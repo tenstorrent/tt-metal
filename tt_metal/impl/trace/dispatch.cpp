@@ -78,7 +78,7 @@ void issue_trace_commands(
     if (DispatchQueryManager::instance().dispatch_s_enabled()) {
         uint16_t index_bitmask = 0;
         for (const auto& id : dispatch_md.sub_device_ids) {
-            index_bitmask |= 1 << id.to_index();
+            index_bitmask |= 1 << *id;
         }
         command_sequence.add_notify_dispatch_s_go_signal_cmd(false, index_bitmask);
         dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SLAVE;
@@ -106,11 +106,10 @@ void issue_trace_commands(
         const auto& num_noc_unicast_txns =
             desc.num_traced_programs_needing_go_signal_unicast ? device->num_noc_unicast_txns(id) : 0;
         reset_launch_message_read_ptr_go_signal.dispatch_message_offset =
-            (uint8_t)DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(id.to_index());
+            (uint8_t)DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(*id);
         uint32_t dispatch_message_addr =
-            dispatch_message_base_addr +
-            DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(id.to_index());
-        auto index = id.to_index();
+            dispatch_message_base_addr + DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(*id);
+        auto index = *id;
 
         // Wait to ensure that all kernels have completed. Then send the reset_rd_ptr go_signal.
         command_sequence.add_dispatch_go_signal_mcast(
@@ -128,7 +127,7 @@ void issue_trace_commands(
     // go_signal. Clear the dispatch <--> worker semaphore, since trace starts at 0.
     constexpr bool clear_count = true;
     for (const auto& [id, desc] : dispatch_md.trace_worker_descriptors) {
-        auto index = id.to_index();
+        auto index = *id;
         uint32_t expected_num_workers = expected_num_workers_completed[index];
         if (desc.num_traced_programs_needing_go_signal_multicast) {
             expected_num_workers += device->num_worker_cores(HalProgrammableCoreType::TENSIX, id);
@@ -191,7 +190,7 @@ void update_worker_state_post_trace_execution(
     std::array<WorkerConfigBufferMgr, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>& config_buffer_mgr,
     std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed) {
     for (const auto& [id, desc] : trace_worker_descriptors) {
-        auto index = id.to_index();
+        auto index = *id;
         // Update the expected worker cores counter due to trace programs completion
         expected_num_workers_completed[index] = desc.num_completion_worker_cores;
         // After trace runs, the rdptr on each worker will be incremented by the number of programs in the trace

@@ -32,7 +32,7 @@ void write_go_signal(
 
     auto dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
-    auto sub_device_index = sub_device_id.to_index();
+    auto sub_device_index = *sub_device_id;
 
     HugepageDeviceCommand go_signal_cmd_sequence(cmd_region, cmd_sequence_sizeB);
     go_msg_t run_program_go_signal;

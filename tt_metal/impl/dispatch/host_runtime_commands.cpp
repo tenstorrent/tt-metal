@@ -120,7 +120,7 @@ EnqueueProgramCommand::EnqueueProgramCommand(
     this->dispatch_message_addr =
         DispatchMemMap::get(this->dispatch_core_type)
             .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE) +
-        DispatchMemMap::get(this->dispatch_core_type).get_dispatch_message_offset(this->sub_device_id.to_index());
+        DispatchMemMap::get(this->dispatch_core_type).get_dispatch_message_offset(*this->sub_device_id);
 }
 
 void EnqueueProgramCommand::process() {

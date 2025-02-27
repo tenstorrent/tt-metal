@@ -63,7 +63,7 @@ void issue_record_event_commands(
 
     uint32_t last_index = num_worker_counters - 1;
     for (uint32_t i = 0; i < num_worker_counters; ++i) {
-        auto offset_index = sub_device_ids[i].to_index();
+        auto offset_index = *sub_device_ids[i];
         uint32_t dispatch_message_addr =
             dispatch_message_base_addr +
             DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(offset_index);

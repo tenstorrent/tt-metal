@@ -69,8 +69,7 @@ CoreType MeshCommandQueue::dispatch_core_type() const { return this->dispatch_co
 void MeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
     std::unordered_set<SubDeviceId> sub_device_ids = mesh_workload.determine_sub_device_ids(mesh_device_);
     TT_FATAL(sub_device_ids.size() == 1, "Programs must be executed on a single sub-device");
-    auto sub_device_id = *(sub_device_ids.begin());
-    auto sub_device_index = sub_device_id.to_index();
+    SubDeviceId sub_device_id = *(sub_device_ids.begin());
     auto mesh_device_id = this->mesh_device_->id();
     auto& sysmem_manager = this->reference_sysmem_manager();
     auto dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
@@ -96,10 +95,10 @@ void MeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool b
     program_dispatch::ProgramDispatchMetadata dispatch_metadata;
     uint32_t expected_num_workers_completed = sysmem_manager.get_bypass_mode()
                                                   ? trace_ctx_->descriptors[sub_device_id].num_completion_worker_cores
-                                                  : expected_num_workers_completed_[sub_device_index];
+                                                  : expected_num_workers_completed_[*sub_device_id];
     // Reserve space in the L1 Kernel Config Ring Buffer for this workload.
     program_dispatch::reserve_space_in_kernel_config_buffer(
-        this->get_config_buffer_mgr(sub_device_index),
+        this->get_config_buffer_mgr(*sub_device_id),
         mesh_workload.get_program_config_sizes(),
         mesh_workload.get_program_binary_status(mesh_device_id),
         num_workers,
@@ -116,8 +115,8 @@ void MeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool b
         program_dispatch::update_program_dispatch_commands(
             program,
             program_cmd_seq,
-            sysmem_manager.get_worker_launch_message_buffer_state()[sub_device_index].get_mcast_wptr(),
-            sysmem_manager.get_worker_launch_message_buffer_state()[sub_device_index].get_unicast_wptr(),
+            sysmem_manager.get_worker_launch_message_buffer_state()[*sub_device_id].get_mcast_wptr(),
+            sysmem_manager.get_worker_launch_message_buffer_state()[*sub_device_id].get_unicast_wptr(),
             expected_num_workers_completed,
             this->virtual_program_dispatch_core(),
             dispatch_core_type,
@@ -160,10 +159,10 @@ void MeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool b
     }
     // Increment Launch Message Buffer Write Pointers
     if (mcast_go_signals) {
-        sysmem_manager.get_worker_launch_message_buffer_state()[sub_device_index].inc_mcast_wptr(1);
+        sysmem_manager.get_worker_launch_message_buffer_state()[*sub_device_id].inc_mcast_wptr(1);
     }
     if (unicast_go_signals) {
-        sysmem_manager.get_worker_launch_message_buffer_state()[sub_device_index].inc_unicast_wptr(1);
+        sysmem_manager.get_worker_launch_message_buffer_state()[*sub_device_id].inc_unicast_wptr(1);
     }
 
     if (sysmem_manager.get_bypass_mode()) {
@@ -176,7 +175,7 @@ void MeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool b
         // Update the expected number of workers dispatch must wait on
         trace_ctx_->descriptors[sub_device_id].num_completion_worker_cores += num_workers;
     } else {
-        expected_num_workers_completed_[sub_device_index] += num_workers;
+        expected_num_workers_completed_[*sub_device_id] += num_workers;
     }
     // From the dispatcher's perspective, binaries are now committed to DRAM
     mesh_workload.set_program_binary_status(mesh_device_id, ProgramBinaryStatus::Committed);

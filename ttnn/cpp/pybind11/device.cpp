@@ -147,6 +147,9 @@ void device_module(py::module& m_device) {
             R"doc(
             Creates a SubDeviceId object with the given ID.
         )doc")
+        .def(
+            "__repr__",
+            [](const SubDeviceId& self) { return "SubDeviceId(" + std::to_string(static_cast<int>(*self)) + ")"; })
         .def(py::self == py::self)
         .def(py::self != py::self);
 
@@ -182,13 +185,14 @@ void device_module(py::module& m_device) {
                 [](IDevice* device,
                    const std::vector<SubDevice>& sub_devices,
                    DeviceAddr local_l1_size) -> SubDeviceManagerId {
-                    SubDeviceManagerId sub_device_manager_id;
+                    std::optional<SubDeviceManagerId> sub_device_manager_id;
                     device->push_work(
                         [device, sub_devices, local_l1_size, &sub_device_manager_id] {
                             sub_device_manager_id = device->create_sub_device_manager(sub_devices, local_l1_size);
                         },
                         /*blocking=*/true);
-                    return sub_device_manager_id;
+                    TT_FATAL(sub_device_manager_id.has_value(), "Failed to create sub-device manager");
+                    return *sub_device_manager_id;
                 },
                 py::arg("sub_devices"),
                 py::arg("local_l1_size"),
@@ -205,14 +209,15 @@ void device_module(py::module& m_device) {
             .def(
                 "create_sub_device_manager_with_fabric",
                 [](IDevice* device, const std::vector<SubDevice>& sub_devices, DeviceAddr local_l1_size) {
-                    std::tuple<SubDeviceManagerId, SubDeviceId> manager_and_sub_device_ids;
+                    std::optional<std::tuple<SubDeviceManagerId, SubDeviceId>> manager_and_sub_device_ids;
                     device->push_work(
                         [device, sub_devices, local_l1_size, &manager_and_sub_device_ids] {
                             manager_and_sub_device_ids =
                                 device->create_sub_device_manager_with_fabric(sub_devices, local_l1_size);
                         },
                         /*blocking=*/true);
-                    return manager_and_sub_device_ids;
+                    TT_FATAL(manager_and_sub_device_ids.has_value(), "Failed to create sub-device manager with fabric");
+                    return *manager_and_sub_device_ids;
                 },
                 py::arg("sub_devices"),
                 py::arg("local_l1_size"),
@@ -260,13 +265,13 @@ void device_module(py::module& m_device) {
                 Args:
                     sub_device_manager_id (SubDeviceManagerId): The ID of the sub-device manager to remove.
             )doc")
-        .def(
-            "set_sub_device_stall_group",
-            [](IDevice* device, const std::vector<SubDeviceId>& sub_device_ids) {
-                device->push_work([device, sub_device_ids] { device->set_sub_device_stall_group(sub_device_ids); });
-            },
-            py::arg("sub_device_ids"),
-            R"doc(
+            .def(
+                "set_sub_device_stall_group",
+                [](IDevice* device, const std::vector<SubDeviceId>& sub_device_ids) {
+                    device->push_work([device, sub_device_ids] { device->set_sub_device_stall_group(sub_device_ids); });
+                },
+                py::arg("sub_device_ids"),
+                R"doc(
                 Set the SubDevice IDs that will be stalled on by default for Fast Dispatch commands such as reading, writing, synchronizing.
                 Stalling here refers to the Fast Dispatch cores waiting for programs to complete execution on the specified SubDevices before proceeding with the specified instruction.
                 The default SubDevice IDs to stall on are set to all SubDevice IDs, and whenever a new SubDevice Manager is loaded.
@@ -274,25 +279,25 @@ void device_module(py::module& m_device) {
                 Args:
                     sub_device_ids (List[SubDeviceId]): The IDs of the SubDevices to stall on.
             )doc")
-        .def(
-            "reset_sub_device_stall_group",
-            [](IDevice* device) { device->push_work([device] { device->reset_sub_device_stall_group(); }); },
-            R"doc(
+            .def(
+                "reset_sub_device_stall_group",
+                [](IDevice* device) { device->push_work([device] { device->reset_sub_device_stall_group(); }); },
+                R"doc(
                 Resets the sub_device_ids that will be stalled on by default for Fast Dispatch commands such as reading, writing, synchronizing
                 back to all SubDevice IDs.
             )doc")
-        .def(
-            "sfpu_eps",
-            [](IDevice* device) { return tt::tt_metal::experimental::hal::get_eps(); },
-            R"doc(Returns machine epsilon value for current architecture.)doc")
-        .def(
-            "sfpu_nan",
-            [](IDevice* device) { return tt::tt_metal::experimental::hal::get_nan(); },
-            R"doc(Returns NaN value for current architecture.)doc")
-        .def(
-            "sfpu_inf",
-            [](IDevice* device) { return tt::tt_metal::experimental::hal::get_inf(); },
-            R"doc(Returns Infinity value for current architecture.)doc");
+            .def(
+                "sfpu_eps",
+                [](IDevice* device) { return tt::tt_metal::experimental::hal::get_eps(); },
+                R"doc(Returns machine epsilon value for current architecture.)doc")
+            .def(
+                "sfpu_nan",
+                [](IDevice* device) { return tt::tt_metal::experimental::hal::get_nan(); },
+                R"doc(Returns NaN value for current architecture.)doc")
+            .def(
+                "sfpu_inf",
+                [](IDevice* device) { return tt::tt_metal::experimental::hal::get_inf(); },
+                R"doc(Returns Infinity value for current architecture.)doc");
 
     auto pyDevice = static_cast<py::class_<tt::tt_metal::Device, IDevice, std::unique_ptr<tt::tt_metal::Device, py::nodelete>>>(m_device.attr("Device"));
     pyDevice
