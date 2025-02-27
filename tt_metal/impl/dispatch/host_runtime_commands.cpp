@@ -235,6 +235,7 @@ void EnqueueReadSubBuffer(
     void* dst,
     const BufferRegion& region,
     bool blocking) {
+    std::cout << "host runtime: EnqueueReadSubBuffer" << std::endl;
     detail::DispatchStateCheck(true);
     detail::ValidateBufferRegion(buffer, region);
 
@@ -270,6 +271,7 @@ void EnqueueWriteSubBuffer(
     detail::DispatchStateCheck(true);
     detail::ValidateBufferRegion(buffer, region);
 
+    std::cout << "host runtime: EnqueueWriteSubBuffer" << std::endl;
     cq.enqueue_write_buffer(std::move(buffer), std::move(src), region, blocking);
 }
 

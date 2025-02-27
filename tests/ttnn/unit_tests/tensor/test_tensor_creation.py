@@ -259,3 +259,65 @@ def test_tensor_creation_with_memory_config(shape, memory_config, tt_dtype, layo
     passing = torch.allclose(py_tensor, py_tensor_after_round_trip_3, **allclose_kwargs)
     passing = torch.allclose(py_tensor, py_tensor_after_round_trip_4, **allclose_kwargs)
     assert passing
+
+
+@pytest.mark.parametrize(
+    "layout, tile",
+    [
+        (ttnn.TILE_LAYOUT, ttnn.Tile([32, 32])),
+    ],
+)
+@pytest.mark.parametrize(
+    "tt_dtype",
+    [
+        ttnn.bfloat16,
+    ],
+)
+@pytest.mark.parametrize(
+    "shape, memory_config",
+    [
+        (
+            (1, 1, 64, 32),
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.num_cores_to_corerangeset(2, grid_size, True),
+                    [64, 32],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    ttnn.ShardMode.LOGICAL,
+                ),
+            ),
+        ),
+    ],
+    ids=[
+        "height_sharded",
+    ],
+)
+def test_tensor_sharding(shape, memory_config, tt_dtype, layout, tile, device):
+    torch.manual_seed(0)
+
+    if tt_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b) and layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("{} is only valid for ttnn.TILE_LAYOUT!".format(tt_dtype))
+
+    dtype = tt_dtype_to_torch_dtype[tt_dtype]
+
+    if dtype in {torch.uint8, torch.int16, torch.int32}:
+        py_tensor = torch.randint(torch.iinfo(dtype).min, torch.iinfo(dtype).max, shape, dtype=dtype)
+    else:
+        py_tensor = torch.rand(shape, dtype=dtype)
+
+    tt_tensor_1 = ttnn.Tensor(py_tensor, tt_dtype, device, layout, memory_config, tile)
+
+    tt_tensor_1 = tt_tensor_1.cpu()
+
+    py_tensor_after_round_trip_1 = tt_tensor_1.to_torch()
+
+    allclose_kwargs = {}
+    if tt_dtype == ttnn.bfloat8_b:
+        allclose_kwargs = dict(atol=1e-2)
+    elif tt_dtype == ttnn.bfloat4_b:
+        allclose_kwargs = dict(atol=0.2)
+
+    passing = torch.allclose(py_tensor, py_tensor_after_round_trip_1, **allclose_kwargs)
+    assert passing

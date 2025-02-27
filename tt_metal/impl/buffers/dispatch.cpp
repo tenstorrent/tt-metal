@@ -537,6 +537,7 @@ void write_to_device_buffer(
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     CoreType dispatch_core_type,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    std::cout << "dispatch: write_to_device_buffer" << std::endl;
     validate_buffer_region_conditions(buffer, region);
 
     SystemMemoryManager& sysmem_manager = buffer.device()->sysmem_manager();
