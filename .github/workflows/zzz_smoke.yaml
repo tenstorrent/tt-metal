@@ -12,7 +12,6 @@ on:
 
 jobs:
   metal-tests:
-    needs: pr-gate-build
     strategy:
       fail-fast: false
       matrix:
