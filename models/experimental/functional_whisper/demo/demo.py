@@ -122,6 +122,7 @@ def run_generate(
     # Run encoder
     start_encode = time.time()
     encoder_hidden_states = ttnn_model.encoder(config, input_embeds, parameters=parameters.encoder)
+    ttnn.synchronize_device(device)
     logger.info(f"Encode time: {time.time() - start_encode}")
 
     # Decode inference run
