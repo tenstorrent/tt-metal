@@ -68,3 +68,4 @@ blobfile==2.1.1 # Required for llama3
 numpy>=1.24.4,<2
 huggingface-hub==0.25.2
 pydantic==2.9.2 # Required for Superset benchmarking
+fiftyone==0.25.2 # Required for Yolo benchmarking
