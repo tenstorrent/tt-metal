@@ -37,10 +37,12 @@ TEST_F(DropoutTest, TestSeed) {
         xt::xarray<float> xtensor_a = xt::random::rand(shape, -0.5, 0.5);
 
         auto xtensor_a_tensor = ttml::core::from_xtensor(xtensor_a, device);
+        auto num_cache_before = device->num_program_cache_entries();
         auto result01 = ttnn::experimental::dropout(xtensor_a_tensor, prob, scale, dropout_seed1);
         auto result02 = ttnn::experimental::dropout(xtensor_a_tensor, prob, scale, dropout_seed2);
         auto result11 = ttnn::experimental::dropout(xtensor_a_tensor, prob, scale, dropout_seed1);
         auto result12 = ttnn::experimental::dropout(xtensor_a_tensor, prob, scale, dropout_seed2);
+        auto num_cache_after = device->num_program_cache_entries();
 
         auto result01_vec = ttml::core::to_xtensor(result01);
         auto result02_vec = ttml::core::to_xtensor(result02);
@@ -50,6 +52,7 @@ TEST_F(DropoutTest, TestSeed) {
         EXPECT_TRUE(xt::allclose(result01_vec, result11_vec, /*rtol=*/1e-4, /*atol=*/1e-3));
         EXPECT_TRUE(xt::allclose(result02_vec, result12_vec, /*rtol=*/1e-4, /*atol=*/1e-3));
         EXPECT_FALSE(xt::allclose(result01_vec, result02_vec, /*rtol=*/1e-4, /*atol=*/1e-3));
+        EXPECT_EQ(num_cache_before, num_cache_after - 1);
     }
 }
 
