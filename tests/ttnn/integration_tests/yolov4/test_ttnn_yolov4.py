@@ -10,6 +10,7 @@ from models.utility_functions import skip_for_grayskull
 from models.demos.yolov4.ttnn.yolov4 import TtYOLOv4
 from models.demos.yolov4.demo.demo import YoloLayer, get_region_boxes, gen_yolov4_boxes_confs
 from models.demos.yolov4.ttnn.weight_parameter_update import update_weight_parameters
+from models.demos.yolov4.ttnn.model_preprocessing import create_yolov4_input_tensors, create_yolov4_model_parameters
 from collections import OrderedDict
 
 import cv2
@@ -41,18 +42,20 @@ def test_yolov4(device, reset_seeds, model_location_generator, use_pretrained_we
                 )  # execute the yolov4_weights_download.sh file
 
             weights_pth = "tests/ttnn/integration_tests/yolov4/yolov4.pth"
+
         else:
             weights_pth = str(model_path / "yolov4.pth")
 
-        ttnn_model = TtYOLOv4(weights_pth, device)
         torch_model = Yolov4()
-        new_state_dict = dict(zip(torch_model.state_dict().keys(), ttnn_model.torch_model.values()))
+        torch_dict = torch.load(weights_pth)
+        new_state_dict = dict(zip(torch_model.state_dict().keys(), torch_dict.values()))
         torch_model.load_state_dict(new_state_dict)
         torch_model.eval()
+
     else:
         torch_model = Yolov4.from_random_weights()
         ttnn_weights = update_weight_parameters(OrderedDict(torch_model.state_dict()))
-        ttnn_model = TtYOLOv4(ttnn_weights, device)
+        # ttnn_model = TtYOLOv4(ttnn_weights, device)
 
     imgfile = "models/demos/yolov4/demo/giraffe_320.jpg"
     width = 320
@@ -70,6 +73,10 @@ def test_yolov4(device, reset_seeds, model_location_generator, use_pretrained_we
     ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16)
 
     torch_output_tensor = torch_model(torch_input)
+
+    parameters = create_yolov4_model_parameters(torch_model, torch_input, device)
+
+    ttnn_model = TtYOLOv4(weights_pth, device)
 
     ref1, ref2, ref3 = gen_yolov4_boxes_confs(torch_output_tensor)
     ref_boxes, ref_confs = get_region_boxes([ref1, ref2, ref3])
