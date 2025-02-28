@@ -216,20 +216,23 @@ def from_torch(
     else:
         tensor = ttnn.Tensor(tensor, dtype)
 
+    strategy = {}
+    tilize_input = []
+
     if mesh_mapper:
         if isinstance(mesh_mapper, ttnn.CppTensorToMesh):
             tensor = ttnn.distribute_tensor(tensor, mesh_mapper, device)
-            if tile is not None:
-                tensor = ttnn.Tensor(ttnn.to_torch(tensor), dtype, {}, tile)
+            tilize_input = ttnn.to_torch(tensor)
         else:
+            strategy = mesh_mapper.config()
             shards = mesh_mapper.map(ttnn.to_torch(tensor))
-            if tile is not None:
-                tensor = ttnn.Tensor(shards, dtype, mesh_mapper.config(), tile)
-            else:
-                tensor = ttnn.Tensor(shards, dtype, mesh_mapper.config())
-    else:
-        if tile is not None:
-            tensor = ttnn.Tensor(ttnn.to_torch(tensor), dtype, {}, tile)
+            tilize_input = shards
+            if tile is None:
+                tensor = ttnn.Tensor(tilize_input, dtype, strategy)
+
+    # TODO: find cleaner way of tilizing
+    if tile is not None:
+        tensor = ttnn.Tensor(tilize_input, dtype, strategy, tile)
 
     if layout is not None and not (dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b):
         if pad_value is not None:
@@ -315,7 +318,7 @@ def to_torch(
         if isinstance(mesh_composer, ttnn.MeshToTensor):
             return mesh_composer.compose(tensor)
         else:
-            return mesh_composer.compose(ttnn.get_device_tensors(tensor))
+            return mesh_composer.compose(ttnn.get_device_tensors(tensor)).to_torch()
 
     if tensor.storage_type() == ttnn.DEVICE_STORAGE_TYPE:
         raise RuntimeError("ttnn.Tensor cannot be on device when converting to torch.Tensor!")

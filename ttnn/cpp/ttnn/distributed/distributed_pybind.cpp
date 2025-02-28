@@ -476,10 +476,7 @@ void py_module(py::module& module) {
         static_cast<py::class_<MeshToTensor, std::unique_ptr<MeshToTensor>>>(module.attr("CppConcatMeshToTensor"));
     py_concat_mesh_to_tensor
         .def(
-            py::init([](MeshDevice& mesh_device, int dim) -> std::unique_ptr<MeshToTensor> {
-                return concat_mesh_to_tensor_composer(dim);
-            }),
-            py::arg("mesh_device"),
+            py::init([](int dim) -> std::unique_ptr<MeshToTensor> { return concat_mesh_to_tensor_composer(dim); }),
             py::arg("dim"))
         .def(
             "compose",
@@ -705,6 +702,7 @@ void py_module(py::module& module) {
         [](const Tensor& tensor,
            const TensorToMesh& mapper,
            std::optional<std::reference_wrapper<MeshDevice>> mesh_device = std::nullopt) -> Tensor {
+
             Tensor cpu_tensor;
             if (tensor.storage_type() == StorageType::MULTI_DEVICE_HOST) {
                 cpu_tensor = tt::tt_metal::tensor_impl::to_host_mesh_tensor_wrapper(tensor, true);
