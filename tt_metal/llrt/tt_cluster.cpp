@@ -514,7 +514,7 @@ void Cluster::write_dram_vec(std::vector<uint32_t> &vec, tt_target_dram dram, ui
         desc_to_use.get_num_dram_views());
     int d_chan = desc_to_use.get_channel_for_dram_view(d_view);
     TT_ASSERT(
-        d_subchannel < desc_to_use.dram_cores.at(d_chan).size(),
+        d_subchannel < desc_to_use.get_dram_cores().at(d_chan).size(),
         "Trying to address dram sub channel that doesnt exist in the device descriptor");
     tt::umd::CoreCoord dram_core_coord =
         desc_to_use.get_dram_core_for_channel(d_chan, d_subchannel, CoordSystem::VIRTUAL);
@@ -535,7 +535,7 @@ void Cluster::read_dram_vec(
         desc_to_use.get_num_dram_views());
     int d_chan = desc_to_use.get_channel_for_dram_view(d_view);
     TT_ASSERT(
-        d_subchannel < desc_to_use.dram_cores.at(d_chan).size(),
+        d_subchannel < desc_to_use.get_dram_cores().at(d_chan).size(),
         "Trying to address dram sub channel that doesnt exist in the device descriptor");
     tt::umd::CoreCoord dram_core_coord =
         desc_to_use.get_dram_core_for_channel(d_chan, d_subchannel, CoordSystem::VIRTUAL);
