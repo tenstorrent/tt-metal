@@ -2,7 +2,7 @@ import os
 import re
 
 # List of operations
-ops = ["isinf", "isnan", "isposinf", "isneginf", "sin"]
+ops = ["i0", "i1", "erf", "tan", "abs_int32"]
 
 
 # Function to modify the file
