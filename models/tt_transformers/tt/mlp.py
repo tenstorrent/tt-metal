@@ -91,9 +91,9 @@ class MLP(LightweightModule):
         w1_out = ttnn.linear(
             x,
             self.w1,
-            compute_kernel_config=self.model_config["FF1_3_COMPUTE_KERNEL_CFG"],
+            dtype=ttnn.bfloat8_b if TG else self.model_config["ACTIVATION_DTYPE"] or ttnn.bfloat16,
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
-            dtype=ttnn.bfloat8_b if TG else ttnn.bfloat16,
+            compute_kernel_config=self.model_config["LI_FF1_3_COMPUTE_KERNEL_CFG"],
             program_config=pc_1,
             memory_config=x.memory_config(),
         )
@@ -101,9 +101,9 @@ class MLP(LightweightModule):
         w3_out = ttnn.linear(
             x,
             self.w3,
-            compute_kernel_config=self.model_config["FF1_3_COMPUTE_KERNEL_CFG"],
+            dtype=ttnn.bfloat8_b if TG else self.model_config["ACTIVATION_DTYPE"] or ttnn.bfloat16,
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
-            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.model_config["LI_FF1_3_COMPUTE_KERNEL_CFG"],
             program_config=pc_3,
             memory_config=x.memory_config(),
         )
@@ -159,7 +159,7 @@ class MLP(LightweightModule):
             w1_out,
             w3_out,
             input_tensor_a_activation=ttnn.UnaryOpType.SILU,
-            dtype=ttnn.bfloat8_b,
+            dtype=self.model_config["ACTIVATION_DTYPE"] or ttnn.bfloat8_b,
             memory_config=w1_out.memory_config(),
         )
 
@@ -186,8 +186,8 @@ class MLP(LightweightModule):
         w2_out = ttnn.linear(
             w2_in,
             self.w2,
-            compute_kernel_config=self.model_config["FF2_COMPUTE_KERNEL_CFG"],
-            dtype=self.args.ccl_dtype if TG else ttnn.bfloat16,
+            compute_kernel_config=self.model_config["LI_FF2_COMPUTE_KERNEL_CFG"],
+            dtype=self.args.ccl_dtype if TG else self.model_config["ACTIVATION_DTYPE"] or ttnn.bfloat16,
             program_config=pc_2,
             memory_config=(
                 (ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG)
