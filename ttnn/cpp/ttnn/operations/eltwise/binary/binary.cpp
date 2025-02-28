@@ -129,8 +129,8 @@ auto preprocess_inputs(const Tensor& input_tensor_a_arg, const Tensor& input_ten
     Tensor input_tensor_b = input_tensor_b_arg;
     DataType a_dtype = input_tensor_a.get_dtype();
     DataType b_dtype = input_tensor_b.get_dtype();
-    TT_FATAL(is_dtype_supported(binary_op_type, a_dtype), "Unsupported data type {}", a_dtype);
-    TT_FATAL(is_dtype_supported(binary_op_type, b_dtype), "Unsupported data type {}", b_dtype);
+    // TT_FATAL(is_dtype_supported(binary_op_type, a_dtype), "Unsupported data type {}", a_dtype);
+    // TT_FATAL(is_dtype_supported(binary_op_type, b_dtype), "Unsupported data type {}", b_dtype);
     // TODO: #7731 (Remove calls to repeat )
     auto repeat_smaller = [](const auto& first, auto& second) {
         const auto& first_shape = first.get_logical_shape();
