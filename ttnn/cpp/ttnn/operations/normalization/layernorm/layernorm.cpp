@@ -21,8 +21,12 @@ ttnn::Tensor ExecuteLayerNorm::invoke(
     auto arch = input_tensor.storage_type() == StorageType::DEVICE
                     ? input_tensor.device()->arch()
                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
-    auto kernel_config_val =
-        init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, false, true, false);
+    bool is_float_32 = input_tensor.get_dtype() == DataType::FLOAT32;
+    bool approx_mode = !is_float_32;
+    bool fp32_acc = is_float_32;
+    bool dst_full_sync_en = false;
+    auto kernel_config_val = init_device_compute_kernel_config(
+        arch, compute_kernel_config, MathFidelity::HiFi4, approx_mode, fp32_acc, dst_full_sync_en);
     return operation::run(
                LayerNorm{
                    .norm_type = LayerNormType::LAYERNORM,
