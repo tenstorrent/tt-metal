@@ -107,13 +107,20 @@ operation::ProgramWithCallbacks UntilizeWithUnpadding::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-    if (input_tensors.at(0).memory_config().is_sharded() || this->use_multicore) {
-        return detail::untilize_with_unpadding_multi_core(
-            input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en, this->enough_space_height);
-    } else {
+    if (input_tensors.at(0).memory_config().is_sharded()) {
+        return detail::untilize_with_unpadding_multi_core_sharded(
+            input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
+    }
+    if (!this->use_multicore) {
         return detail::untilize_with_unpadding_single_core(
             input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
     }
+    if (!this->enough_space_height) {
+        return detail::untilize_with_unpadding_multi_core_block_interleaved(
+            input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
+    }
+    return detail::untilize_with_unpadding_multi_core_interleaved(
+        input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
 }
 
 }  // namespace ttnn::operations::data_movement
