@@ -651,6 +651,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     if (packer_l1_acc) {
         compute_defines["PACKER_L1_ACC"] = "1";
     }
+
+    for (auto elem : compute_defines) {
+        log_debug(LogOp, "compute_defines: {} = {}", elem.first, elem.second);
+    }
+
     uint32_t num_output_tiles = per_core_out_matrix_height_ntiles * p_config.per_core_out_matrix_width_ntile;
     compute_kernel_args = {
         act_block_w_ntiles,      // in0_block_w
