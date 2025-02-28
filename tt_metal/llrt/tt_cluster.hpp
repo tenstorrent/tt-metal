@@ -182,6 +182,9 @@ public:
     // Returns set of logical inactive ethernet coordinates on chip
     std::unordered_set<CoreCoord> get_inactive_ethernet_cores(chip_id_t chip_id) const;
 
+    // Returns whether `logical_core` has an eth link to a core on a connected chip
+    bool is_ethernet_link_up(chip_id_t chip_id, const CoreCoord& logical_core) const;
+
     // Returns connected ethernet core on the other chip
     std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(std::tuple<chip_id_t, CoreCoord> eth_core) const;
 
@@ -302,7 +305,7 @@ private:
     // Need to hold reference to cluster descriptor to detect total number of devices available in cluster
     // UMD static APIs `detect_available_device_ids` and `detect_number_of_chips` only returns number of MMIO mapped
     // devices
-    std::unique_ptr<tt_ClusterDescriptor> cluster_desc_;
+    tt_ClusterDescriptor* cluster_desc_ = nullptr;
     // There is an entry for every device that can be targeted (MMIO and remote)
     std::unordered_map<chip_id_t, metal_SocDescriptor> sdesc_per_chip_;
 

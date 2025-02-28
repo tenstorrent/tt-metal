@@ -695,11 +695,6 @@ std::vector<std::pair<transfer_info_cores, uint32_t>> MeshDevice::extract_dst_no
     return reference_device()->extract_dst_noc_multicast_info(ranges, core_type);
 }
 
-size_t MeshDevice::get_device_kernel_defines_hash() {
-    return validate_and_get_reference_value(
-        scoped_devices_->root_devices(), [](const auto& device) { return device->get_device_kernel_defines_hash(); });
-}
-
 // Methods for SubDevice Management
 uint8_t MeshDevice::num_noc_mcast_txns(SubDeviceId sub_device_id) const {
     return sub_device_manager_tracker_->get_active_sub_device_manager()->num_noc_mcast_txns(sub_device_id);
@@ -749,10 +744,6 @@ bool MeshDevice::is_mmio_capable() const {
     TT_THROW("is_mmio_capable() is not supported on MeshDevice - use individual devices instead");
     return reference_device()->is_mmio_capable();
 }
-std::vector<std::vector<chip_id_t>> MeshDevice::get_tunnels_from_mmio() const {
-    TT_THROW("get_tunnels_from_mmio() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->get_tunnels_from_mmio();
-}
 
 // Allocator methods
 std::optional<DeviceAddr> MeshDevice::lowest_occupied_compute_l1_address() const {
@@ -790,7 +781,7 @@ MeshSubDeviceManagerId MeshDevice::mesh_create_sub_device_manager(
 
 std::tuple<MeshSubDeviceManagerId, SubDeviceId> MeshDevice::mesh_create_sub_device_manager_with_fabric(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
     MeshSubDeviceManagerId mesh_sub_device_manager_id(*this);
-    SubDeviceId fabric_sub_device_id;
+    SubDeviceId fabric_sub_device_id(0);
     const auto& devices = scoped_devices_->root_devices();
     for (uint32_t i = 0; i < devices.size(); i++) {
         auto* device = devices[i];
@@ -843,8 +834,10 @@ void MeshDevice::mesh_reset_sub_device_stall_group() {
 }
 
 MeshSubDeviceManagerId::MeshSubDeviceManagerId(const MeshDevice& mesh_device) {
-    this->sub_device_manager_ids.resize(mesh_device.num_devices());
+    this->sub_device_manager_ids.reserve(mesh_device.num_devices());
+    for (uint32_t i = 0; i < mesh_device.num_devices(); i++) {
+        this->sub_device_manager_ids.push_back(SubDeviceManagerId(0));
+    }
 }
-
 
 }  // namespace tt::tt_metal::distributed
