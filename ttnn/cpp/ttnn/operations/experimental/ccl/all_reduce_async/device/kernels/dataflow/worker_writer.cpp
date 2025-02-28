@@ -44,10 +44,7 @@ void kernel_main() {
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t reduction_semaphore_send_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t mcast_dest_noc_start_y = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t mcast_dest_noc_end_x = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t mcast_dest_noc_end_y = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_mcast_ranges = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t link = get_arg_val<uint32_t>(arg_idx++);
 
     // Set up for mcasting to reduction workers
@@ -59,6 +56,16 @@ void kernel_main() {
     arg_idx += num_cores;
     tt_l1_ptr uint32_t* core_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_cores;
+
+    tt_l1_ptr uint32_t* mcast_dest_noc_start_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
+    arg_idx += num_mcast_ranges;
+    tt_l1_ptr uint32_t* mcast_dest_noc_start_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
+    arg_idx += num_mcast_ranges;
+    tt_l1_ptr uint32_t* mcast_dest_noc_end_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
+    arg_idx += num_mcast_ranges;
+    tt_l1_ptr uint32_t* mcast_dest_noc_end_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
+    arg_idx += num_mcast_ranges;
+
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_idx);
 
@@ -155,21 +162,24 @@ void kernel_main() {
     // 3. wait for mcast output ready semaphore
     while (*reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr) < out_ready_sem_wait_value);
 
-    // Signal the reduction workers
-    const uint64_t reduction_semaphore_recv_noc_addr = get_noc_multicast_addr(
-        mcast_dest_noc_start_x,
-        mcast_dest_noc_start_y,
-        mcast_dest_noc_end_x,
-        mcast_dest_noc_end_y,
-        reduction_semaphore_send_addr);
+    // loop over mcast ranges
+    for (uint32_t i = 0; i < num_mcast_ranges; i++) {
+        // Signal the reduction workers
+        const uint64_t reduction_semaphore_recv_noc_addr = get_noc_multicast_addr(
+            mcast_dest_noc_start_x[i],
+            mcast_dest_noc_start_y[i],
+            mcast_dest_noc_end_x[i],
+            mcast_dest_noc_end_y[i],
+            reduction_semaphore_send_addr);
 
-    noc_semaphore_set_multicast(
-        reduction_semaphore_send_addr,
-        reduction_semaphore_recv_noc_addr,
-        num_cores,
-        false,  // TODO: Why?
-        false,  // TODO: Why?
-        0);
+        noc_semaphore_set_multicast(
+            reduction_semaphore_send_addr,
+            reduction_semaphore_recv_noc_addr,
+            num_cores,
+            false,  // TODO: Why?
+            false,  // TODO: Why?
+            0);
+    }
 
     // 4. global semaphore reset
     const uint64_t dest_noc_addr = get_noc_addr(my_x[0], my_y[0], out_ready_sem_bank_addr);

@@ -147,9 +147,11 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
     uint32_t num_assigned_cores = 0;
     for (uint32_t link = 0; link < num_links; link++) {
         uint32_t num_cores_this_link = std::min(output_cores_per_link, num_output_cores - num_assigned_cores);
-        output_corerangeset_per_link.emplace_back(cores_to_corerangeset(std::vector<CoreCoord>(
-            output_cores_vec.begin() + num_assigned_cores,
-            output_cores_vec.begin() + num_assigned_cores + num_cores_this_link)));
+        output_corerangeset_per_link.emplace_back(
+            cores_to_corerangeset(std::vector<CoreCoord>(
+                                      output_cores_vec.begin() + num_assigned_cores,
+                                      output_cores_vec.begin() + num_assigned_cores + num_cores_this_link))
+                .merge_ranges());
         num_output_cores_in_link[link] = num_cores_this_link;
         num_assigned_cores += num_cores_this_link;
     }
@@ -375,10 +377,19 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_reader_kernel_id, {core}, reader_rt_args);
 
         // Set writer runtime args
-        auto mcast_start_core =
-            device->worker_core_from_logical_core(output_corerangeset_per_link[link].bounding_box().start_coord);
-        auto mcast_end_core =
-            device->worker_core_from_logical_core(output_corerangeset_per_link[link].bounding_box().end_coord);
+        std::vector<uint32_t> mcast_start_x;
+        std::vector<uint32_t> mcast_start_y;
+        std::vector<uint32_t> mcast_end_x;
+        std::vector<uint32_t> mcast_end_y;
+
+        for (const auto& range : output_corerangeset_per_link[link].ranges()) {
+            auto start_core = device->worker_core_from_logical_core(range.start_coord);
+            auto end_core = device->worker_core_from_logical_core(range.end_coord);
+            mcast_start_x.push_back(start_core.x);
+            mcast_start_y.push_back(start_core.y);
+            mcast_end_x.push_back(end_core.x);
+            mcast_end_y.push_back(end_core.y);
+        }
 
         uint32_t out_ready_sem_wait_value = ring_size;
         std::vector<uint32_t> writer_rt_args = {
@@ -392,14 +403,17 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
             drain_sync_core.y,                    // out_ready_sem_noc0_y
             out_ready_sem_wait_value,             // out_ready_sem_wait_value
             reduction_semaphore_ids[link],        // reduction_semaphore_id
-            mcast_start_core.x,                   // mcast_dest_noc_start_x
-            mcast_start_core.y,                   // mcast_dest_noc_start_y
-            mcast_end_core.x,                     // mcast_dest_noc_end_x
-            mcast_end_core.y,                     // mcast_dest_noc_end_y
+            mcast_start_x.size(),                 // num_mcast_ranges
             link,                                 // link
         };
         writer_rt_args.insert(writer_rt_args.end(), output_tensor_cores_x.begin(), output_tensor_cores_x.end());
         writer_rt_args.insert(writer_rt_args.end(), output_tensor_cores_y.begin(), output_tensor_cores_y.end());
+
+        writer_rt_args.insert(writer_rt_args.end(), mcast_start_x.begin(), mcast_start_x.end());
+        writer_rt_args.insert(writer_rt_args.end(), mcast_start_y.begin(), mcast_start_y.end());
+        writer_rt_args.insert(writer_rt_args.end(), mcast_end_x.begin(), mcast_end_x.end());
+        writer_rt_args.insert(writer_rt_args.end(), mcast_end_y.begin(), mcast_end_y.end());
+
         log_trace(tt::LogOp, "Writer Runtime Args:");
         for (const auto& arg : writer_rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);
