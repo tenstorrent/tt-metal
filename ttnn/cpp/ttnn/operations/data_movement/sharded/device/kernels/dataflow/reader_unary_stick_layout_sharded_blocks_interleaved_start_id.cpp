@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "build_Debug/std=c++20"
 #include "dataflow_api.h"
 
 void kernel_main() {
