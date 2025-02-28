@@ -22,7 +22,10 @@ import time
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.functional_whisper.tt import ttnn_optimized_functional_whisper
-from models.experimental.functional_whisper.tt.ttnn_optimized_functional_whisper import init_kv_cache
+from models.experimental.functional_whisper.tt.ttnn_optimized_functional_whisper import (
+    init_kv_cache,
+    WHISPER_L1_SMALL_SIZE,
+)
 from models.generation_utils import get_logits_processor
 
 
@@ -117,7 +120,9 @@ def run_generate(
         current_decode_pos = None
 
     # Run encoder
+    start_encode = time.time()
     encoder_hidden_states = ttnn_model.encoder(config, input_embeds, parameters=parameters.encoder)
+    logger.info(f"Encode time: {time.time() - start_encode}")
 
     # Decode inference run
     MAX_GEN_LEN = 128
@@ -275,7 +280,7 @@ def run_demo_functional_whisper_for_audio_classification_inference(input_path, t
 
         config = model.config
         input_embedding = ttnn_model.preprocess_encoder_inputs(
-            input_features=input_features, parameters=parameters.encoder, device=device
+            config=config, input_features=input_features, parameters=parameters.encoder, device=device
         )
 
         encoder_outputs = ttnn_model.encoder(
@@ -357,7 +362,7 @@ def run_demo_functional_whisper_for_audio_classification_dataset(ttnn_model, dev
 
     config = model.config
     input_embedding = ttnn_model.preprocess_encoder_inputs(
-        input_features=input_features, parameters=parameters.encoder, device=device
+        config=config, input_features=input_features, parameters=parameters.encoder, device=device
     )
 
     encoder_outputs = ttnn_model.encoder(config=config, inputs_embeds=input_embedding, parameters=parameters.encoder)
@@ -404,6 +409,7 @@ def run_demo_functional_whisper_for_conditional_generation_dataset(ttnn_model, d
     ((1),),
 )
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_demo_for_audio_classification(
     input_path, ttnn_model, device, num_inputs, use_program_cache, enable_async_mode
 ):
@@ -419,6 +425,7 @@ def test_demo_for_audio_classification(
     ((2),),
 )
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_demo_for_conditional_generation(
     input_path, ttnn_model, device, num_inputs, use_program_cache, enable_async_mode
 ):
@@ -430,6 +437,7 @@ def test_demo_for_conditional_generation(
     (ttnn_optimized_functional_whisper,),
 )
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_demo_for_audio_classification_dataset(ttnn_model, device, use_program_cache, enable_async_mode):
     return run_demo_functional_whisper_for_audio_classification_dataset(ttnn_model, device)
 
@@ -439,5 +447,6 @@ def test_demo_for_audio_classification_dataset(ttnn_model, device, use_program_c
     (ttnn_optimized_functional_whisper,),
 )
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_demo_for_conditional_generation_dataset(ttnn_model, device, use_program_cache, enable_async_mode):
     return run_demo_functional_whisper_for_conditional_generation_dataset(ttnn_model, device)
