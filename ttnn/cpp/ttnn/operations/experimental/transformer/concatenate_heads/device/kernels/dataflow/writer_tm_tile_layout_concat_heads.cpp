@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <array>
 #include "dataflow_api.h"
+#include "hw/inc/grayskull/tensix_types.h"
 
 void kernel_main() {
     // WRITER RUNTIME ARGS
@@ -23,13 +24,15 @@ void kernel_main() {
 
     constexpr bool out_is_dram_bool = out_is_dram == 1;
     constexpr bool tile_dtype_is_bfloat16 = get_compile_time_arg_val(0) == 1;
-#if (tile_dtype_is_bfloat16)
+
+    DataFormat data_format = DataFormat::Invalid;
+    if constexpr (tile_dtype_is_bfloat16) {
+        data_format = DataFormat::Float16;
+    } else {
+        data_format = DataFormat::Bfp8_b;
+    }
     const InterleavedAddrGenFast<out_is_dram_bool> s = {
-        .bank_base_address = out_tensor_addr, .page_size = single_tile_size_bytes, .data_format = DataFormat::Float16};
-#else
-    const InterleavedAddrGenFast<out_is_dram_bool> s = {
-        .bank_base_address = out_tensor_addr, .page_size = single_tile_size_bytes, .data_format = DataFormat::Bfp8_b};
-#endif
+        .bank_base_address = out_tensor_addr, .page_size = single_tile_size_bytes, .data_format = data_format};
 
     uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
     uint32_t out_num_tiles_read = in0_w_tiles;

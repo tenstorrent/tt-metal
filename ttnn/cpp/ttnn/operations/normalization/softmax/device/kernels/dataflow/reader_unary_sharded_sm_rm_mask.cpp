@@ -18,17 +18,9 @@ void kernel_main() {
     uint32_t mask_tile_bytes = get_tile_size(cb_attn);
 
     constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(2) == 1;
-#if (stick_size_is_pow2)
-    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(3);
-#else
-    constexpr uint32_t page_size = get_compile_time_arg_val(3);
-#endif
-#if (stick_size_is_pow2)
-    const InterleavedPow2AddrGen<is_dram_mask> addr_mask = {
-        .bank_base_address = mask_addr, .log_base_2_of_page_size = log_base_2_of_page_size};
-#else
-    const InterleavedAddrGen<is_dram_mask> addr_mask = {.bank_base_address = mask_addr, .page_size = page_size};
-#endif
+    constexpr uint32_t size = get_compile_time_arg_val(3);
+
+    const auto addr_mask = get_interleaved_addr_gen<is_dram_mask, stick_size_is_pow2>(mask_addr, size);
 
     constexpr auto cb_fused_scale = tt::CBIndex::c_2;
     const uint32_t pre_scale = get_arg_val<uint32_t>(1);
