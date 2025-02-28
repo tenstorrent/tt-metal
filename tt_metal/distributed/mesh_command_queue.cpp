@@ -188,8 +188,7 @@ void MeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool b
 }
 
 void MeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    std::shared_ptr<MeshEvent> event = std::make_shared<MeshEvent>();
-    this->enqueue_record_event_to_host(event, sub_device_ids);
+    auto event = this->enqueue_record_event_to_host(sub_device_ids);
     this->drain_events_from_completion_queue();
     this->verify_reported_events_after_draining(event);
 }
@@ -478,22 +477,22 @@ void MeshCommandQueue::enqueue_read_shards(
     }
 }
 
-void MeshCommandQueue::enqueue_record_event_helper(
-    const std::shared_ptr<MeshEvent>& event,
+MeshEvent MeshCommandQueue::enqueue_record_event_helper(
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     bool notify_host,
     const std::optional<MeshCoordinateRange>& device_range) {
     auto& sysmem_manager = this->reference_sysmem_manager();
-    event->cq_id = id_;
-    event->event_id = sysmem_manager.get_next_event(id_);
-    event->device = mesh_device_;
-    event->device_range = device_range.value_or(MeshCoordinateRange(mesh_device_->shape()));
+    auto event = MeshEvent(
+        sysmem_manager.get_next_event(id_),
+        mesh_device_,
+        id_,
+        device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
-    for (const auto& coord : event->device_range) {
+    for (const auto& coord : event.device_range()) {
         event_dispatch::issue_record_event_commands(
             mesh_device_,
-            event->event_id,
+            event.id(),
             id_,
             mesh_device_->num_hw_cqs(),
             mesh_device_->get_device(coord)->sysmem_manager(),
@@ -501,28 +500,27 @@ void MeshCommandQueue::enqueue_record_event_helper(
             expected_num_workers_completed_,
             notify_host);
     }
+
+    return event;
 }
 
-void MeshCommandQueue::enqueue_record_event(
-    const std::shared_ptr<MeshEvent>& event,
-    tt::stl::Span<const SubDeviceId> sub_device_ids,
-    const std::optional<MeshCoordinateRange>& device_range) {
-    this->enqueue_record_event_helper(event, sub_device_ids, false, device_range);
+MeshEvent MeshCommandQueue::enqueue_record_event(
+    tt::stl::Span<const SubDeviceId> sub_device_ids, const std::optional<MeshCoordinateRange>& device_range) {
+    return this->enqueue_record_event_helper(sub_device_ids, /*notify_host=*/false, device_range);
 }
 
-void MeshCommandQueue::enqueue_record_event_to_host(
-    const std::shared_ptr<MeshEvent>& event,
-    tt::stl::Span<const SubDeviceId> sub_device_ids,
-    const std::optional<MeshCoordinateRange>& device_range) {
-    this->enqueue_record_event_helper(event, sub_device_ids, true, device_range);
+MeshEvent MeshCommandQueue::enqueue_record_event_to_host(
+    tt::stl::Span<const SubDeviceId> sub_device_ids, const std::optional<MeshCoordinateRange>& device_range) {
+    auto event = this->enqueue_record_event_helper(sub_device_ids, /*notify_host=*/true, device_range);
     event_descriptors_.push(std::make_shared<MeshReadEventDescriptor>(MeshReadEventDescriptor{
-        .single_device_descriptor = ReadEventDescriptor(event->event_id), .device_range = event->device_range}));
+        .single_device_descriptor = ReadEventDescriptor(event.id()), .device_range = event.device_range()}));
+    return event;
 }
 
-void MeshCommandQueue::enqueue_wait_for_event(const std::shared_ptr<MeshEvent>& sync_event) {
-    for (const auto& coord : sync_event->device_range) {
+void MeshCommandQueue::enqueue_wait_for_event(const MeshEvent& sync_event) {
+    for (const auto& coord : sync_event.device_range()) {
         event_dispatch::issue_wait_for_event_commands(
-            id_, sync_event->cq_id, mesh_device_->get_device(coord)->sysmem_manager(), sync_event->event_id);
+            id_, sync_event.mesh_cq_id(), mesh_device_->get_device(coord)->sysmem_manager(), sync_event.id());
     }
 }
 
@@ -546,13 +544,14 @@ void MeshCommandQueue::drain_events_from_completion_queue() {
     }
 }
 
-void MeshCommandQueue::verify_reported_events_after_draining(const std::shared_ptr<MeshEvent>& event) {
-    auto& device_range = event->device_range;
+void MeshCommandQueue::verify_reported_events_after_draining(const MeshEvent& event) {
+    auto& device_range = event.device_range();
     for (const auto& coord : device_range) {
         TT_FATAL(
-            mesh_device_->get_device(coord)->sysmem_manager().get_last_completed_event(event->cq_id) >= event->event_id,
+            mesh_device_->get_device(coord)->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) >=
+                event.id(),
             "Expected to see event id {} in completion queue",
-            event->event_id);
+            event.id());
     }
 }
 

@@ -19,9 +19,6 @@ namespace ttnn {
 using QueueId = tt::stl::StrongType<uint8_t, struct QueueIdTag>;
 constexpr QueueId DefaultQueueId = QueueId(0);
 
-using MeshCommandQueueId = tt::stl::StrongType<uint8_t, struct MeshCommandQueueIdTag>;
-constexpr MeshCommandQueueId DefaultMeshCommandQueueId = MeshCommandQueueId(0);
-
 }  // namespace ttnn
 
 // Exporting to tt::tt_metal namespace because ttnn
@@ -29,6 +26,5 @@ constexpr MeshCommandQueueId DefaultMeshCommandQueueId = MeshCommandQueueId(0);
 namespace tt::tt_metal {
 
 using QueueId = ttnn::QueueId;
-using MeshCommandQueueId = ttnn::MeshCommandQueueId;
 
 }  // namespace tt::tt_metal

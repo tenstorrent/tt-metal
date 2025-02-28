@@ -23,9 +23,9 @@ void execute_trace(IDevice* device, uint32_t trace_id, QueueId cq_id, bool block
 void release_trace(IDevice* device, uint32_t trace_id);
 
 // Trace APIs - Multi Device
-MeshTraceId begin_mesh_trace_capture(MeshDevice* device, MeshCommandQueueId mesh_cq_id);
-void end_mesh_trace_capture(MeshDevice* device, MeshTraceId trace_id, MeshCommandQueueId mesh_cq_id);
-void execute_mesh_trace(MeshDevice* device, MeshTraceId trace_id, MeshCommandQueueId mesh_cq_id, bool blocking);
+MeshTraceId begin_mesh_trace_capture(MeshDevice* device, QueueId cq_id);
+void end_mesh_trace_capture(MeshDevice* device, MeshTraceId trace_id, QueueId cq_id);
+void execute_mesh_trace(MeshDevice* device, MeshTraceId trace_id, QueueId cq_id, bool blocking);
 void release_mesh_trace(MeshDevice* device, MeshTraceId trace_id);
 
 }  // namespace trace

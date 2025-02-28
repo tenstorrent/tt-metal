@@ -17,6 +17,11 @@ namespace ttnn::events {
 void py_module_types(py::module& module) {
     py::class_<Event, std::shared_ptr<Event>>(module, "event");
     py::class_<MultiDeviceEvent>(module, "multi_device_event");
+    py::class_<MeshEvent>(module, "MeshEvent").def("__repr__", [](const MeshEvent& self) {
+        std::ostringstream str;
+        str << self;
+        return str.str();
+    });
 }
 
 void py_module(py::module& module) {
@@ -99,6 +104,25 @@ void py_module(py::module& module) {
                 event (event): The event used to record completion of preceeding commands.
                 sub_device_ids (List[ttnn.SubDeviceId], optional): The sub-device IDs to record completion for. Defaults to sub-devices set by set_sub_device_stall_group.
             )doc");
+
+    module.def(
+        "record_mesh_event",
+        py::overload_cast<
+            MeshDevice*,
+            QueueId,
+            const std::vector<SubDeviceId>&,
+            const std::optional<MeshCoordinateRange>&>(&record_mesh_event),
+        py::arg("mesh_device"),
+        py::arg("cq_id"),
+        py::arg("sub_device_ids") = std::vector<SubDeviceId>(),
+        py::arg("device_range") = std::nullopt);
+
+    module.def(
+        "wait_for_mesh_event",
+        py::overload_cast<MeshDevice*, QueueId, const MeshEvent&>(&wait_for_mesh_event),
+        py::arg("mesh_device"),
+        py::arg("cq_id"),
+        py::arg("mesh_event"));
 }
 
 }  // namespace ttnn::events
