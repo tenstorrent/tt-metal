@@ -153,17 +153,15 @@ ttnn::Tensor SliceOperation::invoke(
             memory_config_arg.value_or(input_tensor.memory_config()));
     }
 
-    auto res = tt::tt_metal::operation::operation::run(
-                   SliceDeviceOperation{
-                       ttnn::Shape(modified_begins),
-                       ttnn::Shape(modified_ends),
-                       ttnn::Shape(modified_step),
-                       memory_config},
-                   {input},
-                   {},
-                   {optional_output_tensor},
-                   queue_id)
-                   .at(0);
+    auto res =
+        tt::tt_metal::operation::run(
+            SliceDeviceOperation{
+                ttnn::Shape(modified_begins), ttnn::Shape(modified_ends), ttnn::Shape(modified_step), memory_config},
+            {input},
+            {},
+            {optional_output_tensor},
+            queue_id)
+            .at(0);
     return ret_adjustment(res);
 }
 
