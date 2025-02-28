@@ -99,7 +99,7 @@ owned_buffer::Buffer<bfloat16> conv_using_op_trace_metadata(
 owned_buffer::Buffer<bfloat16> conv_using_shard_boundaries(
     const owned_buffer::Buffer<bfloat16>& input_padded_tensor_buf,
     const std::vector<float>& filter_vector,
-    const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries,
+    const std::vector<ShardBoundary>& shard_boundaries,
     uint32_t stride_h,
     uint32_t stride_w,
     uint32_t padded_input_h,
@@ -116,7 +116,7 @@ owned_buffer::Buffer<bfloat16> conv_using_shard_boundaries(
     uint32_t padded_input_hw = padded_input_h * padded_input_w;
     uint32_t input_idx_strt, input_idx;
     for (auto shard_boundry : shard_boundaries) {
-        auto [output_shard_start, output_shard_end] = shard_boundry.first;
+        auto [output_shard_start, output_shard_end] = shard_boundry.output_range;
         for (auto i = output_shard_start; i <= output_shard_end; i++) {
             for (auto fh = 0; fh < filter_h; fh++) {
                 for (auto fw = 0; fw < filter_w; fw++) {
@@ -143,7 +143,7 @@ owned_buffer::Buffer<bfloat16> conv_using_sliding_window_op_config(
     const owned_buffer::Buffer<bfloat16>& input_padded_tensor_buf,
     const std::vector<float>& filter_vector,
     const std::vector<uint32_t>& op_trace_metadata,
-    const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries,
+    const std::vector<ShardBoundary>& shard_boundaries,
     const std::vector<std::vector<uint16_t>>& sharded_input_top_left_indices,
     uint32_t input_h,
     uint32_t input_w,
@@ -160,7 +160,7 @@ owned_buffer::Buffer<bfloat16> conv_using_sliding_window_op_config(
 
     for (auto j = 0; j < sharded_input_top_left_indices.size(); j++) {
         auto shard = sharded_input_top_left_indices[j];
-        auto [output_shard_start, output_shard_end] = shard_boundaries[j].first;
+        auto [output_shard_start, output_shard_end] = shard_boundaries[j].output_range;
         for (auto idx : shard) {
             for (auto fh = 0; fh < filter_h; fh++) {
                 for (auto fw = 0; fw < filter_w; fw++) {
@@ -182,11 +182,10 @@ owned_buffer::Buffer<bfloat16> conv_using_sliding_window_op_config(
     return conv_tensor_buf;
 }
 
-std::vector<bool> pad_metadata_from_tensor_metadata(
-    const std::vector<std::pair<bool, uint32_pair_t>>& tensor_metadata) {
+std::vector<bool> pad_metadata_from_tensor_metadata(const std::vector<PixelMetadata>& tensor_metadata) {
     std::vector<bool> ref_pad_metadata;
     for (auto i = 0; i < tensor_metadata.size(); i++) {
-        auto is_pad_stick = tensor_metadata[i].first;
+        auto is_pad_stick = tensor_metadata[i].is_pad;
         if (is_pad_stick) {
             ref_pad_metadata.push_back(true);
             continue;
@@ -198,11 +197,11 @@ std::vector<bool> pad_metadata_from_tensor_metadata(
 
 std::vector<uint32_t> pad_indices_from_flattened_pad_config(
     const std::vector<std::vector<uint16_t>>& flattened_pad_config,
-    const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries) {
+    const std::vector<ShardBoundary>& shard_boundaries) {
     std::vector<uint32_t> abs_indices;
     for (auto i = 0; i < shard_boundaries.size(); i++) {
-        uint32_pair_t input_boundry = shard_boundaries[i].second;
-        uint32_t padded_input_tensor_buf_idx = input_boundry.first;
+        auto input_boundry = shard_boundaries[i].input_range;
+        uint32_t padded_input_tensor_buf_idx = input_boundry.start;
 
         std::vector<uint16_t> pad_config = flattened_pad_config[i];
         for (auto j = 0; j < pad_config.size(); j += 2) {
@@ -218,11 +217,11 @@ std::vector<uint32_t> pad_indices_from_flattened_pad_config(
 
 std::vector<uint32_t> input_indices_from_flattened_local_config(
     const std::vector<std::vector<uint16_t>>& flattened_local_config,
-    const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries) {
+    const std::vector<ShardBoundary>& shard_boundaries) {
     std::vector<uint32_t> abs_indices;
     for (auto i = 0; i < shard_boundaries.size(); i++) {
-        uint32_pair_t input_boundry = shard_boundaries[i].second;
-        uint32_t padded_input_tensor_buf_idx = input_boundry.first;
+        auto input_boundry = shard_boundaries[i].input_range;
+        uint32_t padded_input_tensor_buf_idx = input_boundry.start;
 
         std::vector<uint16_t> local_config = flattened_local_config[i];
         size_t sz = local_config[2];
@@ -240,7 +239,7 @@ std::vector<uint32_t> input_indices_from_flattened_local_config(
 std::vector<uint32_t> input_indices_from_flattened_remote_config(
     tt::tt_metal::IDevice* device,
     const std::vector<std::vector<uint16_t>>& flattened_remote_config,
-    const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries,
+    const std::vector<ShardBoundary>& shard_boundaries,
     bool remote_read,
     bool is_block_sharded,
     bool transpose_mcast) {
@@ -262,7 +261,7 @@ std::vector<uint32_t> input_indices_from_flattened_remote_config(
         CoreCoord coord = {remote_config[0], remote_config[1]};
         uint32_t core_id = phy_to_log_core_map[coord];
         uint32_t padded_input_tensor_buf_idx =
-            remote_read ? shard_boundaries[i].second.first : shard_boundaries[core_id].second.first;
+            remote_read ? shard_boundaries.at(i).input_range.start : shard_boundaries.at(core_id).input_range.start;
         size_t sz = remote_config[2];
         uint32_t local_idx = 3;
         while (sz) {
@@ -277,7 +276,7 @@ std::vector<uint32_t> input_indices_from_flattened_remote_config(
             coord = {remote_config[local_idx], remote_config[local_idx + 1]};
             core_id = phy_to_log_core_map[coord];
             padded_input_tensor_buf_idx =
-                remote_read ? shard_boundaries[i].second.first : shard_boundaries[core_id].second.first;
+                remote_read ? shard_boundaries.at(i).input_range.start : shard_boundaries.at(core_id).input_range.start;
             local_idx += 2;
             sz = remote_config[local_idx];
             local_idx++;
