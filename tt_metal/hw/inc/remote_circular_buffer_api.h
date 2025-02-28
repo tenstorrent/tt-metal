@@ -69,11 +69,8 @@ FORCE_INLINE void update_pages_acked(
         MEM_NOC_ATOMIC_RET_VAL_ADDR);
 }
 #else
-static constexpr uint8_t default_noc_mode = 0;
-template <uint8_t nm = default_noc_mode, bool barrier_atomics = false>
 FORCE_INLINE void update_pages_sent(
     const RemoteSenderCBInterface& sender_cb_interface, uint32_t aligned_page_adjustment, uint8_t noc) {}
-template <uint8_t nm = default_noc_mode, bool barrier_atomics = false>
 FORCE_INLINE void update_pages_acked(
     const RemoteReceiverCBInterface& receiver_cb_interface, uint32_t aligned_page_adjustment, uint8_t noc) {}
 #endif
