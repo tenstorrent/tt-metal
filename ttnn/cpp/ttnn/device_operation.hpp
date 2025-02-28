@@ -404,7 +404,7 @@ void launch_on_mesh_device(
             device,
             device_operation_id);
 
-        tt::tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, true);
+        tt::tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
 
     } else {
         auto program_factory = device_operation_t::select_program_factory(operation_attributes, tensor_args);
@@ -432,7 +432,7 @@ void launch_on_mesh_device(
             std::move(*program),
             tt::tt_metal::distributed::MeshCoordinateRange(
                 {0, 0}, {mesh_device->num_rows() - 1, mesh_device->num_cols() - 1}));
-        tt::tt_metal::distributed::EnqueueMeshWorkload(cq, mesh_workload, true);
+        tt::tt_metal::distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     }
 }
 
