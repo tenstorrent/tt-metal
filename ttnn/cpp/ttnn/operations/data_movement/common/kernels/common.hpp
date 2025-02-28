@@ -182,4 +182,18 @@ FORCE_INLINE uint32_t align_address(const uint32_t address, const uint64_t mask)
     return (address & mask) + AlignReq;
 }
 
+// Minimal custom "index_sequence" machinery (C++14 style).
+// Works fine in embedded environments without a full stdlib.
+
+template <size_t... I>
+struct index_sequence {};
+
+// Recursive definition of make_index_sequence
+//   - Make a sequence [0, 1, 2, ..., N-1]
+template <size_t N, size_t... I>
+struct make_index_sequence : make_index_sequence<N - 1, N - 1, I...> {};
+
+template <size_t... I>
+struct make_index_sequence<0, I...> : index_sequence<I...> {};
+
 }  // namespace tt::data_movement::common

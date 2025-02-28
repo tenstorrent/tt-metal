@@ -235,6 +235,16 @@ def test_permute_nd(device):
     assert_with_pcc(torch_output, output_tensor, 0.9999)
 
 
+def test_permute_nd_rm_invariant(device):
+    torch.manual_seed(2005)
+    torch_tensor = torch.rand((1, 3, 16, 16, 16, 16), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    output_tensor = ttnn.permute(input_tensor, (0, 2, 4, 3, 1, 5))
+    output_tensor = ttnn.to_torch(output_tensor)
+    torch_output = torch.permute(torch_tensor, (0, 2, 4, 3, 1, 5))
+    assert_with_pcc(torch_output, output_tensor, 0.9999)
+
+
 def test_permute_squeeze(device):
     torch.manual_seed(2005)
     ones = ttnn.ones((1, 1, 3))
