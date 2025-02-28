@@ -31,7 +31,13 @@ from models.demos.llama3.tt.model_config import TtModelArgs
 
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
-from models.demos.llama3.tt.model_config import LlamaOptimizations, LayerGroup, PrecisionSetting
+from models.demos.llama3.tt.model_config import (
+    LlamaOptimizations,
+    TensorGroup,
+    PrecisionSetting,
+    OpGroup,
+    MathFidelitySetting,
+)
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -515,7 +521,10 @@ def run_llama3_demo(
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
 
         decode_input = ttnn.unsqueeze_to_4D(tt_embd(tt_out_tok))
-        decode_input = ttnn.to_memory_config(decode_input, tt_model.args.model_config["DECODE_RESIDUAL_MEMCFG"])
+        decode_input = ttnn.to_memory_config(
+            decode_input,
+            tt_model.args.model_config["DECODE_RESIDUAL_MEMCFG"],
+        )
         rot_mats = tt_model.rope_setup.get_rot_mats(rot_mat_idxs)
         tt_out = tt_model(
             decode_input,
@@ -550,13 +559,15 @@ def run_llama3_demo(
         current_pos_reset = ttnn.from_torch(
             current_pos,
             dtype=ttnn.int32,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device,
-                dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
-                mesh_shape=model_args.cluster_shape,
-            )
-            if tt_model.args.num_devices > 1
-            else None,
+            mesh_mapper=(
+                ttnn.ShardTensor2dMesh(
+                    mesh_device,
+                    dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+                    mesh_shape=model_args.cluster_shape,
+                )
+                if tt_model.args.num_devices > 1
+                else None
+            ),
         )
         tt_out_tok_reset = ttnn.from_torch(
             torch.nn.functional.pad(
@@ -918,57 +929,212 @@ def run_llama3_demo(
     [
         pytest.param(
             LlamaOptimizations(
-                {LayerGroup.FF1_FF3: PrecisionSetting.BFP4_LOFI, LayerGroup.FF2: PrecisionSetting.BFP4_LOFI}
+                {
+                    "TensorPrecision": {
+                        TensorGroup.FF1_FF3: PrecisionSetting.BFP4,
+                        TensorGroup.FF2: PrecisionSetting.BFP4,
+                    },
+                    "OpFidelity": {
+                        OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI,
+                        OpGroup.LI_FF2: MathFidelitySetting.LOFI,
+                    },
+                }
             ),
-            id="precision_ff1_3_bfp4_lofi_ff2_bfp4_lofi",
+            id="p001111_f00121143",
         ),
         pytest.param(
             LlamaOptimizations(
-                {LayerGroup.FF1_FF3: PrecisionSetting.BFP4_LOFI, LayerGroup.FF2: PrecisionSetting.BFP8_HIFI2}
+                {
+                    "TensorPrecision": {
+                        TensorGroup.FF1_FF3: PrecisionSetting.BFP4,
+                        TensorGroup.FF2: PrecisionSetting.BFP8,
+                    },
+                    "OpFidelity": {
+                        OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI,
+                        OpGroup.LI_FF2: MathFidelitySetting.HIFI2,
+                    },
+                }
             ),
-            id="precision_ff1_3_bfp4_lofi_ff2_bfp8_hifi2",
+            id="p011111_f01121143",
         ),
         pytest.param(
             LlamaOptimizations(
-                {LayerGroup.FF1_FF3: PrecisionSetting.BFP4_LOFI, LayerGroup.FF2: PrecisionSetting.BF16_HIFI4}
+                {
+                    "TensorPrecision": {
+                        TensorGroup.FF1_FF3: PrecisionSetting.BFP4,
+                        TensorGroup.FF2: PrecisionSetting.BF16,
+                    },
+                    "OpFidelity": {
+                        OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI,
+                        OpGroup.LI_FF2: MathFidelitySetting.HIFI4,
+                    },
+                }
             ),
-            id="precision_ff1_3_bfp4_lofi_ff2_bf16_hifi4",
+            id="p021111_f04121143",
         ),
         pytest.param(
             LlamaOptimizations(
-                {LayerGroup.FF1_FF3: PrecisionSetting.BFP8_HIFI2, LayerGroup.FF2: PrecisionSetting.BFP4_LOFI}
+                {
+                    "TensorPrecision": {
+                        TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
+                        TensorGroup.FF2: PrecisionSetting.BFP4,
+                    },
+                    "OpFidelity": {
+                        OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2,
+                        OpGroup.LI_FF2: MathFidelitySetting.LOFI,
+                    },
+                }
             ),
-            id="precision_ff1_3_bfp8_hifi2_ff2_bfp4_lofi",
+            id="p101111_f10121143",
         ),
         pytest.param(
             LlamaOptimizations(
-                {LayerGroup.FF1_FF3: PrecisionSetting.BFP8_HIFI2, LayerGroup.FF2: PrecisionSetting.BFP8_HIFI2}
+                {
+                    "TensorPrecision": {
+                        TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
+                        TensorGroup.FF2: PrecisionSetting.BFP8,
+                    },
+                    "OpFidelity": {
+                        OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2,
+                        OpGroup.LI_FF2: MathFidelitySetting.HIFI2,
+                    },
+                }
             ),
-            id="precision_ff1_3_bfp8_hifi2_ff2_bfp8_hifi2",
+            id="p11111_f11121143",
         ),
         pytest.param(
             LlamaOptimizations(
-                {LayerGroup.FF1_FF3: PrecisionSetting.BFP8_HIFI2, LayerGroup.FF2: PrecisionSetting.BF16_HIFI4}
+                {
+                    "TensorPrecision": {
+                        TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
+                        TensorGroup.FF2: PrecisionSetting.BF16,
+                    },
+                    "OpFidelity": {
+                        OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2,
+                        OpGroup.LI_FF2: MathFidelitySetting.HIFI4,
+                    },
+                }
             ),
-            id="precision_ff1_3_bfp8_hifi2_ff2_bf16_hifi4",
+            id="p121111_f14121143",
         ),
         pytest.param(
             LlamaOptimizations(
-                {LayerGroup.FF1_FF3: PrecisionSetting.BF16_HIFI4, LayerGroup.FF2: PrecisionSetting.BFP4_LOFI}
+                {
+                    "TensorPrecision": {
+                        TensorGroup.FF1_FF3: PrecisionSetting.BF16,
+                        TensorGroup.FF2: PrecisionSetting.BFP4,
+                    },
+                    "OpFidelity": {
+                        OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI4,
+                        OpGroup.LI_FF2: MathFidelitySetting.LOFI,
+                    },
+                }
             ),
-            id="precision_ff1_3_bf16_hifi4_ff2_bfp4_lofi",
+            id="p201111_f40121143",
         ),
         pytest.param(
             LlamaOptimizations(
-                {LayerGroup.FF1_FF3: PrecisionSetting.BF16_HIFI4, LayerGroup.FF2: PrecisionSetting.BFP8_HIFI2}
+                {
+                    "TensorPrecision": {
+                        TensorGroup.FF1_FF3: PrecisionSetting.BF16,
+                        TensorGroup.FF2: PrecisionSetting.BFP8,
+                    },
+                    "OpFidelity": {
+                        OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI4,
+                        OpGroup.LI_FF2: MathFidelitySetting.HIFI2,
+                    },
+                }
             ),
-            id="precision_ff1_3_bf16_hifi4_ff2_bfp8_hifi2",
+            id="p211111_f41121143",
         ),
         pytest.param(
             LlamaOptimizations(
-                {LayerGroup.FF1_FF3: PrecisionSetting.BF16_HIFI4, LayerGroup.FF2: PrecisionSetting.BF16_HIFI4}
+                {
+                    "TensorPrecision": {
+                        TensorGroup.FF1_FF3: PrecisionSetting.BF16,
+                        TensorGroup.FF2: PrecisionSetting.BF16,
+                    },
+                    "OpFidelity": {
+                        OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI4,
+                        OpGroup.LI_FF2: MathFidelitySetting.HIFI4,
+                    },
+                }
             ),
-            id="precision_ff1_3_bf16_hifi4_ff2_bf16_hifi4",
+            id="p221111_f44121143",
+        ),
+        pytest.param(
+            LlamaOptimizations(
+                {
+                    "TensorPrecision": {
+                        TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
+                        TensorGroup.FF2: PrecisionSetting.BFP8,
+                        TensorGroup.WQKV: PrecisionSetting.BFP8,
+                        TensorGroup.WO: PrecisionSetting.BFP4,
+                        TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
+                        TensorGroup.ACTIVATION: PrecisionSetting.BF16,
+                    },
+                    "OpFidelity": {
+                        OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2,
+                        OpGroup.LI_FF2: MathFidelitySetting.HIFI2,
+                        OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI2,
+                        OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2_NA,
+                        OpGroup.LI_O_DECODE: MathFidelitySetting.LOFI,
+                        OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
+                        OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
+                        OpGroup.LI_O_PREFILL: MathFidelitySetting.LOFI,
+                    },
+                }
+            ),
+            id="p111012_f11120140",
+        ),
+        pytest.param(
+            LlamaOptimizations(
+                {
+                    "TensorPrecision": {
+                        TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
+                        TensorGroup.FF2: PrecisionSetting.BFP8,
+                        TensorGroup.WQKV: PrecisionSetting.BFP8,
+                        TensorGroup.WO: PrecisionSetting.BFP4,
+                        TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
+                        TensorGroup.ACTIVATION: PrecisionSetting.BFP8,
+                    },
+                    "OpFidelity": {
+                        OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2,
+                        OpGroup.LI_FF2: MathFidelitySetting.HIFI2,
+                        OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI2,
+                        OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2_NA,
+                        OpGroup.LI_O_DECODE: MathFidelitySetting.LOFI,
+                        OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
+                        OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
+                        OpGroup.LI_O_PREFILL: MathFidelitySetting.LOFI,
+                    },
+                }
+            ),
+            id="p111011_f11120140",
+        ),
+        pytest.param(
+            LlamaOptimizations(
+                {
+                    "TensorPrecision": {
+                        TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
+                        TensorGroup.FF2: PrecisionSetting.BFP8,
+                        TensorGroup.WQKV: PrecisionSetting.BFP8,
+                        TensorGroup.WO: PrecisionSetting.BFP4,
+                        TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
+                    },
+                    "OpFidelity": {
+                        OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2,
+                        OpGroup.LI_FF2: MathFidelitySetting.HIFI2,
+                        OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI2,
+                        OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2_NA,
+                        OpGroup.LI_O_DECODE: MathFidelitySetting.LOFI,
+                        OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
+                        OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
+                        OpGroup.LI_O_PREFILL: MathFidelitySetting.LOFI,
+                    },
+                }
+            ),
+            id="p11101o_f11120140",
         ),
         LlamaOptimizations.performance,
         LlamaOptimizations.accuracy,
