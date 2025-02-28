@@ -139,9 +139,12 @@ class TransformerBlock(LightweightModule):
         ff_in = self.ff_norm(h, mode)
         if TG and mode == "decode":
             ff_in = ttnn.to_memory_config(ff_in, memory_config=self.model_config["MLP_ACT_MEMCFG"])
+
+        # breakpoint()
         # MLP takes replicated inputs and produces fractured outputs
         ff_out = self.feed_forward.forward(ff_in, mode)
         # ff_out and h are both fractured across devices
+        # breakpoint()
         out = ttnn.add(
             h,
             ff_out,
