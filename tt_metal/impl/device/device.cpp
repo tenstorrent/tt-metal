@@ -943,8 +943,8 @@ void Device::init_fabric() {
 
     program_dispatch::finalize_program_offsets(*fabric_program_, this);
 
-    detail::WriteRuntimeArgsToDevice(this, *fabric_program_);
-    detail::ConfigureDeviceWithProgram(this, *fabric_program_);
+    detail::WriteRuntimeArgsToDevice(this, *fabric_program_, this->using_fast_dispatch());
+    detail::ConfigureDeviceWithProgram(this, *fabric_program_, this->using_fast_dispatch());
 
     // Note: the l1_barrier below is needed to be sure writes to cores that
     // don't get the GO mailbox (eg, storage cores) have all landed
