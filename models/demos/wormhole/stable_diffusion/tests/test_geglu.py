@@ -15,50 +15,50 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_geglu import gegl
 from models.utility_functions import torch_random, skip_for_grayskull
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
+    preprocess_and_push_input_to_device,
+)
+
+from models.demos.wormhole.stable_diffusion.tests.parameterizations import TRANSFORMER_PARAMETERIZATIONS
 
 
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize(
-    "N, C, H, W, index",
-    [
-        (
-            1,
-            2,
-            4096,
-            320,
-            3,
-        ),
-        (
-            1,
-            2,
-            1024,
-            640,
-            2,
-        ),
-        (
-            1,
-            2,
-            256,
-            1280,
-            1,
-        ),
-        (
-            1,
-            2,
-            64,
-            1280,
-            1,
-        ),
-    ],
+    "input_shape, shard_layout, shard_end_core, shard_shape, attention_head_dim, block, block_index, attention_index",
+    TRANSFORMER_PARAMETERIZATIONS,
 )
-def test_geglu_512x512(device, model_name, N, C, H, W, index, reset_seeds):
-    input_shapes = (N, C, H, W)
+def test_geglu_512x512(
+    device,
+    model_name,
+    input_shape,
+    shard_layout,
+    shard_end_core,
+    shard_shape,
+    attention_head_dim,
+    block,
+    block_index,
+    attention_index,
+):
     model = UNet2DConditionModel.from_pretrained(model_name, subfolder="unet").eval()
-    ref_model = model.up_blocks[index].attentions[0].transformer_blocks[0].ff.net[0]
+
+    if block == "up":
+        basic_transformer = model.up_blocks[block_index].attentions[attention_index].transformer_blocks[0]
+    elif block == "down":
+        basic_transformer = model.down_blocks[block_index].attentions[attention_index].transformer_blocks[0]
+    elif block == "mid":
+        basic_transformer = model.mid_block.attentions[0].transformer_blocks[0]
+
+    ref_model = basic_transformer.ff.net[0]
     config = model.config
-    torch_hidden_states = torch_random(input_shapes, -1, 1, dtype=torch.float32)
+
+    N, C, H, W = input_shape
+
+    hidden_states = torch_random(input_shape, -1, 1, dtype=torch.float32)
+    torch_hidden_states = torch.permute(hidden_states, [0, 2, 3, 1])
+    torch_hidden_states = torch.reshape(torch_hidden_states, [N, H * W, C])
+
     torch_output = ref_model(torch_hidden_states)
 
     parameters = preprocess_model_parameters(
@@ -68,16 +68,32 @@ def test_geglu_512x512(device, model_name, N, C, H, W, index, reset_seeds):
     )
     model = geglu(device, parameters=parameters)
 
-    torch_hidden_states = torch_hidden_states.reshape(
-        1, 1, torch_hidden_states.shape[-3] * torch_hidden_states.shape[-2], torch_hidden_states.shape[-1]
+    ttnn_hidden_states = preprocess_and_push_input_to_device(
+        device,
+        hidden_states,
+        memory_config=ttnn.MemoryConfig(
+            shard_layout,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet(
+                    {
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0),
+                            ttnn.CoreCoord(shard_end_core[0], shard_end_core[1]),
+                        ),
+                    }
+                ),
+                shard_shape,
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        ),
+        dtype=ttnn.bfloat16,
     )
-    ttnn_hidden_state = ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    ttnn_hidden_state = ttnn.to_device(ttnn_hidden_state, device)
 
-    output = model(config, ttnn_hidden_state)
+    output = model(config, ttnn_hidden_states)
     output = ttnn.from_device(output)
     output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.to_torch(output)
     output = output.reshape(1, 2, output.shape[-2] // 2, output.shape[-1])
 
-    assert_with_pcc(torch_output, output.to(torch_output.dtype), 0.99)
+    assert_with_pcc(torch_output, output.to(torch_output.dtype).squeeze(0), 0.99)
