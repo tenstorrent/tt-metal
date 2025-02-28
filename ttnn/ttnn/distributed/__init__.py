@@ -6,10 +6,6 @@
 from .distributed import (
     MeshDevice,
     DispatchCoreType,
-    TensorToMesh,
-    ShardTensorToMesh,
-    ShardTensor2dMesh,
-    ReplicateTensorToMesh,
     MeshToTensor,
     ConcatMeshToTensor,
     ConcatMesh2dToTensor,
