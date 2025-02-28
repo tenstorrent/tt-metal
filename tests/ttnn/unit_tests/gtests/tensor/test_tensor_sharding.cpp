@@ -762,7 +762,7 @@ TEST_P(CreateShardedTensorWithAlignmentTests, AllocateTensor) {
 
     TensorLayout layout(params.inputs.data_type, params.inputs.page_config, params.inputs.memory_config);
 
-    test_utils::test_tensor_on_device(input_shape, layout, device_);
+    test_utils::test_tensor_on_device(input_shape, layout, device_.get());
 
     EXPECT_EQ(layout.compute_physical_shape(input_shape), params.expected.physical_shape);
 }

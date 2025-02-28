@@ -10,7 +10,8 @@
 
 namespace test_utils {
 
-void test_tensor_on_device(const ttnn::Shape& input_shape, const TensorLayout& layout, tt::tt_metal::IDevice* device) {
+void test_tensor_on_device(
+    const ttnn::Shape& input_shape, const TensorLayout& layout, tt::tt_metal::distributed::MeshDevice* device) {
     using namespace tt::tt_metal;
 
     const ttnn::QueueId io_cq = ttnn::DefaultQueueId;
@@ -28,13 +29,13 @@ void test_tensor_on_device(const ttnn::Shape& input_shape, const TensorLayout& l
     }
 
     auto tensor = tt::tt_metal::create_device_tensor(TensorSpec(input_shape, layout), device);
-    ttnn::queue_synchronize(device->command_queue(*io_cq));
+    device->synchronize();
 
     ttnn::write_buffer(io_cq, tensor, {host_data});
-    ttnn::queue_synchronize(device->command_queue(*io_cq));
+    device->synchronize();
 
     ttnn::read_buffer(io_cq, tensor, {readback_data});
-    ttnn::queue_synchronize(device->command_queue(*io_cq));
+    device->synchronize();
 
     for (int i = 0; i < input_buf_size; i++) {
         EXPECT_EQ(host_data[i], readback_data[i]);
@@ -48,11 +49,11 @@ void test_tensor_on_device(const ttnn::Shape& input_shape, const TensorLayout& l
 }
 
 void test_tensor_on_device(const ttnn::Shape& input_shape, const tt::tt_metal::TensorLayout& layout) {
-    tt::tt_metal::IDevice* device = tt::tt_metal::CreateDevice(0);
+    auto device = tt::tt_metal::distributed::MeshDevice::create_single_device(0);
 
-    test_tensor_on_device(input_shape, layout, device);
+    test_tensor_on_device(input_shape, layout, device.get());
 
-    tt::tt_metal::CloseDevice(device);
+    device->close();
 }
 
 }  // namespace test_utils
