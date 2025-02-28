@@ -86,7 +86,8 @@ struct PartialPageSpec {
     uint32_t num_partial_pages_per_full_page = 0;
 };
 
-struct BufferReadLargePageDispatchParams : BufferReadDispatchParams {
+class BufferReadLargePageDispatchParams : public BufferReadDispatchParams {
+public:
     PartialPageSpec partial_page_spec;
 
     void update_params_to_be_within_bounds(const Buffer& buffer) override {
@@ -105,6 +106,8 @@ struct BufferReadLargePageDispatchParams : BufferReadDispatchParams {
         this->src_page_index = (this->src_page_index + this->pages_per_txn) % this->num_banks;
     }
 };
+
+using BufferReadDispatchParamsVariant = std::variant<BufferReadDispatchParams, BufferReadLargePageDispatchParams>;
 
 struct ShardedBufferReadDispatchParams : BufferReadDispatchParams {
     bool width_split = false;
@@ -131,7 +134,7 @@ ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     const BufferRegion& region);
 
-std::unique_ptr<BufferReadDispatchParams> initialize_interleaved_buf_read_dispatch_params(
+BufferReadDispatchParamsVariant initialize_interleaved_buf_read_dispatch_params(
     Buffer& buffer,
     uint32_t cq_id,
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
@@ -171,7 +174,7 @@ std::shared_ptr<::tt::tt_metal::CompletionReaderVariant> generate_sharded_buffer
 std::shared_ptr<::tt::tt_metal::CompletionReaderVariant> generate_interleaved_buffer_read_descriptor(
     void* dst, BufferReadDispatchParams* dispatch_params, Buffer& buffer);
 
-bool are_pages_large(const Buffer& buffer);
+bool are_pages_larger_than_max_prefetch_cmd_size(const Buffer& buffer);
 
 PartialPageSpec calculate_partial_page_spec(const Buffer& buffer);
 }  // namespace buffer_dispatch
