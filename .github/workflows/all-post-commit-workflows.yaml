@@ -50,6 +50,14 @@ jobs:
       build-type: ${{ inputs.build-type || 'Release' }}
       tracy: true
     secrets: inherit
+
+  smoke-tests:
+    needs: pr-gate-build
+    uses: ./.github/impl/smoke.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
+
   # Slow Dispatch Unit Tests
   sd-unit-tests:
     needs: build-artifact
