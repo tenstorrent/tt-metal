@@ -11,13 +11,13 @@ static inline bool verify_available_cores(
     uint16_t width,
     uint16_t min_dim,
     uint16_t max_dim,
-    CoreCoord grid,
+    CoreRangeSet core_range_set,
     uint16_t k,
     const uint32_t l1_size,
     const uint32_t value_tile_size,
     const uint32_t index_tile_size) {
-    const auto max_cores = grid.y - 1;  // reserve one core for the gather - switch to grid.x as it allows for more
-                                        // cores and allow spillover to next row
+    const auto core_range = core_range_set.ranges().at(0);
+    const auto max_cores = core_range.end_coord.y - core_range.start_coord.y - 1;
     for (uint16_t split_size = max_dim; split_size >= min_dim; split_size /= 2) {
         uint16_t rem = width % split_size;
         uint16_t num_cores = width / split_size + (rem > 0);
@@ -75,12 +75,17 @@ void TopK::validate_with_output_tensors(
                 input_shape[this->dim],
                 64,
                 input_shape[this->dim] / 2,
-                device->compute_with_storage_grid_size(),
+                this->sub_core_grids,
                 this->k,
                 device->l1_size_per_core(),
                 value_tile_size,
                 index_tile_size),
             "Not enough cores available to run topk operation");
+
+        TT_FATAL(
+            this->sub_core_grids.ranges().size() == 1,
+            "Only one core range is supported right now, got {}",
+            this->sub_core_grids.ranges().size());
     }
 }
 
@@ -121,11 +126,24 @@ operation::ProgramWithCallbacks TopK::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     if (input_tensor.get_padded_shape()[dim] < topk_utils::multi_core_min_width) {
+        tt::log_info("create_program sub_core_grids: {}", this->sub_core_grids);
         return detail::topk_single_core_interleaved(
-            input_tensor, this->k, this->dim, this->largest, output_tensors.at(0), output_tensors.at(1));
+            input_tensor,
+            this->k,
+            this->dim,
+            this->largest,
+            this->sub_core_grids,
+            output_tensors.at(0),
+            output_tensors.at(1));
     } else {
         return detail::topk_multicore_interleaved(
-            input_tensor, this->k, this->dim, this->largest, output_tensors.at(0), output_tensors.at(1));
+            input_tensor,
+            this->k,
+            this->dim,
+            this->largest,
+            this->sub_core_grids,
+            output_tensors.at(0),
+            output_tensors.at(1));
     }
 }
 

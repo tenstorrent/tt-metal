@@ -797,4 +797,4 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_i
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
-} // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::operations::experimental::transformer

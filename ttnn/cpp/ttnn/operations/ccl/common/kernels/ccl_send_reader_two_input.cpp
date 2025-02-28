@@ -260,14 +260,14 @@ struct command_context_t final {
         return current_cmd_header.dest_type != ttnn::ccl::cmd::CclCommandDestType::CHIP_LOCAL_ONLY;
     }
 
-    FORCE_INLINE bool is_complete() const { return command_idx >= num_commands; }
+    bool is_complete() const { return command_idx >= num_commands; }
 
-    FORCE_INLINE void complete_current_command() {
+    void complete_current_command() {
         command_idx++;
         populated = false;
     }
 
-    FORCE_INLINE bool current_command_active() const { return populated; }
+    bool current_command_active() const { return populated; }
 
     void fetch_next_command() {
         populated = true;
@@ -610,7 +610,7 @@ void write_and_advance_local_read_address_for_fabric_write(
     l1_read_addr += payload_size_bytes;
 }
 
-FORCE_INLINE void write_payload_then_advance_read_address(
+void write_payload_then_advance_read_address(
     uint64_t noc0_dest_noc_addr,
     size_t packet_header_buffer_addr,
     const ttnn::ccl::cmd::CclCommandHeader& current_cmd_header,
@@ -708,7 +708,7 @@ void try_advance_write_tensor_from_cb(command_context_t<Addrgen>& cmd_ctx) {
 }
 #endif
 
-static FORCE_INLINE ttnn::ccl::cmd::noc_transfer_info get_next_noc_transfer_in_burst(arg_idx_t& arg_idx) {
+static ttnn::ccl::cmd::noc_transfer_info get_next_noc_transfer_in_burst(arg_idx_t& arg_idx) {
     auto noc_yx_in_16bits_each = get_arg_val<uint32_t>(arg_idx + 1);
     noc_grid_index_t noc_x = static_cast<noc_grid_index_t>(noc_yx_in_16bits_each & 0xFF);
     noc_grid_index_t noc_y = static_cast<noc_grid_index_t>((noc_yx_in_16bits_each >> 16) & 0xFF);
@@ -718,9 +718,9 @@ static FORCE_INLINE ttnn::ccl::cmd::noc_transfer_info get_next_noc_transfer_in_b
     return {safe_get_noc_addr(noc_x, noc_y, bank_addr_offset), noc_transfer_size_bytes};
 }
 
-static FORCE_INLINE size_t get_args_consumed_by_noc_transfer_info_in_burst() { return 3; }
+static size_t get_args_consumed_by_noc_transfer_info_in_burst() { return 3; }
 
-FORCE_INLINE static ttnn::ccl::cmd::noc_transfer_info advance_to_next_noc_transaction_in_burst(
+static ttnn::ccl::cmd::noc_transfer_info advance_to_next_noc_transaction_in_burst(
     noc_transfer_burst_context& noc_burst_ctx, arg_idx_t& arg_idx) {
     const auto noc_transfer_info = get_next_noc_transfer_in_burst(arg_idx);
     arg_idx += get_args_consumed_by_noc_transfer_info_in_burst();
