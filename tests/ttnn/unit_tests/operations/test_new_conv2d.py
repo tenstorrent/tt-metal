@@ -72,6 +72,7 @@ def run_conv(
     weight_mesh_mapper=None,
     output_mesh_composer=None,
     enable_split_reader=False,
+    enable_halo_split_reader=False,
     activation="",
 ):
     if isinstance(device, ttnn.MeshDevice):
@@ -138,6 +139,7 @@ def run_conv(
         enable_subblock_padding=False,
         output_layout=output_layout,
         activation=activation,
+        enable_halo_split_reader=enable_halo_split_reader,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -2851,4 +2853,83 @@ def test_block_sharding_relu_act_block_h(
         config_override=config_override,
         shard_layout=shard_layout,
         activation=activation,
+    )
+
+@pytest.mark.parametrize("batch", [1])
+@pytest.mark.parametrize(
+    "output_channels, input_channels, input_height, input_width",
+    (
+        (4, 32, 288, 288),
+        (32, 48, 284, 284),
+        (48, 56, 280, 280),
+        (56, 64, 272, 272),
+    ),
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat16],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat16],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize(
+    "kernel, dilation, padding",
+    [
+        [5, 2, 2],
+        [3, 8, 1],
+    ],
+)
+@pytest.mark.parametrize("stride", [1])
+@pytest.mark.parametrize("enable_halo_split_reader", [True])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384*2}], indirect=True)
+def test_halo_split_reader(
+    device,
+    torch_tensor_map,
+    batch,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    weights_dtype,
+    activations_dtype,
+    math_fidelity,
+    kernel,
+    dilation,
+    padding,
+    stride,
+    enable_halo_split_reader
+):
+    config_override = {}
+
+    run_conv(
+        device=device,
+        torch_tensor_map=torch_tensor_map,
+        activations_dtype=activations_dtype,
+        weights_dtype=weights_dtype,
+        batch_size=batch,
+        output_channels=output_channels,
+        input_channels=input_channels,
+        input_height=input_height,
+        input_width=input_width,
+        filter_height=kernel,
+        filter_width=kernel,
+        stride_h=stride,
+        stride_w=stride,
+        pad_h=padding,
+        pad_w=padding,
+        config_override=config_override,
+        dilation=dilation,
+        math_fidelity=math_fidelity,
+        output_layout=ttnn.TILE_LAYOUT,
+        debug=False,
+        groups=1,
+        has_bias=True,
+        shard_layout=None,
+        memory_config=None,
+        input_mesh_mapper=None,
+        weight_mesh_mapper=None,
+        output_mesh_composer=None,
+        enable_halo_split_reader=enable_halo_split_reader,
     )
