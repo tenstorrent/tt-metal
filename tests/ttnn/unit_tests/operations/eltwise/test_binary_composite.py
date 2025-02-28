@@ -1312,3 +1312,44 @@ def test_unary_right_shift(input_shapes, device, scalar):
 
     pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
     assert pcc >= 0.99
+
+
+@pytest.mark.parametrize(
+    "input_dtype, output_dtype,",
+    [
+        # (ttnn.int32, ttnn.int32),
+        (ttnn.uint32, ttnn.uint32),
+        (ttnn.uint16, ttnn.uint16),
+        # (ttnn.float32, ttnn.float32)
+    ],
+)
+@pytest.mark.parametrize(
+    "a_shape, b_shape",
+    (([1, 1, 32, 32], [1, 1, 32, 32]),),
+)
+@pytest.mark.parametrize(
+    "ttnn_function",
+    (
+        ttnn.add,
+        ttnn.sub,
+        ttnn.mul,
+        ttnn.gt,
+    ),
+)
+def test_int_dtypes(device, a_shape, b_shape, input_dtype, output_dtype, ttnn_function):
+    x_torch = torch.randint(0, 100, a_shape, dtype=torch.int32)
+    y_torch = torch.randint(0, 100, b_shape, dtype=torch.int32)
+    golden_fn = ttnn.get_golden_function(ttnn_function)
+    z_torch = golden_fn(x_torch, y_torch)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    z_tt_sub = ttnn_function(x_tt, y_tt)
+    print("Input_A", x_tt)
+    print("Input_B", y_tt)
+    tt_out = ttnn.to_torch(z_tt_sub, dtype=torch.int32)
+    print("Torch_Output:", z_torch)
+    print("TT_Output:", z_tt_sub)
+    status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.99
+    assert status
