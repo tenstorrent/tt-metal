@@ -27,7 +27,7 @@ void kernel_main() {
     constexpr uint32_t original_page_size_bytes = get_compile_time_arg_val(1);
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(2);
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(3);
-#define page_is_pow_2 (get_compile_time_arg_val(4) == 1)
+    constexpr bool page_is_pow_2 = (get_compile_time_arg_val(4) == 1);
     constexpr uint32_t page_pow_2 = get_compile_time_arg_val(5);
     //(higher_dim,rep_dim,lower_dim,page_size)
     // cb_id_in0 and cb_id_in1 is each 1 page of size:
@@ -43,16 +43,10 @@ void kernel_main() {
         return;
     }
 
-#if page_is_pow_2
-    // TODO: add CCL sharded native support
-    const InterleavedPow2AddrGen<tensor_is_dram> s = {
-        .bank_base_address = src_addr, .log_base_2_of_page_size = page_pow_2};
-    const InterleavedPow2AddrGen<tensor_is_dram> d = {
-        .bank_base_address = dst_addr, .log_base_2_of_page_size = page_pow_2};
-#else
-    const InterleavedAddrGen<tensor_is_dram> s = {.bank_base_address = src_addr, .page_size = original_page_size_bytes};
-    const InterleavedAddrGen<tensor_is_dram> d = {.bank_base_address = dst_addr, .page_size = original_page_size_bytes};
-#endif
+    const auto s =
+        get_interleaved_addr_gen<tensor_is_dram, page_is_pow_2>(src_addr, original_page_size_bytes, page_pow_2);
+    const auto d =
+        get_interleaved_addr_gen<tensor_is_dram, page_is_pow_2>(dst_addr, original_page_size_bytes, page_pow_2);
 
     // alignments pre-calculations
     constexpr uint64_t r_mask_to_use = tensor_is_dram ? MASK_64 : MASK_16;
