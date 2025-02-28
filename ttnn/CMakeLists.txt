@@ -1061,7 +1061,7 @@ endif()
 
 build_library(
     "ttnncpp"                        #LIBRARY_NAME
-    "TTNN"                           #ALIAS
+    "TTNNCPP"                        #ALIAS
     ${TTNN_CPP_BUILD_TYPE}
     SOURCES
         "${SOURCES_CPP}"
@@ -1076,7 +1076,7 @@ build_library(
 if(WITH_PYTHON_BINDINGS)
     build_library(
         "ttnn"                           #LIBRARY_NAME
-        "PYBIND"                         #ALIAS
+        "TTNN"	                         #ALIAS
         SHARED
         SOURCES
             "${SOURCES_PYBIND}"
