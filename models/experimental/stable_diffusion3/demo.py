@@ -14,23 +14,25 @@ if TYPE_CHECKING:
     import ttnn
 
 
+@pytest.mark.parametrize(
+    "model_name, image_w, image_h, guidance_scale, num_inference_steps",
+    [
+        #        ("medium", 512, 512, 4.5, 40),
+        #        ("medium", 1024, 1024, 4.5, 40),
+        #        ("large", 512, 512, 3.5, 28),
+        ("large", 1024, 1024, 3.5, 28),
+    ],
+)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192, "trace_region_size": 15210496}], indirect=True)
 @pytest.mark.usefixtures("use_program_cache")
-def test_sd3(
-    *,
-    device: ttnn.Device,
-) -> None:
+def test_sd3(*, device: ttnn.Device, model_name, image_w, image_h, guidance_scale, num_inference_steps) -> None:
     pipeline = TtStableDiffusion3Pipeline(
-        checkpoint="stabilityai/stable-diffusion-3.5-medium",
+        checkpoint=f"stabilityai/stable-diffusion-3.5-{model_name}",
         device=device,
         enable_t5_text_encoder=True,
     )
 
-    pipeline.prepare(
-        batch_size=1,
-        width=1024,
-        height=1024,
-    )
+    pipeline.prepare(batch_size=1, width=image_w, height=image_h, guidance_scale=guidance_scale)
 
     prompt = (
         "An epic, high-definition cinematic shot of a rustic snowy cabin glowing "
@@ -55,8 +57,8 @@ def test_sd3(
             negative_prompt_1=[negative_prompt],
             negative_prompt_2=[negative_prompt],
             negative_prompt_3=[negative_prompt],
-            num_inference_steps=40,
+            num_inference_steps=num_inference_steps,
             seed=0,
         )
 
-        images[0].save("sd3_512_yesT5.png")
+        images[0].save(f"sd35_{image_w}_{image_h}.png")

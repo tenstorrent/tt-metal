@@ -15,12 +15,12 @@ from ..tt.vae_decoder import TtGroupNorm, TtGroupNormParameters, TtVaeDecoder, T
 
 @pytest.mark.skip(reason="broken since last merge to main")
 @pytest.mark.parametrize(
-    "image_size",
+    ("model_name", "image_size"),
     [
-        128,
-        # 256,
-        # 512,
-        # 1024,
+        ("large", 128),
+        # ("large", 256),
+        # ("large", 512),
+        # ("large", 1024),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384, "trace_region_size": 716800}], indirect=True)
@@ -32,7 +32,9 @@ from ..tt.vae_decoder import TtGroupNorm, TtGroupNormParameters, TtVaeDecoder, T
         # (True, True),
     ],
 )
-def test_vae_decoder(*, device: ttnn.Device, use_program_cache: bool, use_tracing: bool, image_size: int) -> None:
+def test_vae_decoder(
+    *, device: ttnn.Device, model_name, use_program_cache: bool, use_tracing: bool, image_size: int
+) -> None:
     if use_program_cache:
         ttnn.enable_program_cache(device)
 
@@ -40,7 +42,7 @@ def test_vae_decoder(*, device: ttnn.Device, use_program_cache: bool, use_tracin
     ttnn_dtype = ttnn.bfloat16
 
     parent_torch_model = AutoencoderKL.from_pretrained(
-        "stabilityai/stable-diffusion-3.5-medium", subfolder="vae", torch_dtype=torch_dtype
+        f"stabilityai/stable-diffusion-3.5-{model_name}", subfolder="vae", torch_dtype=torch_dtype
     )
     torch_model = VaeDecoder()
     torch_model.load_state_dict(parent_torch_model.decoder.state_dict())

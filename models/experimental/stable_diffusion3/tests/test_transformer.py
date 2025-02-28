@@ -12,9 +12,9 @@ from ..tt.utils import allocate_tensor_on_device_like, assert_quality
 
 
 @pytest.mark.parametrize(
-    ("batch_size", "prompt_sequence_length", "height", "width"),
+    ("model_name", "batch_size", "prompt_sequence_length", "height", "width"),
     [
-        (2, 333, 1024, 1024),
+        ("large", 2, 333, 1024, 1024),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192, "trace_region_size": 15157248}], indirect=True)
@@ -22,13 +22,14 @@ from ..tt.utils import allocate_tensor_on_device_like, assert_quality
 def test_transformer(
     *,
     device: ttnn.Device,
+    model_name,
     batch_size: int,
     prompt_sequence_length: int,
     height: int,
     width: int,
 ) -> None:
     torch_model = SD3Transformer2DModel.from_pretrained(
-        "stabilityai/stable-diffusion-3.5-medium", subfolder="transformer"
+        f"stabilityai/stable-diffusion-3.5-{model_name}", subfolder="transformer"
     )
     torch_model.eval()
 

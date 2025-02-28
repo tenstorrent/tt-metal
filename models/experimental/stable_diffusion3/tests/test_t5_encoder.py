@@ -15,13 +15,21 @@ from ..tt.t5_encoder import TtT5Encoder, TtT5EncoderParameters
 from ..tt.utils import assert_quality
 
 
+@pytest.mark.parametrize(
+    "model_name",
+    [
+        "large",
+    ],
+)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 @pytest.mark.parametrize(("use_program_cache"), [False, True])
-def test_t5_encoder(*, device: ttnn.Device, use_program_cache: bool) -> None:
+def test_t5_encoder(*, device: ttnn.Device, model_name, use_program_cache: bool) -> None:
     if use_program_cache:
         ttnn.enable_program_cache(device)
 
-    hf_model = T5EncoderModel.from_pretrained("stabilityai/stable-diffusion-3.5-medium", subfolder="text_encoder_3")
+    hf_model = T5EncoderModel.from_pretrained(
+        f"stabilityai/stable-diffusion-3.5-{model_name}", subfolder="text_encoder_3"
+    )
 
     with torch.device("meta"):
         torch_model = T5Encoder(
