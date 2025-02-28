@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import copy
 import ttnn
 import torch
 from typing import Optional, Dict
@@ -263,8 +264,31 @@ class transformer_2d_model:
             "dilation": (1, 1),
             "groups": 1,
             "device": self.device,
-            "conv_config": conv_config,
+            # "conv_config": conv_config,
         }
+
+        # enforce wh grid
+        end_x = 7 if attention_head_dim == 160 else 4
+        wh_grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    # Volume must match batch size
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(end_x, 7),
+                ),
+            }
+        )
+        conv_config_wh_grid = ttnn.Conv2dConfig(
+            dtype=ttnn.bfloat8_b,
+            weights_dtype=ttnn.bfloat8_b,
+            activation="",
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            input_channels_alignment=32,
+            transpose_shards=False,
+            reshard_if_not_optimal=False,
+            override_sharding_config=True,
+            core_grid=wh_grid,
+        )
 
         if not ttnn.is_tensor_storage_on_device(self.proj_in_conv_weights):
             self.proj_in_conv_weights = ttnn.prepare_conv_weights(
@@ -273,12 +297,14 @@ class transformer_2d_model:
                 input_memory_config=hidden_states.memory_config(),
                 input_layout=hidden_states.get_layout(),
                 has_bias=True,
+                conv_config=conv_config_wh_grid,
                 **conv_kwargs,
             )
             self.proj_in_conv_bias = ttnn.prepare_conv_bias(
                 bias_tensor=self.proj_in_conv_bias,
                 input_memory_config=hidden_states.memory_config(),
                 input_layout=hidden_states.get_layout(),
+                conv_config=conv_config_wh_grid,
                 **conv_kwargs,
             )
             self.proj_in_conv_weights = ttnn.to_device(self.proj_in_conv_weights, self.device)
@@ -288,12 +314,15 @@ class transformer_2d_model:
             input_tensor=hidden_states,
             weight_tensor=self.proj_in_conv_weights,
             bias_tensor=self.proj_in_conv_bias,
+            conv_config=conv_config_wh_grid,
             **conv_kwargs,
             compute_config=compute_config,
             conv_op_cache=conv_cache,
             return_output_dim=False,
             return_weights_and_bias=False,
         )
+
+        conv_kwargs["conv_config"] = conv_config
 
         inner_dim = hidden_states.shape[-1]
         # hidden_states = ttnn.to_layout(hidden_states, layout=ttnn.ROW_MAJOR_LAYOUT)
