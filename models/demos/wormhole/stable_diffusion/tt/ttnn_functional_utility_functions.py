@@ -121,10 +121,8 @@ def pad_group_norm_weight(weight, groups, channels):
 
 
 def permute_conv_parameters(weight, bias):
-    weight = ttnn.to_layout(weight, layout=ttnn.ROW_MAJOR_LAYOUT)
-    weight = ttnn.permute(weight, (2, 3, 0, 1))
     weight = ttnn.to_torch(weight)
-    bias = ttnn.to_layout(bias, layout=ttnn.ROW_MAJOR_LAYOUT)
+    weight = torch.permute(weight, (2, 3, 0, 1))
     bias = ttnn.to_torch(bias)
     return weight, bias
 
