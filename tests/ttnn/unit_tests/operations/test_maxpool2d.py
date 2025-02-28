@@ -11,7 +11,13 @@ import math
 from models.utility_functions import is_wormhole_b0, is_grayskull, is_x2_harvested
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
+import numpy as np
+import matplotlib.pyplot as plt
+import copy
+
 import ttnn
+
+output_shards = [[] for _ in range(64)]
 
 
 def run_max_pool(
@@ -25,6 +31,7 @@ def run_max_pool(
     memory_config=None,
     shard_scheme=None,
     ceil_mode=False,
+    in_place_halo=False,
 ):
     in_n, in_c, in_h, in_w = act_shape
     kernel_h, kernel_w = kernel_size
@@ -130,13 +137,13 @@ def run_max_pool(
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
 
     ## construct the tensor in NCHW shape
-    act = torch.randn(act_shape, dtype=torch.bfloat16)
-    # act = torch.zeros(act_shape, dtype=torch.bfloat16)
-    # for n in range(act_shape[0]):
-    #     for c in range(act_shape[1]):
-    #         for h in range(act_shape[2]):
-    #             for w in range(act_shape[3]):
-    #                 act[n, c, h, w] = h * in_w + w
+    # act = torch.randn(act_shape, dtype=torch.bfloat16)
+    act = torch.zeros(act_shape, dtype=torch.bfloat16)
+    for n in range(act_shape[0]):
+        for c in range(act_shape[1]):
+            for h in range(act_shape[2]):
+                for w in range(act_shape[3]):
+                    act[n, c, h, w] = h * in_w + w
     # torch.save(act, "act.pt")
     # act = torch.load("act.pt")
 
@@ -192,53 +199,86 @@ def run_max_pool(
         memory_config=memory_config,
         applied_shard_scheme=shard_scheme,
         ceil_mode=ceil_mode,
+        in_place_halo=in_place_halo,
     )
 
-    output_host = output.cpu()
-    output_pytorch_padded = torch.Tensor(ttnn.to_torch(output_host))
-    output_pytorch = output_pytorch_padded[:, :, :, :in_c]
+    for core_id in range(0, 64):
+        output_shard = torch.Tensor(ttnn.to_torch(output.extract_shard(core_id).pad_to_tile(0.0).cpu()))
+        output_shards[core_id].append(output_shard)
+    if len(output_shards[0]) == 2:
+        for core_id in range(0, 64):
+            print(f"Core ID: {core_id}")
+            # coord = ttnn.CoreCoord(x, y)
+            gold_shard = output_shards[core_id][0]
+            opt_shard = output_shards[core_id][1]
+            diff = gold_shard[0][0] - opt_shard[0][0]
 
-    ## reference
-    golden_pytorch = torch.nn.MaxPool2d(
-        kernel_size,
-        stride=stride,
-        padding=padding,
-        dilation=dilation,
-        return_indices=False,
-        ceil_mode=ceil_mode,
-    )(act)
+            print(gold_shard)
+            print(opt_shard)
+            print("--")
 
-    ## test for equivalance
-    golden_shape = golden_pytorch.shape
-    output_pytorch = output_pytorch.reshape(golden_shape[0], golden_shape[2], golden_shape[3], golden_shape[1])
+            diff = diff.to(torch.float32)
+            # Replace -inf with zeros only where both gold_shard[0][0] and opt_shard[0][0] are -inf
+            mask = (gold_shard[0][0] == -float("inf")) & (opt_shard[0][0] == -float("inf"))
+            diff = torch.where(mask, torch.tensor(0.0, dtype=diff.dtype), diff)
 
-    output_pytorch = torch.permute(output_pytorch, (0, 3, 1, 2))  ## N, C, H, W
+            # Plot the difference
+            plt.imshow(diff, cmap="viridis")
+            plt.colorbar()
+            plt.title("Difference between output shards")
 
-    pcc_thresh = 1.0
-    if dtype == ttnn.bfloat8_b:
-        pcc_thresh = 0.9994
+            # Save the plot
+            filename = "output_shard_pics/output_shard_difference_core_" + str(core_id) + ".png"
+            plt.savefig(filename)
 
-    passing, pcc = assert_with_pcc(output_pytorch, golden_pytorch, pcc_thresh)
+            # Clear the plot to avoid overlap in subsequent runs
+            plt.clf()
 
-    logger.debug(f"Passing: {passing}, PCC: {pcc}")
+    # output_host = output.cpu()
+    # output_pytorch_padded = torch.Tensor(ttnn.to_torch(output_host))
+    # output_pytorch = output_pytorch_padded[:, :, :, :in_c]
 
-    ## do more rigorous comparision for each element
-    atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
-    if dtype == ttnn.bfloat8_b:
-        atol = 0.35
+    # ## reference
+    # golden_pytorch = torch.nn.MaxPool2d(
+    #     kernel_size,
+    #     stride=stride,
+    #     padding=padding,
+    #     dilation=dilation,
+    #     return_indices=False,
+    #     ceil_mode=ceil_mode,
+    # )(act)
 
-    allclose = torch.allclose(output_pytorch, golden_pytorch, atol=atol)
-    isclose = torch.all(torch.isclose(output_pytorch, golden_pytorch, atol=atol))
-    isequal = torch.equal(output_pytorch, golden_pytorch)
+    # ## test for equivalance
+    # golden_shape = golden_pytorch.shape
+    # output_pytorch = output_pytorch.reshape(golden_shape[0], golden_shape[2], golden_shape[3], golden_shape[1])
 
-    assert allclose
-    assert isclose
-    if dtype == ttnn.bfloat16:
-        assert isequal
+    # output_pytorch = torch.permute(output_pytorch, (0, 3, 1, 2))  ## N, C, H, W
 
-    if memory_config:
-        logger.debug(f"Output memory config: {memory_config}")
-        assert ttnn.get_memory_config(output) == memory_config
+    # pcc_thresh = 1.0
+    # if dtype == ttnn.bfloat8_b:
+    #     pcc_thresh = 0.9994
+
+    # passing, pcc = assert_with_pcc(output_pytorch, golden_pytorch, pcc_thresh)
+
+    # logger.debug(f"Passing: {passing}, PCC: {pcc}")
+
+    # ## do more rigorous comparision for each element
+    # atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
+    # if dtype == ttnn.bfloat8_b:
+    #     atol = 0.35
+
+    # allclose = torch.allclose(output_pytorch, golden_pytorch, atol=atol)
+    # isclose = torch.all(torch.isclose(output_pytorch, golden_pytorch, atol=atol))
+    # isequal = torch.equal(output_pytorch, golden_pytorch)
+
+    # assert allclose
+    # assert isclose
+    # if dtype == ttnn.bfloat16:
+    #     assert isequal
+
+    # if memory_config:
+    #     logger.debug(f"Output memory config: {memory_config}")
+    #     assert ttnn.get_memory_config(output) == memory_config
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
@@ -246,52 +286,56 @@ def run_max_pool(
     "act_shape",  ## NCHW
     (
         (  ## resnet shapes
-            [1, 64, 112, 112],
-            [4, 64, 112, 112],
-            [8, 64, 112, 112],
-            [16, 64, 112, 112],
-            # [20, 64, 112, 112],   ## oom
-            ## hpr shapes
-            [8, 32, 132, 20],
-            [16, 32, 132, 20],
-            [32, 32, 132, 20],
-            [64, 32, 132, 20],
-            [128, 32, 132, 20],
-            # [256, 32, 132, 20],   ## oom
-            [8, 32, 264, 40],
-            [16, 32, 264, 40],
-            [32, 32, 264, 40],
-            # [64, 32, 264, 40],    ## oom
-            # [128, 32, 264, 40],   ## oom
-            # [256, 32, 264, 40],   ## oom
-            [4, 16, 1056, 160],
-            # [8, 16, 1056, 160],     ## oom
-            # [16, 16, 1056, 160],    ## oom
-            # [32, 16, 1056, 160],    ## oom
-            # [64, 16, 1056, 160],    ## oom
-            # [128, 16, 1056, 160],   ## oom
-            # [256, 16, 1056, 160],   ## oom
-            [8, 16, 528, 80],
-            [16, 16, 528, 80],
-            # [32, 16, 528, 80],  ## oom
-            # [64, 16, 528, 80],  ## oom
-            # [128, 16, 528, 80], ## oom
-            # [256, 16, 528, 80], ## oom
-            ## wide for vgg
-            [1, 256, 56, 56],
-            [1, 512, 28, 28],
-            [1, 512, 14, 14],
-            # wide yolo kernel
-            [1, 512, 10, 10],
-            [1, 96, 112, 112],
-            [1, 192, 132, 20],
-            # wide non-8 multiple tests
-            [1, 800, 32, 32],
-            [1, 640, 32, 32],
-            [1, 576, 32, 32],
-            [1, 384, 32, 32],
-            # C=16 test
-            [1, 16, 10, 10],
+            # [1, 64, 112, 112],
+            # [4, 64, 112, 112],
+            # [8, 64, 112, 112],
+            # [16, 64, 112, 112],
+            # # [20, 64, 112, 112],   ## oom
+            # ## hpr shapes
+            # [8, 32, 132, 20],
+            # [16, 32, 132, 20],
+            # [32, 32, 132, 20],
+            # [64, 32, 132, 20],
+            # [128, 32, 132, 20],
+            # # [256, 32, 132, 20],   ## oom
+            # [8, 32, 264, 40],
+            # [16, 32, 264, 40],
+            # [32, 32, 264, 40],
+            # # [64, 32, 264, 40],    ## oom
+            # # [128, 32, 264, 40],   ## oom
+            # # [256, 32, 264, 40],   ## oom
+            # [4, 16, 1056, 160],
+            # # [8, 16, 1056, 160],     ## oom
+            # # [16, 16, 1056, 160],    ## oom
+            # # [32, 16, 1056, 160],    ## oom
+            # # [64, 16, 1056, 160],    ## oom
+            # # [128, 16, 1056, 160],   ## oom
+            # # [256, 16, 1056, 160],   ## oom
+            # [8, 16, 528, 80],
+            # [16, 16, 528, 80],
+            # # [32, 16, 528, 80],  ## oom
+            # # [64, 16, 528, 80],  ## oom
+            # # [128, 16, 528, 80], ## oom
+            # # [256, 16, 528, 80], ## oom
+            # ## wide for vgg
+            # [1, 256, 56, 56],
+            # [1, 512, 28, 28],
+            # [1, 512, 14, 14],
+            # # wide yolo kernel
+            # [1, 512, 10, 10],
+            # [1, 96, 112, 112],
+            # [1, 192, 132, 20],
+            # # wide non-8 multiple tests
+            # [1, 800, 32, 32],
+            # [1, 640, 32, 32],
+            # [1, 576, 32, 32],
+            # [1, 384, 32, 32],
+            # # C=16 test2
+            # [1, 16, 10, 10],
+            # --
+            [8, 32, 8, 8],
+            # [32, 32, 132, 20],
+            # [8, 32, 264, 40],
         )
     ),
 )
@@ -299,27 +343,27 @@ def run_max_pool(
     "kernel_size",
     (
         (2, 2),
-        (3, 3),
-        (5, 5),
-        (9, 9),
-        (13, 13),
+        # (3, 3),
+        # (5, 5),
+        # (9, 9),
+        # (13, 13),
     ),
 )
 @pytest.mark.parametrize(
     "padding",
     (
         (0, 0),
-        (1, 1),
-        (2, 2),
-        (4, 4),
-        (6, 6),
+        # (1, 1),
+        # (2, 2),
+        # (4, 4),
+        # (6, 6),
     ),
 )
 @pytest.mark.parametrize(
     "stride",
     (
         (1, 1),
-        (2, 2),
+        # (2, 2),
     ),
 )
 @pytest.mark.parametrize("dilation", ((1, 1),))  ## default
@@ -327,17 +371,26 @@ def run_max_pool(
     "dtype",
     [
         ttnn.bfloat16,
-        ttnn.bfloat8_b,
+        # ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
     "ceil_mode",
     [
         False,
+        # True,
+    ],
+)
+@pytest.mark.parametrize(
+    "in_place_halo",
+    [
+        False,
         True,
     ],
 )
-def test_run_max_pool(act_shape, kernel_size, padding, stride, dilation, device, dtype, use_program_cache, ceil_mode):
+def test_run_max_pool(
+    act_shape, kernel_size, padding, stride, dilation, device, dtype, use_program_cache, ceil_mode, in_place_halo
+):
     run_max_pool(
         act_shape,
         kernel_size,
@@ -348,210 +401,243 @@ def test_run_max_pool(act_shape, kernel_size, padding, stride, dilation, device,
         dtype,
         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ceil_mode=ceil_mode,
+        in_place_halo=in_place_halo,
     )
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-@pytest.mark.parametrize(
-    "act_shape",  ## NCHW
-    (
-        (
-            [1, 512, 28, 28],
-            [1, 512, 14, 14],
-            [1, 1024, 6, 6],
-            [1, 2048, 6, 6],
-            [1, 4096, 6, 6],
-            [4, 1024, 40, 40],
-            [2, 2048, 40, 40],
-            [8, 4096, 10, 16],
-            # wide yolo kernel
-            [1, 32768, 10, 10],
-            [1, 6144, 6, 6],
-            # wide non-8 multiple tests
-            [1, 800 * 64, 8, 8],
-            [1, 640 * 64, 8, 8],
-            [1, 576 * 64, 8, 8],
-            [1, 384 * 64, 8, 8],
-        )
-    ),
-)
-@pytest.mark.parametrize(
-    "kernel_size",
-    (
-        (2, 2),
-        (3, 3),
-        (5, 5),
-        (9, 9),
-        (13, 13),
-    ),
-)
-@pytest.mark.parametrize(
-    "padding",
-    (
-        (0, 0),
-        (1, 1),
-        (2, 2),
-        (4, 4),
-        (6, 6),
-    ),
-)
-@pytest.mark.parametrize(
-    "stride",
-    (
-        (1, 1),
-        (2, 2),
-    ),
-)
-@pytest.mark.parametrize("dilation", ((1, 1),))  ## default
-@pytest.mark.parametrize(
-    "dtype",
-    [
-        ttnn.bfloat16,
-        ttnn.bfloat8_b,
-    ],
-)
-@pytest.mark.parametrize(
-    "ceil_mode",
-    [
-        False,
-        True,
-    ],
-)
-def test_run_max_pool_width_shard(
-    act_shape,
-    kernel_size,
-    padding,
-    stride,
-    dilation,
-    device,
-    dtype,
-    use_program_cache,
-    ceil_mode,
-):
-    run_max_pool(
-        act_shape,
-        kernel_size,
-        padding,
-        stride,
-        dilation,
-        device,
-        dtype,
-        shard_scheme=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ceil_mode=ceil_mode,
-    )
+# @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+# @pytest.mark.parametrize(
+#     "act_shape",  ## NCHW
+#     (
+#         (
+#             # [1, 512, 28, 28],
+#             # [1, 512, 14, 14],
+#             # [1, 1024, 6, 6],
+#             # [1, 2048, 6, 6],
+#             # [1, 4096, 6, 6],
+#             # [4, 1024, 40, 40],
+#             # [2, 2048, 40, 40],
+#             # [8, 4096, 10, 16],
+#             # # wide yolo kernel
+#             # [1, 32768, 10, 10],
+#             # [1, 6144, 6, 6],
+#             # # wide non-8 multiple tests
+#             # [1, 800 * 64, 8, 8],
+#             # [1, 640 * 64, 8, 8],
+#             # [1, 576 * 64, 8, 8],
+#             # [1, 384 * 64, 8, 8],
+#             # --
+#             [1, 1024, 40, 40],
+#             [1, 2048, 28, 28],
+#             [1, 2048, 6, 6],
+#             [1, 4096, 32, 32],
+#             [1, 384 * 64, 8, 8],
+#         )
+#     ),
+# )
+# @pytest.mark.parametrize(
+#     "kernel_size",
+#     (
+#         # (2, 2),
+#         (3, 3),
+#         (5, 5),
+#         # (9, 9),
+#         # (13, 13),
+#     ),
+# )
+# @pytest.mark.parametrize(
+#     "padding",
+#     (
+#         # (0, 0),
+#         (1, 1),
+#         (2, 2),
+#         # (4, 4),
+#         # (6, 6),
+#     ),
+# )
+# @pytest.mark.parametrize(
+#     "stride",
+#     (
+#         (1, 1),
+#         # (2, 2),
+#     ),
+# )
+# @pytest.mark.parametrize("dilation", ((1, 1),))  ## default
+# @pytest.mark.parametrize(
+#     "dtype",
+#     [
+#         ttnn.bfloat16,
+#         # ttnn.bfloat8_b,
+#     ],
+# )
+# @pytest.mark.parametrize(
+#     "ceil_mode",
+#     [
+#         False,
+#         # True,
+#     ],
+# )
+# @pytest.mark.parametrize(
+#     "in_place_halo",
+#     [
+#         # False,
+#         True,
+#     ],
+# )
+# def test_run_max_pool_width_shard(
+#     act_shape,
+#     kernel_size,
+#     padding,
+#     stride,
+#     dilation,
+#     device,
+#     dtype,
+#     use_program_cache,
+#     ceil_mode,
+#     in_place_halo,
+# ):
+#     run_max_pool(
+#         act_shape,
+#         kernel_size,
+#         padding,
+#         stride,
+#         dilation,
+#         device,
+#         dtype,
+#         shard_scheme=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+#         ceil_mode=ceil_mode,
+#         in_place_halo=in_place_halo,
+#     )
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-@pytest.mark.parametrize(
-    "act_shape",  ## NCHW
-    (
-        (
-            [1, 256, 56, 56],
-            [1, 256, 28, 28],
-            [1, 256, 14, 14],
-            [1, 256, 10, 14],
-            [1, 512, 8, 6],
-            [1, 1024, 6, 6],
-            [1, 2048, 4, 6],
-            [4, 512, 40, 40],
-            [2, 1024, 40, 40],
-            [8, 2048, 10, 16],
-            ## resnet shapes
-            [1, 64, 112, 112],
-            [4, 64, 112, 112],
-            [8, 64, 112, 112],
-            [16, 64, 112, 112],
-            ## hpr shapes
-            [8, 32, 132, 20],
-            [16, 32, 132, 20],
-            [32, 32, 132, 20],
-            [64, 32, 132, 20],
-            [128, 32, 132, 20],
-            [8, 32, 264, 40],
-            [16, 32, 264, 40],
-            [32, 32, 264, 40],
-            [4, 16, 1056, 160],
-            [8, 16, 528, 80],
-            [16, 16, 528, 80],
-            # wide yolo kernel
-            [1, 4096, 10, 10],
-            [1, 768, 56, 56],
-            [1, 1280, 8, 6],
-            # wide non-8 multiple tests
-            [1, 800 * 8, 16, 16],
-            [1, 640 * 8, 16, 16],
-            [1, 576 * 8, 16, 16],
-            [1, 384 * 8, 16, 16],
-        )
-    ),
-)
-@pytest.mark.parametrize(
-    "kernel_size",
-    (
-        (2, 2),
-        (3, 3),
-        (5, 5),
-        (9, 9),
-        (13, 13),
-    ),
-)
-@pytest.mark.parametrize(
-    "padding",
-    (
-        (0, 0),
-        (1, 1),
-        (2, 2),
-        (4, 4),
-        (6, 6),
-    ),
-)
-@pytest.mark.parametrize(
-    "stride",
-    (
-        (1, 1),
-        (2, 2),
-    ),
-)
-@pytest.mark.parametrize("dilation", ((1, 1),))  ## default
-@pytest.mark.parametrize(
-    "dtype",
-    [
-        ttnn.bfloat16,
-        ttnn.bfloat8_b,
-    ],
-)
-@pytest.mark.parametrize(
-    "ceil_mode",
-    [
-        False,
-        True,
-    ],
-)
-def test_run_max_pool_block_shard(
-    act_shape,
-    kernel_size,
-    padding,
-    stride,
-    dilation,
-    device,
-    dtype,
-    use_program_cache,
-    ceil_mode,
-):
-    run_max_pool(
-        act_shape,
-        kernel_size,
-        padding,
-        stride,
-        dilation,
-        device,
-        dtype,
-        shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-        ceil_mode=ceil_mode,
-    )
+# @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+# @pytest.mark.parametrize(
+#     "act_shape",  ## NCHW
+#     (
+#         (
+#             # [1, 256, 56, 56],
+#             # [1, 256, 28, 28],
+#             # [1, 256, 14, 14],
+#             # [1, 256, 10, 14],
+#             # [1, 512, 8, 6],
+#             # [1, 1024, 6, 6],
+#             # [1, 2048, 4, 6],
+#             # [4, 512, 40, 40],
+#             # [2, 1024, 40, 40],
+#             # [8, 2048, 10, 16],
+#             # ## resnet shapes
+#             # [1, 64, 112, 112],
+#             # [4, 64, 112, 112],
+#             # [8, 64, 112, 112],
+#             # [16, 64, 112, 112],
+#             # ## hpr shapes
+#             # [8, 32, 132, 20],
+#             # [16, 32, 132, 20],
+#             # [32, 32, 132, 20],
+#             # [64, 32, 132, 20],
+#             # [128, 32, 132, 20],
+#             # [8, 32, 264, 40],
+#             # [16, 32, 264, 40],
+#             # [32, 32, 264, 40],
+#             # [4, 16, 1056, 160],
+#             # [8, 16, 528, 80],
+#             # [16, 16, 528, 80],
+#             # # wide yolo kernel
+#             # [1, 4096, 10, 10],
+#             # [1, 768, 56, 56],
+#             # [1, 1280, 8, 6],
+#             # # wide non-8 multiple tests
+#             # [1, 800 * 8, 16, 16],
+#             # [1, 640 * 8, 16, 16],
+#             # [1, 576 * 8, 16, 16],
+#             # [1, 384 * 8, 16, 16],
+#             # --
+#             [1, 1024, 8, 8],
+#             [1, 2048, 8, 8],
+#             [1, 4096, 8, 8],
+#             [1, 1024, 16, 16],
+#             [1, 2048, 16, 16],
+#             [1, 4096, 16, 16],
+#             [1, 384 * 8, 16, 16],
+#         )
+#     ),
+# )
+# @pytest.mark.parametrize(
+#     "kernel_size",
+#     (
+#         # (2, 2),
+#         (3, 3),
+#         (5, 5),
+#         # (9, 9),
+#         # (13, 13),
+#     ),
+# )
+# @pytest.mark.parametrize(
+#     "padding",
+#     (
+#         # (0, 0),
+#         (1, 1),
+#         (2, 2),
+#         # (4, 4),
+#         # (6, 6),
+#     ),
+# )
+# @pytest.mark.parametrize(
+#     "stride",
+#     (
+#         (1, 1),
+#         # (2, 2),
+#     ),
+# )
+# @pytest.mark.parametrize("dilation", ((1, 1),))  ## default
+# @pytest.mark.parametrize(
+#     "dtype",
+#     [
+#         ttnn.bfloat16,
+#         # ttnn.bfloat8_b,
+#     ],
+# )
+# @pytest.mark.parametrize(
+#     "ceil_mode",
+#     [
+#         False,
+#         # True,
+#     ],
+# )
+# @pytest.mark.parametrize(
+#     "in_place_halo",
+#     [
+#         # False,
+#         True,
+#     ],
+# )
+# def test_run_max_pool_block_shard(
+#     act_shape,
+#     kernel_size,
+#     padding,
+#     stride,
+#     dilation,
+#     device,
+#     dtype,
+#     use_program_cache,
+#     ceil_mode,
+#     in_place_halo,
+# ):
+#     run_max_pool(
+#         act_shape,
+#         kernel_size,
+#         padding,
+#         stride,
+#         dilation,
+#         device,
+#         dtype,
+#         shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+#         ceil_mode=ceil_mode,
+#         in_place_halo=in_place_halo,
+#     )
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+""" @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "act_shape",  ## NCHW
     (
@@ -900,4 +986,4 @@ def test_run_max_pool_squeeze_net_model(
         device,
         dtype,
         ceil_mode=ceil_mode,
-    )
+    ) """

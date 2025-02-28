@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/untilize_with_halo_v2/device/untilize_with_halo_v2_program_factory.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/sliding_window/halo/device/halo_device_operation.hpp"
 #include <array>
@@ -69,6 +70,11 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
         TT_FATAL(input_core_w == output_core_w, "Error");
     }
 
+    if (this->in_place_) {
+        // tt::log_info(tt::LogAlways, "halo_device_operation - Using in-place mode so deallocating input buffer");
+        // DeallocateBuffer(*input_tensor.buffer());
+    }
+
     auto out_mem_config = output_memory_config_;
     std::array<uint32_t, 2> shard_shape = {
         tt::div_up(output_shape[0] * output_shape[2], config_.num_cores_nhw),
@@ -101,6 +107,8 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
     const auto& pad_config = std::get<0>(kernel_config);
     const auto& local_config = std::get<1>(kernel_config);
     const auto& remote_config = std::get<2>(kernel_config);
+    const auto& remote_ref_counts = std::get<3>(kernel_config);
+    const auto& max_ref_size = std::get<4>(kernel_config);
 
     auto pad_config_tensor =
         sliding_window::construct_on_host_config_tensor(pad_config, this->config_, this->parallel_config_);
@@ -109,12 +117,47 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
     auto remote_config_tensor =
         sliding_window::construct_on_host_config_tensor(remote_config, this->config_, this->parallel_config_);
 
+    DataType type = input_tensor.get_dtype();
+    int num_cores = this->parallel_config_.grid.num_cores();
+    int num_cores_c = conv::get_num_cores_channels_from_parallel_config(this->parallel_config_);
+    int stick_size = input_tensor.get_padded_shape()[3] / num_cores_c;
+
     auto pad_config_device_tensor =
         sliding_window::move_config_tensor_to_device(pad_config_tensor, parallel_config_, is_block_sharded, device);
     auto local_config_device_tensor =
         sliding_window::move_config_tensor_to_device(local_config_tensor, parallel_config_, is_block_sharded, device);
     auto remote_config_device_tensor =
         sliding_window::move_config_tensor_to_device(remote_config_tensor, parallel_config_, is_block_sharded, device);
+
+    std::optional<Tensor> remote_temp_device_tensor;
+    std::optional<Tensor> remote_ref_counts_device_tensor;
+    if (max_ref_size > 0 && this->in_place_) {
+        int remote_temp_size = max_ref_size * stick_size * num_cores;
+        // TODO do we need to vary this type for bfloat8?
+        auto remote_temp_buffer = owned_buffer::create<bfloat16>(std::vector<bfloat16>(remote_temp_size));
+        ttnn::Shape remote_temp_shape = ttnn::Shape({num_cores, max_ref_size, stick_size});
+        Tensor remote_temp_tensor(OwnedStorage{remote_temp_buffer}, remote_temp_shape, type, Layout::ROW_MAJOR);
+
+        uint32_t repeat_factor = num_cores;
+        std::vector<std::vector<uint16_t>> remote_ref_counts_repeated;
+        for (uint32_t i = 0; i < repeat_factor; ++i) {
+            remote_ref_counts_repeated.push_back(remote_ref_counts);
+        }
+        ttnn::Shape config_shape(
+            {(uint32_t)remote_ref_counts_repeated.size(), (uint32_t)remote_ref_counts_repeated[0].size()});
+        std::vector<uint16_t> config_vector = sliding_window::flatten(remote_ref_counts_repeated);
+        auto config_buffer = owned_buffer::create<uint16_t>(std::move(config_vector));
+        auto remote_ref_counts_tensor =
+            Tensor(OwnedStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR);
+
+        remote_ref_counts_device_tensor = sliding_window::move_config_tensor_to_device(
+            remote_ref_counts_tensor, parallel_config_, is_block_sharded, device);
+
+        auto shard_shape = std::array<uint32_t, 2>({max_ref_size, stick_size});
+        ShardSpec shard_spec(parallel_config_.grid, shard_shape, ShardOrientation::ROW_MAJOR);
+        MemoryConfig memory_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec};
+        remote_temp_device_tensor = remote_temp_tensor.to_device(device, memory_config);
+    }
 
     Program program = CreateProgram();
 
@@ -123,14 +166,21 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
         input_tensor,
         pad_val_,
         config_.num_cores_nhw,
+        config_.num_cores_c,
         max_out_nsticks_per_core_,
         pad_config_device_tensor,
         local_config_device_tensor,
         remote_config_device_tensor,
+        remote_ref_counts_device_tensor
+            ? std::optional<std::reference_wrapper<const Tensor>>(*remote_ref_counts_device_tensor)
+            : std::nullopt,
+        remote_temp_device_tensor ? std::optional<std::reference_wrapper<const Tensor>>(*remote_temp_device_tensor)
+                                  : std::nullopt,
         remote_read_,
         transpose_mcast_,
         output_tensor,
-        /*capture_buffers=*/true)};
+        /*capture_buffers=*/true,
+        this->in_place_)};
 }
 
 Tensor halo_op(
@@ -141,7 +191,8 @@ Tensor halo_op(
     bool transpose_mcast,
     uint32_t reshard_num_cores_nhw,
     const MemoryConfig& output_memory_config,
-    bool is_out_tiled) {
+    bool is_out_tiled,
+    bool in_place) {
     TT_FATAL(input_tensor.memory_config().is_sharded(), "Halo expects sharded input tensor");
     TT_FATAL(
         input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
@@ -159,7 +210,8 @@ Tensor halo_op(
          transpose_mcast,
          reshard_num_cores_nhw,
          output_memory_config,
-         is_out_tiled](
+         is_out_tiled,
+         in_place](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -192,7 +244,8 @@ Tensor halo_op(
                 .reshard_num_cores_nhw_ = reshard_num_cores_nhw,
                 .max_out_nsticks_per_core_ = max_out_nsticks_per_core,
                 .output_memory_config_ = output_memory_config,
-                .is_out_tiled_ = is_out_tiled},
+                .is_out_tiled_ = is_out_tiled,
+                .in_place_ = in_place},
             {input_tensor});
     };
 

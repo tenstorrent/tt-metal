@@ -7,7 +7,7 @@
 
 #include "dataflow_api.h"
 
-#define ENABLE_DEBUG 0
+#define ENABLE_DEBUG 1
 
 #if ENABLE_DEBUG
 #include "debug/dprint.h"
@@ -69,6 +69,8 @@ void copy_sticks_async(
             } else {
                 uint64_t dst_addr = base_addr + dst_offset;
                 uint32_t src_addr = in_base_l1_addr + src_offset;
+                // DPRINT << "src_offset: " << src_offset << " dst_offset: " << dst_offset << " nsticks: " << nsticks
+                //        << "\n";
                 if constexpr (stick_nbytes == input_aligned_page_size) {
                     noc_async_write(src_addr, dst_addr, size);
                 } else {
@@ -89,18 +91,18 @@ void kernel_main() {
     constexpr uint32_t padding_config_cb_id = get_compile_time_arg_val(0);  // has untilized input shard
     constexpr uint32_t local_config_cb_id = get_compile_time_arg_val(1);    // has untilized input shard
     constexpr uint32_t remote_config_cb_id = get_compile_time_arg_val(2);   // has untilized input shard
-    constexpr uint32_t src_cb_id = get_compile_time_arg_val(3);             // has untilized input shard
-    constexpr uint32_t in_cb_id = get_compile_time_arg_val(4);              // has untilized input shard
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(5);     // output shard with padding and halo goes here
-    constexpr uint32_t pad_cb_id = get_compile_time_arg_val(6);     // cb for const pad val buffer
-    constexpr uint32_t pad_val_u32 = get_compile_time_arg_val(7);   // pad value to fill pad buffer with
-    constexpr uint32_t in_nsticks = get_compile_time_arg_val(8);    // number of sticks
-    constexpr uint32_t stick_nbytes = get_compile_time_arg_val(9);  // stick size in bytes (post untilize)
-    constexpr uint32_t is_block_sharded = get_compile_time_arg_val(10);
-    constexpr uint32_t remote_read = get_compile_time_arg_val(11);
-    constexpr bool is_col_major = get_compile_time_arg_val(12) == 1;
-    constexpr uint32_t is_width_sharded = get_compile_time_arg_val(13);
-    constexpr uint32_t input_aligned_page_size = get_compile_time_arg_val(14);
+    constexpr uint32_t src_cb_id = get_compile_time_arg_val(5);             // has untilized input shard
+    constexpr uint32_t in_cb_id = get_compile_time_arg_val(6);              // has untilized input shard
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(7);      // output shard with padding and halo goes here
+    constexpr uint32_t pad_cb_id = get_compile_time_arg_val(8);      // cb for const pad val buffer
+    constexpr uint32_t pad_val_u32 = get_compile_time_arg_val(9);    // pad value to fill pad buffer with
+    constexpr uint32_t in_nsticks = get_compile_time_arg_val(10);    // number of sticks
+    constexpr uint32_t stick_nbytes = get_compile_time_arg_val(11);  // stick size in bytes (post untilize)
+    constexpr uint32_t is_block_sharded = get_compile_time_arg_val(12);
+    constexpr uint32_t remote_read = get_compile_time_arg_val(13);
+    constexpr bool is_col_major = get_compile_time_arg_val(14) == 1;
+    constexpr uint32_t is_width_sharded = get_compile_time_arg_val(15);
+    constexpr uint32_t input_aligned_page_size = get_compile_time_arg_val(16);
 
     constexpr uint32_t elem_nbytes = sizeof(uint16_t);
     constexpr uint16_t pad_core_id = 0xFFFF;
@@ -169,4 +171,8 @@ void kernel_main() {
 
     noc_async_read_barrier();
     noc_async_write_barrier();
+
+    if (local_config_cb_id) {
+        // tt::data_movement::common::print_bf16_pages(out_base_l1_addr, 32, 64);
+    }
 }

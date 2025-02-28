@@ -95,7 +95,12 @@ std::vector<std::pair<bool, uint32_pair_t>> generate_tensor_metadata(
     bool is_in_tiled = true);
 uint32_t generate_max_out_nsticks_per_core(
     const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries);
-std::tuple<std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>>
+std::tuple<
+    std::vector<std::vector<uint16_t>>,
+    std::vector<std::vector<uint16_t>>,
+    std::vector<std::vector<uint16_t>>,
+    std::vector<uint16_t>,
+    int>
 generate_halo_kernel_config_tensors(
     const std::vector<std::pair<bool, uint32_pair_t>>& tensor_metadata,
     const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries,
@@ -108,7 +113,7 @@ std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
     const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries,
     bool pad_tile = false,
     bool pad_cores = false);
-std::vector<uint16_t> flatten(const std::vector<std::vector<uint16_t>>& input);
+std::vector<uint16_t> flatten(const std::vector<std::vector<uint16_t>>& input, uint32_t extend_with_zeroes = 0);
 Tensor construct_on_host_config_tensor(
     const std::vector<std::vector<uint16_t>>& config,
     const SlidingWindowConfig& sw_config,
