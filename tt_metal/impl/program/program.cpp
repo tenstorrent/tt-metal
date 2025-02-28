@@ -1118,6 +1118,7 @@ void detail::Program_::populate_dispatch_data(IDevice* device) {
             }
             const auto& binaries =
                 kernel->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
+            const auto core_type = kernel->get_kernel_programmable_core_type();
             std::vector<uint32_t> dst_base_addrs;
             std::vector<uint32_t> page_offsets;
             std::vector<uint32_t> lengths;
@@ -1138,6 +1139,7 @@ void detail::Program_::populate_dispatch_data(IDevice* device) {
                 kernel_bin.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t dst, uint32_t len) {
 
                     // Set dst for eth kernels until they move to ring buffer
+                    dst = hal.iram_relocate_dev_addr(dst, core_type);
                     dst_base_addrs[transfer_info_index] = dst;
                     page_offsets[transfer_info_index] =
                         binaries_data.size() * sizeof(uint32_t) / HostMemDeviceCommand::PROGRAM_PAGE_SIZE;

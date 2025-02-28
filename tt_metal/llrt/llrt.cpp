@@ -140,10 +140,14 @@ bool test_load_write_read_risc_binary(
     assert(tt::Cluster::instance().is_worker_core(core, chip_id) or tt::Cluster::instance().is_ethernet_core(core, chip_id));
 
     uint64_t local_init_addr = tt::tt_metal::hal.get_jit_build_config(core_type_idx, processor_class_idx, processor_type_idx).local_init_addr;
+    auto core_type = tt::tt_metal::hal.get_programmable_core_type(core_type_idx);
 
     log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size()*sizeof(uint32_t));
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
-        uint64_t relo_addr = tt::tt_metal::hal.relocate_dev_addr(addr, local_init_addr);
+        uint64_t relo_addr = tt::tt_metal::hal.iram_relocate_dev_addr(addr, core_type);
+        if (relo_addr == addr) {
+            relo_addr = tt::tt_metal::hal.relocate_dev_addr(addr, local_init_addr);
+        }
 
         tt::Cluster::instance().write_core(&*mem_ptr, len_words * sizeof(uint32_t), tt_cxy_pair(chip_id, core), relo_addr);
     });

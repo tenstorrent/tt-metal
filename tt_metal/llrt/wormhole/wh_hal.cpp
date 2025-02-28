@@ -58,14 +58,6 @@ void Hal::initialize_wh() {
     this->mem_alignments_[static_cast<std::size_t>(HalMemType::HOST)] = PCIE_ALIGNMENT;
 
     this->relocate_func_ = [](uint64_t addr, uint64_t local_init_addr) {
-        if (std::getenv("TT_METAL_ENABLE_IRAM")) {
-            auto erisc_iram_base =
-                static_cast<uint64_t>(static_cast<uint32_t>(eth_iram_mem::address_map::ERISC_IRAM_BASE));
-            auto firmware_base = static_cast<uint64_t>(static_cast<uint32_t>(eth_l1_mem::address_map::FIRMWARE_BASE));
-            if (addr == erisc_iram_base && local_init_addr == firmware_base) {
-                return (uint64_t)eth_l1_mem::address_map::KERNEL_BASE;
-            }
-        }
         if ((addr & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
             // Move addresses in the local memory range to l1 (copied by kernel)
             return (addr & ~MEM_LOCAL_BASE) + local_init_addr;
@@ -75,6 +67,18 @@ void Hal::initialize_wh() {
         }
 
         // No relocation needed
+        return addr;
+    };
+
+    this->iram_relocate_func_ = [](uint64_t addr, HalProgrammableCoreType type) {
+        if (std::getenv("TT_METAL_ENABLE_IRAM")) {
+            if (type == HalProgrammableCoreType::ACTIVE_ETH &&
+                addr == static_cast<uint64_t>(static_cast<uint32_t>(eth_iram_mem::address_map::ERISC_IRAM_BASE))) {
+                // IRAM enabled program starts from ERISC_IRAM_BASE. This relocation is for where to put the program.
+                // At first the program is placed on ERISC_IRAM_BASE, then erisc.cc copies to local IRAM.
+                return (uint64_t)eth_l1_mem::address_map::KERNEL_BASE;
+            }
+        }
         return addr;
     };
 
