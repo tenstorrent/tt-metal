@@ -195,7 +195,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         is_width_sharded,
         aligned_input_nstick_nbytes,
         enable_split_reader,
-        false};
+        true};
 
     if (enable_split_reader) {
         reader_ct_args[0] = padding_config_cb_id;
@@ -214,7 +214,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_ct_args});
 
     if (enable_split_reader) {
-        reader_ct_args[16] = true;
+        reader_ct_args[16] = false;
     } else {
         reader_ct_args[0] = padding_config_cb_id;
         reader_ct_args[1] = 0;

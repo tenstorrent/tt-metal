@@ -42,7 +42,7 @@ void copy_sticks_async(
     const uint32_t out_base_l1_addr) {
     int i = 0;
     int length = config_data[i + 2];
-
+    uint16_t iteration = 0;
     while (length) {
         uint16_t noc_x = ((is_block_sharded && !is_col_major) || is_width_sharded) ? my_noc_x : config_data[i + 0];
         uint16_t noc_y = ((is_block_sharded && is_col_major) || is_width_sharded) ? my_noc_y : config_data[i + 1];
@@ -51,22 +51,31 @@ void copy_sticks_async(
 
         const uint64_t base_addr = get_noc_addr(noc_x, noc_y, is_read ? in_base_l1_addr : out_base_l1_addr);
 
-        uint16_t start_index = 0;
-        // Determine the read offset based on whether split reader is enabled
-        // Each entry in config_data is of size 3. so if split reader is enabled,
-        // even entries and odd entries are processed on separate cores.
-        uint16_t read_offset = enable_split_reader ? 6 : 3;
-
-        // If split reader is enabled and this instance is a reader, set the start index to 3
-        // to read all odd indexed entries
-        if constexpr (enable_split_reader) {
-            // read odd entries for remote_config and even entries for local_config on the reader core and other way
-            // around for other core.
-            if constexpr ((is_reader && is_remote_config) || (!is_reader && !is_remote_config)) {
-                start_index = 3;
+        for (uint16_t j = 0; j < length; j += 3) {
+            iteration++;
+            if constexpr (enable_split_reader) {
+                if constexpr (is_remote_config) {
+                    if constexpr (is_reader) {
+                        if (iteration % 2 == 1) {
+                            continue;
+                        }
+                    } else {
+                        if (iteration % 2 == 0) {
+                            continue;
+                        }
+                    }
+                } else {
+                    if constexpr (is_reader) {
+                        if (iteration % 2 == 0) {
+                            continue;
+                        }
+                    } else {
+                        if (iteration % 2 == 1) {
+                            continue;
+                        }
+                    }
+                }
             }
-        }
-        for (uint16_t j = start_index; j < length; j += read_offset) {
             uint16_t src_local_idx = config_data[i + j + 0];
             uint16_t dst_local_idx = config_data[i + j + 1];
             uint16_t nsticks = config_data[i + j + 2];
