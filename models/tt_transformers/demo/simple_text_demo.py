@@ -119,6 +119,8 @@ def create_tt_model(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
     )
+
+    # Avoid loading state_dict for every DP model
     if not state_dict:
         state_dict = tt_model_args.load_state_dict()
 
@@ -158,6 +160,49 @@ def create_tt_model(
     return tt_model_args, model, page_table, tt_kv_cache, state_dict
 
 
+def prepare_generator_args(
+    num_devices,
+    data_parallel,
+    mesh_device,
+    instruct,
+    batch_size,
+    optimizations,
+    max_seq_len,
+    page_params,
+    paged_attention,
+):
+    # Partition the mesh, singular model implemented for TP on 1xN mesh
+    submesh_devices = mesh_device.create_submeshes(ttnn.MeshShape(1, num_devices // data_parallel))
+    state_dict = None
+
+    # Hybrid requires a model per submesh
+    model_args = []
+    model = []
+    page_table = []
+    tt_kv_cache = []
+
+    for submesh in submesh_devices:
+        model_args_i, model_i, page_table_i, tt_kv_cache_i, state_dict = create_tt_model(
+            submesh,
+            instruct=instruct,
+            max_batch_size=batch_size // data_parallel,
+            optimizations=optimizations,
+            max_seq_len=max_seq_len,
+            page_params=page_params,
+            dtype=ttnn.bfloat8_b,
+            use_paged_kv_cache=paged_attention,
+            state_dict=state_dict,
+        )
+        model_args.append(model_args_i)
+        model.append(model_i)
+        page_table.append(page_table_i)
+        tt_kv_cache.append(tt_kv_cache_i)
+
+    # Host code, safe to reuse tokenizer from the 1st model
+    tokenizer = model_args[0].tokenizer
+    return model_args, model, page_table, tt_kv_cache, tokenizer
+
+
 # List of supported Parameters for demo.py
 #
 # input_prompts (string): input json file with prompts to process. See models/tt_transformers/demo/*.json for list of input files
@@ -174,7 +219,7 @@ def create_tt_model(
 # optimization (ModelOptimizations): Optimization level to use for the model (performance or accuracy)
 # MESH_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export MESH_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
 @pytest.mark.parametrize(
-    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only",
+    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only, data_parallel",
     [
         (  # Batch-1 run (Latency) - single user, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -188,6 +233,7 @@ def create_tt_model(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
+            1,
         ),
         (  # Batch-32 run (Throughput) - 32 users, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -201,6 +247,7 @@ def create_tt_model(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
+            1,
         ),
         (  # Long-context run - Single user, long prompt (adapted to the model being used and architecture)
             "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
@@ -214,6 +261,7 @@ def create_tt_model(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
+            1,
         ),
         (  # Batch-1 run (Reasoning) - single user, small prompt, long thinking time
             "models/tt_transformers/demo/input_data_questions_reasoning.json",  # input_prompts
@@ -227,6 +275,7 @@ def create_tt_model(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             False,  # stop_at_eos
             False,  # ci_only
+            1,
         ),
         (  # CI Batch-1 run - Measures the performance of a single user over 4096 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -240,6 +289,7 @@ def create_tt_model(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             False,  # stop_at_eos
             True,  # ci_only
+            1,
         ),
         (  # CI Batch-32 run - Measures the performance of a 32 users over 4096 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -253,6 +303,21 @@ def create_tt_model(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             False,  # stop_at_eos
             True,  # ci_only
+            1,
+        ),
+        (  # Batch-1 run (Latency) - single user, small prompt
+            "models/demos/llama3/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            1024,  # max_seq_len
+            1,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # ci_only
+            8,
         ),
     ],
     ids=[
@@ -262,13 +327,7 @@ def create_tt_model(
         "reasoning-1",  # reasoning
         "ci-1",  # CI batch 1
         "ci-32",  # CI batch 32
-    ],
-)
-@pytest.mark.parametrize(
-    "data_parallel",
-    [
-        # 1, 2, 4,
-        8,
+        "batch-1-DP",  # DP latency
     ],
 )
 @pytest.mark.parametrize(
@@ -298,13 +357,13 @@ def test_demo_text(
     paged_attention,
     page_params,
     sampling_params,
-    data_parallel,
     optimizations,
     stop_at_eos,
     mesh_device,
     use_program_cache,
     is_ci_env,
     ci_only,
+    data_parallel,
     reset_seeds,
     request,
 ):
@@ -333,9 +392,6 @@ def test_demo_text(
     repeat_batches = request.config.getoption("--repeat_batches") or repeat_batches
     max_seq_len = request.config.getoption("--max_seq_len") or max_seq_len
     batch_size = request.config.getoption("--batch_size") or batch_size
-
-    batch_size *= data_parallel
-
     max_generated_tokens = request.config.getoption("--max_generated_tokens") or max_generated_tokens
     paged_attention = request.config.getoption("--paged_attention") or paged_attention
     page_params = request.config.getoption("--page_params") or page_params
@@ -346,6 +402,13 @@ def test_demo_text(
         1,
     ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
         stop_at_eos = request.config.getoption("--stop_at_eos")
+
+    num_devices = mesh_device.get_num_devices()
+    batch_size *= data_parallel  # input batch_size is interpreted as size per DP group
+
+    # uneven split of devices per DP group not supported
+    if data_parallel > num_devices or num_devices % data_parallel != 0:
+        pytest.skip(f"Invalid number of DP groups: {data_parallel}, for {num_devices} devices")
 
     if not stop_at_eos:
         logger.info(f"The decode generation will only stop at the max_generated_tokens limit == {max_generated_tokens}")
@@ -378,35 +441,17 @@ def test_demo_text(
     for i in range(repeat_batches):
         repeat_batch_prompts.append([input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))])
 
-    # Hybrid requires a model per submesh
-    model_args = []
-    model = []
-    page_table = []
-    tt_kv_cache = []
-
-    # Partition the mesh, singular model implemented for TP on 1xN mesh
-    num_devices = mesh_device.get_num_devices()
-    submesh_devices = mesh_device.create_submeshes(ttnn.MeshShape(1, num_devices // data_parallel))
-    state_dict = None
-
-    for submesh in submesh_devices:
-        model_args_i, model_i, page_table_i, tt_kv_cache_i, state_dict = create_tt_model(
-            submesh,
-            instruct=instruct,
-            max_batch_size=batch_size // data_parallel,
-            optimizations=optimizations,
-            max_seq_len=max_seq_len,
-            page_params=page_params,
-            dtype=ttnn.bfloat8_b,
-            use_paged_kv_cache=paged_attention,
-            state_dict=state_dict,
-        )
-        model_args.append(model_args_i)
-        model.append(model_i)
-        page_table.append(page_table_i)
-        tt_kv_cache.append(tt_kv_cache_i)
-
-    tokenizer = [arg.tokenizer for arg in model_args]
+    model_args, model, page_table, tt_kv_cache, tokenizer = prepare_generator_args(
+        num_devices=num_devices,
+        data_parallel=data_parallel,
+        mesh_device=mesh_device,
+        instruct=instruct,
+        batch_size=batch_size,
+        optimizations=optimizations,
+        max_seq_len=max_seq_len,
+        page_params=page_params,
+        paged_attention=paged_attention,
+    )
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
     num_tokens_generated_decode = []
@@ -541,7 +586,7 @@ def test_demo_text(
             for user in range(batch_size):
                 user_tok = out_tok[user].item()
                 if (
-                    user_tok not in tokenizer[0].stop_tokens and user_done[user] == False
+                    user_tok not in tokenizer.stop_tokens and user_done[user] == False
                 ):  # Read until an eos token (e.g. <|eot_id|>); create_tokenizer adds stop_tokens to HF tokenizers
                     all_outputs[user].append(user_tok)
                 else:
@@ -556,7 +601,7 @@ def test_demo_text(
             # Print out generated outputs for each user at the end of every iteration
             if not is_ci_env:
                 for user in range(batch_size):
-                    text = "".join(tokenizer[0].decode(all_outputs[user]))
+                    text = "".join(tokenizer.decode(all_outputs[user]))
                     if len(text) > 100:
                         text = "..." + text[-97:]
                     text = text.replace("\n", " ")
@@ -573,8 +618,8 @@ def test_demo_text(
                 profiler.start(f"log_saving_file", iteration=batch_idx)
                 logger.info("Finished decoding, printing the final outputs...\n")
                 for i, (output, prompt) in enumerate(zip(all_outputs, input_prompts)):
-                    text = tokenizer[0].decode(output)
-                    prompt_including_assistant_tags = tokenizer[0].decode(
+                    text = tokenizer.decode(output)
+                    prompt_including_assistant_tags = tokenizer.decode(
                         model_args[0].encode_prompt(prompt, instruct=instruct)
                     )
                     text_after_prompt = text.replace(prompt_including_assistant_tags, "", 1)
