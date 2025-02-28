@@ -23,13 +23,15 @@ void kernel_main() {
 
     constexpr bool in0_is_dram_bool = in0_is_dram == 1;
     constexpr bool tile_dtype_is_bfloat16 = get_compile_time_arg_val(0) == 1;
-#if (tile_dtype_is_bfloat16)
+
+    DataFormat data_format = DataFormat::Invalid;
+    if constexpr (tile_dtype_is_bfloat16) {
+        data_format = DataFormat::Float16;
+    } else {
+        data_format = DataFormat::Bfp8_b;
+    }
     const InterleavedAddrGenFast<in0_is_dram_bool> s0 = {
-        .bank_base_address = in0_tensor_addr, .page_size = single_tile_size_bytes, .data_format = DataFormat::Float16};
-#else
-    const InterleavedAddrGenFast<in0_is_dram_bool> s0 = {
-        .bank_base_address = in0_tensor_addr, .page_size = single_tile_size_bytes, .data_format = DataFormat::Bfp8_b};
-#endif
+        .bank_base_address = in0_tensor_addr, .page_size = single_tile_size_bytes, .data_format = data_format};
 
     uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
     uint32_t in0_tensor_current_tile_id = in0_tensor_tile_id;
