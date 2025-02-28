@@ -127,7 +127,6 @@ TEST_F(CommandQueueEventFixture, TestEventsEnqueueRecordEventAndSynchronizeHang)
 
     auto future_event = std::make_shared<Event>();
     EnqueueRecordEvent(this->device_->command_queue(), future_event);
-    future_event->wait_until_ready();  // in case async used, must block until async cq populated event.
     future_event->event_id = 0xFFFF;   // Modify event_id to be a future event that isn't issued yet.
 
     // Launch Host Sync in an async thread, expected to hang, with timeout and kill signal.
@@ -158,7 +157,6 @@ TEST_F(CommandQueueEventFixture, TestEventsQueueWaitForEventHang) {
 
     auto future_event = std::make_shared<Event>();
     EnqueueRecordEvent(this->device_->command_queue(), future_event);
-    future_event->wait_until_ready();  // in case async used, must block until async cq populated event.
     future_event->event_id = 0xFFFF;   // Modify event_id to be a future event that isn't issued yet.
     EnqueueWaitForEvent(this->device_->command_queue(), future_event);
 
@@ -244,7 +242,6 @@ TEST_F(CommandQueueEventFixture, TestEventsEventsQueryBasic) {
     // Query a future event that hasn't completed and ensure it's not finished.
     auto future_event = std::make_shared<Event>();
     EnqueueRecordEvent(this->device_->command_queue(), future_event);
-    future_event->wait_until_ready();  // in case async used, must block until async cq populated event.
     future_event->event_id = 0xFFFF;   // Modify event_id to be a future event that isn't issued yet.
     event_status = EventQuery(future_event);
     EXPECT_EQ(event_status, false);

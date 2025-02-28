@@ -297,7 +297,6 @@ void EnqueueRecordEvent(
 
 void EnqueueWaitForEvent(CommandQueue& cq, const std::shared_ptr<Event>& event) {
     detail::DispatchStateCheck(true);
-    event->wait_until_ready();  // Block until event populated. Worker thread.
     log_trace(
         tt::LogMetal,
         "EnqueueWaitForEvent() issued on Event(device_id: {} cq_id: {} event_id: {}) from device_id: {} cq_id: {}",
@@ -311,7 +310,6 @@ void EnqueueWaitForEvent(CommandQueue& cq, const std::shared_ptr<Event>& event) 
 
 void EventSynchronize(const std::shared_ptr<Event>& event) {
     detail::DispatchStateCheck(true);
-    event->wait_until_ready();  // Block until event populated. Parent thread.
     log_trace(
         tt::LogMetal,
         "Issuing host sync on Event(device_id: {} cq_id: {} event_id: {})",
@@ -334,7 +332,6 @@ void EventSynchronize(const std::shared_ptr<Event>& event) {
 
 bool EventQuery(const std::shared_ptr<Event>& event) {
     detail::DispatchStateCheck(true);
-    event->wait_until_ready();  // Block until event populated. Parent thread.
     bool event_completed = event->device->sysmem_manager().get_last_completed_event(event->cq_id) >= event->event_id;
     log_trace(
         tt::LogMetal,
