@@ -62,7 +62,7 @@ class ModelOptimizations:
     @classmethod
     def performance(cls, model_name):
         """Configuration optimized for performance
-        All models use bfp4 MLPs in this configuration
+        All models use bfp4 in FF1 and FF3 MLPs in this configuration
         """
         inst = cls({LayerGroup.FF1_FF3: PrecisionSetting.BFP4_LOFI})
         inst.__name__ = "performance"
