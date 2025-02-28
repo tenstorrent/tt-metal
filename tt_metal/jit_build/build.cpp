@@ -28,6 +28,16 @@ namespace fs = std::filesystem;
 using namespace std;
 using namespace tt;
 
+namespace {
+
+void sync_events(auto& events) {
+    for (auto& f : events) {
+        f.get();
+    }
+}
+
+}  // namespace
+
 namespace tt::tt_metal {
 
 static std::string get_string_aliased_arch_lowercase(tt::ARCH arch) {
@@ -87,7 +97,7 @@ void JitBuildEnv::init(
     switch (arch) {
         case ARCH::GRAYSKULL: common_flags = "-mcpu=tt-gs "; break;
         case ARCH::WORMHOLE_B0: common_flags = "-mcpu=tt-wh "; break;
-        case ARCH::BLACKHOLE: common_flags = "-mcpu=tt-bh "; break;
+        case ARCH::BLACKHOLE: common_flags = "-mcpu=tt-bh -fno-rvtt-sfpu-replay "; break;
         default: TT_ASSERT(false, "Invalid arch"); break;
     }
     common_flags += "-std=c++17 -flto -ffast-math ";
@@ -660,7 +670,8 @@ void JitBuildState::compile(const string& log_file, const string& out_dir, const
             events);
     }
 
-    sync_build_step(events);
+    sync_events(events);
+
     if (tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
         dump_kernel_defines_and_args(env_.get_out_kernel_root_path());
     }
@@ -762,7 +773,8 @@ void jit_build_set(const JitBuildStateSet& build_set, const JitBuildSettings* se
         auto& build = build_set[i];
         launch_build_step([build, settings] { build->build(settings); }, events);
     }
-    sync_build_step(events);
+
+    sync_events(events);
 }
 
 void jit_build_subset(const JitBuildStateSubset& build_subset, const JitBuildSettings* settings) {
@@ -772,7 +784,8 @@ void jit_build_subset(const JitBuildStateSubset& build_subset, const JitBuildSet
         auto& build = build_subset.build_ptr[i];
         launch_build_step([build, settings] { build->build(settings); }, events);
     }
-    sync_build_step(events);
+
+    sync_events(events);
 }
 
 void launch_build_step(const std::function<void()>& build_func, std::vector<std::shared_future<void>>& events) {

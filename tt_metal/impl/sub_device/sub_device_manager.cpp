@@ -154,9 +154,9 @@ void SubDeviceManager::set_sub_device_stall_group(tt::stl::Span<const SubDeviceI
     TT_FATAL(!sub_device_ids.empty(), "sub_device_ids to stall must not be empty");
     for (const auto& sub_device_id : sub_device_ids) {
         TT_FATAL(
-            sub_device_id.to_index() < sub_devices_.size(),
+            *sub_device_id < sub_devices_.size(),
             "SubDevice index {} out of bounds {}",
-            sub_device_id.to_index(),
+            *sub_device_id,
             sub_devices_.size());
     }
     sub_device_stall_group_ = std::vector<SubDeviceId>(sub_device_ids.begin(), sub_device_ids.end());
@@ -165,7 +165,7 @@ void SubDeviceManager::set_sub_device_stall_group(tt::stl::Span<const SubDeviceI
 void SubDeviceManager::reset_sub_device_stall_group() { this->set_sub_device_stall_group(sub_device_ids_); }
 
 uint8_t SubDeviceManager::get_sub_device_index(SubDeviceId sub_device_id) const {
-    auto sub_device_index = sub_device_id.to_index();
+    auto sub_device_index = *sub_device_id;
     TT_FATAL(
         sub_device_index < sub_devices_.size(),
         "SubDevice index {} out of bounds {}",
@@ -180,8 +180,8 @@ void SubDeviceManager::validate_sub_devices() const {
     const auto& compute_grid_size = device_->compute_with_storage_grid_size();
     CoreRange device_worker_cores = CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1});
 
-    for (auto sub_device_id = SubDeviceId{0}; sub_device_id < this->num_sub_devices(); ++sub_device_id) {
-        const auto& sub_device = this->sub_device(sub_device_id);
+    for (uint8_t sub_device_id = 0; sub_device_id < this->num_sub_devices(); ++sub_device_id) {
+        const auto& sub_device = this->sub_device(SubDeviceId(sub_device_id));
         const auto& worker_cores = sub_device.cores(HalProgrammableCoreType::TENSIX);
         TT_FATAL(
             device_worker_cores.contains(worker_cores),
@@ -220,9 +220,9 @@ void SubDeviceManager::validate_sub_devices() const {
 }
 
 void SubDeviceManager::populate_sub_device_ids() {
-    sub_device_ids_.resize(this->num_sub_devices());
+    sub_device_ids_.reserve(this->num_sub_devices());
     for (uint8_t i = 0; i < this->num_sub_devices(); ++i) {
-        sub_device_ids_[i] = SubDeviceId{i};
+        sub_device_ids_.push_back(SubDeviceId{i});
     }
     this->reset_sub_device_stall_group();
 }

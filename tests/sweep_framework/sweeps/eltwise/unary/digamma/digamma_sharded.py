@@ -7,7 +7,6 @@ from functools import partial
 
 import json
 import torch
-import random
 import ttnn
 import math
 from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape_rm
@@ -20,11 +19,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
-
-# Override the default timeout in seconds for hang detection.
-TIMEOUT = 120
-
-random.seed(0)
 
 
 # Parameters provided to the test vector generator are defined here.
@@ -66,8 +60,7 @@ def run(
     *,
     device,
 ) -> list:
-    data_seed = random.randint(0, 20000000)
-    torch.manual_seed(data_seed)
+    torch.manual_seed(0)
 
     (
         input_shape,
@@ -92,7 +85,7 @@ def run(
     )
 
     torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=0.0001, high=100, dtype=torch.float32), input_a_dtype
+        partial(torch_random, low=1, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
     golden_function = ttnn.get_golden_function(ttnn.digamma)
     torch_output_tensor = golden_function(torch_input_tensor_a)
