@@ -39,27 +39,17 @@ ALWI void binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
     PACK((llk_pack_dest_init<false, DST_ACCUM_MODE>()));
 }
 
+// clang-format off
 /**
- * Please refer to documentation for any_init.
- * f means high fidelity with resepect to accuracy
- * this is set during createprogram
+ * Short init function
+ *
+ * | Argument       | Description                                                   | Type     | Valid Range | Required |
+ * |----------------|---------------------------------------------------------------|----------|-------------|----------|
+ * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31     | True     |
+ * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31     | True     |
  */
-ALWI void mul_tiles_init_f() { MATH((llk_math_eltwise_binary_init<ELWMUL, NONE, MATH_FIDELITY>())); }
-
-/**
- * Please refer to documentation for any_init.
- */
-ALWI void mul_tiles_init(uint32_t icb0, uint32_t icb1) {
-    MATH((llk_math_eltwise_binary_init<ELWMUL, NONE, MATH_FIDELITY>()));
-    UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1)));
-}
-
-/**
- * Please refer to documentation for any_init.
- * nof means low fidelity with resepect to accuracy
- * this is set during createprogram
- */
-ALWI void add_tiles_init_nof() { MATH((llk_math_eltwise_binary_init<ELWADD, NONE>())); }
+// clang-format on
+ALWI void mul_tiles_init(uint32_t icb0, uint32_t icb1) { binary_tiles_init<true, ELWMUL>(icb0, icb1); }
 
 // clang-format off
 /**
@@ -73,16 +63,8 @@ ALWI void add_tiles_init_nof() { MATH((llk_math_eltwise_binary_init<ELWADD, NONE
  */
 // clang-format on
 ALWI void add_tiles_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = false) {
-    MATH((llk_math_eltwise_binary_init<ELWADD, NONE>(0 /*transpose*/, acc_to_dest)));
-    UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1, 0 /*transpose*/, acc_to_dest)));
+    binary_tiles_init<true, ELWADD>(icb0, icb1, acc_to_dest);
 }
-
-/**
- * Please refer to documentation for any_init.
- * nof means low fidelity with respect to accuracy
- * this is set during createprogram
- */
-ALWI void sub_tiles_init_nof() { MATH((llk_math_eltwise_binary_init<ELWSUB, NONE>())); }
 
 // clang-format off
 /**
@@ -96,8 +78,7 @@ ALWI void sub_tiles_init_nof() { MATH((llk_math_eltwise_binary_init<ELWSUB, NONE
  */
 // clang-format on
 ALWI void sub_tiles_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = false) {
-    MATH((llk_math_eltwise_binary_init<ELWSUB, NONE>(0 /*transpose*/, acc_to_dest)));
-    UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1, 0 /*transpose*/, acc_to_dest)));
+    binary_tiles_init<true, ELWSUB>(icb0, icb1, acc_to_dest);
 }
 
 // clang-format off
@@ -181,6 +162,28 @@ ALWI void sub_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itil
         icb0, icb1, idst)));
 }
 
+ /**
+ * Template for initializing element-wise binary operations.
+ * Template parameters:
+ * full_init: if true, the full init is performed (unpack+math), otherwise a nof init is performed (only math)
+ * eltwise_binary_op_type: the binary operation type
+ *
+ * Function
+ * | Argument       | Description                                                   | Type     | Valid Range | Required |
+ * |----------------|---------------------------------------------------------------|----------|-------------|----------|
+ * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31     | True     |
+ * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31     | True     |
+ * | acc_to_dest    | If true, operation = A - B + dst_tile_idx of sub_tiles        | bool     | 0,1         | False    |
+ */
+template <bool full_init, EltwiseBinaryType eltwise_binary_op_type>
+ALWI void binary_tiles_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = false) {
+    MATH((llk_math_eltwise_binary_init<eltwise_binary_type, NONE, MATH_FIDELITY>(0 /*transpose*/, acc_to_dest)));
+
+    if constexpr (full_init) {
+        UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1, 0 /*transpose*/, acc_to_dest)));
+    }
+}
+
 /**
  * Init function with a specified op
  * template parameters:
@@ -190,23 +193,7 @@ ALWI void sub_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itil
 template <bool full_init = false, EltwiseBinaryType eltwise_binary_op_type = ELWADD>
 ALWI void binary_op_specific_init(uint32_t icb0, uint32_t icb1)  // TODO(AP): better naming
 {
-    if constexpr (full_init) {
-        if constexpr (eltwise_binary_op_type == ELWADD) {
-            add_tiles_init(icb0, icb1);
-        } else if constexpr (eltwise_binary_op_type == ELWSUB) {
-            sub_tiles_init(icb0, icb1);
-        } else if constexpr (eltwise_binary_op_type == ELWMUL) {
-            mul_tiles_init(icb0, icb1);
-        }
-    } else {
-        if constexpr (eltwise_binary_op_type == ELWADD) {
-            add_tiles_init_nof();
-        } else if constexpr (eltwise_binary_op_type == ELWSUB) {
-            sub_tiles_init_nof();
-        } else if constexpr (eltwise_binary_op_type == ELWMUL) {
-            mul_tiles_init_f();
-        }
-    }
+    binary_tiles_init<full_init, eltwise_binary_op_type>(icb0,icb1);
 }
 
 /**
