@@ -61,7 +61,7 @@ std::vector<Tensor> post_topk_transform_tensor(
     const auto orig_rank = input_shape.rank();
 
     Shape final_lshape = original_lshape;
-    final_lshape[dim] = std::min(original_lshape[dim], k);
+    final_lshape[dim] = std::min(original_lshape[dim], adjusted_k);
 
     // case 1 : K is not a supported shape
     if (adjusted_k != k) {
