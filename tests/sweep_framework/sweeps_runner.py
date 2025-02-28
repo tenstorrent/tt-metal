@@ -83,7 +83,7 @@ def gather_single_test_perf(device, test_passed):
 
 def run(test_module, input_queue, output_queue, suite_name=""):
     device_generator = get_devices(test_module)
-    log_file = f"/home/ubuntu/tt-metal/output_log_{suite_name}.csv"
+    log_file = f"/home/mcwopsteam/Aswin/tt-metal/output_log_{suite_name}.csv"
 
     # Open the file in write mode to clear its contents
     with open(log_file, "w") as f:
