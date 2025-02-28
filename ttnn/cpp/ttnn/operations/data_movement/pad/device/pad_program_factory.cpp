@@ -956,12 +956,11 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
         );
     }
     uint32_t cb_npages = get_num_stick_per_barrier(a);
-    std::cout << "cb_npages: " << cb_npages << std::endl;
-    std::cout << "stick_size_padded_aligned: " << stick_size_padded_aligned << std::endl;
-    const uint32_t buffer_factor = 16;
+    const uint32_t buffer_reader_writer_async_factor = 16;
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(
-            buffer_factor * cb_npages * stick_size_padded_aligned, {{src0_cb_index, cb_data_format}})
+            buffer_reader_writer_async_factor * cb_npages * stick_size_padded_aligned,
+            {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, stick_size_padded_aligned);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
