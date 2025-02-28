@@ -30,7 +30,6 @@
 #include "debug/dprint.h"
 #include "debug/stack_usage.h"
 
-#include "debug/ring_buffer.h"
 // clang-format on
 
 uint8_t noc_index;
@@ -592,7 +591,6 @@ int main() {
                 // messages in the ring buffer. Must be executed before the atomic increment, as after that the launch
                 // message is no longer owned by us.
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
-
                 noc_fast_atomic_increment(
                     noc_index,
                     NCRISC_AT_CMD_BUF,
