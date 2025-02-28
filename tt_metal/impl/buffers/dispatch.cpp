@@ -7,7 +7,9 @@
 #include "assert.hpp"
 #include "dispatch.hpp"
 #include <tt-metalium/command_queue_interface.hpp>
+#include <tt-metalium/device_command.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
+#include <tt-metalium/program_impl.hpp>
 
 #include "tt_cluster.hpp"
 
