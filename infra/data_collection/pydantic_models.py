@@ -9,7 +9,8 @@ Definition of the pydantic models used for data production.
 from datetime import datetime
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from enum import Enum
+from pydantic import BaseModel, Field, model_validator
 
 
 class Test(BaseModel):
@@ -33,6 +34,17 @@ class Test(BaseModel):
     full_test_name: str = Field(description="Test name plus config.")
     config: Optional[dict] = Field(None, description="Test configuration key/value " "pairs.")
     tags: Optional[dict] = Field(None, description="Tags associated with the test, as key/value pairs.")
+
+
+class JobStatus(str, Enum):
+    success = "success"
+    failure = "failure"
+    skipped = "skipped"
+    cancelled = "cancelled"
+    neutral = "neutral"
+    unknown = "unknown"
+    timed_out = "timed_out"
+    action_required = "action_required"
 
 
 class Job(BaseModel):
@@ -61,6 +73,11 @@ class Job(BaseModel):
         "criteria. Failure mechanisms that are only descriptive of the "
         "job itself."
     )
+    job_status: Optional[JobStatus] = Field(
+        None,
+        description="Job execution status, possible statuses include success, failure, "
+        "skipped, cancelled, neutral, etc.",
+    )
     docker_image: Optional[str] = Field(None, description="Name of the Docker image used for the CI job.")
     is_build_job: bool = Field(description="Flag identifying if the job is a software build.")
     job_matrix_config: Optional[dict] = Field(
@@ -73,6 +90,20 @@ class Job(BaseModel):
     failure_signature: Optional[str] = Field(None, description="Failure signature.")
     failure_description: Optional[str] = Field(None, description="Failure description.")
     tests: List[Test] = []
+
+    # Model validator to check the unique combination constraint
+    @model_validator(mode="before")
+    def check_unique_tests(cls, values):
+        tests = values.get("tests", [])
+        seen_combinations = set()
+
+        for test in tests:
+            # for each job, the test constraint is full_test_name, test_start_ts
+            test_combination = (test.full_test_name, test.test_start_ts)
+            if test_combination in seen_combinations:
+                raise ValueError(f"Duplicate test combination found: {test_combination}")
+            seen_combinations.add(test_combination)
+        return values
 
 
 class Pipeline(BaseModel):

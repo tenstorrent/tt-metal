@@ -8,6 +8,7 @@
 #include <tt-metalium/rtoptions.hpp>
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "test_common.hpp"
+#include "routing_test_common.hpp"
 #include "llrt.hpp"
 
 using std::vector;

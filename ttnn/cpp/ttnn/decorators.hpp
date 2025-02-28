@@ -54,8 +54,6 @@ auto extract_args_to_vector(args_t&&... args) {
 template <typename operation_t, typename execute_on_worker_thread_return_t, typename... args_t>
 inline auto create_async_output_tensors(
     const Tensors& inputs, const OptionalConstTensors& optional_inputs, args_t&&... args) {
-    bool enable_autoformat_device = false;
-
     constexpr bool custom_create_async_outputs =
         requires(const operation_t& t) { t.create_async_output_tensors(inputs, optional_inputs); };
 
@@ -72,15 +70,14 @@ inline auto create_async_output_tensors(
 
         return operation_t::create_async_optional_output_tensors(std::forward<decltype(args)>(args)...);
     } else if constexpr (std::is_same_v<std::decay_t<execute_on_worker_thread_return_t>, Tensor>) {
-        return std::vector{Tensor(
-            tt::tt_metal::operation::get_workers_for_op_output(inputs, optional_inputs, enable_autoformat_device))};
+        return std::vector{Tensor(tt::tt_metal::operation::get_workers_for_op_output(inputs, optional_inputs))};
 
     } else if constexpr (detail::is_homogenous_tuple<execute_on_worker_thread_return_t, Tensor>()) {
         Tensors output_tensors;
         output_tensors.reserve(std::tuple_size_v<execute_on_worker_thread_return_t>);
         for (auto index = 0; index < std::tuple_size_v<execute_on_worker_thread_return_t>; index++) {
-            output_tensors.emplace_back(Tensor(
-                tt::tt_metal::operation::get_workers_for_op_output(inputs, optional_inputs, enable_autoformat_device)));
+            output_tensors.emplace_back(
+                Tensor(tt::tt_metal::operation::get_workers_for_op_output(inputs, optional_inputs)));
         }
         return output_tensors;
     } else {
@@ -108,6 +105,9 @@ auto map_launch_op_args_to_execute_on_worker_thread_args(
                        &optional_output_tensor_index,
                        &optional_output_tensors](auto&& arg) {
         using T = std::decay_t<decltype(arg)>;
+        if constexpr (std::is_same_v<T, std::vector<Tensor>>) {
+            return input_tensors;
+        }
         if constexpr (std::is_same_v<T, Tensor>) {
             return input_tensors.at(input_tensor_index++);
         } else if constexpr (std::is_same_v<T, std::optional<const Tensor>>) {
@@ -307,9 +307,24 @@ private:
 
         using execute_on_worker_thread_return_t = decltype(operation_t::invoke(args...));
 
-        const Tensors input_tensors = detail::extract_args_to_vector<ttnn::Tensor>(args...);
+        Tensors single_input_tensor = detail::extract_args_to_vector<ttnn::Tensor>(args...);
         const OptionalConstTensors optional_input_tensors =
             detail::extract_args_to_vector<std::optional<const ttnn::Tensor>>(args...);
+        std::vector<std::vector<ttnn::Tensor>> vec_input_tensors =
+            detail::extract_args_to_vector<std::vector<ttnn::Tensor>>(args...);
+        if (!(single_input_tensor.empty() || vec_input_tensors.empty())) {
+            TT_THROW(
+                "Only one of single_input_tensor or vec_input_tensors can be specified."
+                "Ensure that your invoke function does not have both Tensor and std::vector<Tensor> as input "
+                "parameters");
+        }
+        if (single_input_tensor.empty() && vec_input_tensors.size() > 1) {
+            TT_THROW(
+                "You have more than one std::vector<Tensor> input parameters in the invoke. Only one vector is "
+                "allowed");
+        }
+
+        auto& input_tensors = !vec_input_tensors.empty() ? vec_input_tensors[0] : single_input_tensor;
 
         auto output_tensors = detail::create_async_output_tensors<operation_t, execute_on_worker_thread_return_t>(
             input_tensors, optional_input_tensors, args...);
@@ -317,7 +332,6 @@ private:
         const OptionalTensors optional_output_tensors =
             detail::extract_args_to_vector<std::optional<ttnn::Tensor>>(args...);
 
-        bool enable_autoformat = false;
         tt::tt_metal::operation::launch_op(
             [args...](
                 const Tensors& input_tensors,
@@ -335,8 +349,7 @@ private:
             input_tensors,
             output_tensors,
             optional_input_tensors,
-            optional_output_tensors,
-            enable_autoformat);
+            optional_output_tensors);
 
         if constexpr (std::is_same_v<std::decay_t<execute_on_worker_thread_return_t>, Tensor>) {
             return output_tensors.at(0);

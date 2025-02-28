@@ -6,13 +6,14 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/device_impl.hpp>
 #include <tt-metalium/rtoptions.hpp>
-#include "tt_fabric/control_plane.hpp"
+#include <tt-metalium/control_plane.hpp>
 // #include "tt_metal/impl/dispatch/cq_commands.hpp"
 // #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
-#include "tt_fabric/hw/inc/tt_fabric_status.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "test_common.hpp"
+#include "routing_test_common.hpp"
 #include "eth_l1_address_map.h"
-#include "tt_fabric/hw/inc/tt_fabric_interface.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
 
 using std::vector;
 using namespace tt;
@@ -299,7 +300,7 @@ int main(int argc, char** argv) {
         uint32_t routing_table_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
         uint32_t gk_interface_addr = routing_table_addr + sizeof(fabric_router_l1_config_t) * 4;
         uint32_t client_interface_addr = routing_table_addr + sizeof(fabric_router_l1_config_t) * 4;
-        uint32_t client_pull_req_buf_addr = client_interface_addr + sizeof(fabric_client_interface_t);
+        uint32_t client_pull_req_buf_addr = client_interface_addr + sizeof(fabric_pull_client_interface_t);
         uint32_t socket_info_addr = gk_interface_addr + sizeof(gatekeeper_info_t);
         log_info(LogTest, "GK Routing Table Addr = 0x{:08X}", routing_table_addr);
         log_info(LogTest, "GK Info Addr = 0x{:08X}", gk_interface_addr);
@@ -395,7 +396,7 @@ int main(int argc, char** argv) {
 
             auto kernel = tt_metal::CreateKernel(
                 program_map[device.first],
-                "tt_fabric/impl/kernels/tt_fabric_gatekeeper.cpp",
+                "tt_metal/fabric/impl/kernels/tt_fabric_gatekeeper.cpp",
                 {gk_core},
                 tt_metal::DataMovementConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,

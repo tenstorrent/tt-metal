@@ -50,12 +50,6 @@ jobs:
       build-type: ${{ inputs.build-type || 'Release' }}
       tracy: true
     secrets: inherit
-  test-wheels:
-    needs: build-artifact
-    uses: ./.github/workflows/_test-wheels-impl.yaml
-    with:
-      from-precompiled: true
-    secrets: inherit
   # Slow Dispatch Unit Tests
   sd-unit-tests:
     needs: build-artifact
@@ -64,7 +58,6 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: grayskull, runner-label: E150 },
           { arch: wormhole_b0, runner-label: N150 },
           { arch: wormhole_b0, runner-label: N300 },
         ]
@@ -80,11 +73,25 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: grayskull, runner-label: E150 },
           { arch: wormhole_b0, runner-label: N150 },
           { arch: wormhole_b0, runner-label: N300 },
         ]
     uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
+    with:
+      os: ubuntu-20.04
+      arch: ${{ matrix.test-group.arch }}
+      runner-label: ${{ matrix.test-group.runner-label }}
+  # Fabric Unit Tests
+  fabric-unit-tests:
+    needs: build-artifact
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { arch: wormhole_b0, runner-label: N300 },
+        ]
+    uses: ./.github/workflows/fabric-build-and-unit-tests.yaml
     with:
       os: ubuntu-20.04
       arch: ${{ matrix.test-group.arch }}
@@ -97,7 +104,6 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: grayskull, runner-label: E150 },
           { arch: wormhole_b0, runner-label: N150 },
           { arch: wormhole_b0, runner-label: N300 },
         ]
@@ -113,7 +119,6 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: grayskull, runner-label: E150 },
           { arch: wormhole_b0, runner-label: N150 },
           { arch: wormhole_b0, runner-label: N300 },
         ]
@@ -129,7 +134,6 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: grayskull, runner-label: E150 },
           { arch: wormhole_b0, runner-label: N150 },
           { arch: wormhole_b0, runner-label: N300 },
         ]
@@ -150,8 +154,7 @@ jobs:
       matrix:
         test-group: [
           { arch: wormhole_b0, runner-label: N150 },
-          # Disabled due to https://github.com/tenstorrent/tt-metal/issues/16012
-          # { arch: wormhole_b0, runner-label: N300 },
+          { arch: wormhole_b0, runner-label: N300 },
         ]
     uses: ./.github/workflows/tt-train-post-commit.yaml
     with:
@@ -164,7 +167,6 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: grayskull, runner-label: E150 },
           { arch: wormhole_b0, runner-label: N150 },
           { arch: wormhole_b0, runner-label: N300 },
         ]

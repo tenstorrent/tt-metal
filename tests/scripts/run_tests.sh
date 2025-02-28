@@ -203,6 +203,17 @@ run_ccl_microbenchmarks_pipeline_tests() {
     fi
 }
 
+run_T3K_microbenchmarks_pipeline_tests() {
+    local tt_arch=$1
+    local pipeline_type=$2
+    local dispatch_mode=$3
+
+    export TT_METAL_DEVICE_PROFILER=1
+
+    source python_env/bin/activate
+    pytest -svv tests/tt_metal/microbenchmarks/ethernet/test_fabric_edm_bandwidth.py
+}
+
 run_ttnn_sweeps_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
@@ -351,6 +362,8 @@ run_pipeline_tests() {
         run_microbenchmarks_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "ccl_microbenchmarks" ]]; then
         run_ccl_microbenchmarks_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
+    elif [[ $pipeline_type == "T3K_microbenchmark" ]]; then
+        run_T3K_microbenchmarks_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "ttnn_sweeps" ]]; then
         run_ttnn_sweeps_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     # T3000 pipelines
@@ -431,7 +444,13 @@ set_up_chdir() {
         return
       fi
     done
-      echo "Could not find the 'tt-metal' directory in your PYTHONPATH." 1>&2
+    for ENTRY in "${ENTRIES[@]}"; do
+      if [[ -d "$ENTRY/tt_metal" ]]; then
+        cd "$ENTRY"
+        return
+      fi
+    done
+    echo "Could not find the 'tt-metal' directory in your PYTHONPATH." 1>&2
     exit 1
 }
 

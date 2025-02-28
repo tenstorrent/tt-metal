@@ -5,10 +5,10 @@
 // clang-format off
 #include "dataflow_api.h"
 #include "debug/dprint.h"
-#include "tt_fabric/hw/inc/tt_fabric.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
-#include "tt_fabric/hw/inc/tt_fabric_interface.h"
-#include "tt_fabric/hw/inc/tt_fabric_api.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 // clang-format on
 
 using namespace tt::tt_fabric;
@@ -67,7 +67,8 @@ uint32_t max_packet_size_mask;
 auto input_queue_state = select_input_queue<pkt_dest_size_choice>();
 volatile local_pull_request_t* local_pull_request = (volatile local_pull_request_t*)(data_buffer_start_addr - 1024);
 volatile tt_l1_ptr fabric_router_l1_config_t* routing_table;
-volatile fabric_client_interface_t* client_interface;
+volatile tt_l1_ptr fabric_pull_client_interface_t* client_interface =
+    (volatile tt_l1_ptr fabric_pull_client_interface_t*)client_interface_addr;
 volatile tt_l1_ptr chan_req_buf* client_pull_req_buf =
     reinterpret_cast<tt_l1_ptr chan_req_buf*>(client_pull_req_buf_addr);
 
@@ -350,7 +351,8 @@ void kernel_main() {
     zero_l1_buf((uint32_t*)&packet_header, sizeof(packet_header_t));
 
     // initalize client
-    fabric_endpoint_init(client_interface_addr, gk_interface_addr_l, gk_interface_addr_h);
+    tt_fabric_init();
+    fabric_endpoint_init<RoutingType::ROUTING_TABLE>(client_interface, gk_interface_addr_l, gk_interface_addr_h);
     routing_table = reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(
         client_interface->routing_tables_l1_offset + sizeof(fabric_router_l1_config_t) * routing_plane);
 
@@ -402,6 +404,7 @@ void kernel_main() {
     uint32_t packet_count = 0;
 
     socket_handle_t* socket_handle = fabric_socket_open(
+        client_interface_addr,  // client interface address
         3,                      // the network plane to use for this socket
         2,                      // Temporal epoch for which the socket is being opened
         1,                      // Socket Id to open

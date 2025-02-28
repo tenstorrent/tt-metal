@@ -126,8 +126,7 @@ __attribute__((noinline)) void launch_op_func(
     const Tensors input_tensors,
     OutputType& output_tensors,
     const OptionalConstTensors optional_input_tensors = {},
-    const OptionalTensors optional_output_tensors = {},
-    bool enable_autoformat_device = true);
+    const OptionalTensors optional_output_tensors = {});
 
 /*
  */
@@ -137,16 +136,14 @@ void launch_op(
     const Tensors input_tensors,
     OutputType& output_tensors,
     const OptionalConstTensors optional_input_tensors = {},
-    const OptionalTensors optional_output_tensors = {},
-    bool enable_autoformat_device = true) {
+    const OptionalTensors optional_output_tensors = {}) {
     using FuncType = std::function<OutputType(const Tensors&, const OptionalConstTensors&, const OptionalTensors&)>;
     launch_op_func(
         FuncType(std::forward<F>(op_func)),
         input_tensors,
         output_tensors,
         optional_input_tensors,
-        optional_output_tensors,
-        enable_autoformat_device);
+        optional_output_tensors);
 }
 
 void launch_with_autoformat(
@@ -157,9 +154,7 @@ void launch_with_autoformat(
     const OptionalTensors& optional_output_tensors = {});
 
 std::vector<IDevice*> get_workers_for_op_output(
-    const std::vector<Tensor>& inputs,
-    const std::vector<std::optional<const Tensor>>& optional_inputs = {},
-    bool enable_autoformat_device = true);
+    const std::vector<Tensor>& inputs, const std::vector<std::optional<const Tensor>>& optional_inputs = {});
 
 namespace detail {
 IDevice* get_device(const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors = {});

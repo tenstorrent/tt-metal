@@ -25,7 +25,7 @@ public:
 
     std::map<CoreCoord, int> logical_eth_core_to_chan_map;
 
-    metal_SocDescriptor(const tt_SocDescriptor& other, uint32_t harvesting_mask, const BoardType& board_type);
+    metal_SocDescriptor(const tt_SocDescriptor& other, const BoardType& board_type);
     metal_SocDescriptor() = default;
 
     CoreCoord get_preferred_worker_core_for_dram_view(int dram_view) const;
@@ -34,9 +34,6 @@ public:
     size_t get_address_offset(int dram_view) const;
     size_t get_channel_for_dram_view(int dram_view) const;
     size_t get_num_dram_views() const;
-
-    const std::vector<CoreCoord>& get_pcie_cores() const;
-    const std::vector<CoreCoord> get_dram_cores() const;
 
     int get_dram_channel_from_logical_core(const CoreCoord& logical_coord) const;
 
@@ -62,7 +59,4 @@ private:
     void load_dram_metadata_from_device_descriptor();
     void generate_logical_eth_coords_mapping();
     void generate_physical_routing_to_profiler_flat_id();
-    // This is temporary until virtual coordinates are enabled because BH chips on
-    //  different cards use different physical PCIe NoC endpoints
-    void update_pcie_cores(const BoardType& board_type);
 };

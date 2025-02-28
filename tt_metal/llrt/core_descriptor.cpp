@@ -66,7 +66,7 @@ const core_descriptor_t& get_core_descriptor_config(
         config_by_arch;
 
     ARCH arch = tt::Cluster::instance().arch();
-    uint32_t harvesting_mask = tt::Cluster::instance().get_harvested_rows(device_id);
+    uint32_t harvesting_mask = tt::Cluster::instance().get_harvesting_mask(device_id);
     std::bitset<32> mask_bitset(harvesting_mask);
     uint32_t num_harvested_rows = mask_bitset.count();
 
@@ -154,7 +154,7 @@ const core_descriptor_t& get_core_descriptor_config(
         dispatch_cores_string = "tg_dispatch_cores";
     }
 
-    CoreCoord grid_size = tt::Cluster::instance().get_soc_desc(device_id).worker_grid_size;
+    CoreCoord grid_size = tt::Cluster::instance().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
     auto logical_active_eth_cores = tt::Cluster::instance().get_active_ethernet_cores(device_id);
 
     for (const auto& core_node : desc_yaml[dispatch_cores_string]) {

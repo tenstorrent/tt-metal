@@ -23,7 +23,6 @@ jobs:
         ]
     name: ${{ matrix.test-group.name }}
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.test-group.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
@@ -48,3 +47,9 @@ jobs:
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: U03BJ1L3LUQ # Mo Memarian
+      - uses: ./.github/actions/upload-artifact-with-job-uuid
+        if: ${{ !cancelled() }}
+        with:
+          path: |
+            generated/test_reports/
+          prefix: "test_reports_"

@@ -336,10 +336,11 @@ bool ReadFromDeviceL1(
     const CoreCoord& logical_core,
     uint32_t address,
     uint32_t size,
-    std::vector<uint32_t>& host_buffer) {
+    std::vector<uint32_t>& host_buffer,
+    CoreType core_type) {
     tt::Cluster::instance().l1_barrier(device->id());
-    auto worker_core = device->worker_core_from_logical_core(logical_core);
-    host_buffer = llrt::read_hex_vec_from_core(device->id(), worker_core, address, size);
+    auto virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
+    host_buffer = llrt::read_hex_vec_from_core(device->id(), virtual_core, address, size);
     return true;
 }
 
@@ -348,6 +349,10 @@ bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t 
     auto worker_core = device->worker_core_from_logical_core(logical_core);
     tt::Cluster::instance().read_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
     return true;
+}
+
+void InitializeFabricSetting(detail::FabricSetting fabric_setting) {
+    tt::DevicePool::initialize_fabric_setting(detail::FabricSetting::FABRIC);
 }
 
 std::map<chip_id_t, IDevice*> CreateDevices(
@@ -929,12 +934,7 @@ bool CloseDevice(IDevice* device) {
     return tt::DevicePool::instance().close_device(device_id);
 }
 
-Program CreateProgram() {
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    auto program = Program();
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureCreateProgram, program);
-    return program;
-}
+Program CreateProgram() { return Program(); }
 
 KernelHandle CreateDataMovementKernel(
     Program& program,
@@ -1149,8 +1149,7 @@ GlobalSemaphore CreateGlobalSemaphore(
 }
 
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config) {
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    auto buffer = Buffer::create(
+    return Buffer::create(
         config.device,
         config.size,
         config.page_size,
@@ -1159,9 +1158,6 @@ std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config) {
         std::nullopt,
         std::nullopt,
         std::nullopt);
-
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureCreateBuffer, buffer, config);
-    return buffer;
 }
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config, DeviceAddr address) {
     return Buffer::create(

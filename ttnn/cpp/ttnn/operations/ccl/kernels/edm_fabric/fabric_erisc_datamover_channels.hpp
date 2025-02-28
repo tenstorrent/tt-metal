@@ -64,12 +64,14 @@ class EthChannelBuffer final {
         return this->buffer_addresses[buffer_index];
     }
 
-    [[nodiscard]] FORCE_INLINE volatile PacketHeader *get_packet_header(BufferIndex const& buffer_index) const {
-        return reinterpret_cast<volatile PacketHeader *>(this->buffer_addresses[buffer_index]);
+    template <typename T>
+    [[nodiscard]] FORCE_INLINE volatile T *get_packet_header(BufferIndex const& buffer_index) const {
+        return reinterpret_cast<volatile T *>(this->buffer_addresses[buffer_index]);
     }
 
+    template <typename T>
     [[nodiscard]] FORCE_INLINE size_t get_payload_size(BufferIndex const& buffer_index) const {
-        return get_packet_header(buffer_index)->get_payload_size_including_header();
+        return get_packet_header<T>(buffer_index)->get_payload_size_including_header();
     }
     [[nodiscard]] FORCE_INLINE size_t get_channel_buffer_max_size_in_bytes(BufferIndex const& buffer_index) const {
         return this->buffer_size_in_bytes;
@@ -115,6 +117,7 @@ template <uint8_t NUM_BUFFERS>
 struct EdmChannelWorkerInterface {
     EdmChannelWorkerInterface() :
         worker_location_info_ptr(nullptr),
+        cached_worker_semaphore_address(0),
         remote_producer_wrptr(nullptr),
         connection_live_semaphore(nullptr),
         local_wrptr(),
@@ -132,6 +135,7 @@ struct EdmChannelWorkerInterface {
         volatile tt_l1_ptr uint32_t *const remote_producer_wrptr,
         volatile tt_l1_ptr uint32_t *const connection_live_semaphore) :
         worker_location_info_ptr(worker_location_info_ptr),
+        cached_worker_semaphore_address(0),
         remote_producer_wrptr(remote_producer_wrptr),
         connection_live_semaphore(connection_live_semaphore),
         local_wrptr(),
@@ -153,14 +157,11 @@ struct EdmChannelWorkerInterface {
     }
 
     [[nodiscard]] FORCE_INLINE uint32_t get_worker_semaphore_address() const {
-        return worker_location_info_ptr->worker_semaphore_address;
+        return cached_worker_semaphore_address & 0xFFFFFFFF;
     }
 
     FORCE_INLINE void update_worker_copy_of_read_ptr(BufferPtr new_ptr_val) {
-        auto const &worker_info = *worker_location_info_ptr;
-        uint64_t worker_semaphore_address = get_noc_addr(
-            (uint32_t)worker_info.worker_xy.x, (uint32_t)worker_info.worker_xy.y, worker_info.worker_semaphore_address);
-        noc_inline_dw_write(worker_semaphore_address, new_ptr_val);
+        noc_inline_dw_write(this->cached_worker_semaphore_address, new_ptr_val);
     }
 
     // Connection management methods
@@ -178,6 +179,15 @@ struct EdmChannelWorkerInterface {
         noc_semaphore_inc(worker_semaphore_address, 1);
     }
 
+    FORCE_INLINE void cache_producer_noc_addr() {
+        auto const &worker_info = *worker_location_info_ptr;
+        uint64_t worker_semaphore_address = get_noc_addr(
+            (uint32_t)worker_info.worker_xy.x,
+            (uint32_t)worker_info.worker_xy.y,
+            worker_info.worker_semaphore_address);
+        this->cached_worker_semaphore_address = worker_semaphore_address;
+    }
+
     FORCE_INLINE bool all_eth_packets_acked() const {
         return this->local_ackptr.is_caught_up_to(this->local_wrptr);
     }
@@ -185,15 +195,11 @@ struct EdmChannelWorkerInterface {
         return this->local_rdptr.is_caught_up_to(this->local_wrptr);
     }
 
-    // Call to keep the connection flow control info fresh with worker.
-    FORCE_INLINE void propagate_ackptr_to_connection_info() {
-        worker_location_info_ptr->edm_rdptr = local_ackptr.get_ptr();
-    }
-
     [[nodiscard]] FORCE_INLINE bool has_worker_teardown_request() const { return *connection_live_semaphore == tt::fabric::EdmToEdmSender<0>::close_connection_request_value; }
     [[nodiscard]] FORCE_INLINE bool connection_is_live() const { return *connection_live_semaphore == tt::fabric::EdmToEdmSender<0>::open_connection_value; }
 
     volatile EDMChannelWorkerLocationInfo *worker_location_info_ptr;
+    uint64_t cached_worker_semaphore_address = 0;
     volatile tt_l1_ptr uint32_t *const remote_producer_wrptr;
     volatile tt_l1_ptr uint32_t *const connection_live_semaphore;
 

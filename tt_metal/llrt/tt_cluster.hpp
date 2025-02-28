@@ -8,7 +8,6 @@
 #include <functional>
 
 #include "metal_soc_descriptor.h"
-#include "test_common.hpp"
 #include "tt_backend_api_types.hpp"
 #include "umd/device/device_api_metal.h"
 #include "umd/device/tt_cluster_descriptor.h"
@@ -38,6 +37,14 @@ enum class TargetDevice : std::uint8_t {
     Invalid = 0xFF,
 };
 
+enum class ClusterType : std::uint8_t {
+    INVALID = 0,
+    N300 = 1,    // Production N300
+    T3K = 2,     // Production T3K, built with 4 N300s
+    GALAXY = 3,  // Production Galaxy, all chips with mmio
+    TG = 4,      // Will be deprecated
+};
+
 class Cluster {
 public:
     Cluster& operator=(const Cluster&) = delete;
@@ -50,7 +57,7 @@ public:
     // For TG Galaxy systems, mmio chips are gateway chips that are only used for dispatc, so user_devices are meant for
     // user facing host apis
     size_t number_of_user_devices() const {
-        if (this->is_tg_cluster_) {
+        if (this->cluster_type_ == ClusterType::TG) {
             const auto& chips = this->cluster_desc_->get_all_chips();
             return std::count_if(chips.begin(), chips.end(), [&](const auto& id) {
                 return this->cluster_desc_->get_board_type(id) == BoardType::GALAXY;
@@ -79,16 +86,19 @@ public:
     const std::unordered_set<CoreCoord>& get_virtual_worker_cores(chip_id_t chip_id) const;
     const std::unordered_set<CoreCoord>& get_virtual_eth_cores(chip_id_t chip_id) const;
 
-    uint32_t get_harvested_rows(chip_id_t chip) const;
     uint32_t get_harvesting_mask(chip_id_t chip) const {
-        return this->driver_->get_harvesting_masks_for_soc_descriptors().at(chip);
+        return this->driver_->get_soc_descriptor(chip).harvesting_masks.tensix_harvesting_mask;
     }
 
     //! device driver and misc apis
     void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t>& fw_versions) const;
 
-    void deassert_risc_reset_at_core(const tt_cxy_pair& physical_chip_coord) const;
-    void assert_risc_reset_at_core(const tt_cxy_pair& physical_chip_coord) const;
+    void deassert_risc_reset_at_core(
+        const tt_cxy_pair& physical_chip_coord,
+        const TensixSoftResetOptions& soft_resets = TENSIX_DEASSERT_SOFT_RESET) const;
+    void assert_risc_reset_at_core(
+        const tt_cxy_pair& physical_chip_coord,
+        const TensixSoftResetOptions& soft_resets = TENSIX_ASSERT_SOFT_RESET) const;
 
     void write_dram_vec(
         std::vector<uint32_t>& vec, tt_target_dram dram, uint64_t addr, bool small_access = false) const;
@@ -164,11 +174,16 @@ public:
     // Returns set of logical active ethernet coordinates on chip
     // If skip_reserved_tunnel_cores is true, will return cores that dispatch is not using,
     // intended for users to grab available eth cores for testing
+    // `skip_reserved_tunnel_cores` is ignored on BH because there are no ethernet cores used for Fast Dispatch
+    // tunneling
     std::unordered_set<CoreCoord> get_active_ethernet_cores(
         chip_id_t chip_id, bool skip_reserved_tunnel_cores = false) const;
 
     // Returns set of logical inactive ethernet coordinates on chip
     std::unordered_set<CoreCoord> get_inactive_ethernet_cores(chip_id_t chip_id) const;
+
+    // Returns whether `logical_core` has an eth link to a core on a connected chip
+    bool is_ethernet_link_up(chip_id_t chip_id, const CoreCoord& logical_core) const;
 
     // Returns connected ethernet core on the other chip
     std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(std::tuple<chip_id_t, CoreCoord> eth_core) const;
@@ -245,6 +260,8 @@ public:
     // Returns Wormhole chip board type.
     BoardType get_board_type(chip_id_t chip_id) const;
 
+    ClusterType get_cluster_type() const;
+
     bool is_worker_core(const CoreCoord& core, chip_id_t chip_id) const;
     bool is_ethernet_core(const CoreCoord& core, chip_id_t chip_id) const;
     CoreCoord get_logical_ethernet_core_from_virtual(chip_id_t chip, CoreCoord core) const;
@@ -267,9 +284,7 @@ private:
     void open_driver(const bool& skip_driver_allocs = false);
     void start_driver(tt_device_params& device_params) const;
 
-    void get_metal_desc_from_tt_desc(
-        const std::unordered_map<chip_id_t, tt_SocDescriptor>& input,
-        const std::unordered_map<chip_id_t, uint32_t>& per_chip_id_harvesting_masks);
+    void get_metal_desc_from_tt_desc();
     void generate_virtual_to_umd_coord_mapping();
     void generate_virtual_to_profiler_flat_id_mapping();
 
@@ -290,7 +305,7 @@ private:
     // Need to hold reference to cluster descriptor to detect total number of devices available in cluster
     // UMD static APIs `detect_available_device_ids` and `detect_number_of_chips` only returns number of MMIO mapped
     // devices
-    std::unique_ptr<tt_ClusterDescriptor> cluster_desc_;
+    tt_ClusterDescriptor* cluster_desc_ = nullptr;
     // There is an entry for every device that can be targeted (MMIO and remote)
     std::unordered_map<chip_id_t, metal_SocDescriptor> sdesc_per_chip_;
 
@@ -306,7 +321,7 @@ private:
     std::unordered_map<BoardType, std::unordered_map<CoreCoord, int32_t>> virtual_routing_to_profiler_flat_id_;
     // Flag to tell whether we are on a TG type of system.
     // If any device has to board type of GALAXY, we are on a TG cluster.
-    bool is_tg_cluster_;
+    ClusterType cluster_type_ = ClusterType::INVALID;
 
     // Tunnels setup in cluster
     std::map<chip_id_t, std::vector<std::vector<chip_id_t>>> tunnels_from_mmio_device = {};

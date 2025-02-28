@@ -9,7 +9,7 @@
 
 #include "device.hpp"
 #include "hostdevcommon/common_values.hpp"
-#include "work_executor.hpp"
+#include "work_executor_types.hpp"
 #include "basic_allocator.hpp"
 #include "l1_banking_allocator.hpp"
 #include "data_types.hpp"
@@ -49,8 +49,8 @@ public:
     Device(const Device &other) = delete;
     Device& operator=(const Device &other) = delete;
 
-    Device(Device &&other) = default;
-    Device& operator=(Device &&other) = default;
+    Device(Device&& other);
+    Device& operator=(Device&& other);
 
     tt::ARCH arch() const override;
 
@@ -85,8 +85,12 @@ public:
     // Ethernet API
     CoreCoord ethernet_core_from_logical_core(const CoreCoord &logical_core) const override;
     CoreCoord logical_core_from_ethernet_core(const CoreCoord &ethernet_core) const override;
+    // `skip_reserved_tunnel_cores` is ignored on BH because there are no ethernet cores used for Fast Dispatch
+    // tunneling
     std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores=false) const override;
     std::unordered_set<CoreCoord> get_inactive_ethernet_cores() const override;
+    // `skip_reserved_tunnel_cores` is ignored on BH because there are no ethernet cores used for Fast Dispatch
+    // tunneling
     bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores=false) const override;
     std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const override;
     std::vector<CoreCoord> get_ethernet_sockets(chip_id_t connected_chip_id) const override;
@@ -150,13 +154,18 @@ public:
     void init_command_queue_host() override;
     void init_command_queue_device() override;
 
+    void init_fabric() override;
+
     // Puts device into reset
     bool close() override;
 
+    // Calls to enable_async are ignored in effort to forcefully disable async for single device use-cases
+    // MeshDevice calls force_enable_async directly avoiding enable_async call for multi-device use-case
     void enable_async(bool enable) override;
+    void force_enable_async(bool enable);
     void synchronize() override;
-    WorkExecutorMode get_worker_mode() override { return work_executor_.get_worker_mode(); }
-    bool is_worker_queue_empty() const override { return work_executor_.worker_queue.empty(); }
+    WorkExecutorMode get_worker_mode() override;
+    bool is_worker_queue_empty() const override;
 
     void push_work(std::function<void()> work, bool blocking) override;
 
@@ -170,8 +179,6 @@ public:
     HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const override;
 
     std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const std::vector<CoreRange>& ranges, const CoreType core_type) override;
-
-    size_t get_device_kernel_defines_hash() override;
 
     uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const override;
     uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;
@@ -195,7 +202,6 @@ public:
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
 
     bool is_mmio_capable() const override;
-    std::vector<std::vector<chip_id_t>> get_tunnels_from_mmio() const override { return tunnels_from_mmio_; }
 
 private:
     static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;
@@ -239,9 +245,12 @@ private:
     std::vector<std::unique_ptr<Program>> command_queue_programs_;
     bool using_fast_dispatch_ = false;
 
+    // Fabric program includes ethernet router kernel and tensix gatekeeper kernel
+    std::unique_ptr<Program> fabric_program_;
+
     // Work Executor for this device - can asynchronously process host side work for
     // all tasks scheduled on this device
-    WorkExecutor work_executor_;
+    std::unique_ptr<WorkExecutor> work_executor_;
     uint32_t worker_thread_core_ = 0;
     uint32_t completion_queue_reader_core_ = 0;
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
@@ -255,8 +264,6 @@ private:
     std::set<CoreCoord> ethernet_cores_;
     std::vector<CoreCoord> optimal_dram_bank_to_logical_worker_assignment_;
 
-    std::map<std::string, std::string> device_kernel_defines_;
-
     std::vector<int32_t> dram_bank_offset_map_;
     std::vector<int32_t> l1_bank_offset_map_;
     std::vector<uint16_t> dram_bank_to_noc_xy_;
@@ -265,6 +272,8 @@ private:
     program_cache::detail::ProgramCache program_cache_;
 
     uint32_t trace_buffers_size_ = 0;
+    bool uninitialized_error_fired_ =
+        false;  // To avoid spam with warnings about calling Device methods when it's not initialized.
 };
 
 }  // namespace v0
