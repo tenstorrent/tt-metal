@@ -532,6 +532,74 @@ def test_ttnn_slice_bert(input_shape, input_start, input_ends, layout, memory_co
     assert_with_pcc(torch_output, ttnn_output, 0.99)
 
 
+@pytest.mark.parametrize(
+    "input_shape, input_start, input_ends",
+    (
+        ((8, 8, 4096, 128), (0, 0, 0, 0), (8, 8, 32, 128)),
+        ((1, 32, 32, 32), (0, 0, 0, 0), (1, 32, 32, 1)),
+        ((1, 32, 32, 32), (0, 0, 0, 0), (1, 32, 32, 2)),
+        ((1, 32, 32, 32), (0, 0, 0, 0), (1, 32, 32, 3)),
+        ((1, 32, 32, 32), (0, 0, 0, 0), (1, 32, 32, 4)),
+        ((1, 32, 32, 32), (0, 0, 0, 0), (1, 32, 32, 5)),
+        ((1, 32, 32, 32), (0, 0, 0, 0), (1, 32, 32, 6)),
+        ((1, 32, 32, 32), (0, 0, 0, 0), (1, 32, 32, 7)),
+        ((1, 32, 32, 32), (0, 0, 0, 0), (1, 32, 32, 8)),
+        ((1, 32, 32, 32), (0, 0, 0, 0), (1, 32, 32, 9)),
+        ((1, 32, 32, 32), (0, 0, 0, 0), (1, 32, 32, 10)),
+        ((1, 32, 32, 32), (0, 0, 0, 0), (1, 32, 32, 11)),
+        ((1, 32, 32, 32), (0, 0, 0, 0), (1, 32, 32, 12)),
+        ((1, 32, 32, 32), (0, 0, 0, 0), (1, 32, 32, 13)),
+        ((1, 32, 32, 32), (0, 0, 0, 0), (1, 32, 32, 14)),
+        ((1, 32, 32, 32), (0, 0, 0, 0), (1, 32, 32, 15)),
+        ((1, 32, 32, 32), (0, 0, 0, 0), (1, 32, 32, 16)),
+        ((1, 32, 32, 32), (0, 0, 0, 0), (1, 32, 32, 17)),
+        ((32, 8, 4096, 128), (0, 0, 0, 0), (32, 8, 1, 128)),
+        ((32, 8, 4096, 128), (0, 0, 0, 0), (32, 8, 2, 128)),
+        ((32, 8, 4096, 128), (0, 0, 0, 0), (32, 8, 3, 128)),
+        ((32, 8, 4096, 128), (0, 0, 0, 0), (32, 8, 4, 128)),
+        ((32, 8, 4096, 128), (0, 0, 0, 0), (32, 8, 5, 128)),
+        ((32, 8, 4096, 128), (0, 0, 0, 0), (32, 8, 6, 128)),
+        ((32, 8, 4096, 128), (0, 0, 0, 0), (32, 8, 7, 128)),
+        ((32, 8, 4096, 128), (0, 0, 0, 0), (32, 8, 8, 128)),
+        ((32, 8, 4096, 128), (0, 0, 0, 0), (32, 8, 9, 128)),
+        ((32, 8, 4096, 128), (0, 0, 0, 0), (32, 8, 10, 128)),
+        ((32, 8, 4096, 128), (0, 0, 0, 0), (32, 8, 11, 128)),
+        ((32, 8, 4096, 128), (0, 0, 0, 0), (32, 8, 12, 128)),
+        ((32, 8, 4096, 128), (0, 0, 0, 0), (32, 8, 13, 128)),
+        ((32, 8, 4096, 128), (0, 0, 0, 0), (32, 8, 14, 128)),
+        ((32, 8, 4096, 128), (0, 0, 0, 0), (32, 8, 15, 128)),
+        ((32, 8, 4096, 128), (0, 0, 0, 0), (32, 8, 16, 128)),
+        ((32, 8, 4096, 128), (0, 0, 0, 0), (32, 8, 17, 128)),
+    ),
+)
+@pytest.mark.parametrize(
+    "dtype",
+    (ttnn.bfloat16, ttnn.bfloat8_b),
+)
+@pytest.mark.parametrize(
+    "memory_config",
+    (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+)
+def test_ttnn_slice_mistral(input_shape, input_start, input_ends, memory_config, dtype, device, use_program_cache):
+    if input_shape[0] == 32 and memory_config == ttnn.L1_MEMORY_CONFIG:
+        pytest.skip("OoM")
+
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+
+    torch_output = torch_input[
+        input_start[0] : input_ends[0],
+        input_start[1] : input_ends[1],
+        input_start[2] : input_ends[2],
+        input_start[3] : input_ends[3],
+    ]
+
+    ttnn_output = ttnn.slice(ttnn_input, input_start, input_ends, memory_config=memory_config)
+
+    ttnn_output = ttnn.to_torch(ttnn_output)
+    assert_with_pcc(torch_output, ttnn_output, 0.9999)
+
+
 def test_slice_output_tensor_rm(device):
     torch_input = torch.ones(1, 3, 640, 640)
     ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16)
