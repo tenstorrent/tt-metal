@@ -90,11 +90,11 @@ void kernel_main() {
                         noc_async_read_barrier();
                         cb_push_back(cb_id_in1, onetile);
 
-#if (transpose_hw_bool)
-                        itileB++;  // Kt is in B[3], so it is contiguous in memory
-#else
-                        itileB += Nt;  // Kt is in B[2], so stride is Nt
-#endif
+                        if constexpr (transpose_hw_bool) {
+                            itileB++;  // Kt is in B[3], so it is contiguous in memory
+                        } else {
+                            itileB += Nt;  // Kt is in B[2], so stride is Nt
+                        }
                     }  // Kt loop
 
                     // Read 32 untilized tiles and select correct rows to reconstruct single correct tile
@@ -109,12 +109,12 @@ void kernel_main() {
                 }  // 32 tiles loop
                 cb_push_back(cb_id_intermed2, 1);
 
-// Next tile in Nt
-#if (transpose_hw_bool)
-                itileB_Nt += Kt;  // next tile in Nt is in B[2], so stride is Kt
-#else
-                itileB_Nt++;
-#endif
+                // Next tile in Nt
+                if constexpr (transpose_hw_bool) {
+                    itileB_Nt += Kt;  // next tile in Nt is in B[2], so stride is Kt
+                } else {
+                    itileB_Nt++;
+                }
             }  // Nt loop
 
             itileA_Mt += Kt;
