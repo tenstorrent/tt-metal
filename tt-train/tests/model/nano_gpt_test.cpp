@@ -177,6 +177,14 @@ void train_test(bool use_moreh_adamw = false, bool memory_efficient = false) {
         steps_time.emplace_back((double)duration / 1000.0);
     }
 
+    // verify program cache
+    auto program_cache_entries = device->num_program_cache_entries();
+    if (!use_moreh_adamw) {
+        EXPECT_EQ(program_cache_entries, 123);
+    } else {
+        EXPECT_EQ(program_cache_entries, 102);
+    }
+
     // verify time per step
     size_t num_steps_below = 0;
     const double expected_default_runner_time_ms = 330.0;
