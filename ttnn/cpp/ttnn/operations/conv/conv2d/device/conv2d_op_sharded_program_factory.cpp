@@ -1435,6 +1435,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     if (packer_l1_acc_en) {
         compute_defines["PACKER_L1_ACC"] = "1";
     }
+    for (auto elem : compute_defines) {
+        log_debug(LogOp, "compute_defines: {} = {}", elem.first, elem.second);
+    }
 
     writer_compile_time_args = {
         (uint32_t)(dst_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),

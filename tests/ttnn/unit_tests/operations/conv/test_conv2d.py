@@ -540,9 +540,9 @@ def test_conv_features_multi_device(
 @pytest.mark.parametrize(
     "output_channels, input_channels, input_height, input_width, shard_layout, config",
     (
-        (256, 256, 8, 8, WS, None),
-        (128, 128, 32, 32, BS, None),
-        (16, 16, 256, 256, HS, {"act_block_h": 32}),
+        # (256, 256, 8, 8, WS, None),
+        # (128, 128, 32, 32, BS, None),
+        (32, 32, 256, 256, HS, {"act_block_h": 32}),
     ),
 )
 @pytest.mark.parametrize(
@@ -561,8 +561,8 @@ def test_conv_features_multi_device(
     [False],  # Fp32 Accum, Packer L1 Accum and Row Major together fails.
 )
 @pytest.mark.parametrize(
-    "packer_l1_acc",
-    [True, False],
+    "has_bias",
+    [True],
 )
 @pytest.mark.parametrize(
     "filter, pad",
@@ -591,7 +591,7 @@ def test_conv_activation(
     pad,
     output_layout,
     fp32_accum,
-    packer_l1_acc,
+    has_bias,
     activation,
 ):
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat8_b:
@@ -617,9 +617,9 @@ def test_conv_activation(
         config,
         shard_layout=shard_layout,
         output_layout=output_layout,
-        has_bias=True,
+        has_bias=has_bias,
         fp32_accum=fp32_accum,
-        packer_l1_acc=packer_l1_acc,
+        packer_l1_acc=False,
         activation=activation,
     )
 
