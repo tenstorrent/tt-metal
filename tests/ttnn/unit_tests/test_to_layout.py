@@ -10,7 +10,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
-from models.utility_functions import is_grayskull, is_blackhole, torch_random, skip_for_grayskull
+from models.utility_functions import is_grayskull, is_blackhole, torch_random, skip_for_grayskull, skip_for_wormhole_b0
 
 
 @pytest.mark.parametrize("height", [32, 30])
@@ -363,3 +363,43 @@ def test_interleaved_to_sharded_block_shareded_unaligned_width(device):
 
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_input, output_torch)
     assert passing, pcc_msg
+
+
+@skip_for_wormhole_b0()
+def test_shard_untilize(device):
+    torch.manual_seed(2005)
+
+    torch_tensor = torch.rand(1, 1, 29640, 128, dtype=torch.bfloat16)
+
+    sharded_memory_config = ttnn.create_sharded_memory_config(
+        [
+            480,
+            128,
+        ],
+        core_grid=ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(7, 6),
+                ),
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 7),
+                    ttnn.CoreCoord(5, 7),
+                ),
+            }
+        ),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    input_tensor = ttnn.from_torch(
+        torch_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_memory_config
+    )
+
+    output_tensor = ttnn.to_layout(input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    print(f"output_tensor.memory_config()={output_tensor.memory_config()}")
+    assert output_tensor.memory_config() == ttnn.DRAM_MEMORY_CONFIG, "Memory config is not DRAM"
+
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert torch_tensor.shape == output_tensor.shape
+    assert_with_pcc(torch_tensor, output_tensor, 0.9999)
