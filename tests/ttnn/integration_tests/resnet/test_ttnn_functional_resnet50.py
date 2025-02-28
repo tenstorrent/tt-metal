@@ -20,6 +20,8 @@ from models.utility_functions import (
     (
         (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2),
         (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
+        (20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
+        (32, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
     ),
 )
 @pytest.mark.parametrize(
@@ -42,6 +44,9 @@ def test_resnet_50(
 ):
     if (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y) == (8, 7):
         pytest.skip("Test is not supported on n300 (8,7) grid")
+
+    if batch_size > 16 and not is_blackhole():
+        pytest.skip("Batch size > 16 is not supported on non-blackhole devices")
 
     if is_blackhole() and use_pretrained_weight:
         pytest.skip(

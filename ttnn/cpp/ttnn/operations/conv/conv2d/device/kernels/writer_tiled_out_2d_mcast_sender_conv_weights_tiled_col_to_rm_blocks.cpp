@@ -335,4 +335,6 @@ void kernel_main() {
         cb_id_out0,
         out_subblock_tile_count * out_num_subblocks_h * out_num_subblocks_w * out_num_blocks_w * out_num_blocks_h);
 #endif
+
+    noc_async_write_barrier();
 }
