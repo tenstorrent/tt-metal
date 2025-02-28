@@ -82,7 +82,7 @@ def calculate_key_values(config, key_value_states, *, parameters):
     return key_states, value_states
 
 
-def get_decode_sdpa_configs(config):
+def get_decode_sdpa_configs(config, device):
     head_size = config.d_model // config.decoder_attention_heads
     padded_num_heads = nearest_32(config.decoder_attention_heads)
 
@@ -115,7 +115,8 @@ def get_decode_sdpa_configs(config):
         k_chunk_size=256,
     )
 
-    sdpa_decode_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+    sdpa_decode_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=False,
         fp32_dest_acc_en=False,
@@ -197,7 +198,7 @@ def whisper_attention(
             value_states = value_states[:, :unpadded_batch_size, :, :]
 
             sdpa_batch_sharded_memcfg, sdpa_decode_progcfg, sdpa_decode_compute_kernel_config = get_decode_sdpa_configs(
-                config
+                config, hidden_states.device()
             )
 
             # Convert to sharded (required by paged_update_cache and sdpa ops)
