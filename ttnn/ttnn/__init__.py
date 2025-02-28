@@ -99,7 +99,6 @@ from ttnn._ttnn.multi_device import (
     get_device_tensors,
     aggregate_as_tensor,
     get_t3k_physical_device_ids_ring,
-    DefaultMeshCommandQueueId,
 )
 
 from ttnn._ttnn.events import (
@@ -181,7 +180,6 @@ from ttnn.types import (
     MeshCoordinate,
     MeshCoordinateRange,
     QueueId,
-    MeshCommandQueueId,
     UnaryWithParam,
     UnaryOpType,
     BinaryOpType,

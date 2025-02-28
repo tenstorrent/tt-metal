@@ -97,32 +97,32 @@ void py_module(py::module& module) {
 
     module.def(
         "begin_mesh_trace_capture",
-        [](MeshDevice* device, MeshCommandQueueId mesh_cq_id) {
-            return ttnn::operations::trace::begin_mesh_trace_capture(device, mesh_cq_id);
+        [](MeshDevice* device, QueueId cq_id) {
+            return ttnn::operations::trace::begin_mesh_trace_capture(device, cq_id);
         },
         py::arg("mesh_device"),
         py::kw_only(),
-        py::arg("mesh_cq_id") = ttnn::DefaultMeshCommandQueueId);
+        py::arg("cq_id") = ttnn::DefaultQueueId);
 
     module.def(
         "end_mesh_trace_capture",
-        [](MeshDevice* device, MeshTraceId trace_id, MeshCommandQueueId mesh_cq_id) {
-            return ttnn::operations::trace::end_mesh_trace_capture(device, trace_id, mesh_cq_id);
+        [](MeshDevice* device, MeshTraceId trace_id, QueueId cq_id) {
+            return ttnn::operations::trace::end_mesh_trace_capture(device, trace_id, cq_id);
         },
         py::arg("mesh_device"),
         py::arg("trace_id"),
         py::kw_only(),
-        py::arg("mesh_cq_id") = ttnn::DefaultMeshCommandQueueId);
+        py::arg("cq_id") = ttnn::DefaultQueueId);
 
     module.def(
         "execute_mesh_trace",
-        [](MeshDevice* device, MeshTraceId trace_id, MeshCommandQueueId mesh_cq_id, bool blocking) {
-            return ttnn::operations::trace::execute_mesh_trace(device, trace_id, mesh_cq_id, blocking);
+        [](MeshDevice* device, MeshTraceId trace_id, QueueId cq_id, bool blocking) {
+            return ttnn::operations::trace::execute_mesh_trace(device, trace_id, cq_id, blocking);
         },
         py::arg("mesh_device"),
         py::arg("trace_id"),
         py::kw_only(),
-        py::arg("mesh_cq_id") = ttnn::DefaultMeshCommandQueueId,
+        py::arg("cq_id") = ttnn::DefaultQueueId,
         py::arg("blocking") = true);
 
     module.def(

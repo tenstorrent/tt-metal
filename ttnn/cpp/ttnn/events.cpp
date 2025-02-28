@@ -62,14 +62,14 @@ void wait_for_event(QueueId cq_id, const MultiDeviceEvent& multi_device_event) {
 
 MeshEvent record_mesh_event(
     MeshDevice* mesh_device,
-    MeshCommandQueueId mesh_cq_id,
+    QueueId cq_id,
     const std::vector<SubDeviceId>& sub_device_ids,
     const std::optional<ttnn::MeshCoordinateRange>& device_range) {
-    return EnqueueRecordEventToHost(mesh_device->mesh_command_queue(*mesh_cq_id), sub_device_ids, device_range);
+    return EnqueueRecordEventToHost(mesh_device->mesh_command_queue(*cq_id), sub_device_ids, device_range);
 }
 
-void wait_for_mesh_event(MeshDevice* mesh_device, MeshCommandQueueId mesh_cq_id, const MeshEvent& event) {
-    EnqueueWaitForEvent(mesh_device->mesh_command_queue(*mesh_cq_id), event);
+void wait_for_mesh_event(MeshDevice* mesh_device, QueueId cq_id, const MeshEvent& event) {
+    EnqueueWaitForEvent(mesh_device->mesh_command_queue(*cq_id), event);
 }
 
 }  // namespace ttnn::events

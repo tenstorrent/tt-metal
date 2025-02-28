@@ -75,7 +75,6 @@ CoreRange = ttnn._ttnn.tensor.CoreRange
 CoreCoord = ttnn._ttnn.tensor.CoreCoord
 
 QueueId = ttnn._ttnn.types.QueueId
-MeshCommandQueueId = ttnn._ttnn.types.MeshCommandQueueId
 
 UnaryWithParam = ttnn._ttnn.activation.UnaryWithParam
 UnaryOpType = ttnn._ttnn.activation.UnaryOpType

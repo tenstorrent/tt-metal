@@ -109,19 +109,19 @@ void py_module(py::module& module) {
         "record_mesh_event",
         py::overload_cast<
             MeshDevice*,
-            MeshCommandQueueId,
+            QueueId,
             const std::vector<SubDeviceId>&,
             const std::optional<MeshCoordinateRange>&>(&record_mesh_event),
         py::arg("mesh_device"),
-        py::arg("mesh_cq_id"),
+        py::arg("cq_id"),
         py::arg("sub_device_ids") = std::vector<SubDeviceId>(),
         py::arg("device_range") = std::nullopt);
 
     module.def(
         "wait_for_mesh_event",
-        py::overload_cast<MeshDevice*, MeshCommandQueueId, const MeshEvent&>(&wait_for_mesh_event),
+        py::overload_cast<MeshDevice*, QueueId, const MeshEvent&>(&wait_for_mesh_event),
         py::arg("mesh_device"),
-        py::arg("mesh_cq_id"),
+        py::arg("cq_id"),
         py::arg("mesh_event"));
 }
 
