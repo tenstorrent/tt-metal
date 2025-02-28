@@ -201,7 +201,8 @@ class MLP(LightweightModule):
                 w2_in = ttnn.to_memory_config(w2_in, ttnn.L1_MEMORY_CONFIG)
 
         # breakpoint()
-        sleep(1)
+        # sleep(1)
+        # ttnn.synchronize_device(self.mesh_device.get_devices()[0])
         w2_out = ttnn.linear(
             w2_in,
             self.w2,
