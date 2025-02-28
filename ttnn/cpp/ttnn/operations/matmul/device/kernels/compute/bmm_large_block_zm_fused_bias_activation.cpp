@@ -202,7 +202,7 @@ void MAIN {
 #ifdef ARCH_BLACKHOLE
                                 // FIXME: This is a temporary workaround to avoid hangs on blackhole.
                                 // https://github.com/tenstorrent/tt-metal/issues/16439
-                                for (uint32_t i = 0; i < 10; i++) {
+                                for (uint32_t i = 0; i < 20; i++) {
                                     asm volatile("nop");
                                 }
 #endif
