@@ -57,20 +57,12 @@ void kernel_main() {
     generate_bcast_col_scalar(eps_cb_id, eps);
 
     constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(6) == 1;
-#if (stick_size_is_pow2)
-    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(7);
-#else
-    constexpr uint32_t page_size = get_compile_time_arg_val(7);
-#endif
+    constexpr uint32_t size = get_compile_time_arg_val(7);
 
     if constexpr (fuse_gamma) {
         const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
-#if (stick_size_is_pow2)
-        const InterleavedPow2AddrGen<gamma_is_dram> gamma = {
-            .bank_base_address = gamma_addr, .log_base_2_of_page_size = log_base_2_of_page_size};
-#else
-        const InterleavedAddrGen<gamma_is_dram> gamma = {.bank_base_address = gamma_addr, .page_size = page_size};
-#endif
+
+        const auto gamma = get_interleaved_addr_gen<gamma_is_dram, stick_size_is_pow2>(gamma_addr, size);
 
         constexpr uint32_t mask_read_tile_face_bytes = FLOAT32_DTYPE_GAMMA ? 64 : 32;
         constexpr uint32_t mask_read_tile_offset_bytes = FLOAT32_DTYPE_GAMMA ? 1024 : 512;
@@ -93,12 +85,8 @@ void kernel_main() {
 
     if constexpr (fuse_beta) {
         const uint32_t beta_tile_bytes = get_tile_size(cb_beta);
-#if (stick_size_is_pow2)
-        const InterleavedPow2AddrGen<beta_is_dram> beta = {
-            .bank_base_address = beta_addr, .log_base_2_of_page_size = log_base_2_of_page_size};
-#else
-        const InterleavedAddrGen<beta_is_dram> beta = {.bank_base_address = beta_addr, .page_size = page_size};
-#endif
+
+        const auto beta = get_interleaved_addr_gen<beta_is_dram, stick_size_is_pow2>(beta_addr, size);
 
         uint32_t mask_read_tile_face_bytes = FLOAT32_DTYPE_BETA ? 64 : 32;
         uint32_t mask_read_tile_offset_bytes = FLOAT32_DTYPE_BETA ? 1024 : 512;
