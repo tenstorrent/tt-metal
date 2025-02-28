@@ -15,6 +15,8 @@
 #include "ttnn/tensor/enum_types.hpp"
 #include "ttnn_test_fixtures.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::distributed::test {
 namespace {
 

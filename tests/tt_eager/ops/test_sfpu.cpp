@@ -19,6 +19,7 @@
 // #include "tt_gdb/tt_gdb.hpp"
 
 using std::vector;
+using namespace tt::tt_metal;
 
 // SFPU maps -> relevant kernels, golden functions, comparison functions
 std::map<std::string, std::map<std::string, std::string>> sfpu_op_to_hlk_op_name = {};

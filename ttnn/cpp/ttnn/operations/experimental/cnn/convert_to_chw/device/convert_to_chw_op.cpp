@@ -7,6 +7,8 @@
 #include "convert_to_chw_program_factory.hpp"
 #include <tt-metalium/constants.hpp>
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::experimental::cnn {
 
 void ConvertToCHW::validate(const std::vector<Tensor>& input_tensors) const {
@@ -30,7 +32,8 @@ void ConvertToCHW::validate(const std::vector<Tensor>& input_tensors) const {
         input_shard_spec.shape[0] % TILE_HEIGHT == 0,
         "Shard height must be divisible by tile size");  // input shards can be padded so HW may not match shard height
     TT_FATAL(
-        this->memory_config.is_sharded() && this->memory_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+        this->memory_config.is_sharded() &&
+            this->memory_config.memory_layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED,
         "Output tensor must be width sharded");
 }
 

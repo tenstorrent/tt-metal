@@ -21,9 +21,10 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
 
-using namespace tt;
 namespace ttnn {
 namespace operations::conv {
+using namespace tt;
+using namespace tt::tt_metal;
 using sliding_window::ParallelConfig;
 using sliding_window::SlidingWindowConfig;
 

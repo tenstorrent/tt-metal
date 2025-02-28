@@ -23,6 +23,8 @@
 
 using std::vector;
 using namespace tt;
+using namespace tt::tt_metal;
+
 using namespace tt::tt_fabric;
 using json = nlohmann::json;
 

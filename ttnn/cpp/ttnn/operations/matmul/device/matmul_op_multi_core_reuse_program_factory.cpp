@@ -84,8 +84,8 @@ tt_metal::operation::ProgramWithCallbacks create_program(
     uint32_t num_blocks_y = M / per_core_M;
     uint32_t num_blocks_x = N / per_core_N;
 
-    CoreRangeSet all_cores(
-        num_cores_to_corerangeset(num_blocks_x * num_blocks_y, device->compute_with_storage_grid_size(), true));
+    CoreRangeSet all_cores(tt::tt_metal::num_cores_to_corerangeset(
+        num_blocks_x * num_blocks_y, device->compute_with_storage_grid_size(), true));
 
     // Create circular buffers
     uint32_t src0_cb_index = 0;
@@ -242,7 +242,7 @@ namespace operations {
 
 namespace matmul {
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse(
+tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse(
     const Tensor& a, const Tensor& b, Tensor& output, bool bcast_batch) {
     const auto &ashape = a.get_padded_shape(), bshape = b.get_padded_shape();
 

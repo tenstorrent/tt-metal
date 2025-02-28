@@ -10,6 +10,8 @@
 
 namespace ttnn::operations::data_movement {
 
+using namespace tt::tt_metal;
+
 // Does a broadcast
 Tensor BcastOperation::invoke(
     QueueId queue_id,

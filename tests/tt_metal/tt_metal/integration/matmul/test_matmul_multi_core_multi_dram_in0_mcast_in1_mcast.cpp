@@ -16,6 +16,7 @@
 
 using std::vector;
 using namespace tt;
+using namespace tt::tt_metal;
 namespace unit_tests_common::matmul::test_matmul_multi_core_multi_dram_in0_mcast_in1_mcast {
 
 std::tuple<

@@ -12,6 +12,7 @@
 #include <tt-metalium/logger.hpp>
 
 using namespace tt;
+using namespace tt::tt_metal;
 
 namespace unit_tests_common::dram::test_dram_to_l1_multicast {
 

@@ -9,6 +9,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 
 using tt::tt_metal::IDevice;
+using namespace tt::tt_metal;
 using namespace tt::test_utils;
 using namespace tt::test::buffer::detail;
 

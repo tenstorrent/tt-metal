@@ -11,6 +11,7 @@ namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 using namespace ttnn::operations::normalization;
+using namespace tt::tt_metal;
 
 std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_shape_dims(const Tensor& x) {
     const auto& shape = x.padded_shape();
@@ -329,11 +330,12 @@ void BatchNormOperation::BatchNormFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
-    auto update_args = [](Program& program, KernelHandle kernel_id, CoreCoord core, auto&& args) {
-        auto& all_args = GetRuntimeArgs(program, kernel_id);
-        auto& core_args = all_args.at(core.x).at(core.y);
-        std::copy(args.begin(), args.end(), core_args.data());
-    };
+    auto update_args =
+        [](tt::tt_metal::Program& program, tt::tt_metal::KernelHandle kernel_id, CoreCoord core, auto&& args) {
+            auto& all_args = GetRuntimeArgs(program, kernel_id);
+            auto& core_args = all_args.at(core.x).at(core.y);
+            std::copy(args.begin(), args.end(), core_args.data());
+        };
 
     CMAKE_UNIQUE_NAMESPACE::set_or_update_runtime_arguments(
         cached_program.program,

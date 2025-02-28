@@ -19,6 +19,7 @@
 
 using uint32_t = std::uint32_t;
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 namespace ttnn::operations::normalization {
 
@@ -139,7 +140,7 @@ operation::ProgramWithCallbacks Softmax::create_program(
     bool causal_mask = this->is_causal_mask;
 
     return std::visit(
-        [&](const auto& program_config) -> operation::ProgramWithCallbacks {
+        [&](const auto& program_config) -> tt::tt_metal::operation::ProgramWithCallbacks {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (std::is_same_v<ProgramConfigType, SoftmaxShardedMultiCoreProgramConfig>) {
                 return scale_mask_softmax_sharded_multi_core(

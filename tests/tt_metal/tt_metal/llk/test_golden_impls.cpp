@@ -12,6 +12,7 @@
 #include "tests/tt_metal/test_utils/packing.hpp"
 
 using std::vector;
+using namespace tt::tt_metal;
 
 namespace unit_tests::compute {
 

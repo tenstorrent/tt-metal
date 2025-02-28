@@ -20,6 +20,8 @@
 
 namespace ttnn::operations::data_movement {
 
+using namespace tt::tt_metal;
+
 std::vector<Tensor> fold_with_transpose_(
     QueueId queue_id,
     const Tensor& input,

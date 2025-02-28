@@ -9,6 +9,7 @@
 #include <tt-metalium/host_api.hpp>
 
 using namespace tt;
+using namespace tt::tt_metal;
 
 bool is_galaxy_device(const chip_id_t device_id) {
     return tt::Cluster::instance().get_board_type(device_id) == BoardType::GALAXY;

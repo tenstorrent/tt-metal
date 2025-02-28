@@ -8,6 +8,8 @@
 #include "typecast.hpp"
 #include "cpp/ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::experimental::copy {
 
 ttnn::Tensor TypecastOperation::invoke(

@@ -11,6 +11,7 @@
 namespace ttnn::operations::normalization {
 
 using namespace moreh::moreh_softmax;
+using namespace tt::tt_metal;
 
 ttnn::Tensor ExecuteSoftmax::invoke(
     const ttnn::Tensor& input_tensor,

@@ -8,6 +8,8 @@
 
 #include "gtest/gtest.h"
 
+using namespace tt::tt_metal;
+
 namespace test_utils {
 
 void test_tensor_on_device(const ttnn::Shape& input_shape, const TensorLayout& layout, tt::tt_metal::IDevice* device) {

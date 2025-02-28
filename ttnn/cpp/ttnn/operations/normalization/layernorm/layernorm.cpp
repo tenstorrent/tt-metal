@@ -7,6 +7,8 @@
 
 #include "device/layernorm_op.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::normalization {
 
 ttnn::Tensor ExecuteLayerNorm::invoke(

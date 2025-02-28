@@ -8,6 +8,8 @@
 #include <gtest/gtest.h>
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 
+using namespace tt::tt_metal;
+
 TEST(DeviceCommandTest, AddDispatchWait) {
     DeviceCommandCalculator calculator;
     calculator.add_dispatch_wait();

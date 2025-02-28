@@ -17,6 +17,8 @@
 #include <tt-metalium/rtoptions.hpp>
 #include "llrt.hpp"
 
+namespace tt::tt_metal {
+
 class CommandQueueFixture : public DispatchFixture {
 protected:
     tt::tt_metal::IDevice* device_;
@@ -160,3 +162,5 @@ protected:
 };
 
 class CommandQueueMultiDeviceProgramFixture : public CommandQueueMultiDeviceFixture {};
+
+}  // namespace tt::tt_metal

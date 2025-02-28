@@ -8,6 +8,8 @@
 #include "cpp/ttnn/tensor/types.hpp"
 #include "cpp/ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::data_movement {
 
 PermuteDeviceOperation::program_factory_t PermuteDeviceOperation::select_program_factory(

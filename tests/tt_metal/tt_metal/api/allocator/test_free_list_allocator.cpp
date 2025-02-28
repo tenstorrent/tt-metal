@@ -8,6 +8,8 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/impl/allocator/algorithms/free_list.hpp"
 
+using namespace tt::tt_metal;
+
 // TODO: Add a variant with randomized allocations and deallocations
 TEST(FreeListAllocator, TestDirectedSeriesOfAllocDealloc) {
     constexpr uint32_t max_size_bytes = 1024;

@@ -13,6 +13,8 @@
 
 namespace ttnn::operations::embedding_backward {
 
+using namespace tt::tt_metal;
+
 Tensor EmbeddingBackwardOperation::invoke(
     QueueId queue_id,
     const Tensor& input_tensor_arg,

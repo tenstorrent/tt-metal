@@ -22,7 +22,7 @@ ttnn::Tensor ExecuteRMSNorm::invoke(
                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
-    return operation::run(
+    return tt::tt_metal::operation::run(
                LayerNorm{
                    .norm_type = LayerNormType::RMSNORM,
                    .eps = epsilon,

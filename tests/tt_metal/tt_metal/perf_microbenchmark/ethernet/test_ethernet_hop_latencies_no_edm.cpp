@@ -38,6 +38,7 @@ using tt::tt_metal::distributed::MeshDevice;
 using tt::tt_metal::distributed::MeshDeviceConfig;
 using tt::tt_metal::distributed::MeshDeviceView;
 using tt::tt_metal::distributed::MeshShape;
+using namespace tt::tt_metal;
 
 class T3000TestDevice {
 public:

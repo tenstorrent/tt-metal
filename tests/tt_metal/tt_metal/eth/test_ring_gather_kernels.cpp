@@ -25,6 +25,7 @@
 using std::vector;
 using namespace tt;
 using namespace tt::test_utils;
+using namespace tt::tt_metal;
 using namespace tt::test_utils::df;
 
 constexpr std::int32_t WORD_SIZE = 16;  // 16 bytes per eth send packet

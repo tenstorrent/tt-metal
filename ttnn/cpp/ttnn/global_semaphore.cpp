@@ -9,6 +9,8 @@
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/span.hpp>
 
+using namespace tt::tt_metal;
+
 namespace ttnn::global_semaphore {
 
 MultiDeviceGlobalSemaphore::MultiDeviceGlobalSemaphore(MeshDevice* mesh_device) {

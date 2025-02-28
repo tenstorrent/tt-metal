@@ -7,6 +7,8 @@
 
 namespace ttnn::operations::experimental::transformer {
 
+using namespace tt::tt_metal;
+
 void CreateQKVHeadsDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");

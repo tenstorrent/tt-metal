@@ -11,6 +11,8 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn {
 
 namespace operations {

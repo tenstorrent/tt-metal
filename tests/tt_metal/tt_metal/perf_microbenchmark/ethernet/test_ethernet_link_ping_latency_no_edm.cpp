@@ -32,6 +32,7 @@
 
 using namespace tt;
 using namespace tt::test_utils;
+using namespace tt::tt_metal;
 using namespace tt::test_utils::df;
 
 class N300TestDevice {

@@ -6,6 +6,8 @@
 
 #include <tt-metalium/work_split.hpp>
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::experimental::transformer {
 
 // Generic NLP CreateHeads op

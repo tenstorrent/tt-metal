@@ -25,6 +25,7 @@
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 namespace ttnn {
 

@@ -9,6 +9,8 @@
 
 #include "device_fixture.hpp"
 
+using namespace tt::tt_metal;
+
 TEST_F(DeviceSingleCardBufferFixture, TestInvalidBufferRegion) {
     const InterleavedBufferConfig& buffer_config{
         .device = this->device_, .size = 2048, .page_size = 32, .buffer_type = BufferType::DRAM};

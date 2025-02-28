@@ -7,6 +7,8 @@
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::transformer {
 
 template <bool in_place>

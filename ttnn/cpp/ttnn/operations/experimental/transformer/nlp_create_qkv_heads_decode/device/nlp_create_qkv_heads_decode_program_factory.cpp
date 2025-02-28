@@ -8,6 +8,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 using namespace tt::constants;
+using namespace tt::tt_metal;
 using namespace tt;
 
 namespace ttnn::operations::experimental::transformer {

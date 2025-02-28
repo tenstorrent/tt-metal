@@ -11,6 +11,8 @@
 #include "ttnn/operation.hpp"
 #include <algorithm>
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::reduction::detail {
 
 operation::ProgramWithCallbacks sampling_multicore_interleaved(

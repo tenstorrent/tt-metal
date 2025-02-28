@@ -11,6 +11,8 @@
 #include <tt-metalium/rtoptions.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
+using namespace tt::tt_metal;  // For test
+
 namespace ttnn {
 
 class MultiCommandQueueSingleDeviceFixture : public ::testing::Test {

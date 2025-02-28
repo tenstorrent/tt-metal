@@ -8,6 +8,8 @@
 
 namespace ttnn {
 
+using namespace tt::tt_metal;
+
 void Barrier::validate(const std::vector<Tensor>& input_tensors) const {
     // Validate the input tensor
     TT_FATAL(this->topology == ccl::Topology::Ring, "We currently only support Ring topologies on the barrier op");

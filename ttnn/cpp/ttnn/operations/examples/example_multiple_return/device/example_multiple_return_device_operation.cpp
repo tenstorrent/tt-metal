@@ -4,6 +4,8 @@
 
 #include "example_multiple_return_device_operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::examples {
 
 ExampleMultipleReturnDeviceOperation::program_factory_t ExampleMultipleReturnDeviceOperation::select_program_factory(

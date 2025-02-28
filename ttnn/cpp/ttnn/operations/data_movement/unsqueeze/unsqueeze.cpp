@@ -7,6 +7,8 @@
 
 namespace ttnn::operations::data_movement {
 
+using namespace tt::tt_metal;
+
 ttnn::Tensor UnsqueezeOperation::invoke(const ttnn::Tensor& input_tensor, const int dim) {
     const auto& tensor_shape = input_tensor.get_logical_shape();
     const uint32_t rank = tensor_shape.rank();

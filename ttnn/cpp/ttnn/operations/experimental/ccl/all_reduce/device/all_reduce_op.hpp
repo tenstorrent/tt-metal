@@ -32,7 +32,7 @@ struct AllReduce {
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
-    operation::ProgramWithCallbacks create_program(
+    tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
 };
 
@@ -43,7 +43,7 @@ Tensor all_reduce(
     const Tensor& input_tensor,
     ttnn::operations::reduction::ReduceType reduce_op = ttnn::operations::reduction::ReduceType::Sum,
     const uint32_t num_links = 1,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
     const std::optional<size_t> user_defined_num_workers = std::nullopt,
     const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt);

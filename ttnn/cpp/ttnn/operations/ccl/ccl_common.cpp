@@ -18,6 +18,7 @@ namespace ttnn {
 namespace ccl {
 
 using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 
 void SyncModeSpec::add_signal(uint32_t sem_id, uint32_t wait_count) {
     this->sem_ids.push_back(sem_id);

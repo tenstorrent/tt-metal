@@ -10,6 +10,7 @@
 #include "compile_program_with_kernel_path_env_var_fixture.hpp"
 
 using namespace tt;
+using namespace tt::tt_metal;
 
 // Ensures we can successfully create kernels on available compute grid
 TEST_F(DispatchFixture, TensixCreateKernelsOnComputeCores) {

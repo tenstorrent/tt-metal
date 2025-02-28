@@ -45,6 +45,7 @@ constexpr uint32_t MIN_PAGED_WRITE_ADDR =
 //////////////////////////////////////////////////////////////////////////////////////////
 using std::vector;
 using namespace tt;
+using namespace tt::tt_metal;
 
 uint32_t iterations_g = DEFAULT_ITERATIONS;
 uint32_t warmup_iterations_g = DEFAULT_WARMUP_ITERATIONS;

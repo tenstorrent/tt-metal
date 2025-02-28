@@ -14,6 +14,8 @@
 
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::experimental::ccl {
 
 namespace detail {

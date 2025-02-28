@@ -15,14 +15,12 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 using namespace tt::constants;
+using namespace tt::tt_metal;
 using namespace tt;
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
 namespace reuse_mcast_optimized_helpers {
-using namespace tt::constants;
-using namespace tt;
-using namespace tt_metal;
 
 operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     tt_metal::Program& program,

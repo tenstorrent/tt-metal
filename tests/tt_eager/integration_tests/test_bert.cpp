@@ -17,6 +17,8 @@
 #include "ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads.hpp"
 #include "ttnn/operations/experimental/transformer/concatenate_heads/concatenate_heads.hpp"
 
+using namespace tt::tt_metal;
+
 using Parameters = std::map<std::string, Tensor>;
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;

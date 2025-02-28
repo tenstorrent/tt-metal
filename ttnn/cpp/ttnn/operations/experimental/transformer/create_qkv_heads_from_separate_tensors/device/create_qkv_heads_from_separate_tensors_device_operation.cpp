@@ -7,6 +7,8 @@
 
 namespace ttnn::operations::experimental::transformer {
 
+using namespace tt::tt_metal;
+
 void CreateQKVHeadsSeparateTensorsDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
     using namespace tt::constants;
     const auto& q_input_tensor = input_tensors.at(0);

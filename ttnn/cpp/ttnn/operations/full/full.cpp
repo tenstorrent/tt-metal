@@ -9,6 +9,9 @@
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::full {
+
+using namespace tt::tt_metal;
+
 Tensor Full::invoke(
     const ttnn::SmallVector<uint32_t>& shape,
     const std::variant<float, int> fill_value,

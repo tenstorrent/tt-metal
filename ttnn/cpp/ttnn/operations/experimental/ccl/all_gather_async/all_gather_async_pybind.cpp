@@ -13,6 +13,8 @@
 #include "ttnn/distributed/types.hpp"
 #include "cpp/ttnn/global_semaphore.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::experimental::ccl {
 
 namespace detail {

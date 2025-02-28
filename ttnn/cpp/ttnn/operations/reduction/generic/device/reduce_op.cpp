@@ -158,7 +158,7 @@ Tensor reduce_min(
     const Tensor& input_tensor,
     ReduceOpDim reduce_dim,
     float scaler = 1.0f,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt) {
     Tensor input = input_tensor;
     if (input.get_layout() == Layout::ROW_MAJOR && input.storage_type() == StorageType::DEVICE) {

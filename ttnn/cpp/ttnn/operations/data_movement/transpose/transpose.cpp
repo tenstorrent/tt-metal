@@ -15,11 +15,14 @@
 
 #include <tt-metalium/hal_exp.hpp>
 
-using namespace tt::tt_metal::experimental;
-
 namespace ttnn::operations::data_movement {
 
 namespace detail {
+
+using namespace tt::tt_metal::experimental;
+using namespace tt;
+using namespace tt::tt_metal;
+using namespace tt::tt_metal::operation;
 
 inline Tensor transpose_(
     const Tensor& a,
@@ -108,8 +111,8 @@ ttnn::Tensor ExecuteTranspose::invoke(
         input_unsqueezed.get_dtype() == DataType::BFLOAT8_B and !bfloat8_supported and !input_unsqueezed.is_sharded();
     Tensor input_typecasted = typecast ? ttnn::typecast(input_unsqueezed, DataType::BFLOAT16) : input_unsqueezed;
 
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_typecasted}))};
-    operation::launch_with_autoformat(
+    std::vector<Tensor> output_tensors = {Tensor(detail::get_workers_for_op_output({input_typecasted}))};
+    detail::launch_with_autoformat(
         [normalized_dim1, normalized_dim2, memory_config_arg, pad_value](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,

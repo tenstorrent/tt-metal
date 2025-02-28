@@ -4,6 +4,8 @@
 
 #include "tensor_types_from_flatbuffer.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn {
 
 BufferType from_flatbuffer(flatbuffer::BufferType type) {

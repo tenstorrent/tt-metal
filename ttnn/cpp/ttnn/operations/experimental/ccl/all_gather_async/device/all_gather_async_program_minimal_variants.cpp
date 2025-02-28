@@ -27,7 +27,9 @@
 #include <type_traits>
 #include <ranges>
 #include <optional>
+
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 namespace ttnn {
 

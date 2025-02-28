@@ -19,6 +19,7 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using std::vector;
 using namespace tt;
+using namespace tt::tt_metal;
 
 void check_program_is_mapped_to_correct_cores(
     const tt_metal::Program& program,

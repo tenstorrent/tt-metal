@@ -8,11 +8,12 @@
 #include <tt-metalium/util.hpp>
 
 using namespace tt::constants;
+using namespace tt::tt_metal;
 using namespace tt;
 
 namespace ttnn::operations::experimental::transformer {
 
-static inline operation::ProgramWithCallbacks create_heads_combined_qkv_sharded(
+static inline tt::tt_metal::operation::ProgramWithCallbacks create_heads_combined_qkv_sharded(
     const Tensor& input_tensor,
     const std::vector<uint32_t>&& heads_per_group,
     const uint32_t head_dim,

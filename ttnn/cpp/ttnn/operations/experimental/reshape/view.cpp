@@ -11,6 +11,8 @@
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::experimental::reshape {
 
 static MemoryConfig infer_output_memory_config(

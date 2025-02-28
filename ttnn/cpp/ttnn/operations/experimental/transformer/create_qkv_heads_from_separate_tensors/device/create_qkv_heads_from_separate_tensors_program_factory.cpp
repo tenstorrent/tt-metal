@@ -7,12 +7,13 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 
-using namespace tt::constants;
-using namespace tt;
-
 namespace ttnn::operations::experimental::transformer {
 
-static inline operation::ProgramWithCallbacks create_qkv_separate(
+using namespace tt::constants;
+using namespace tt;
+using namespace tt::tt_metal;
+
+static inline tt::tt_metal::operation::ProgramWithCallbacks create_qkv_separate(
     const Tensor& input_tensor_q,
     const Tensor& input_tensor_kv,
     const uint32_t num_q_heads,

@@ -32,7 +32,7 @@ struct ExecuteTopK {
         const bool sorted,
         const std::optional<MemoryConfig>& memory_config,
         std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors = std::nullopt) {
-        return operation::run(
+        return tt::tt_metal::operation::run(
             TopK{k, dim, largest, sorted, memory_config.value_or(input_tensor.memory_config())},
             {input_tensor},
             {},
@@ -56,8 +56,8 @@ struct ExecuteTopK {
         const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
         const auto& input_tensor = input_tensors.at(0);
         return {
-            Tensor(operation::get_workers_for_op_output({input_tensor})),
-            Tensor(operation::get_workers_for_op_output({input_tensor}))};
+            Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor})),
+            Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
     }
 };
 

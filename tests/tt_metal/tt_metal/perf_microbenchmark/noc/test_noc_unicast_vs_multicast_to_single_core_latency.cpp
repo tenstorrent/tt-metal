@@ -12,6 +12,7 @@
 #include "tt_cluster.hpp"
 
 using namespace tt;
+using namespace tt::tt_metal;
 //
 void measure_latency(const string& kernel_name) {
     const int device_id = 0;

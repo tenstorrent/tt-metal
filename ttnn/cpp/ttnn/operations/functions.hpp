@@ -22,8 +22,11 @@ using tt::tt_metal::IDevice;
 using tt::tt_metal::Layout;
 using tt::tt_metal::MemoryConfig;
 using tt::tt_metal::OwnedStorage;
+using tt::tt_metal::PageConfig;
 using tt::tt_metal::StorageType;
 using tt::tt_metal::Tensor;
+using tt::tt_metal::TensorLayout;
+using tt::tt_metal::TensorMemoryLayout;
 
 template <typename T, bool IS_UPPER>
 static Tensor index_trilu(
@@ -255,7 +258,7 @@ static Tensor fill_first_val_into_tensor(
     } else {
         tt::tt_metal::tensor_impl::read_data_from_device_buffer<T>(device_buffer, data_vec);
     }
-    auto input_buffer = owned_buffer::create<T>(std::move(data_vec));
+    auto input_buffer = tt::tt_metal::owned_buffer::create<T>(std::move(data_vec));
     const ttnn::Shape input_tensor_strides = input_tensor.strides();
     for (uint32_t i = 0; i < physical_volume; i++) {
         owned_buffer[i] = input_buffer[0];
@@ -298,7 +301,7 @@ static Tensor prod_result_computation_GS(
     } else {
         tt::tt_metal::tensor_impl::read_data_from_device_buffer<T>(device_buffer, data_vec);
     }
-    auto input_buffer = owned_buffer::create<T>(std::move(data_vec));
+    auto input_buffer = tt::tt_metal::owned_buffer::create<T>(std::move(data_vec));
     const ttnn::Shape input_tensor_strides = input_tensor.strides();
     auto result = static_cast<T>(1.0f);
     for (uint32_t i = s_a[0] - 1; i < s_a[0]; i++) {
@@ -357,7 +360,7 @@ static Tensor prod_result_computation_WH_B0(
     } else {
         tt::tt_metal::tensor_impl::read_data_from_device_buffer<T>(device_buffer, data_vec);
     }
-    auto input_buffer = owned_buffer::create<T>(std::move(data_vec));
+    auto input_buffer = tt::tt_metal::owned_buffer::create<T>(std::move(data_vec));
     const ttnn::Shape input_tensor_strides = input_tensor.strides();
     auto result = static_cast<T>(1.0f);
     // need to access the last 4 rows and alternating columns of index 17 ,19, 21, 23, 25, 27, 29, 31
@@ -507,7 +510,7 @@ static Tensor manual_insertion(
     } else {
         tt::tt_metal::tensor_impl::read_data_from_device_buffer<T>(device_buffer, data_vec);
     }
-    auto owned_buffer = owned_buffer::create<T>(std::move(data_vec));
+    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(std::move(data_vec));
     auto output = Tensor(
                       OwnedStorage{owned_buffer},
                       TensorSpec(

@@ -13,6 +13,7 @@
 
 using std::vector;
 using namespace tt;
+using namespace tt::tt_metal;
 using namespace tt::test_utils;
 
 namespace unit_tests_common::matmul::test_matmul_large_block {

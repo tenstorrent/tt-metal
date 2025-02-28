@@ -14,6 +14,8 @@
 
 namespace ttnn::operations::data_movement {
 
+using namespace tt::tt_metal;
+
 template <typename T>
 ttnn::Tensor SliceOperation::invoke(
     QueueId queue_id,

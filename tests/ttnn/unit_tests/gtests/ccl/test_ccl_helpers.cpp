@@ -9,6 +9,8 @@
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "tests/tt_metal/test_utils/env_vars.hpp"
 
+using namespace tt::tt_metal;
+
 TEST(CclHelpers, CreateEriscDatamoverBuilder_Chan4_PageSize2048_RRBufferSharingMode) {
     std::size_t num_channels = 4;
     uint32_t page_size = 2048;

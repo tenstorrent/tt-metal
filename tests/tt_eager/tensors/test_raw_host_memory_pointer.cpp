@@ -42,6 +42,8 @@
 
 */
 
+using namespace tt::tt_metal;
+
 template <typename DataType>
 struct NDArray {
     ttnn::Shape shape;

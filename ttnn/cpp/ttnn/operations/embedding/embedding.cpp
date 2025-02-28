@@ -13,6 +13,8 @@
 
 namespace ttnn::operations::embedding {
 
+using namespace tt::tt_metal;
+
 ttnn::Tensor EmbeddingOperation::invoke(
     QueueId queue_id,
     const Tensor& input_tensor_arg,

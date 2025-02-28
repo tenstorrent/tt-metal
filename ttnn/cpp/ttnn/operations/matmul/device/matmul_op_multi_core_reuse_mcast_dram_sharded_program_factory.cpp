@@ -17,6 +17,7 @@
 
 using namespace tt;
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 namespace reuse_dram_sharded_optimized_helpers {
 using ttnn::operations::unary::UnaryOpType;

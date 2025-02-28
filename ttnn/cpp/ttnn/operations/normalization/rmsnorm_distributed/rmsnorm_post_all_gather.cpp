@@ -7,6 +7,8 @@
 #include "ttnn/operations/normalization/layernorm_distributed/device/layernorm_post_all_gather_op.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_op.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::normalization {
 
 ttnn::Tensor ExecuteRMSNormPostAllGather::invoke(

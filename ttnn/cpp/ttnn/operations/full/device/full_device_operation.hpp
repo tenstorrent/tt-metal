@@ -29,7 +29,7 @@ struct FullOperation {
 
     struct ProgramFactory {
         struct shared_variables_t {
-            KernelHandle writer_id;
+            tt::tt_metal::KernelHandle writer_id;
             std::size_t num_cores;
             std::size_t core_h;
         };

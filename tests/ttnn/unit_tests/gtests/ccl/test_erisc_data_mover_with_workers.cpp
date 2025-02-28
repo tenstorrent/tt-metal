@@ -30,6 +30,7 @@
 // #include <tt-metalium/kernel_types.hpp>
 
 using namespace tt;
+using namespace tt::tt_metal;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
 using namespace tt::tt_metal::experimental;

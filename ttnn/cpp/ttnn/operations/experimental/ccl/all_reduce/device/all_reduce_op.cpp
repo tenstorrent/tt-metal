@@ -10,6 +10,8 @@
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include <cstdint>
 
+using namespace tt::tt_metal;
+
 namespace ttnn {
 
 void AllReduce::validate(const std::vector<Tensor>& input_tensors) const {

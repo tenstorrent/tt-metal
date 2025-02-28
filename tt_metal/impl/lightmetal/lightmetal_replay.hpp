@@ -46,7 +46,7 @@ struct LightMetalBinary;
 
 using FlatbufferRuntimeArgVector =
     const flatbuffers::Vector<flatbuffers::Offset<tt::tt_metal::flatbuffer::RuntimeArg>>*;
-using RuntimeArgs = std::vector<std::variant<Buffer*, uint32_t>>;
+using RuntimeArgs = std::vector<std::variant<tt::tt_metal::Buffer*, uint32_t>>;
 
 namespace tt::tt_metal {
 inline namespace v0 {

@@ -19,17 +19,22 @@ namespace primary {
  */
 
 struct Prod_op {
-    const MemoryConfig output_mem_config;
-    const DataType output_dtype;  // TODO: Uplift output_dtype as an option for general dot/bmm
-    void validate(const std::vector<Tensor>& input_tensors) const;
-    std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
-    operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
+    const tt::tt_metal::MemoryConfig output_mem_config;
+    const tt::tt_metal::DataType output_dtype;  // TODO: Uplift output_dtype as an option for general dot/bmm
+    void validate(const std::vector<tt::tt_metal::Tensor>& input_tensors) const;
+    std::vector<tt::tt_metal::TensorSpec> compute_output_specs(
+        const std::vector<tt::tt_metal::Tensor>& input_tensors) const;
+    tt::tt_metal::operation::ProgramWithCallbacks create_program(
+        const std::vector<tt::tt_metal::Tensor>& input_tensors,
+        std::vector<tt::tt_metal::Tensor>& output_tensors) const;
 };
 
-operation::ProgramWithCallbacks prod_single_core(const Tensor& input_tensor_a, const Tensor& output_tensor);
+tt::tt_metal::operation::ProgramWithCallbacks prod_single_core(
+    const tt::tt_metal::Tensor& input_tensor_a, const tt::tt_metal::Tensor& output_tensor);
 
-Tensor prod_all(const Tensor& input, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+tt::tt_metal::Tensor prod_all(
+    const tt::tt_metal::Tensor& input,
+    const tt::tt_metal::MemoryConfig& mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 }  // namespace primary
 
 }  // namespace operations

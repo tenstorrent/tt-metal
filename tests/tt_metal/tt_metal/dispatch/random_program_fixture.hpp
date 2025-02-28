@@ -14,6 +14,8 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "dispatch_test_utils.hpp"
 
+namespace tt::tt_metal {
+
 class RandomProgramFixture : virtual public CommandQueueSingleCardProgramFixture {
 protected:
     static const uint32_t MIN_KERNEL_SIZE_BYTES = 20;
@@ -387,3 +389,5 @@ private:
         }
     }
 };
+
+}  // namespace tt::tt_metal

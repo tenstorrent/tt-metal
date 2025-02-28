@@ -29,8 +29,8 @@ Tensor create_mask(const Tensor& input_a, const std::optional<MemoryConfig>& out
 Tensor ArgmaxOperation::invoke(
     const Tensor& input_t, int64_t _dim, bool all, const std::optional<MemoryConfig>& output_mem_config) {
     auto output_memory_config = output_mem_config.value_or(input_t.memory_config());
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_t}))};
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_t}))};
+    tt::tt_metal::operation::launch_op(
         [_dim, all, output_memory_config](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,

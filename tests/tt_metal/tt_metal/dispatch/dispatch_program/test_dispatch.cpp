@@ -9,6 +9,7 @@
 #include <tt-metalium/hal.hpp>
 
 using std::vector;
+using namespace tt::tt_metal;
 
 // Test sync w/ semaphores betweeen eth/tensix cores
 // Test will hang in the kernel if the sync doesn't work properly

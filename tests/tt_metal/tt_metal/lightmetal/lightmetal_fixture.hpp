@@ -16,6 +16,8 @@
 #include "command_queue_fixture.hpp"
 #include <lightmetal_binary.hpp>
 
+namespace tt::tt_metal {
+
 class SingleDeviceLightMetalFixture : public CommandQueueFixture {
 protected:
     bool replay_binary_;
@@ -79,3 +81,5 @@ protected:
         }
     }
 };
+
+}  // namespace tt::tt_metal

@@ -5,6 +5,8 @@
 #include "topk_op.hpp"
 #include "topk_program_factory.hpp"
 
+using namespace tt::tt_metal;
+
 namespace topk_utils {
 
 static inline bool verify_available_cores(

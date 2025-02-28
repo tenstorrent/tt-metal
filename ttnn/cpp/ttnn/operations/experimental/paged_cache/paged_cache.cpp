@@ -12,6 +12,8 @@
 namespace ttnn {
 namespace operations::experimental::paged_cache {
 
+using namespace tt::tt_metal;
+
 ttnn::Tensor PagedUpdateCacheOperation::invoke(
     const Tensor& cache_tensor,
     const Tensor& input_tensor,

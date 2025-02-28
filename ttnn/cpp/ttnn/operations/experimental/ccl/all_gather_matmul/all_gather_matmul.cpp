@@ -5,6 +5,8 @@
 #include "ttnn/operations/experimental/ccl/all_gather_matmul/device/all_gather_matmul_op.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_matmul/all_gather_matmul.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn {
 namespace operations::experimental::ccl {
 

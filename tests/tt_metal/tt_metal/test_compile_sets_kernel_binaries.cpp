@@ -22,6 +22,7 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using std::vector;
 using namespace tt;
+using namespace tt::tt_metal;
 
 std::string get_latest_kernel_binary_path(const string& kernel_root_path, const std::shared_ptr<Kernel>& kernel) {
     TT_FATAL(kernel != nullptr, "Error");

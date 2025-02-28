@@ -6,6 +6,8 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::full {
 void FullOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {

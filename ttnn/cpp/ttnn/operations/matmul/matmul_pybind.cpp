@@ -20,6 +20,7 @@ namespace operations {
 namespace matmul {
 
 using ttnn::operations::unary::UnaryWithParam;
+using namespace tt::tt_metal;
 
 void py_module(py::module& module) {
     auto matmul_program_config = tt_serializable_class<MatmulProgramConfig>(module, "MatmulProgramConfig", R"doc(

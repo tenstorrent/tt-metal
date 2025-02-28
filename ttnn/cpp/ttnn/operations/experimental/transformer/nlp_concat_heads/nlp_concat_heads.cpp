@@ -16,7 +16,7 @@ ttnn::Tensor NLPConcatHeadsOperation::invoke(
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
-    return operation::run(
+    return tt::tt_metal::operation::run(
                NLPConcatHeadsDeviceOperation{memory_config.value_or(input_tensor.memory_config())},
                {input_tensor},
                {},

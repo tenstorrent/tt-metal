@@ -9,6 +9,8 @@
 
 namespace ttnn::operations::kv_cache {
 
+using namespace tt::tt_metal;
+
 ttnn::Tensor ExecuteUpdateCache::invoke(
     const ttnn::Tensor& cache,
     const ttnn::Tensor& input,

@@ -13,9 +13,11 @@
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 
-using namespace tt;
 namespace ttnn {
 namespace operations::conv {
+
+using namespace tt;
+using namespace tt::tt_metal;
 using sliding_window::ParallelConfig;
 using sliding_window::SlidingWindowConfig;
 

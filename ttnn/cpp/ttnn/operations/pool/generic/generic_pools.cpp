@@ -14,6 +14,8 @@
 
 #include <limits>
 
+using namespace tt::tt_metal;
+
 namespace ttnn {
 namespace operations::pool {
 

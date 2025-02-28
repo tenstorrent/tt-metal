@@ -16,6 +16,8 @@
 
 #include "ttnn_test_fixtures.hpp"
 
+using namespace tt::tt_metal;
+
 namespace {
 
 void run_create_tensor_test(tt::tt_metal::IDevice* device, const ttnn::Shape& input_shape) {

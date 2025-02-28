@@ -15,6 +15,7 @@
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
+using namespace tt::tt_metal;
 
 int main(int argc, char** argv) {
     bool pass = true;

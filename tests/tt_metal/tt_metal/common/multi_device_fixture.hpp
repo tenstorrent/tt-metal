@@ -15,6 +15,8 @@
 #include "umd/device/types/cluster_descriptor_types.h"
 #include "tt_metal/test_utils/env_vars.hpp"
 
+namespace tt::tt_metal {
+
 class MultiDeviceFixture : public DispatchFixture {
 protected:
     void SetUp() override { this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()); }
@@ -126,7 +128,7 @@ protected:
                 magic_enum::enum_name(*config_.mesh_device_type));
         }
         // Use ethernet dispatch for more than 1 CQ on T3K/N300
-        DispatchCoreType core_type = (config_.num_cqs >= 2) ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
+        auto core_type = (config_.num_cqs >= 2) ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
         mesh_device_ = MeshDevice::create(
             MeshDeviceConfig{.mesh_shape = get_mesh_shape(*mesh_device_type)},
             0,
@@ -208,3 +210,5 @@ protected:
     T3000MultiCQMeshDeviceFixture() :
         MeshDeviceFixtureBase(Config{.mesh_device_type = MeshDeviceType::T3000, .num_cqs = 2}) {}
 };
+
+}  // namespace tt::tt_metal

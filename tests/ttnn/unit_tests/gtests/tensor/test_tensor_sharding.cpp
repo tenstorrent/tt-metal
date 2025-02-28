@@ -16,6 +16,8 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn_test_fixtures.hpp"
 
+using namespace tt::tt_metal;
+
 namespace {
 
 void pretty_print_data_as_shards(

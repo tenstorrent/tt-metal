@@ -16,6 +16,7 @@
 using std::vector;
 using namespace tt;
 using namespace tt::test_utils;
+using namespace tt::tt_metal;
 namespace unit_tests_common::matmul::test_matmul_X_tile {
 
 struct MatmulTileStimuli {

@@ -13,6 +13,7 @@
 
 using uint32_t = std::uint32_t;
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 namespace ttnn::operations::normalization {
 
@@ -306,7 +307,7 @@ operation::ProgramWithCallbacks LayerNorm::create_program(
     auto& output_tensor = output_tensors.at(0);
 
     return std::visit(
-        [&](const auto& program_config) -> operation::ProgramWithCallbacks {
+        [&](const auto& program_config) -> tt::tt_metal::operation::ProgramWithCallbacks {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>) {
                 uint32_t num_cores_x = program_config.compute_with_storage_grid_size.x;

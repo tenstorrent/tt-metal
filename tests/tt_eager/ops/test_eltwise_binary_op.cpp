@@ -14,6 +14,7 @@ using tt::tt_metal::IDevice;
 using tt::tt_metal::Layout;
 using tt::tt_metal::OwnedStorage;
 using tt::tt_metal::Tensor;
+using namespace tt::tt_metal;
 
 template <typename BinaryFunction>
 Tensor host_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b) {

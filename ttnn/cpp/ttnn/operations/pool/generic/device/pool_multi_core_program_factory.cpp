@@ -10,6 +10,8 @@
  * Generic pool implementation that uses the new sliding window infrastructure.
  */
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::pool {
 
 Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_new(

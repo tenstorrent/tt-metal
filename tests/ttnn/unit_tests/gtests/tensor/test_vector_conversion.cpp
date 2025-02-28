@@ -19,6 +19,8 @@
 #include "ttnn/tensor/xtensor/conversion_utils.hpp"
 #include "ttnn/tensor/xtensor/xtensor_all_includes.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn {
 namespace {
 

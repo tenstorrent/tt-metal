@@ -228,57 +228,60 @@ class FabricEriscDatamoverBuilder {
            // TODO
        }
 
-    void teardown_from_host(IDevice*d, tt::fabric::TerminationSignal termination_signal = tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE) const;
+       void teardown_from_host(
+           tt::tt_metal::IDevice* d,
+           tt::fabric::TerminationSignal termination_signal =
+               tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE) const;
 
-    void set_firmware_context_switch_interval(size_t interval);
+       void set_firmware_context_switch_interval(size_t interval);
 
-    //    protected:
-    friend class EdmLineFabricOpInterface;
-    CoreCoord my_eth_core_logical;
-    size_t my_noc_x = 0;
-    size_t my_noc_y = 0;
+       //    protected:
+       friend class EdmLineFabricOpInterface;
+       CoreCoord my_eth_core_logical;
+       size_t my_noc_x = 0;
+       size_t my_noc_y = 0;
 
-    FabricEriscDatamoverConfig config;
+       FabricEriscDatamoverConfig config;
 
-    size_t my_chip_id = 0;
-    size_t peer_chip_id = 0;
-    size_t handshake_address = 0;
-    size_t channel_buffer_size = 0;
+       size_t my_chip_id = 0;
+       size_t peer_chip_id = 0;
+       size_t handshake_address = 0;
+       size_t channel_buffer_size = 0;
 
-    size_t sender_0_num_buffers = 0;
-    size_t sender_1_num_buffers = 0;
-    size_t receiver_num_buffers = 0;
+       size_t sender_0_num_buffers = 0;
+       size_t sender_1_num_buffers = 0;
+       size_t receiver_num_buffers = 0;
 
-    size_t local_sender_channel_0_buffer_address = 0;
-    size_t local_sender_channel_0_connection_info_addr = 0;
-    size_t local_sender_channel_1_buffer_address = 0;
-    size_t local_sender_channel_1_connection_info_addr = 0;
-    size_t local_receiver_channel_buffer_address = 0;
+       size_t local_sender_channel_0_buffer_address = 0;
+       size_t local_sender_channel_0_connection_info_addr = 0;
+       size_t local_sender_channel_1_buffer_address = 0;
+       size_t local_sender_channel_1_connection_info_addr = 0;
+       size_t local_receiver_channel_buffer_address = 0;
 
-    size_t termination_signal_ptr = 0;
+       size_t termination_signal_ptr = 0;
 
-    // Semaphore IDs
-    // this is the receiver channel's local sem for flow controlling with downstream fabric sender
-    std::optional<size_t> receiver_channel_downstream_flow_control_semaphore_id;
-    std::optional<size_t> receiver_channel_downstream_teardown_semaphore_id;
-    size_t sender_channel_0_flow_control_semaphore_id = 0;
-    size_t sender_channel_1_flow_control_semaphore_id = 0;
-    size_t sender_channel_0_connection_semaphore_id = 0;
-    size_t sender_channel_1_connection_semaphore_id = 0;
-    size_t sender_channel_0_buffer_index_semaphore_id = 0;
-    size_t sender_channel_1_buffer_index_semaphore_id = 0;
-    size_t receiver_channel_local_buffer_index_address = 0;
+       // Semaphore IDs
+       // this is the receiver channel's local sem for flow controlling with downstream fabric sender
+       std::optional<size_t> receiver_channel_downstream_flow_control_semaphore_id;
+       std::optional<size_t> receiver_channel_downstream_teardown_semaphore_id;
+       size_t sender_channel_0_flow_control_semaphore_id = 0;
+       size_t sender_channel_1_flow_control_semaphore_id = 0;
+       size_t sender_channel_0_connection_semaphore_id = 0;
+       size_t sender_channel_1_connection_semaphore_id = 0;
+       size_t sender_channel_0_buffer_index_semaphore_id = 0;
+       size_t sender_channel_1_buffer_index_semaphore_id = 0;
+       size_t receiver_channel_local_buffer_index_address = 0;
 
-    std::optional<size_t> downstream_edm_noc_x;
-    std::optional<size_t> downstream_edm_noc_y;
-    std::optional<size_t> downstream_edm_buffer_base_address;
-    std::optional<size_t> downstream_edm_semaphore_address;
-    std::optional<size_t> downstream_edm_worker_registration_address;
-    std::optional<size_t> downstream_edm_worker_location_info_address;
-    std::optional<size_t> downstream_sender_channel_buffer_index_semaphore_id;
-    bool enable_persistent_mode = false;
-    bool build_in_worker_connection_mode = false;
-    size_t firmware_context_switch_interval = default_firmware_context_switch_interval;
+       std::optional<size_t> downstream_edm_noc_x;
+       std::optional<size_t> downstream_edm_noc_y;
+       std::optional<size_t> downstream_edm_buffer_base_address;
+       std::optional<size_t> downstream_edm_semaphore_address;
+       std::optional<size_t> downstream_edm_worker_registration_address;
+       std::optional<size_t> downstream_edm_worker_location_info_address;
+       std::optional<size_t> downstream_sender_channel_buffer_index_semaphore_id;
+       bool enable_persistent_mode = false;
+       bool build_in_worker_connection_mode = false;
+       size_t firmware_context_switch_interval = default_firmware_context_switch_interval;
 };
 
 
@@ -295,18 +298,34 @@ class EdmLineFabricOpInterface {
 
 
     //   The constructor will assemble/connect the line across the specified device sequence, for all available links.
-    EdmLineFabricOpInterface (std::vector<IDevice*> const& device_sequence, std::vector<Program*> const& program_sequence, bool enable_persistent_mode, std::optional<size_t> desired_num_links = std::nullopt, bool build_in_worker_connection_mode = false);
+    EdmLineFabricOpInterface(
+        const std::vector<tt::tt_metal::IDevice*>& device_sequence,
+        const std::vector<tt::tt_metal::Program*>& program_sequence,
+        bool enable_persistent_mode,
+        std::optional<size_t> desired_num_links = std::nullopt,
+        bool build_in_worker_connection_mode = false);
 
     // Invocable per chip if we want to collectively build the fabric by building this separately per chip
     // (and implicitly building the fabric that way)
-    EdmLineFabricOpInterface (IDevice* local_device, std::optional<IDevice*> forward_device, std::optional<IDevice*> backward_device,  Program* program, bool enable_persistent_mode, std::optional<size_t> desired_num_links, bool build_in_worker_connection_mode = false);
+    EdmLineFabricOpInterface(
+        tt::tt_metal::IDevice* local_device,
+        std::optional<tt::tt_metal::IDevice*> forward_device,
+        std::optional<tt::tt_metal::IDevice*> backward_device,
+        tt::tt_metal::Program* program,
+        bool enable_persistent_mode,
+        std::optional<size_t> desired_num_links,
+        bool build_in_worker_connection_mode = false);
 
-    static EdmLineFabricOpInterface build_program_builder_worker_connection_fabric(std::vector<IDevice*> const& device_sequence, std::vector<Program*> const& program_sequence, bool enable_persistent_mode, std::optional<size_t> desired_num_links = std::nullopt);
     static EdmLineFabricOpInterface build_program_builder_worker_connection_fabric(
-        IDevice* local_device,
-        IDevice* forward_device,
-        IDevice* backward_device,
-        Program* program,
+        const std::vector<tt::tt_metal::IDevice*>& device_sequence,
+        const std::vector<tt::tt_metal::Program*>& program_sequence,
+        bool enable_persistent_mode,
+        std::optional<size_t> desired_num_links = std::nullopt);
+    static EdmLineFabricOpInterface build_program_builder_worker_connection_fabric(
+        tt::tt_metal::IDevice* local_device,
+        tt::tt_metal::IDevice* forward_device,
+        tt::tt_metal::IDevice* backward_device,
+        tt::tt_metal::Program* program,
         bool enable_persistent_mode,
         std::optional<size_t> desired_num_links = std::nullopt);
 
@@ -328,14 +347,15 @@ class EdmLineFabricOpInterface {
     std::vector<edm_termination_info_t> generate_ordered_termination_info_farthest_to_nearest() const;
 
     // Generates a list of termination infos for the local chip's EDMs
-    std::vector<edm_termination_info_t> generate_local_chip_fabric_termination_infos(IDevice*device) const;
+    std::vector<edm_termination_info_t> generate_local_chip_fabric_termination_infos(
+        tt::tt_metal::IDevice* device) const;
 
     // Accessors
     size_t get_num_links() const { return num_links; }
 
     size_t get_device_count() const { return device_sequence.size(); }
 
-    size_t get_index_of_device(IDevice*device) const {
+    size_t get_index_of_device(tt::tt_metal::IDevice* device) const {
         for (size_t i = 0; i < device_sequence.size(); i++) {
             if (device_sequence[i] == device) {
                 return i;
@@ -363,8 +383,8 @@ class EdmLineFabricOpInterface {
     std::unordered_map<size_t, size_t> next_forward_direction_edm_available;
     std::unordered_map<size_t, size_t> next_backward_direction_edm_available;
 
-    std::vector<IDevice*> device_sequence;
-    std::vector<Program*> programs;
+    std::vector<tt::tt_metal::IDevice*> device_sequence;
+    std::vector<tt::tt_metal::Program*> programs;
 
     size_t num_links;
     size_t buffer_size_bytes;
