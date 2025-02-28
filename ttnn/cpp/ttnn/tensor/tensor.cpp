@@ -524,6 +524,9 @@ template std::vector<uint16_t> Tensor::to_vector<uint16_t>() const;
 template std::vector<uint32_t> Tensor::to_vector<uint32_t>() const;
 
 Tensor Tensor::to_device(IDevice* target_device, const MemoryConfig& mem_config, QueueId cq_id) const {
+    if (auto mesh_device = dynamic_cast<distributed::MeshDevice*>(target_device)) {
+        return to_device(mesh_device, mem_config, cq_id);
+    }
     return tensor_ops::tensor_to_device(*this, target_device, mem_config, cq_id);
 }
 
