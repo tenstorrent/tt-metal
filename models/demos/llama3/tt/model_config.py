@@ -709,7 +709,7 @@ class TtModelArgs:
             )  # if self.dim==8192 else ttnn.DRAM_MEMORY_CONFIG
 
             self.model_config["FF1_OUT_GATHERED_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(32 * 4, self.hidden_dim // 8 // 8),
+                shape=(32, 4 * self.hidden_dim // 8 // 8),
                 core_grid=ttnn.CoreGrid(y=1, x=8),
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
