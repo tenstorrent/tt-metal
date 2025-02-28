@@ -337,6 +337,10 @@ void py_module(py::module& module) {
                back to all SubDevice IDs.
            )doc")
         .def(
+            "num_program_cache_entries",
+            &MeshDevice::num_program_cache_entries,
+            "Number of entries in the program cache for this device")
+        .def(
             "sfpu_eps",
             [](MeshDevice* device) { return tt::tt_metal::experimental::hal::get_eps(); },
             R"doc(Returns machine epsilon value for current architecture.)doc")
