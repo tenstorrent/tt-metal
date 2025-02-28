@@ -13,8 +13,19 @@
 #include "init/tensor_initializers.hpp"
 #include "ops/linear_op.hpp"
 
+namespace ttml::modules {
+
 namespace {
-ttml::autograd::TensorPtr create_bias(uint32_t out_features, float init_k) {
+ttml::autograd::TensorPtr create_weight(uint32_t in_features, uint32_t out_features) {
+    auto* device = &autograd::ctx().get_device();
+    auto weight_shape = core::create_shape({1, 1, out_features, in_features});
+    auto weight = ttml::autograd::create_tensor();
+    const float init_k = std::sqrtf(1.F / static_cast<float>(in_features));
+    init::uniform_init(weight, weight_shape, init::UniformRange{-init_k, init_k});
+    return weight;
+}
+ttml::autograd::TensorPtr create_bias(uint32_t in_features, uint32_t out_features) {
+    const float init_k = std::sqrtf(1.F / static_cast<float>(in_features));
     auto* device = &ttml::autograd::ctx().get_device();
     auto bias_shape = ttml::core::create_shape({1, 1, 1, out_features});
     auto bias = ttml::autograd::create_tensor();
@@ -22,18 +33,6 @@ ttml::autograd::TensorPtr create_bias(uint32_t out_features, float init_k) {
     return bias;
 }
 }  // namespace
-namespace ttml::modules {
-
-void LinearLayer::initialize_tensors(uint32_t in_features, uint32_t out_features, bool has_bias) {
-    auto* device = &autograd::ctx().get_device();
-    auto weight_shape = core::create_shape({1, 1, out_features, in_features});
-    m_weight = ttml::autograd::create_tensor();
-    const float init_k = std::sqrtf(1.F / static_cast<float>(in_features));
-    init::uniform_init(m_weight, weight_shape, init::UniformRange{-init_k, init_k});
-    if (has_bias) {
-        m_bias = create_bias(out_features, init_k);
-    }
-}
 
 void LinearLayer::register_tensors() {
     create_name("linear");
@@ -44,7 +43,10 @@ void LinearLayer::register_tensors() {
 }
 
 LinearLayer::LinearLayer(uint32_t in_features, uint32_t out_features, bool has_bias) {
-    initialize_tensors(in_features, out_features, has_bias);
+    m_weight = create_weight(in_features, out_features);
+    if (has_bias) {
+        m_bias = create_bias(in_features, out_features);
+    }
     register_tensors();
 }
 
