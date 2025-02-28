@@ -17,10 +17,10 @@ if TYPE_CHECKING:
 
 
 @pytest.mark.parametrize(
-    ("block_index", "batch_size", "spatial_sequence_length", "prompt_sequence_length"),
+    ("model_name", "block_index", "batch_size", "spatial_sequence_length", "prompt_sequence_length"),
     [
-        (0, 2, 4096, 333),
-        (23, 2, 4096, 333),
+        ("large", 0, 2, 4096, 333),
+        ("large", 23, 2, 4096, 333),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 716800}], indirect=True)
@@ -28,13 +28,14 @@ if TYPE_CHECKING:
 def test_transformer_block(
     *,
     device: ttnn.Device,
+    model_name,
     block_index: int,
     batch_size: int,
     spatial_sequence_length: int,
     prompt_sequence_length: int,
 ) -> None:
     parent_torch_model = SD3Transformer2DModel.from_pretrained(
-        "stabilityai/stable-diffusion-3.5-medium", subfolder="transformer"
+        f"stabilityai/stable-diffusion-3.5-{model_name}", subfolder="transformer"
     )
     torch_model: TransformerBlock = parent_torch_model.transformer_blocks[block_index]
     torch_model.eval()
@@ -42,7 +43,10 @@ def test_transformer_block(
     parameters = TtTransformerBlockParameters.from_torch(torch_model.state_dict(), device=device, dtype=ttnn.bfloat8_b)
     tt_model = TtTransformerBlock(parameters, num_heads=torch_model.num_heads)
 
-    embedding_dim = 1536
+    if model_name == "medium":
+        embedding_dim = 1536
+    else:
+        embedding_dim = 2432
 
     torch.manual_seed(0)
     spatial = torch.randn((batch_size, spatial_sequence_length, embedding_dim))

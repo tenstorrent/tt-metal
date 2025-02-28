@@ -17,9 +17,9 @@ if TYPE_CHECKING:
 
 
 @pytest.mark.parametrize(
-    "batch_size",
+    ("model_name", "batch_size"),
     [
-        2,
+        ("large", 2),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
@@ -27,12 +27,13 @@ if TYPE_CHECKING:
 def test_patch_embedding(
     *,
     device: ttnn.Device,
+    model_name,
     batch_size: int,
 ) -> None:
     dtype = torch.bfloat16
 
     parent_torch_model = SD3Transformer2DModel.from_pretrained(
-        "stabilityai/stable-diffusion-3.5-medium", subfolder="transformer", torch_dtype=dtype
+        f"stabilityai/stable-diffusion-3.5-{model_name}", subfolder="transformer", torch_dtype=dtype
     )
     torch_model: PatchEmbed = parent_torch_model.pos_embed
     torch_model.eval()

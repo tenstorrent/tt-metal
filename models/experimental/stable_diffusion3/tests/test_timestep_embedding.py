@@ -20,21 +20,22 @@ if TYPE_CHECKING:
 
 
 @pytest.mark.parametrize(
-    "batch_size",
+    ("model_name", "batch_size"),
     [
-        100,
+        ("large", 100),
     ],
 )
 @pytest.mark.usefixtures("use_program_cache")
 def test_timestep_embedding(
     *,
     device: ttnn.Device,
+    model_name,
     batch_size: int,
 ) -> None:
     dtype = torch.bfloat16
 
     parent_torch_model = SD3Transformer2DModel.from_pretrained(
-        "stabilityai/stable-diffusion-3.5-medium", subfolder="transformer", torch_dtype=dtype
+        f"stabilityai/stable-diffusion-3.5-{model_name}", subfolder="transformer", torch_dtype=dtype
     )
     torch_model: CombinedTimestepTextProjEmbeddings = parent_torch_model.time_text_embed
     torch_model.eval()

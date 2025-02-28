@@ -83,27 +83,27 @@ class TtAttentionPart:
             # sharding leads to worse PCC, so disable it until further investigation
             mm_a_x = 8
             mm_a_y = 8
-            mm_a_x_memory_config = ttnn.L1_MEMORY_CONFIG
+            mm_a_x_memory_config = ttnn.DRAM_MEMORY_CONFIG
         elif sequence_length >= 512:
             mm_a_y = 8
             mm_a_x = 8
-            mm_a_x_strategy = ttnn.ShardStrategy.BLOCK
-            mm_a_x_memory_config = ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
-            x = to_memory_config(
-                x,
-                memory_config=ttnn.create_sharded_memory_config(
-                    x.shape,
-                    core_grid=ttnn.CoreGrid(y=mm_a_y, x=mm_a_x),
-                    strategy=mm_a_x_strategy,
-                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                ),
-                deallocate=deallocate,
-            )
+            # mm_a_x_strategy = ttnn.ShardStrategy.BLOCK
+            mm_a_x_memory_config = ttnn.DRAM_MEMORY_CONFIG
+            # x = to_memory_config(
+            #     x,
+            #     memory_config=ttnn.create_sharded_memory_config(
+            #         x.shape,
+            #         core_grid=ttnn.CoreGrid(y=mm_a_y, x=mm_a_x),
+            #         strategy=mm_a_x_strategy,
+            #         orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            #     ),
+            #     deallocate=deallocate,
+            # )
             deallocate = True
         else:
             mm_a_x = 8
             mm_a_y = 6
-            mm_a_x_memory_config = ttnn.L1_MEMORY_CONFIG
+            mm_a_x_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
         qkv = self._qkv_proj(
             x,
@@ -114,7 +114,7 @@ class TtAttentionPart:
         )
 
         qkv = ttnn.reallocate(qkv)
-        qkv = to_memory_config(qkv, ttnn.L1_MEMORY_CONFIG, deallocate=True)
+        qkv = to_memory_config(qkv, ttnn.DRAM_MEMORY_CONFIG, deallocate=True)
 
         q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(qkv, num_heads=num_heads, transpose_key=False)
         ttnn.deallocate(qkv)

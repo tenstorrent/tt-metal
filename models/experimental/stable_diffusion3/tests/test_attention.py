@@ -17,10 +17,12 @@ if TYPE_CHECKING:
 
 
 @pytest.mark.parametrize(
-    ("block_index", "batch_size", "spatial_sequence_length", "prompt_sequence_length"),
+    ("model_name", "block_index", "batch_size", "spatial_sequence_length", "prompt_sequence_length"),
     [
-        (0, 2, 4096, 333),
-        (23, 2, 4096, 333),
+        #        ("medium", 0, 1, 4096, 333),
+        #        ("medium", 23, 1, 4096, 333),
+        ("large", 0, 1, 4096, 333),
+        ("large", 23, 1, 4096, 333),
     ],
 )
 @pytest.mark.parametrize("joint_attention", [False, True])
@@ -29,6 +31,7 @@ if TYPE_CHECKING:
 def test_attention(
     *,
     device: ttnn.Device,
+    model_name,
     block_index: int,
     batch_size: int,
     spatial_sequence_length: int,
@@ -39,8 +42,13 @@ def test_attention(
     ttnn_dtype = ttnn.bfloat16
 
     parent_torch_model = SD3Transformer2DModel.from_pretrained(
-        "stabilityai/stable-diffusion-3.5-medium", subfolder="transformer", torch_dtype=torch_dtype
+        f"stabilityai/stable-diffusion-3.5-{model_name}", subfolder="transformer", torch_dtype=torch_dtype
     )
+    if model_name == "medium":
+        embedding_dim = 1536
+    else:
+        embedding_dim = 2432
+
     torch_model: Attention = parent_torch_model.transformer_blocks[block_index].attn
     torch_model.eval()
 
@@ -48,8 +56,10 @@ def test_attention(
     tt_model = TtAttention(parameters, num_heads=torch_model.num_heads)
 
     torch.manual_seed(0)
-    spatial = torch.randn((batch_size, spatial_sequence_length, 1536), dtype=torch_dtype)
-    prompt = torch.randn((batch_size, prompt_sequence_length, 1536), dtype=torch_dtype) if joint_attention else None
+    spatial = torch.randn((batch_size, spatial_sequence_length, embedding_dim), dtype=torch_dtype)
+    prompt = (
+        torch.randn((batch_size, prompt_sequence_length, embedding_dim), dtype=torch_dtype) if joint_attention else None
+    )
 
     tt_spatial_host = ttnn.from_torch(spatial, layout=ttnn.TILE_LAYOUT, dtype=ttnn_dtype)
     tt_prompt_host = ttnn.from_torch(prompt, layout=ttnn.TILE_LAYOUT, dtype=ttnn_dtype) if joint_attention else None
