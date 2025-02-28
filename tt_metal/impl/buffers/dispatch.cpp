@@ -13,6 +13,7 @@
 #include <tt-metalium/dispatch_settings.hpp>
 #include <tt-metalium/program_impl.hpp>
 
+#include "hal.hpp"
 #include "tt_cluster.hpp"
 
 namespace tt::tt_metal {
@@ -44,18 +45,16 @@ struct BufferWriteDispatchParams {
 };
 
 // Parameters specific to interleaved buffers
-struct InterleavedBufferWriteDispatchParams : BufferWriteDispatchParams {
-    uint32_t num_banks = 0;
+class InterleavedBufferWriteDispatchParams : public BufferWriteDispatchParams {
+public:
     uint32_t data_size_to_copy = 0;
-    const Buffer& buffer;
 
     InterleavedBufferWriteDispatchParams(
         const Buffer& buffer,
         uint32_t dst_page_index,
         uint32_t total_pages_to_write,
         uint32_t cq_id,
-        tt::stl::Span<const uint32_t> expected_num_workers_completed) :
-        buffer(buffer) {
+        tt::stl::Span<const uint32_t> expected_num_workers_completed) {
         this->num_banks = buffer.device()->allocator()->get_num_banks(buffer.buffer_type());
         this->address = buffer.address();
         this->dst_page_index = dst_page_index;
@@ -66,6 +65,8 @@ struct InterleavedBufferWriteDispatchParams : BufferWriteDispatchParams {
         this->cq_id = cq_id;
         this->expected_num_workers_completed = expected_num_workers_completed;
     }
+
+    InterleavedBufferWriteDispatchParams() = default;
     virtual ~InterleavedBufferWriteDispatchParams() = default;
 
     void calculate_issue_wait() {
@@ -102,9 +103,13 @@ struct InterleavedBufferWriteDispatchParams : BufferWriteDispatchParams {
     virtual uint32_t num_partial_pages_per_full_page() const { return 1; }
 
     virtual uint32_t get_padding_for_last_partial_page() const { return 0; }
+
+protected:
+    uint32_t num_banks = 0;
 };
 
-struct InterleavedBufferWriteLargePageDispatchParams : InterleavedBufferWriteDispatchParams {
+class InterleavedBufferWriteLargePageDispatchParams : public InterleavedBufferWriteDispatchParams {
+public:
     InterleavedBufferWriteLargePageDispatchParams(
         const Buffer& buffer,
         uint32_t dst_page_index,
@@ -116,6 +121,7 @@ struct InterleavedBufferWriteLargePageDispatchParams : InterleavedBufferWriteDis
         tt::stl::Span<const uint32_t> expected_num_workers_completed) :
         InterleavedBufferWriteDispatchParams(
             buffer, dst_page_index, total_pages_to_write, cq_id, expected_num_workers_completed) {
+        this->buffer_address = buffer.address();
         this->page_size_to_write = partial_page_spec.partial_page_size;
         this->data_size_to_copy = partial_page_spec.partial_page_size;
         this->full_pages_to_write = num_full_pages;
@@ -123,6 +129,8 @@ struct InterleavedBufferWriteLargePageDispatchParams : InterleavedBufferWriteDis
         this->num_partial_pages_in_single_full_page = partial_page_spec.num_partial_pages_per_full_page;
         this->last_partial_page_padding = partial_page_spec.last_partial_page_padding;
     }
+
+    InterleavedBufferWriteLargePageDispatchParams() = default;
 
     void calculate_num_pages_for_write_transaction(uint32_t num_pages_available_in_cq) override {
         TT_ASSERT(this->num_banks > this->dst_page_index);
@@ -162,14 +170,15 @@ struct InterleavedBufferWriteLargePageDispatchParams : InterleavedBufferWriteDis
     uint32_t get_padding_for_last_partial_page() const override { return this->last_partial_page_padding; }
 
 private:
-    uint32_t num_partial_pages_in_single_full_page = 0;
-    uint32_t last_partial_page_padding = 0;
-    uint32_t full_page_size = 0;
+    uint32_t buffer_address;
+    uint32_t num_partial_pages_in_single_full_page;
+    uint32_t last_partial_page_padding;
+    uint32_t full_page_size;
     uint32_t full_pages_written = 0;
     uint32_t full_pages_to_write = 0;
 
     bool were_full_pages_written_in_last_write_transaction() const {
-        const uint32_t page_size = this->address - this->buffer.address();
+        const uint32_t page_size = this->address - this->buffer_address;
         return page_size > 0 && page_size % this->full_page_size == 0;
     }
 
@@ -207,7 +216,7 @@ uint32_t calculate_max_data_size(const CoreType& dispatch_core_type) {
            (hal.get_alignment(HalMemType::HOST) * 2);  // * 2 to account for issue
 }
 
-bool are_pages_large(const Buffer& buffer) {
+bool are_pages_larger_than_max_prefetch_cmd_size(const Buffer& buffer) {
     const CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(buffer.device()->id());
     const uint32_t max_data_size = calculate_max_data_size(dispatch_core_type);
     return buffer.aligned_page_size() > max_data_size;
@@ -263,15 +272,8 @@ ShardedBufferWriteDispatchParams initialize_sharded_buf_dispatch_params(
 
 uint32_t calculate_partial_page_size(const Buffer& buffer) {
     uint32_t partial_page_size = DispatchSettings::BASE_PARTIAL_PAGE_SIZE;
-    const uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
-    uint32_t mem_alignment = 0;
-    if (buffer.is_dram()) {
-        mem_alignment = hal.get_alignment(HalMemType::DRAM);
-    } else {
-        TT_ASSERT(buffer.is_l1());
-        mem_alignment = hal.get_alignment(HalMemType::L1);
-    }
-    partial_page_size = tt::align(partial_page_size, std::lcm(pcie_alignment, mem_alignment));
+    const HalMemType buffer_mem_type = buffer.memory_type();
+    partial_page_size = tt::align(partial_page_size, hal.get_common_alignment_with_pcie(buffer_mem_type));
     return partial_page_size;
 }
 
@@ -285,26 +287,28 @@ PartialPageSpec calculate_partial_page_spec(const Buffer& buffer) {
     return partial_page_spec;
 }
 
-std::unique_ptr<InterleavedBufferWriteDispatchParams> initialize_interleaved_buf_dispatch_params(
+using InterleavedBufferWriteDispatchParamsVariant =
+    std::variant<InterleavedBufferWriteDispatchParams, InterleavedBufferWriteLargePageDispatchParams>;
+
+InterleavedBufferWriteDispatchParamsVariant initialize_interleaved_buf_dispatch_params(
     const Buffer& buffer,
     const BufferDispatchConstants& buf_dispatch_constants,
     uint32_t cq_id,
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     const BufferRegion& region) {
-    std::unique_ptr<InterleavedBufferWriteDispatchParams> dispatch_params;
+    InterleavedBufferWriteDispatchParamsVariant dispatch_params;
 
     uint32_t total_pages_to_write = region.size / buffer.page_size();
     const uint32_t dst_page_index = region.offset / buffer.page_size();
 
-    const bool write_large_pages = buffer.aligned_page_size() > buf_dispatch_constants.max_data_sizeB;
-    if (write_large_pages) {
+    if (are_pages_larger_than_max_prefetch_cmd_size(buffer)) {
         const PartialPageSpec partial_page_spec = calculate_partial_page_spec(buffer);
         const uint32_t full_page_size =
             partial_page_spec.num_partial_pages_per_full_page * partial_page_spec.partial_page_size;
         const uint32_t num_full_pages = total_pages_to_write;
         const uint32_t padded_buffer_size = total_pages_to_write * buffer.aligned_page_size();
         total_pages_to_write = num_full_pages * partial_page_spec.num_partial_pages_per_full_page;
-        dispatch_params = std::make_unique<InterleavedBufferWriteLargePageDispatchParams>(
+        dispatch_params.emplace<InterleavedBufferWriteLargePageDispatchParams>(
             buffer,
             dst_page_index,
             partial_page_spec,
@@ -314,7 +318,7 @@ std::unique_ptr<InterleavedBufferWriteDispatchParams> initialize_interleaved_buf
             cq_id,
             expected_num_workers_completed);
     } else {
-        dispatch_params = std::make_unique<InterleavedBufferWriteDispatchParams>(
+        dispatch_params.emplace<InterleavedBufferWriteDispatchParams>(
             buffer, dst_page_index, total_pages_to_write, cq_id, expected_num_workers_completed);
     }
 
@@ -722,9 +726,14 @@ void write_to_device_buffer(
                 dispatch_core_type);
         }
     } else {
-        std::unique_ptr<InterleavedBufferWriteDispatchParams> dispatch_params =
+        InterleavedBufferWriteDispatchParamsVariant dispatch_params_variant =
             initialize_interleaved_buf_dispatch_params(
                 buffer, buf_dispatch_constants, cq_id, expected_num_workers_completed, region);
+
+        InterleavedBufferWriteDispatchParams* dispatch_params = std::visit(
+            [](auto& val) { return static_cast<InterleavedBufferWriteDispatchParams*>(&val); },
+            dispatch_params_variant);
+
         write_interleaved_buffer_to_device(
             src, *dispatch_params, buffer, buf_dispatch_constants, sub_device_ids, dispatch_core_type);
     }
@@ -760,40 +769,45 @@ ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
     return dispatch_params;
 }
 
-std::unique_ptr<BufferReadDispatchParams> initialize_interleaved_buf_read_dispatch_params(
+BufferReadDispatchParamsVariant initialize_interleaved_buf_read_dispatch_params(
     Buffer& buffer,
     uint32_t cq_id,
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     const BufferRegion& region) {
     validate_buffer_region_conditions(buffer, region);
 
-    std::unique_ptr<BufferReadDispatchParams> dispatch_params;
-    const bool read_large_pages = are_pages_large(buffer);
+    BufferReadDispatchParamsVariant dispatch_params;
+
+    const bool read_large_pages = are_pages_larger_than_max_prefetch_cmd_size(buffer);
     if (read_large_pages) {
-        dispatch_params = std::make_unique<BufferReadLargePageDispatchParams>();
+        dispatch_params = BufferReadLargePageDispatchParams{};
     } else {
-        dispatch_params = std::make_unique<BufferReadDispatchParams>();
+        dispatch_params = BufferReadDispatchParams{};
     }
 
-    dispatch_params->total_pages_to_read = region.size / buffer.page_size();
-    dispatch_params->src_page_index = region.offset / buffer.page_size();
-    dispatch_params->cq_id = cq_id;
-    dispatch_params->device = buffer.device();
-    dispatch_params->address = buffer.address();
-    dispatch_params->unpadded_dst_offset = 0;
-    dispatch_params->expected_num_workers_completed = expected_num_workers_completed;
-    dispatch_params->num_banks = buffer.device()->allocator()->get_num_banks(buffer.buffer_type());
+    IDevice* device = buffer.device();
 
-    if (read_large_pages) {
-        BufferReadLargePageDispatchParams* large_page_dispatch_params =
-            dynamic_cast<BufferReadLargePageDispatchParams*>(dispatch_params.get());
-        const PartialPageSpec partial_page_spec = calculate_partial_page_spec(buffer);
-        large_page_dispatch_params->partial_page_spec = partial_page_spec;
-        dispatch_params->padded_page_size =
-            partial_page_spec.partial_page_size * partial_page_spec.num_partial_pages_per_full_page;
-    } else {
-        dispatch_params->padded_page_size = buffer.aligned_page_size();
-    }
+    std::visit(
+        [&](auto& params) {
+            params.total_pages_to_read = region.size / buffer.page_size();
+            params.src_page_index = region.offset / buffer.page_size();
+            params.cq_id = cq_id;
+            params.device = device;
+            params.address = buffer.address();
+            params.unpadded_dst_offset = 0;
+            params.expected_num_workers_completed = expected_num_workers_completed;
+            params.num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
+
+            if constexpr (std::is_same_v<std::decay_t<decltype(params)>, BufferReadLargePageDispatchParams>) {
+                const PartialPageSpec partial_page_spec = calculate_partial_page_spec(buffer);
+                params.partial_page_spec = partial_page_spec;
+                params.padded_page_size =
+                    partial_page_spec.partial_page_size * partial_page_spec.num_partial_pages_per_full_page;
+            } else {
+                params.padded_page_size = buffer.aligned_page_size();
+            }
+        },
+        dispatch_params);
 
     return dispatch_params;
 }

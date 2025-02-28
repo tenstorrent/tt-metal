@@ -464,7 +464,7 @@ DeviceAddr CalculateAddressDeviceInterleavedContiguous(
         addr = buffer.page_address(bank_index, page_index);
     }
 
-    if (buffer_dispatch::are_pages_large(buffer)) {
+    if (buffer_dispatch::are_pages_larger_than_max_prefetch_cmd_size(buffer)) {
         const buffer_dispatch::PartialPageSpec& partial_page_spec =
             buffer_dispatch::calculate_partial_page_spec(buffer);
         const uint32_t full_padded_page_size =
