@@ -21,6 +21,9 @@ constexpr bool is_associative(BinaryOpType op) {
            op == BinaryOpType::LOGICAL_AND || op == BinaryOpType::LOGICAL_OR || op == BinaryOpType::LOGADDEXP ||
            op == BinaryOpType::LOGADDEXP2 || op == BinaryOpType::LOGICAL_XOR;
 }
+inline Tensor typecast_to(DataType dtype, const Tensor& input) {
+    return input.get_dtype() == dtype ? input : ttnn::typecast(input, dtype);
+}
 
 constexpr bool is_dtype_supported(BinaryOpType op, DataType dtype) {
     switch (op) {
@@ -28,7 +31,7 @@ constexpr bool is_dtype_supported(BinaryOpType op, DataType dtype) {
         case BinaryOpType::SUB:
             return (
                 dtype == DataType::FLOAT32 || dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B ||
-                dtype == DataType::BFLOAT4_B || dtype == DataType::INT32);
+                dtype == DataType::BFLOAT4_B || dtype == DataType::INT32 || dtype == DataType::UINT16);
         case BinaryOpType::BITWISE_XOR:
         case BinaryOpType::BITWISE_AND:
         case BinaryOpType::BITWISE_OR:
@@ -177,19 +180,34 @@ Tensor BinaryOperation<binary_op_type>::invoke(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<unary::FusedActivations>& activations,
     const std::optional<unary::UnaryWithParam>& input_tensor_a_activation) {
-    auto [input_tensor_a, input_tensor_b] =
-        detail::preprocess_inputs<binary_op_type>(input_tensor_a_arg, input_tensor_b_arg);
+    Tensor input_a = input_tensor_a_arg;
+    Tensor input_b = input_tensor_b_arg;
+    bool typecast_out = false;
+    DataType dtype = output_dtype.value_or(input_tensor_a_arg.get_dtype());
+    if (input_tensor_a_arg.get_dtype() == DataType::UINT16) {
+        input_a = typecast_to(DataType::BFLOAT16, input_tensor_a_arg);
+        typecast_out = true;
+        dtype = DataType::BFLOAT16;
+    }
+    if (input_tensor_b_arg.get_dtype() == DataType::UINT16) {
+        input_b = typecast_to(DataType::BFLOAT16, input_tensor_b_arg);
+        typecast_out = true;
+        dtype = DataType::BFLOAT16;
+    }
+    auto [input_tensor_a, input_tensor_b] = detail::preprocess_inputs<binary_op_type>(input_a, input_b);
 
-    return ttnn::prim::binary(
+    Tensor result = ttnn::prim::binary(
         queue_id,
         input_tensor_a,
         input_tensor_b,
         binary_op_type,
-        output_dtype,
+        dtype,
         memory_config,
         optional_output_tensor,
         activations,
         input_tensor_a_activation);
+    return typecast_out ? ttnn::typecast(result, input_tensor_a_arg.get_dtype(), std::nullopt, optional_output_tensor)
+                        : result;
 }
 
 template <BinaryOpType binary_op_type>

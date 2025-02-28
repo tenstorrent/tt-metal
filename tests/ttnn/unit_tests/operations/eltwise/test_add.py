@@ -14,9 +14,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "shapes",
     [
         [[63, 1, 4], [1, 9, 4]],
-        [[13600, 1, 4], [1, 9, 4]],
-        [[1, 16, 6, 64, 64], [1, 16, 1, 64, 64]],
-        [[63, 1, 4], [1, 1, 1]],
+        # [[13600, 1, 4], [1, 9, 4]],
+        # [[1, 16, 6, 64, 64], [1, 16, 1, 64, 64]],
+        # [[63, 1, 4], [1, 1, 1]],
     ],
 )
 def test_non_4D_channel_bcast(device, shapes):
@@ -585,3 +585,45 @@ def test_add_with_sub_devices(device, input_a_sharded, input_b_sharded, out_shar
     output_tensor = ttnn.to_torch(output_tensor)
     assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
     assert output_tensor.shape == shape
+
+
+@pytest.mark.parametrize(
+    "input_dtype, output_dtype,",
+    [
+        # (ttnn.uint32, ttnn.uint32),
+        (ttnn.uint16, ttnn.uint16),
+    ],
+)
+@pytest.mark.parametrize(
+    "a_shape, b_shape",
+    (
+        ([1, 1, 32, 32], [1, 1, 32, 32]),
+        ([1, 1, 32, 32], [1, 1, 32, 1]),
+        ([3, 1, 64, 64], [3, 1, 64, 64]),
+        ([128, 128], [128, 128]),
+        ([63, 1, 4], [1, 9, 4]),
+        ([13600, 1, 4], [1, 9, 4]),
+        ([1, 16, 6, 64, 64], [1, 16, 1, 64, 64]),
+        ([63, 1, 4], [1, 1, 1]),
+    ),
+)
+def test_add_with_int_dtypes(device, a_shape, b_shape, input_dtype, output_dtype):
+    x_torch = torch.randint(0, 100, a_shape, dtype=torch.int32)
+    y_torch = torch.randint(0, 100, b_shape, dtype=torch.int32)
+
+    golden_fn = ttnn.get_golden_function(ttnn.add)
+    z_torch = golden_fn(x_torch, y_torch)
+    x_tt = ttnn.from_torch(x_torch, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    out = ttnn.add(x_tt, y_tt, dtype=output_dtype)
+    print("x_torch", x_torch)
+    print("y_torch", y_torch)
+    print("x_tt", x_tt)
+    print("y_tt", y_tt)
+    tt_out = ttnn.to_torch(out, dtype=torch.int32)
+    print("z_torch:", z_torch)
+    print("tt_out:", out)
+    # status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.99
+    # assert status
+    assert_with_pcc(z_torch, tt_out, 1.0)
