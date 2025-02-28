@@ -42,7 +42,7 @@ jobs:
 
   smoke-tests:
     needs: pr-gate-build
-    uses: ./.github/impl/smoke.yaml
+    uses: ./.github/workflows/zzz_smoke.yaml
     with:
       docker-image: ${{ needs.pr-gate-build.outputs.ci-build-docker-image }}
       package-artifact-name: ${{ needs.pr-gate-build.outputs.packages-artifact-name }}
