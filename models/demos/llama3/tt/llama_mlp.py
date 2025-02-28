@@ -8,6 +8,8 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.llama3.tt.llama_common import pad_to_size
 from models.demos.llama3.tt.llama_ccl import tt_all_reduce
 
+from time import sleep
+
 
 class TtLlamaMLP(LightweightModule):
     def __init__(
@@ -199,6 +201,7 @@ class TtLlamaMLP(LightweightModule):
                 w2_in = ttnn.to_memory_config(w2_in, ttnn.L1_MEMORY_CONFIG)
 
         # breakpoint()
+        sleep(1)
         w2_out = ttnn.linear(
             w2_in,
             self.w2,
