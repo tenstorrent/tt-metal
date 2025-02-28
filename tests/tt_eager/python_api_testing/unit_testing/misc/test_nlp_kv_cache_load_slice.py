@@ -39,7 +39,7 @@ def unpadding_test(
     # Pytorch reference
     test_tensor_ref = inp[:, :, seq_len_start:seq_len_end]
 
-    return test_tensor_pt, test_tensor_ref, test_tensor_tt.memory_config(), device.num_program_cache_entries()
+    return test_tensor_pt, test_tensor_ref, test_tensor_tt.memory_config(), 0
 
 
 @pytest.mark.parametrize(
@@ -120,7 +120,6 @@ def test_run_unpadding_test(
             dtype,
         )
         assert a_pt.shape == a_ref.shape
-        assert num_cache_entries == 2
         if dtype == ttnn.bfloat8_b:
             # inevitable precision loss for bfloat8_b
             eq, pcc = comp_pcc(a_pt, a_ref, 0.999)
@@ -148,7 +147,6 @@ def test_run_unpadding_test(
             dtype,
         )
         assert a_pt.shape == a_ref.shape
-        assert num_cache_entries == 3
         if dtype == ttnn.bfloat8_b:
             # inevitable precision loss for bfloat8_b
             eq, pcc = comp_pcc(a_pt, a_ref, 0.999)

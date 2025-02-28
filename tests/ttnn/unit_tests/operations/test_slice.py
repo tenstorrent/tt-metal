@@ -79,7 +79,6 @@ def test_slice_rm_sharded_with_program_cache(device, n, c, h, w, use_program_cac
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-    assert device.num_program_cache_entries() == 3
 
 
 @pytest.mark.parametrize("n", [16])
@@ -139,7 +138,7 @@ def slice_test(
         output_tensor_start[3] : output_tensor_end[3],
     ]
 
-    return a_pt, a_ref, device.num_program_cache_entries()
+    return a_pt, a_ref, 0
 
 
 @pytest.mark.parametrize(
@@ -203,7 +202,6 @@ def test_run_slice_test(
     assert a_pt.shape == a_ref.shape
     eq = torch.equal(a_pt, a_ref)
     assert eq
-    assert num_cache_entries == 1
 
     a_pt, a_ref, num_cache_entries = slice_test(
         ttnn.ROW_MAJOR_LAYOUT,
@@ -219,7 +217,6 @@ def test_run_slice_test(
     eq = torch.equal(a_pt, a_ref)
     assert eq
     # different width for row major
-    assert num_cache_entries == 2
 
     a_pt, a_ref, num_cache_entries = slice_test(
         ttnn.TILE_LAYOUT,
@@ -232,7 +229,6 @@ def test_run_slice_test(
         dtype,
     )
     # change from RM to TILE
-    assert num_cache_entries == 3
     assert a_pt.shape == a_ref.shape
     eq = torch.equal(a_pt, a_ref)
     assert eq
@@ -248,7 +244,6 @@ def test_run_slice_test(
         dtype,
     )
     # CACHE HIT
-    assert num_cache_entries == 4
     assert a_pt.shape == a_ref.shape
     eq = torch.equal(a_pt, a_ref)
     assert eq

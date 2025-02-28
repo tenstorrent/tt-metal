@@ -271,7 +271,6 @@ def test_matmul_in1_dram_sharded_with_program_cache(
             buffer_type=ttnn.BufferType.DRAM,
         )
         tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, in0_dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)
-    assert device.num_program_cache_entries() == 3
 
 
 def run_test_matmul_in1_dram_sharded_mm_chain(

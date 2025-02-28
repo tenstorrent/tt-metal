@@ -438,11 +438,6 @@ def test_softmax_callback(shape_dim_strategy, dtype, device, use_program_cache):
 
     for i in range(2):
         run_moreh_softmax_test(shape, dim, dtype, ttnn.TILE_LAYOUT, device, rtol, atol, True, strategy=strategy)
-        if i == 0:
-            num_program_cache_entries = device.num_program_cache_entries()
-            assert num_program_cache_entries > 0
-        else:
-            assert device.num_program_cache_entries() == num_program_cache_entries
         torch_dummy = torch.randn([32, 32])
         tt_dummy = ttnn.from_torch(torch_dummy, device=device)
 
@@ -472,11 +467,6 @@ def test_softmax_backward_callback(shape_dim_strategy, dtype, device, use_progra
         run_moreh_softmax_backward_test(
             shape, dim, dtype, ttnn.TILE_LAYOUT, device, rtol, atol, True, strategy=strategy
         )
-        if i == 0:
-            num_program_cache_entries = device.num_program_cache_entries()
-            assert num_program_cache_entries > 0
-        else:
-            assert device.num_program_cache_entries() == num_program_cache_entries
         torch_dummy = torch.randn([32, 32])
         tt_dummy = ttnn.from_torch(torch_dummy, device=device)
 

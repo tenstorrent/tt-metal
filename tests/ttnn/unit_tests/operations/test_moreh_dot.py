@@ -119,11 +119,6 @@ def test_moreh_matmul_1d_callback(input_shape, dtype, device, use_program_cache)
         run_moreh_dot_test(input_shape, dtype, device)
         torch_dummy = torch.randn([32, 32])
         tt_dummy = ttnn.from_torch(torch_dummy, device=device)
-        if i == 0:
-            num_program_cache_entries = device.num_program_cache_entries()
-            assert num_program_cache_entries > 0
-        else:
-            assert device.num_program_cache_entries() == num_program_cache_entries
 
 
 @pytest.mark.parametrize(

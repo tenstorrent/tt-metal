@@ -163,7 +163,7 @@ Tensor convert_python_tensor_to_tt_tensor(
     std::optional<Layout> optional_layout,
     const std::optional<Tile>& optional_tile,
     const MemoryConfig& memory_config,
-    IDevice* device,
+    MeshDevice* device,
     const bool force_disable_borrow = false) {
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::detail::convert_python_tensor_to_tt_tensor",
@@ -417,7 +417,9 @@ owned_buffer::Buffer<T> create_row_major_owned_buffer(
 
 std::variant<OwnedBuffer, BorrowedBuffer> get_host_buffer_from_tensor(
     const Tensor& tt_tensor, const bool padded_output) {
-    TT_ASSERT(tt_tensor.storage_type() == StorageType::OWNED or tt_tensor.storage_type() == StorageType::BORROWED);
+    TT_ASSERT(
+        tt_tensor.storage_type() == StorageType::OWNED || tt_tensor.storage_type() == StorageType::BORROWED ||
+        tt_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST);
 
     using RetType = std::variant<OwnedBuffer, BorrowedBuffer>;
     return std::visit(
@@ -454,6 +456,55 @@ std::variant<OwnedBuffer, BorrowedBuffer> get_host_buffer_from_tensor(
                     case DataType::BFLOAT4_B: {
                         const auto& tile = tensor_spec.tile();
                         auto uint32_data = owned_buffer::get_as<std::uint32_t>(storage.buffer).get();
+                        auto float_unpacked_data =
+                            tt_dtype == DataType::BFLOAT8_B
+                                ? unpack_bfp8_tiles_into_float_vec(
+                                      uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
+                                : unpack_bfp4_tiles_into_float_vec(
+                                      uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+                        auto input_float_buffer = owned_buffer::create<float>(std::move(float_unpacked_data));
+                        return create_row_major_owned_buffer(std::move(input_float_buffer), tensor_spec, padded_output);
+                    }
+                    default: {
+                        TT_THROW("Unsupported DataType: {}", tt_dtype);
+                        break;
+                    }
+                }
+            },
+            [&tt_tensor, padded_output](const MultiDeviceHostStorage& storage) -> RetType {
+                const auto& tensor_spec = tt_tensor.get_tensor_spec();
+                const auto tt_dtype = tensor_spec.data_type();
+                TT_FATAL(storage.buffers.size() == 1, "More than 1 buffer");
+                auto& buffer = storage.buffers[0];
+                switch (tt_dtype) {
+                    case DataType::UINT8: {
+                        return create_row_major_owned_buffer(
+                            std::move(owned_buffer::get_as<uint8_t>(buffer)), tensor_spec, padded_output);
+                    }
+                    case DataType::UINT16: {
+                        return create_row_major_owned_buffer(
+                            std::move(owned_buffer::get_as<uint16_t>(buffer)), tensor_spec, padded_output);
+                    }
+                    case DataType::INT32: {
+                        return create_row_major_owned_buffer(
+                            std::move(owned_buffer::get_as<int32_t>(buffer)), tensor_spec, padded_output);
+                    }
+                    case DataType::UINT32: {
+                        return create_row_major_owned_buffer(
+                            std::move(owned_buffer::get_as<uint32_t>(buffer)), tensor_spec, padded_output);
+                    }
+                    case DataType::FLOAT32: {
+                        return create_row_major_owned_buffer(
+                            std::move(owned_buffer::get_as<float>(buffer)), tensor_spec, padded_output);
+                    }
+                    case DataType::BFLOAT16: {
+                        return create_row_major_owned_buffer(
+                            std::move(owned_buffer::get_as<::bfloat16>(buffer)), tensor_spec, padded_output);
+                    }
+                    case DataType::BFLOAT8_B:
+                    case DataType::BFLOAT4_B: {
+                        const auto& tile = tensor_spec.tile();
+                        auto uint32_data = owned_buffer::get_as<std::uint32_t>(buffer).get();
                         auto float_unpacked_data =
                             tt_dtype == DataType::BFLOAT8_B
                                 ? unpack_bfp8_tiles_into_float_vec(
@@ -767,7 +818,7 @@ void pytensor_module(py::module& m_tensor) {
                           const std::array<uint32_t, 4>& shape,
                           DataType data_type,
                           Layout layout,
-                          IDevice* device,
+                          MeshDevice* device,
                           const std::optional<Tile>& tile) {
                 return Tensor::from_vector(
                     std::move(data),
@@ -821,7 +872,7 @@ void pytensor_module(py::module& m_tensor) {
                           const std::array<uint32_t, 4>& shape,
                           DataType data_type,
                           Layout layout,
-                          IDevice* device,
+                          MeshDevice* device,
                           const MemoryConfig& memory_config,
                           const std::optional<Tile>& tile) {
                 return Tensor::from_vector(
@@ -913,7 +964,7 @@ void pytensor_module(py::module& m_tensor) {
         .def(
             py::init<>([](const py::object& python_tensor,
                           std::optional<DataType> data_type,
-                          IDevice* device,
+                          MeshDevice* device,
                           Layout layout,
                           const MemoryConfig& mem_config,
                           const std::optional<Tile>& tile) {
@@ -997,7 +1048,7 @@ void pytensor_module(py::module& m_tensor) {
         .def(
             "to",
             py::overload_cast<MeshDevice*, const MemoryConfig&, QueueId>(&Tensor::to_device, py::const_),
-            py::arg("mesh_device").noconvert(),
+            py::arg("device").noconvert(),
             py::arg("mem_config").noconvert() = MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED},
             py::arg("cq_id") = ttnn::DefaultQueueId,
             py::keep_alive<0, 2>(),

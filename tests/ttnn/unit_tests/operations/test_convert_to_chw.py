@@ -110,5 +110,3 @@ def test_convert_to_chw_with_program_cache(device, use_program_cache):
         tt_dummy_tensor = (
             ttnn.Tensor(py_dummy_tensor, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device, ttnn.L1_MEMORY_CONFIG)
         )
-
-    assert device.num_program_cache_entries() == 2

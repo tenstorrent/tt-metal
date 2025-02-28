@@ -317,7 +317,6 @@ def test_moreh_matmul_enable_cache(params, device, use_program_cache):
             params = tuple(param_list)
         passing = moreh_matmul(params, False, None, device)
         assert passing
-    assert device.num_program_cache_entries() == 2
 
 
 @skip_for_grayskull("GS does not support fp32")

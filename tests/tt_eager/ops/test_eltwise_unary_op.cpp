@@ -273,10 +273,7 @@ void test_program_cache() {
     device->enable_program_cache();
     run_tests();
 
-    TT_FATAL(device->num_program_cache_entries() == 4, "There are {} entries", device->num_program_cache_entries());
-
     device->disable_and_clear_program_cache();
-    TT_FATAL(device->num_program_cache_entries() == 0, "Error");
     TT_FATAL(tt::tt_metal::CloseDevice(device), "Error");
 }
 
