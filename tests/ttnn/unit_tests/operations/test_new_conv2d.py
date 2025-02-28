@@ -60,7 +60,7 @@ def run_conv(
     use_shallow_conv_variant=False,
     fp32_accum=False,
     packer_l1_acc=False,
-    output_layout=ttnn.ROW_MAJOR_LAYOUT,
+    output_layout=ttnn.TILE_LAYOUT,
     deallocate_activation=False,
     debug=False,
     groups=1,
