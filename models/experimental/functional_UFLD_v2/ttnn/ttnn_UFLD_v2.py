@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+import math
 
 
 def p(x, b="x"):
@@ -44,17 +45,19 @@ class ttnn_UFLD_V2_Conv2D:
             packer_l1_acc=True,
             math_approx_mode=True,
         )
+        # if self.in_channels == 3:
+        #     activation_dtype = ttnn.bfloat8_b
         self.conv_config = ttnn.Conv2dConfig(
             dtype=activation_dtype,
             weights_dtype=weights_dtype,
-            shard_layout=shard_layout,
+            shard_layout=None,  # shard_layout,
             deallocate_activation=self.deallocate_activation,
             enable_act_double_buffer=False,
             enable_split_reader=False,
             enable_subblock_padding=False,
             reshard_if_not_optimal=True,
             activation=activation,
-            input_channels_alignment=16,
+            input_channels_alignment=32,
         )
         config_override = None
         if config_override and "act_block_h" in config_override:
@@ -107,21 +110,21 @@ class ttnn_Basic_Block:
                 self.conv_args.downsample[0], conv_pth.downsample, device=device, activation=""
             )
 
-    def __call__(self, device, input):
+    def __call__(self, device, input, bs=1):
         x_identity = input
         x, out_ht, out_wdth = self.conv1(input)
         if x.is_sharded():
             x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
-        x = ttnn.reshape(x, (1, out_ht, out_wdth, x.shape[-1]))  # RESHAPING FROM (1,1,NHW,C) TO (N,H,W,C) TO AVOID OOM
+        x = ttnn.reshape(x, (bs, out_ht, out_wdth, x.shape[-1]))  # RESHAPING FROM (1,1,NHW,C) TO (N,H,W,C) TO AVOID OOM
         x, out_ht, out_wdth = self.conv2(x)
         if x.is_sharded():
             x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
-        x = ttnn.reshape(x, (1, out_ht, out_wdth, x.shape[-1]))
+        x = ttnn.reshape(x, (bs, out_ht, out_wdth, x.shape[-1]))
         if self.is_downsample:
             x_identity, out_ht, out_wdth = self.downsample(input)
             if x_identity.is_sharded():
                 x_identity = ttnn.sharded_to_interleaved(x_identity, memory_config=ttnn.L1_MEMORY_CONFIG)
-                x_identity = ttnn.reshape(x_identity, (1, out_ht, out_wdth, x_identity.shape[-1]))
+                x_identity = ttnn.reshape(x_identity, (bs, out_ht, out_wdth, x_identity.shape[-1]))
         x = ttnn.add(x, x_identity, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.relu(x)
 
@@ -130,6 +133,7 @@ class ttnn_Basic_Block:
 
 class ttnn_Resnet_34:
     def __init__(self, conv_args, conv_pth, device):
+        self.conv_args = conv_args
         self.device = device
         self.conv1 = ttnn_UFLD_V2_Conv2D(conv_args.conv1, conv_pth.conv1, device=self.device, activation="relu")
         # layer-1
@@ -180,41 +184,51 @@ class ttnn_Resnet_34:
         )
 
     def __call__(self, x):  # [1, 320, 800, 3]
+        batch_size = x.shape[0]
+        print("resent batch size is", batch_size)
         x, out_ht, out_wdth = self.conv1(x)  # [1, 1, 64000, 64] #0.99974
+        k_size, stride, padding, dilation = (
+            self.conv_args.maxpool.kernel_size,
+            self.conv_args.maxpool.stride,
+            self.conv_args.maxpool.padding,
+            self.conv_args.maxpool.dilation,
+        )
         x = ttnn.max_pool2d(
             x,
-            batch_size=1,
+            batch_size=batch_size,
             input_h=out_ht,
             input_w=out_wdth,
             channels=x.shape[-1],
-            kernel_size=[3, 3],
-            stride=[2, 2],
-            padding=[1, 1],
-            dilation=[1, 1],
+            kernel_size=[k_size, k_size],
+            stride=[stride, stride],
+            padding=[padding, padding],
+            dilation=[dilation, dilation],
         )
         if x.is_sharded():
             x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
+        out_h = math.floor((out_ht + 2 * padding - (dilation * k_size - 1) - 1) / stride) + 1
+        out_w = math.floor((out_wdth + 2 * padding - (dilation * k_size - 1) - 1) / stride) + 1
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        x = ttnn.reshape(x, (1, 80, 200, x.shape[-1]))
-        x = self.layer1_0(device=self.device, input=x)
-        x = self.layer1_1(device=self.device, input=x)
-        x = self.layer1_2(device=self.device, input=x)
+        x = ttnn.reshape(x, (batch_size, out_h, out_w, x.shape[-1]))
+        x = self.layer1_0(device=self.device, input=x, bs=batch_size)
+        x = self.layer1_1(device=self.device, input=x, bs=batch_size)
+        x = self.layer1_2(device=self.device, input=x, bs=batch_size)
 
-        x = self.layer2_0(device=self.device, input=x)
-        x = self.layer2_1(device=self.device, input=x)
-        x = self.layer2_2(device=self.device, input=x)
-        x = self.layer2_3(device=self.device, input=x)
+        x = self.layer2_0(device=self.device, input=x, bs=batch_size)
+        x = self.layer2_1(device=self.device, input=x, bs=batch_size)
+        x = self.layer2_2(device=self.device, input=x, bs=batch_size)
+        x = self.layer2_3(device=self.device, input=x, bs=batch_size)
 
-        x = self.layer3_0(device=self.device, input=x)
-        x = self.layer3_1(device=self.device, input=x)
-        x = self.layer3_2(device=self.device, input=x)
-        x = self.layer3_3(device=self.device, input=x)
-        x = self.layer3_4(device=self.device, input=x)
-        x = self.layer3_5(device=self.device, input=x)
+        x = self.layer3_0(device=self.device, input=x, bs=batch_size)
+        x = self.layer3_1(device=self.device, input=x, bs=batch_size)
+        x = self.layer3_2(device=self.device, input=x, bs=batch_size)
+        x = self.layer3_3(device=self.device, input=x, bs=batch_size)
+        x = self.layer3_4(device=self.device, input=x, bs=batch_size)
+        x = self.layer3_5(device=self.device, input=x, bs=batch_size)
 
-        x = self.layer4_0(device=self.device, input=x)
-        x = self.layer4_1(device=self.device, input=x)
-        x = self.layer4_2(device=self.device, input=x)
+        x = self.layer4_0(device=self.device, input=x, bs=batch_size)
+        x = self.layer4_1(device=self.device, input=x, bs=batch_size)
+        x = self.layer4_2(device=self.device, input=x, bs=batch_size)
 
         return x
 
@@ -245,12 +259,17 @@ class ttnn_UFLD_V2:
         self.pool = ttnn_UFLD_V2_Conv2D(conv_args.pool, conv_pth.pool, activation="", device=device)
 
     def __call__(self, input):
+        batch_size = input.shape[0]
         fea = self.res_model(input)  # 0.998
         fea, out_h, out_w = self.pool(fea)  # 0.979
         if fea.is_sharded():
             fea = ttnn.sharded_to_interleaved(fea, ttnn.L1_MEMORY_CONFIG)
         fea = ttnn.permute(fea, (0, 3, 1, 2))
-        fea = ttnn.reshape(fea, (1, 2000))
+        p(fea, "spammm")
+        print("details are", (batch_size, (fea.shape[1] * fea.shape[2] * fea.shape[3] * fea.shape[0]) / batch_size))
+        fea = ttnn.reshape(
+            fea, (batch_size, int((fea.shape[1] * fea.shape[2] * fea.shape[3] * fea.shape[0]) / batch_size))
+        )
         out = ttnn.linear(
             fea,
             self.conv_pth.cls.linear_1.weight,

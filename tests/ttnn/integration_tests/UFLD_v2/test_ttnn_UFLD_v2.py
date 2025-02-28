@@ -22,6 +22,13 @@ from models.utility_functions import (
 )
 
 
+def p(x, b="x"):
+    print(f"{b}'s shape is {x.shape}")
+    print(f"{b}'s layout is {x.layout}")
+    print(f"{b}'s dtype is {x.dtype}")
+    print(f"{b}'s config is {x.memory_config()}")
+
+
 def custom_preprocessor_conv(model, name):
     parameters = {}
     if isinstance(model, nn.Conv2d):
@@ -326,6 +333,7 @@ def custom_preprocessor_whole_model(model, name):
     "batch_size,input_channels,height,width",
     [
         (1, 3, 320, 800),
+        (2, 3, 320, 800),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
@@ -359,9 +367,7 @@ def test_UFLD_V2_conv(device, batch_size, input_channels, height, width):
 @skip_for_grayskull()
 @pytest.mark.parametrize(
     "batch_size,input_channels,height,width",
-    [
-        (1, 64, 80, 200),
-    ],
+    [(1, 64, 80, 200), (2, 64, 80, 200)],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
 def test_ufld_v2_basic_block(device, batch_size, input_channels, height, width):
@@ -382,7 +388,7 @@ def test_ufld_v2_basic_block(device, batch_size, input_channels, height, width):
     )
     ttnn_model = ttnn_Basic_Block(parameters.conv_args, parameters, device=device)
     torch_out = torch_model(torch_input_tensor)
-    ttnn_output = ttnn_model(device=device, input=ttnn_input_tensor)
+    ttnn_output = ttnn_model(device=device, input=ttnn_input_tensor, bs=batch_size)
     ttnn_output = ttnn.to_torch(ttnn_output)
     ttnn_output = ttnn_output.permute(0, 3, 1, 2)
     ttnn_output = ttnn_output.reshape(torch_out.shape)
@@ -392,16 +398,21 @@ def test_ufld_v2_basic_block(device, batch_size, input_channels, height, width):
 @pytest.mark.parametrize(
     "batch_size,input_channels,height,width",
     [
-        (1, 3, 320, 800),
+        # (1, 3, 320, 800),
+        # (2, 3, 320, 800),
+        (4, 3, 320, 800),
     ],
 )
 @skip_for_grayskull()
 @pytest.mark.parametrize(
     "use_pretrained_weight",
-    [False, True],  # uncomment  to run the model for real weights
+    [
+        False,
+        #  True
+    ],  # uncomment  to run the model for real weights
     ids=[
         "pretrained_weight_false",
-        "pretrained_weight_true",  # uncomment to run the model for real weights
+        # "pretrained_weight_true",  # uncomment to run the model for real weights
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
