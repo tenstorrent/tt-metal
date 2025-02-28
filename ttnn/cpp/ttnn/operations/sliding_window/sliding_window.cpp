@@ -346,6 +346,131 @@ uint32_t generate_max_out_nsticks_per_core(const std::vector<ShardBoundary>& sha
     return max_out_nsticks_per_core;
 }
 
+using GatherRun = std::tuple<uint32_t, uint32_t, uint32_t>;
+using PerCoreGatherData = std::map<std::pair<uint32_t, uint32_t>, std::vector<GatherRun>>;
+using ReblockedData = std::map<std::pair<uint32_t, uint32_t>, std::map<uint32_t, std::vector<GatherRun>>>;
+
+/**
+ * @brief Splits each run (src_start, dst_start, length) into block-sized chunks.
+ *
+ * If a run crosses the boundary between block i and block i+1 (e.g., block size = 32),
+ * it gets split into multiple smaller runs.
+ */
+ReblockedData reblock_per_core_gather_data(const PerCoreGatherData& per_core_gather_data, uint32_t block_size) {
+    ReblockedData block_data;
+    for (const auto& [core_src_dst, step] : per_core_gather_data) {
+        for (const auto& [src_start, dst_start, len] : step) {
+            uint32_t src_offset = src_start;
+            uint32_t dst_offset = dst_start;
+            uint32_t length = len;
+            while (length > 0) {
+                const uint32_t block_id = src_offset / block_size;
+                const uint32_t offset_in_block = src_offset % block_size;
+                const uint32_t remaining_space_in_block = block_size - offset_in_block;
+                const uint32_t transfer_size = (length <= remaining_space_in_block ? length : remaining_space_in_block);
+
+                block_data[core_src_dst][block_id].push_back({offset_in_block, dst_offset, transfer_size});
+
+                src_offset += transfer_size;
+                dst_offset += transfer_size;
+                length -= transfer_size;
+            }
+        }
+    }
+    return block_data;
+}
+
+inline std::vector<std::pair<uint32_t, uint32_t>> expand_runs(const std::vector<GatherRun>& runs) {
+    std::vector<std::pair<uint32_t, uint32_t>> out;
+    for (auto& [src_start, dst_start, length] : runs) {
+        for (uint32_t i = 0; i < length; i++) {
+            out.push_back({src_start + i, dst_start + i});
+        }
+    }
+    return out;
+}
+
+bool validate_reblocked_data(const PerCoreGatherData& original, const ReblockedData& reblocked, uint32_t block_size) {
+    for (const auto& kv : original) {
+        auto src_dst = kv.first;
+        const auto& original_runs = kv.second;
+
+        std::vector<std::pair<uint32_t, uint32_t>> original_pairs = expand_runs(original_runs);
+
+        std::vector<GatherRun> reconstructed_runs;
+
+        // See if we have an entry in 'reblocked' for this key
+        auto it = reblocked.find(src_dst);
+        if (it == reblocked.end()) {
+            // If the original had runs for (src_core,dst_core) but reblocked does not, that's invalid
+            if (!original_runs.empty()) {
+                std::cerr << "Missing reblocked entry for src_dst=(" << src_dst.first << "," << src_dst.second << ")\n";
+                return false;
+            } else {
+                continue;  // no runs originally, so that's fine
+            }
+        }
+
+        for (auto& block_kv : it->second) {
+            uint32_t block_id = block_kv.first;
+            const auto& block_runs = block_kv.second;
+
+            for (auto& [offset_in_block, dst_start, length] : block_runs) {
+                if (offset_in_block + length > block_size) {
+                    std::cerr << "Block boundary violation for block_id=" << block_id
+                              << " offset_in_block=" << offset_in_block << " length=" << length
+                              << " block_size=" << block_size << " (src_core=" << src_dst.first
+                              << ", dst_core=" << src_dst.second << ")\n";
+                    return false;
+                }
+
+                uint32_t absolute_src_start = block_id * block_size + offset_in_block;
+                reconstructed_runs.push_back(GatherRun(absolute_src_start, dst_start, length));
+            }
+        }
+
+        std::vector<std::pair<uint32_t, uint32_t>> reblocked_pairs = expand_runs(reconstructed_runs);
+
+        auto pair_sort_lambda = [](auto& a, auto& b) {
+            if (a.first == b.first) {
+                return a.second < b.second;
+            }
+            return a.first < b.first;
+        };
+
+        std::sort(original_pairs.begin(), original_pairs.end(), pair_sort_lambda);
+        std::sort(reblocked_pairs.begin(), reblocked_pairs.end(), pair_sort_lambda);
+
+        if (original_pairs.size() != reblocked_pairs.size()) {
+            std::cerr << "Mismatch in pair counts for src_dst=(" << src_dst.first << "," << src_dst.second << ")\n"
+                      << " original pairs=" << original_pairs.size() << ", reblocked pairs=" << reblocked_pairs.size()
+                      << "\n";
+            return false;
+        }
+
+        for (size_t i = 0; i < original_pairs.size(); i++) {
+            if (original_pairs[i] != reblocked_pairs[i]) {
+                std::cerr << "Pair mismatch at index " << i << " for src_dst=(" << src_dst.first << ","
+                          << src_dst.second << ")\n"
+                          << " original=(" << original_pairs[i].first << "," << original_pairs[i].second << ") "
+                          << " reblocked=(" << reblocked_pairs[i].first << "," << reblocked_pairs[i].second << ")\n";
+                return false;
+            }
+        }
+    }
+
+    // Also check if 'reblocked' has extraneous keys that aren't in original
+    for (const auto& kv : reblocked) {
+        auto src_dst = kv.first;
+        if (original.find(src_dst) == original.end()) {
+            // If reblocked has a key that original doesn't have thats invalid
+            std::cerr << "Extra reblocked entry for src_dst=(" << src_dst.first << "," << src_dst.second << ")\n";
+            return false;
+        }
+    }
+    return true;
+}
+
 std::tuple<std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>>
 generate_halo_kernel_config_tensors(
     const std::vector<PixelMetadata>& tensor_metadata,
@@ -391,6 +516,14 @@ generate_halo_kernel_config_tensors(
         }
         ++core_id;
     }
+
+    tt::log_info("per core gather data = {}", per_core_gather_data);
+
+    auto output = reblock_per_core_gather_data(per_core_gather_data, 32);
+    auto is_valid = validate_reblocked_data(per_core_gather_data, output, 32);
+    TT_FATAL(is_valid, "wasnt valid");
+
+    tt::log_info("reblocked per core gather data (valid? {}) -> {}", is_valid, output);
 
     // construct the config tensors
     /**
@@ -765,4 +898,9 @@ auto fmt::formatter<ttnn::operations::sliding_window::ShardBoundary>::format(
         t.output_range.end,
         t.input_range.start,
         t.input_range.end);
+}
+
+auto fmt::formatter<ttnn::operations::sliding_window::PixelMetadata>::format(
+    const ttnn::operations::sliding_window::PixelMetadata& t, format_context& ctx) const -> format_context::iterator {
+    return fmt::format_to(ctx.out(), "[{}, ({}, {})]", t.is_pad, t.src_core_id, t.src_local_idx);
 }

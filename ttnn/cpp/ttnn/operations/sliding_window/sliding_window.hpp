@@ -166,3 +166,9 @@ struct fmt::formatter<ttnn::operations::sliding_window::ShardBoundary> : formatt
     auto format(const ttnn::operations::sliding_window::ShardBoundary& t, fmt::format_context& ctx) const
         -> format_context::iterator;
 };
+
+template <>
+struct fmt::formatter<ttnn::operations::sliding_window::PixelMetadata> : formatter<string_view> {
+    auto format(const ttnn::operations::sliding_window::PixelMetadata& t, fmt::format_context& ctx) const
+        -> format_context::iterator;
+};
