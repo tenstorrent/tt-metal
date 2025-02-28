@@ -160,8 +160,8 @@ CoordSystem metal_SocDescriptor::get_umd_coord_system() const {
 }
 
 void metal_SocDescriptor::generate_logical_eth_coords_mapping() {
-    for (int i = 0; i < this->get_cores(CoreType::ETH).size(); i++) {
-        this->logical_eth_core_to_chan_map.insert({{0, i}, i});
+    for (const auto& logical_coord : this->get_cores(CoreType::ETH, CoordSystem::LOGICAL)) {
+        this->logical_eth_core_to_chan_map.insert({{logical_coord.x, logical_coord.y}, logical_coord.y});
     }
 }
 
