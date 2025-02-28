@@ -430,14 +430,14 @@ def test_pad_for_tensor_in_tile_layout(device, h, w, padding, value):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
 
 
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bfloat16"])
-@pytest.mark.parametrize("use_multicore", [True], ids=["multicore"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bfloat16", "float32"])
+@pytest.mark.parametrize("use_multicore", [True, False], ids=["multicore", "singlecore"])
 @pytest.mark.parametrize(
     "shape, padded_shape",
     [
         [[1392, 1392, 3, 3], [1408, 1408, 3, 3]],
-        # [[32,32, 3, 3], [64, 64, 3, 3]],
-        # [[3, 3, 1392,1392], [3, 3, 1408, 1408]]
+        [[32, 32, 3, 3], [64, 64, 3, 3]],
+        [[3, 3, 1392, 1392], [3, 3, 1408, 1408]],
     ],
 )
 def test_pad_conv2d_sweep(device, dtype, use_multicore, shape, padded_shape):
