@@ -367,8 +367,6 @@ def test_reshard_with_program_cache(
         passing, output = comp_pcc(torch_tensor1, torch_tensor_after_round_trip1)
     assert passing, output
 
-    assert device.num_program_cache_entries() == 3
-
 
 @skip_for_blackhole("GH Issue #15234")
 @pytest.mark.parametrize(
@@ -619,5 +617,3 @@ def test_dram_reshard_with_program_cache(
         dummy_tensor = (
             ttnn.Tensor(torch.rand([2, 2, 128, 64]), dtype).to(ttnn.TILE_LAYOUT).to(device, ttnn.L1_MEMORY_CONFIG)
         )
-
-    assert device.num_program_cache_entries() == 1

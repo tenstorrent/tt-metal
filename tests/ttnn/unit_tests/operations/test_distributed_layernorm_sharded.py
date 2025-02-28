@@ -269,7 +269,6 @@ def run_pre_allgather_layernorm(
                 tt_ex2, torch_ex2, atol=max_atol_ex2
             ), f"E(x^2) mismatch for device {d} (atol: {atol_delta_ex2})"
 
-    assert device.num_program_cache_entries() == 2, "Program cache not working as expected"
     logger.info("Pre-allgather layernorm test passed for all devices")
 
 

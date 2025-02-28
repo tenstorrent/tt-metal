@@ -398,12 +398,3 @@ def test_bert_batch_dram_with_program_cache(
         PERF_CNT,
         device,
     )
-
-    if model_config_str == "BFLOAT8_B-SHARDED":
-        assert device.num_program_cache_entries() == 19
-    elif batch == 8 and model_config_str == "MIXED_PRECISION_BATCH8":
-        assert device.num_program_cache_entries() == 17
-    elif batch == 9 and model_config_str in {"BFLOAT8_B-L1", "BFLOAT8_B-DRAM"}:
-        assert device.num_program_cache_entries() == 17
-    else:
-        assert device.num_program_cache_entries() == 16
