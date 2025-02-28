@@ -121,7 +121,7 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
     });
 
     std::thread t1([&]() {
-        std::vector<uint32_t> host_data(tensor_shape.volume());
+        std::vector<uint32_t> expected_readback_data(tensor_shape.volume());
         for (int j = 0; j < kNumIterations; j++) {
             ttnn::event_synchronize(write_event);
             write_event = std::make_shared<Event>();
@@ -129,8 +129,9 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
             // Read back from device and verify
             const Tensor readback_tensor = device_tensor.cpu(/*blocking=*/true, read_cq);
             EXPECT_FALSE(is_tensor_on_device(readback_tensor));
-            std::iota(host_data.begin(), host_data.end(), j);
-            EXPECT_THAT(readback_tensor.to_vector<uint32_t>(), Pointwise(Eq(), host_data)) << "At iteration " << j;
+            std::iota(expected_readback_data.begin(), expected_readback_data.end(), j);
+            EXPECT_THAT(readback_tensor.to_vector<uint32_t>(), Pointwise(Eq(), expected_readback_data))
+                << "At iteration " << j;
 
             ttnn::record_event(device->command_queue(*read_cq), read_event);
         }
