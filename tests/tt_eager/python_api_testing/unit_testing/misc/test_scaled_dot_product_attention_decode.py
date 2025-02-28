@@ -1294,3 +1294,48 @@ def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dty
 def test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, use_program_cache):
     ttnn.device.DisablePersistentKernelCache()
     run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype)
+
+
+@skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
+@pytest.mark.parametrize(
+    "kv_dtype, q_dtype",
+    [
+        [ttnn.bfloat16, ttnn.bfloat16],
+    ],
+    ids=[
+        "all_bfp16",
+    ],
+)
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d, grid_size, cur_pos_tensor",
+    (
+        [1, 32, 1, 16 * 1024, 128, (1, 1), True],
+        [1, 32, 1, 64 * 1024, 128, (4, 1), True],
+        [1, 32, 2, 64 * 1024, 128, (8, 1), True],
+        [1, 32, 4, 64 * 1024, 128, (8, 2), True],
+        [1, 32, 8, 64 * 1024, 128, (8, 4), True],
+    ),
+)
+@pytest.mark.parametrize("block_size", (64, 128), ids=["paged_64", "paged_128"])
+def test_sdpa_decode_paged_attention_colman(
+    device, b, nh, nkv, s, d, kv_dtype, grid_size, q_dtype, cur_pos_tensor, block_size, use_program_cache
+):
+    if s == 128 * 1024 and block_size != 64:
+        # 128k sequence, block_size 64 tests the sizing of the page table CB
+        pytest.skip("Skipping test for seq_len=128k with block_size!=64")
+    ttnn.device.DisablePersistentKernelCache()
+    run_test_sdpa_decode_paged_attention(
+        device,
+        b,
+        nh,
+        nkv,
+        s,
+        d,
+        kv_dtype,
+        grid_size,
+        q_dtype,
+        cur_pos_tensor,
+        block_size=block_size,
+        sharded_in=True,
+        sharded_out=False,
+    )
