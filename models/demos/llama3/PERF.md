@@ -53,7 +53,7 @@ This configuration uses bfp4 MLP FF1+FF3 only for the 3.1-70B model.
 | 70b   | T3K    | 95        | 99        | 14.7          |
 | 70b   | TG     | 95        | 100       | 12.7          |
 
-## LlamaOptimizations.ff1_3_bfp4_lofi_ff2_bfp4_lofi
+## LlamaOptimizations.ff1_bfp4_lofi_ff2_bfp4_lofi_ff3_bfp4_lofi
 
 | Model | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) |
 |-------|--------|-----------|-----------|---------------|
@@ -75,7 +75,7 @@ This configuration uses bfp4 MLP FF1+FF3 only for the 3.1-70B model.
 | 70b   | T3K    | N/A       | N/A       | N/A           |
 | 70b   | TG     | N/A       | N/A       | N/A           |
 
-## LlamaOptimizations.ff1_3_bfp4_lofi_ff2_bfp8_hifi2
+## LlamaOptimizations.ff1_bfp4_lofi_ff2_bfp8_ff3_bfp4_hifi2
 
 | Model | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) |
 |-------|--------|-----------|-----------|---------------|

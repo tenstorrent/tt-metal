@@ -13,14 +13,14 @@ from models.demos.llama3.tt.llama_common import (
     PagedAttentionConfig,
 )
 from models.demos.llama3.tt.llama_model import TtTransformer
-from models.demos.llama3.tt.model_config import TtModelArgs, LlamaOptimizations
+from models.demos.llama3.tt.model_config import TtModelArgs, LlamaOptimizations, DecodersPrecision
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.demos.llama3.demo.demo import preprocess_inputs_prefill
 from pathlib import Path
 from models.demos.llama3.tests.optimizations_conf import precision_conf
 
 
-def get_accuracy_thresholds(model_name: str, device_name: str, optimizations: LlamaOptimizations):
+def get_accuracy_thresholds(model_name: str, device_name: str, optimizations: DecodersPrecision):
     """Parse accuracy thresholds from PERF.md for the given model, optimization mode, and device."""
     # Get model size (e.g., "1b", "3b", etc.)
     model_size = model_name.split("-")[1].lower()
@@ -32,7 +32,8 @@ def get_accuracy_thresholds(model_name: str, device_name: str, optimizations: Ll
 
     # Split into sections based on optimization mode
     sections = content.split("## ")
-    target_section = next(s for s in sections if s.startswith(f"LlamaOptimizations.{optimizations.__name__}\n"))
+    fist_decoder_conf = optimizations.decoder_optimizations[0]
+    target_section = next(s for s in sections if s.startswith(f"LlamaOptimizations.{fist_decoder_conf.__name__}\n"))
 
     # Parse the table and find the row for our model and device
     rows = [

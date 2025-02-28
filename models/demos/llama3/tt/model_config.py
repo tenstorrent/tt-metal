@@ -38,7 +38,7 @@ class LayerGroup(Enum):
 
 class LlamaOptimizations:
     @classmethod
-    def accuracy(cls, model_name):
+    def accuracy(cls, model_name=None):
         """Configuration optimized for accuracy
         Only 3.1-70B uses bfp4 MLPs in this configuration
         """
@@ -50,13 +50,16 @@ class LlamaOptimizations:
         return inst
 
     @classmethod
-    def performance(cls, model_name):
+    def performance(cls, model_name=None):
         """Configuration optimized for performance
         All models use bfp4 MLPs in this configuration
         """
         inst = cls({LayerGroup.FF1: PrecisionSetting.BFP4_LOFI, LayerGroup.FF3: PrecisionSetting.BFP4_LOFI})
         inst.__name__ = "performance"
         return inst
+
+    def get_layer_precision(self, layer: LayerGroup):
+        return self.layer_settings.get(layer, PrecisionSetting.BFP8_HIFI2)
 
     def __init__(self, layer2precision: dict = None):
         self.layer_settings = self._default_layer_settings()
@@ -69,6 +72,18 @@ class LlamaOptimizations:
             LayerGroup.FF2: PrecisionSetting.BFP8_HIFI2,
             LayerGroup.FF3: PrecisionSetting.BFP8_HIFI2,
         }
+
+
+class DecodersPrecision:
+    def __init__(self, num_decoders, decoder_conf: dict = LlamaOptimizations.accuracy()):
+        self.decoder_optimizations = {decoder_id: decoder_conf for decoder_id in range(num_decoders)}
+        self.__name__ = "tmp"
+
+    def set_decoder_conf(self, decoder_id, conf: LlamaOptimizations):
+        self.decoder_optimizations[decoder_id] = conf
+
+    def get_precision(self, decoder_id, layer: LayerGroup):
+        return self.decoder_optimizations[decoder_id].get_layer_precision(layer)
 
 
 class TtModelArgs:
@@ -112,7 +127,7 @@ class TtModelArgs:
         dummy_weights=False,
         max_batch_size=1,
         max_seq_len=1024 * 128,
-        optimizations=LlamaOptimizations.accuracy,
+        optimizations=None,
     ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
@@ -197,11 +212,6 @@ class TtModelArgs:
             max_prefill_chunk_size_div1024 is not None
         ), f"Unsupported model {self.model_name} on device {self.device_name}"
         self.max_prefill_chunk_size = max_prefill_chunk_size_div1024 * 1024
-
-        if callable(optimizations):
-            self.optimizations = optimizations(self.model_name)
-        else:
-            self.optimizations = optimizations
 
         # Load model params
         if not dummy_weights:
@@ -297,16 +307,9 @@ class TtModelArgs:
             )
 
             # Configure data precision and math fidelity for kernels
-            self.model_config["COMPUTE_KERNEL_CONFIG_HIFI2"] = self.compute_kernel_config_hifi2
-            precision_setting_lookup = {
-                PrecisionSetting.BFP4_LOFI: (ttnn.bfloat4_b, self.compute_kernel_config_lofi),
-                PrecisionSetting.BFP8_HIFI2: (ttnn.bfloat8_b, self.compute_kernel_config_hifi2),
-                PrecisionSetting.BF16_HIFI4: (ttnn.bfloat16, self.compute_kernel_config_hifi4),
-            }
-            for layer, precision in self.optimizations.layer_settings.items():
-                dtype, kernel_cfg = precision_setting_lookup[precision]
-                self.model_config[f"{layer.value.upper()}_DTYPE"] = dtype
-                self.model_config[f"{layer.value.upper()}_COMPUTE_KERNEL_CFG"] = kernel_cfg
+            if optimizations is None:
+                optimizations = DecodersPrecision(num_decoders=self.n_layers)
+            self.model_config["DECODERS_OPTIMIZATIONS"] = optimizations
 
             # Create memory config for sharded tensors
             residual_grid = self.dram_shard_core_grid_for_k(self.dim // self.num_devices)

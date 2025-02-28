@@ -6,14 +6,55 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.llama3.tt.llama_ccl import tt_all_reduce
+from models.demos.llama3.tt.model_config import LayerGroup, PrecisionSetting
 
 
 class TtLlamaMLP(LightweightModule):
+    def _get_dtype_and_kernel(self, layer_num, layer: LayerGroup):
+        precision = self.model_config["DECODERS_OPTIMIZATIONS"].get_precision(layer_num, layer)
+        precision_setting_lookup = {
+            PrecisionSetting.BFP4_LOFI: (ttnn.bfloat4_b, self.compute_kernel_config_lofi),
+            PrecisionSetting.BFP8_HIFI2: (ttnn.bfloat8_b, self.compute_kernel_config_hifi2),
+            PrecisionSetting.BF16_HIFI4: (ttnn.bfloat16, self.compute_kernel_config_hifi4),
+        }
+        return precision_setting_lookup[precision]
+
     def __init__(
         self, mesh_device, args, state_dict, weight_cache_path, layer_num, dtype, model_config, state_dict_prefix=None
     ):
         super().__init__()
-
+        # Compute kernels. FP32 acc does not appear to be needed for accuracy in model tests or demo runs.
+        self.compute_kernel_config_lofi = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+        self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+        self.compute_kernel_config_hifi2_fp16 = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+        self.compute_kernel_config_hifi4 = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+        # NOTE: compute_kernel_config_sdpa seems not used in the any of the model files
+        self.compute_kernel_config_sdpa = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
         self.state_dict = state_dict
         self.mesh_device = mesh_device
         self.args = args
@@ -49,11 +90,19 @@ class TtLlamaMLP(LightweightModule):
         w1_dim = (-1, -2) if args.is_galaxy else (-2, -1)
         w2_dim = (-2, -1) if args.is_galaxy else (-1, -2)
 
+        w1_dtype, w1_kernel = self._get_dtype_and_kernel(layer_num, LayerGroup.FF1)
+        w2_dtype, w2_kernel = self._get_dtype_and_kernel(layer_num, LayerGroup.FF2)
+        w3_dtype, w3_kernel = self._get_dtype_and_kernel(layer_num, LayerGroup.FF3)
+
+        self.model_config["FF1_COMPUTE_KERNEL_CFG"] = w1_kernel
+        self.model_config["FF2_COMPUTE_KERNEL_CFG"] = w2_kernel
+        self.model_config["FF3_COMPUTE_KERNEL_CFG"] = w3_kernel
+
         self.w1 = as_sharded_tensor(
-            "w1_sharded", self.model_config["FF1_DTYPE"], dim=w1_dim
+            "w1_sharded", w1_dtype, dim=w1_dim
         )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
-        self.w2 = as_sharded_tensor("w2_sharded", self.model_config["FF2_DTYPE"], dim=w2_dim)
-        self.w3 = as_sharded_tensor("w3_sharded", self.model_config["FF3_DTYPE"], dim=w1_dim)
+        self.w2 = as_sharded_tensor("w2_sharded", w2_dtype, dim=w2_dim)
+        self.w3 = as_sharded_tensor("w3_sharded", w3_dtype, dim=w1_dim)
 
     def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
         """
