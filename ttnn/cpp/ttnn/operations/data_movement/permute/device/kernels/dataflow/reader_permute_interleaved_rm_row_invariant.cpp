@@ -4,7 +4,14 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "permute_struct.hpp"
+
+struct PermuteReaderStruct {
+    bool src_is_dram;
+    uint32_t input_rm_page_size;
+
+    constexpr PermuteReaderStruct(bool src_is_dram, uint32_t input_rm_page_size) :
+        src_is_dram(src_is_dram), input_rm_page_size(input_rm_page_size) {}
+};
 
 void kernel_main() {
     constexpr auto PermuteReaderArgs = PERMUTE_READER_STRUCT;
