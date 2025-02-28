@@ -14,6 +14,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/tt_align.hpp>
 
+static const uint32_t max_read_size = 2048;  // max read size in bytes for reader and writer kernels
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
@@ -724,7 +725,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
 
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores_total);
 
-    uint32_t max_read_size = 2048;
+    // uint32_t max_read_size = 2048;
     auto& front_pad = input_tensor_start;
     uint32_t curr_c = 0, curr_h = 0, curr_n = 0;
     for (uint32_t i = 0, curr_sticks_read = 0, curr_sticks_write = 0; i < num_cores_total; i++) {
@@ -792,6 +793,23 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     return ret_val;
 }
 
+uint32_t get_read_write_cb_size_all_cores(
+    const Tensor& input_tensor,
+    const uint32_t& num_w_sticks_per_core_group_1,
+    const uint32_t& num_w_sticks_per_core_group_2) {
+    uint32_t W = input_tensor.get_padded_shape()[3];
+    uint32_t W_bytes = W * input_tensor.element_size();
+    uint32_t num_sticks_per_core_read_g1 =
+        tt::tt_metal::merge_num_sticks_to_read(num_w_sticks_per_core_group_1, W_bytes, max_read_size);
+    uint32_t num_read_per_barrier1 = num_w_sticks_per_core_group_1 / num_sticks_per_core_read_g1;
+    uint32_t num_sticks_per_core_read_g2 =
+        tt::tt_metal::merge_num_sticks_to_read(num_w_sticks_per_core_group_2, W_bytes, max_read_size);
+    uint32_t num_read_per_barrier2 = num_w_sticks_per_core_group_2 / num_sticks_per_core_read_g2;
+    std::cout << "num_read_per_barrier1: " << num_read_per_barrier1 << std::endl;
+    std::cout << "num_read_per_barrier2: " << num_read_per_barrier2 << std::endl;
+    return num_read_per_barrier1 * num_read_per_barrier2 * 2;
+}
+
 operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
     const Tensor& a,
     Tensor& output,
@@ -815,6 +833,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
     auto stick_size_padded_front = front_pad[-1] * a.element_size();
     auto stick_size_padded_end = stick_size_padded - stick_size - stick_size_padded_front;
     uint32_t stick_size_padded_aligned = tt::align(stick_size_padded, hal.get_alignment(HalMemType::L1));
+    uint32_t stick_size_padded_DRAM_aligned = tt::align(stick_size_padded, hal.get_alignment(HalMemType::DRAM));
     uint32_t row_major_min_bytes = 16;
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
@@ -851,16 +870,16 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
 
     uint32_t src1_cb_index = tt::CBIndex::c_1;
     tt::tt_metal::CircularBufferConfig cb_src1_config =
-        tt::tt_metal::CircularBufferConfig(stick_size_padded_aligned, {{src1_cb_index, cb_data_format}})
-            .set_page_size(src1_cb_index, stick_size_padded_aligned);
+        tt::tt_metal::CircularBufferConfig(stick_size_padded_DRAM_aligned, {{src1_cb_index, cb_data_format}})
+            .set_page_size(src1_cb_index, stick_size_padded_DRAM_aligned);
     auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
 
     bool unaligned = stick_size_padded_aligned % hal.get_alignment(HalMemType::DRAM) != 0;
     if (stick_size_padded_front != 0 || unaligned) {
         uint32_t src2_cb_index = tt::CBIndex::c_2;
         tt::tt_metal::CircularBufferConfig cb_src2_config =
-            tt::tt_metal::CircularBufferConfig(stick_size_padded_aligned, {{src2_cb_index, cb_data_format}})
-                .set_page_size(src2_cb_index, stick_size_padded_aligned);
+            tt::tt_metal::CircularBufferConfig(stick_size_padded_DRAM_aligned, {{src2_cb_index, cb_data_format}})
+                .set_page_size(src2_cb_index, stick_size_padded_DRAM_aligned);
         auto cb_src2 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src2_config);
     }
 
@@ -932,7 +951,6 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
         core_group_2,
         num_sticks_padded_per_core_group_2);
 
-    uint32_t max_num_read_per_barrier = 0;
     for (uint32_t i = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args[i].first);
@@ -941,11 +959,13 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
             program, writer_kernel_id, core, all_runtime_args[i].second
 
         );
-        max_num_read_per_barrier = std::max(max_num_read_per_barrier, all_runtime_args[i].first[2]);
     }
+    uint32_t cb_npages =
+        get_read_write_cb_size_all_cores(a, num_sticks_padded_per_core_group_1, num_sticks_padded_per_core_group_2);
+    std::cout << "cb_npages: " << cb_npages << std::endl;
+    std::cout << "stick_size_padded_aligned: " << stick_size_padded_aligned << std::endl;
     tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(
-            max_num_read_per_barrier * stick_size_padded_aligned, {{src0_cb_index, cb_data_format}})
+        tt::tt_metal::CircularBufferConfig(cb_npages * stick_size_padded_aligned, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, stick_size_padded_aligned);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
