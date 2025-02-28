@@ -164,6 +164,7 @@ def test_fast_reduce_nc_with_prgm_caching(dims, device, use_program_cache):
         logger.debug(f"Output pcc={output_pcc}")
 
         assert passing
+        assert device.num_program_cache_entries() == len(dims) + 1
 
     input_shape_2 = [1, 8, 32, 32]
     output_shape_2 = input_shape_2.copy()
@@ -189,3 +190,4 @@ def test_fast_reduce_nc_with_prgm_caching(dims, device, use_program_cache):
         logger.debug(f"Output pcc={output_pcc}")
 
         assert passing
+        assert device.num_program_cache_entries() == 2 * len(dims) + 1

@@ -223,8 +223,10 @@ def test_moreh_linear_enable_cache(shapes, device, use_program_cache):
         assert passing
         torch_dummy = torch.randn([32, 32])
         tt_dummy = to_ttnn(torch_dummy, device=device)
-        num_program_cache_entries_list.append(0)
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert num_program_cache_entries_list[0] > 0
+    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
 def moreh_linear_backward(
@@ -384,8 +386,10 @@ def test_moreh_linear_backward_enable_cache(shapes, device, use_program_cache):
         assert passing
         torch_dummy = torch.randn([32, 32])
         tt_dummy = to_ttnn(torch_dummy, device=device)
-        num_program_cache_entries_list.append(0)
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert num_program_cache_entries_list[0] > 0
+    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
 @skip_for_grayskull("GS does not support fp32")

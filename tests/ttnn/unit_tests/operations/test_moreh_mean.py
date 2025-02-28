@@ -195,8 +195,10 @@ def test_moreh_mean_callback(input_shape_dim, device, use_program_cache):
         run_moreh_mean(input_shape_dim, device, keepdim=True)
         torch_dummy = torch.randn([32, 32])
         ttnn_dummy = ttnn.from_torch(torch_dummy, device=device)
-        num_program_cache_entries_list.append(0)
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert num_program_cache_entries_list[0] > 0
+    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
 @pytest.mark.parametrize(
@@ -264,8 +266,10 @@ def test_moreh_mean_backward_callback(input_shape_dim, device, use_program_cache
         run_moreh_mean_backward(input_shape_dim, device, keepdim=True)
         torch_dummy = torch.randn([32, 32])
         ttnn_dummy = ttnn.from_torch(torch_dummy, device=device)
-        num_program_cache_entries_list.append(0)
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert num_program_cache_entries_list[0] > 0
+    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
 @pytest.mark.parametrize(

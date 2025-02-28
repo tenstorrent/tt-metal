@@ -123,6 +123,7 @@ def test_softmax_stable_with_program_cache(
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+    assert device.num_program_cache_entries() == 1
 
 
 def run_softmax_sharded_stable(
@@ -220,6 +221,7 @@ def test_softmax_sharded_stable_with_program_cache(
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+    assert device.num_program_cache_entries() == 1
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])

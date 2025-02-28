@@ -184,3 +184,5 @@ def test_ssm_prefix_scan_with_program_cache(device, use_program_cache):
         run_ssm_prefix_scan(L, E, N, num_cores, dtype, device)
         py_dummy_tensor = torch.randn(dummy_shape)
         tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype).to(ttnn.TILE_LAYOUT).to(device, dummy_memory_config)
+
+    assert device.num_program_cache_entries() == 1

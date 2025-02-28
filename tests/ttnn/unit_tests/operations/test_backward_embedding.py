@@ -120,3 +120,5 @@ def test_embedding_bw_with_program_cache(
 
         logger.debug(comp_out)
         assert comp_pass
+
+    assert device.num_program_cache_entries() == 1

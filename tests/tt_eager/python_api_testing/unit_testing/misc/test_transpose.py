@@ -52,6 +52,9 @@ def transpose(
     logger.info(output)
     assert passing
 
+    if expected_program_cache_size != None:
+        assert device.num_program_cache_entries() == expected_program_cache_size
+
 
 @pytest.mark.parametrize(
     "dtype",
@@ -383,6 +386,7 @@ def test_transpose_hw_rm_with_program_cache(device, n, c, h, w, use_program_cach
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+    assert device.num_program_cache_entries() == 1
 
 
 @skip_for_blackhole("Mismatching on BH, see #12349")
@@ -474,6 +478,7 @@ def test_transpose_hw_sharded_rm_with_program_cache(device, n, c, h, w, use_prog
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+    assert device.num_program_cache_entries() == 3
 
 
 @pytest.mark.parametrize("n", [16])
@@ -534,6 +539,7 @@ def test_transpose_hc_rm_with_program_cache(device, n, c, h, w, use_program_cach
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+    assert device.num_program_cache_entries() == 1
 
 
 def run_transpose_hc_sharded(device, n, c, h, w, grid_size):
@@ -595,6 +601,7 @@ def test_transpose_hc_sharded_with_program_cache(device, n, c, h, w, grid_size, 
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+    assert device.num_program_cache_entries() == 3
 
 
 @pytest.mark.parametrize(

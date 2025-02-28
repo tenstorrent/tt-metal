@@ -111,6 +111,11 @@ def test_full_like_callback(device, input_shape, fill_value, layout, use_program
         tt_output = ttnn.moreh_full_like(tt_input, fill_value)
         assert ttnn.is_tensor_storage_on_device(tt_output)
         tt_output_cpu = ttnn.to_torch(tt_output)
+        if i == 0:
+            num_program_cache_entries = device.num_program_cache_entries()
+            assert num_program_cache_entries > 0
+        else:
+            assert device.num_program_cache_entries() == num_program_cache_entries
         torch_dummy = torch.randn([32, 32])
         tt_dummy = ttnn.from_torch(torch_dummy, device=device)
 

@@ -47,4 +47,7 @@ def test_expand_callback(tensor_layout, device, use_program_cache):
     num_program_cache_entries_list = []
     for i in range(2):
         test_expand([32, 1], [32, 32], tensor_layout, device)
-        num_program_cache_entries_list.append(0)
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
+
+    assert num_program_cache_entries_list[0] > 0
+    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]

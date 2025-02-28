@@ -411,6 +411,7 @@ def test_create_heads_with_slice(
         )
     # BH does s2i and i2s inside of to_device and from_device as device ops
     expected_entries = 1 if not is_blackhole() else 4 if overlap_coregrid else 5
+    assert device.num_program_cache_entries() == expected_entries
 
 
 @pytest.fixture()
@@ -462,6 +463,7 @@ def test_create_min_width_shard_subcoregrid(
             overlap_coregrid=overlap_coregrid,
             sub_core_grids=sub_core_grids,
         )
+    assert device.num_program_cache_entries() == 1, "Only one Op program cache should exist"
 
 
 def run_test_create_width_shard_by_head(
