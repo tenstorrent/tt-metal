@@ -54,8 +54,7 @@ LinearLayer::LinearLayer(const autograd::TensorPtr& weight, bool has_bias) : m_w
     if (has_bias) {
         int in_features = m_weight->get_value().get_logical_shape()[3];
         int out_features = m_weight->get_value().get_logical_shape()[2];
-        const float init_k = std::sqrtf(1.F / static_cast<float>(in_features));
-        m_bias = create_bias(out_features, init_k);
+        m_bias = create_bias(in_features, out_features);
     }
     register_tensors();
 }
