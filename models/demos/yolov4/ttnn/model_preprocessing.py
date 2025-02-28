@@ -1,0 +1,190 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+import torch
+import ttnn
+from ttnn.model_preprocessing import infer_ttnn_module_args
+from models.demos.yolov4.reference import yolov4
+import torch.nn as nn
+from ttnn.model_preprocessing import preprocess_model_parameters, fold_batch_norm2d_into_conv2d
+from models.demos.yolov4.reference.resblock import ResBlock
+
+
+def create_yolov4_input_tensors(device, batch=1, input_channels=3, input_height=320, input_width=320):
+    torch_input_tensor = torch.randn(batch, input_channels, input_height, input_width)
+    ttnn_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
+    ttnn_input_tensor = ttnn_input_tensor.reshape(
+        1,
+        1,
+        ttnn_input_tensor.shape[0] * ttnn_input_tensor.shape[1] * ttnn_input_tensor.shape[2],
+        ttnn_input_tensor.shape[3],
+    )
+    ttnn_input_tensor = ttnn.from_torch(ttnn_input_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+    return torch_input_tensor, ttnn_input_tensor
+
+
+def custom_preprocessor(model, name):
+    parameters = {}
+
+    # Helper function to process Conv2d + BatchNorm2d pairs
+    def process_conv_bn_pair(conv_layer, bn_layer, base_name):
+        parameters[base_name] = {}
+        conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(conv_layer, bn_layer)
+        parameters[base_name]["weight"] = ttnn.from_torch(conv_weight)
+        parameters[base_name]["bias"] = ttnn.from_torch(torch.reshape(conv_bias, (1, 1, 1, -1)))
+
+    def process_conv_param(conv_layer, base_name):
+        parameters[base_name] = {}
+        conv_weight, conv_bias = conv_layer.weight, conv_layer.bias
+        parameters[base_name]["weight"] = ttnn.from_torch(conv_weight)
+        parameters[base_name]["bias"] = ttnn.from_torch(torch.reshape(conv_bias, (1, 1, 1, -1)))
+
+    # Recursive function to process all layers
+    def process_layers(layers, prefix=""):
+        i = 0
+        while i < len(layers):
+            layer_name, layer = layers[i]
+            full_name = f"{layer_name}" if prefix else layer_name
+            if isinstance(layer, torch.nn.Conv2d):
+                # Check if the next layer is BatchNorm2d
+                if i + 1 < len(layers) and isinstance(layers[i + 1][1], torch.nn.BatchNorm2d):
+                    process_conv_bn_pair(layer, layers[i + 1][1], full_name)
+                    i += 1  # Skip the BatchNorm layer in the next iteration
+                else:
+                    # Handle Conv2d without BatchNorm2d (e.g., store as-is or skip)
+                    process_conv_param(layer, full_name)
+                    # print(f"Skipping Conv2d '{full_name}' because it is not followed by BatchNorm2d.")
+            elif isinstance(layer, (torch.nn.Sequential, torch.nn.ModuleList)):
+                # Recursively process nested layers
+                process_layers(list(layer.named_children()), full_name)
+            elif isinstance(layer, ResBlock):
+                # Special handling for ResBlock
+                process_resblock(layer, full_name)
+            i += 1
+
+    # Special handling for ResBlock
+    def process_resblock(resblock, prefix):
+        module_list = resblock.module_list  # Access the ModuleList inside ResBlock
+        if prefix not in parameters:
+            parameters[prefix] = {}  # Create a nested dictionary for the ResBlock
+        for outer_idx, inner_module_list in enumerate(module_list):
+            if str(outer_idx) not in parameters[prefix]:
+                parameters[prefix][str(outer_idx)] = {}  # Create a nested dictionary for each outer index
+            # Process Conv2d at index 0 and 3 of each inner ModuleList
+            for inner_idx in [0, 3]:
+                conv_layer = inner_module_list[inner_idx]
+                bn_layer = inner_module_list[inner_idx + 1]  # BatchNorm2d follows Conv2d
+                base_name = f"{inner_idx}"
+                parameters[prefix][str(outer_idx)][base_name] = {}
+                conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(conv_layer, bn_layer)
+                parameters[prefix][str(outer_idx)][base_name]["weight"] = ttnn.from_torch(conv_weight)
+                parameters[prefix][str(outer_idx)][base_name]["bias"] = ttnn.from_torch(
+                    torch.reshape(conv_bias, (1, 1, 1, -1))
+                )
+
+    # Process the model
+    if isinstance(
+        model,
+        (
+            yolov4.DownSample1,
+            yolov4.DownSample2,
+            yolov4.DownSample3,
+            yolov4.DownSample4,
+            yolov4.DownSample5,
+            yolov4.Neck,
+            yolov4.Head,
+        ),
+    ):
+        layers = list(model.named_children())
+        process_layers(layers, name)
+    elif isinstance(model, ResBlock):
+        process_resblock(model, name)
+
+    return parameters
+
+
+def create_yolov4_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor, device):
+    parameters = preprocess_model_parameters(
+        initialize_model=lambda: model,
+        custom_preprocessor=custom_preprocessor,
+        device=device,
+    )
+    parameters.conv_args = {}
+    parameters.conv_args = infer_ttnn_module_args(model=model, run_model=lambda model: model(input_tensor), device=None)
+
+    # DS1
+    parameters.conv_args.c1["act_block_h"] = 128
+    parameters.conv_args.c1["enable_split_reader"] = True
+    parameters.conv_args.c1["enable_act_double_buffer"] = True
+    parameters.conv_args.c1["deallocate_activation"] = True
+    parameters.conv_args.c1["reshard_if_not_optimal"] = False
+    parameters.conv_args.c1["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    parameters.conv_args.c1["transpose_shards"] = False
+
+    parameters.conv_args.c2["act_block_h"] = None
+    parameters.conv_args.c2["enable_split_reader"] = True
+    parameters.conv_args.c2["enable_act_double_buffer"] = True
+    parameters.conv_args.c2["deallocate_activation"] = True
+    parameters.conv_args.c2["reshard_if_not_optimal"] = False
+    parameters.conv_args.c2["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    parameters.conv_args.c2["transpose_shards"] = False
+
+    parameters.conv_args.c3["act_block_h"] = None
+    parameters.conv_args.c3["enable_split_reader"] = True
+    parameters.conv_args.c3["enable_act_double_buffer"] = True
+    parameters.conv_args.c3["deallocate_activation"] = False
+    parameters.conv_args.c3["reshard_if_not_optimal"] = False
+    parameters.conv_args.c3["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    parameters.conv_args.c3["transpose_shards"] = False
+
+    parameters.conv_args.c4["act_block_h"] = None
+    parameters.conv_args.c4["enable_split_reader"] = True
+    parameters.conv_args.c4["enable_act_double_buffer"] = True
+    parameters.conv_args.c4["deallocate_activation"] = True
+    parameters.conv_args.c4["reshard_if_not_optimal"] = False
+    parameters.conv_args.c4["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    parameters.conv_args.c4["transpose_shards"] = False
+
+    parameters.conv_args.c5["act_block_h"] = None
+    parameters.conv_args.c5["enable_split_reader"] = True
+    parameters.conv_args.c5["enable_act_double_buffer"] = True
+    parameters.conv_args.c5["deallocate_activation"] = False
+    parameters.conv_args.c5["reshard_if_not_optimal"] = False
+    parameters.conv_args.c5["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    parameters.conv_args.c5["transpose_shards"] = False
+
+    parameters.conv_args.c6["act_block_h"] = None
+    parameters.conv_args.c6["enable_split_reader"] = True
+    parameters.conv_args.c6["enable_act_double_buffer"] = True
+    parameters.conv_args.c6["deallocate_activation"] = True
+    parameters.conv_args.c6["reshard_if_not_optimal"] = False
+    parameters.conv_args.c6["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    parameters.conv_args.c6["transpose_shards"] = False
+
+    parameters.conv_args.c7["act_block_h"] = None
+    parameters.conv_args.c7["enable_split_reader"] = True
+    parameters.conv_args.c7["enable_act_double_buffer"] = True
+    parameters.conv_args.c7["deallocate_activation"] = True
+    parameters.conv_args.c7["reshard_if_not_optimal"] = False
+    parameters.conv_args.c7["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    parameters.conv_args.c7["transpose_shards"] = False
+
+    parameters.conv_args.c8["act_block_h"] = None
+    parameters.conv_args.c8["enable_split_reader"] = True
+    parameters.conv_args.c8["enable_act_double_buffer"] = True
+    parameters.conv_args.c8["deallocate_activation"] = True
+    parameters.conv_args.c8["reshard_if_not_optimal"] = False
+    parameters.conv_args.c8["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    parameters.conv_args.c8["transpose_shards"] = False
+
+    # parameters.conv_args.c2["act_block_h"] = None
+    # parameters.conv_args.c2["enable_split_reader"] = False
+    # parameters.conv_args.c2["enable_act_double_buffer"] = False
+    # parameters.conv_args.c2["deallocate_activation"] = True
+    # parameters.conv_args.c2["reshard_if_not_optimal"] = False
+    # parameters.conv_args.c2["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    # parameters.conv_args.c2["transpose_shards"] = False
+
+    print(parameters.conv_args.c1)
+    return parameters
