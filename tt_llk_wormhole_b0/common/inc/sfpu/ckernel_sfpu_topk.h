@@ -116,7 +116,7 @@ inline void bitonic_topk_store16(uint dist0, uint dist1) {
 inline void bitonic_topk_ph3_st4_to_1(bool dir, bool &init_replay, int replay_start) {
     
     if (dir == (bool)SortDir::ArgMin) {
-        TT_LOG("Issue max/min reverse");
+        
         TTI_SFPCONFIG(0x104, 0xF, 1);      // Reverse the max/min behaviour of SWAP
         TTI_SFPNOP;
         TTI_SFPNOP;
@@ -145,7 +145,7 @@ inline void bitonic_topk_ph3_st4_to_1(bool dir, bool &init_replay, int replay_st
     TT_REPLAY(replay_start, 7, 0, 0);
 
     if (dir == (bool)SortDir::ArgMin) {
-        TT_LOG("Restore max/min reverse");
+        
         TTI_SFPCONFIG(0x004, 0xF, 1);      // Restore the max/min behaviour of SWAP
         TTI_SFPNOP;
         TTI_SFPNOP;
@@ -259,7 +259,7 @@ inline void _bitonic_topk_phases_steps(
             bool dir = idir;
             for (int ph=i_start_phase; ph<(i_end_phase+1); ph++) {
                 init_phase = true; // init each new phase of local sort in replay buffer
-                TT_LOG("Local Sort: phase = {}, dir = {}, idir = {}", ph, dir, idir);
+                
                 TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
                 switch (ph) {
                 case 0:
@@ -399,7 +399,7 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
             uint datums_compared = 0;
             uint dst_offset = 0;
             uint dst_cr = 0;
-            TT_LOG("Merge - m = {}, k = {}, dist = {}, total_datums_to_compare = {}", m_iter, k, dist, total_datums_to_compare);
+            
             while (datums_compared < total_datums_to_compare) {
                 for (uint ii=0; ii<inner_d; ii++) {
                     bitonic_topk_load8(dst_offset, ld_dist);
@@ -442,10 +442,10 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
             int ph = logk-1;
             bool dir = idir;
             uint datums_compared = 0;
-            TT_LOG("Rebuild - m = {}, k = {}, dist = {}, total_datums_to_compare = {}", m_iter, k, dist, total_datums_to_compare);
+            
             switch (ph) {
                 case 0:
-                    TT_RISC_ASSERT(false, "K=2 not supported!");
+                    
                     break;
                 case 1:
                     if (m_iter >= 2) {
