@@ -130,7 +130,8 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
         remote_read_,
         transpose_mcast_,
         output_tensor,
-        /*capture_buffers=*/true)};
+        /*capture_buffers=*/true,
+        enable_split_reader_)};
 }
 
 Tensor halo_op(
@@ -141,7 +142,8 @@ Tensor halo_op(
     bool transpose_mcast,
     uint32_t reshard_num_cores_nhw,
     const MemoryConfig& output_memory_config,
-    bool is_out_tiled) {
+    bool is_out_tiled,
+    bool enable_split_reader) {
     TT_FATAL(input_tensor.memory_config().is_sharded(), "Halo expects sharded input tensor");
     TT_FATAL(
         input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
@@ -159,7 +161,8 @@ Tensor halo_op(
          transpose_mcast,
          reshard_num_cores_nhw,
          output_memory_config,
-         is_out_tiled](
+         is_out_tiled,
+         enable_split_reader](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -192,7 +195,8 @@ Tensor halo_op(
                 .reshard_num_cores_nhw_ = reshard_num_cores_nhw,
                 .max_out_nsticks_per_core_ = max_out_nsticks_per_core,
                 .output_memory_config_ = output_memory_config,
-                .is_out_tiled_ = is_out_tiled},
+                .is_out_tiled_ = is_out_tiled,
+                .enable_split_reader_ = enable_split_reader},
             {input_tensor});
     };
 

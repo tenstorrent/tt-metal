@@ -30,16 +30,19 @@ template <
     bool is_block_sharded,
     bool is_width_sharded,
     bool is_read,
-    bool is_col_major>
+    bool is_col_major,
+    bool is_remote_config,
+    bool enable_split_reader,
+    bool is_reader>
 void copy_sticks_async(
-    tt_l1_ptr uint16_t const* config_data,
+    const tt_l1_ptr uint16_t* config_data,
     const uint16_t my_noc_x,
     const uint16_t my_noc_y,
-    uint32_t const in_base_l1_addr,
-    uint32_t const out_base_l1_addr) {
+    const uint32_t in_base_l1_addr,
+    const uint32_t out_base_l1_addr) {
     int i = 0;
     int length = config_data[i + 2];
-
+    uint16_t iteration = 0;
     while (length) {
         uint16_t noc_x = ((is_block_sharded && !is_col_major) || is_width_sharded) ? my_noc_x : config_data[i + 0];
         uint16_t noc_y = ((is_block_sharded && is_col_major) || is_width_sharded) ? my_noc_y : config_data[i + 1];
@@ -47,7 +50,36 @@ void copy_sticks_async(
         i += 3;
 
         const uint64_t base_addr = get_noc_addr(noc_x, noc_y, is_read ? in_base_l1_addr : out_base_l1_addr);
+
         for (uint16_t j = 0; j < length; j += 3) {
+            iteration++;
+            if constexpr (enable_split_reader) {
+                if constexpr (is_remote_config) {
+                    if constexpr (is_reader) {
+                        // Skip every odd iteration for readers in remote configuration
+                        if (iteration % 2 == 1) {
+                            continue;
+                        }
+                    } else {
+                        // Skip every even iteration for writer in remote configuration
+                        if (iteration % 2 == 0) {
+                            continue;
+                        }
+                    }
+                } else {
+                    if constexpr (is_reader) {
+                        // Skip every even iteration for readers in local configuration
+                        if (iteration % 2 == 0) {
+                            continue;
+                        }
+                    } else {
+                        // Skip every odd iteration for writer in local configuration
+                        if (iteration % 2 == 1) {
+                            continue;
+                        }
+                    }
+                }
+            }
             uint16_t src_local_idx = config_data[i + j + 0];
             uint16_t dst_local_idx = config_data[i + j + 1];
             uint16_t nsticks = config_data[i + j + 2];
@@ -101,6 +133,8 @@ void kernel_main() {
     constexpr bool is_col_major = get_compile_time_arg_val(12) == 1;
     constexpr uint32_t is_width_sharded = get_compile_time_arg_val(13);
     constexpr uint32_t input_aligned_page_size = get_compile_time_arg_val(14);
+    constexpr bool enable_split_reader = get_compile_time_arg_val(15);
+    constexpr bool is_reader = get_compile_time_arg_val(16);
 
     constexpr uint32_t elem_nbytes = sizeof(uint16_t);
     constexpr uint16_t pad_core_id = 0xFFFF;
@@ -110,21 +144,43 @@ void kernel_main() {
     const uint32_t in_base_l1_addr = get_read_ptr(in_cb_id);
     const uint32_t out_base_l1_addr = get_write_ptr(out_cb_id);
 
+    // pad sticks
     if constexpr (padding_config_cb_id) {
         // construct the pad stick in its buffer
-        cb_reserve_back(pad_cb_id, 1);
-        const uint16_t pad_val = pad_val_u32;
-        fill_with_val(get_write_ptr(pad_cb_id), stick_nbytes / elem_nbytes, pad_val);
-        cb_push_back(pad_cb_id, 1);
+        if constexpr (enable_split_reader) {
+            if constexpr (is_reader) {
+                cb_reserve_back(pad_cb_id, 1);
+                const uint16_t pad_val = pad_val_u32;
+                fill_with_val(get_write_ptr(pad_cb_id), stick_nbytes / elem_nbytes, pad_val);
+                cb_push_back(pad_cb_id, 1);
+            } else {
+                cb_wait_front(pad_cb_id, 1);
+            }
+        } else {
+            cb_reserve_back(pad_cb_id, 1);
+            const uint16_t pad_val = pad_val_u32;
+            fill_with_val(get_write_ptr(pad_cb_id), stick_nbytes / elem_nbytes, pad_val);
+            cb_push_back(pad_cb_id, 1);
+        }
 
         uint32_t padding_config_l1_addr = get_read_ptr(padding_config_cb_id);
         volatile tt_l1_ptr uint16_t* config_data =
             reinterpret_cast<volatile tt_l1_ptr uint16_t*>(padding_config_l1_addr);
-        // print_data_u16(padding_config_l1_addr, 1, 16);
+
         const uint64_t padding_l1_addr = get_noc_addr(my_noc_x, my_noc_y, get_read_ptr(pad_cb_id));
         const uint32_t dst_base_addr = out_base_l1_addr;
         uint16_t nsticks = 1;
-        for (uint16_t j = 0; nsticks; j += 2) {
+        uint16_t start_index = 0;
+        // Determine the read offset based on whether split reader is enabled
+        // Each entry in config_data is of size 2. so if split reader is enabled,
+        // even entries and odd entries are processed on separate cores.
+        uint16_t read_offset = enable_split_reader ? 4 : 2;
+        // If split reader is enabled and this instance is a reader, set the start index to 2
+        // to read all odd indexed entries
+        if constexpr (enable_split_reader && is_reader) {
+            start_index = 2;
+        }
+        for (uint16_t j = start_index; nsticks; j += read_offset) {
             uint16_t dst_local_idx = config_data[j + 0];
             nsticks = config_data[j + 1];
 
@@ -137,12 +193,13 @@ void kernel_main() {
     }
 
     // input shards
-    if constexpr (local_config_cb_id) {
+    if constexpr ((enable_split_reader && is_reader) || (!enable_split_reader && local_config_cb_id)) {
         cb_reserve_back(src_cb_id, in_nsticks);
         cb_push_back(src_cb_id, in_nsticks);
     }
 
     cb_wait_front(in_cb_id, in_nsticks);  // make sure untilized data is available
+    // copy data as per remote config
     if constexpr (remote_config_cb_id) {
         uint32_t config_data_l1_addr = get_read_ptr(remote_config_cb_id);
         tt_l1_ptr uint16_t const* config_data = reinterpret_cast<tt_l1_ptr uint16_t const*>(config_data_l1_addr);
@@ -152,9 +209,12 @@ void kernel_main() {
             is_block_sharded,
             is_width_sharded,
             remote_read,
-            is_col_major>(config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr);
+            is_col_major,
+            true,
+            enable_split_reader,
+            is_reader>(config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr);
     }
-
+    // copy data as per local config
     if constexpr (local_config_cb_id) {
         uint32_t config_data_l1_addr = get_read_ptr(local_config_cb_id);
         tt_l1_ptr uint16_t const* config_data = reinterpret_cast<tt_l1_ptr uint16_t const*>(config_data_l1_addr);
@@ -164,7 +224,10 @@ void kernel_main() {
             is_block_sharded,
             is_width_sharded,
             false,
-            is_col_major>(config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr);
+            is_col_major,
+            false,
+            enable_split_reader,
+            is_reader>(config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr);
     }
 
     noc_async_read_barrier();
