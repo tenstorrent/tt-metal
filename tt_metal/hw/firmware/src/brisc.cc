@@ -451,10 +451,6 @@ int main() {
                     31 /*wrap*/,
                     false /*linked*/,
                     post_atomic_increments /*posted*/);
-#if defined(ARCH_BLACKHOLE)
-                // flush for BH since this is non-posted, which could cause counter mismatch
-                while (!ncrisc_noc_nonposted_atomics_flushed(noc_index));
-#endif
             }
         }
 
@@ -610,9 +606,6 @@ int main() {
                     while (!ncrisc_dynamic_noc_nonposted_atomics_flushed(noc_index));
                     // reset local counters
                     noc_local_state_init(noc_index);
-                } else {
-                    // flush for BH since this is non-posted, which could cause counter mismatch in the next iter
-                    while (!ncrisc_noc_nonposted_atomics_flushed(noc_index));
                 }
 #endif
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
