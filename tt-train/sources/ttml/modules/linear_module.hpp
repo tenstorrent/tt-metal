@@ -14,6 +14,7 @@ private:
     autograd::TensorPtr m_bias;
 
     void initialize_tensors(uint32_t in_features, uint32_t out_features, bool has_bias = true);
+    void register_tensors();
 
 public:
     LinearLayer(uint32_t in_features, uint32_t out_features, bool has_bias = true);
