@@ -44,7 +44,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 140
+        default: 35
       os:
         required: false
         type: string
