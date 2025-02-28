@@ -5,8 +5,11 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_defs.h"
 #include "ckernel_include.h"
+#include "ckernel_ops.h"
 #include "cmath_common.h"
 #ifdef PERF_DUMP
 #include "ckernel_perf_api.h"

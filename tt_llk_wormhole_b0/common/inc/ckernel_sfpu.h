@@ -2,14 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+
 #pragma once
 
-#include "ckernel_defs.h"
-#include "noc_nonblocking_api.h"
-#include "ckernel.h"
 #include <limits>
-#include "ckernel_globals.h"
 
+#include "ckernel_defs.h"
+#include "ckernel_globals.h"
+#include "ckernel.h"
+#include "noc_nonblocking_api.h"
 #include "sfpi.h"
 
 #include "sfpu/ckernel_sfpu_abs.h"

@@ -5,8 +5,11 @@
 
 #pragma once
 
-namespace ckernel
-{
+// MT: This should be dissolved and moved to the appropriate place
+#include "cfg_defines.h"
+#include "ckernel_ops.h"
+
+namespace ckernel {
 
 constexpr uint8_t ADDR_MOD_0 = 0;
 constexpr uint8_t ADDR_MOD_1 = 1;

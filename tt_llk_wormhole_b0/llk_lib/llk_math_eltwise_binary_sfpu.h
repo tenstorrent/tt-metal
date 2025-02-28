@@ -5,14 +5,16 @@
 
 #pragma once
 
-#include "ckernel_include.h"
-#include "ckernel_template.h"
 #include <type_traits>
+
+#include "ckernel_globals.h"
+#include "ckernel_include.h"
+#include "ckernel_sfpu.h"
+#include "ckernel_ops.h"
+#include "ckernel_template.h"
 
 #include "cmath_common.h"
 #include "llk_math_common.h"
-#include "ckernel_globals.h"
-#include "ckernel_sfpu.h"
 
 using namespace ckernel;
 // local function declarations

@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 //#include "kernel_types.h"
 #include "ckernel.h"
 #include "ckernel_template.h"

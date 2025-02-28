@@ -5,8 +5,11 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "ckernel_instr_params.h"
 #include "fw_debug.h"
 #include "cpack_common.h"
 #include "llk_defs.h"

@@ -5,7 +5,10 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_include.h"
+#include "ckernel_ops.h"
 #include "ckernel_template.h"
 
 #include "cmath_common.h"

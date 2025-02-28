@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_defs.h"
 #include "ckernel_include.h"
 #include "cmath_common.h"

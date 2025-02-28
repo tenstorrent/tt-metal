@@ -5,7 +5,11 @@
 
 #pragma once
 
+#include "ckernel_instr_params.h"
 #include "risc_attribs.h"
+
+// MT: This should be dissolved and moved to the appropriate place
+#include "tensix.h"
 
 // Compiler hint that a branch is unlikely to be taken
 #define UNLIKELY(condition) __builtin_expect(static_cast<bool>(condition), 0)
@@ -59,7 +63,6 @@
 #include <cstdint>
 
 #include "ckernel_include.h"
-#include "tensix.h"
 #include "fw_debug.h"
 #include "tt_log.h"
 // #include <cstring>

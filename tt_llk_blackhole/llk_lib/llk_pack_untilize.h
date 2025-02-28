@@ -4,12 +4,16 @@
 
 
 #pragma once
+
+#include <cstdint>
+
 #include "llk_defs.h"
 
 #include "ckernel.h"
+#include "ckernel_globals.h"
+#include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "llk_pack_common.h"
-#include "ckernel_globals.h"
 
 using namespace ckernel;
 using namespace ckernel::packer;
