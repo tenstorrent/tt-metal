@@ -4,6 +4,7 @@
 
 #include "tt_metal/impl/event/dispatch.hpp"
 #include <tt-metalium/dispatch_settings.hpp>
+#include <tt-metalium/program_impl.hpp>
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 #include <tt_align.hpp>
 

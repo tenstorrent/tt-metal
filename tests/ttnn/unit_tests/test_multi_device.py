@@ -247,6 +247,27 @@ def test_multi_device_single_op_unary(mesh_device):
     assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden, pcc=0.999)
 
 
+def test_multi_device_single_op_unary_with_cache(mesh_device):
+    """Multidevice API test: Running tensor-parallel multi-device single-op unary with cache"""
+    mesh_device.enable_program_cache()
+
+    torch_input_tensor = torch.rand((1, 1, 32, 32 * mesh_device.get_num_devices()), dtype=torch.bfloat16)
+    torch_output_golden = torch.nn.functional.gelu(torch_input_tensor)
+    torch_golden = torch.nn.functional.gelu(torch_output_golden)
+
+    ttnn_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ShardTensorToMesh(mesh_device, dim=3),
+        device=mesh_device,
+    )
+    ttnn_output_tensor = ttnn.gelu(ttnn_input_tensor)
+    final_output_tensor = ttnn.gelu(ttnn_output_tensor)
+
+    ttnn_torch_output_tensor = ttnn.to_torch(final_output_tensor, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
+    assert_with_pcc(ttnn_torch_output_tensor, torch_golden, pcc=0.999)
+
+
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
