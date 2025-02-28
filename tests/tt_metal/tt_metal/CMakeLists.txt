@@ -105,6 +105,7 @@ target_sources(
             ${CMAKE_CURRENT_SOURCE_DIR}/../../.. # FIXME
         FILES
             test_kernels/compute/increment_runtime_arg.cpp
+            test_kernels/dataflow/semaphore_across_core_types.cpp
             test_kernels/dataflow/unit_tests/command_queue/arbiter_hang.cpp
             test_kernels/dataflow/unit_tests/command_queue/dispatcher_kernel_size_and_runtime.cpp
             test_kernels/dataflow/unit_tests/command_queue/pcie_write_16b.cpp

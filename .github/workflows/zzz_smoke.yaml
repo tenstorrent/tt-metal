@@ -11,18 +11,19 @@ on:
         type: string
 
 jobs:
-  metal-tests:
+  metalium-smoke:
     strategy:
       fail-fast: false
       matrix:
-        runs-on: [
+        platform: [
           "N150",
-          "P150"
+          "N300",
+          # "P150" # Machines aren't ready yet
         ]
     runs-on:
       - in-service
       - cloud-virtual-machine
-      - ${{ matrix.runs-on }}
+      - ${{ matrix.platform }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
       volumes:
@@ -62,10 +63,12 @@ jobs:
         uses: phoenix-actions/test-reporting@v15
         if: ${{ !cancelled() }}
         with:
-          name: Metalium Blackhole smoke tests
+          name: Metalium ${{ matrix.platform }} smoke tests
           path: /work/test-reports/*.xml
           reporter: jest-junit
 
+      # Arbitrary limit that's higher than we would like, but the JIT build seems inconsistent.
+      # Keep it here as a guardrail to keep Smoke tests fast.  We can adjust as needed.
       - name: Check for slow tests
         shell: python3 {0}
         run: |
@@ -87,12 +90,12 @@ jobs:
                   root = tree.getroot()
                   for tc in root.findall(".//testcase"):
                       time = float(tc.get("time", 0))
-                      if time > 1.5:
+                      if time > 3.5:
                           slow_tests.append(f"{report_file}: {tc.get('classname', 'Unknown')}.{tc.get('name', 'Unknown')} ({time:.3f}s)")
               except Exception as e:
                   print(f"Error parsing {report_file}: {e}")
                   sys.exit(2)
 
           if slow_tests:
-              print("Some tests exceeded 1.5s:\n" + "\n".join(slow_tests))
+              print("Some tests exceeded 3.5s:\n" + "\n".join(slow_tests))
               sys.exit(3)

@@ -28,12 +28,12 @@ target_include_directories(
 )
 target_link_libraries(unit_tests_dispatch_smoke PRIVATE test_metal_common_libs)
 
-# Slow tests (too slow for smoke; will run less frequently)
-add_library(unit_tests_dispatch_slow OBJECT)
-add_library(TT::Metalium::Test::Dispatch::Slow ALIAS unit_tests_dispatch_slow)
-TT_ENABLE_UNITY_BUILD(unit_tests_dispatch_slow)
+# Sanity tests (too slow for smoke; will run less frequently)
+add_library(unit_tests_dispatch_sanity OBJECT)
+add_library(TT::Metalium::Test::Dispatch::Sanity ALIAS unit_tests_dispatch_sanity)
+TT_ENABLE_UNITY_BUILD(unit_tests_dispatch_sanity)
 target_sources(
-    unit_tests_dispatch_slow
+    unit_tests_dispatch_sanity
     PRIVATE
         dispatch_buffer/test_EnqueueWriteBuffer_and_EnqueueReadBuffer.cpp
         dispatch_program/test_EnqueueProgram.cpp
@@ -41,7 +41,7 @@ target_sources(
         dispatch_trace/test_sub_device.cpp
 )
 target_include_directories(
-    unit_tests_dispatch_slow
+    unit_tests_dispatch_sanity
     BEFORE
     PRIVATE
         "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
@@ -50,7 +50,7 @@ target_include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/common
 )
-target_link_libraries(unit_tests_dispatch_slow PRIVATE test_metal_common_libs)
+target_link_libraries(unit_tests_dispatch_sanity PRIVATE test_metal_common_libs)
 
 # Target for all Dispatch tests regardless of duration
 add_executable(unit_tests_dispatch)
@@ -66,5 +66,5 @@ target_link_libraries(
     unit_tests_dispatch
     PRIVATE
         TT::Metalium::Test::Dispatch::Smoke
-        TT::Metalium::Test::Dispatch::Slow
+        TT::Metalium::Test::Dispatch::Sanity
 )

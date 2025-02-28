@@ -258,6 +258,27 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
                 ckernels/blackhole/metal/llk_io/llk_io_unpack.h
                 ckernels/blackhole/metal/llk_io/llk_operands.h
                 ckernels/blackhole/metal/llk_io/llk_outputs.h
+                ckernels/wormhole_b0/metal/common/chlkc_list.h
+                ckernels/wormhole_b0/metal/llk_api/llk_math_common_api.h
+                ckernels/wormhole_b0/metal/llk_api/llk_math_matmul_api.h
+                ckernels/wormhole_b0/metal/llk_api/llk_math_unary_datacopy_api.h
+                ckernels/wormhole_b0/metal/llk_api/llk_pack_api.h
+                ckernels/wormhole_b0/metal/llk_api/llk_param_structs.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_converter.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_exp.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_recip.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_exp.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_init.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_params.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu_types.h
+                ckernels/wormhole_b0/metal/llk_api/llk_unpack_AB_matmul_api.h
+                ckernels/wormhole_b0/metal/llk_api/llk_unpack_A_api.h
+                ckernels/wormhole_b0/metal/llk_api/llk_unpack_common_api.h
+                ckernels/wormhole_b0/metal/llk_io/llk_io.h
+                ckernels/wormhole_b0/metal/llk_io/llk_io_pack.h
+                ckernels/wormhole_b0/metal/llk_io/llk_io_unpack.h
+                ckernels/wormhole_b0/metal/llk_io/llk_operands.h
+                ckernels/wormhole_b0/metal/llk_io/llk_outputs.h
                 inc/atomic_rwptr.h
                 inc/bit_utils.h
                 inc/blackhole/c_tensix_core.h
@@ -326,8 +347,20 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
                 inc/wormhole/noc/noc_overlay_parameters.h
                 inc/wormhole/noc/noc_parameters.h
                 inc/wormhole/noc_nonblocking_api.h
+                inc/wormhole/stream_interface.h
                 inc/wormhole/stream_io_map.h
                 inc/wormhole/tdma_xmov.h
+                inc/wormhole/tensix.h
+                inc/wormhole/wormhole_b0_defines/cfg_defines.h
+                inc/wormhole/wormhole_b0_defines/tensix_types.h
+                inc/dataflow_api_addrgen.h
+                inc/dataflow_api_common.h
+                # Toolchain
+                toolchain/erisc-b0-app.ld
+                toolchain/erisc-b0-app-sections.ld
+                toolchain/erisc-b0-memory.ld
+                toolchain/erisc-b0-kernel.ld
+                toolchain/tensix-address.ld
     )
 endif()
 
