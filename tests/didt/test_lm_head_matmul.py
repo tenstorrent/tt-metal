@@ -66,7 +66,7 @@ class LMHeadTest(OpTestBase):
 )
 def test_lm_head_matmul(
     mesh_device,
-    iterations=1,
+    iterations=100,
     determinism_check_iterations=False,
     use_program_cache=False,
     simulate_bh_harvesting=False,

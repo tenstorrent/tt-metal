@@ -340,7 +340,7 @@ void MAIN {
                     cb_pop_front(in1_cb_id, in1_block_num_tiles);
 
                     // atomic increment to transfer compute_token to paired core
-                    PACK((noc_semaphore_inc(didt_semaphore_noc_addr, 1)));
+                    UNPACK((noc_semaphore_inc(didt_semaphore_noc_addr, 1)));
                 }
 
 #ifdef FUSE_BIAS

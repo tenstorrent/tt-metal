@@ -296,9 +296,9 @@ inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_reads_flushed(uint
     uint32_t dm1_risc_resp =
         get_noc_reads_num_issued<static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM1)>(
             noc);  // NCRISC
-    uint32_t trisc2_resp = get_noc_reads_num_issued<static_cast<std::underlying_type_t<TensixProcessorTypes>>(
-        TensixProcessorTypes::MATH2)>(noc);  // TRISC2
-    return (NOC_STATUS_READ_REG(noc, NIU_MST_RD_RESP_RECEIVED) == (dm0_risc_resp + dm1_risc_resp + trisc2_resp));
+    uint32_t trisc0_resp = get_noc_reads_num_issued<static_cast<std::underlying_type_t<TensixProcessorTypes>>(
+        TensixProcessorTypes::MATH0)>(noc);  // TRISC0
+    return (NOC_STATUS_READ_REG(noc, NIU_MST_RD_RESP_RECEIVED) == (dm0_risc_resp + dm1_risc_resp + trisc0_resp));
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_reads_flushed(uint32_t noc) {
@@ -419,10 +419,10 @@ inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_writes_s
     uint32_t dm1_risc_sent =
         get_noc_nonposted_writes_num_issued<static_cast<std::underlying_type_t<TensixProcessorTypes>>(
             TensixProcessorTypes::DM1)>(noc);  // NCRISC
-    uint32_t trisc2_sent =
+    uint32_t trisc0_sent =
         get_noc_nonposted_writes_num_issued<static_cast<std::underlying_type_t<TensixProcessorTypes>>(
-            TensixProcessorTypes::MATH2)>(noc);  // TRISC2
-    return (NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT) == (dm0_risc_sent + dm1_risc_sent + trisc2_sent));
+            TensixProcessorTypes::MATH0)>(noc);  // TRISC0
+    return (NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT) == (dm0_risc_sent + dm1_risc_sent + trisc0_sent));
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_writes_sent(uint32_t noc) {
@@ -439,9 +439,9 @@ inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_writes_f
         TensixProcessorTypes::DM0)>(noc);  // BRISC
     uint32_t dm1_risc_acked = get_noc_nonposted_writes_acked<static_cast<std::underlying_type_t<TensixProcessorTypes>>(
         TensixProcessorTypes::DM1)>(noc);  // NCRISC
-    uint32_t trisc2_acked = get_noc_nonposted_writes_acked<static_cast<std::underlying_type_t<TensixProcessorTypes>>(
-        TensixProcessorTypes::MATH2)>(noc);  // TRISC2
-    return (NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED) == (dm0_risc_acked + dm1_risc_acked + trisc2_acked));
+    uint32_t trisc0_acked = get_noc_nonposted_writes_acked<static_cast<std::underlying_type_t<TensixProcessorTypes>>(
+        TensixProcessorTypes::MATH0)>(noc);  // TRISC0
+    return (NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED) == (dm0_risc_acked + dm1_risc_acked + trisc0_acked));
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_writes_flushed(uint32_t noc) {
@@ -535,27 +535,27 @@ inline __attribute__((always_inline)) void dynamic_noc_didt_init(uint32_t atomic
         uint64_t xy_local_addr = NOC_XY_ADDR(my_x, my_y, 0);
         uint32_t noc_rd_cmd_field =
             NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
-        uint64_t atomic_ret_addr = NOC_XY_ADDR(my_x, my_y, atomic_ret_val);
 
-        // program brisc cmd_buf 0
-        NOC_CMD_BUF_WRITE_REG(
-            noc, DYNAMIC_NOC_DIDT_TRISC_AT_CMD_BUF, NOC_RET_ADDR_LO, (uint32_t)(atomic_ret_addr & 0xFFFFFFFF));
-        NOC_CMD_BUF_WRITE_REG(
-            noc,
-            DYNAMIC_NOC_DIDT_TRISC_AT_CMD_BUF,
-            NOC_RET_ADDR_COORDINATE,
-            (uint32_t)(atomic_ret_addr >> NOC_ADDR_COORD_SHIFT));
+        // program trisc cmd_buf 0
+        // uint64_t atomic_ret_addr = NOC_XY_ADDR(my_x, my_y, atomic_ret_val);
+        // NOC_CMD_BUF_WRITE_REG(
+        //     noc, DYNAMIC_NOC_DIDT_TRISC_AT_CMD_BUF, NOC_RET_ADDR_LO, (uint32_t)(atomic_ret_addr & 0xFFFFFFFF));
+        // NOC_CMD_BUF_WRITE_REG(
+        //     noc,
+        //     DYNAMIC_NOC_DIDT_TRISC_AT_CMD_BUF,
+        //     NOC_RET_ADDR_COORDINATE,
+        //     (uint32_t)(atomic_ret_addr >> NOC_ADDR_COORD_SHIFT));
 
         // no need to program NCRISC since we will reprogram between rd/wr each call since it only uses 1 cmd buff
-        // program brisc cmd_buf 1
-        NOC_CMD_BUF_WRITE_REG(noc, DYNAMIC_NOC_DIDT_NCRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);
-        NOC_CMD_BUF_WRITE_REG(
-            noc,
-            DYNAMIC_NOC_DIDT_NCRISC_RD_CMD_BUF,
-            NOC_RET_ADDR_COORDINATE,
-            (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
+        // program ncrisc cmd_buf 3
+        // NOC_CMD_BUF_WRITE_REG(noc, DYNAMIC_NOC_DIDT_NCRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);
+        // NOC_CMD_BUF_WRITE_REG(
+        //     noc,
+        //     DYNAMIC_NOC_DIDT_NCRISC_RD_CMD_BUF,
+        //     NOC_RET_ADDR_COORDINATE,
+        //     (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
 
-        // program ncrisc cmd_buf 2
+        // program brisc cmd_buf 1
         NOC_CMD_BUF_WRITE_REG(noc, DYNAMIC_NOC_DIDT_BRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);
         NOC_CMD_BUF_WRITE_REG(
             noc,
@@ -563,7 +563,7 @@ inline __attribute__((always_inline)) void dynamic_noc_didt_init(uint32_t atomic
             NOC_RET_ADDR_COORDINATE,
             (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
 
-        // program ncrisc cmd_buf 3
+        // program brisc cmd_buf 2
         NOC_CMD_BUF_WRITE_REG(
             noc,
             DYNAMIC_NOC_DIDT_BRISC_WR_CMD_BUF,
@@ -604,9 +604,9 @@ inline __attribute__((always_inline)) void dynamic_noc_didt_local_state_init() {
         NOC_0, 0);
     set_noc_reads_num_issued<static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM1)>(
         NOC_1, NOC_STATUS_READ_REG(NOC_1, NIU_MST_RD_RESP_RECEIVED));
-    set_noc_reads_num_issued<static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::MATH2)>(
+    set_noc_reads_num_issued<static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::MATH0)>(
         NOC_0, 0);
-    set_noc_reads_num_issued<static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::MATH2)>(
+    set_noc_reads_num_issued<static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::MATH0)>(
         NOC_1, 0);
 
     set_noc_nonposted_writes_num_issued<static_cast<std::underlying_type_t<TensixProcessorTypes>>(
@@ -618,9 +618,9 @@ inline __attribute__((always_inline)) void dynamic_noc_didt_local_state_init() {
     set_noc_nonposted_writes_num_issued<static_cast<std::underlying_type_t<TensixProcessorTypes>>(
         TensixProcessorTypes::DM1)>(NOC_1, NOC_STATUS_READ_REG(NOC_1, NIU_MST_NONPOSTED_WR_REQ_SENT));
     set_noc_nonposted_writes_num_issued<static_cast<std::underlying_type_t<TensixProcessorTypes>>(
-        TensixProcessorTypes::MATH2)>(NOC_0, 0);
+        TensixProcessorTypes::MATH0)>(NOC_0, 0);
     set_noc_nonposted_writes_num_issued<static_cast<std::underlying_type_t<TensixProcessorTypes>>(
-        TensixProcessorTypes::MATH2)>(NOC_1, 0);
+        TensixProcessorTypes::MATH0)>(NOC_1, 0);
 
     set_noc_nonposted_writes_acked<static_cast<std::underlying_type_t<TensixProcessorTypes>>(
         TensixProcessorTypes::DM0)>(NOC_0, NOC_STATUS_READ_REG(NOC_0, NIU_MST_WR_ACK_RECEIVED));
@@ -631,9 +631,9 @@ inline __attribute__((always_inline)) void dynamic_noc_didt_local_state_init() {
     set_noc_nonposted_writes_acked<static_cast<std::underlying_type_t<TensixProcessorTypes>>(
         TensixProcessorTypes::DM1)>(NOC_1, NOC_STATUS_READ_REG(NOC_1, NIU_MST_WR_ACK_RECEIVED));
     set_noc_nonposted_writes_acked<static_cast<std::underlying_type_t<TensixProcessorTypes>>(
-        TensixProcessorTypes::MATH2)>(NOC_0, 0);
+        TensixProcessorTypes::MATH0)>(NOC_0, 0);
     set_noc_nonposted_writes_acked<static_cast<std::underlying_type_t<TensixProcessorTypes>>(
-        TensixProcessorTypes::MATH2)>(NOC_1, 0);
+        TensixProcessorTypes::MATH0)>(NOC_1, 0);
 
     set_noc_nonposted_atomics_acked<static_cast<std::underlying_type_t<TensixProcessorTypes>>(
         TensixProcessorTypes::DM0)>(NOC_0, NOC_STATUS_READ_REG(NOC_0, NIU_MST_ATOMIC_RESP_RECEIVED));
@@ -644,9 +644,9 @@ inline __attribute__((always_inline)) void dynamic_noc_didt_local_state_init() {
     set_noc_nonposted_atomics_acked<static_cast<std::underlying_type_t<TensixProcessorTypes>>(
         TensixProcessorTypes::DM1)>(NOC_1, NOC_STATUS_READ_REG(NOC_1, NIU_MST_ATOMIC_RESP_RECEIVED));
     set_noc_nonposted_atomics_acked<static_cast<std::underlying_type_t<TensixProcessorTypes>>(
-        TensixProcessorTypes::MATH2)>(NOC_0, 0);
+        TensixProcessorTypes::MATH0)>(NOC_0, 0);
     set_noc_nonposted_atomics_acked<static_cast<std::underlying_type_t<TensixProcessorTypes>>(
-        TensixProcessorTypes::MATH2)>(NOC_1, 0);
+        TensixProcessorTypes::MATH0)>(NOC_1, 0);
 
     // todo: set rd/at/reg_wr (all 5)
 }
@@ -736,7 +736,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len(
         len_bytes,
         vc,
         mcast,
-        linked,
+        ((noc_mode != DM_DYNAMIC_NOC_DIDT) ? linked : false),  // prevents hang
         num_dests,
         multicast_path_reserve,
         posted,
