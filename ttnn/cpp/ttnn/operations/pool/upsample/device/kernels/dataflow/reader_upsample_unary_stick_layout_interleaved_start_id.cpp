@@ -13,14 +13,10 @@ void kernel_main() {
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
     constexpr bool src0_is_dram = get_compile_time_arg_val(1) == 1;
     constexpr bool src_stick_size_is_pow2 = get_compile_time_arg_val(2) == 1;
-
-#if (src_stick_size_is_pow2)
     constexpr uint32_t src_log_base_2_of_page_size = get_compile_time_arg_val(3);
-    const InterleavedPow2AddrGen<src0_is_dram> s0 = {
-        .bank_base_address = src_addr, .log_base_2_of_page_size = src_log_base_2_of_page_size};
-#else
-    const InterleavedAddrGen<src0_is_dram> s0 = {.bank_base_address = src_addr, .page_size = stick_size};
-#endif
+
+    const auto s0 = get_interleaved_addr_gen<src0_is_dram, src_stick_size_is_pow2>(
+        src_addr, stick_size, src_log_base_2_of_page_size);
 
     // reader copied the data from DRAM to CB buffer.
     for (uint32_t i = 0; i < num_sticks; ++i) {
