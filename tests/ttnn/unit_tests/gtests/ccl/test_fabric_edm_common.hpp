@@ -2137,6 +2137,22 @@ void run_all_gather_2D_test(const size_t dim, const size_t num_links, const ttnn
         false,
         true);
 
+    /*
+    Buffer* dst_buffer = output_tensor.buffer();
+    tt_metal::InterleavedBufferConfig input_dram_config{
+        .device = devices[0],
+        .size = 8192,
+        .page_size = 2048,
+        .buffer_type = tt_metal::BufferType::DRAM};
+    std::vector<uint32_t> received_buffer_data;
+    tt::tt_metal::detail::ReadFromBuffer(*dst_buffer, received_buffer_data);
+    printf("size of received_buffer_data is : %zu\n", received_buffer_data.size());
+    for (uint32_t i=0; i<received_buffer_data.size(); i++) {
+        printf("output data at index %u is %u\n", i, received_buffer_data[i]);
+    }
+    //EXPECT_EQ(golden_tensor, received_tensor);
+    */
+
     log_info(tt::LogTest, "Synchronizing");
     for (auto d : devices) {
         tt_metal::Synchronize(d, *ttnn::DefaultQueueId);

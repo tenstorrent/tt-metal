@@ -40,7 +40,7 @@ volatile tt_l1_ptr fabric_router_l1_config_t* routing_table =
 
 volatile uint32_t* sync_sem_addr = (volatile uint32_t*)FABRIC_ROUTER_SYNC_SEM;
 
-#define SWITCH_THRESHOLD 0x3FFF
+#define SWITCH_THRESHOLD 0xFF
 
 inline void wait_for_sem(uint32_t value) {
     while (*sync_sem_addr != value) {

@@ -905,7 +905,7 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
     log_info(tt::LogTest, "Finished");
 }
 
-TEST(CclAsyncOp, AllGather_on_2D_Test) { run_all_gather_2D_test(3, 1, ttnn::Shape({1, 1, 32, 128})); }
+TEST(CclAsyncOp, AllGather_on_2D_Test) { run_all_gather_2D_test(3, 1, ttnn::Shape({1, 1, 32, 32})); }
 
 TEST(CclAsyncOp, AllGather_PersistentFabric_Dim3_Links1_Shape1_1_32_128) {
     run_all_gather_with_persistent_fabric(3, 1, ttnn::Shape({1, 1, 32, 128}));

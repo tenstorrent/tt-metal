@@ -128,29 +128,53 @@ operation::ProgramWithCallbacks all_gather_2D_multi_core_with_workers(
 
     // bool is_first_chip = ring_index == 0;
     // bool is_last_chip = ring_index == ring_size - 1;
+    printf("is horizontal: %d\n", is_horizontal);
+    uint32_t depth_dir0 = 0;
+    uint32_t depth_dir1 = 0;
 
     tt::tt_fabric::RoutingDirection direction0;
     tt::tt_fabric::RoutingDirection direction1;
     if(is_horizontal) {
         direction0 = tt::tt_fabric::RoutingDirection::E;
         direction1 = tt::tt_fabric::RoutingDirection::W;
+        depth_dir0 = eastCount;
+        depth_dir1 = westCount;
     }
     else{
         direction0 = tt::tt_fabric::RoutingDirection::N;
         direction1 = tt::tt_fabric::RoutingDirection::S;
+        depth_dir0 = upCount;
+        depth_dir1 = downCount;
     }
 
     tt::tt_fabric::ControlPlane* control_plane = tt::DevicePool::instance().get_control_plane();
     std::pair<tt::tt_fabric::mesh_id_t, chip_id_t> device_mesh_chip_id =
         control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
 
+    printf(
+        "mesh id is %u and chip_id is %u for device %u\n",
+        device_mesh_chip_id.first,
+        device_mesh_chip_id.second,
+        device_id);
+
     auto neighbors_dir0 =
         control_plane->get_intra_chip_neighbors(device_mesh_chip_id.first, device_mesh_chip_id.second, direction0);
     auto neighbors_dir1 =
         control_plane->get_intra_chip_neighbors(device_mesh_chip_id.first, device_mesh_chip_id.second, direction1);
 
+    for (uint32_t i = 0; i < neighbors_dir0.size(); i++) {
+        printf("neighbors in dir 0 at index %u is %u for device: %u\n", i, neighbors_dir0[i], device_id);
+    }
+
+    for (uint32_t i = 0; i < neighbors_dir1.size(); i++) {
+        printf("neighbors in dir 1 at index %u is %u for device: %u\n", i, neighbors_dir1[i], device_id);
+    }
+
     bool first_device = neighbors_dir1.size() == 0;
     bool last_device = neighbors_dir0.size() == 0;
+
+    printf("first device: %d for device %u\n", first_device, device_id);
+    printf("last device: %d for device %u\n", last_device, device_id);
 
     chip_id_t chip_id_dir0 =0;
     chip_id_t chip_id_dir1 =0;
@@ -163,15 +187,34 @@ operation::ProgramWithCallbacks all_gather_2D_multi_core_with_workers(
         chip_id_dir0 = neighbors_dir0[0];
         mesh_chip_ids_dir0 = control_plane->get_mesh_chip_id_from_physical_chip_id(chip_id_dir0);
         mesh_id_dir0 = mesh_chip_ids_dir0.first;
+        printf("chip_id_dir0: %u for device %u\n", chip_id_dir0, device_id);
+        printf(
+            "mesh_chip_ids_dir0: %u, %u for device %u\n",
+            mesh_chip_ids_dir0.first,
+            mesh_chip_ids_dir0.second,
+            device_id);
+        printf("mesh_id_dir0: %u for device %u\n", mesh_id_dir0, device_id);
+
+    } else {
+        depth_dir0 = 0;
     }
     if (!first_device) {
         chip_id_dir1 = neighbors_dir1[0];
         mesh_chip_ids_dir1 = control_plane->get_mesh_chip_id_from_physical_chip_id(chip_id_dir1);
         mesh_id_dir1 = mesh_chip_ids_dir1.first;
+        printf("chip_id_dir1: %u for device %u\n", chip_id_dir1, device_id);
+        printf(
+            "mesh_chip_ids_dir1: %u, %u for device %u\n",
+            mesh_chip_ids_dir1.first,
+            mesh_chip_ids_dir1.second,
+            device_id);
+        printf("mesh_id_dir1: %u for device %u\n", mesh_id_dir1, device_id);
+    } else {
+        depth_dir1 = 0;
     }
 
-    uint32_t depth_dir0 = neighbors_dir0.size();
-    uint32_t depth_dir1 = neighbors_dir1.size();
+    printf("depth_dir0: %u for device %u\n", depth_dir0, device_id);
+    printf("depth_dir1: %u for device %u\n", depth_dir1, device_id);
 
     std::vector<std::pair<tt::tt_fabric::routing_plane_id_t, CoreCoord>> routers_dir0 = control_plane->get_routers_to_chip(
         device_mesh_chip_id.first, device_mesh_chip_id.second, mesh_id_dir0, chip_id_dir0);
@@ -197,7 +240,7 @@ operation::ProgramWithCallbacks all_gather_2D_multi_core_with_workers(
     //const size_t packet_size_bytes = tt::tt_fabric::PACKET_HEADER_SIZE_BYTES + data_size;
     uint32_t cb_num_pages = lower_pages * higher_pages;
 
-    uint32_t input_cb_index = tt::CBIndex::c_4;
+    uint32_t input_cb_index = tt::CBIndex::c_0;
     tt::tt_metal::CircularBufferConfig cb_input_config =
         tt::tt_metal::CircularBufferConfig(
             cb_num_pages * page_size * input_tensor.element_size(), {{input_cb_index, input_cb_data_format}})
@@ -208,8 +251,8 @@ operation::ProgramWithCallbacks all_gather_2D_multi_core_with_workers(
     auto sem_noc_encoding = tt::tt_metal::hal.noc_xy_encoding(drain_sync_core.x, drain_sync_core.y);
 
     // Allocate space for the client interface
-    uint32_t num_directions = 2;
-    uint32_t client_interface_cb_index = tt::CBIndex::c_0;
+    uint32_t num_directions = (!first_device && !last_device) ? 2 : 1;
+    uint32_t client_interface_cb_index = tt::CBIndex::c_12;
     tt::tt_metal::CircularBufferConfig client_interface_cb_config =
         tt::tt_metal::CircularBufferConfig(
             num_directions * tt::tt_fabric::CLIENT_INTERFACE_SIZE, {{client_interface_cb_index, tt::DataFormat::UInt32}})
@@ -224,13 +267,14 @@ operation::ProgramWithCallbacks all_gather_2D_multi_core_with_workers(
 
     uint32_t src_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> bd_reader_compile_time_args = {src_is_dram, input_cb_index, lower_pages, higher_pages};
+
     auto bd_reader_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/all_gather_reader_kernel_2d.cpp",
         core,
         tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
             .compile_args = bd_reader_compile_time_args});
 
     uint32_t dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
@@ -243,13 +287,14 @@ operation::ProgramWithCallbacks all_gather_2D_multi_core_with_workers(
         device_id,
         output_tensor.element_size(),
         semaphore_target_value};
+
     auto bd_writer_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/all_gather_writer_kernel_2d.cpp",
         core,
         tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
             .compile_args = bd_writer_compile_time_args});
 
     std::vector<uint32_t> bd_reader_runtime_args = {
