@@ -12,11 +12,6 @@ from collections import defaultdict
 from model import Qwen2_5_VLForConditionalGeneration
 
 
-def nested_dict():
-    """Create an infinitely nestable defaultdict."""
-    return defaultdict(nested_dict)
-
-
 def print_dict_structure(d, prefix="", max_tensor_info=10):
     """Print the structure of a nested dictionary, including tensor shapes.
 
@@ -50,7 +45,7 @@ def convert_state_dict(flat_dict):
         Input: {'model.layers.0.self_attn.q_proj.weight': tensor(...)}
         Output: {'model': {'layers': {'0': {'self_attn': {'q_proj': {'weight': tensor(...)}}}}}}
     """
-    nested = nested_dict()
+    nested = {}
 
     for key, value in flat_dict.items():
         # Skip if not a tensor or buffer
@@ -62,41 +57,15 @@ def convert_state_dict(flat_dict):
 
         # Traverse the nested dict, creating the structure
         current = nested
-        for part in parts[:-1]:
+        for i, part in enumerate(parts[:-1]):
+            if part not in current:
+                current[part] = {}
             current = current[part]
 
         # Set the leaf value
         current[parts[-1]] = value
 
     return nested
-
-
-def extract_vision_state_dict(nested_dict):
-    """Extract just the vision-related parts of the state dict.
-    This includes patch embedding, rotary embeddings, and vision blocks.
-    """
-    vision_dict = {}
-
-    if "model" in nested_dict:
-        model_dict = nested_dict["model"]
-
-        # Extract patch embedding
-        if "patch_embed" in model_dict:
-            vision_dict["patch_embed"] = model_dict["patch_embed"]
-
-        # Extract rotary embeddings
-        if "rotary_pos_emb" in model_dict:
-            vision_dict["rotary_pos_emb"] = model_dict["rotary_pos_emb"]
-
-        # Extract vision blocks
-        if "blocks" in model_dict:
-            vision_dict["blocks"] = model_dict["blocks"]
-
-        # Extract patch merger
-        if "merger" in model_dict:
-            vision_dict["merger"] = model_dict["merger"]
-
-    return vision_dict
 
 
 def main():
@@ -116,7 +85,7 @@ def main():
     print_dict_structure(nested)
 
     print("\nExtracting vision components...")
-    vision_dict = extract_vision_state_dict(nested)
+    vision_dict = dict(nested["visual"])
 
     print("\nVision components structure:")
     print_dict_structure(vision_dict)
