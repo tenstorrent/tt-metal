@@ -737,10 +737,6 @@ bool MeshDevice::is_mmio_capable() const {
     TT_THROW("is_mmio_capable() is not supported on MeshDevice - use individual devices instead");
     return reference_device()->is_mmio_capable();
 }
-std::vector<std::vector<chip_id_t>> MeshDevice::get_tunnels_from_mmio() const {
-    TT_THROW("get_tunnels_from_mmio() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->get_tunnels_from_mmio();
-}
 
 // Allocator methods
 std::optional<DeviceAddr> MeshDevice::lowest_occupied_compute_l1_address() const {
@@ -778,7 +774,7 @@ MeshSubDeviceManagerId MeshDevice::mesh_create_sub_device_manager(
 
 std::tuple<MeshSubDeviceManagerId, SubDeviceId> MeshDevice::mesh_create_sub_device_manager_with_fabric(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
     MeshSubDeviceManagerId mesh_sub_device_manager_id(*this);
-    SubDeviceId fabric_sub_device_id;
+    SubDeviceId fabric_sub_device_id(0);
     const auto& devices = scoped_devices_->root_devices();
     for (uint32_t i = 0; i < devices.size(); i++) {
         auto* device = devices[i];
@@ -831,8 +827,10 @@ void MeshDevice::mesh_reset_sub_device_stall_group() {
 }
 
 MeshSubDeviceManagerId::MeshSubDeviceManagerId(const MeshDevice& mesh_device) {
-    this->sub_device_manager_ids.resize(mesh_device.num_devices());
+    this->sub_device_manager_ids.reserve(mesh_device.num_devices());
+    for (uint32_t i = 0; i < mesh_device.num_devices(); i++) {
+        this->sub_device_manager_ids.push_back(SubDeviceManagerId(0));
+    }
 }
-
 
 }  // namespace tt::tt_metal::distributed
