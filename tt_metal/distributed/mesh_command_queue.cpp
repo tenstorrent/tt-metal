@@ -198,7 +198,7 @@ void MeshCommandQueue::write_shard_to_device(
     const void* src,
     const BufferRegion& region,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    TT_FATAL(!trace_id.has_value(), "Writes are not supported during trace capture.");
+    TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture.");
     auto device = shard_view->device();
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
     buffer_dispatch::write_to_device_buffer(
@@ -210,7 +210,7 @@ void MeshCommandQueue::read_shard_from_device(
     void* dst,
     const BufferRegion& region,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    TT_FATAL(!trace_id.has_value(), "Reads are not supported during trace capture.");
+    TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
     this->drain_events_from_completion_queue();
     auto device = shard_view->device();
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
@@ -454,7 +454,7 @@ void MeshCommandQueue::enqueue_record_event_helper(
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     bool notify_host,
     const std::optional<MeshCoordinateRange>& device_range) {
-    TT_FATAL(!trace_id.has_value(), "Event Synchronization is not supported during trace capture.");
+    TT_FATAL(!trace_id_.has_value(), "Event Synchronization is not supported during trace capture.");
     auto& sysmem_manager = this->reference_sysmem_manager();
     event->cq_id = id_;
     event->event_id = sysmem_manager.get_next_event(id_);
@@ -492,7 +492,7 @@ void MeshCommandQueue::enqueue_record_event_to_host(
 }
 
 void MeshCommandQueue::enqueue_wait_for_event(const std::shared_ptr<MeshEvent>& sync_event) {
-    TT_FATAL(!trace_id.has_value(), "Event Synchronization is not supported during trace capture.");
+    TT_FATAL(!trace_id_.has_value(), "Event Synchronization is not supported during trace capture.");
     for (const auto& coord : sync_event->device_range) {
         event_dispatch::issue_wait_for_event_commands(
             id_, sync_event->cq_id, mesh_device_->get_device(coord)->sysmem_manager(), sync_event->event_id);
