@@ -19,9 +19,10 @@ namespace tt::tt_metal::distributed {
 
 class MeshEvent;
 struct MeshReadEventDescriptor;
-struct MeshReadBufferDescriptor;
+struct MeshBufferReadDescriptor;
+struct MeshBufferReadPayload;
 
-using MeshCompletionReaderVariant = std::variant<MeshReadBufferDescriptor, MeshReadEventDescriptor>;
+using MeshCompletionReaderVariant = std::variant<MeshBufferReadDescriptor, MeshReadEventDescriptor>;
 
 class MeshCommandQueue {
     // Main interface to dispatch data and workloads to a MeshDevice
@@ -115,6 +116,8 @@ private:
     CoreType dispatch_core_type_ = CoreType::WORKER;
 
     MultiProducerSingleConsumerQueue<MeshCompletionReaderVariant> completion_queue_reads_;
+    MultiProducerSingleConsumerQueue<MeshBufferReadPayload> read_payloads_;
+    uint32_t num_reads_ = 0;
 
     std::condition_variable reader_thread_cv_;
     std::mutex reader_thread_cv_mutex_;
@@ -130,6 +133,16 @@ private:
 
 public:
     MeshCommandQueue(MeshDevice* mesh_device, uint32_t id);
+
+    ~MeshCommandQueue() {
+        exit_condition_ = true;
+        {
+            std::lock_guard lock(reader_thread_cv_mutex_);
+            reader_thread_cv_.notify_one();
+        }
+        completion_queue_reader_thread_.join();
+    }
+
     MeshDevice* device() const { return mesh_device_; }
     uint32_t id() const { return id_; }
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) { return config_buffer_mgr_[index]; };
@@ -181,7 +194,7 @@ public:
     void enqueue_trace(const MeshTraceId& trace_id, bool blocking);
     void read_completion_queue();
     void read_completion_queue_event(MeshReadEventDescriptor& read_event_descriptor);
-    void copy_buffer_data_to_user_space(MeshReadBufferDescriptor& read_buffer_descriptor);
+    void copy_buffer_data_to_user_space(MeshBufferReadDescriptor& read_buffer_descriptor);
 };
 
 }  // namespace tt::tt_metal::distributed

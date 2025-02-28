@@ -333,7 +333,7 @@ TEST_F(MeshWorkloadTestSuite, EltwiseBinaryMeshWorkload) {
 }
 
 TEST_F(MeshWorkloadTestSuite, NonBlockingReads) {
-    uint32_t num_tiles = 10;
+    uint32_t num_tiles = 1024;
     uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
     uint32_t dram_buffer_size = single_tile_size * num_tiles;
 
@@ -348,7 +348,6 @@ TEST_F(MeshWorkloadTestSuite, NonBlockingReads) {
 
     auto buffer = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
     std::vector<uint32_t> src_vec = std::vector<uint32_t>(dram_buffer_size / sizeof(uint32_t));
-    std::iota(src_vec.begin(), src_vec.end(), 1);
     std::vector<MeshCommandQueue::ShardDataTransfer> shards = {};
     std::vector<std::vector<uint32_t>> shard_data = {};
     for (const auto& device_coord : devices_0) {
@@ -359,13 +358,14 @@ TEST_F(MeshWorkloadTestSuite, NonBlockingReads) {
         });
     }
 
-    for (int i = 0; i < 1; i++) {
+    for (int i = 0; i < 100; i++) {
+        std::iota(src_vec.begin(), src_vec.end(), i);
         EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), buffer, src_vec, true);
         mesh_device_->mesh_command_queue().enqueue_read_shards(shards, buffer, false);
-    }
-    Finish(mesh_device_->mesh_command_queue());
-    for (auto& dst_vec : shard_data) {
-        EXPECT_EQ(dst_vec, src_vec);
+        Finish(mesh_device_->mesh_command_queue());
+        for (auto& dst_vec : shard_data) {
+            EXPECT_EQ(dst_vec, src_vec);
+        }
     }
 }
 

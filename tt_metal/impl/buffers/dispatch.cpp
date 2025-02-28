@@ -776,6 +776,7 @@ std::shared_ptr<tt::tt_metal::CompletionReaderVariant> generate_sharded_buffer_r
     // for the current core/txn
     auto initial_src_page_index = dispatch_params.src_page_index;
     dispatch_params.src_page_index += dispatch_params.pages_per_txn;
+    // std::cout << "Pages per txn in main thread " << dispatch_params.pages_per_txn << std::endl;
     return std::make_shared<tt::tt_metal::CompletionReaderVariant>(
         std::in_place_type<tt::tt_metal::ReadBufferDescriptor>,
         buffer.buffer_layout(),
@@ -811,8 +812,10 @@ void copy_completion_queue_data_into_user_space(
     volatile bool& exit_condition) {
     const auto& [buffer_layout, page_size, padded_page_size, buffer_page_mapping, dst, dst_offset, num_pages_read, cur_dev_page_id, starting_host_page_id] =
         read_buffer_descriptor;
+    // std::cout << num_pages_read << " " << padded_page_size << std::endl;
     uint32_t padded_num_bytes = (num_pages_read * padded_page_size) + sizeof(CQDispatchCmd);
     uint32_t contig_dst_offset = dst_offset;
+    // std::cout << "Padded num bytes: " << padded_num_bytes << std::endl;
     uint32_t remaining_bytes_to_read = padded_num_bytes;
     uint32_t dev_page_id = cur_dev_page_id;
 
@@ -824,6 +827,7 @@ void copy_completion_queue_data_into_user_space(
     uint32_t pad_size_bytes = padded_page_size - page_size;
 
     while (remaining_bytes_to_read != 0) {
+        // std::cout << "Remaining bytes: " << remaining_bytes_to_read << std::endl;
         uint32_t completion_queue_write_ptr_and_toggle =
             sysmem_manager.completion_queue_wait_front(cq_id, exit_condition);
 
@@ -850,11 +854,19 @@ void copy_completion_queue_data_into_user_space(
         uint32_t num_pages_xfered = div_up(bytes_xfered, DispatchSettings::TRANSFER_PAGE_SIZE);
 
         remaining_bytes_to_read -= bytes_xfered;
-
+        // std::cout << "Bytes xfered " << bytes_xfered << std::endl;
         if (buffer_page_mapping == nullptr) {
             void* contiguous_dst = (void*)(uint64_t(dst) + contig_dst_offset);
             if (page_size == padded_page_size) {
                 uint32_t data_bytes_xfered = bytes_xfered - offset_in_completion_q_data;
+                // std::cout << "Hit nullptr equal" << std::endl;
+
+                // std::cout << "Src : " << completion_q_read_ptr + offset_in_completion_q_data << std::endl;
+                // std::cout << "Num bytes: " << data_bytes_xfered << std::endl;
+                // std::cout << "Dst: " << contiguous_dst << std::endl;
+                // std::cout << "Channel: " << channel << std::endl;
+                // std::cout << "Device Id: " << mmio_device_id << std::endl;
+
                 tt::Cluster::instance().read_sysmem(
                     contiguous_dst,
                     data_bytes_xfered,
@@ -901,7 +913,12 @@ void copy_completion_queue_data_into_user_space(
                     } else {
                         num_bytes_to_copy = page_size;
                     }
-
+                    // std::cout << "Hit nullptr unequal" << std::endl;
+                    // std::cout << "Src : " << completion_q_read_ptr + src_offset_bytes << std::endl;
+                    // std::cout << "Num bytes: " << num_bytes_to_copy << std::endl;
+                    // std::cout << "Dst: " << (uint64_t(contiguous_dst) + dst_offset_bytes) << std::endl;
+                    // std::cout << "Channel: " << channel << std::endl;
+                    // std::cout << "Device Id: " << mmio_device_id << std::endl;
                     tt::Cluster::instance().read_sysmem(
                         (char*)(uint64_t(contiguous_dst) + dst_offset_bytes),
                         num_bytes_to_copy,
@@ -915,14 +932,16 @@ void copy_completion_queue_data_into_user_space(
                 }
             }
         } else {
+            // std::cout << "Hit buffer page mapping" << std::endl;
             uint32_t src_offset_bytes = offset_in_completion_q_data;
             offset_in_completion_q_data = 0;
             uint32_t dst_offset_bytes = contig_dst_offset;
             uint32_t num_bytes_to_copy = 0;
-
+            // std::cout << "conditional: " << src_offset_bytes << " " << bytes_xfered << std::endl;
             while (src_offset_bytes < bytes_xfered) {
                 uint32_t src_offset_increment = padded_page_size;
                 if (remaining_bytes_of_nonaligned_page > 0) {
+                    // std::cout << "Case 1" << std::endl;
                     // Case 1: Portion of the page was copied into user buffer on the previous completion queue pop.
                     uint32_t num_bytes_remaining = bytes_xfered - src_offset_bytes;
                     num_bytes_to_copy = std::min(remaining_bytes_of_nonaligned_page, num_bytes_remaining);
@@ -946,6 +965,7 @@ void copy_completion_queue_data_into_user_space(
                         continue;
                     }
                 } else if (src_offset_bytes + padded_page_size >= bytes_xfered) {
+                    // std::cout << "Case 2" << std::endl;
                     // Case 2: Last page of data that was popped off the completion queue
                     // Don't need to compute src_offset_increment since this is end of loop
                     host_page_id = buffer_page_mapping->dev_page_to_host_page_mapping_[dev_page_id];
@@ -958,12 +978,15 @@ void copy_completion_queue_data_into_user_space(
                         dev_page_id++;
                     }
                     if (host_page_id.has_value()) {
+                        // std::cout << "Host page id has value" << std::endl;
                         dst_offset_bytes = (*host_page_id - starting_host_page_id) * page_size;
                     } else {
+                        // std::cout << "Continue" << std::endl;
                         src_offset_bytes += src_offset_increment;
                         continue;
                     }
                 } else {
+                    // std::cout << "Case 3" << std::endl;
                     num_bytes_to_copy = page_size;
                     host_page_id = buffer_page_mapping->dev_page_to_host_page_mapping_[dev_page_id];
                     dev_page_id++;
@@ -974,7 +997,11 @@ void copy_completion_queue_data_into_user_space(
                         continue;
                     }
                 }
-
+                // // std::cout << "Src : " << completion_q_read_ptr + src_offset_bytes << std::endl;
+                // // std::cout << "Num bytes: " << num_bytes_to_copy << std::endl;
+                // // std::cout << "Dst: " << (uint64_t(dst) + dst_offset_bytes) << std::endl;
+                // // std::cout << "Channel: " << channel << std::endl;
+                // // std::cout << "Device Id: " << mmio_device_id << std::endl;
                 tt::Cluster::instance().read_sysmem(
                     (char*)(uint64_t(dst) + dst_offset_bytes),
                     num_bytes_to_copy,
