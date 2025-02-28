@@ -5,6 +5,10 @@
 
 #pragma once
 
+// MT: This should be dissolved and moved to the appropriate place
+#include "cfg_defines.h"
+#include "ckernel_ops.h"
+
 namespace ckernel
 {
 

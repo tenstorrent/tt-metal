@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+
+#include <cstdint>
+
 #include "llk_defs.h"
 
 #include "ckernel.h"

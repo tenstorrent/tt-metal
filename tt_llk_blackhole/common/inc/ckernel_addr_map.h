@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 
+#pragma once
 
 // Temp address map in bytes
 #define TRISC0_PARAMS_BASE_ADDRESS 32*1024

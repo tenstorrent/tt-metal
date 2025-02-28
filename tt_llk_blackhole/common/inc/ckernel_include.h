@@ -8,7 +8,10 @@
 //
 // This file lists the includes that are safe to be included for both firmware and ckernels
 //
-#include "tensix.h"                 // MT: this should be dissolved
+
+// MT: This should be dissolved and moved to the appropriate place
+#include "tensix.h"
+
 #include "ckernel_defs.h"
 #include "ckernel_instr_params.h"
 #include "ckernel_addrmod.h"

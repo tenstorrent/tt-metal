@@ -9,6 +9,9 @@
 #include "perf_res_decouple.h"
 #endif
 
+// MT: This should be dissolved and moved to the appropriate place
+#include "tensix.h"
+
 // Hand-coded parameter encoding for various common instructions
 namespace ckernel
 {

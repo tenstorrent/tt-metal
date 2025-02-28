@@ -4,11 +4,15 @@
 
 
 #pragma once
+
+#include <cstdint>
+
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "ckernel_globals.h"
+#include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cunpack_common.h"
-#include "ckernel_globals.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;

@@ -6,6 +6,7 @@
 #pragma once
 
 #include <cstdint>
+
 #include "ckernel_structs.h"
 #include "risc_attribs.h"
 
