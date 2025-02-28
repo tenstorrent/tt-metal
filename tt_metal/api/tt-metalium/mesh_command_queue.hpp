@@ -15,7 +15,11 @@
 #include "mesh_trace.hpp"
 #include "mesh_trace_id.hpp"
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
+
+class ThreadPool;
+
+namespace distributed {
 
 class MeshEvent;
 struct MeshReadEventDescriptor;
@@ -111,9 +115,15 @@ private:
     CoreCoord dispatch_core_;
     CoreType dispatch_core_type_ = CoreType::WORKER;
     std::queue<std::shared_ptr<MeshReadEventDescriptor>> event_descriptors_;
+    // MeshCommandQueues and the MeshDevice share the thread-pool
+    std::shared_ptr<ThreadPool> thread_pool_;
 
 public:
-    MeshCommandQueue(MeshDevice* mesh_device, uint32_t id);
+    MeshCommandQueue(MeshDevice* mesh_device, uint32_t id, std::shared_ptr<ThreadPool> thread_pool);
+
+    MeshCommandQueue(const MeshCommandQueue& other) = delete;
+    MeshCommandQueue& operator=(const MeshCommandQueue& other) = delete;
+
     MeshDevice* device() const { return mesh_device_; }
     uint32_t id() const { return id_; }
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) { return config_buffer_mgr_[index]; };
@@ -167,4 +177,6 @@ public:
     void enqueue_trace(const MeshTraceId& trace_id, bool blocking);
 };
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace distributed
+
+}  // namespace tt::tt_metal
