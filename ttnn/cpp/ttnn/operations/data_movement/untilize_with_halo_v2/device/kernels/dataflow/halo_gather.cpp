@@ -56,20 +56,24 @@ void copy_sticks_async(
             if constexpr (enable_split_reader) {
                 if constexpr (is_remote_config) {
                     if constexpr (is_reader) {
+                        // Skip every odd iteration for readers in remote configuration
                         if (iteration % 2 == 1) {
                             continue;
                         }
                     } else {
+                        // Skip every even iteration for writer in remote configuration
                         if (iteration % 2 == 0) {
                             continue;
                         }
                     }
                 } else {
                     if constexpr (is_reader) {
+                        // Skip every even iteration for readers in local configuration
                         if (iteration % 2 == 0) {
                             continue;
                         }
                     } else {
+                        // Skip every odd iteration for writer in local configuration
                         if (iteration % 2 == 1) {
                             continue;
                         }
