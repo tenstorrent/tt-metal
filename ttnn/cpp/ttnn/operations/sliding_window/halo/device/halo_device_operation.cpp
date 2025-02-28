@@ -98,9 +98,24 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
     auto kernel_config = sliding_window::generate_halo_kernel_config_tensors(
         tensor_metadata, shard_boundaries, is_block_sharded, transpose_mcast_, remote_read_, device);
 
+    tt::log_info(
+        "logical - input_shape = {}, output_shape = {}",
+        input_tensor.get_logical_shape(),
+        output_tensor.get_logical_shape());
+    tt::log_info(
+        "padded - input_shape = {}, output_shape = {}",
+        input_tensor.get_padded_shape(),
+        output_tensor.get_padded_shape());
+    tt::log_info("shard_boundaries ({} elements) = {}", shard_boundaries.size(), shard_boundaries);
+    tt::log_info("tensor_metadata ({} elements) = {}", tensor_metadata.size(), tensor_metadata);
+
     const auto& pad_config = std::get<0>(kernel_config);
     const auto& local_config = std::get<1>(kernel_config);
     const auto& remote_config = std::get<2>(kernel_config);
+
+    tt::log_info("pad_config = {}", pad_config);
+    tt::log_info("local_config = {}", local_config);
+    tt::log_info("remote_config = {}", remote_config);
 
     auto pad_config_tensor =
         sliding_window::construct_on_host_config_tensor(pad_config, this->config_, this->parallel_config_);

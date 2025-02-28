@@ -232,13 +232,14 @@ std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& conf
     return op_trace_metadata;
 }
 
-std::vector<std::pair<uint32_pair_t, uint32_pair_t>> generate_shard_boundaries(
+std::vector<ShardBoundary> generate_shard_boundaries(
     const SlidingWindowConfig& config, const std::vector<uint32_t>& op_trace_metadata) {
-    std::vector<std::pair<uint32_pair_t, uint32_pair_t>> shard_boundaries;
-    uint32_t num_cores = config.num_cores_nhw;
-    uint32_t output_shard_h = config.get_output_shard_y(config.snap_to_tile);
+    std::vector<ShardBoundary> shard_boundaries;
 
-    uint32_t ceil_padding_w = config.get_ceil_pad_w();
+    const uint32_t num_cores = config.num_cores_nhw;
+    const uint32_t output_shard_h = config.get_output_shard_y(config.snap_to_tile);
+
+    const uint32_t ceil_padding_w = config.get_ceil_pad_w();
     uint32_t padded_input_w = config.input_hw.second + 2 * config.pad_hw.second + ceil_padding_w;
 
     uint32_t max_index = op_trace_metadata.size();
@@ -253,9 +254,10 @@ std::vector<std::pair<uint32_pair_t, uint32_pair_t>> generate_shard_boundaries(
     if (config.is_bilinear) {
         halo_with_pad_len = (config.window_hw.first) * padded_input_w;
     }
+
     uint32_t output_index_start = 0;
     for (uint32_t core = 0; core < num_cores; ++core) {
-        uint32_t output_index_end = std::min(output_index_start + output_shard_h, max_index) - 1;
+        const uint32_t output_index_end = std::min(output_index_start + output_shard_h, max_index) - 1;
         uint32_t input_index_start = op_trace_metadata[std::min(output_index_start, max_index - 1)];
         uint32_t input_index_end = op_trace_metadata[output_index_end] + halo_with_pad_len;
         if (input_index_start == 0 and output_index_start != 0) {
@@ -273,21 +275,15 @@ std::vector<std::pair<uint32_pair_t, uint32_pair_t>> generate_shard_boundaries(
         shard_boundaries.push_back({{output_index_start, output_index_end}, {input_index_start, input_index_end}});
         output_index_start = output_index_end + 1;
     }
-#if 1
-    for (auto [output_shard, input_shard] : shard_boundaries) {
-        log_debug(
-            tt::LogOp,
-            "output_shard: ({}, {}), input_shard: ({}, {})",
-            output_shard.first,
-            output_shard.second,
-            input_shard.first,
-            input_shard.second);
-    }
-#endif
+
+    for (auto& boundary : shard_boundaries) {
+        log_debug(tt::LogOp, "shard_boundary={}", boundary);
+    };
+
     return shard_boundaries;
 }
 
-std::vector<std::pair<bool, uint32_pair_t>> generate_tensor_metadata(
+std::vector<PixelMetadata> generate_tensor_metadata(
     const std::vector<bool>& pad_metadata,
     const SlidingWindowConfig& config,
     uint32_t reshard_num_cores_nhw,
@@ -316,14 +312,20 @@ std::vector<std::pair<bool, uint32_pair_t>> generate_tensor_metadata(
         }
     };
 
-    std::vector<std::pair<bool, uint32_pair_t>> tensor_metadata;
+    std::vector<PixelMetadata> tensor_metadata;
+    tensor_metadata.reserve(pad_metadata.size());
+
     uint32_t core_id = 0;
     uint32_t input_reshard_local_idx = 0;
-    for (bool is_pad_stick : pad_metadata) {
-        if (is_pad_stick) {
-            tensor_metadata.push_back(std::make_pair(is_pad_stick, std::make_pair(0, 0)));
+
+    for (bool is_pad_flag : pad_metadata) {
+        if (is_pad_flag) {
+            tensor_metadata.push_back(PixelMetadata{true, 0, 0});
         } else {
-            tensor_metadata.push_back(std::make_pair(is_pad_stick, remap(core_id, input_reshard_local_idx++)));
+            auto [new_core_id, new_local_idx] = remap(core_id, input_reshard_local_idx);
+            tensor_metadata.push_back(PixelMetadata{false, new_core_id, new_local_idx});
+
+            input_reshard_local_idx++;
             if (input_reshard_local_idx == input_shard_height) {
                 core_id++;
                 input_reshard_local_idx = 0;
@@ -334,8 +336,7 @@ std::vector<std::pair<bool, uint32_pair_t>> generate_tensor_metadata(
     return tensor_metadata;
 }
 
-uint32_t generate_max_out_nsticks_per_core(
-    const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries) {
+uint32_t generate_max_out_nsticks_per_core(const std::vector<ShardBoundary>& shard_boundaries) {
     // calculate max_out_nsticks_per_core
     uint32_t max_out_nsticks_per_core = 0;
     for (auto [_, in_shard] : shard_boundaries) {
@@ -345,10 +346,135 @@ uint32_t generate_max_out_nsticks_per_core(
     return max_out_nsticks_per_core;
 }
 
+using GatherRun = std::tuple<uint32_t, uint32_t, uint32_t>;
+using PerCoreGatherData = std::map<std::pair<uint32_t, uint32_t>, std::vector<GatherRun>>;
+using ReblockedData = std::map<std::pair<uint32_t, uint32_t>, std::map<uint32_t, std::vector<GatherRun>>>;
+
+/**
+ * @brief Splits each run (src_start, dst_start, length) into block-sized chunks.
+ *
+ * If a run crosses the boundary between block i and block i+1 (e.g., block size = 32),
+ * it gets split into multiple smaller runs.
+ */
+ReblockedData reblock_per_core_gather_data(const PerCoreGatherData& per_core_gather_data, uint32_t block_size) {
+    ReblockedData block_data;
+    for (const auto& [core_src_dst, step] : per_core_gather_data) {
+        for (const auto& [src_start, dst_start, len] : step) {
+            uint32_t src_offset = src_start;
+            uint32_t dst_offset = dst_start;
+            uint32_t length = len;
+            while (length > 0) {
+                const uint32_t block_id = src_offset / block_size;
+                const uint32_t offset_in_block = src_offset % block_size;
+                const uint32_t remaining_space_in_block = block_size - offset_in_block;
+                const uint32_t transfer_size = (length <= remaining_space_in_block ? length : remaining_space_in_block);
+
+                block_data[core_src_dst][block_id].push_back({offset_in_block, dst_offset, transfer_size});
+
+                src_offset += transfer_size;
+                dst_offset += transfer_size;
+                length -= transfer_size;
+            }
+        }
+    }
+    return block_data;
+}
+
+inline std::vector<std::pair<uint32_t, uint32_t>> expand_runs(const std::vector<GatherRun>& runs) {
+    std::vector<std::pair<uint32_t, uint32_t>> out;
+    for (auto& [src_start, dst_start, length] : runs) {
+        for (uint32_t i = 0; i < length; i++) {
+            out.push_back({src_start + i, dst_start + i});
+        }
+    }
+    return out;
+}
+
+bool validate_reblocked_data(const PerCoreGatherData& original, const ReblockedData& reblocked, uint32_t block_size) {
+    for (const auto& kv : original) {
+        auto src_dst = kv.first;
+        const auto& original_runs = kv.second;
+
+        std::vector<std::pair<uint32_t, uint32_t>> original_pairs = expand_runs(original_runs);
+
+        std::vector<GatherRun> reconstructed_runs;
+
+        // See if we have an entry in 'reblocked' for this key
+        auto it = reblocked.find(src_dst);
+        if (it == reblocked.end()) {
+            // If the original had runs for (src_core,dst_core) but reblocked does not, that's invalid
+            if (!original_runs.empty()) {
+                std::cerr << "Missing reblocked entry for src_dst=(" << src_dst.first << "," << src_dst.second << ")\n";
+                return false;
+            } else {
+                continue;  // no runs originally, so that's fine
+            }
+        }
+
+        for (auto& block_kv : it->second) {
+            uint32_t block_id = block_kv.first;
+            const auto& block_runs = block_kv.second;
+
+            for (auto& [offset_in_block, dst_start, length] : block_runs) {
+                if (offset_in_block + length > block_size) {
+                    std::cerr << "Block boundary violation for block_id=" << block_id
+                              << " offset_in_block=" << offset_in_block << " length=" << length
+                              << " block_size=" << block_size << " (src_core=" << src_dst.first
+                              << ", dst_core=" << src_dst.second << ")\n";
+                    return false;
+                }
+
+                uint32_t absolute_src_start = block_id * block_size + offset_in_block;
+                reconstructed_runs.push_back(GatherRun(absolute_src_start, dst_start, length));
+            }
+        }
+
+        std::vector<std::pair<uint32_t, uint32_t>> reblocked_pairs = expand_runs(reconstructed_runs);
+
+        auto pair_sort_lambda = [](auto& a, auto& b) {
+            if (a.first == b.first) {
+                return a.second < b.second;
+            }
+            return a.first < b.first;
+        };
+
+        std::sort(original_pairs.begin(), original_pairs.end(), pair_sort_lambda);
+        std::sort(reblocked_pairs.begin(), reblocked_pairs.end(), pair_sort_lambda);
+
+        if (original_pairs.size() != reblocked_pairs.size()) {
+            std::cerr << "Mismatch in pair counts for src_dst=(" << src_dst.first << "," << src_dst.second << ")\n"
+                      << " original pairs=" << original_pairs.size() << ", reblocked pairs=" << reblocked_pairs.size()
+                      << "\n";
+            return false;
+        }
+
+        for (size_t i = 0; i < original_pairs.size(); i++) {
+            if (original_pairs[i] != reblocked_pairs[i]) {
+                std::cerr << "Pair mismatch at index " << i << " for src_dst=(" << src_dst.first << ","
+                          << src_dst.second << ")\n"
+                          << " original=(" << original_pairs[i].first << "," << original_pairs[i].second << ") "
+                          << " reblocked=(" << reblocked_pairs[i].first << "," << reblocked_pairs[i].second << ")\n";
+                return false;
+            }
+        }
+    }
+
+    // Also check if 'reblocked' has extraneous keys that aren't in original
+    for (const auto& kv : reblocked) {
+        auto src_dst = kv.first;
+        if (original.find(src_dst) == original.end()) {
+            // If reblocked has a key that original doesn't have thats invalid
+            std::cerr << "Extra reblocked entry for src_dst=(" << src_dst.first << "," << src_dst.second << ")\n";
+            return false;
+        }
+    }
+    return true;
+}
+
 std::tuple<std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>>
 generate_halo_kernel_config_tensors(
-    const std::vector<std::pair<bool, uint32_pair_t>>& tensor_metadata,
-    const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries,
+    const std::vector<PixelMetadata>& tensor_metadata,
+    const std::vector<ShardBoundary>& shard_boundaries,
     bool is_block_sharded,
     bool transpose_mcast,
     bool remote_read,
@@ -371,8 +497,7 @@ generate_halo_kernel_config_tensors(
         for (uint32_t global_idx = input_start; global_idx <= input_end; ++global_idx) {
             uint32_t dst_core_id = core_id;
             uint32_t local_idx = global_idx - input_start;
-            auto [is_pad_stick, src_idx] = tensor_metadata[global_idx];
-            auto [src_core_id, src_local_idx] = src_idx;
+            auto [is_pad_stick, src_core_id, src_local_idx] = tensor_metadata[global_idx];
             TT_ASSERT(local_idx < pad_local && src_local_idx < pad_local, "Index overflow");
             if (is_pad_stick) {
                 TT_ASSERT(src_local_idx == 0);
@@ -391,6 +516,14 @@ generate_halo_kernel_config_tensors(
         }
         ++core_id;
     }
+
+    tt::log_info("per core gather data = {}", per_core_gather_data);
+
+    auto output = reblock_per_core_gather_data(per_core_gather_data, 32);
+    auto is_valid = validate_reblocked_data(per_core_gather_data, output, 32);
+    TT_FATAL(is_valid, "wasnt valid");
+
+    tt::log_info("reblocked per core gather data (valid? {}) -> {}", is_valid, output);
 
     // construct the config tensors
     /**
@@ -556,13 +689,13 @@ generate_halo_kernel_config_tensors(
 
 std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
     const std::vector<uint32_t>& op_trace_metadata,
-    const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries,
+    const std::vector<ShardBoundary>& shard_boundaries,
     bool pad_tile,
     bool pad_cores) {
     std::vector<std::vector<uint16_t>> sharded_input_top_left_indices;
     for (const auto& item : shard_boundaries) {
-        const auto& [output_shard_start, output_shard_end] = item.first;
-        const auto& [input_shard_start, input_shard_end] = item.second;
+        const auto& [output_shard_start, output_shard_end] = item.output_range;
+        const auto& [input_shard_start, input_shard_end] = item.input_range;
         std::vector<uint16_t> local_top_left_indices;
         // sanity check
         if (output_shard_start >= op_trace_metadata.size()) {
@@ -734,8 +867,8 @@ auto fmt::formatter<ttnn::operations::sliding_window::ParallelConfig>::format(
 }
 
 auto fmt::formatter<ttnn::operations::sliding_window::SlidingWindowConfig>::format(
-    const ttnn::operations::sliding_window::SlidingWindowConfig& t,
-    format_context& ctx) const -> format_context::iterator {
+    const ttnn::operations::sliding_window::SlidingWindowConfig& t, format_context& ctx) const
+    -> format_context::iterator {
     std::string str = fmt::format(
         "SlidingWindowConfig(batch_size={}, input_hw=({},{}), window_hw=({},{}), stride_hw=({},{}), pad_hw=({},{}), "
         "dilation_hw=({},{}), num_cores_nhw={}, num_cores_c={}, core_range_set_={})",
@@ -754,4 +887,20 @@ auto fmt::formatter<ttnn::operations::sliding_window::SlidingWindowConfig>::form
         t.num_cores_c,
         t.core_range_set.str());
     return fmt::format_to(ctx.out(), "{}", str);
+}
+
+auto fmt::formatter<ttnn::operations::sliding_window::ShardBoundary>::format(
+    const ttnn::operations::sliding_window::ShardBoundary& t, format_context& ctx) const -> format_context::iterator {
+    return fmt::format_to(
+        ctx.out(),
+        "[output_shard=({}, {}), input_shard=({}, {})]",
+        t.output_range.start,
+        t.output_range.end,
+        t.input_range.start,
+        t.input_range.end);
+}
+
+auto fmt::formatter<ttnn::operations::sliding_window::PixelMetadata>::format(
+    const ttnn::operations::sliding_window::PixelMetadata& t, format_context& ctx) const -> format_context::iterator {
+    return fmt::format_to(ctx.out(), "[{}, ({}, {})]", t.is_pad, t.src_core_id, t.src_local_idx);
 }
