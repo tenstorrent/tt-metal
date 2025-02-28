@@ -149,6 +149,9 @@ Buffer<T> get_as(const Tensor& tensor) {
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
                 return get_as<T>(storage.buffer);
+            } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
+                TT_FATAL(storage.buffers.size() == 1, "Only single buffer storage is supported");
+                return get_as<T>(storage.buffers[0]);
             } else {
                 TT_THROW("Tensor must have OwnedStorage");
             }

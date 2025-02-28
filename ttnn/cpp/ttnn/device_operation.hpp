@@ -15,6 +15,7 @@
 #include <tt-metalium/graph_tracking.hpp>
 #include "ttnn/core.hpp"
 #include "ttnn/distributed/api.hpp"
+#include <tt-metalium/distributed.hpp>
 #include "tools/profiler/op_profiler.hpp"
 
 namespace ttnn {
@@ -22,7 +23,7 @@ namespace ttnn {
 namespace device_operation {
 
 template <typename T>
-using CachedProgram = tt::tt_metal::program_cache::detail::CachedProgram<T>;
+using CachedProgram = tt::tt_metal::program_cache::detail::ProgramAdapter<T>;
 
 template <typename program_factory_t>
 concept ProgramFactoryConcept = requires {
@@ -131,7 +132,8 @@ inline auto& create_or_get_program_from_cache(
                 program_cache.insert(
                     program_hash,
                     tt::tt_metal::program_cache::detail::CachedProgramFactory{
-                        program_factory_t::create(operation_attributes, tensor_args, tensor_return_value),
+                        tt::tt_metal::program_cache::detail::ProgramAdapter(
+                            program_factory_t::create(operation_attributes, tensor_args, tensor_return_value)),
                         program_factory_index});
                 auto& cached_program_factory = program_cache.get(program_hash);
                 auto& cached_program = cached_program_factory.cached_program.template get<cached_program_t>();
@@ -164,6 +166,119 @@ inline auto& create_or_get_program_from_cache(
             },
             program_factory);
         return program;
+    }
+}
+
+template <typename device_operation_t>
+inline auto& create_or_get_meshworkload_from_cache(
+    auto& program_cache,
+    auto program_cache_hit,
+    auto program_hash,
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const typename device_operation_t::tensor_args_t& tensor_args,
+    typename device_operation_t::tensor_return_value_t& tensor_return_value,
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    uint64_t device_operation_id) {
+    if (!program_cache_hit) {
+        tt::log_info("CACHE MISS: Creating mesh workload from cache");
+        auto program_factory = device_operation_t::select_program_factory(operation_attributes, tensor_args);
+        auto program_factory_index = program_factory.index();
+
+        auto& mesh_workload = std::visit(
+            [&program_factory_index,
+             &program_hash,
+             &program_cache,
+             &operation_attributes,
+             &tensor_args,
+             &tensor_return_value,
+             &device_operation_id,
+             &mesh_device](auto&& program_factory) -> auto& {
+                using program_factory_t = std::decay_t<decltype(program_factory)>;
+                using cached_program_t =
+                    decltype(program_factory_t::create(operation_attributes, tensor_args, tensor_return_value));
+
+                // Create a cached program (contains both program and shared variables)
+                auto cached_program = program_factory_t::create(operation_attributes, tensor_args, tensor_return_value);
+
+                // Set runtime ID here before moving the program
+                cached_program.program.set_runtime_id(device_operation_id);
+
+                // Create a new mesh workload
+                auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
+
+                // Move the program from the cached_program into the mesh workload
+                tt::tt_metal::distributed::AddProgramToMeshWorkload(
+                    mesh_workload,
+                    std::move(cached_program.program),  // Move the program
+                    tt::tt_metal::distributed::MeshCoordinateRange(
+                        {0, 0}, {mesh_device->num_rows() - 1, mesh_device->num_cols() - 1}));
+
+                // Create a cached mesh workload with the mesh workload and shared variables
+                auto cached_mesh_workload = tt::tt_metal::program_cache::detail::CachedMeshWorkload<
+                    typename program_factory_t::shared_variables_t>(
+                    std::move(mesh_workload), std::move(cached_program.shared_variables));
+
+                // Create a program adapter to wrap the cached mesh workload
+                tt::tt_metal::program_cache::detail::ProgramAdapter<typename program_factory_t::shared_variables_t>
+                    adapter(std::move(cached_mesh_workload));
+
+                // Insert the cached program factory into the cache
+                program_cache.insert(
+                    program_hash,
+                    tt::tt_metal::program_cache::detail::CachedProgramFactory{
+                        std::move(adapter), program_factory_index});
+
+                // Return the mesh workload from the cached factory
+                auto& cached_program_factory = program_cache.get(program_hash);
+                // Get the program adapter from the cached factory
+                auto& cached_adapter = cached_program_factory.cached_program
+                                           .template get<tt::tt_metal::program_cache::detail::ProgramAdapter<
+                                               typename program_factory_t::shared_variables_t>>();
+                return cached_adapter.get_cached_mesh_workload().workload;
+            },
+            program_factory);
+        return mesh_workload;
+    } else {
+        tt::log_info("CACHE HIT: Creating mesh workload from cache");
+        auto& cached_program_factory = program_cache.get(program_hash);
+        auto program_factory_index = cached_program_factory.program_factory_index;
+
+        // Reconstruct the program factory variant based on the stored index
+        using program_factory_variant_t =
+            decltype(device_operation_t::select_program_factory(operation_attributes, tensor_args));
+        auto program_factory = map_index_to_variant(program_factory_index, program_factory_variant_t{});
+
+        // Use std::visit to override runtime arguments using the selected factory
+        auto& mesh_workload = std::visit(
+            [&program_factory_index,
+             &operation_attributes,
+             &tensor_args,
+             &tensor_return_value,
+             &device_operation_id,
+             &mesh_device,
+             &cached_program_factory](auto&& program_factory) -> auto& {
+                using program_factory_t = std::decay_t<decltype(program_factory)>;
+                using cached_program_t =
+                    decltype(program_factory_t::create(operation_attributes, tensor_args, tensor_return_value));
+
+                // Get the program adapter from the cached factory
+                auto& adapter = cached_program_factory.cached_program
+                                    .template get<tt::tt_metal::program_cache::detail::ProgramAdapter<
+                                        typename program_factory_t::shared_variables_t>>();
+
+                // Override runtime arguments through the adapter
+                program_factory_t::override_runtime_arguments(
+                    adapter, operation_attributes, tensor_args, tensor_return_value);
+
+                adapter.program.set_runtime_id(device_operation_id);
+
+                tt::tt_metal::GraphTracker::instance().track_program(&adapter.program, mesh_device);
+
+                // Return the mesh workload from the cached factory
+                return adapter.get_cached_mesh_workload().workload;
+            },
+            program_factory);
+        return mesh_workload;
     }
 }
 
@@ -237,10 +352,14 @@ inline void log_operation(
 
 #endif
 
-
-
 template <DeviceOperationConcept device_operation_t>
-void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& operation_attributes, const auto& tensor_args, auto &tensor_return_value, auto& device) {
+void launch_on_mesh_device(
+    auto cq_id,
+    auto device_operation_id,
+    const auto& operation_attributes,
+    const auto& tensor_args,
+    auto& tensor_return_value,
+    auto& device) {
     ZoneScopedN("TT_DNN_DEVICE_OP");
 
     if constexpr (HasSkipLaunch<device_operation_t>) {
@@ -261,13 +380,91 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
     }
 
     log_operation<device_operation_t>(
-            device_operation_id,
-            device->id(),
+        device_operation_id, device->id(), operation_attributes, tensor_args, program_hash, program_cache_hit);
+
+    tt::stl::reflection::visit_object_of_type<Tensor>(CheckDeviceBufferIsAllocated{}, tensor_args);
+
+    if (program_cache_hit) {
+        ZoneScopedN("Validate on Program Cache Hit");
+        device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
+    } else {
+        ZoneScopedN("Validate on Program Cache Miss");
+        device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
+    }
+
+    if (is_program_cache_enabled) {
+        tt::log_info("Creating mesh workload from cache");
+        auto& mesh_workload = create_or_get_meshworkload_from_cache<device_operation_t>(
+            program_cache,
+            program_cache_hit,
+            program_hash,
             operation_attributes,
             tensor_args,
-            program_hash,
-            program_cache_hit
-        );
+            tensor_return_value,
+            device,
+            device_operation_id);
+
+        tt::tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, true);
+
+    } else {
+        auto program_factory = device_operation_t::select_program_factory(operation_attributes, tensor_args);
+
+        auto program = std::visit(
+            [&](auto&& program_factory) {
+                using program_factory_t = std::decay_t<decltype(program_factory)>;
+                auto cached_program = program_factory_t::create(operation_attributes, tensor_args, tensor_return_value);
+                return std::make_shared<tt::tt_metal::Program>(std::move(cached_program.program));
+            },
+            program_factory);
+
+        program->set_runtime_id(device_operation_id);
+
+        tt::tt_metal::GraphTracker::instance().track_program(program.get(), device);
+        if (tt::tt_metal::GraphTracker::instance().hook_program(program.get())) {
+            return;
+        }
+        auto mesh_device = dynamic_cast<tt::tt_metal::distributed::MeshDevice*>(device);
+        TT_FATAL(mesh_device != nullptr, "Device is not a MeshDevice");
+        auto& cq = mesh_device->mesh_command_queue();
+        auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
+        tt::tt_metal::distributed::AddProgramToMeshWorkload(
+            mesh_workload,
+            std::move(*program),
+            tt::tt_metal::distributed::MeshCoordinateRange(
+                {0, 0}, {mesh_device->num_rows() - 1, mesh_device->num_cols() - 1}));
+        tt::tt_metal::distributed::EnqueueMeshWorkload(cq, mesh_workload, true);
+    }
+}
+
+template <DeviceOperationConcept device_operation_t>
+void launch_on_worker_thread(
+    auto cq_id,
+    auto device_operation_id,
+    const auto& operation_attributes,
+    const auto& tensor_args,
+    auto& tensor_return_value,
+    auto& device) {
+    ZoneScopedN("TT_DNN_DEVICE_OP");
+
+    if constexpr (HasSkipLaunch<device_operation_t>) {
+        if (device_operation_t::skip_launch(operation_attributes, tensor_args, tensor_return_value)) {
+            return;
+        }
+    }
+
+    auto& program_cache = device->get_program_cache();
+
+    auto program_hash = 0;
+    bool program_cache_hit = false;
+
+    auto is_program_cache_enabled = program_cache.is_enabled();
+    if (is_program_cache_enabled) {
+        program_hash = compute_program_hash<device_operation_t>(operation_attributes, tensor_args);
+        program_cache_hit = program_cache.contains(program_hash);
+    }
+
+    log_operation<device_operation_t>(
+        device_operation_id, device->id(), operation_attributes, tensor_args, program_hash, program_cache_hit);
 
     tt::stl::reflection::visit_object_of_type<Tensor>(CheckDeviceBufferIsAllocated{}, tensor_args);
 
@@ -297,7 +494,7 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
         program.set_runtime_id(device_operation_id);
 
         tt::tt_metal::GraphTracker::instance().track_program(&program, device);
-        if(tt::tt_metal::GraphTracker::instance().hook_program(&program)) {
+        if (tt::tt_metal::GraphTracker::instance().hook_program(&program)) {
             return;
         }
 
@@ -318,15 +515,15 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
         auto program = std::visit(
             [&](auto&& program_factory) {
                 using program_factory_t = std::decay_t<decltype(program_factory)>;
-                return std::make_shared<tt::tt_metal::Program>(
-                    program_factory_t::create(operation_attributes, tensor_args, tensor_return_value).program);
+                auto cached_program = program_factory_t::create(operation_attributes, tensor_args, tensor_return_value);
+                return std::make_shared<tt::tt_metal::Program>(std::move(cached_program.program));
             },
             program_factory);
 
         program->set_runtime_id(device_operation_id);
 
         tt::tt_metal::GraphTracker::instance().track_program(program.get(), device);
-        if(tt::tt_metal::GraphTracker::instance().hook_program(program.get())) {
+        if (tt::tt_metal::GraphTracker::instance().hook_program(program.get())) {
             return;
         }
 
@@ -353,92 +550,17 @@ typename device_operation_t::tensor_return_value_t launch_on_single_device(
 
     // Create output tensor first
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
-    auto device = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args).device();
-    launch_on_worker_thread<device_operation_t>(cq_id, device_operation_id, operation_attributes, tensor_args, tensor_return_value, device);
-    return tensor_return_value;
-}
-
-template <DeviceOperationConcept device_operation_t>
-typename device_operation_t::tensor_args_t get_shard_tensor_args(std::size_t index, auto device, const typename device_operation_t::tensor_args_t& tensor_args) {
-    auto get_shard = [device](const auto& tensor) {
-        auto& storage = std::get<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage());
-        return Tensor{DeviceStorage{storage.get_buffer_for_device(device)}, storage.get_tensor_spec_for_device(device)};
-    };
-    return tt::stl::reflection::transform_object_of_type<Tensor>(get_shard, tensor_args);
-}
-
-static Tensor make_tensor_return_value_from_shards(auto& old_storage, std::vector<Tensor>& output_shards) {
-    return distributed::create_multi_device_tensor(output_shards, StorageType::MULTI_DEVICE, old_storage.strategy);
-}
-
-static std::vector<Tensor> make_tensor_return_value_from_shards(auto& old_storage,  std::vector<std::vector<Tensor>>& output_shards) {
-    auto& first_shard = output_shards[0];
-
-    std::vector<Tensor> output;
-    output.reserve(first_shard.size());
-
-    for (auto index = 0; index < first_shard.size(); index++) {
-        std::vector<Tensor> tensors;
-        for (auto shard_index = 0; shard_index < output_shards.size(); shard_index++) {
-            tensors.push_back(output_shards[shard_index][index]);
-        }
-        output.push_back(make_tensor_return_value_from_shards(old_storage, tensors));
-    }
-    return output;
-}
-
-static std::vector<std::optional<Tensor>> make_tensor_return_value_from_shards(auto& old_storage, std::vector<std::vector<std::optional<Tensor>>>& output_shards) {
-    auto& first_shard = output_shards[0];
-
-    std::vector<std::optional<Tensor>> output;
-    output.reserve(first_shard.size());
-
-    for (auto index = 0; index < first_shard.size(); index++) {
-        if (not first_shard[index].has_value()) {
-            output.push_back(std::nullopt);
-            continue;
-        }
-        std::vector<Tensor> tensors;
-        for (auto shard_index = 0; shard_index < output_shards.size(); shard_index++) {
-            tensors.push_back(output_shards[shard_index][index].value());
-        }
-        output.push_back(make_tensor_return_value_from_shards(old_storage, tensors));
-    }
-    return output;
-}
-
-template<typename T>
-static T make_tensor_return_value_from_shards(auto& old_storage, std::vector<T>& output_shards) {
-    // TODO: add logic to handle all types we want to support generically
-    TT_THROW("make_tensor_return_value_from_shards is not implemented for this type. Please add an overload");
-}
-
-template <DeviceOperationConcept device_operation_t>
-typename device_operation_t::tensor_return_value_t launch_on_multi_device(
-    QueueId cq_id,
-    const typename device_operation_t::operation_attributes_t& operation_attributes,
-    const typename device_operation_t::tensor_args_t& tensor_args) {
-    ZoneScopedN("Launch Multi Device Operation");
-
-    using tensor_return_value_t = typename device_operation_t::tensor_return_value_t;
-
-    // TODO: support the case when tensor args are empty? Or pass in the device as an argument in that case
     auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
-    const auto& storage = std::get<tt::tt_metal::MultiDeviceStorage>(first_tensor.get_storage());
-    using storage_t = std::remove_cvref_t<decltype(storage)>;
-
-    auto num_shards = storage.num_buffers();
-
-    std::vector<tensor_return_value_t> outputs;
-    outputs.reserve(num_shards);
-
-    for (const auto &[shard_index, buffer] : storage.buffers ) {
-        auto device = buffer->device();
-        auto shard_tensor_args = get_shard_tensor_args<device_operation_t>(shard_index, device, tensor_args);
-        outputs.push_back(launch_on_single_device<device_operation_t>(cq_id, operation_attributes, shard_tensor_args));
+    if (auto mesh_device = first_tensor.mesh_device(); mesh_device != nullptr) {
+        auto& cq = mesh_device->mesh_command_queue();
+        launch_on_mesh_device<device_operation_t>(
+            cq_id, device_operation_id, operation_attributes, tensor_args, tensor_return_value, mesh_device);
+    } else {
+        auto device = first_tensor.device();
+        launch_on_worker_thread<device_operation_t>(
+            cq_id, device_operation_id, operation_attributes, tensor_args, tensor_return_value, device);
     }
-
-    return make_tensor_return_value_from_shards(storage, outputs);
+    return tensor_return_value;
 }
 
 template <DeviceOperationConcept device_operation_t>
@@ -462,14 +584,7 @@ typename device_operation_t::tensor_return_value_t invoke(
     auto tensor_return_value = std::visit(
         [&cq_id, &operation_attributes, &tensor_args](auto&& storage) -> tensor_return_value_t {
             using storage_t = std::remove_cvref_t<decltype(storage)>;
-            if constexpr (std::is_same_v<storage_t, tt::tt_metal::DeviceStorage>) {
-                return detail::launch_on_single_device<device_operation_t>(cq_id, operation_attributes, tensor_args);
-            } else if constexpr (std::is_same_v<storage_t, tt::tt_metal::MultiDeviceStorage>) {
-                return detail::launch_on_multi_device<device_operation_t>(cq_id, operation_attributes, tensor_args);
-            }
-            else {
-                TT_THROW("Unsupported storage type");
-            }
+            return detail::launch_on_single_device<device_operation_t>(cq_id, operation_attributes, tensor_args);
         },
         storage);
 

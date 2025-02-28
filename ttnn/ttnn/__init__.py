@@ -110,10 +110,6 @@ from ttnn._ttnn.operations.trace import (
     end_trace_capture,
     execute_trace,
     release_trace,
-    begin_mesh_trace_capture,
-    end_mesh_trace_capture,
-    execute_mesh_trace,
-    release_mesh_trace,
 )
 
 from ttnn._ttnn.global_circular_buffer import (

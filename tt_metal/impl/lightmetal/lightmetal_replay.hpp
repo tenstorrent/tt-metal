@@ -10,6 +10,7 @@
 #include <optional>
 #include <lightmetal_binary.hpp>
 
+#include <tt-metalium/program_impl.hpp>
 #include <tt-metalium/device.hpp>
 
 // Forward decl for trace_buffer.hpp

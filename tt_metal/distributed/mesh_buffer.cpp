@@ -130,7 +130,15 @@ void MeshBuffer::initialize_device_buffers() {
     }
 }
 
-bool MeshBuffer::is_allocated() const { return not std::holds_alternative<DeallocatedState>(state_); }
+bool MeshBuffer::is_allocated() const {
+    if (std::holds_alternative<DeallocatedState>(state_)) {
+        return false;
+    }
+    if (mesh_device_.lock() == nullptr) {
+        return false;
+    }
+    return true;
+}
 
 MeshBuffer::~MeshBuffer() { deallocate(); }
 
