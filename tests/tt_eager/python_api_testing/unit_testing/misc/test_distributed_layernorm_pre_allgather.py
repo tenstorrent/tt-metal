@@ -269,3 +269,7 @@ def test_layernorm_part_1_with_program_cache2(
                 )
             )
         run_layernorm_part_1(inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, device)
+
+    assert device.num_program_cache_entries() == 1, "Program cache should have only one entry" + str(
+        device.num_program_cache_entries()
+    )

@@ -129,5 +129,10 @@ def test_index_fill_callback(shape, dim, value, device, use_program_cache):
     torch.manual_seed(2024)
     for i in range(2):
         run_index_fill_test(shape, dim, value, torch.int32, device)
+        if i == 0:
+            num_program_cache_entries = device.num_program_cache_entries()
+            assert num_program_cache_entries > 0
+        else:
+            assert device.num_program_cache_entries() == num_program_cache_entries
         torch_dummy = torch.randn([32, 32])
         tt_dummy = ttnn.from_torch(torch_dummy, device=device)

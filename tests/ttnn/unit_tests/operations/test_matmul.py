@@ -631,6 +631,7 @@ def test_matmul_2d_multiple_output_blocks_per_core(
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+    assert device.num_program_cache_entries() == 1
 
 
 def run_matmul_2d_tiny_tile(
@@ -791,6 +792,7 @@ def test_matmul_2d_tiny_tile(
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+    assert device.num_program_cache_entries() == 1
 
 
 def run_matmul_1d_tiny_tile(
@@ -954,6 +956,7 @@ def test_matmul_1d_tiny_tile(
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+    assert device.num_program_cache_entries() == 1
 
 
 def run_matmul_1d_multiple_output_blocks_per_core(
@@ -1179,6 +1182,7 @@ def test_matmul_1d_multiple_output_blocks_per_core(
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+    assert device.num_program_cache_entries() == 1
 
 
 @pytest.mark.parametrize("side", ["height", "width"])

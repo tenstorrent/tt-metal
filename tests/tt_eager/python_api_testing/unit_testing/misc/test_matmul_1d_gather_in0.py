@@ -329,6 +329,9 @@ def run_multi_core_matmul_1d(
 
     assert passing
 
+    # Check program cache
+    assert device.num_program_cache_entries() == 1  # Only 1 op
+
 
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
 @pytest.mark.skipif(is_blackhole(), reason="Test suite for GS only")

@@ -330,8 +330,10 @@ def test_moreh_group_norm_callback(N, C_num_groups, HW, eps, affine, compute_mea
         run_test_moreh_group_norm(N, C_num_groups, HW, eps, affine, compute_mean_rstd, device)
         torch_dummy = torch.randn([32, 32])
         tt_dummy = to_ttnn(torch_dummy, device=device)
-        num_program_cache_entries_list.append(0)
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert num_program_cache_entries_list[0] > 0
+    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
 def run_test_moreh_group_norm_backward(
@@ -539,5 +541,7 @@ def test_moreh_group_norm_backward_callback(
         )
         torch_dummy = torch.randn([32, 32])
         tt_dummy = to_ttnn(torch_dummy, device=device)
-        num_program_cache_entries_list.append(0)
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert num_program_cache_entries_list[0] > 0
+    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]

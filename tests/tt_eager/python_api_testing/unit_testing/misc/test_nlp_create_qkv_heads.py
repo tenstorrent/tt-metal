@@ -119,6 +119,8 @@ def test_nlp_create_qkv_heads_falcon7b_with_program_cache(device, use_program_ca
         py_dummy_tensor = torch.randn(dummy_shape)
         tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)
 
+    assert device.num_program_cache_entries() == 2
+
 
 """
 Generic shapes + functionality
@@ -363,6 +365,8 @@ def test_nlp_create_qkv_heads_with_program_cache(device, use_program_cache):
         py_dummy_tensor = torch.randn(dummy_shape)
         tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)
 
+    assert device.num_program_cache_entries() == 2
+
 
 def run_sharded_nlp_create_qkv_heads_test(
     batch,
@@ -527,3 +531,5 @@ def test_sharded_nlp_create_qkv_heads_with_program_cache(device, use_program_cac
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
         tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)
+
+    assert device.num_program_cache_entries() == 2

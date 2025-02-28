@@ -182,8 +182,10 @@ def test_moreh_dot_backward_callback(
     num_program_in_cache = []
     for i in range(2):
         run_moreh_dot_backward(input_shape, requires_grad, device)
-        num_program_in_cache.append(0)
+        num_program_in_cache.append(device.num_program_cache_entries())
         dummy = torch.randn([32, 32])
         tt_dummy = ttnn.from_torch(dummy, device=device)
 
     logger.info(f"num_program_in_cache={num_program_in_cache}")
+    assert num_program_in_cache[0] > 0
+    assert num_program_in_cache[0] == num_program_in_cache[1]

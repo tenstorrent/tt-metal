@@ -163,3 +163,5 @@ def test_bert_large_fused_qkv_matmul_with_program_cache(device, use_program_cach
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
         tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype, device, ttnn.TILE_LAYOUT, mem_config)
+
+    assert device.num_program_cache_entries() == 2

@@ -140,9 +140,11 @@ def test_sampling_callback(shape, k, p, seed, device, use_program_cache):
         run_sampling(shape, k, p, seed, device)
         # Add dummy tensor to make sure that created tensor in 2 iteration don't share the same addr
         tt_dummy_tensor = ttnn.empty([1, 1, 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
-        num_program_cache_entries_list.append(0)
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
 
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert num_program_cache_entries_list[0] > 0
+    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
@@ -166,6 +168,8 @@ def test_sampling_subcores_callback(shape, k, p, seed, device, sub_core_grids, u
         run_sampling(shape, k, p, seed, device, sub_core_grids)
         # Add dummy tensor to make sure that created tensor in 2 iteration don't share the same addr
         tt_dummy_tensor = ttnn.empty([1, 1, 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
-        num_program_cache_entries_list.append(0)
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
 
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert num_program_cache_entries_list[0] > 0
+    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]

@@ -189,6 +189,7 @@ def test_moreh_cumsum_callback(input_shape, dim, device, use_program_cache):
         logger.debug(f"Output pcc={output_pcc}")
 
         assert passing
+    assert device.num_program_cache_entries() == 1
 
 
 @pytest.mark.parametrize(
@@ -240,3 +241,4 @@ def test_moreh_cumsum_backward_callback(input_shape, dim, device, use_program_ca
         logger.debug(f"Output pcc={output_pcc}")
 
         assert passing
+    assert device.num_program_cache_entries() == 1

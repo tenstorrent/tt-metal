@@ -101,5 +101,10 @@ def test_full_callback(device, input_shape, fill_value, layout, use_program_cach
         tt_output_cpu = ttnn.to_torch(tt_output)
         torch_dummy = torch.randn([32, 32])
         ttnn_dummy = ttnn.from_torch(torch_dummy, device=device)
+        if i == 0:
+            num_program_cache_entries = device.num_program_cache_entries()
+            assert num_program_cache_entries > 0
+        else:
+            assert device.num_program_cache_entries() == num_program_cache_entries
 
         assert torch.equal(torch_output, tt_output_cpu)

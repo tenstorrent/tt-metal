@@ -136,3 +136,5 @@ def test_rotary_embedding_llama_fused_qk_with_program_cache(
 
     if (batch * 2) % ttnn.TILE_SIZE != 0:
         num_ops += 1  # slice
+
+    assert device.num_program_cache_entries() == num_ops
