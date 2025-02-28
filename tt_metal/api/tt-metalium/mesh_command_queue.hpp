@@ -171,7 +171,7 @@ public:
         const vector_memcpy_aligned<uint32_t>& go_signal_noc_data);
     void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx);
     void record_end();
-    void enqueue_trace(const MeshTraceId& trace_id, bool blocking);
+    void enqueue_trace(const std::shared_ptr<MeshTraceBuffer>& trace_buffer, bool blocking);
 };
 
 }  // namespace distributed

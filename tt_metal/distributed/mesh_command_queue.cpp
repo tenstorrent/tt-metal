@@ -671,10 +671,9 @@ void MeshCommandQueue::capture_go_signal_trace_on_unused_subgrids(
     }
 }
 
-void MeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blocking) {
-    auto trace_inst = mesh_device_->get_mesh_trace(trace_id);
-    auto descriptor = trace_inst->desc;
-    auto buffer = trace_inst->mesh_buffer;
+void MeshCommandQueue::enqueue_trace(const std::shared_ptr<MeshTraceBuffer>& trace_buffer, bool blocking) {
+    auto descriptor = trace_buffer->desc;
+    auto buffer = trace_buffer->mesh_buffer;
     uint32_t num_sub_devices = descriptor->sub_device_ids.size();
 
     auto cmd_sequence_sizeB = trace_dispatch::compute_trace_cmd_size(num_sub_devices);
@@ -692,7 +691,7 @@ void MeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blocking)
             mesh_device_, device->sysmem_manager(), dispatch_md, id_, expected_num_workers_completed_, dispatch_core_);
     }
     trace_dispatch::update_worker_state_post_trace_execution(
-        trace_inst->desc->descriptors,
+        trace_buffer->desc->descriptors,
         this->reference_sysmem_manager(),
         config_buffer_mgr_,
         expected_num_workers_completed_);
