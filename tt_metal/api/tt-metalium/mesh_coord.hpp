@@ -124,6 +124,10 @@ public:
     // Returns the intersection of the range with the given range.
     std::optional<MeshCoordinateRange> intersection(const MeshCoordinateRange& range) const;
 
+    // Needed for reflect / fmt
+    static constexpr auto attribute_names = std::forward_as_tuple("start", "end");
+    auto attribute_values() const { return std::forward_as_tuple(start_, end_); }
+
     class Iterator {
     public:
         Iterator& operator++();

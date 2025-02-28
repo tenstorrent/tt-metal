@@ -27,8 +27,9 @@ namespace py = pybind11;
 void py_module_types(py::module& module) {
     py::class_<MeshDevice, std::shared_ptr<MeshDevice>>(module, "MeshDevice");
     py::class_<MeshSubDeviceManagerId>(module, "MeshSubDeviceManagerId");
-    py::class_<MeshShape>(module, "MeshShape", "Struct representing the shape of a mesh device.");
-    py::class_<MeshCoordinate>(module, "MeshCoordinate", "Struct representing the coordinate of a mesh device.");
+    py::class_<MeshShape>(module, "MeshShape", "Shape of a mesh device.");
+    py::class_<MeshCoordinate>(module, "MeshCoordinate", "Coordinate within a mesh device.");
+    py::class_<MeshCoordinateRange>(module, "MeshCoordinateRange", "Range of coordinates within a mesh device.");
 }
 
 void py_module(py::module& module) {
@@ -86,6 +87,29 @@ void py_module(py::module& module) {
         .def(
             "__iter__",
             [](const MeshCoordinate& mc) { return py::make_iterator(mc.coords().begin(), mc.coords().end()); },
+            py::keep_alive<0, 1>());
+
+    static_cast<py::class_<MeshCoordinateRange>>(module.attr("MeshCoordinateRange"))
+        .def(
+            py::init(
+                [](const MeshCoordinate& start, const MeshCoordinate& end) { return MeshCoordinateRange(start, end); }),
+            "Constructor with specified start and end coordinates.",
+            py::arg("start"),
+            py::arg("end"))
+        .def(
+            py::init([](const MeshShape& shape) { return MeshCoordinateRange(shape); }),
+            "Constructor that spans the entire mesh.",
+            py::arg("shape"))
+        .def(
+            "__repr__",
+            [](const MeshCoordinateRange& mcr) {
+                std::ostringstream str;
+                str << mcr;
+                return str.str();
+            })
+        .def(
+            "__iter__",
+            [](const MeshCoordinateRange& mcr) { return py::make_iterator(mcr.begin(), mcr.end()); },
             py::keep_alive<0, 1>());
 
     auto py_mesh_device = static_cast<py::class_<MeshDevice, std::shared_ptr<MeshDevice>>>(module.attr("MeshDevice"));
