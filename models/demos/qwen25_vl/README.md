@@ -2,6 +2,16 @@
 
 This repository contains a framework for converting the Qwen2.5-VL model from its original PyTorch module implementation to a clean, functional implementation that's easier to understand and modify.
 
+## Installation
+
+Install the Qwen2.5-VL model dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+Note that this uses the main branch of transformers, not a release. It also requires python 3.9 or higher.
+
 ## Overview
 
 The conversion process follows these steps:

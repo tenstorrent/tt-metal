@@ -63,53 +63,38 @@ def qwen2_5_vl_vision_sdpa_attention(
     position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
 ) -> torch.Tensor:
     """Vision self-attention with rotary embeddings."""
-    print("\n    Vision Attention:")
-    print(f"    Input shape: {x.shape}")
-
     seq_len, hidden_size = x.shape
     head_dim = hidden_size // num_heads
-    print(f"    seq_len: {seq_len}, hidden_size: {hidden_size}, head_dim: {head_dim}")
 
     # QKV projection and reshape
     qkv = F.linear(x, state_dict["qkv"]["weight"], state_dict["qkv"]["bias"])
     q, k, v = qkv.view(seq_len, 3, num_heads, head_dim).permute(1, 0, 2, 3)
-    print(f"    After QKV: q={q.shape}, k={k.shape}, v={v.shape}")
 
     # Apply rotary embeddings
     if rotary_pos_emb is not None:
-        print("    Using rotary_pos_emb")
         emb = torch.cat((rotary_pos_emb, rotary_pos_emb), dim=-1)
         cos = emb.cos().float()
         sin = emb.sin().float()
         q, k = apply_rotary_pos_emb_vision(q, k, cos, sin)
     elif position_embeddings is not None:
-        print("    Using position_embeddings")
-        print(f"    Position embeddings shapes: {[p.shape for p in position_embeddings]}")
         q, k = apply_rotary_pos_emb_vision(q, k, *position_embeddings)
-    print(f"    After rotary: q={q.shape}, k={k.shape}")
 
     # Create attention mask
     mask = torch.ones(1, seq_len, seq_len, device=q.device, dtype=torch.bool)
     if cu_seqlens is not None:
-        print(f"    Creating mask from cu_seqlens: {cu_seqlens}")
         mask.zero_()
         for i in range(1, len(cu_seqlens)):
             s, e = cu_seqlens[i - 1 : i + 1]
-            print(f"    Setting mask[{s}:{e}, {s}:{e}] = True")
             mask[..., s:e, s:e] = True
-    print(f"    Mask shape: {mask.shape}, dtype: {mask.dtype}")
-    print(f"    Mask non-zero ratio: {mask.sum() / mask.numel():.2%}")
 
     # Attention and output projection
     attn_out = F.scaled_dot_product_attention(
         q.transpose(0, 1), k.transpose(0, 1), v.transpose(0, 1), mask, dropout_p=0.0
     )
-    print(f"    After attention: {attn_out.shape}")
 
     output = F.linear(
         attn_out.transpose(0, 1).reshape(seq_len, -1), state_dict["proj"]["weight"], state_dict["proj"]["bias"]
     )
-    print(f"    Final output: {output.shape}")
 
     return output
 
@@ -193,15 +178,161 @@ def qwen2_5_vision_patch_embed(
     return hidden_states
 
 
+def qwen2_5_vl_rot_pos_emb(grid_thw: torch.Tensor, spatial_merge_size: int, head_dim: int) -> torch.Tensor:
+    """Rotary position embedding for Qwen2.5 Vision Transformer.
+
+    Args:
+        grid_thw: Temporal, height, width dimensions for each image/video
+        spatial_merge_size: Spatial merge size parameter
+        head_dim: Attention head dimension
+    Returns:
+        Rotary position embeddings
+    """
+    pos_ids = []
+    for t, h, w in grid_thw:
+        hpos_ids = torch.arange(h).unsqueeze(1).expand(-1, w)
+        hpos_ids = hpos_ids.reshape(
+            h // spatial_merge_size,
+            spatial_merge_size,
+            w // spatial_merge_size,
+            spatial_merge_size,
+        )
+        hpos_ids = hpos_ids.permute(0, 2, 1, 3)
+        hpos_ids = hpos_ids.flatten()
+
+        wpos_ids = torch.arange(w).unsqueeze(0).expand(h, -1)
+        wpos_ids = wpos_ids.reshape(
+            h // spatial_merge_size,
+            spatial_merge_size,
+            w // spatial_merge_size,
+            spatial_merge_size,
+        )
+        wpos_ids = wpos_ids.permute(0, 2, 1, 3)
+        wpos_ids = wpos_ids.flatten()
+        pos_ids.append(torch.stack([hpos_ids, wpos_ids], dim=-1).repeat(t, 1))
+    pos_ids = torch.cat(pos_ids, dim=0)
+    max_grid_size = grid_thw[:, 1:].max()
+    rotary_pos_emb_full = qwen2_5_vision_rotary_embedding(max_grid_size, head_dim // 2)
+    rotary_pos_emb = rotary_pos_emb_full[pos_ids].flatten(1)
+    return rotary_pos_emb
+
+
+def qwen2_5_vl_get_window_index(
+    grid_thw: torch.Tensor, window_size: int, spatial_merge_size: int, patch_size: int
+) -> Tuple[torch.Tensor, List[int]]:
+    """Get window index and cu_window_seqlens for Qwen2.5 Vision Transformer.
+
+    Args:
+        grid_thw: Temporal, height, width dimensions for each image/video
+        window_size: Size of attention window
+        spatial_merge_size: Spatial merge size parameter
+        patch_size: Size of image patches
+
+    Returns:
+        Tuple of window_index and cu_window_seqlens
+    """
+    window_index: list = []
+    cu_window_seqlens: list = [0]
+    window_index_id = 0
+    vit_merger_window_size = window_size // spatial_merge_size // patch_size
+    spatial_merge_unit = spatial_merge_size * spatial_merge_size
+
+    for grid_t, grid_h, grid_w in grid_thw:
+        llm_grid_h, llm_grid_w = (
+            grid_h // spatial_merge_size,
+            grid_w // spatial_merge_size,
+        )
+        index = torch.arange(grid_t * llm_grid_h * llm_grid_w).reshape(grid_t, llm_grid_h, llm_grid_w)
+        pad_h = vit_merger_window_size - llm_grid_h % vit_merger_window_size
+        pad_w = vit_merger_window_size - llm_grid_w % vit_merger_window_size
+        num_windows_h = (llm_grid_h + pad_h) // vit_merger_window_size
+        num_windows_w = (llm_grid_w + pad_w) // vit_merger_window_size
+        index_padded = F.pad(index, (0, pad_w, 0, pad_h), "constant", -100)
+        index_padded = index_padded.reshape(
+            grid_t,
+            num_windows_h,
+            vit_merger_window_size,
+            num_windows_w,
+            vit_merger_window_size,
+        )
+        index_padded = index_padded.permute(0, 1, 3, 2, 4).reshape(
+            grid_t,
+            num_windows_h * num_windows_w,
+            vit_merger_window_size,
+            vit_merger_window_size,
+        )
+        seqlens = (index_padded != -100).sum([2, 3]).reshape(-1)
+        index_padded = index_padded.reshape(-1)
+        index_new = index_padded[index_padded != -100]
+        window_index.append(index_new + window_index_id)
+        cu_seqlens_tmp = seqlens.cumsum(0) * spatial_merge_unit + cu_window_seqlens[-1]
+        cu_window_seqlens.extend(cu_seqlens_tmp.tolist())
+        window_index_id += (grid_t * llm_grid_h * llm_grid_w).item()
+    window_index = torch.cat(window_index, dim=0)
+
+    return window_index, cu_window_seqlens
+
+
+def qwen2_5_vl_vision_block(
+    hidden_states: torch.Tensor,
+    cu_seqlens: torch.Tensor,
+    state_dict: Dict,
+    num_heads: int,
+    rotary_pos_emb: Optional[torch.Tensor] = None,
+    position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+) -> torch.Tensor:
+    """Functional implementation of a Qwen2.5 Vision Block.
+
+    Args:
+        hidden_states: Input tensor
+        cu_seqlens: Cumulative sequence lengths
+        state_dict: Dictionary containing model weights
+        num_heads: Number of attention heads
+        rotary_pos_emb: Optional rotary position embeddings
+        position_embeddings: Optional position embeddings tuple (cos, sin)
+
+    Returns:
+        Transformed hidden states
+    """
+    # Layer norm 1
+    residual = hidden_states
+    hidden_states = qwen2_rms_norm(hidden_states, state_dict["norm1"])
+
+    # Self-attention
+    attn_output = qwen2_5_vl_vision_sdpa_attention(
+        hidden_states, cu_seqlens, state_dict["attn"], num_heads, rotary_pos_emb, position_embeddings
+    )
+
+    # Add residual connection
+    hidden_states = residual + attn_output
+
+    # Layer norm 2
+    residual = hidden_states
+    hidden_states = qwen2_rms_norm(hidden_states, state_dict["norm2"])
+
+    # MLP
+    mlp_output = qwen2_5_vl_mlp(hidden_states, state_dict["mlp"])
+
+    # Add residual connection
+    hidden_states = residual + mlp_output
+
+    return hidden_states
+
+
 def qwen2_5_vision_transformer(
     hidden_states: torch.Tensor,
     cu_seqlens: Optional[torch.Tensor],
     state_dict: Dict,
     num_heads: int,
-    patch_size: int = 14,
-    temporal_patch_size: int = 2,
+    head_dim: int,
+    spatial_merge_size: int,
+    window_size: int,
+    fullatt_block_indexes: List[int],
+    patch_size: int,
+    temporal_patch_size: int,
     rotary_pos_emb: Optional[torch.Tensor] = None,
     position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    grid_thw: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     """Functional implementation of Qwen2.5 Vision Transformer.
 
@@ -214,158 +345,98 @@ def qwen2_5_vision_transformer(
         temporal_patch_size: Size of temporal patches
         rotary_pos_emb: Optional rotary position embeddings
         position_embeddings: Optional position embeddings tuple (cos, sin)
+        grid_thw: Optional grid dimensions for window calculations
 
-    state_dict structure:
-    - patch_embed: Patch embedding weights
-    - blocks: List of transformer block weights
-    - merger: Patch merger weights
+    Returns:
+        Transformed hidden states
     """
-    print("\nStarting functional implementation:")
-    print(f"Initial hidden_states shape: {hidden_states.shape}")
-
-    # Patch embedding
+    # Step 1: Apply patch embedding
     hidden_states = qwen2_5_vision_patch_embed(
         hidden_states, state_dict["patch_embed"], patch_size, temporal_patch_size
     )
-    print(f"After patch embedding shape: {hidden_states.shape}")
 
-    # Get window indices and window-level cumulative sequence lengths
-    window_index = state_dict["window_index"]
-    cu_window_seqlens = torch.tensor(state_dict["cu_window_seqlens"], device=hidden_states.device, dtype=torch.int32)
-    cu_window_seqlens = torch.unique_consecutive(cu_window_seqlens)
-
-    # Compute reverse indices right after getting window_index
-    reverse_indices = torch.argsort(window_index)
-    print(f"reverse_indices shape: {reverse_indices.shape}")
-    print(f"reverse_indices min/max: {reverse_indices.min()}, {reverse_indices.max()}")
-
-    # Apply windowing
-    seq_len, _ = hidden_states.size()
-    spatial_merge_unit = state_dict["spatial_merge_unit"]
-    print(f"\nBefore windowing:")
-    print(f"seq_len: {seq_len}")
-    print(f"spatial_merge_unit: {spatial_merge_unit}")
-    print(f"window_index shape: {window_index.shape}")
-    print(f"window_index min/max: {window_index.min()}, {window_index.max()}")
-
-    hidden_states = hidden_states.reshape(seq_len // spatial_merge_unit, spatial_merge_unit, -1)
-    print(f"After first reshape: {hidden_states.shape}")
-    hidden_states = hidden_states[window_index, :, :]
-    print(f"After window indexing: {hidden_states.shape}")
-    hidden_states = hidden_states.reshape(seq_len, -1)
-    print(f"After final reshape: {hidden_states.shape}")
-
-    # Apply same windowing to position embeddings if present
-    if rotary_pos_emb is not None:
-        print("\nProcessing rotary embeddings:")
-        print(f"Initial rotary_pos_emb shape: {rotary_pos_emb.shape}")
-        rotary_pos_emb = rotary_pos_emb.reshape(seq_len // spatial_merge_unit, spatial_merge_unit, -1)
-        print(f"After first reshape: {rotary_pos_emb.shape}")
-        rotary_pos_emb = rotary_pos_emb[window_index, :, :]
-        print(f"After window indexing: {rotary_pos_emb.shape}")
-        rotary_pos_emb = rotary_pos_emb.reshape(seq_len, -1)
-        print(f"After final reshape: {rotary_pos_emb.shape}")
-        # Create final position embeddings
+    # Step 2: Calculate rotary position embeddings if not provided
+    if position_embeddings is None and rotary_pos_emb is None and grid_thw is not None:
+        rotary_pos_emb = qwen2_5_vl_rot_pos_emb(grid_thw, spatial_merge_size, head_dim)
         emb = torch.cat((rotary_pos_emb, rotary_pos_emb), dim=-1)
-        print(f"After concatenation: {emb.shape}")
         position_embeddings = (emb.cos(), emb.sin())
-        print(f"Final position embeddings shapes: {[p.shape for p in position_embeddings]}")
 
-    # Process blocks in order
-    num_blocks = len(state_dict["blocks"])
-    fullatt_block_indexes = state_dict["fullatt_block_indexes"]
-    print(f"\nProcessing {num_blocks} blocks:")
-    print(f"Full attention block indexes: {fullatt_block_indexes}")
+    # Step 3: Process window indices and cu_seqlens if grid_thw is provided
+    if grid_thw is not None:
+        window_index, cu_window_seqlens = qwen2_5_vl_get_window_index(
+            grid_thw, window_size, spatial_merge_size, patch_size
+        )
 
-    # If cu_seqlens is not provided, create it from the sequence length
-    if cu_seqlens is None:
-        # In the model, this is computed from grid_thw, but since we don't have that,
-        # we'll create a single sequence length tensor
-        cu_seqlens = torch.tensor([0, seq_len], device=hidden_states.device, dtype=torch.int32)
+        # Reshape and reindex hidden states based on window_index
+        seq_len, _ = hidden_states.size()
+        hidden_states = hidden_states.reshape(seq_len // (spatial_merge_size**2), spatial_merge_size**2, -1)
+        hidden_states = hidden_states[window_index, :, :]
+        hidden_states = hidden_states.reshape(seq_len, -1)
 
-    for block_idx in range(num_blocks):
-        # Choose between full attention and windowed attention
-        cu_seqlens_now = cu_seqlens if block_idx in fullatt_block_indexes else cu_window_seqlens
-        print(f"\nBlock {block_idx}:")
-        print(f"Using {'full' if block_idx in fullatt_block_indexes else 'windowed'} attention")
-        print(f"cu_seqlens shape: {cu_seqlens_now.shape}")
-        print(f"cu_seqlens values: {cu_seqlens_now}")
+        # Also reindex position embeddings
+        if rotary_pos_emb is not None:
+            rotary_pos_emb = rotary_pos_emb.reshape(seq_len // (spatial_merge_size**2), spatial_merge_size**2, -1)
+            rotary_pos_emb = rotary_pos_emb[window_index, :, :]
+            rotary_pos_emb = rotary_pos_emb.reshape(seq_len, -1)
+            emb = torch.cat((rotary_pos_emb, rotary_pos_emb), dim=-1)
+            position_embeddings = (emb.cos(), emb.sin())
 
+        # Convert cu_window_seqlens to tensor
+        cu_window_seqlens_tensor = torch.tensor(
+            cu_window_seqlens,
+            device=hidden_states.device,
+            dtype=torch.int32,
+        )
+        cu_window_seqlens_tensor = torch.unique_consecutive(cu_window_seqlens_tensor)
+    else:
+        window_index = None
+        cu_window_seqlens_tensor = None
+
+    # Step 4: Process through transformer blocks
+    for i, block in enumerate(state_dict["blocks"].keys()):
+        layer_num = int(block)
+        block_state = state_dict["blocks"][block]
+
+        # Determine which cu_seqlens to use based on fullatt_block_indexes
+        if cu_window_seqlens_tensor is not None and layer_num in fullatt_block_indexes:
+            cu_seqlens_now = cu_seqlens
+        else:
+            cu_seqlens_now = cu_window_seqlens_tensor if cu_window_seqlens_tensor is not None else cu_seqlens
+
+        # Process through vision block
         hidden_states = qwen2_5_vl_vision_block(
             hidden_states,
             cu_seqlens_now,
-            state_dict["blocks"][str(block_idx)],
+            block_state,
             num_heads,
-            rotary_pos_emb,
+            None,  # rotary_pos_emb not needed as we use position_embeddings
             position_embeddings,
         )
-        print(f"Output shape: {hidden_states.shape}")
 
-    # Patch merging
-    print("\nPatch merging:")
-    print(f"Input shape: {hidden_states.shape}")
+    # Step 5: Apply patch merger
     hidden_states = qwen2_5_vl_patch_merger(hidden_states, state_dict["merger"])
-    print(f"After merging: {hidden_states.shape}")
 
-    # Restore original token order using pre-computed reverse_indices
-    print("\nRestoring token order:")
-    hidden_states = hidden_states[reverse_indices, :]
-    print(f"Final output shape: {hidden_states.shape}")
+    # Step 6: Reorder using reverse indices if window_index is available
+    if window_index is not None:
+        reverse_indices = torch.argsort(window_index)
+        hidden_states = hidden_states[reverse_indices, :]
 
     return hidden_states
 
 
-def qwen2_5_vl_vision_block(
-    hidden_states: torch.Tensor,
-    cu_seqlens: torch.Tensor,
-    state_dict: Dict,
-    num_heads: int,
-    rotary_pos_emb: Optional[torch.Tensor] = None,
-    position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-) -> torch.Tensor:
-    """Functional stub for Qwen2_5_VLVisionBlock.
+def qwen2_5_vision_rotary_embedding(seqlen: int, dim, theta: float = 10000.0, device=None) -> torch.Tensor:
+    """Functional implementation of Qwen2_5_VisionRotaryEmbedding.
 
     Args:
-        hidden_states: Input tensor
-        cu_seqlens: Cumulative sequence lengths
-        state_dict: Dictionary containing model weights
-        num_heads: Number of attention heads
-        rotary_pos_emb: Optional rotary position embeddings
-        position_embeddings: Optional position embeddings tuple (cos, sin)
+        seqlen: Sequence length to generate embeddings for
+        dim: Dimension of the embeddings
+        theta: Base for the frequencies
+        device: Device to create the embeddings on
 
-    state_dict structure:
-    - norm1:
-      - weight: First layer norm weight
-    - norm2:
-      - weight: Second layer norm weight
-    - attn: Attention module weights
-    - mlp: MLP module weights
+    Returns:
+        Rotary position embeddings
     """
-    print("\n  Vision Block:")
-    print(f"  Input shape: {hidden_states.shape}")
-
-    # Layer norm 1
-    residual = hidden_states
-    hidden_states = qwen2_rms_norm(hidden_states, {"weight": state_dict["norm1"]["weight"]})
-    print(f"  After norm1: {hidden_states.shape}")
-
-    # Attention
-    hidden_states = qwen2_5_vl_vision_sdpa_attention(
-        hidden_states, cu_seqlens, state_dict["attn"], num_heads, rotary_pos_emb, position_embeddings
-    )
-    print(f"  After attention: {hidden_states.shape}")
-    hidden_states = residual + hidden_states
-    print(f"  After residual1: {hidden_states.shape}")
-
-    # Layer norm 2
-    residual = hidden_states
-    hidden_states = qwen2_rms_norm(hidden_states, {"weight": state_dict["norm2"]["weight"]})
-    print(f"  After norm2: {hidden_states.shape}")
-
-    # MLP
-    hidden_states = qwen2_mlp(hidden_states, state_dict["mlp"])
-    print(f"  After MLP: {hidden_states.shape}")
-    hidden_states = residual + hidden_states
-    print(f"  After residual2: {hidden_states.shape}")
-
-    return hidden_states
+    inv_freq = 1.0 / (theta ** (torch.arange(0, dim, 2, dtype=torch.float, device=device) / dim))
+    seq = torch.arange(seqlen, device=device, dtype=torch.float)
+    freqs = torch.outer(seq, inv_freq)
+    return freqs

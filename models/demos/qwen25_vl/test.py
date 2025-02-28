@@ -12,7 +12,7 @@ from glob import glob
 from scipy.stats import pearsonr
 import numpy as np
 
-from functional import (
+from models.demos.qwen25_vl.functional import (
     qwen2_rms_norm,
     qwen2_5_vl_mlp,
     qwen2_5_vl_vision_sdpa_attention,
@@ -20,8 +20,10 @@ from functional import (
     qwen2_5_vision_patch_embed,
     qwen2_5_vl_vision_block,
     qwen2_5_vision_transformer,
+    qwen2_5_vl_rot_pos_emb,
+    qwen2_5_vl_get_window_index,
+    qwen2_5_vision_rotary_embedding,
 )
-from model import Qwen2_5_VLVisionConfig, Qwen2_5_VisionTransformerPretrainedModel
 
 
 @pytest.fixture
@@ -64,7 +66,13 @@ def load_earliest_run(module_name):
             # convert to tuple as that's what the model expects
             if all(isinstance(x, torch.Tensor) for x in loaded):
                 return tuple(loaded)
+            # Try to convert a list of strings to integers if they all look like integers
+            if all(isinstance(x, str) and x.isdigit() for x in loaded):
+                return [int(x) for x in loaded]
             return loaded
+        # Try to convert string to int if it represents a number
+        if isinstance(data, str) and data.isdigit():
+            return int(data)
         return data
 
     inputs = load_tensor_data(metadata["inputs"])
@@ -117,46 +125,22 @@ def test_qwen2_5_vl_vision_sdpa_attention(vision_weights):
     """Test Vision SDPA Attention functional implementation."""
     inputs, outputs, settings = load_earliest_run("Qwen2_5_VLVisionSdpaAttention")
 
-    # Debug: Print input shapes and types
-    print("\nInput shapes and types:")
-    for i, arg in enumerate(inputs["args"]):
-        if arg is not None:
-            print(f"Arg {i}: shape={arg.shape if hasattr(arg, 'shape') else 'no shape'}, type={type(arg)}")
-    print("\nKwargs:")
-    for k, v in inputs["kwargs"].items():
-        if v is not None:
-            print(f"{k}: shape={v.shape if hasattr(v, 'shape') else 'no shape'}, type={type(v)}")
-
     # Extract inputs and state dict from vision weights
     hidden_states = inputs["args"][0]
     cu_seqlens = inputs["kwargs"].get("cu_seqlens")
     rotary_pos_emb = inputs["kwargs"].get("rotary_pos_emb")  # This should now be None instead of "None"
     position_embeddings = inputs["kwargs"].get("position_embeddings")  # This is already a tuple of tensors
 
-    # Debug: Print state dict keys and shapes
-    print("\nAttention weights:")
+    # Get attention weights from vision weights
     attn_weights = vision_weights["blocks"]["0"]["attn"]
-    for k, v in attn_weights.items():
-        if isinstance(v, dict):
-            for k2, v2 in v.items():
-                if hasattr(v2, "shape"):
-                    print(f"{k}.{k2}: shape={v2.shape}")
-        elif hasattr(v, "shape"):
-            print(f"{k}: shape={v.shape}")
 
     # Run functional implementation with num_heads from settings, ensuring it's an int
     result = qwen2_5_vl_vision_sdpa_attention(
         hidden_states, cu_seqlens, attn_weights, int(settings["num_heads"]), rotary_pos_emb, position_embeddings
     )
 
-    # Debug: Print shapes of result and expected output
-    print("\nOutput shapes:")
-    print(f"Result shape: {result.shape}")
-    print(f"Expected shape: {outputs.shape}")
-
     # Check correlation with recorded output
     pcc = pearson_correlation(result, outputs)
-    print(f"\nPearson correlation: {pcc}")
     assert pcc > 0.999, f"PCC {pcc} below threshold"
 
 
@@ -184,8 +168,6 @@ def test_qwen2_5_vision_patch_embed(vision_weights):
     hidden_states = inputs["args"][0]
     patch_embed_weights = vision_weights["patch_embed"]
 
-    print(f"hidden_states shape: {hidden_states.shape}")
-
     # Run functional implementation
     result = qwen2_5_vision_patch_embed(hidden_states, patch_embed_weights, patch_size=14, temporal_patch_size=2)
 
@@ -212,18 +194,20 @@ def test_qwen2_5_vl_vision_block(vision_weights):
     inputs, outputs, _ = load_earliest_run("Qwen2_5_VLVisionBlock")
     model_settings = load_model_settings()  # Load settings from model metadata
 
-    # Extract inputs and state dict from vision weights
+    # Extract inputs
     hidden_states = inputs["args"][0]
-    block_weights = vision_weights["blocks"]["0"]  # Use first block's weights
-
-    # Get position embeddings from the recorded inputs if available
     position_embeddings = inputs["kwargs"].get("position_embeddings")
     rotary_pos_emb = inputs["kwargs"].get("rotary_pos_emb")
     cu_seqlens = inputs["kwargs"].get("cu_seqlens")
 
-    # Run functional implementation with position embeddings
+    # Run functional implementation with first block's weights
     result = qwen2_5_vl_vision_block(
-        hidden_states, cu_seqlens, block_weights, int(model_settings["num_heads"]), rotary_pos_emb, position_embeddings
+        hidden_states,
+        cu_seqlens,
+        vision_weights["blocks"]["0"],
+        int(model_settings["num_heads"]),
+        rotary_pos_emb,
+        position_embeddings,
     )
 
     # Check correlation with recorded output
@@ -231,81 +215,116 @@ def test_qwen2_5_vl_vision_block(vision_weights):
     assert pcc > 0.999, f"PCC {pcc} below threshold"
 
 
+def test_qwen2_5_vision_rotary_embedding():
+    """Test the vision rotary embedding functional implementation."""
+    inputs, outputs, _ = load_earliest_run("Qwen2_5_VisionRotaryEmbedding")
+    model_settings = load_model_settings()  # Load settings from model metadata
+
+    # Extract inputs
+    seqlen = inputs["args"][0]
+    head_dim = model_settings["hidden_size"] // model_settings["num_heads"]
+
+    result = qwen2_5_vision_rotary_embedding(seqlen, dim=head_dim // 2, device=outputs.device)
+
+    # Check correlation with recorded output
+    pcc = pearson_correlation(result, outputs)
+    assert pcc > 0.999, f"PCC {pcc} below threshold"
+
+
+def test_qwen2_5_vl_rot_pos_emb(vision_weights):
+    """Test rotary position embedding function."""
+    inputs, outputs, _ = load_earliest_run("Qwen2_5_VisionTransformerPretrainedModel_rot_pos_emb")
+    model_settings = load_model_settings()  # Load settings from model metadata
+
+    # Extract inputs
+    grid_thw = inputs["args"][0]
+    spatial_merge_size = model_settings["spatial_merge_size"]
+    head_dim = model_settings["hidden_size"] // model_settings["num_heads"]
+
+    # Run functional implementation
+    result = qwen2_5_vl_rot_pos_emb(grid_thw, spatial_merge_size, head_dim)
+
+    # Check correlation with recorded output
+    pcc = pearson_correlation(result, outputs)
+    assert pcc > 0.999, f"PCC {pcc} below threshold"
+
+
+def test_qwen2_5_vl_get_window_index(vision_weights):
+    """Test window index generation function."""
+    inputs, outputs, _ = load_earliest_run("Qwen2_5_VisionTransformerPretrainedModel_get_window_index")
+    model_settings = load_model_settings()  # Load settings from model metadata
+
+    # Extract inputs
+    grid_thw = inputs["args"][0]
+    window_size = model_settings["window_size"]
+    spatial_merge_size = model_settings["spatial_merge_size"]
+    patch_size = model_settings["patch_size"]
+
+    # Run functional implementation
+    window_index, cu_window_seqlens = qwen2_5_vl_get_window_index(grid_thw, window_size, spatial_merge_size, patch_size)
+
+    # Check correlation with recorded output (first element of tuple is window_index)
+    pcc = pearson_correlation(window_index, outputs[0])
+    assert pcc > 0.999, f"PCC {pcc} below threshold"
+
+    # Check cu_window_seqlens (second element of tuple)
+    expected_cu_seqlens = outputs[1]
+    assert cu_window_seqlens == expected_cu_seqlens, "cu_window_seqlens do not match"
+
+
 def test_qwen2_5_vision_transformer(vision_weights):
     """Test Vision Transformer functional implementation."""
-    inputs, outputs, settings = load_earliest_run("Qwen2_5_VisionTransformerPretrainedModel")
+    inputs, outputs, model_settings = load_earliest_run("Qwen2_5_VisionTransformerPretrainedModel")
 
     # Extract inputs
     hidden_states = inputs["args"][0]
     cu_seqlens = inputs["kwargs"].get("cu_seqlens")
     position_embeddings = inputs["kwargs"].get("position_embeddings")
     rotary_pos_emb = inputs["kwargs"].get("rotary_pos_emb")
-
-    # Get window indices and window-level cumulative sequence lengths
     grid_thw = inputs["kwargs"].get("grid_thw")
-    if grid_thw is None:
-        pytest.skip("grid_thw not found in recorded inputs")
 
-    # Create a model instance to compute window indices and record intermediate values
-    config = Qwen2_5_VLVisionConfig(**settings)
-    model = Qwen2_5_VisionTransformerPretrainedModel(config)
+    # Calculate head_dim from the hidden size and num_heads
+    head_dim = int(model_settings["hidden_size"]) // int(model_settings["num_heads"])
 
-    print("\nModel forward pass for reference values:")
-    model_output = model(hidden_states, grid_thw)
+    # Get other required parameters from model settings
+    spatial_merge_size = int(model_settings["spatial_merge_size"])
+    window_size = int(model_settings["window_size"])
 
-    # Now get window indices
-    window_index, cu_window_seqlens = model.get_window_index(grid_thw)
-    cu_window_seqlens = torch.tensor(
-        cu_window_seqlens,
-        device=hidden_states.device,
-        dtype=grid_thw.dtype if torch.jit.is_tracing() else torch.int32,
-    )
-    cu_window_seqlens = torch.unique_consecutive(cu_window_seqlens)
+    # Get fullatt_block_indexes, default to empty list if not present
+    fullatt_block_indexes = model_settings.get("fullatt_block_indexes", [])
 
-    # Add required fields to state dict
-    vision_weights["window_index"] = window_index
-    vision_weights["cu_window_seqlens"] = cu_window_seqlens
-    vision_weights["spatial_merge_unit"] = config.spatial_merge_size * config.spatial_merge_size
-    vision_weights["fullatt_block_indexes"] = config.fullatt_block_indexes
+    # Ensure fullatt_block_indexes is a list of integers
+    if isinstance(fullatt_block_indexes, str):
+        # Handle case where it might be stored as a string representation of a list
+        import ast
 
-    print("\nInput shapes:")
-    print(f"hidden_states: {hidden_states.shape}")
-    print(f"cu_seqlens: {cu_seqlens.shape if cu_seqlens is not None else None}")
-    print(f"window_index: {window_index.shape}")
-    print(f"cu_window_seqlens: {cu_window_seqlens.shape}")
-    if rotary_pos_emb is not None:
-        print(f"rotary_pos_emb: {rotary_pos_emb.shape}")
-    if position_embeddings is not None:
-        print(f"position_embeddings: {[p.shape for p in position_embeddings]}")
+        fullatt_block_indexes = ast.literal_eval(fullatt_block_indexes)
+    elif not isinstance(fullatt_block_indexes, list):
+        fullatt_block_indexes = []
 
-    print("\nConfig values:")
-    print(f"spatial_merge_size: {config.spatial_merge_size}")
-    print(f"fullatt_block_indexes: {config.fullatt_block_indexes}")
-    print(f"num_heads: {config.num_heads}")
+    # Limit to first n blocks
+    n_blocks = 1
+    vision_weights["blocks"] = {k: v for k, v in vision_weights["blocks"].items() if int(k) < n_blocks}
 
-    # Run functional implementation
-    print("\nFunctional implementation forward pass:")
     result = qwen2_5_vision_transformer(
         hidden_states,
         cu_seqlens,
         vision_weights,
-        int(settings["num_heads"]),
+        int(model_settings["num_heads"]),
+        head_dim=head_dim,
+        spatial_merge_size=spatial_merge_size,
+        window_size=window_size,
+        fullatt_block_indexes=fullatt_block_indexes,
         patch_size=14,
         temporal_patch_size=2,
         rotary_pos_emb=rotary_pos_emb,
         position_embeddings=position_embeddings,
+        grid_thw=grid_thw,
     )
 
-    print("\nOutput shapes:")
-    print(f"result: {result.shape}")
-    print(f"model_output: {model_output.shape}")
-    print(f"expected output: {outputs.shape}")
-
     # Compare with both model output and recorded output
-    pcc_model = pearson_correlation(result, model_output)
     pcc_recorded = pearson_correlation(result, outputs)
     print(f"\nCorrelations:")
-    print(f"PCC with model output: {pcc_model}")
     print(f"PCC with recorded output: {pcc_recorded}")
 
     assert pcc_recorded > 0.999, f"PCC {pcc_recorded} below threshold"

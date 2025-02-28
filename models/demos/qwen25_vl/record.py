@@ -4,10 +4,10 @@
 """Record module inputs/outputs for testing functional implementations."""
 
 import torch
-from model import Qwen2_5_VLForConditionalGeneration, Qwen2_5_VLMLP
+from models.demos.qwen25_vl.model import Qwen2_5_VLForConditionalGeneration, Qwen2_5_VLMLP
 from transformers import AutoTokenizer, AutoProcessor
 from qwen_vl_utils import process_vision_info
-from instrument import instrument
+from models.demos.qwen25_vl.instrument import instrument
 
 # Instrument the vision MLP
 Qwen2_5_VLMLP.forward = instrument("Qwen2_5_VLMLP")(Qwen2_5_VLMLP.forward)
@@ -16,6 +16,11 @@ Qwen2_5_VLMLP.forward = instrument("Qwen2_5_VLMLP")(Qwen2_5_VLMLP.forward)
 model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
     "Qwen/Qwen2.5-VL-3B-Instruct", torch_dtype="auto", device_map="auto"
 )
+
+# Modify model config to only use a single layer
+# This will make the model only run the first layer during forward pass
+model.config.num_hidden_layers = 1
+model.config.num_vision_layers = 1  # If the vision encoder has separate layers
 
 # Default processor
 processor = AutoProcessor.from_pretrained("Qwen/Qwen2.5-VL-3B-Instruct")
