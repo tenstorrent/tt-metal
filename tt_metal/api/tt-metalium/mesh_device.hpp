@@ -23,7 +23,7 @@ namespace tt::tt_metal {
 class SubDeviceManagerTracker;
 class ThreadPool;
 
-template <typename TraceKey, typename TraceBufferType>
+template <typename TraceId, typename TraceBufferType>
 class TraceBufferPool;
 
 namespace distributed {

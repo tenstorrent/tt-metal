@@ -35,9 +35,9 @@
 
 #include "impl/dispatch/topology.hpp"
 #include "impl/dispatch/hardware_command_queue.hpp"
+#include "tt_metal/common/work_executor.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
-
-#include "work_executor.hpp"
+#include "tt_metal/impl/trace/trace_buffer_pool.hpp"
 
 namespace tt {
 
@@ -1346,12 +1346,13 @@ void Device::begin_trace(const uint8_t cq_id, const uint32_t tid) {
             // Create an empty trace buffer here. This will get initialized in end_trace
             auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
             TT_FATAL(
-                active_sub_device_manager->get_trace(tid) == nullptr,
+                active_sub_device_manager->trace_buffer_pool()->get(tid) == nullptr,
                 "Trace already exists for tid {} on device {}'s active sub-device manager {}",
                 tid,
                 this->id_,
                 active_sub_device_manager->id());
-            auto& trace_buffer = active_sub_device_manager->create_trace(tid);
+            auto trace_buffer =
+                active_sub_device_manager->trace_buffer_pool()->emplace(tid, Trace::create_empty_trace_buffer());
             this->command_queues_[cq_id]->record_begin(tid, trace_buffer->desc);
         },
         false /* blocking */);
@@ -1368,7 +1369,7 @@ void Device::end_trace(const uint8_t cq_id, const uint32_t tid) {
                 (uint32_t)cq_id,
                 tid);
             auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
-            auto trace_buffer = active_sub_device_manager->get_trace(tid);
+            auto trace_buffer = active_sub_device_manager->trace_buffer_pool()->get(tid);
             TT_FATAL(
                 trace_buffer != nullptr,
                 "Trace instance {} must exist on device {}'s active sub-device manager {}",
@@ -1394,14 +1395,16 @@ void Device::load_trace(const uint8_t cq_id, const uint32_t trace_id, const Trac
     this->mark_allocations_safe();
 
     auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
+    auto* trace_buffer_pool = active_sub_device_manager->trace_buffer_pool();
     TT_FATAL(
-        active_sub_device_manager->get_trace(trace_id) == nullptr,
+        trace_buffer_pool->get(trace_id) == nullptr,
         "Trace already exists for trace_id {} on device {}'s active sub-device manager {}",
         trace_id,
         this->id_,
         active_sub_device_manager->id());
 
-    auto& trace_buffer = active_sub_device_manager->create_trace(trace_id);
+    auto trace_buffer = trace_buffer_pool->emplace(trace_id, Trace::create_empty_trace_buffer());
+
     *trace_buffer->desc = trace_desc;
     Trace::initialize_buffer(this->command_queue(cq_id), trace_buffer);
     this->mark_allocations_unsafe();
@@ -1414,18 +1417,14 @@ void Device::replay_trace(
         [this, cq_id, tid, block_on_device]() mutable {
             ZoneScoped;
             TracyTTMetalReplayTrace(this->id(), tid);
-            constexpr bool check = false;
             auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
-            const auto& trace_buffer = active_sub_device_manager->get_trace(tid);
+            const auto trace_buffer = active_sub_device_manager->trace_buffer_pool()->get(tid);
             TT_FATAL(
                 trace_buffer != nullptr,
                 "Trace instance {} must exist on device {}'s active sub-device manager {}",
                 tid,
                 this->id_,
                 active_sub_device_manager->id());
-            if constexpr (check) {
-                Trace::validate_instance(*trace_buffer);
-            }
             EnqueueTrace(this->command_queue(cq_id), tid, block_on_device);
         },
         block_on_worker_thread);
@@ -1437,7 +1436,8 @@ void Device::release_trace(const uint32_t tid) {
             ZoneScoped;
             TracyTTMetalReleaseTrace(this->id(), tid);
 
-            sub_device_manager_tracker_->get_active_sub_device_manager()->release_trace(tid);
+            auto* trace_buffer_pool = sub_device_manager_tracker_->get_active_sub_device_manager()->trace_buffer_pool();
+            trace_buffer_pool->erase(tid);
 
             // Only enable allocations once all captured traces are released
             if (this->trace_buffers_size_ == 0) {
@@ -1448,7 +1448,7 @@ void Device::release_trace(const uint32_t tid) {
 }
 
 std::shared_ptr<TraceBuffer> Device::get_trace(uint32_t tid) {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->get_trace(tid);
+    return sub_device_manager_tracker_->get_active_sub_device_manager()->trace_buffer_pool()->get(tid);
 }
 
 void Device::enable_program_cache() {

@@ -48,16 +48,12 @@ public:
 
     void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id);
 
-    SubDeviceManager* get_active_sub_device_manager() const;
-
-    SubDeviceManager* get_default_sub_device_manager() const;
-
     // Used for caching program state by manager and buffers to check that the required manager is still active
-    SubDeviceManagerId get_active_sub_device_manager_id() const;
+    SubDeviceManager* get_active_sub_device_manager() const;
 
     // Currently only used by program's determine_sub_device_ids algorithm to avoid running the search algorithm in the
     // default case to not affect performance
-    SubDeviceManagerId get_default_sub_device_manager_id() const;
+    SubDeviceManager* get_default_sub_device_manager() const;
 
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address(
         tt::stl::Span<const SubDeviceId> sub_device_ids = {}) const;

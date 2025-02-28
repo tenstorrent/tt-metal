@@ -126,14 +126,6 @@ SubDeviceManager* SubDeviceManagerTracker::get_default_sub_device_manager() cons
     return default_sub_device_manager_;
 }
 
-SubDeviceManagerId SubDeviceManagerTracker::get_active_sub_device_manager_id() const {
-    return active_sub_device_manager_->id();
-}
-
-SubDeviceManagerId SubDeviceManagerTracker::get_default_sub_device_manager_id() const {
-    return default_sub_device_manager_->id();
-}
-
 std::optional<DeviceAddr> SubDeviceManagerTracker::lowest_occupied_compute_l1_address(
     tt::stl::Span<const SubDeviceId> sub_device_ids) const {
     constexpr uint32_t global_bank_id = 0;
