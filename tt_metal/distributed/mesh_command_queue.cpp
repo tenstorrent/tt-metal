@@ -376,6 +376,8 @@ void MeshCommandQueue::read_sharded_buffer(MeshBuffer& buffer, void* dst) {
             }
             num_reads_ = 0;
 
+            this->finish();
+
             uint32_t write_offset = shard_x * single_write_size + shard_y * stride_size_bytes * shard_shape.height();
             uint32_t size_to_write = total_write_size_per_shard;
             uint32_t local_offset = 0;
