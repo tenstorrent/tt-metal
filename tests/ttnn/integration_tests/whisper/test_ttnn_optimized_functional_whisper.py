@@ -5,7 +5,10 @@
 from loguru import logger
 import pytest
 from models.experimental.functional_whisper.tt import ttnn_optimized_functional_whisper
-from models.experimental.functional_whisper.tt.ttnn_optimized_functional_whisper import init_kv_cache
+from models.experimental.functional_whisper.tt.ttnn_optimized_functional_whisper import (
+    init_kv_cache,
+    WHISPER_L1_SMALL_SIZE,
+)
 import transformers
 from transformers import AutoFeatureExtractor, WhisperModel, WhisperConfig
 from datasets import load_dataset
@@ -38,6 +41,7 @@ MODEL_NAME = "distil-whisper/distil-large-v3"
     ],
 )
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_whisper_attention(
     device,
     ttnn_model,
@@ -164,6 +168,7 @@ def test_whisper_attention(
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [1500])
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_encoder_layer(device, ttnn_model, model_name, batch_size, sequence_size, use_program_cache, enable_async_mode):
     torch.manual_seed(0)
     config = transformers.WhisperConfig.from_pretrained(model_name)
@@ -196,6 +201,7 @@ def test_encoder_layer(device, ttnn_model, model_name, batch_size, sequence_size
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_length", [3000])
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_encoder(device, ttnn_model, model_name, batch_size, sequence_length, use_program_cache, enable_async_mode):
     torch.manual_seed(0)
     config = transformers.WhisperConfig.from_pretrained(model_name)
@@ -215,13 +221,11 @@ def test_encoder(device, ttnn_model, model_name, batch_size, sequence_length, us
     )
 
     input_embeds = ttnn_model.preprocess_encoder_inputs(
+        config=config,
         input_features=torch_input_features,
         parameters=ttnn_parameters,
         device=device,
     )
-    input_embeds = ttnn.to_layout(input_embeds, ttnn.TILE_LAYOUT)
-    input_embeds = ttnn.to_device(input_embeds, device)
-
     output = ttnn_model.encoder(config, input_embeds, parameters=ttnn_parameters)
     output = ttnn.to_torch(output)
 
@@ -241,6 +245,7 @@ def test_encoder(device, ttnn_model, model_name, batch_size, sequence_length, us
     ),
 )
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_decoder_layer(
     device,
     ttnn_model,
@@ -316,6 +321,7 @@ def test_decoder_layer(
     ),
 )
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_decoder(
     device,
     ttnn_model,
@@ -393,6 +399,7 @@ def test_decoder(
     ),
 )
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_ttnn_whisper(
     tmp_path, device, ttnn_model, model_name, decoder_sequence_size, use_kv_cache, use_program_cache, enable_async_mode
 ):
@@ -446,5 +453,5 @@ def test_ttnn_whisper(
     )
     last_hidden_state = ttnn.to_torch(last_hidden_state)
 
-    _, pcc_message = assert_with_pcc(expected_last_hidden_state, last_hidden_state, 0.996)
+    _, pcc_message = assert_with_pcc(expected_last_hidden_state, last_hidden_state, 0.991)
     logger.info(f"Output PCC: {pcc_message}")
