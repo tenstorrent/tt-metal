@@ -1,0 +1,5 @@
+arch.dump
+sfpi/
+tt-smi/
+python_tests/test_tilize_max_pool.py
+sources/tilize_max_pool_test.cpp
