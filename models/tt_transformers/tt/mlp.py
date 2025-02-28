@@ -92,6 +92,7 @@ class MLP(LightweightModule):
 
         # In decode mode (seqlen <= 32) do DRAM sharded matmuls
         # These use HiFi2; this drops 1 bit of the activations but would be FLOP-bound on 12 cores with HiFi4
+        # breakpoint()
         w1_out = ttnn.linear(
             x,
             self.w1,
@@ -106,6 +107,7 @@ class MLP(LightweightModule):
             memory_config=x.memory_config(),
         )
 
+        # breakpoint()
         w3_out = ttnn.linear(
             x,
             self.w3,
@@ -167,6 +169,7 @@ class MLP(LightweightModule):
                     memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == "decode" else None,
                 )
 
+        # breakpoint()
         w2_in = ttnn.mul(
             w1_out,
             w3_out,
@@ -174,6 +177,7 @@ class MLP(LightweightModule):
             dtype=ttnn.bfloat8_b,
             memory_config=w1_out.memory_config(),
         )
+
         if mode == "decode" and not TG:
             # w2 may use a different core grid, this is a no-op if they already match
             w2_in = ttnn.to_memory_config(w2_in, self.model_config["SHARDED_MLP2_INPUT_MEMCFG"])
@@ -194,6 +198,7 @@ class MLP(LightweightModule):
             if mode == "decode":
                 w2_in = ttnn.to_memory_config(w2_in, ttnn.L1_MEMORY_CONFIG)
 
+        # breakpoint()
         w2_out = ttnn.linear(
             w2_in,
             self.w2,
@@ -210,6 +215,7 @@ class MLP(LightweightModule):
         ttnn.deallocate(w2_in)
         # if mode == "decode" and not TG:
         #     w2_out = ttnn.sharded_to_interleaved(w2_out, ttnn.DRAM_MEMORY_CONFIG)
+        # breakpoint()
         w2_out_reduced = tt_all_reduce(
             w2_out,
             self.mesh_device,
