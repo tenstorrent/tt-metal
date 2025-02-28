@@ -22,7 +22,7 @@ ttnn::Tensor ExecuteLayerNorm::invoke(
                     ? input_tensor.device()->arch()
                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     auto kernel_config_val =
-        init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
+        init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, false, true, false);
     return operation::run(
                LayerNorm{
                    .norm_type = LayerNormType::LAYERNORM,
