@@ -517,7 +517,8 @@ int main() {
                 cb_l1_base =
                     (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.remote_cb_offset);
                 end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
-                experimental::setup_remote_cb_interfaces<true>(cb_l1_base, end_cb_index, noc_index);
+                experimental::setup_remote_cb_interfaces<true>(
+                    cb_l1_base, end_cb_index, noc_index, noc_mode, post_atomic_increments);
                 int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
                 void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
                     (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
@@ -538,7 +539,8 @@ int main() {
                     cb_l1_base =
                         (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.remote_cb_offset);
                     uint32_t end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
-                    experimental::setup_remote_cb_interfaces<true>(cb_l1_base, end_cb_index, noc_index);
+                    experimental::setup_remote_cb_interfaces<true>(
+                        cb_l1_base, end_cb_index, noc_index, noc_mode, post_atomic_increments);
                 }
                 wait_for_go_message();
             }
@@ -596,18 +598,6 @@ int main() {
                     31 /*wrap*/,
                     false /*linked*/,
                     post_atomic_increments /*posted*/);
-#if defined(ARCH_BLACKHOLE)
-                if (noc_mode == DM_DYNAMIC_NOC) {
-                    // inc dm noc counter for BH as this is non-posted
-                    inc_noc_counter_val<
-                        static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM0),
-                        NocBarrierType::NONPOSTED_ATOMICS_ACKED>(noc_index, 1);
-                    // barrier till the atomic response is back
-                    while (!ncrisc_dynamic_noc_nonposted_atomics_flushed(noc_index));
-                    // reset local counters
-                    noc_local_state_init(noc_index);
-                }
-#endif
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
             }
         }

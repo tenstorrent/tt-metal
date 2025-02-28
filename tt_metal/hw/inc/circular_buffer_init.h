@@ -57,7 +57,8 @@ FORCE_INLINE void setup_local_cb_read_write_interfaces(
 namespace experimental {
 
 template <bool update_remote_over_noc = false>
-inline void setup_remote_cb_interfaces(uint32_t tt_l1_ptr* cb_l1_base, uint32_t start_cb_index, uint8_t noc) {
+inline void setup_remote_cb_interfaces(
+    uint32_t tt_l1_ptr* cb_l1_base, uint32_t start_cb_index, uint8_t noc, uint8_t nm, bool posted) {
     volatile tt_l1_ptr uint32_t* circular_buffer_config_addr = cb_l1_base;
 
     for (uint32_t cb_id = NUM_CIRCULAR_BUFFERS - 1, end_id = start_cb_index - 1; cb_id != end_id; cb_id--) {
@@ -81,7 +82,7 @@ inline void setup_remote_cb_interfaces(uint32_t tt_l1_ptr* cb_l1_base, uint32_t 
             sender_cb_interface.aligned_pages_sent_ptr = aligned_pages_sent_addr;
             sender_cb_interface.num_receivers = num_receivers;
             // Using posted semaphore inc
-            resize_remote_sender_cb_interface<update_remote_over_noc>(cb_id, page_size, noc);
+            resize_remote_sender_cb_interface<update_remote_over_noc>(cb_id, page_size, noc, nm, posted);
         } else {
             uint32_t aligned_pages_acked_addr = aligned_pages_sent_addr + L1_ALIGNMENT;
             uint32_t sender_noc_x = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_noc_xy_addr)[0];
@@ -94,7 +95,7 @@ inline void setup_remote_cb_interfaces(uint32_t tt_l1_ptr* cb_l1_base, uint32_t 
             receiver_cb_interface.sender_noc_y = sender_noc_y;
             receiver_cb_interface.aligned_pages_acked_ptr = aligned_pages_acked_addr;
             // Using posted semaphore inc
-            resize_remote_receiver_cb_interface<update_remote_over_noc>(cb_id, page_size, noc);
+            resize_remote_receiver_cb_interface<update_remote_over_noc>(cb_id, page_size, noc, nm, posted);
         }
         circular_buffer_config_addr += UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG;
     }
