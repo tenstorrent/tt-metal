@@ -901,3 +901,43 @@ def test_run_max_pool_squeeze_net_model(
         dtype,
         ceil_mode=ceil_mode,
     )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "act_shape",
+    (([1, 256, 20, 20],)),  # 640x640 resolution
+)
+@pytest.mark.parametrize(
+    "kernel_size",
+    ((5, 5),),
+)
+@pytest.mark.parametrize(
+    "padding",
+    ((2, 2),),
+)
+@pytest.mark.parametrize("stride", ((1, 1),))
+@pytest.mark.parametrize("dilation", ((1, 1),))
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("ceil_mode", [False, True])
+def test_run_max_pool_yolov8s_world_model(
+    act_shape,
+    kernel_size,
+    padding,
+    stride,
+    dilation,
+    device,
+    dtype,
+    use_program_cache,
+    ceil_mode,
+):
+    run_max_pool(
+        act_shape,
+        kernel_size,
+        padding,
+        stride,
+        dilation,
+        device,
+        dtype,
+        ceil_mode=ceil_mode,
+    )
