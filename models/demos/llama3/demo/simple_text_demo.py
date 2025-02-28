@@ -109,6 +109,7 @@ def create_tt_model(
     page_params,
     dtype=ttnn.bfloat8_b,
     use_paged_kv_cache=False,
+    state_dict=None,
 ):
     from models.demos.llama3.tt.llama_model import TtTransformer
     from models.demos.llama3.tt.model_config import TtModelArgs
@@ -120,7 +121,8 @@ def create_tt_model(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
     )
-    state_dict = tt_model_args.load_state_dict()
+    if not state_dict:
+        state_dict = tt_model_args.load_state_dict()
 
     page_table = None
     paged_attention_config = None
@@ -155,7 +157,7 @@ def create_tt_model(
     if use_paged_kv_cache:
         tt_kv_cache = [l.attention.layer_past for l in model.layers]
 
-    return tt_model_args, model, page_table, tt_kv_cache
+    return tt_model_args, model, page_table, tt_kv_cache, state_dict
 
 
 # List of supported Parameters for demo.py
@@ -384,11 +386,12 @@ def test_llama_demo_text(
     tt_kv_cache = []
 
     # Partition the mesh, singular model implemented for TP on 1xN mesh
-    mesh_shape = list(mesh_device.shape)
-    submesh_devices = mesh_device.create_submeshes(ttnn.MeshShape(mesh_shape[0], mesh_shape[1] // data_parallel))
+    num_devices = mesh_device.get_num_devices()
+    submesh_devices = mesh_device.create_submeshes(ttnn.MeshShape(1, num_devices // data_parallel))
+    state_dict = None
 
     for submesh in submesh_devices:
-        model_args_i, model_i, page_table_i, tt_kv_cache_i = create_tt_model(
+        model_args_i, model_i, page_table_i, tt_kv_cache_i, state_dict = create_tt_model(
             submesh,
             instruct=instruct,
             max_batch_size=batch_size // data_parallel,
@@ -397,6 +400,7 @@ def test_llama_demo_text(
             page_params=page_params,
             dtype=ttnn.bfloat8_b,
             use_paged_kv_cache=paged_attention,
+            state_dict=state_dict,
         )
         model_args.append(model_args_i)
         model.append(model_i)
