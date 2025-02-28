@@ -208,6 +208,28 @@ def test_multi_device_replicate(mesh_device, shape, layout, memory_config):
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
     indirect=True,
 )
+def test_ttnn_multi_device_all_gather(pcie_mesh_device):
+    """Multidevice API test for ttnn.all_gather CCL operation"""
+    pytest.skip("TT-Mesh: Skipping because we need CCL port to fabric")
+    if pcie_mesh_device.get_num_devices() <= 1:
+        pytest.skip("Requires multiple devices to run")
+    full_tensor = torch.rand((1, 1, 32, 32 * pcie_mesh_device.get_num_devices()), dtype=torch.bfloat16)
+
+    ttnn_tensor = ttnn.from_torch(full_tensor, mesh_mapper=ShardTensorToMesh(pcie_mesh_device, dim=3))
+    ttnn_tensor = ttnn.to_device(ttnn_tensor, pcie_mesh_device)
+    ttnn_tensor = ttnn.all_gather(ttnn_tensor, dim=3, num_links=1)
+
+    device_tensors: typing.List[ttnn.Tensor] = ttnn.get_device_tensors(ttnn_tensor)
+    for device_tensor in device_tensors:
+        device_tensor_torch = ttnn.to_torch(device_tensor)
+        assert torch.all(device_tensor_torch == full_tensor)
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
+    indirect=True,
+)
 def test_multi_device_single_op_unary(mesh_device):
     """Multidevice API test: Running tensor-parallel multi-device single-op unary"""
     torch_input_tensor = torch.rand((1, 1, 32, 32 * mesh_device.get_num_devices()), dtype=torch.bfloat16)
@@ -469,9 +491,7 @@ def test_ttnn_multi_device_all_gather_all_devices(t3k_mesh_device):
 
 @pytest.mark.parametrize(
     "device_params",
-    # TODO(jchu): col dispatch not supported yet
-    # [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}],
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
     indirect=True,
 )
 def test_sharded_matmul(t3k_mesh_device):
@@ -591,7 +611,6 @@ def test_clone(mesh_device):
 
 
 def test_device_shard_to_torch(mesh_device):
-    # TODO(jchu): error with single-device cmd-queues
     """Test `ttnn.get_device_tensor(..) API"""
     torch_input_tensor = torch.rand((1, 1, 32, 32 * mesh_device.get_num_devices()), dtype=torch.bfloat16)
     torch_output_golden = torch.nn.functional.gelu(torch_input_tensor)

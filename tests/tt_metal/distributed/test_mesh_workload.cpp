@@ -82,7 +82,7 @@ void verify_cb_config(
     uint32_t cb_config_buffer_size =
         NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
-    for (const auto& device_range : workload.get_logical_device_ranges()) {
+    for (const auto& [device_range, _] : workload.get_programs()) {
         for (const auto& coord : device_range) {
             auto device = mesh_device->get_device(coord);
             uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
@@ -417,7 +417,7 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSanity) {
     for (int iter = 0; iter < 100; iter++) {
         log_info(LogTest, "Run iter {}", iter);
         if (iter) {
-            auto& program = mesh_workload.get_program_on_device_range(devices_0);
+            auto& program = mesh_workload.get_programs().at(devices_0);
             auto& rtas = GetRuntimeArgs(program, reader_writer_kernel);
             for (auto core : full_grid) {
                 rtas[core.x][core.y].at(4) = ((iter % 2) + 1) * add_factor;
@@ -475,7 +475,7 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadCBUpdate) {
         CBConfig& cb_config = updated_cb_config_vector[cb_id];
         cb_config.num_pages *= 2;
         const uint32_t cb_size = cb_config.num_pages * cb_config.page_size;
-        UpdateCircularBufferTotalSize(mesh_workload.get_program_on_device_range(devices), cb_handles[cb_id], cb_size);
+        UpdateCircularBufferTotalSize(mesh_workload.get_programs().at(devices), cb_handles[cb_id], cb_size);
     }
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
     Finish(mesh_device_->mesh_command_queue());

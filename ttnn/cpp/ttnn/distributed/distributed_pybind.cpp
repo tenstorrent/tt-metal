@@ -406,6 +406,7 @@ void py_module(py::module& module) {
         py::arg("tensors"),
         py::kw_only());
     module.def("get_t3k_physical_device_ids_ring", &get_t3k_physical_device_ids_ring);
+    module.attr("DefaultMeshCommandQueueId") = ttnn::DefaultMeshCommandQueueId;
 }
 
 }  // namespace ttnn::distributed

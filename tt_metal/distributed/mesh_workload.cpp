@@ -10,15 +10,6 @@
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
 
 namespace tt::tt_metal::distributed {
-namespace {
-
-// TODO: Consider how this can be extended to ND.
-uint32_t encode_device_range(const MeshCoordinate& coord) {
-    TT_FATAL(coord.dims() == 2, "Expected 2D coordinate: {}", coord);
-    return (coord[0] << 24) | (coord[1] << 16);
-}
-
-}  // namespace
 
 MeshWorkload::MeshWorkload() {
     // A MeshWorkload tracks maintains its own handles to kernels across all
@@ -28,9 +19,7 @@ MeshWorkload::MeshWorkload() {
 }
 
 void MeshWorkload::add_program(const MeshCoordinateRange& device_range, Program&& program) {
-    // Add a program to a MeshWorkload and tie it a specific logical device range
     programs_[device_range] = std::move(program);
-    logical_device_ranges_.push_back(device_range);
 }
 
 void MeshWorkload::compile(MeshDevice* mesh_device) {
@@ -164,8 +153,9 @@ std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& MeshWorkload::get_ker
     uint32_t programmable_core_type_index) {
     // Get all kernels across all programs in the MeshWorkload
     if (kernels_.at(programmable_core_type_index).empty()) {
+        uint32_t device_range_idx = 0;
         for (auto& [device_range, program] : programs_) {
-            uint32_t device_range_handle = encode_device_range(device_range.start_coord());
+            const uint32_t device_range_handle = (device_range_idx++) << 16;
             for (const auto& kernel : program.get_kernels(programmable_core_type_index)) {
                 KernelHandle handle = (device_range_handle | kernel.first);
                 kernels_.at(programmable_core_type_index).insert({handle, kernel.second});
@@ -178,8 +168,9 @@ std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& MeshWorkload::get_ker
 std::vector<std::shared_ptr<KernelGroup>>& MeshWorkload::get_kernel_groups(uint32_t programmable_core_type_index) {
     // Get all kernel groups across all programs in the MeshWorkload
     if (kernel_groups_.at(programmable_core_type_index).empty()) {
+        uint32_t device_range_idx = 0;
         for (auto& [device_range, program] : programs_) {
-            uint32_t device_range_handle = encode_device_range(device_range.start_coord());
+            const uint32_t device_range_handle = (device_range_idx++) << 16;
             for (auto& kg : program.get_kernel_groups(programmable_core_type_index)) {
                 for (auto& optional_kernel_id : kg->kernel_ids) {
                     if (optional_kernel_id.has_value()) {

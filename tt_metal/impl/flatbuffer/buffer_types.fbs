@@ -1,4 +1,5 @@
 include "flatbuffer/base_types.fbs";
+include "flatbuffer/program_types.fbs"; // For CoreRangeSet
 
 namespace tt.tt_metal.flatbuffer;
 
@@ -11,20 +12,43 @@ enum BufferType: ushort {
 }
 
 enum TensorMemoryLayout: ushort {
-  None = 0,
-  Interleaved = 1,
-  SingleBank = 2,
-  HeightSharded = 3,
-  WidthSharded = 4,
-  BlockSharded = 5,
+  Interleaved = 0,
+  SingleBank = 1,
+  HeightSharded = 2,
+  WidthSharded = 3,
+  BlockSharded = 4,
 }
 
-table InterleavedBufferConfig {
-  device_id: int; // Reference to IDevice *device;
-  size: int; // Size in bytes
-  page_size: int; // Size of unit being interleaved. For non-interleaved buffers: size == page_size
-  buffer_type: BufferType;
-  buffer_layout: TensorMemoryLayout;
+enum ShardOrientation : ubyte {
+    RowMajor = 0,
+    ColMajor = 1,
+}
+
+enum ShardMode : ubyte {
+    Physical,
+    Logical,
+}
+
+table ShardShape {
+    height: uint32;
+    width: uint32;
+}
+
+table ShardSpec {
+    grid: CoreRangeSet;
+    shape_h: uint32;
+    shape_w: uint32;
+    orientation: ShardOrientation;
+    shard_mode: ShardMode;
+    physical_shard_shape: ShardShape;
+}
+
+table ShardSpecBuffer {
+  tensor_shard_spec: ShardSpec;
+  page_shape_h: uint32;
+  page_shape_w: uint32;
+  tensor2d_shape_in_pages_h: uint32;
+  tensor2d_shape_in_pages_w: uint32;
 }
 
 struct CBConfigPageSize {
@@ -45,11 +69,11 @@ struct CBConfigTile {
 
 table CircularBufferConfig {
   total_size: uint32;
-  globally_allocated_address: uint32; // Optional behavior can be handled with a default value (or union)
+  globally_allocated_address: Uint32Optional;
   data_formats: [CBConfigDataFormat]; // Mimic optional array in C++ by using KV map.
   page_sizes: [CBConfigPageSize];     // Mimic optional array in C++ by using KV map.
   tiles: [CBConfigTile];              // Mimic optional array in C++ by using KV map.
-  shadow_buf_global_id: uint32;
+  shadow_buf_global_id: Uint32Optional;
   buffer_indices: [uint8];
   local_buffer_indices: [uint8];
   remote_buffer_indices: [uint8];

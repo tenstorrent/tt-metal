@@ -79,10 +79,14 @@ jobs:
     uses: ./.github/workflows/tg-unit-tests-impl.yaml
     if: ${{ inputs.tg-unit }}
   tg-frequent-tests:
+    if: ${{ inputs.tg-frequent }}
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/tg-frequent-tests-impl.yaml
-    if: ${{ inputs.tg-frequent }}
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   tg-model-perf-tests:
     needs: build-artifact
     secrets: inherit
