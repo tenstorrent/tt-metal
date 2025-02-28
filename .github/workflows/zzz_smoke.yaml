@@ -16,8 +16,8 @@ jobs:
       fail-fast: false
       matrix:
         runs-on: [
-          "BH",
-          "wormhole_b0"
+          "N150",
+          "P150"
         ]
     runs-on:
       - in-service
