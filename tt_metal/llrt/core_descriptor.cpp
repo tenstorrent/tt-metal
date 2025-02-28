@@ -154,7 +154,7 @@ const core_descriptor_t& get_core_descriptor_config(
         dispatch_cores_string = "tg_dispatch_cores";
     }
 
-    CoreCoord grid_size = tt::Cluster::instance().get_soc_desc(device_id).worker_grid_size;
+    CoreCoord grid_size = tt::Cluster::instance().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
     auto logical_active_eth_cores = tt::Cluster::instance().get_active_ethernet_cores(device_id);
 
     for (const auto& core_node : desc_yaml[dispatch_cores_string]) {
