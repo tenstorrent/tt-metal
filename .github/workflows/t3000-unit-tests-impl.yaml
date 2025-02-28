@@ -57,6 +57,8 @@ jobs:
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
+          export GTEST_OUTPUT=xml:generated/test_reports/
+          mkdir -p generated/test_reports
           source ${{ github.workspace }}/tests/scripts/t3000/run_t3000_unit_tests.sh
           ${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/slack-report
@@ -64,3 +66,15 @@ jobs:
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: ${{ matrix.test-group.owner_id }}
+      - uses: ./.github/actions/upload-artifact-with-job-uuid
+        if: ${{ !cancelled() }}
+        with:
+          path: |
+            generated/test_reports/
+          prefix: "test_reports_"
+      - name: Generate gtest annotations on failure
+        uses: ./.github/actions/generate-gtest-failure-message
+        if: ${{ failure() }}
+        with:
+          path: |
+            generated/test_reports/
