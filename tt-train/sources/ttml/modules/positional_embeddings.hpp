@@ -19,12 +19,7 @@ struct PositionalEmbeddingConfig {
     bool use_dropout_seed_per_device{true};
 };
 
-class PositionalEmbeddingBase : public autograd::ModuleBase {
-public:
-    virtual autograd::TensorPtr operator()(const autograd::TensorPtr& input) = 0;
-};
-
-class PositionalEmbedding : public PositionalEmbeddingBase {
+class PositionalEmbedding : public autograd::ModuleBase {
 private:
     uint32_t m_sequence_length{};
     std::shared_ptr<DropoutLayer> m_dropout;
@@ -35,7 +30,7 @@ public:
     [[nodiscard]] autograd::TensorPtr operator()(const autograd::TensorPtr& input) override;
 };
 
-class TrainablePositionalEmbedding : public PositionalEmbeddingBase {
+class TrainablePositionalEmbedding : public autograd::ModuleBase {
     uint32_t m_sequence_length{};
     autograd::TensorPtr m_weight;
     std::shared_ptr<DropoutLayer> m_dropout;

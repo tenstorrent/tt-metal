@@ -5,6 +5,7 @@
 #include "gpt2.hpp"
 
 #include "autograd/graph_utils.hpp"
+#include "autograd/module_base.hpp"
 #include "autograd/tensor.hpp"
 #include "core/distributed_mapping.hpp"
 #include "core/scoped.hpp"
@@ -129,7 +130,7 @@ DistributedTransformer::DistributedTransformer(const TransformerConfig& config) 
     auto create_positional_embedding = [position_embedding_type,
                                         max_sequence_length,
                                         embedding_dim,
-                                        dropout_prob]() -> std::shared_ptr<modules::PositionalEmbeddingBase> {
+                                        dropout_prob]() -> std::shared_ptr<autograd::ModuleBase> {
         if (position_embedding_type == PositionalEmbeddingType::Trainable) {
             return std::make_shared<ttml::modules::TrainablePositionalEmbedding>(
                 ttml::modules::PositionalEmbeddingConfig{

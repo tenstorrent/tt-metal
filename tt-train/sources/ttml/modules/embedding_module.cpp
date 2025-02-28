@@ -45,13 +45,14 @@ autograd::TensorPtr Embedding::operator()(const autograd::TensorPtr& tensor) {
     return ops::embedding_op(tensor, m_weight);
 }
 
-void Embedding::set_weight(const autograd::TensorPtr& weight) {
-    m_weight = weight;
-    override_tensor(m_weight, "weight");
-}
-
 autograd::TensorPtr Embedding::get_weight() const {
     return m_weight;
+}
+
+Embedding::Embedding(const autograd::TensorPtr& weight) {
+    m_weight = weight;
+    create_name("embedding");
+    register_tensor(m_weight, "weight");
 }
 
 }  // namespace ttml::modules

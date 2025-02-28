@@ -24,11 +24,11 @@ using models::gpt2::WeightTyingType;
 class DistributedTransformer : public ttml::autograd::ModuleBase {
 private:
     RunnerType runner_type = RunnerType::Default;
-    std::shared_ptr<ttml::modules::Embedding> tok_emb;
-    std::shared_ptr<ttml::modules::PositionalEmbeddingBase> pos_emb;
-    std::vector<std::shared_ptr<ttml::modules::distributed::DistributedGPTBlock>> blocks;
-    std::shared_ptr<ttml::modules::LayerNormLayer> ln_fc;
-    std::shared_ptr<ttml::modules::distributed::ColumnParallelLinear> fc;
+    std::shared_ptr<ttml::autograd::ModuleBase> tok_emb;
+    std::shared_ptr<ttml::autograd::ModuleBase> pos_emb;
+    std::vector<std::shared_ptr<ttml::autograd::ModuleBase>> blocks;
+    std::shared_ptr<ttml::autograd::ModuleBase> ln_fc;
+    std::shared_ptr<ttml::autograd::ModuleBase> fc;
 
 public:
     explicit DistributedTransformer(const TransformerConfig& config);

@@ -19,7 +19,8 @@ class SingleHeadAttention : public ttml::autograd::ModuleBase {
 public:
     explicit SingleHeadAttention(uint32_t embedding_dim, float dropout_prob);
 
-    autograd::TensorPtr operator()(const autograd::TensorPtr& x, const autograd::TensorPtr& mask);
+    [[nodiscard]] autograd::TensorPtr operator()(
+        const autograd::TensorPtr& x, const autograd::TensorPtr& mask) override;
 };
 
 }  // namespace ttml::modules
