@@ -1212,8 +1212,8 @@ void pytensor_module(py::module& m_tensor) {
         .def(
             "unpad",
             [](const Tensor& self,
-               const std::array<uint32_t, 4>& output_tensor_start,
-               const std::array<uint32_t, 4>& output_tensor_end) {
+               const ttnn::SmallVector<uint32_t>& output_tensor_start,
+               const ttnn::SmallVector<uint32_t>& output_tensor_end) {
                 return self.unpad(ttnn::Shape(output_tensor_start), ttnn::Shape(output_tensor_end));
             },
             R"doc(
