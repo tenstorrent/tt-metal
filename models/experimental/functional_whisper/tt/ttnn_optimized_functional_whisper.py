@@ -15,6 +15,8 @@ from models.utility_functions import nearest_32
 
 WHISPER_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 
+WHISPER_L1_SMALL_SIZE = 1024
+
 
 def gelu(tensor):
     return ttnn.gelu(tensor, memory_config=WHISPER_MEMORY_CONFIG)
@@ -429,29 +431,97 @@ def convert_to_ttnn(model, name):
     ]
 
 
-def preprocess_encoder_inputs(input_features, *, parameters, device):
-    def conv(input, weight, bias, stride=1, padding=1, dilation=1, groups=1):
-        return F.conv1d(input, weight, bias, stride, padding, dilation, groups)
-
-    input_embeds = torch.nn.functional.gelu(
-        conv(
-            input_features,
-            weight=parameters.conv1.weight,
-            bias=parameters.conv1.bias,
-            padding=1,
-        )
+def get_conv_configs(device):
+    conv1d_config = ttnn.Conv1dConfig(
+        dtype=ttnn.bfloat16,
+        weights_dtype=ttnn.bfloat16,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
     )
-    input_embeds = torch.nn.functional.gelu(
-        conv(
-            input_embeds,
-            weight=parameters.conv2.weight,
-            bias=parameters.conv2.bias,
+    conv1d_compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+    return conv1d_config, conv1d_compute_config
+
+
+def prepare_conv_weights(config, parameters):
+    conv2_out_channel_splits = 4
+    conv2_out_channels = config.d_model // conv2_out_channel_splits
+    if isinstance(parameters.conv1.weight, torch.Tensor):
+        parameters.conv1.weight = ttnn.from_torch(
+            parameters.conv1.weight, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
+    if isinstance(parameters.conv2.weight, torch.Tensor):
+        parameters.conv2.weight = ttnn.from_torch(
+            parameters.conv2.weight, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
+        # Split output channels to avoid running out of L1 memory
+        weight_splits = []
+        for i in range(conv2_out_channel_splits):
+            weight_splits.append(parameters.conv2.weight[i * conv2_out_channels : (i + 1) * conv2_out_channels, :, :])
+        parameters.conv2.weight = weight_splits
+    return conv2_out_channel_splits, conv2_out_channels
+
+
+def preprocess_encoder_inputs(config, input_features, *, parameters, device):
+    input_length = input_features.shape[-1]
+    input_features = ttnn.from_torch(input_features, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    input_features = ttnn.transpose(input_features, 1, 2)
+
+    conv1d_config, conv1d_compute_config = get_conv_configs(device)
+
+    # First time convs are runs, weights are on host (convs will return weights on device)
+    conv2_out_channel_splits, conv2_out_channels = prepare_conv_weights(config, parameters)
+
+    input_embeds, [weights_device, _] = ttnn.Conv1d(
+        input_tensor=input_features,
+        weight_tensor=parameters.conv1.weight,
+        device=device,
+        in_channels=config.num_mel_bins,
+        out_channels=config.d_model,
+        batch_size=1,
+        input_length=input_length,
+        kernel_size=3,
+        stride=1,
+        padding=1,
+        dilation=1,
+        groups=1,
+        conv_config=conv1d_config,
+        compute_config=conv1d_compute_config,
+        return_weights_and_bias=True,
+    )
+    parameters.conv1.weight = weights_device
+    input_embeds = ttnn.gelu(input_embeds)
+    input_embeds = ttnn.sharded_to_interleaved(input_embeds)
+
+    out_tensor_splits = []
+    for i in range(conv2_out_channel_splits):
+        out_split, [weights_device, _] = ttnn.Conv1d(
+            input_tensor=input_embeds,
+            weight_tensor=parameters.conv2.weight[i],
+            device=device,
+            in_channels=config.d_model,
+            out_channels=conv2_out_channels,
+            batch_size=1,
+            input_length=input_length,
+            kernel_size=3,
             stride=2,
             padding=1,
+            dilation=1,
+            groups=1,
+            conv_config=conv1d_config,
+            compute_config=conv1d_compute_config,
+            return_weights_and_bias=True,
         )
-    )
-    input_embeds = input_embeds.permute(0, 2, 1)
-    input_embeds = ttnn.from_torch(input_embeds, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        parameters.conv2.weight[i] = weights_device
+        out_split = ttnn.sharded_to_interleaved(out_split)
+        out_tensor_splits.append(out_split)
+
+    input_embeds = ttnn.concat(out_tensor_splits, dim=3)
+    input_embeds = ttnn.gelu(input_embeds)
+    input_embeds = ttnn.squeeze(input_embeds, 0)
 
     return input_embeds
 
@@ -469,7 +539,7 @@ def preprocess_decoder_inputs(
         attention_mask = prepare_decoder_attention_mask(attention_mask, input_shape)
     if attention_mask is not None:
         # ttnn cannot broadcast when adding on the batch or channel dimensions so this is a workaround
-        attention_mask = attention_mask.expand(-1, config.encoder_attention_heads, -1, -1)
+        attention_mask = attention_mask.expand(-1, config.decoder_attention_heads, -1, -1)
         attention_mask = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     if decode_pos is None:
@@ -493,7 +563,7 @@ def preprocess_inputs(
     device,
     create_attention_mask=True,
 ):
-    input_embeds = preprocess_encoder_inputs(input_features, parameters=parameters.encoder, device=device)
+    input_embeds = preprocess_encoder_inputs(config, input_features, parameters=parameters.encoder, device=device)
     (decoder_hidden_states, attention_mask) = preprocess_decoder_inputs(
         config,
         input_ids,

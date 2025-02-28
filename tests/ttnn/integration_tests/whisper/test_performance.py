@@ -4,7 +4,10 @@
 
 import pytest
 from models.experimental.functional_whisper.tt import ttnn_optimized_functional_whisper
-from models.experimental.functional_whisper.tt.ttnn_optimized_functional_whisper import init_kv_cache
+from models.experimental.functional_whisper.tt.ttnn_optimized_functional_whisper import (
+    init_kv_cache,
+    WHISPER_L1_SMALL_SIZE,
+)
 from transformers import AutoFeatureExtractor, WhisperModel, WhisperConfig
 from datasets import load_dataset
 import torch
@@ -35,6 +38,7 @@ def get_expected_times(model_name):
 @pytest.mark.parametrize("use_kv_cache", [True])
 @pytest.mark.parametrize("functional_whisper", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_performance(
     device,
     use_program_cache,
