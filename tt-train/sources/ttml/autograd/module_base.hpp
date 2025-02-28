@@ -58,5 +58,4 @@ public:
         const autograd::TensorPtr& tensor, const autograd::TensorPtr& other);
 };
 
-using ModulePtr = std::shared_ptr<Tensor>;
 }  // namespace ttml::autograd
