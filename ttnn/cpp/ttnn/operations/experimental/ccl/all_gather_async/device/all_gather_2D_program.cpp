@@ -70,12 +70,6 @@ void getNeighborsCountAndOffset(
     if (device_coord.coords()[0] < num_rows - 1) {
         downCount = num_rows - device_coord.coords()[0] - 1;  // Devices below
     }
-
-    if (is_horizontal) {
-        offset = device_coord.coords()[0];
-    } else {
-        offset = device_coord.coords()[1];
-    }
 }
 
 // For ring all-gather, we can send sub-sections of input tensor in opposite directions
@@ -170,9 +164,21 @@ operation::ProgramWithCallbacks all_gather_2D_multi_core_with_workers(
         printf("neighbors in dir 1 at index %u is %u for device: %u\n", i, neighbors_dir1[i], device_id);
     }
 
+    uint32_t device_order = 0;
     bool first_device = neighbors_dir1.size() == 0;
     bool last_device = neighbors_dir0.size() == 0;
 
+    if (first_device) {
+        device_order = 0;
+    } else if (last_device) {
+        device_order = num_devices - 1;
+    } else if (eastCount == 2) {
+        device_order = 1;
+    } else {
+        device_order = 2;
+    }
+
+    printf("device_order is %u for device_id: %u\n", device_order, device_id);
     printf("first device: %d for device %u\n", first_device, device_id);
     printf("last device: %d for device %u\n", last_device, device_id);
 
@@ -284,7 +290,7 @@ operation::ProgramWithCallbacks all_gather_2D_multi_core_with_workers(
         dst_is_dram,
         input_cb_index,
         num_devices,
-        device_id,
+        device_order,
         output_tensor.element_size(),
         semaphore_target_value};
 

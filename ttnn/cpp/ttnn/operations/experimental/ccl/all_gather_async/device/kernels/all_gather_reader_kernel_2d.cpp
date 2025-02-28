@@ -28,12 +28,12 @@ void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t num_bytes = get_arg_val<uint32_t>(rt_args_idx++);
 
-    DPRINT << "lower_pages: " << (uint32_t)lower_pages << ENDL();
-    DPRINT << "higher_pages: " << (uint32_t)higher_pages << ENDL();
-    DPRINT << "src address: " << (uint32_t)src_addr << ENDL();
-    DPRINT << "num_bytes: " << (uint32_t)num_bytes << ENDL();
+    // DPRINT << "lower_pages: " << (uint32_t)lower_pages << ENDL();
+    // DPRINT << "higher_pages: " << (uint32_t)higher_pages << ENDL();
+    // DPRINT << "src address: " << (uint32_t)src_addr << ENDL();
+    // DPRINT << "num_bytes: " << (uint32_t)num_bytes << ENDL();
 
-    const InterleavedAddrGen<src0_is_dram> s = {.bank_base_address = src_addr, .page_size = num_bytes};
+    const InterleavedAddrGenFast<src0_is_dram> s = {.bank_base_address = src_addr, .page_size = num_bytes};
 
     cb_reserve_back(cb_id_in0, higher_pages * lower_pages);
     uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
@@ -41,10 +41,12 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < higher_pages * lower_pages; i++) {
         uint64_t src_noc_addr = get_noc_addr(i, s);
-        noc_async_read(src_noc_addr, l1_write_addr, num_bytes);
+        // noc_async_read(src_noc_addr, l1_write_addr, num_bytes);
+        noc_async_read_tile(i, s, l1_write_addr);
         l1_write_addr += num_bytes;
     }
     noc_async_read_barrier();
+    /*
     auto* ptr_orig = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(original_addr);
     for (uint32_t ii1 = 0; ii1 < 1024; ii1 = ii1 + 1) {
         if (ii1 % 16 == 0) {
@@ -52,5 +54,6 @@ void kernel_main() {
         }
         DPRINT << "value at i1 = " << (uint32_t)ii1 << " is: " << BF16((uint16_t)ptr_orig[ii1]) << ENDL();
     }
+    */
     cb_push_back(cb_id_in0, higher_pages * lower_pages);
 }

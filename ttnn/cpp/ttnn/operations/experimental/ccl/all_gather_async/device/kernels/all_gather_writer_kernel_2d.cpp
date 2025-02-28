@@ -53,10 +53,10 @@ void kernel_main() {
 
     uint32_t num_dirs = (!first_device && !last_device) ? 2 : 1;
 
-    const InterleavedAddrGen<dst_is_dram> s = {.bank_base_address = dst_addr, .page_size = num_bytes};
+    const InterleavedAddrGenFast<dst_is_dram> s = {.bank_base_address = dst_addr, .page_size = num_bytes};
 
     uint32_t packet_size_bytes = num_bytes + PACKET_HEADER_SIZE_BYTES;
-
+    /*
     DPRINT << "dst_is_dram: " << (uint32_t)dst_is_dram << ENDL();
     DPRINT << "cb_id_in0: " << (uint32_t)cb_id_in0 << ENDL();
     DPRINT << "num_devices: " << (uint32_t)num_devices << ENDL();
@@ -88,44 +88,36 @@ void kernel_main() {
 
     DPRINT << "num_dirs: " << (uint32_t)num_dirs << ENDL();
     DPRINT << "packet_size_bytes: " << (uint32_t)packet_size_bytes << ENDL();
-
+    */
     uint32_t client_interface_addr = get_write_ptr(client_interface_cb);
     volatile tt_l1_ptr fabric_pull_client_interface_t* client_interface =
         reinterpret_cast<volatile tt_l1_ptr fabric_pull_client_interface_t*>(client_interface_addr);
 
-    DPRINT << "after setting vlient interface " << ENDL();
     for (uint32_t i = 0; i < num_dirs; i++) {
-        DPRINT << "before fabric endpoint init for dirextion index : " << (uint32_t)i << ENDL();
         fabric_endpoint_init(client_interface + i, 0 /* unused */);
-        DPRINT << "after fabric endpoint init for dirextion index : " << (uint32_t)i << ENDL();
     }
-    DPRINT << "after fabric endpoint init " << ENDL();
     uint32_t l1_read_addr = get_read_ptr(cb_id_in0);
     cb_wait_front(cb_id_in0, higher_pages * lower_pages);
-
-    uint32_t original_addr = get_read_ptr(cb_id_in0);
-    auto* ptr_orig = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(original_addr);
-    for (uint32_t ii1 = 0; ii1 < 1024; ii1 = ii1 + 1) {
-        if (ii1 % 16 == 0) {
-            DPRINT << "CHECK HERE ";
-        }
-        DPRINT << "value at i1 = " << (uint32_t)ii1 << " is: " << BF16((uint16_t)ptr_orig[ii1]) << ENDL();
-    }
 
     if constexpr (is_horizontal) {
         for (uint32_t i = 0; i < higher_pages; i++) {
             for (uint32_t k = 0; k < lower_pages; k++) {
-                uint32_t src_offset = i * lower_pages * element_size + k;
-                uint32_t dst_offset =
-                    i * num_devices * lower_pages * element_size + k + this_device_id * lower_pages * element_size;
-                uint64_t dst_noc_addr = get_noc_addr_helper(dst_offset, dst_addr);
-                noc_async_write(l1_read_addr + src_offset, dst_noc_addr, num_bytes);
+                uint32_t src_page = i * lower_pages + k;
+                uint32_t dst_page = i * num_devices * lower_pages + k + this_device_id * lower_pages;
+                DPRINT << "dst_page: " << (uint32_t)dst_page << ENDL();
+                DPRINT << "src_page: " << (uint32_t)src_page << ENDL();
+                uint64_t dst_noc_addr = get_noc_addr(dst_page, s);
+                DPRINT << "local write for order " << (uint32_t)this_device_id << " from address "
+                       << (uint32_t)(l1_read_addr + src_page * num_bytes) << " to " << (uint32_t)dst_noc_addr
+                       << " of size " << (uint32_t)num_bytes << ENDL();
+                // noc_async_write(l1_read_addr + src_page * num_bytes, dst_noc_addr, num_bytes);
+                noc_async_write_tile(dst_page, s, l1_read_addr + src_page * num_bytes);
 
                 if (!last_device) {
                     fabric_async_write_multicast(
                         client_interface,
                         router_noc_xy_dir0,
-                        l1_read_addr + src_offset,  // source address in sender’s memory
+                        l1_read_addr + src_page * num_bytes,  // source address in sender’s memory
                         dst_mesh_id_dir0,
                         dst_device_id_dir0,
                         dst_noc_addr,       // destination write address
@@ -151,15 +143,14 @@ void kernel_main() {
 
         for (uint32_t i = 0; i < higher_pages; i++) {
             for (uint32_t k = 0; k < lower_pages; k++) {
-                uint32_t src_offset = i * lower_pages * element_size + k;
-                uint32_t dst_offset =
-                    i * num_devices * lower_pages * element_size + k + this_device_id * lower_pages * element_size;
-                uint64_t dst_noc_addr = get_noc_addr_helper(dst_offset, dst_addr);
+                uint32_t src_page = i * lower_pages + k;
+                uint32_t dst_page = i * num_devices * lower_pages + k + this_device_id * lower_pages;
+                uint64_t dst_noc_addr = get_noc_addr(dst_page, s);
                 if (!first_device) {
                     fabric_async_write_multicast<AsyncWriteMode::ADD_AND_SEND_PR>(
                         client_interface,
                         router_noc_xy_dir1,
-                        l1_read_addr + src_offset,  // source address in sender’s memory
+                        l1_read_addr + src_page * num_bytes,  // source address in sender’s memory
                         dst_mesh_id_dir1,
                         dst_device_id_dir1,
                         dst_noc_addr,       // destination write address
@@ -176,16 +167,16 @@ void kernel_main() {
     else {
         for (uint32_t i = 0; i < higher_pages; i++) {
             for (uint32_t k = 0; k < lower_pages; k++) {
-                uint32_t src_offset = i * lower_pages * element_size + k;
-                uint32_t dst_offset =
-                    i * num_devices * lower_pages * element_size + k + this_device_id * lower_pages * element_size;
-                uint64_t dst_noc_addr = get_noc_addr_helper(dst_offset, dst_addr);
-                noc_async_write(l1_read_addr + src_offset, dst_noc_addr, num_bytes);
+                uint32_t src_page = i * lower_pages + k;
+                uint32_t dst_page = i * num_devices * lower_pages + k + this_device_id * lower_pages;
+                uint64_t dst_noc_addr = get_noc_addr(dst_page, s);
+                noc_async_write(l1_read_addr + src_page, dst_noc_addr, num_bytes);
+                noc_async_write_barrier();
                 if (!last_device) {
                     fabric_async_write_multicast(
                         client_interface,
                         router_noc_xy_dir0,
-                        l1_read_addr + src_offset,  // source address in sender’s memory
+                        l1_read_addr + src_page * num_bytes,  // source address in sender’s memory
                         dst_mesh_id_dir0,
                         dst_device_id_dir0,
                         dst_noc_addr,       // destination write address
@@ -211,15 +202,14 @@ void kernel_main() {
 
         for (uint32_t i = 0; i < higher_pages; i++) {
             for (uint32_t k = 0; k < lower_pages; k++) {
-                uint32_t src_offset = i * lower_pages * element_size + k;
-                uint32_t dst_offset =
-                    i * num_devices * lower_pages * element_size + k + this_device_id * lower_pages * element_size;
-                uint64_t dst_noc_addr = get_noc_addr_helper(dst_offset, dst_addr);
+                uint32_t src_page = i * lower_pages + k;
+                uint32_t dst_page = i * num_devices * lower_pages + k + this_device_id * lower_pages;
+                uint64_t dst_noc_addr = get_noc_addr(dst_page, s);
                 if (!first_device) {
                     fabric_async_write_multicast<AsyncWriteMode::ADD_AND_SEND_PR>(
                         client_interface,
                         router_noc_xy_dir1,
-                        l1_read_addr + src_offset,  // source address in sender’s memory
+                        l1_read_addr + src_page * num_bytes,  // source address in sender’s memory
                         dst_mesh_id_dir1,
                         dst_device_id_dir1,
                         dst_noc_addr,       // destination write address
@@ -282,5 +272,14 @@ void kernel_main() {
         client_interface++;
     }
     noc_async_write_barrier();
+    /*
+    for(uint32_t ii =0; ii< higher_pages* lower_pages * 4; ii++) {
+        uint32_t dst_noc_address = get_noc_addr(ii, s);
+        volatile tt_l1_ptr uint32_t* dst_noc2 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_noc_address);
+        for (uint32_t value =0; value < 1024; value++) {
+            DPRINT << "value at " << (uint32_t)value << " is: " << BF16((uint16_t)dst_noc2[value]) << ENDL();
+        }
+    }
+    */
     cb_pop_front(cb_id_in0, higher_pages * lower_pages);
 }

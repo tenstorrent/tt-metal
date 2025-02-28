@@ -2137,6 +2137,10 @@ void run_all_gather_2D_test(const size_t dim, const size_t num_links, const ttnn
         false,
         true);
 
+    log_info(tt::LogTest, "Synchronizing");
+    for (auto d : devices) {
+        tt_metal::Synchronize(d, *ttnn::DefaultQueueId);
+    }
     /*
     Buffer* dst_buffer = output_tensor.buffer();
     tt_metal::InterleavedBufferConfig input_dram_config{
@@ -2153,10 +2157,6 @@ void run_all_gather_2D_test(const size_t dim, const size_t num_links, const ttnn
     //EXPECT_EQ(golden_tensor, received_tensor);
     */
 
-    log_info(tt::LogTest, "Synchronizing");
-    for (auto d : devices) {
-        tt_metal::Synchronize(d, *ttnn::DefaultQueueId);
-    }
     log_info(tt::LogTest, "Finished");
 }
 

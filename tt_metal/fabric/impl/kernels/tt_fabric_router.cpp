@@ -172,7 +172,7 @@ void kernel_main() {
                 req_buf_advance_rdptr((chan_req_buf*)fvc_consumer_req_buf);
                 fvc_consumer_state.packet_in_progress = 0;
             }
-            loop_count = 0;
+            // loop_count = 0;
         }
 
         if (fvc_consumer_state.total_words_to_forward) {
@@ -182,7 +182,7 @@ void kernel_main() {
         // Handle Ethernet Inbound Data
         if (fvc_producer_state.get_curr_packet_valid()) {
             fvc_producer_state.process_inbound_packet();
-            loop_count = 0;
+            // loop_count = 0;
         } else if (fvc_producer_state.packet_corrupted) {
             write_kernel_status(kernel_status, TT_FABRIC_STATUS_INDEX, TT_FABRIC_STATUS_BAD_HEADER);
             return;
