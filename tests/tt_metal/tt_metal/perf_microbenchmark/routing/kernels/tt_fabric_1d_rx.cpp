@@ -42,6 +42,7 @@ void kernel_main() {
         uint32_t expected_val = time_seed + (packet_payload_size_bytes / 16) - 1;
 
         while (expected_val != *poll_addr);
+        DPRINT << "got data" << ENDL();
 
         // check for data correctness
         match = check_packet_data(

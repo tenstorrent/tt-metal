@@ -150,6 +150,8 @@ struct TestDevice {
             throw std::runtime_error("Cannot initalize EDM worker on inactive eth chan");
         }
 
+        std::cout << "my chip: " << (uint32_t)chip_id << ", remote chip: " << (uint32_t)remote_chip_id << std::endl;
+
         auto edm_builder = ttnn::ccl::FabricEriscDatamoverBuilder::build(
             IDevice_handle,
             program_handle,
@@ -168,8 +170,8 @@ struct TestDevice {
             throw std::runtime_error("Attempted to connect uninitialized EDMs");
         }
 
-        auto edm_worker_1 = edm_workers.at(eth_chan_1);
-        auto edm_worker_2 = edm_workers.at(eth_chan_2);
+        auto& edm_worker_1 = edm_workers.at(eth_chan_1);
+        auto& edm_worker_2 = edm_workers.at(eth_chan_2);
 
         edm_worker_1.connect_to_downstream_edm(edm_worker_2);
         edm_worker_2.connect_to_downstream_edm(edm_worker_1);
@@ -245,6 +247,7 @@ struct TestFabricTraffic {
     CoreCoord tx_logical_core;
     CoreCoord tx_virtual_core;
     std::vector<CoreCoord> rx_logical_cores;
+    std::vector<CoreCoord> rx_virtual_cores;
     std::vector<uint32_t> tx_results;
     std::vector<std::vector<uint32_t>> rx_results;
 
@@ -261,7 +264,9 @@ struct TestFabricTraffic {
 
         // TODO: for mcast, choose the same rx core
         for (auto& rx_device : rx_devices) {
-            rx_logical_cores.push_back(rx_device->select_random_worker_cores(1)[0]);
+            CoreCoord rx_logical_core = rx_device->select_random_worker_cores(1)[0];
+            rx_logical_cores.push_back(rx_logical_core);
+            rx_virtual_cores.push_back(rx_device->IDevice_handle->worker_core_from_logical_core(rx_logical_core));
         }
     }
 
@@ -312,12 +317,16 @@ struct TestFabricTraffic {
 
         tt_metal::SetRuntimeArgs(tx_device->program_handle, tx_kernel, tx_logical_core, tx_runtime_args);
 
+        std::cout << "num hops: " << num_hops << std::endl;
+
         log_info(
             LogTest,
-            "[Device: Phys: {}] TX running on: logical: x={},y={}, Eth chan: {}",
+            "[Device: Phys: {}] TX running on: logical: x={},y={}, virtual: x{},y={}, Eth chan: {}",
             tx_device->chip_id,
             tx_logical_core.x,
             tx_logical_core.y,
+            tx_virtual_core.x,
+            tx_virtual_core.y,
             (uint32_t)tx_eth_chan);
 
         // build receiver kernel(s)
@@ -337,10 +346,12 @@ struct TestFabricTraffic {
 
         log_info(
             LogTest,
-            "[Device: Phys: {}] RX running on: logical: x={},y={}",
+            "[Device: Phys: {}] RX running on: logical: x={},y={}, virtual: x{},y={}",
             rx_devices[0]->chip_id,
             rx_logical_cores[0].x,
-            rx_logical_cores[0].y);
+            rx_logical_cores[0].y,
+            rx_virtual_cores[0].x,
+            rx_virtual_cores[0].y);
     }
 
     void notify_tx_worker() {
@@ -433,7 +444,7 @@ struct TestFabricTraffic {
         uint64_t num_tx_bytes =
             ((uint64_t)tx_results[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | tx_results[TT_FABRIC_WORD_CNT_INDEX];
         uint64_t tx_elapsed_cycles =
-            ((uint64_t)tx_results[TT_FABRIC_STATUS_INDEX + 1] << 32) | tx_results[TT_FABRIC_STATUS_INDEX];
+            ((uint64_t)tx_results[TT_FABRIC_CYCLES_INDEX + 1] << 32) | tx_results[TT_FABRIC_CYCLES_INDEX];
         double tx_bw = ((double)num_tx_bytes) / tx_elapsed_cycles;
 
         log_info(
@@ -451,14 +462,12 @@ void generate_traffic_instances(
     auto tx_devices = connection_info;
 
     // maintain the order of the chips in the fabric spec
-    std::vector<chip_id_t> chips_in_fabric;
-    chips_in_fabric.push_back(connection_info[0].first);
-    for (auto i = 1; i < connection_info.size(); i++) {
-        auto chip_id = connection_info[i].first;
-        if (chips_in_fabric[i - 1] != chip_id) {
-            chips_in_fabric.push_back(chip_id);
-        }
+    std::unordered_set<chip_id_t> chips_in_fabric_;
+    for (const auto& [chip_id, eth_chan] : connection_info) {
+        chips_in_fabric_.insert(chip_id);
     }
+
+    std::vector<chip_id_t> chips_in_fabric(chips_in_fabric_.begin(), chips_in_fabric_.end());
 
     // shuffle to induce randomness
     std::shuffle(tx_devices.begin(), tx_devices.end(), global_rng);
@@ -494,7 +503,7 @@ void generate_traffic_instances(
             num_hops,
             test_board.get_test_device(tx_device.first),
             {test_board.get_test_device(rx_chip_id)});
-        result.push_back(traffic_instance);
+        result.push_back(std::move(traffic_instance));
     }
 }
 
@@ -620,13 +629,11 @@ int main(int argc, char** argv) {
         std::vector<TestLineFabric> line_fabrics;
 
         // TODO: programmatically generate these potentially using control plane
-        fabric_connections.push_back({{4, 0}, {11, 0}});  // 1 hop N<>S
-        /*
-        fabric_connections.push_back({{4, 1}, {11, 1}});                                         // 1 hop N<>S
-        fabric_connections.push_back({{5, 4}, {6, 12}});                                         // 1 hop E<>W
-        fabric_connections.push_back({{17, 8}, {20, 8}, {20, 0}, {23, 0}});                      // 3 hops N<>S
-        fabric_connections.push_back({{2, 12}, {27, 4}, {27, 12}, {26, 4}, {26, 12}, {25, 4}});  // 4 hops E<>W
-        */
+        // fabric_connections.push_back({{4, 0}, {11, 0}});  // 1 hop N<>S
+        // fabric_connections.push_back({{4, 1}, {11, 1}});                                         // 1 hop N<>S
+        // fabric_connections.push_back({{5, 4}, {6, 12}});                                         // 1 hop E<>W
+        // fabric_connections.push_back({{17, 8}, {20, 8}, {20, 0}, {23, 0}});                      // 3 hops N<>S
+        fabric_connections.push_back({{32, 12}, {27, 4}, {27, 12}, {26, 4}, {26, 12}, {25, 4}});  // 4 hops E<>W
 
         // init and build line fabric
         for (auto& connection_info : fabric_connections) {
@@ -648,10 +655,14 @@ int main(int argc, char** argv) {
             device->launch_program();
         }
 
+        std::cout << "seed: " << prng_seed << std::endl;
+
         // wait for EDM handshake to be done
         for (auto& [chip, device] : test_board.test_device_map) {
             device->wait_for_EDM_handshake();
         }
+
+        std::cout << "handshake done" << std::endl;
 
         // start traffic
         for (auto& fabric : line_fabrics) {
@@ -662,10 +673,13 @@ int main(int argc, char** argv) {
 
         // wait for all workers to finish
         // if we only wait for rx workers and there is a data mismatch, rx kernels will terminate earlier
-        // while the tx kernels might still have an active connection with the EDM
+        // while the tx kernels might still have an active connection with the EDM. This will cause the
+        // test to hang
         for (auto& fabric : line_fabrics) {
             fabric.wait_for_workers_to_finish();
         }
+
+        std::cout << "workers finished" << std::endl;
 
         // gracefully terminate EDM kernels
         for (auto& [chip, device] : test_board.test_device_map) {

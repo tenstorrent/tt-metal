@@ -91,4 +91,5 @@ void kernel_main() {
     test_results[TT_FABRIC_CYCLES_INDEX + 1] = cycles_elapsed >> 32;
     test_results[TT_FABRIC_WORD_CNT_INDEX] = (uint32_t)bytes_sent;
     test_results[TT_FABRIC_WORD_CNT_INDEX + 1] = bytes_sent >> 32;
+    DPRINT << "tx, exiting" << ENDL();
 }
