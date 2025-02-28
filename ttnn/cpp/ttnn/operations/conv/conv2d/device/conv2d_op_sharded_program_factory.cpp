@@ -60,7 +60,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     bool enable_subblock_padding);
 
 // TODO: Add namespace for utilities?
-std::tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
+std::tuple<CBHandle, CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
     tt_metal::Program& program,
     const Tensor& input,
     CoreRange core,
@@ -96,6 +96,8 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
     uint32_t interm0_single_tile_size = tt_metal::detail::TileSize(interm0_df);
 
     CBHandle cb_sharded_act = 0;
+    CBHandle cb_output = 0;
+    CBHandle cb_matmul_partials = 0;
     if (input.memory_config().is_sharded()) {
         uint32_t num_bytes_for_df = datum_size(act_df);
         auto shard_shape = input.shard_spec().value().shape;
@@ -181,13 +183,12 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
         num_cb0_tilized_tiles,
         tilized_act_tile_size);
 
-    CBHandle cb_output = 0;
     if (untilize_out) {
         auto output_shard_shape = output.shard_spec().value().shape;
         CircularBufferConfig cb_matmul_partials_config =
             CircularBufferConfig(num_output_tiles * interm0_single_tile_size, {{matmul_partials_cb, interm0_df}})
                 .set_page_size(matmul_partials_cb, interm0_single_tile_size);
-        auto cb_matmul_partials = tt_metal::CreateCircularBuffer(program, core, cb_matmul_partials_config);
+        cb_matmul_partials = tt_metal::CreateCircularBuffer(program, core, cb_matmul_partials_config);
         log_debug(
             LogOp,
             "Matmul Partials CB: {}, npages: {}, pagesize: {}",
@@ -227,12 +228,13 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
                     out_tile_size);
             }
             cb_output = tt_metal::CreateCircularBuffer(program, cores, cb_matmul_partials_config);
+            cb_matmul_partials = cb_output;
         } else {
             // Separate buffer if not same data format
             CircularBufferConfig cb_matmul_partials_config =
                 CircularBufferConfig(num_output_tiles * interm0_single_tile_size, {{matmul_partials_cb, interm0_df}})
                     .set_page_size(matmul_partials_cb, interm0_single_tile_size);
-            auto cb_matmul_partials = tt_metal::CreateCircularBuffer(program, core, cb_matmul_partials_config);
+            cb_matmul_partials = tt_metal::CreateCircularBuffer(program, core, cb_matmul_partials_config);
             log_debug(
                 LogOp,
                 "Matmul Partials CB: {}, npages: {}, pagesize: {}",
@@ -261,11 +263,11 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
         log_debug(LogOp, "Bias CB: {}, npages: {}, pagesize: {}", bias_cb, bias_ntiles, bias_pagesize);
     }
 
-    return {cb_sharded_act, cb_output};
+    return {cb_sharded_act, cb_output, cb_matmul_partials};
 }
 
 // TODO: Add namespace for utilities?
-std::tuple<CBHandle, CBHandle> create_CBs_for_depthwise_sharded_input(
+std::tuple<CBHandle, CBHandle, CBHandle> create_CBs_for_depthwise_sharded_input(
     tt_metal::Program& program,
     const Tensor& input,
     CoreRange core,
@@ -371,7 +373,7 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_depthwise_sharded_input(
     }
     cb_output = tt_metal::CreateCircularBuffer(program, cores, cb_output_config);
 
-    return {cb_sharded_act, cb_output};
+    return {cb_sharded_act, cb_output, cb_matmul_partials};
 }
 
 operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
@@ -1067,7 +1069,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     // For bias, last iteration of l1 acc remains in intermediate buffer, does not spill and reload
     bool packer_l1_acc_en = determine_packer_l1_acc(packer_l1_acc, has_bias, in0_num_blocks_w);
 
-    std::tuple<CBHandle, CBHandle> input_output_cbs = {0, 0};
+    std::tuple<CBHandle, CBHandle, CBHandle> input_output_cbs = {0, 0, 0};
     if (is_conv_1d_depthwise_conv) {
         input_output_cbs = create_CBs_for_depthwise_sharded_input(
             program,
@@ -1123,6 +1125,21 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     }
     CBHandle cb_sharded_act = std::get<0>(input_output_cbs);
     CBHandle cb_output = std::get<1>(input_output_cbs);
+    CBHandle cb_matmul_partials = std::get<2>(input_output_cbs);
+    CircularBufferConfig cb_config_output = GetCircularBufferConfig(program, cb_output);
+    CircularBufferConfig cb_config_matmul_partials = GetCircularBufferConfig(program, cb_matmul_partials);
+    bool partials_cb_uses_output = false;
+    if (cb_config_matmul_partials.globally_allocated_address().has_value() &&
+        cb_config_output.globally_allocated_address().has_value()) {
+        partials_cb_uses_output = cb_config_matmul_partials.globally_allocated_address().value() ==
+                                  cb_config_output.globally_allocated_address().value();
+    }
+    log_info(
+        LogOp,
+        "Conv2D Matmul Partials CB uses output memory: {}, Handles : {} {}",
+        partials_cb_uses_output,
+        cb_output,
+        cb_matmul_partials);
 
     string reader_kernel;
     string compute_kernel;
@@ -1376,7 +1393,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         untilize_out,
 
         bias_ntiles_per_core,
-        out0_cb};
+        out0_cb,
+        partials_cb_uses_output};
 
     auto writer_mcast_noc = NOC::NOC_0;
     auto reader_noc = writer_mcast_noc == NOC::NOC_0 ? NOC::NOC_1 : NOC::NOC_0;
