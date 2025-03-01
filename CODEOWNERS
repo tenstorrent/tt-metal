@@ -8,6 +8,8 @@
 .github/ @tenstorrent/metalium-developers-infra
 .github/workflows/ttnn-run-sweeps.yaml @xanderchin @jdesousa-TT @sjameelTT
 
+.gitattributes @tenstorrent/metalium-developers-infra
+
 /infra/ @tenstorrent/metalium-developers-infra
 
 CONTRIBUTING.md @tenstorrent/metalium-developers-infra

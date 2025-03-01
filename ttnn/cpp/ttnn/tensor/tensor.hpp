@@ -227,19 +227,19 @@ public:
     // ======================================================================================
     // Non-Blocking Getters. Query attributes directly, without waiting for worker completion
     // ======================================================================================
-    inline const Storage& storage() const { return this->tensor_attributes->storage; };
-    inline const ttnn::Shape& logical_shape() const { return this->tensor_attributes->tensor_spec.logical_shape(); };
-    inline const ttnn::Shape& padded_shape() const { return this->tensor_attributes->tensor_spec.padded_shape(); };
-    inline DataType dtype() const { return this->tensor_attributes->tensor_spec.tensor_layout().get_data_type(); };
-    inline Layout layout() const { return this->tensor_attributes->tensor_spec.tensor_layout().get_layout(); };
-    inline const TensorSpec& tensor_spec() const { return this->tensor_attributes->tensor_spec; }
+    const Storage& storage() const { return this->tensor_attributes->storage; };
+    const ttnn::Shape& logical_shape() const { return this->tensor_attributes->tensor_spec.logical_shape(); };
+    const ttnn::Shape& padded_shape() const { return this->tensor_attributes->tensor_spec.padded_shape(); };
+    DataType dtype() const { return this->tensor_attributes->tensor_spec.tensor_layout().get_data_type(); };
+    Layout layout() const { return this->tensor_attributes->tensor_spec.tensor_layout().get_layout(); };
+    const TensorSpec& tensor_spec() const { return this->tensor_attributes->tensor_spec; }
 
     // ======================================================================================
     //                                      Setters
     // ======================================================================================
-    inline void set_storage(const Storage& storage) { this->tensor_attributes->storage = storage; }
+    void set_storage(const Storage& storage) { this->tensor_attributes->storage = storage; }
     // We intend to remove this API once we migrate all ops to compute_output_specs, and provide TensorSpec at creation
-    inline void set_tensor_spec(const TensorSpec& tensor_spec) {
+    void set_tensor_spec(const TensorSpec& tensor_spec) {
         this->tensor_attributes->tensor_spec = tensor_spec;
         this->tensor_attributes->metadata_populated = true;
     }
@@ -322,7 +322,7 @@ public:
     std::vector<uint32_t> host_page_ordering();
 
     // Main Thread - Wait for all workers in this tensor to populate the entire tensor
-    inline void wait_for_tensor_data_populated() const {
+    void wait_for_tensor_data_populated() const {
         // Stall until all the workers for this tensor
         // have populated the full tensor
         while (this->tensor_attributes->num_workers_completed < this->tensor_attributes->num_shards_to_be_populated) {
@@ -330,7 +330,7 @@ public:
     }
 
     // Main Thread - Wait for the first worker in this tensor to populate the global metadata fields
-    inline void wait_for_tensor_metadata_populated() const {
+    void wait_for_tensor_metadata_populated() const {
         // First worker is responsible for updating all metadata fields
         // Stall until this worker is done
         while (not this->tensor_attributes->metadata_populated) {
