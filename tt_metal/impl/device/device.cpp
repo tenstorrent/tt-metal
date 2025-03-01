@@ -1425,7 +1425,7 @@ void Device::replay_trace(
                 tid,
                 this->id_,
                 active_sub_device_manager->id());
-            EnqueueTrace(this->command_queue(cq_id), tid, block_on_device);
+            command_queue(cq_id).enqueue_trace(trace_buffer, block_on_device);
         },
         block_on_worker_thread);
 }

@@ -609,6 +609,7 @@ void MeshDevice::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
 
 void MeshDevice::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking) {
     auto trace_buffer = trace_buffer_pool_->get(trace_id);
+    TT_FATAL(trace_buffer != nullptr, "Trace instance {} must exist on device", trace_id);
     mesh_command_queues_[cq_id]->enqueue_trace(trace_buffer, blocking);
 }
 

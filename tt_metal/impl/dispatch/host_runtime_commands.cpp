@@ -363,8 +363,9 @@ void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureEnqueueTrace, cq, trace_id, blocking);
     detail::DispatchStateCheck(true);
-    TT_FATAL(cq.device()->get_trace(trace_id) != nullptr, "Trace instance {} must exist on device", trace_id);
-    cq.enqueue_trace(trace_id, blocking);
+    auto trace_buffer = cq.device()->get_trace(trace_id);
+    TT_FATAL(trace_buffer != nullptr, "Trace instance {} must exist on device", trace_id);
+    cq.enqueue_trace(trace_buffer, blocking);
 }
 
 }  // namespace v0

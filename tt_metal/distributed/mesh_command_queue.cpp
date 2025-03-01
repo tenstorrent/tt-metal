@@ -691,10 +691,7 @@ void MeshCommandQueue::enqueue_trace(const std::shared_ptr<MeshTraceBuffer>& tra
             mesh_device_, device->sysmem_manager(), dispatch_md, id_, expected_num_workers_completed_, dispatch_core_);
     }
     trace_dispatch::update_worker_state_post_trace_execution(
-        trace_buffer->desc->descriptors,
-        this->reference_sysmem_manager(),
-        config_buffer_mgr_,
-        expected_num_workers_completed_);
+        descriptor->descriptors, this->reference_sysmem_manager(), config_buffer_mgr_, expected_num_workers_completed_);
 
     if (blocking) {
         this->finish();
