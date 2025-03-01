@@ -587,7 +587,7 @@ def test_conv_dram(
 
     tt_input_tensor = ttnn.from_torch(torch_input_tensor, device=device, dtype=ttnn.bfloat16)
     conv_slice_config = ttnn.ConvSliceConfig(
-        slice_output_height=True,
+        slice_output_height=False,
         output_slice_size=64,
     )
     conv_config = ttnn.Conv2dConfig(
