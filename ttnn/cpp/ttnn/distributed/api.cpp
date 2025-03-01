@@ -177,7 +177,7 @@ Tensor get_device_tensor(const Tensor& multi_device_tensor, const int device_id)
 
         auto* mesh_device = multi_device_tensor.mesh_device();
         TT_FATAL(mesh_device != nullptr, "Tensor is not a mesh tensor");
-        auto* mesh_buffer = device_storage.get_mesh_buffer();
+        auto mesh_buffer = device_storage.get_mesh_buffer();
         auto mesh_coordinate = mesh_device->get_view().find_device(device_id);
 
         auto device_buffer = mesh_buffer->get_device_buffer(mesh_coordinate);

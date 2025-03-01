@@ -34,6 +34,7 @@ namespace tt_metal {
 
 namespace distributed {
 class MeshDevice;
+class MeshCommandQueue;
 }
 
 class Tensor {
@@ -257,6 +258,10 @@ public:
         return nullptr;
     }
 
+    std::shared_ptr<distributed::MeshBuffer> mesh_buffer() const {
+        return std::get<DeviceStorage>(get_storage()).get_mesh_buffer();
+    }
+
     IDevice* device() const {
         if (this->mesh_device_.has_value()) {
             return this->mesh_device_.value();
@@ -315,12 +320,28 @@ void memcpy(
     const Tensor& src,
     const std::optional<BufferRegion>& region = std::nullopt,
     bool blocking = true);
+void memcpy(
+    distributed::MeshCommandQueue& queue,
+    void* dst,
+    const Tensor& src,
+    const std::optional<BufferRegion>& region = std::nullopt,
+    bool blocking = true);
 
 void memcpy(
     CommandQueue& queue, Tensor& dst, const void* src, const std::optional<BufferRegion>& region = std::nullopt);
+void memcpy(
+    distributed::MeshCommandQueue& queue,
+    Tensor& dst,
+    const void* src,
+    const std::optional<BufferRegion>& region = std::nullopt);
 
 void memcpy(
     CommandQueue& queue, Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
+void memcpy(
+    distributed::MeshCommandQueue& queue,
+    Tensor& dst,
+    const Tensor& src,
+    const std::optional<BufferRegion>& region = std::nullopt);
 
 void memcpy(
     void* dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt, bool blocking = true);
