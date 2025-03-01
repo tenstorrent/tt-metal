@@ -25,7 +25,7 @@ public:
     explicit RotaryEmbedding(RotaryEmbeddingParams &rope_params);
     [[nodiscard]] autograd::TensorPtr operator()(const autograd::TensorPtr &input);
 
-    static RotaryEmbeddingParams build_params(uint32_t sequence_length, uint32_t embedding_dim, float theta = 10000.0F);
+    static RotaryEmbeddingParams build_params(uint32_t sequence_length, uint32_t head_dim, float theta = 10000.0F);
 };
 
 }  // namespace ttml::modules
