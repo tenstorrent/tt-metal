@@ -180,7 +180,6 @@ inline auto& create_or_get_meshworkload_from_cache(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     uint64_t device_operation_id) {
     if (!program_cache_hit) {
-        tt::log_info("CACHE MISS: Creating mesh workload from cache");
         auto program_factory = device_operation_t::select_program_factory(operation_attributes, tensor_args);
         auto program_factory_index = program_factory.index();
 
@@ -239,7 +238,6 @@ inline auto& create_or_get_meshworkload_from_cache(
             program_factory);
         return mesh_workload;
     } else {
-        tt::log_info("CACHE HIT: Creating mesh workload from cache");
         auto& cached_program_factory = program_cache.get(program_hash);
         auto program_factory_index = cached_program_factory.program_factory_index;
 
@@ -352,6 +350,112 @@ inline void log_operation(
 
 #endif
 
+
+
+template <DeviceOperationConcept device_operation_t>
+void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& operation_attributes, const auto& tensor_args, auto &tensor_return_value, auto& device) {
+    ZoneScopedN("TT_DNN_DEVICE_OP");
+
+    if constexpr (HasSkipLaunch<device_operation_t>) {
+        if (device_operation_t::skip_launch(operation_attributes, tensor_args, tensor_return_value)) {
+            return;
+        }
+    }
+
+    auto& program_cache = device->get_program_cache();
+
+    auto program_hash = 0;
+    bool program_cache_hit = false;
+
+    auto is_program_cache_enabled = program_cache.is_enabled();
+    if (is_program_cache_enabled) {
+        program_hash = compute_program_hash<device_operation_t>(operation_attributes, tensor_args);
+        program_cache_hit = program_cache.contains(program_hash);
+    }
+
+    log_operation<device_operation_t>(
+            device_operation_id,
+            device->id(),
+            operation_attributes,
+            tensor_args,
+            program_hash,
+            program_cache_hit
+        );
+
+    tt::stl::reflection::visit_object_of_type<Tensor>(CheckDeviceBufferIsAllocated{}, tensor_args);
+
+    if (program_cache_hit) {
+        ZoneScopedN("Validate on Program Cache Hit");
+        device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
+    } else {
+        ZoneScopedN("Validate on Program Cache Miss");
+        device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
+    }
+
+    const auto enqueue_or_launch_program = [=](tt::tt_metal::Program& program) {
+        if (USE_FAST_DISPATCH) {
+            ZoneScopedN("EnqueueProgram");
+            auto& queue = device->command_queue(*cq_id);
+            tt::tt_metal::EnqueueProgram(queue, program, false);
+        } else {
+            ZoneScopedN("LaunchProgram");
+            tt::tt_metal::detail::LaunchProgram(device, program);
+        }
+    };
+
+    if (is_program_cache_enabled) {
+        auto& program = create_or_get_program_from_cache<device_operation_t>(
+            program_cache, program_cache_hit, program_hash, operation_attributes, tensor_args, tensor_return_value);
+
+        program.set_runtime_id(device_operation_id);
+
+        tt::tt_metal::GraphTracker::instance().track_program(&program, device);
+        if(tt::tt_metal::GraphTracker::instance().hook_program(&program)) {
+            return;
+        }
+
+        enqueue_or_launch_program(program);
+
+        TracyOpTTNNDevice(
+            device_operation_t{},
+            device_operation_id,
+            device->id(),
+            program,
+            operation_attributes,
+            tensor_args,
+            tensor_return_value);
+
+    } else {
+        auto program_factory = device_operation_t::select_program_factory(operation_attributes, tensor_args);
+
+        auto program = std::visit(
+            [&](auto&& program_factory) {
+                using program_factory_t = std::decay_t<decltype(program_factory)>;
+                auto cached_program = program_factory_t::create(operation_attributes, tensor_args, tensor_return_value);
+                return std::make_shared<tt::tt_metal::Program>(std::move(cached_program.program));
+            },
+            program_factory);
+
+        program->set_runtime_id(device_operation_id);
+
+        tt::tt_metal::GraphTracker::instance().track_program(program.get(), device);
+        if(tt::tt_metal::GraphTracker::instance().hook_program(program.get())) {
+            return;
+        }
+
+        enqueue_or_launch_program(*program);
+
+        TracyOpTTNNDevice(
+            device_operation_t{},
+            device_operation_id,
+            device->id(),
+            *program,
+            operation_attributes,
+            tensor_args,
+            tensor_return_value);
+    }
+}
+
 template <DeviceOperationConcept device_operation_t>
 void launch_on_mesh_device(
     auto cq_id,
@@ -393,7 +497,6 @@ void launch_on_mesh_device(
     }
 
     if (is_program_cache_enabled) {
-        tt::log_info("Creating mesh workload from cache");
         auto& mesh_workload = create_or_get_meshworkload_from_cache<device_operation_t>(
             program_cache,
             program_cache_hit,
@@ -433,110 +536,6 @@ void launch_on_mesh_device(
             tt::tt_metal::distributed::MeshCoordinateRange(
                 {0, 0}, {mesh_device->num_rows() - 1, mesh_device->num_cols() - 1}));
         tt::tt_metal::distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
-    }
-}
-
-template <DeviceOperationConcept device_operation_t>
-void launch_on_worker_thread(
-    auto cq_id,
-    auto device_operation_id,
-    const auto& operation_attributes,
-    const auto& tensor_args,
-    auto& tensor_return_value,
-    auto& device) {
-    ZoneScopedN("TT_DNN_DEVICE_OP");
-
-    if constexpr (HasSkipLaunch<device_operation_t>) {
-        if (device_operation_t::skip_launch(operation_attributes, tensor_args, tensor_return_value)) {
-            return;
-        }
-    }
-
-    auto& program_cache = device->get_program_cache();
-
-    auto program_hash = 0;
-    bool program_cache_hit = false;
-
-    auto is_program_cache_enabled = program_cache.is_enabled();
-    if (is_program_cache_enabled) {
-        program_hash = compute_program_hash<device_operation_t>(operation_attributes, tensor_args);
-        program_cache_hit = program_cache.contains(program_hash);
-    }
-
-    log_operation<device_operation_t>(
-        device_operation_id, device->id(), operation_attributes, tensor_args, program_hash, program_cache_hit);
-
-    tt::stl::reflection::visit_object_of_type<Tensor>(CheckDeviceBufferIsAllocated{}, tensor_args);
-
-    if (program_cache_hit) {
-        ZoneScopedN("Validate on Program Cache Hit");
-        device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
-    } else {
-        ZoneScopedN("Validate on Program Cache Miss");
-        device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
-    }
-
-    const auto enqueue_or_launch_program = [=](tt::tt_metal::Program& program) {
-        if (USE_FAST_DISPATCH) {
-            ZoneScopedN("EnqueueProgram");
-            auto& queue = device->command_queue(*cq_id);
-            tt::tt_metal::EnqueueProgram(queue, program, false);
-        } else {
-            ZoneScopedN("LaunchProgram");
-            tt::tt_metal::detail::LaunchProgram(device, program);
-        }
-    };
-
-    if (is_program_cache_enabled) {
-        auto& program = create_or_get_program_from_cache<device_operation_t>(
-            program_cache, program_cache_hit, program_hash, operation_attributes, tensor_args, tensor_return_value);
-
-        program.set_runtime_id(device_operation_id);
-
-        tt::tt_metal::GraphTracker::instance().track_program(&program, device);
-        if (tt::tt_metal::GraphTracker::instance().hook_program(&program)) {
-            return;
-        }
-
-        enqueue_or_launch_program(program);
-
-        TracyOpTTNNDevice(
-            device_operation_t{},
-            device_operation_id,
-            device->id(),
-            program,
-            operation_attributes,
-            tensor_args,
-            tensor_return_value);
-
-    } else {
-        auto program_factory = device_operation_t::select_program_factory(operation_attributes, tensor_args);
-
-        auto program = std::visit(
-            [&](auto&& program_factory) {
-                using program_factory_t = std::decay_t<decltype(program_factory)>;
-                auto cached_program = program_factory_t::create(operation_attributes, tensor_args, tensor_return_value);
-                return std::make_shared<tt::tt_metal::Program>(std::move(cached_program.program));
-            },
-            program_factory);
-
-        program->set_runtime_id(device_operation_id);
-
-        tt::tt_metal::GraphTracker::instance().track_program(program.get(), device);
-        if (tt::tt_metal::GraphTracker::instance().hook_program(program.get())) {
-            return;
-        }
-
-        enqueue_or_launch_program(*program);
-
-        TracyOpTTNNDevice(
-            device_operation_t{},
-            device_operation_id,
-            device->id(),
-            *program,
-            operation_attributes,
-            tensor_args,
-            tensor_return_value);
     }
 }
 
@@ -584,7 +583,11 @@ typename device_operation_t::tensor_return_value_t invoke(
     auto tensor_return_value = std::visit(
         [&cq_id, &operation_attributes, &tensor_args](auto&& storage) -> tensor_return_value_t {
             using storage_t = std::remove_cvref_t<decltype(storage)>;
-            return detail::launch_on_single_device<device_operation_t>(cq_id, operation_attributes, tensor_args);
+            if constexpr (std::is_same_v<storage_t, tt::tt_metal::DeviceStorage>) {
+                return detail::launch_on_single_device<device_operation_t>(cq_id, operation_attributes, tensor_args);
+            else {
+                TT_THROW("Unsupported storage type");
+            }
         },
         storage);
 

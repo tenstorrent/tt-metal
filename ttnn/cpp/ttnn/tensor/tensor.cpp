@@ -637,7 +637,6 @@ bool Tensor::is_scalar() const {
 
 Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
     if (distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device)) {
-        tt::log_info(tt::LogOp, "in create_device_tensor(..) with mesh_device");
         return allocate_tensor_on_mesh(tensor_spec, mesh_device);
     }
 

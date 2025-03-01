@@ -7,10 +7,7 @@
 
 namespace tt::tt_metal {
 
-DeviceStorage::DeviceStorage(std::shared_ptr<Buffer> buffer_) {
-    tt::log_warning("Constructing DeviceStorage from Single-Device Buffer");
-    buffer = std::move(buffer_);
-}
+DeviceStorage::DeviceStorage(std::shared_ptr<Buffer> buffer_) { buffer = std::move(buffer_); }
 
 MemoryConfig DeviceStorage::memory_config() const {
     if (this->mesh_buffer.get() != nullptr) {
