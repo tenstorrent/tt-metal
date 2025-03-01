@@ -13,19 +13,24 @@ DeviceStorage::DeviceStorage(std::shared_ptr<Buffer> buffer_) {
 }
 
 MemoryConfig DeviceStorage::memory_config() const {
-    if (this->mesh_buffer.get() == nullptr) {
-        TT_THROW("MemoryConfig can only be obtained if the buffer is not null");
+    if (this->mesh_buffer.get() != nullptr) {
+        const auto& buffer = this->mesh_buffer->get_device_buffer(tt::tt_metal::distributed::MeshCoordinate(0, 0));
+        std::optional<ShardSpec> shard_spec = std::nullopt;
+
+        if (is_sharded(buffer->buffer_layout())) {
+            shard_spec = buffer->shard_spec().tensor_shard_spec;
+        }
+        return MemoryConfig{
+            .memory_layout = buffer->buffer_layout(), .buffer_type = buffer->buffer_type(), .shard_spec = shard_spec};
     }
-    // TT_THROW("MemoryConfig not implemented for mesh buffer");
-
-    const auto& buffer = this->mesh_buffer->get_device_buffer(tt::tt_metal::distributed::MeshCoordinate(0, 0));
     std::optional<ShardSpec> shard_spec = std::nullopt;
-
-    if (is_sharded(buffer->buffer_layout())) {
-        shard_spec = buffer->shard_spec().tensor_shard_spec;
+    if (is_sharded(this->buffer->buffer_layout())) {
+        shard_spec = this->buffer->shard_spec().tensor_shard_spec;
     }
     return MemoryConfig{
-        .memory_layout = buffer->buffer_layout(), .buffer_type = buffer->buffer_type(), .shard_spec = shard_spec};
+        .memory_layout = this->buffer->buffer_layout(),
+        .buffer_type = this->buffer->buffer_type(),
+        .shard_spec = shard_spec};
 }
 
 DeviceStorage::DeviceStorage(std::shared_ptr<distributed::MeshBuffer> mesh_buffer_) :
