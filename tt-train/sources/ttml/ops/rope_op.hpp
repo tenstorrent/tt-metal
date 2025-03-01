@@ -5,10 +5,17 @@
 #pragma once
 
 #include "autograd/tensor.hpp"
-#include "modules/rotary_embedding.hpp"
 
 namespace ttml::ops {
 
-autograd::TensorPtr rope(const autograd::TensorPtr& input, const ttml::modules::RotaryEmbeddingParams& rope_params);
+struct RotaryEmbeddingParams {
+    ttnn::Tensor cos_cache;
+    ttnn::Tensor sin_cache;
+    ttnn::Tensor neg_cos_cache;
+    ttnn::Tensor neg_sin_cache;
+    ttnn::Tensor trans_mat;
+};
+
+autograd::TensorPtr rope(const autograd::TensorPtr& input, const RotaryEmbeddingParams& rope_params);
 
 }  // namespace ttml::ops

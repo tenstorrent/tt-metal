@@ -8,12 +8,11 @@
 #include "autograd/graph.hpp"
 #include "autograd/graph_utils.hpp"
 #include "autograd/tensor.hpp"
-#include "modules/rotary_embedding.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama.hpp"
 
 namespace ttml::ops {
 // trans_mat, sin_cache, cos_cache all precomputed and stored somewhere in the module hierarchy
-autograd::TensorPtr rope(const autograd::TensorPtr& input, const modules::RotaryEmbeddingParams& params) {
+autograd::TensorPtr rope(const autograd::TensorPtr& input, const RotaryEmbeddingParams& params) {
     if (input->get_value().logical_shape().rank() != 4) {
         throw std::runtime_error("rope only supports rank-4 input tensors.");
     }

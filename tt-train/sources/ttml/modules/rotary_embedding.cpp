@@ -14,7 +14,7 @@
 
 namespace ttml::modules {
 
-RotaryEmbedding::RotaryEmbedding(RotaryEmbeddingParams& rope_params) : m_rope_params(rope_params) {
+RotaryEmbedding::RotaryEmbedding(ops::RotaryEmbeddingParams& rope_params) : m_rope_params(rope_params) {
 }
 
 autograd::TensorPtr RotaryEmbedding::operator()(const autograd::TensorPtr& input) {
@@ -71,7 +71,7 @@ ttnn::Tensor gen_trans_mat(int head_dim) {
     return rot_emb_matrix_tensor;
 }
 
-RotaryEmbeddingParams RotaryEmbedding::build_params(uint32_t sequence_length, uint32_t head_dim, float theta) {
+ops::RotaryEmbeddingParams RotaryEmbedding::build_params(uint32_t sequence_length, uint32_t head_dim, float theta) {
     ttnn::Tensor freqs = gen_freqs(head_dim, sequence_length, theta);
     auto sin_freqs = ttnn::sin(freqs);
     auto cos_freqs = ttnn::cos(freqs);
