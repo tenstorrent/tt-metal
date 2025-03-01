@@ -69,8 +69,8 @@ class OpGroup(Enum):
 class MathFidelitySetting(Enum):
     LOFI = "lofi"
     HIFI2 = "hifi2"
-    HIFI2_NA = "hifi2_na"
-    HIFI2_FP16 = "hifi2_fp16"
+    HIFI2_NA = "hifi2na"
+    HIFI2_FP16 = "hifi2fp16"
     HIFI4 = "hifi4"
 
     @classmethod
@@ -109,15 +109,26 @@ class ModelOptimizations:
     def __init__(self, settings: dict = None):
         self._opt_settings = self._default_settings()
         self._names = {}
-        for key in ("TensorPrecision", "OpFidelity"):
+        for key, enum_type in (("TensorPrecision", TensorGroup), ("OpFidelity", OpGroup)):
             self._opt_settings[key].update((settings or {}).get(key, {}))
-            self._names[key] = "_".join(
-                [f"{k.value}_{v.value if v else 'orig'}" for k, v in self._opt_settings[key].items()]
-            )
+            curr = self._opt_settings[key]
+            self._names[key] = {
+                "full_name": ", ".join([f"{k.value}: {curr[k].value if curr[k] else 'orig'}" for k in list(enum_type)]),
+                "half_name": "_".join([f"{curr[k].value if curr[k] else 'orig'}" for k in list(enum_type)]),
+            }
 
-        self._full_name = self._names["TensorPrecision"] + "_" + self._names["OpFidelity"]
-        self.__name__ = f"p{''.join([str(PrecisionSetting.index(v)) if v else 'o' for v in self._opt_settings['TensorPrecision'].values()])}"
-        self.__name__ += f"_f{''.join([str(MathFidelitySetting.index(v)) if v else 'o' for v in self._opt_settings['OpFidelity'].values()])}"
+        self._full_name = (
+            "precision_cfg, fidelity_cfg = {"
+            + self._names["TensorPrecision"]["full_name"]
+            + "}, {"
+            + self._names["OpFidelity"]["full_name"]
+            + "}"
+        )
+        # NOTE: self.__name__ is used as section header in PERF.md; It is also used by, for example test_llama_accuracy.py to look for comparative results in PERF.md
+        self.__name__ = self._full_name
+        # NOTE: _half_name is used as pytest marker ids -- it can uniquely identify the optimization setting
+        self._half_name = self._names["TensorPrecision"]["half_name"] + "__" + self._names["OpFidelity"]["half_name"]
+
         # TODO: maybe we could warn about some unwanted settings here
 
     def _default_settings(self):
@@ -149,6 +160,181 @@ class ModelOptimizations:
     @property
     def op_fidelity_settings(self):
         return self._opt_settings["OpFidelity"]
+
+    @property
+    def id(self):
+        return self._half_name
+
+
+dtype_mf_settings = [
+    LlamaOptimizations(
+        {
+            "TensorPrecision": {
+                TensorGroup.FF1_FF3: PrecisionSetting.BFP4,
+                TensorGroup.FF2: PrecisionSetting.BFP4,
+            },
+            "OpFidelity": {
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI,
+                OpGroup.LI_FF2: MathFidelitySetting.LOFI,
+            },
+        }
+    ),
+    LlamaOptimizations(
+        {
+            "TensorPrecision": {
+                TensorGroup.FF1_FF3: PrecisionSetting.BFP4,
+                TensorGroup.FF2: PrecisionSetting.BFP8,
+            },
+            "OpFidelity": {
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI,
+                OpGroup.LI_FF2: MathFidelitySetting.HIFI2,
+            },
+        }
+    ),
+    LlamaOptimizations(
+        {
+            "TensorPrecision": {
+                TensorGroup.FF1_FF3: PrecisionSetting.BFP4,
+                TensorGroup.FF2: PrecisionSetting.BF16,
+            },
+            "OpFidelity": {
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI,
+                OpGroup.LI_FF2: MathFidelitySetting.HIFI4,
+            },
+        }
+    ),
+    LlamaOptimizations(
+        {
+            "TensorPrecision": {
+                TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
+                TensorGroup.FF2: PrecisionSetting.BFP4,
+            },
+            "OpFidelity": {
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2,
+                OpGroup.LI_FF2: MathFidelitySetting.LOFI,
+            },
+        }
+    ),
+    LlamaOptimizations(
+        {
+            "TensorPrecision": {
+                TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
+                TensorGroup.FF2: PrecisionSetting.BFP8,
+            },
+            "OpFidelity": {
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2,
+                OpGroup.LI_FF2: MathFidelitySetting.HIFI2,
+            },
+        }
+    ),
+    LlamaOptimizations(
+        {
+            "TensorPrecision": {
+                TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
+                TensorGroup.FF2: PrecisionSetting.BF16,
+            },
+            "OpFidelity": {
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2,
+                OpGroup.LI_FF2: MathFidelitySetting.HIFI4,
+            },
+        }
+    ),
+    LlamaOptimizations(
+        {
+            "TensorPrecision": {
+                TensorGroup.FF1_FF3: PrecisionSetting.BF16,
+                TensorGroup.FF2: PrecisionSetting.BFP4,
+            },
+            "OpFidelity": {
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI4,
+                OpGroup.LI_FF2: MathFidelitySetting.LOFI,
+            },
+        }
+    ),
+    LlamaOptimizations(
+        {
+            "TensorPrecision": {
+                TensorGroup.FF1_FF3: PrecisionSetting.BF16,
+                TensorGroup.FF2: PrecisionSetting.BFP8,
+            },
+            "OpFidelity": {
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI4,
+                OpGroup.LI_FF2: MathFidelitySetting.HIFI2,
+            },
+        }
+    ),
+    LlamaOptimizations(
+        {
+            "TensorPrecision": {
+                TensorGroup.FF1_FF3: PrecisionSetting.BF16,
+                TensorGroup.FF2: PrecisionSetting.BF16,
+            },
+            "OpFidelity": {
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI4,
+                OpGroup.LI_FF2: MathFidelitySetting.HIFI4,
+            },
+        }
+    ),
+    LlamaOptimizations(
+        {
+            "TensorPrecision": {
+                TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
+                TensorGroup.FF2: PrecisionSetting.BFP8,
+                TensorGroup.WQKV: PrecisionSetting.BFP8,
+                TensorGroup.WO: PrecisionSetting.BFP4,
+                TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
+                TensorGroup.ACTIVATION: PrecisionSetting.BF16,
+            },
+            "OpFidelity": {
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2,
+                OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2_NA,
+                OpGroup.LI_O_DECODE: MathFidelitySetting.LOFI,
+                OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
+                OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
+                OpGroup.LI_O_PREFILL: MathFidelitySetting.LOFI,
+            },
+        }
+    ),
+    LlamaOptimizations(
+        {
+            "TensorPrecision": {
+                TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
+                TensorGroup.FF2: PrecisionSetting.BFP8,
+                TensorGroup.WQKV: PrecisionSetting.BFP8,
+                TensorGroup.WO: PrecisionSetting.BFP4,
+                TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
+                TensorGroup.ACTIVATION: PrecisionSetting.BFP8,
+            },
+            "OpFidelity": {
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2,
+                OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2_NA,
+                OpGroup.LI_O_DECODE: MathFidelitySetting.LOFI,
+                OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
+                OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
+                OpGroup.LI_O_PREFILL: MathFidelitySetting.LOFI,
+            },
+        }
+    ),
+    LlamaOptimizations(
+        {
+            "TensorPrecision": {
+                TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
+                TensorGroup.FF2: PrecisionSetting.BFP8,
+                TensorGroup.WQKV: PrecisionSetting.BFP8,
+                TensorGroup.WO: PrecisionSetting.BFP4,
+                TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
+            },
+            "OpFidelity": {
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2,
+                OpGroup.LI_FF2: MathFidelitySetting.HIFI2,
+                OpGroup.LI_O_DECODE: MathFidelitySetting.LOFI,
+                OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
+                OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
+                OpGroup.LI_O_PREFILL: MathFidelitySetting.LOFI,
+            },
+        }
+    ),
+]
 
 
 class CheckpointType(Enum):
