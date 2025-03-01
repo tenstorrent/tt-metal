@@ -66,16 +66,28 @@ FORCE_INLINE bool eth_txq_is_busy(uint32_t q_num) {
 #endif
 }
 
-FORCE_INLINE
-void eth_send_packet(uint32_t q_num, uint32_t src_word_addr, uint32_t dest_word_addr, uint32_t num_words) {
+template <bool ctx_switch = true>
+FORCE_INLINE void eth_send_packet(uint32_t q_num, uint32_t src_word_addr, uint32_t dest_word_addr, uint32_t num_words) {
     while (eth_txq_is_busy(q_num)) {
         // Note, this is overly eager... Kills perf on allgather
-        risc_context_switch();
+        if constexpr (ctx_switch) {
+            risc_context_switch();
+        }
     }
     eth_txq_reg_write(q_num, ETH_TXQ_TRANSFER_START_ADDR, src_word_addr << 4);
     eth_txq_reg_write(q_num, ETH_TXQ_DEST_ADDR, dest_word_addr << 4);
     eth_txq_reg_write(q_num, ETH_TXQ_TRANSFER_SIZE_BYTES, num_words << 4);
     eth_txq_reg_write(q_num, ETH_TXQ_CMD, ETH_TXQ_CMD_START_DATA);
+}
+
+FORCE_INLINE
+void eth_send_packet_byte_addr(uint32_t q_num, uint32_t src_addr, uint32_t dest_addr, uint32_t num_words) {
+    while (eth_txq_is_busy(q_num));
+    volatile uint32_t* ptr = (volatile uint32_t*)ETH_TXQ0_REGS_START;
+    ptr[ETH_TXQ_TRANSFER_START_ADDR >> 2] = src_addr;
+    ptr[ETH_TXQ_DEST_ADDR >> 2] = dest_addr;
+    ptr[ETH_TXQ_TRANSFER_SIZE_BYTES >> 2] = num_words << 4;
+    ptr[ETH_TXQ_CMD >> 2] = ETH_TXQ_CMD_START_DATA;
 }
 
 FORCE_INLINE
@@ -96,10 +108,12 @@ void eth_send_packet_bytes_unsafe(uint32_t q_num, uint32_t src_addr, uint32_t de
     eth_txq_reg_write(q_num, ETH_TXQ_CMD, ETH_TXQ_CMD_START_DATA);
 }
 
-FORCE_INLINE
-void eth_write_remote_reg(uint32_t q_num, uint32_t reg_addr, uint32_t val) {
+template <bool ctx_switch = true>
+FORCE_INLINE void eth_write_remote_reg(uint32_t q_num, uint32_t reg_addr, uint32_t val) {
     while (eth_txq_is_busy(q_num)) {
-        risc_context_switch();
+        if constexpr (ctx_switch) {
+            risc_context_switch();
+        }
     }
     eth_txq_reg_write(q_num, ETH_TXQ_DEST_ADDR, reg_addr);
     eth_txq_reg_write(q_num, ETH_TXQ_REMOTE_REG_DATA, val);
