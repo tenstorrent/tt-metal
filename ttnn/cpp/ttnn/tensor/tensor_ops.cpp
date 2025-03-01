@@ -220,7 +220,9 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, distri
                 if (worker_index == 0) {
                     auto orig_layout = input_tensor.get_tensor_spec().tensor_layout();
                     auto upd_layout = TensorLayout(
-                        orig_layout.get_data_type(), PageConfig(target_layout), orig_layout.get_memory_config());
+                        orig_layout.get_data_type(),
+                        PageConfig(target_layout, orig_layout.get_tile()),
+                        orig_layout.get_memory_config());
                     tensor_modified_layout.set_tensor_spec(TensorSpec(input_tensor.get_logical_shape(), upd_layout));
                 }
             });
