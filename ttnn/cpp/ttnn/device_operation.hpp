@@ -585,7 +585,7 @@ typename device_operation_t::tensor_return_value_t invoke(
             using storage_t = std::remove_cvref_t<decltype(storage)>;
             if constexpr (std::is_same_v<storage_t, tt::tt_metal::DeviceStorage>) {
                 return detail::launch_on_single_device<device_operation_t>(cq_id, operation_attributes, tensor_args);
-            else {
+            } else {
                 TT_THROW("Unsupported storage type");
             }
         },

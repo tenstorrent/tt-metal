@@ -267,8 +267,6 @@ public:
                 TT_THROW("Cannot get the device from a tensor without an allocated buffer");
             }
             return buffer->device();
-        } else if (this->storage_type() == tt::tt_metal::StorageType::MULTI_DEVICE) {
-            return this->get_workers().at(0);
         } else {
             TT_THROW("Cannot get the device from a tensor with host storage");
         }

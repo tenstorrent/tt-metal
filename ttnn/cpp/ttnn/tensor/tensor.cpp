@@ -616,7 +616,6 @@ StorageType Tensor::storage_type() const {
             [](const OwnedStorage&) { return StorageType::OWNED; },
             [](const DeviceStorage&) { return StorageType::DEVICE; },
             [](const BorrowedStorage&) { return StorageType::BORROWED; },
-            //[](const MultiDeviceStorage& s) { return StorageType::MULTI_DEVICE; },
             [](const MultiDeviceHostStorage&) { return StorageType::MULTI_DEVICE_HOST; },
         },
         this->get_storage());
@@ -821,8 +820,7 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id
         auto& worker = device_tensor.workers[worker_index];
         worker->push_work([cq_id, worker, worker_index, async_safe_tensor, device_tensor]() mutable {
             TT_FATAL(
-                device_tensor.storage_type() == StorageType::DEVICE or
-                    device_tensor.storage_type() == StorageType::MULTI_DEVICE,
+                device_tensor.storage_type() == StorageType::DEVICE,
                 "write_tensor only supports host_tensor to device_tensor data transfer");
             TT_FATAL(async_safe_tensor.get_logical_shape() == device_tensor.get_logical_shape(), "Error");
             TT_FATAL(async_safe_tensor.get_dtype() == device_tensor.get_dtype(), "Error");

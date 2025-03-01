@@ -121,19 +121,17 @@ Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, QueueId cq_id) {
     Tensor host_tensor(workers.size());
     for (int worker_index = 0; worker_index < workers.size(); worker_index++) {
         auto target_device = workers[worker_index];
-        target_device->push_work(
-            [host_tensor, blocking, target_device, input_tensor, worker_index, cq_id]() mutable {
-                TT_ASSERT(
-                    input_tensor.storage_type() == StorageType::DEVICE or
-                        input_tensor.storage_type() == StorageType::MULTI_DEVICE,
-                    "Can only use worker queue for cpu call if tensor is on device.");
-                auto shard = get_shard_for_device(input_tensor, target_device);
-                shard = tensor_impl::to_host_wrapper(shard, blocking, cq_id);
-                insert_buffer_and_shape_for_device(target_device, shard, host_tensor, worker_index);
-                if (worker_index == 0) {
-                    host_tensor.set_tensor_spec(input_tensor.get_tensor_spec());
-                }
-            });
+        target_device->push_work([host_tensor, blocking, target_device, input_tensor, worker_index, cq_id]() mutable {
+            TT_ASSERT(
+                input_tensor.storage_type() == StorageType::DEVICE,
+                "Can only use worker queue for cpu call if tensor is on device.");
+            auto shard = get_shard_for_device(input_tensor, target_device);
+            shard = tensor_impl::to_host_wrapper(shard, blocking, cq_id);
+            insert_buffer_and_shape_for_device(target_device, shard, host_tensor, worker_index);
+            if (worker_index == 0) {
+                host_tensor.set_tensor_spec(input_tensor.get_tensor_spec());
+            }
+        });
     }
 
     if (blocking) {
@@ -173,9 +171,7 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, IDevic
 
     // Running without worker threads (non-async)
     TT_ASSERT(
-        input_tensor.storage_type() != StorageType::DEVICE or
-        input_tensor.storage_type() != StorageType::MULTI_DEVICE &&
-            "Bring tensor to host before converting to target layout");
+        input_tensor.storage_type() != StorageType::DEVICE, "Bring tensor to host before converting to target layout");
     Tensor output;
     if (worker) {
         worker->push_work([&] { output = tensor_impl::to_layout_wrapper(input_tensor, target_layout); });
@@ -231,9 +227,7 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, distri
     }
     // Running without worker threads (non-async)
     TT_ASSERT(
-        input_tensor.storage_type() != StorageType::DEVICE or
-        input_tensor.storage_type() != StorageType::MULTI_DEVICE &&
-            "Bring tensor to host before converting to target layout");
+        input_tensor.storage_type() != StorageType::DEVICE, "Bring tensor to host before converting to target layout");
     auto output = tensor_impl::to_layout_wrapper(input_tensor, target_layout);
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);

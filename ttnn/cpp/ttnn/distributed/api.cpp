@@ -140,27 +140,13 @@ std::vector<IDevice*> get_mapped_devices(const Tensor& tensor, MeshDevice& mesh_
                 },
                 [&](const auto&) { return get_workers_for_tensor(mesh_device.get_devices()); }},
             host_storage.strategy);
-    } /*else if (std::holds_alternative<MultiDeviceStorage>(tensor.get_storage())) {
-        TT_THROW("TODO(jchu): Not implemented");
-        return tensor.workers;
-    } */
-    else {
+    } else {
         return get_workers_for_tensor(mesh_device.get_devices());
     }
 }
 
 DistributedTensorConfig get_distributed_tensor_config_from_tensor(const Tensor& tensor) {
-    if (tensor.storage_type() == StorageType::MULTI_DEVICE) {
-        TT_THROW("TODO(jchu): Not implemented");
-        /*
-        const auto* multi_device_storage = std::get_if<MultiDeviceStorage>(&tensor.get_storage());
-        TT_ASSERT(
-            multi_device_storage != nullptr,
-            "Unexpected type {}",
-            tt::stl::get_active_type_name_in_variant(tensor.get_storage()));
-        return multi_device_storage->strategy;
-        */
-    } else if (tensor.storage_type() == StorageType::MULTI_DEVICE_HOST) {
+    if (tensor.storage_type() == StorageType::MULTI_DEVICE_HOST) {
         const auto* multi_device_host_storage = std::get_if<MultiDeviceHostStorage>(&tensor.get_storage());
         TT_ASSERT(
             multi_device_host_storage != nullptr,
@@ -203,22 +189,6 @@ bool is_mesh_buffer_tensor(const Tensor& tensor) {
 
 std::vector<Tensor> get_tensors_from_multi_device_storage(const Tensor& multi_device_tensor) {
     std::vector<ttnn::Tensor> tensors;
-    /*
-    if (multi_device_tensor.storage_type() == StorageType::MULTI_DEVICE) {
-        TT_ASSERT(
-            std::holds_alternative<MultiDeviceStorage>(multi_device_tensor.get_storage()),
-            "Unexpected type {}",
-            tt::stl::get_active_type_name_in_variant(multi_device_tensor.get_storage()));
-        const auto& tensor_storage = std::get<MultiDeviceStorage>(multi_device_tensor.get_storage());
-        tensors = std::vector<ttnn::Tensor>(tensor_storage.num_buffers(), Tensor());
-        for (int i = 0; i < tensor_storage.ordered_device_ids.size(); ++i) {
-            auto device_id = tensor_storage.ordered_device_ids[i];
-            tensors[i] = Tensor{
-                DeviceStorage{tensor_storage.get_buffer_for_device_id(device_id)}, tensor_storage.specs.at(device_id)};
-        }
-        return tensors;
-    } else {
-    */
     if (multi_device_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST) {
         TT_ASSERT(
             std::holds_alternative<MultiDeviceHostStorage>(multi_device_tensor.get_storage()),
@@ -239,35 +209,6 @@ Tensor create_multi_device_tensor(
     if (tensors.empty()) {
         TT_THROW("Cannot create multi-device tensor with empty tensor list");
     }
-
-    /*
-    if (storage_type == StorageType::MULTI_DEVICE) {
-        std::vector<int> ordered_device_ids;
-        std::unordered_map<int, ttnn::TensorSpec> specs;
-        std::unordered_map<int, std::shared_ptr<Buffer>> device_buffers;
-        for (const auto& tensor : tensors) {
-            TT_ASSERT(
-                std::holds_alternative<DeviceStorage>(tensor.get_storage()),
-                "Unexpected type {}",
-                tt::stl::get_active_type_name_in_variant(tensor.get_storage()));
-            IDevice* device = std::get<DeviceStorage>(tensor.get_storage()).buffer->device();
-            auto device_id = device->id();
-            ordered_device_ids.push_back(device_id);
-            device_buffers.insert({device_id, std::get<DeviceStorage>(tensor.get_storage()).buffer});
-            specs.insert({device_id, tensor.get_tensor_spec()});
-        }
-        return Tensor{
-            MultiDeviceStorage{strategy, ordered_device_ids, device_buffers, specs, nullptr}, // meshbuf
-            TensorSpec(
-                tensors.at(0).get_logical_shape(),
-                TensorLayout::fromPaddedShape(
-                    tensors.at(0).get_dtype(),
-                    PageConfig(tensors.at(0).get_layout()),
-                    MemoryConfig{},
-                    tensors.at(0).get_logical_shape(),
-                    tensors.at(0).get_padded_shape()))};
-    } else
-    */
     if (storage_type == StorageType::MULTI_DEVICE_HOST) {
         std::vector<OwnedBuffer> owned_buffers;
         std::vector<ttnn::TensorSpec> specs;
