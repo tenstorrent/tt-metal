@@ -46,7 +46,7 @@ constexpr uint32_t cmddat_q_size = get_compile_time_arg_val(12);
 // unused for prefetch_h
 constexpr uint32_t scratch_db_base = get_compile_time_arg_val(13);
 constexpr uint32_t scratch_db_size = get_compile_time_arg_val(14);
-constexpr uint32_t downstream_sync_sem_id = get_compile_time_arg_val(15);
+constexpr uint32_t my_downstream_sync_sem_id = get_compile_time_arg_val(15);
 
 // prefetch_d specific
 constexpr uint32_t cmddat_q_pages = get_compile_time_arg_val(16);
@@ -922,7 +922,7 @@ uint32_t process_stall(uint32_t cmd_ptr) {
 
     WAYPOINT("PSW");
     volatile tt_l1_ptr uint32_t* sem_addr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(downstream_sync_sem_id));
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_downstream_sync_sem_id));
     uint32_t heartbeat = 0;
     do {
         invalidate_l1_cache();
