@@ -8,7 +8,7 @@
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/pack_untilize.h"
 
-#define DEBUG_PRINT 0
+#define DEBUG_PRINT 1
 
 #if DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -40,7 +40,7 @@ inline void reduce_h_fused(
     tile_regs_wait();
     tile_regs_commit();
     pack_untilize_dst<num_output_tiles>(
-        out_cb_id, 1 /*out_subblock_h*/, 0, num_out_rows, num_faces_in_tile); /* pack 1 row (1x16 or 1x32) */
+        out_cb_id, /*out_subblock_h=*/1, 0, num_out_rows, num_faces_in_tile); /* pack 1 row (1x16 or 1x32) */
     tile_regs_release();
     cb_push_back(out_cb_id, num_output_tiles);
 }
@@ -72,12 +72,19 @@ void MAIN {
     constexpr uint32_t num_out_rows = 1;
 
     constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
-
     constexpr uint32_t max_tiles_per_iter =
         in_ntiles_c < MAX_TILES_PER_REDUCTION ? in_ntiles_c : MAX_TILES_PER_REDUCTION;
     constexpr uint32_t partial_iter_output_tiles =
         in_ntiles_c % MAX_TILES_PER_REDUCTION == 0 ? max_tiles_per_iter : in_ntiles_c % MAX_TILES_PER_REDUCTION;
-    tilizeA_B_reduce_init(in_cb_id, in_scalar_cb_id, max_tiles_per_iter, out_cb_id, num_faces_in_tile, window_size_hw);
+
+    static_assert(REDUCE_OP == PoolType::MAX || REDUCE_OP == PoolType::SUM, "Only supports REDUCE_OP = MAX or Sum");
+    constexpr bool neginf_srca_maxpool = (REDUCE_OP == PoolType::MAX) ? true : false;
+    constexpr bool zero_srca_avgpool = (REDUCE_OP == PoolType::SUM) ? true : false;
+    DPRINT << "Normal compute kernel - neginf_srca_maxpool : " << (uint32_t)neginf_srca_maxpool << ENDL();
+    DPRINT << "Normal compute kernel - zero_srca_avgpool : " << (uint32_t)zero_srca_avgpool << ENDL();
+
+    tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
+        in_cb_id, in_scalar_cb_id, max_tiles_per_iter, out_cb_id, num_faces_in_tile, window_size_hw);
     pack_untilize_dst_init_short<in_ntiles_c>(out_cb_id, num_out_rows, num_faces_in_tile);
 
     cb_wait_front(in_scalar_cb_id, 1);
