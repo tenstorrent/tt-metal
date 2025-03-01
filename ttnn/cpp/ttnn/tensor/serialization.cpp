@@ -214,7 +214,8 @@ MultiDeviceHostStorage load_multi_device_host_storage(
         }();
         specs.push_back(spec);
 
-        for (std::size_t i = 1; i < mesh_device->num_devices(); ++i) {
+        auto num_devices = mesh_device ? mesh_device->num_devices() : 1;
+        for (std::size_t i = 1; i < num_devices; ++i) {
             buffers.push_back(owned_buffer::Buffer<T>{buffer.get_ptr()});
             specs.push_back(spec);
         }
