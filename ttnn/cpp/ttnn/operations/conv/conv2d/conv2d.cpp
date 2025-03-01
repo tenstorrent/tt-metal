@@ -142,16 +142,18 @@ Result conv2d_DRAM(
                     continue;
                 }
 
-                int input_slice_height_start = output_slice_height_start * stride[0] - padding[0];
-                int input_slice_height_end = (output_slice_height_end - 1) * stride[0] - padding[0] +
-                                             (kernel_size[0] - 1) * (dilation[0] - 1) + kernel_size[0];
+                int input_slice_height_start = (output_slice_height_start * stride[0]) - padding[0];
+                int input_slice_height_end = ((output_slice_height_end - 1) * stride[0]) - padding[0] +
+                                             ((kernel_size[0] - 1) * (dilation[0] - 1)) + kernel_size[0];
                 int pad_top = std::max(0, -input_slice_height_start);
                 int pad_bottom = std::max<int>(0, input_slice_height_end - input_height);
                 input_slice_height_start = std::max(0, input_slice_height_start);
                 input_slice_height_end = std::min<int>(input_height, input_slice_height_end);
                 uint32_t input_slice_height = input_slice_height_end - input_slice_height_start;
 
-                if (input_slice_height_start < input_slice_height_end) {
+                if (input_slice_height_start >= input_slice_height_end) {
+                    continue;
+                }
                     auto sliced_input_tensor = ttnn::slice(
                         input_tensor,
                         std::array<uint32_t, 4>{batch_index, input_slice_height_start, 0, 0},  // Start
@@ -221,11 +223,97 @@ Result conv2d_DRAM(
                     }
                     log_debug(tt::LogOp, "Dram output tensor shape: {}", dram_output_tensor.get_logical_shape());
                     first_run = false;
-                }
             }
         }
     } else {
-        TT_THROW("Slice along width is not supported yet.");
+        for (uint32_t output_slice_width_start = 0; output_slice_width_start < output_width;
+             output_slice_width_start += dram_slice_config.output_slice_size) {
+            uint32_t output_slice_width_end =
+                std::min(output_width, output_slice_width_start + dram_slice_config.output_slice_size);
+            uint32_t output_slice_width = output_slice_width_end - output_slice_width_start;
+
+            if (output_slice_width == 0) {
+                continue;
+            }
+            int input_slice_width_start = (output_slice_width_start * stride[1]) - padding[1];
+            int input_slice_width_end = ((output_slice_width_end - 1) * stride[1]) - padding[1] +
+                                        ((kernel_size[1] - 1) * (dilation[1] - 1)) + kernel_size[1];
+
+            int pad_left = std::max(0, -input_slice_width_start);
+            int pad_right = std::max<int>(0, input_slice_width_end - input_width);
+            input_slice_width_start = std::max(0, input_slice_width_start);
+            input_slice_width_end = std::min<int>(input_width, input_slice_width_end);
+            uint32_t input_slice_width = input_slice_width_end - input_slice_width_start;
+
+            if (input_slice_width_start >= input_slice_width_end) {
+                continue;
+            }
+
+            auto sliced_input_tensor = ttnn::slice(
+                input_tensor,
+                std::array<uint32_t, 4>{0, 0, input_slice_width_start, 0},  // Start
+                std::array<uint32_t, 4>{batch_size, input_height, input_slice_width_end, in_channels},
+                std::array<uint32_t, 4>{1, 1, 1, 1}  // Step
+            );
+            log_debug(tt::LogOp, "Sliced input tensor shape: {}", sliced_input_tensor.get_logical_shape());
+            if (pad_left > 0 || pad_right > 0) {
+                auto pad_top_tensor = ttnn::pad(
+                    DefaultQueueId,
+                    sliced_input_tensor,
+                    std::vector<std::pair<uint32_t, uint32_t>>{{0, 0}, {0, 0}, {pad_left, pad_right}, {0, 0}},
+                    0,
+                    true,
+                    std::nullopt);
+                sliced_input_tensor = pad_top_tensor;
+            }
+            log_debug(tt::LogOp, "Padded sliced input tensor shape: {}", sliced_input_tensor.get_logical_shape());
+            auto conv_config_l1 = conv_config;
+            conv_config_l1.reshard_if_not_optimal = true;
+            ttnn::Tensor sliced_output_tensor;
+            std::tie(sliced_output_tensor, std::ignore, std::ignore, weight_tensor_on_device, bias_tensor_on_device) =
+                conv2d_L1(
+                    sliced_input_tensor,
+                    first_run ? weight_tensor : weight_tensor_on_device,
+                    device,
+                    in_channels,
+                    out_channels,
+                    batch_size,
+                    input_height,
+                    input_slice_width + pad_left + pad_right,
+                    kernel_size,
+                    stride,
+                    {padding[0], 0},
+                    dilation,
+                    groups,
+                    first_run ? bias_tensor : (std::optional<const ttnn::Tensor>)(bias_tensor_on_device),
+                    conv_config_l1,
+                    compute_config_,
+                    memory_config_);
+            sliced_output_tensor = ttnn::to_layout(
+                sliced_output_tensor,
+                Layout::ROW_MAJOR,
+                std::nullopt,
+                MemoryConfig{
+                    .memory_layout = TensorMemoryLayout::INTERLEAVED,
+                    .buffer_type = BufferType::L1,
+                },
+                device);
+            sliced_output_tensor = ttnn::reshape(
+                sliced_output_tensor, ttnn::Shape({batch_size, output_height, output_slice_width, out_channels}));
+            if (first_run) {
+                dram_output_tensor = sliced_output_tensor;
+            } else {
+                dram_output_tensor = ttnn::concat(
+                    std::vector<ttnn::Tensor>{dram_output_tensor, sliced_output_tensor},
+                    2,
+                    MemoryConfig{
+                        .memory_layout = TensorMemoryLayout::INTERLEAVED,
+                        .buffer_type = BufferType::DRAM,
+                    });
+            }
+            log_debug(tt::LogOp, "Dram output tensor shape: {}", dram_output_tensor.get_logical_shape());
+            first_run = false;
+        }
     }
     return {dram_output_tensor, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
 }
