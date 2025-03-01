@@ -22,25 +22,6 @@ constexpr bool is_associative(BinaryOpType op) {
            op == BinaryOpType::LOGADDEXP2 || op == BinaryOpType::LOGICAL_XOR;
 }
 
-constexpr bool is_dtype_supported(BinaryOpType op, DataType dtype) {
-    switch (op) {
-        case BinaryOpType::ADD:
-        case BinaryOpType::SUB:
-            return (
-                dtype == DataType::FLOAT32 || dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B ||
-                dtype == DataType::BFLOAT4_B || dtype == DataType::INT32);
-        case BinaryOpType::BITWISE_XOR:
-        case BinaryOpType::BITWISE_AND:
-        case BinaryOpType::BITWISE_OR:
-        case BinaryOpType::LEFT_SHIFT:
-        case BinaryOpType::RIGHT_SHIFT: return dtype == DataType::INT32;
-        default:
-            return (
-                dtype == DataType::FLOAT32 || dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B ||
-                dtype == DataType::BFLOAT4_B);
-    }
-}
-
 // Tensor - Scalar
 inline Tensor binary_impl(
     QueueId queue_id,
@@ -127,10 +108,7 @@ template <BinaryOpType binary_op_type>
 auto preprocess_inputs(const Tensor& input_tensor_a_arg, const Tensor& input_tensor_b_arg) {
     Tensor input_tensor_a = input_tensor_a_arg;
     Tensor input_tensor_b = input_tensor_b_arg;
-    DataType a_dtype = input_tensor_a.get_dtype();
-    DataType b_dtype = input_tensor_b.get_dtype();
-    TT_FATAL(is_dtype_supported(binary_op_type, a_dtype), "Unsupported data type {}", a_dtype);
-    TT_FATAL(is_dtype_supported(binary_op_type, b_dtype), "Unsupported data type {}", b_dtype);
+
     // TODO: #7731 (Remove calls to repeat )
     auto repeat_smaller = [](const auto& first, auto& second) {
         const auto& first_shape = first.get_logical_shape();
