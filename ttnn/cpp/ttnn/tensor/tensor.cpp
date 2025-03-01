@@ -287,6 +287,7 @@ void Tensor::deallocate_impl(bool force, bool deallocation_through_destructor) {
                                     // the main thread) to the tensor attr object holding this buffer. If
                                     // any other tensor handles hold this buffer, it will not be deleted,
                                     // until the last handle goes out of scope or is deallocated.
+                                    s.mesh_buffer.reset();
                                     s.buffer.reset();
                                 } else if constexpr (std::is_same_v<type, OwnedStorage>) {
                                     // Manage Dynamic Storage (due to autoformat in async mode): Main thread
