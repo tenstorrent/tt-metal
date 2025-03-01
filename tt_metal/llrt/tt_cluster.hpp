@@ -48,7 +48,7 @@ enum class EthRouterMode : uint32_t {
     FABRIC_ROUTER = 2,
 };
 
-enum class FabricConfig { DISABLED = 0, FABRIC_1D = 1, FABRIC_2D = 2, CUSTOM = 4 };
+enum class FabricConfig { DISABLED = 0, FABRIC_1D = 1, FABRIC_2D = 2, FABRIC_2D_PUSH = 3, CUSTOM = 4 };
 
 class Cluster {
 public:

@@ -122,11 +122,19 @@ typedef union _packet_params {
     uint8_t bytes[12];
 } packet_params;
 
+#ifdef FVC_MODE_PULL
 typedef struct _packet_header {
     packet_params packet_parameters;
     tt_session session;
     tt_routing routing;
 } packet_header_t;
+#else
+typedef struct _packet_header {
+    tt_routing routing;
+    tt_session session;
+    packet_params packet_parameters;
+} packet_header_t;
+#endif
 
 static_assert(sizeof(packet_header_t) == PACKET_HEADER_SIZE_BYTES);
 
@@ -196,6 +204,7 @@ typedef union _chan_request_entry {
     pull_request_t pull_request;
     packet_header_t packet_header;
     uint8_t bytes[48];
+    uint32_t words[12];
 } chan_request_entry_t;
 
 constexpr uint32_t CHAN_PTR_SIZE_BYTES = 16;
@@ -353,6 +362,22 @@ static_assert(sizeof(fabric_client_interface_t) == CLIENT_INTERFACE_SIZE);
 static_assert(sizeof(fabric_pull_client_interface_t) % 16 == 0);
 static_assert(sizeof(fabric_pull_client_interface_t) == PULL_CLIENT_INTERFACE_SIZE);
 
+typedef struct _fabric_push_client_interface {
+    uint32_t num_routing_planes;
+    uint32_t routing_tables_l1_offset;
+    uint32_t router_addr_h;
+    uint32_t buffer_start;
+    uint32_t buffer_size;
+    uint32_t wr_ptr;
+    uint32_t router_push_addr;
+    uint32_t router_space;
+    uint32_t update_router_space;
+    uint32_t reserved[3];
+} fabric_push_client_interface_t;
+
+static_assert(sizeof(fabric_push_client_interface_t) % 16 == 0);
+static_assert(sizeof(fabric_push_client_interface_t) == PUSH_CLIENT_INTERFACE_SIZE);
+
 constexpr uint32_t FABRIC_ROUTER_MISC_START = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 constexpr uint32_t FABRIC_ROUTER_MISC_SIZE = 256;
 constexpr uint32_t FABRIC_ROUTER_SYNC_SEM = FABRIC_ROUTER_MISC_START;
@@ -371,5 +396,7 @@ constexpr uint32_t FVCC_IN_BUF_SIZE = FVCC_BUF_SIZE_BYTES;
 constexpr uint32_t FABRIC_ROUTER_REQ_QUEUE_START = FVCC_IN_BUF_START + FVCC_IN_BUF_SIZE;
 constexpr uint32_t FABRIC_ROUTER_REQ_QUEUE_SIZE = sizeof(chan_req_buf);
 constexpr uint32_t FABRIC_ROUTER_DATA_BUF_START = FABRIC_ROUTER_REQ_QUEUE_START + FABRIC_ROUTER_REQ_QUEUE_SIZE;
+constexpr uint32_t FABRIC_ROUTER_OUTBOUND_BUF_SIZE = 0x4000;
+constexpr uint32_t FABRIC_ROUTER_INBOUND_BUF_SIZE = 0x8000;
 
 }  // namespace tt::tt_fabric
