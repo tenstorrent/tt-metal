@@ -345,9 +345,9 @@ uint32_t generate_max_out_nsticks_per_core(const std::vector<ShardBoundary>& sha
     return max_out_nsticks_per_core;
 }
 
-using GatherRun = std::tuple<uint32_t, uint32_t, uint32_t>;
-using PerCoreGatherData = std::map<std::pair<uint32_t, uint32_t>, std::vector<GatherRun>>;
-using ReblockedData = std::map<std::pair<uint32_t, uint32_t>, std::map<uint32_t, std::vector<GatherRun>>>;
+using GatherStep = std::tuple<uint32_t, uint32_t, uint32_t>;
+using PerCoreGatherData = std::map<std::pair<uint32_t, uint32_t>, std::vector<GatherStep>>;
+using ReblockedData = std::map<std::pair<uint32_t, uint32_t>, std::map<uint32_t, std::vector<GatherStep>>>;
 
 /**
  * @brief Splits each run (src_start, dst_start, length) into block-sized chunks.
@@ -379,7 +379,7 @@ ReblockedData reblock_per_core_gather_data(const PerCoreGatherData& per_core_gat
     return block_data;
 }
 
-inline std::vector<std::pair<uint32_t, uint32_t>> expand_runs(const std::vector<GatherRun>& runs) {
+inline std::vector<std::pair<uint32_t, uint32_t>> expand_runs(const std::vector<GatherStep>& runs) {
     std::vector<std::pair<uint32_t, uint32_t>> out;
     for (auto& [src_start, dst_start, length] : runs) {
         for (uint32_t i = 0; i < length; i++) {
@@ -396,7 +396,7 @@ bool validate_reblocked_data(const PerCoreGatherData& original, const ReblockedD
 
         std::vector<std::pair<uint32_t, uint32_t>> original_pairs = expand_runs(original_runs);
 
-        std::vector<GatherRun> reconstructed_runs;
+        std::vector<GatherStep> reconstructed_runs;
 
         // See if we have an entry in 'reblocked' for this key
         auto it = reblocked.find(src_dst);
@@ -424,7 +424,7 @@ bool validate_reblocked_data(const PerCoreGatherData& original, const ReblockedD
                 }
 
                 uint32_t absolute_src_start = block_id * block_size + offset_in_block;
-                reconstructed_runs.push_back(GatherRun(absolute_src_start, dst_start, length));
+                reconstructed_runs.push_back(GatherStep(absolute_src_start, dst_start, length));
             }
         }
 
@@ -494,7 +494,7 @@ std::vector<PerCoreGatherData> reshuffle_reblocked_gather(const ReblockedData& r
             auto& block_map_for_this_block = result[block_id];
 
             // Convert each run from (offset_in_block, dst_start, length) to (absolute_src_start, dst_start, length).
-            std::vector<GatherRun> new_runs;
+            std::vector<GatherStep> new_runs;
             new_runs.reserve(partial_runs.size());
 
             for (const auto& [offset_in_block, dst_start, length] : partial_runs) {
@@ -562,11 +562,9 @@ generate_halo_kernel_config_tensors(
         return device->worker_core_from_logical_core(core_coord);
     };
 
+    // Combine shard boundaries and input pixel metadata into a list of gather steps per route
     const auto per_core_gather_data = generate_gather_data_per_core(shard_boundaries, tensor_metadata);
 
-    for (auto [route, step] : per_core_gather_data) {
-        const auto& [src_core_id, dst_core_id] = route;
-    }
     // construct the config tensors
     /**
      * pad_config: length num_cores_nhw
