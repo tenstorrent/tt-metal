@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
@@ -113,6 +114,15 @@ struct Conv2dConfig {
             std::cref(this->enable_split_reader),
             std::cref(this->enable_subblock_padding));
     }
+};
+
+struct ConvSliceConfig {
+    // If True, slice along the height dimension of the input & output tensor.
+    // If False, slice along the width dimension of the input & output tensor.
+    bool slice_output_height = false;
+
+    // Size of the output slice along the dimension being sliced.
+    uint32_t output_slice_size = 0;
 };
 
 // TODO: Accept parallelization

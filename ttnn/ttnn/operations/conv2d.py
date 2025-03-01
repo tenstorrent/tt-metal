@@ -20,6 +20,7 @@ def _nearest_32(x):
 
 
 Conv2dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
+ConvSliceConfig = ttnn._ttnn.operations.conv.ConvSliceConfig
 
 OptimizedConvParallelizationConfig = ttnn._ttnn.operations.conv.OptimizedConvParallelizationConfig
 OptimizedConvBlockConfig = ttnn._ttnn.operations.conv.OptimizedConvBlockConfig
