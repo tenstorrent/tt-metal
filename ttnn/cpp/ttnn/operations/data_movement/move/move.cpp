@@ -14,21 +14,16 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 
-bool can_deallocate(const Tensor& input_tensor, bool from_multi_device = false) {
+bool can_deallocate(const Tensor& input_tensor) {
     return std::visit(
-        [&input_tensor, &from_multi_device](auto&& storage) {
+        [&input_tensor](auto&& storage) {
             using T = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<T, DeviceStorage>) {
-                return storage.get_buffer().use_count() == (from_multi_device ? 2 : 1);
-            } /*else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
-                bool can_dealloc = true;
-                auto input_tensors = distributed::get_tensors_from_multi_device_storage(input_tensor);
-                for (const auto& device_tensor : input_tensors) {
-                    can_dealloc &= can_deallocate(device_tensor, true);
+                if (storage.mesh_buffer) {
+                    return storage.mesh_buffer.use_count() == 1;
                 }
-                return can_dealloc;
-            } */
-            else {
+                return storage.get_buffer().use_count() == 1;
+            } else {
                 return false;
             }
         },
@@ -127,13 +122,8 @@ static inline Tensor move(QueueId queue_id, const Tensor& input_tensor, const st
 static inline Tensor move_sharded(
     QueueId queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    bool from_multi_device = false;
-    if (std::holds_alternative<DeviceStorage>(input_tensor.storage())) {
-        auto& device_storage = std::get<DeviceStorage>(input_tensor.storage());
-        from_multi_device = device_storage.mesh_buffer != nullptr;
-    }
     operation::launch_op(
-        [from_multi_device, mem_config](
+        [mem_config](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -144,7 +134,7 @@ static inline Tensor move_sharded(
             auto input_address = input_tensor.buffer()->address();
             auto output_mem_config = mem_config.value_or(input_mem_config);
             TT_FATAL(output_mem_config.is_sharded(), "Expected output tensor memory config to be sharded");
-            if (not can_deallocate(input_tensor, from_multi_device)) {
+            if (not can_deallocate(input_tensor)) {
                 TT_FATAL(
                     false,
                     "Expect input tensor to be deallocated after move op. Cannot deallocate before there is probably "
