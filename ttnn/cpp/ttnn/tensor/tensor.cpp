@@ -15,6 +15,7 @@
 #include <tt-metalium/overloaded.hpp>
 #include "tt-metalium/mesh_device_view.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
+#include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
@@ -599,36 +600,18 @@ Tensor Tensor::from_span(tt::stl::Span<const T> buffer, const TensorSpec& spec, 
     return create_owned_tensor_from_row_major_data(std::vector<T>(buffer.begin(), buffer.end()), spec, device);
 }
 
-bool Tensor::is_borrowable(const TensorSpec& spec) {
-    return spec.physical_shape() == spec.logical_2d_shape() &&  //
-           spec.layout() == Layout::ROW_MAJOR &&                //
-           // The block float types imply tilized layout - the extra check is conservative.
-           (spec.data_type() != DataType::BFLOAT4_B && spec.data_type() != DataType::BFLOAT8_B);
-}
-
 template <typename T>
-Tensor Tensor::borrow_from_span(
+Tensor Tensor::from_borrowed_data(
     tt::stl::Span<T> buffer,
-    const TensorSpec& spec,
+    const ttnn::Shape& shape,
     const std::function<void()>& on_creation_callback,
     const std::function<void()>& on_destruction_callback) {
-    size_t volume = spec.logical_shape().volume();
+    size_t volume = shape.volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
-    TT_FATAL(
-        spec.data_type() == convert_to_data_type<T>(),
-        "Unsupported data type: got {}, expected: {}",
-        spec.data_type(),
-        convert_to_data_type<T>());
-    TT_FATAL(
-        is_borrowable(spec),
-        "Tensor spec does not support borrowing a tensor from a buffer: physical shape {}, logical shape {}, layout {}",
-        spec.physical_shape(),
-        spec.logical_2d_shape(),
-        spec.layout());
     BorrowedStorage storage(
         borrowed_buffer::Buffer(buffer.data(), buffer.size()), on_creation_callback, on_destruction_callback);
-    return Tensor(std::move(storage), spec);
+    return Tensor(std::move(storage), shape, convert_to_data_type<T>(), Layout::ROW_MAJOR);
 }
 
 template <>
@@ -720,34 +703,34 @@ template Tensor Tensor::from_span<uint16_t>(
     tt::stl::Span<const uint16_t> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device);
 template Tensor Tensor::from_span<uint32_t>(
     tt::stl::Span<const uint32_t> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device);
-template Tensor Tensor::borrow_from_span<float>(
+template Tensor Tensor::from_borrowed_data<float>(
     tt::stl::Span<float> buffer,
-    const TensorSpec& spec,
+    const ttnn::Shape& shape,
     const std::function<void()>& on_creation_callback,
     const std::function<void()>& on_destruction_callback);
-template Tensor Tensor::borrow_from_span<bfloat16>(
+template Tensor Tensor::from_borrowed_data<bfloat16>(
     tt::stl::Span<bfloat16> buffer,
-    const TensorSpec& spec,
+    const ttnn::Shape& shape,
     const std::function<void()>& on_creation_callback,
     const std::function<void()>& on_destruction_callback);
-template Tensor Tensor::borrow_from_span<int32_t>(
+template Tensor Tensor::from_borrowed_data<int32_t>(
     tt::stl::Span<int32_t> buffer,
-    const TensorSpec& spec,
+    const ttnn::Shape& shape,
     const std::function<void()>& on_creation_callback,
     const std::function<void()>& on_destruction_callback);
-template Tensor Tensor::borrow_from_span<uint8_t>(
+template Tensor Tensor::from_borrowed_data<uint8_t>(
     tt::stl::Span<uint8_t> buffer,
-    const TensorSpec& spec,
+    const ttnn::Shape& shape,
     const std::function<void()>& on_creation_callback,
     const std::function<void()>& on_destruction_callback);
-template Tensor Tensor::borrow_from_span<uint16_t>(
+template Tensor Tensor::from_borrowed_data<uint16_t>(
     tt::stl::Span<uint16_t> buffer,
-    const TensorSpec& spec,
+    const ttnn::Shape& shape,
     const std::function<void()>& on_creation_callback,
     const std::function<void()>& on_destruction_callback);
-template Tensor Tensor::borrow_from_span<uint32_t>(
+template Tensor Tensor::from_borrowed_data<uint32_t>(
     tt::stl::Span<uint32_t> buffer,
-    const TensorSpec& spec,
+    const ttnn::Shape& shape,
     const std::function<void()>& on_creation_callback,
     const std::function<void()>& on_destruction_callback);
 template Tensor Tensor::from_vector<bfloat16>(

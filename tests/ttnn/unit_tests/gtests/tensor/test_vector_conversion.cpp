@@ -187,49 +187,22 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, InvalidSize) {
     auto input = arange<TypeParam>(0, 42, 1);
 
     ASSERT_NE(input.size(), shape.volume());
-    EXPECT_ANY_THROW(Tensor::borrow_from_span(
+    EXPECT_ANY_THROW(Tensor::from_borrowed_data(
         tt::stl::Span<TypeParam>(input),
-        get_tensor_spec(shape, convert_to_data_type<TypeParam>()),
+        shape,
         /*on_creation_callback=*/[]() {},
         /*on_destruction_callback=*/[]() {}));
-}
-
-TYPED_TEST(BorrowedStorageVectorConversionTest, InvalidDtype) {
-    ttnn::Shape shape{32, 32};
-    auto input = arange<TypeParam>(0, shape.volume(), 1);
-
-    EXPECT_ANY_THROW(Tensor::borrow_from_span(
-        tt::stl::Span<TypeParam>(input),
-        get_tensor_spec(
-            shape,
-            // Use INT32 for verification, except for when the actual type is int32_t.
-            (std::is_same_v<TypeParam, int32_t> ? DataType::FLOAT32 : DataType::INT32)),
-        /*on_creation_callback=*/[]() {},
-        /*on_destruction_callback=*/[]() {}));
-}
-
-TYPED_TEST(BorrowedStorageVectorConversionTest, IsBorrowable) {
-    EXPECT_TRUE(Tensor::is_borrowable(get_tensor_spec(ttnn::Shape{1, 2, 3, 4}, DataType::FLOAT32)));
-    EXPECT_FALSE(Tensor::is_borrowable(get_tensor_spec(ttnn::Shape{1, 2, 3, 4}, DataType::FLOAT32, Layout::TILE)));
-    // `TensorSpec` itself is invalid, but `is_borrowable` is conservative in its checks.
-    EXPECT_FALSE(
-        Tensor::is_borrowable(get_tensor_spec(ttnn::Shape{1, 2, 3, 4}, DataType::BFLOAT4_B, Layout::ROW_MAJOR)));
-    EXPECT_FALSE(
-        Tensor::is_borrowable(get_tensor_spec(ttnn::Shape{1, 2, 3, 4}, DataType::BFLOAT8_B, Layout::ROW_MAJOR)));
 }
 
 TYPED_TEST(BorrowedStorageVectorConversionTest, Roundtrip) {
     for (const auto& shape : get_shapes_for_test()) {
         auto input = arange<TypeParam>(0, shape.volume(), 1);
-        auto tensor_spec = get_tensor_spec(shape, convert_to_data_type<TypeParam>());
-
-        ASSERT_TRUE(Tensor::is_borrowable(tensor_spec));
 
         int ctor_count = 0;
         int dtor_count = 0;
-        auto tensor = Tensor::borrow_from_span(
+        auto tensor = Tensor::from_borrowed_data(
             tt::stl::Span<TypeParam>(input),
-            tensor_spec,
+            shape,
             /*on_creation_callback=*/[&]() { ctor_count++; },
             /*on_destruction_callback=*/[&]() { dtor_count++; });
 
@@ -245,12 +218,36 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, Roundtrip) {
 
         EXPECT_THAT(tensor.get_logical_shape(), Eq(shape)) << "for shape: " << shape;
         EXPECT_THAT(tensor.get_dtype(), Eq(convert_to_data_type<TypeParam>())) << "for shape: " << shape;
+        EXPECT_THAT(tensor.get_layout(), Eq(Layout::ROW_MAJOR)) << "for shape: " << shape;
         EXPECT_EQ(tensor.storage_type(), StorageType::BORROWED) << "for shape: " << shape;
 
         auto output = tensor.template to_vector<TypeParam>();
 
         EXPECT_THAT(output, Pointwise(Eq(), input)) << "for shape: " << shape;
     }
+}
+
+TYPED_TEST(BorrowedStorageVectorConversionTest, Callbacks) {
+    ttnn::Shape shape{32, 32};
+    auto input = arange<TypeParam>(0, shape.volume(), 1);
+
+    int ctor_count = 0;
+    int dtor_count = 0;
+    auto tensor = Tensor::from_borrowed_data(
+        tt::stl::Span<TypeParam>(input),
+        shape,
+        /*on_creation_callback=*/[&]() { ctor_count++; },
+        /*on_destruction_callback=*/[&]() { dtor_count++; });
+
+    EXPECT_EQ(ctor_count, 1);
+    EXPECT_EQ(dtor_count, 0);
+    {
+        Tensor copy(tensor.get_storage(), tensor.get_tensor_spec());
+        EXPECT_EQ(ctor_count, 2);
+        EXPECT_EQ(dtor_count, 0);
+    }
+    EXPECT_EQ(ctor_count, 2);
+    EXPECT_EQ(dtor_count, 1);
 }
 
 class BlockFloatVectorConversionTest : public ::testing::TestWithParam<DataType> {};

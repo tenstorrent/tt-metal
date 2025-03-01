@@ -148,19 +148,22 @@ public:
     static Tensor from_span(
         tt::stl::Span<const T> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt);
 
-    // Returns true if the tensor spec is such that the tensor can be created by borrowing storage from a buffer:
-    // 1. The tensor physical shape is the same as logical shape.
-    // 2. The tensor layout is row-major.
-    bool static is_borrowable(const TensorSpec& spec);
-
-    // Creates a `Tensor` with storage "borrowed" from the buffer of elements of type `T`. `on_creation_callback` and
-    // `on_destruction_callback` are called when the tensor is created and destroyed, respectively.
+    // Creates a `Tensor` with storage "borrowed" from the buffer of elements of type `T`.
     //
-    // Throws if `spec` does not satisfy the conditions for borrowing a tensor from a buffer.
+    // The primary use case for this API is to interop with Python, where `on_creation_callback` and
+    // `on_destruction_callback` are specified to be called when the tensor storage is created and destroyed (when
+    // making copies of Tensor object):
+    //
+    // py::object py_tensor = ...;
+    // auto on_creation_callback = [t = py_tensor] { t.inc_ref(); };
+    // auto on_destruction_callback = [t = py_tensor] { t.dec_ref(); };
+    //
+    // When working in C++, prefer creating owned tensors, and retaining a reference to the internal buffer, if
+    // necessary.
     template <typename T>
-    static Tensor borrow_from_span(
+    static Tensor from_borrowed_data(
         tt::stl::Span<T> buffer,
-        const TensorSpec& spec,
+        const ttnn::Shape& shape,
         const std::function<void()>& on_creation_callback,
         const std::function<void()>& on_destruction_callback);
 
