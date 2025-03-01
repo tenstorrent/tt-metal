@@ -461,7 +461,7 @@ TEST_F(DeviceFixture, TensixIllegallyModifyRTArgs) {
     }
 }
 
-TEST_F(DeviceFixture, TensixSetCommonRuntimeArgsMultipleKernelHandlesSameProgram) {
+TEST_F(DeviceFixture, TensixSetCommonRuntimeArgsMultipleCreateKernel) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         auto grid_size = this->devices_.at(id)->logical_grid_size();
         auto max_x = grid_size.x - 1;
