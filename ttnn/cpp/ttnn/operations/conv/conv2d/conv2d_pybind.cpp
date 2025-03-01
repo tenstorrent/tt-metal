@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <optional>
 #include <tt-metalium/constants.hpp>
 #include "cpp/pybind11/decorators.hpp"
 
@@ -63,6 +64,7 @@ void py_bind_conv2d(py::module& module) {
                const std::optional<const Conv2dConfig>& conv_config,
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
                const std::optional<const MemoryConfig>& memory_config,
+               const std::optional<const ConvSliceConfig>& slice_config_,
                QueueId queue_id) -> Result {
                 return self(
                     queue_id,
@@ -82,7 +84,8 @@ void py_bind_conv2d(py::module& module) {
                     bias_tensor,
                     conv_config,
                     compute_config,
-                    memory_config);
+                    memory_config,
+                    slice_config_);
             },
             py::kw_only(),
             py::arg("input_tensor"),
@@ -102,6 +105,7 @@ void py_bind_conv2d(py::module& module) {
             py::arg("conv_config") = std::nullopt,
             py::arg("compute_config") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
+            py::arg("slice_config") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId},
 
         ttnn::pybind_overload_t{
@@ -123,6 +127,7 @@ void py_bind_conv2d(py::module& module) {
                const std::optional<const Conv2dConfig>& conv_config,
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
                const std::optional<const MemoryConfig>& memory_config,
+               const std::optional<const ConvSliceConfig>& slice_config_,
                QueueId queue_id) -> Result {
                 return self(
                     queue_id,
@@ -142,7 +147,8 @@ void py_bind_conv2d(py::module& module) {
                     bias_tensor,
                     conv_config,
                     compute_config,
-                    memory_config);
+                    memory_config,
+                    slice_config_);
             },
             py::kw_only(),
             py::arg("input_tensor"),
@@ -162,6 +168,7 @@ void py_bind_conv2d(py::module& module) {
             py::arg("conv_config") = std::nullopt,
             py::arg("compute_config") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
+            py::arg("slice_config") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId});
 
     module.def(
