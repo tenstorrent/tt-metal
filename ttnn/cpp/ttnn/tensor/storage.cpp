@@ -33,10 +33,7 @@ MemoryConfig DeviceStorage::memory_config() const {
 DeviceStorage::DeviceStorage(std::shared_ptr<distributed::MeshBuffer> mesh_buffer_) :
     mesh_buffer(std::move(mesh_buffer_)) {}
 
-void DeviceStorage::insert_buffer(const std::shared_ptr<Buffer>& buffer_) {
-    tt::log_warning("insert_buffer not implemented for mesh buffer");
-    this->buffer = buffer_;
-}
+void DeviceStorage::insert_buffer(const std::shared_ptr<Buffer>& buffer_) { this->buffer = buffer_; }
 
 std::shared_ptr<Buffer> DeviceStorage::get_buffer() const {
     if (this->mesh_buffer.get() == nullptr) {
