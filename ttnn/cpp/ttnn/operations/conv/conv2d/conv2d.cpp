@@ -17,8 +17,10 @@
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
-
+#include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/data_movement/pad/pad.hpp"
 namespace ttnn {
 namespace operations::conv {
 using namespace tt;
@@ -32,7 +34,143 @@ using OutputWidth = uint32_t;
 using Result = std::tuple<ttnn::Tensor, OutputHeight, OutputWidth, ttnn::Tensor, std::optional<ttnn::Tensor>>;
 
 template <typename T>
-Result conv2d(
+Result conv2d_DRAM(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& weight_tensor,
+    T* device,
+    uint32_t in_channels,
+    uint32_t out_channels,
+    uint32_t batch_size,
+    uint32_t input_height,
+    uint32_t input_width,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::array<uint32_t, 2> padding,
+    std::array<uint32_t, 2> dilation,
+    uint32_t groups,
+    std::optional<const ttnn::Tensor> bias_tensor,
+    const std::optional<const Conv2dConfig>& conv_config_,
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
+    const std::optional<const MemoryConfig>& memory_config,
+    const ConvSliceConfig& dram_slice_config) {
+    uint32_t output_height = ((input_height - kernel_size[0] - ((kernel_size[0] - 1 ) * (dilation[0] - 1)) + 2 * padding[0]) / stride[0]) + 1;
+    uint32_t output_width = ((input_width - kernel_size[1] - ((kernel_size[0] - 1 ) * (dilation[0] - 1)) + 2 * padding[1]) / stride[1]) + 1;
+
+    Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
+    ttnn::Tensor input_tensor_on_device;
+    if (!is_tensor_on_device_or_multidevice(input_tensor)) {
+        input_tensor_on_device = ttnn::operations::core::to_device(input_tensor, device, std::nullopt);
+    } else {
+        input_tensor_on_device = input_tensor;
+    }
+    ttnn::Tensor weight_tensor_on_device;
+    std::optional<ttnn::Tensor> bias_tensor_on_device;
+    TT_FATAL(input_tensor_on_device.memory_config().is_dram(), "Conv DRAM expects the input tensor to be in DRAM.");
+
+    Tensor dram_output_tensor;
+    bool first_run = true;
+    if (dram_slice_config.slice_output_height) {
+        for (int batch_index = 0; batch_index < batch_size; batch_index++) {
+            for (uint32_t output_slice_height_start = 0; output_slice_height_start < output_height;
+                 output_slice_height_start += dram_slice_config.output_slice_size) {
+                uint32_t output_slice_height_end =
+                    std::min(output_height, output_slice_height_start + dram_slice_config.output_slice_size);
+                uint32_t output_slice_height = output_slice_height_end - output_slice_height_start;
+
+                if (output_slice_height == 0) {
+                    continue;
+                }
+
+                int input_slice_height_start = output_slice_height_start * stride[0] - padding[0];
+                int input_slice_height_end = (output_slice_height_end - 1) * stride[0] - padding[0] +
+                                             (kernel_size[0] - 1) * (dilation[0] - 1) + kernel_size[0];
+                int pad_top = std::max(0, -input_slice_height_start);
+                int pad_bottom = std::max<int>(0, input_slice_height_end - input_height);
+                input_slice_height_start = std::max(0, input_slice_height_start);
+                input_slice_height_end = std::min<int>(input_height, input_slice_height_end);
+                uint32_t input_slice_height = input_slice_height_end - input_slice_height_start;
+
+                if (input_slice_height_start < input_slice_height_end) {
+                    auto sliced_input_tensor = ttnn::slice(
+                        input_tensor,
+                        std::array<uint32_t, 4>{batch_index, input_slice_height_start, 0, 0},  // Start
+                        std::array<uint32_t, 4>{
+                            batch_index,
+                            input_slice_height_end - 1,
+                            input_width - 1,
+                            in_channels - 1},                // End - Inclusive
+                        std::array<uint32_t, 4>{1, 1, 1, 1}  // Step
+                    );
+                    log_debug(tt::LogOp, "Sliced input tensor shape: {}", sliced_input_tensor.get_logical_shape());
+                    if (pad_top > 0 || pad_bottom > 0) {
+                        auto pad_top_tensor = ttnn::pad(
+                            DefaultQueueId,
+                            sliced_input_tensor,
+                            std::vector<std::pair<uint32_t, uint32_t>>{{0, 0}, {pad_top, pad_bottom}, {0, 0}, {0, 0}},
+                            0,
+                            true,
+                            std::nullopt);
+                        sliced_input_tensor = pad_top_tensor;
+                    }
+                    log_debug(
+                        tt::LogOp, "Padded sliced input tensor shape: {}", sliced_input_tensor.get_logical_shape());
+                    auto conv_config_l1 = conv_config;
+                    conv_config_l1.reshard_if_not_optimal = true;
+                    ttnn::Tensor sliced_output_tensor;
+                    std::tie(
+                        sliced_output_tensor,
+                        std::ignore,
+                        std::ignore,
+                        weight_tensor_on_device,
+                        bias_tensor_on_device) =
+                        conv2d_L1(
+                            sliced_input_tensor,
+                            first_run ? weight_tensor : weight_tensor_on_device,
+                            device,
+                            in_channels,
+                            out_channels,
+                            1,
+                            input_slice_height + pad_top + pad_bottom,
+                            input_width,
+                            kernel_size,
+                            stride,
+                            {0, padding[1]},
+                            dilation,
+                            groups,
+                            first_run ? bias_tensor : (std::optional<const ttnn::Tensor>)(bias_tensor_on_device),
+                            conv_config_l1);
+                    sliced_output_tensor = ttnn::to_layout(
+                        sliced_output_tensor,
+                        Layout::ROW_MAJOR,
+                        std::nullopt,
+                        MemoryConfig{
+                            .memory_layout = TensorMemoryLayout::INTERLEAVED,
+                            .buffer_type = BufferType::L1,
+                        },
+                        device);
+
+                    if (first_run) {
+                        dram_output_tensor = sliced_output_tensor;
+                    } else {
+                        dram_output_tensor = ttnn::concat(
+                            std::vector<ttnn::Tensor>{dram_output_tensor, sliced_output_tensor},
+                            2,
+                            MemoryConfig{
+                                .memory_layout = TensorMemoryLayout::INTERLEAVED,
+                                .buffer_type = BufferType::DRAM,
+                            });
+                    }
+                    log_debug(tt::LogOp, "Dram output tensor shape: {}", dram_output_tensor.get_logical_shape());
+                    first_run = false;
+                }
+            }
+        }
+    }
+    return {dram_output_tensor, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
+}
+
+template <typename T>
+Result conv2d_L1(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     T* device,
@@ -50,117 +188,6 @@ Result conv2d(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config) {
-
-
-
-    uint32_t output_height = ((input_height - kernel_size[0] - ((kernel_size[0] - 1 ) * (dilation[0] - 1)) + 2 * padding[0]) / stride[0]) + 1;
-    uint32_t output_width = ((input_width - kernel_size[1] - ((kernel_size[0] - 1 ) * (dilation[0] - 1)) + 2 * padding[1]) / stride[1]) + 1;
-
-    Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
-    if(conv_config.output_height_in_l1 > 0) {
-        TT_FATAL((conv_config.output_height_in_l1 % 32) == 0, "Output height in L1 must be a multiple of 32", conv_config.output_height_in_l1);
-        ttnn::Tensor input_tensor_on_device;
-        if( !is_tensor_on_device_or_multidevice(input_tensor)) {
-            input_tensor_on_device = ttnn::operations::core::to_device(input_tensor, device, std::nullopt);
-        }
-        else
-        {
-            input_tensor_on_device = input_tensor;
-        }
-        ttnn::Tensor weight_tensor_on_device;
-        std::optional<ttnn::Tensor> bias_tensor_on_device;
-        if(input_tensor_on_device.memory_config().is_dram()) {
-            Tensor dram_output_tensor;
-            bool first_run = true;
-            for(int batch_index = 0; batch_index < batch_size; batch_index++) {
-                for(uint32_t output_slice_height_start = 0; output_slice_height_start < output_height; output_slice_height_start+=conv_config.output_height_in_l1) {
-                    uint32_t output_slice_height_end = std::min(output_height, output_slice_height_start + conv_config.output_height_in_l1);
-                    uint32_t output_slice_height = output_slice_height_end - output_slice_height_start;
-
-                    if(output_slice_height == 0) {
-                        continue;
-                    }
-
-                    int input_slice_height_start = output_slice_height_start * stride[0] - padding[0];
-                    int input_slice_height_end = (output_slice_height_end - 1) * stride[0] - padding[0] + (kernel_size[0] - 1) * (dilation[0] - 1) + kernel_size[0];
-                    int pad_top = std::max(0, -input_slice_height_start);
-                    int pad_bottom = std::max<int>(0, input_slice_height_end - input_height);
-                    input_slice_height_start = std::max(0, input_slice_height_start);
-                    input_slice_height_end = std::min<int>(input_height, input_slice_height_end);
-                    uint32_t input_slice_height = input_slice_height_end - input_slice_height_start;
-                    log_debug(tt::LogOp, "Output Slice : {}->{}", output_slice_height_start, output_slice_height_end);
-                    log_debug(tt::LogOp, "Input Slice : {}->{}", input_slice_height_start, input_slice_height_end);
-                    log_debug(tt::LogOp, "Padding : {}->{}", pad_top, pad_bottom);
-
-                    if(input_slice_height_start < input_slice_height_end) {
-                        auto sliced_input_tensor = ttnn::slice(input_tensor,
-                            std::array<uint32_t, 4>{batch_index, input_slice_height_start, 0, 0},  //Start
-                            std::array<uint32_t, 4>{batch_index, input_slice_height_end - 1, input_width - 1,in_channels - 1}, //End - Inclusive
-                            std::array<uint32_t, 4>{1, 1, 1, 1} //Step
-                            );
-                        log_debug(tt::LogOp, "Sliced input tensor shape: {}", sliced_input_tensor.get_shape());
-                        if(pad_top>0 || pad_bottom > 0)
-                        {
-                            auto pad_top_tensor = ttnn::pad(
-                                DefaultQueueId,
-                                sliced_input_tensor,
-                                std::vector<std::pair<uint32_t, uint32_t>>{{0, 0}, {pad_top, pad_bottom}, {0, 0}, {0, 0}},
-                                0, true, std::nullopt);
-                            sliced_input_tensor = pad_top_tensor;
-                        }
-                        log_debug(tt::LogOp, "Padded sliced input tensor shape: {}", sliced_input_tensor.get_shape());
-                        auto conv_config_l1 = conv_config;
-                        conv_config_l1.output_height_in_l1 = 0;
-                        conv_config_l1.reshard_if_not_optimal = true;
-                        ttnn::Tensor sliced_output_tensor;
-                        std::tie(sliced_output_tensor, std::ignore, std::ignore, weight_tensor_on_device, bias_tensor_on_device) = conv2d(
-                            sliced_input_tensor,
-                            first_run ? weight_tensor : weight_tensor_on_device,
-                            device,
-                            in_channels,
-                            out_channels,
-                            1, input_slice_height + pad_top + pad_bottom, input_width,
-                            kernel_size, stride, {0,padding[1]}, dilation,
-                            groups,
-                            first_run ?  bias_tensor : (std::optional<const ttnn::Tensor>)(bias_tensor_on_device),
-                            conv_config_l1
-                        );
-                        sliced_output_tensor = ttnn::to_layout(sliced_output_tensor, Layout::ROW_MAJOR, std::nullopt,
-                                                            MemoryConfig {
-                                                                .memory_layout=TensorMemoryLayout::INTERLEAVED,
-                                                                .buffer_type=BufferType::L1,
-                                                            }, device);
-
-                        if(first_run) {
-                            dram_output_tensor = sliced_output_tensor;
-                        }
-                        else {
-                            dram_output_tensor = ttnn::concat(
-                                std::vector<ttnn::Tensor>{dram_output_tensor, sliced_output_tensor}, 2,
-                                MemoryConfig{
-                                    .memory_layout=TensorMemoryLayout::INTERLEAVED,
-                                    .buffer_type=BufferType::DRAM,
-                                });
-                        }
-                        log_debug(tt::LogOp, "Dram output tensor shape: {}", dram_output_tensor.get_shape());
-                        first_run = false;
-                    }
-                }
-            }
-            return {dram_output_tensor, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
-        }
-    }
-    auto [input_tensor_post_tm, parallel_config, tensor_manipulated] = shard_or_reshard_tensor_if_required(
-        device, input_tensor, conv_config, batch_size, output_height, output_width, in_channels, out_channels);
-    if (tensor_manipulated) {
-        if (conv_config.deallocate_activation) {
-            ttnn::Tensor input_tensor_ = input_tensor;  // TODO: allow in place modification of inputs to the op
-            input_tensor_.deallocate();
-            // ttnn::operations::core::deallocate(input_tensor_);
-        }
-        conv_config.deallocate_activation = true;
-    }
-
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups, conv_config);
     const uint32_t output_height =
@@ -359,6 +386,7 @@ Result conv2d(
         return {matmul_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     }
 }
+}
 
 Result Conv2dOperation::invoke(
     QueueId queue_id,
@@ -378,7 +406,8 @@ Result Conv2dOperation::invoke(
     std::optional<const ttnn::Tensor> bias_tensor,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
-    const std::optional<const MemoryConfig>& memory_config) {
+    const std::optional<const MemoryConfig>& memory_config_,
+    const std::optional<const ConvSliceConfig>& dram_slice_config_) {
     return conv2d(
         input_tensor,
         weight_tensor,
@@ -396,7 +425,8 @@ Result Conv2dOperation::invoke(
         std::move(bias_tensor),
         std::move(conv_config_),
         std::move(compute_config_),
-        memory_config);
+        std::move(memory_config_),
+        std::move(dram_slice_config_));
 }
 
 Result Conv2dOperation::invoke(
@@ -417,7 +447,8 @@ Result Conv2dOperation::invoke(
     std::optional<const ttnn::Tensor> bias_tensor,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
-    const std::optional<const MemoryConfig>& memory_config) {
+    const std::optional<const MemoryConfig>& memory_config,
+    const std::optional<const ConvSliceConfig>& dram_slice_config_) {
     return conv2d(
         input_tensor,
         weight_tensor,
@@ -435,7 +466,8 @@ Result Conv2dOperation::invoke(
         std::move(bias_tensor),
         std::move(conv_config_),
         std::move(compute_config_),
-        memory_config);
+        std::move(memory_config),
+        std::move(dram_slice_config_));
 }
 
 }  // namespace conv2d

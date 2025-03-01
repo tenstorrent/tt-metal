@@ -6,10 +6,12 @@
 #include "cpp/pybind11/decorators.hpp"
 
 #include "conv2d_pybind.hpp"
+#include <pybind11/cast.h>
 #include "cpp/ttnn/operations/sliding_window/sliding_window_pybind.hpp"
 #include "conv2d.hpp"
 #include "conv2d_utils.hpp"
 #include "prepare_conv2d_weights.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;
@@ -314,6 +316,12 @@ void py_bind_conv2d(py::module& module) {
         py::arg("tensor_shape"),
         py::arg("parallel_config"),
         py::arg("tile_size"));
+
+    auto py_conv_slice_config = py::class_<ConvSliceConfig>(module, "ConvSliceConfig");
+    py_conv_slice_config.def(
+        py::init<bool, uint32_t>(), py::kw_only(), py::arg("slice_output_height"), py::arg("output_slice_size"));
+    py_conv_slice_config.def_readwrite("slice_output_height", &ConvSliceConfig::slice_output_height);
+    py_conv_slice_config.def_readwrite("output_slice_size", &ConvSliceConfig::output_slice_size);
 
     auto py_conv_config = py::class_<Conv2dConfig>(module, "Conv2dConfig");
     py_conv_config.def(
