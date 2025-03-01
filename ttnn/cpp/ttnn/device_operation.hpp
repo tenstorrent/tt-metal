@@ -180,7 +180,6 @@ inline auto& create_or_get_meshworkload_from_cache(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     uint64_t device_operation_id) {
     if (!program_cache_hit) {
-        tt::log_info("CACHE MISS: Creating mesh workload from cache");
         auto program_factory = device_operation_t::select_program_factory(operation_attributes, tensor_args);
         auto program_factory_index = program_factory.index();
 
@@ -239,7 +238,6 @@ inline auto& create_or_get_meshworkload_from_cache(
             program_factory);
         return mesh_workload;
     } else {
-        tt::log_info("CACHE HIT: Creating mesh workload from cache");
         auto& cached_program_factory = program_cache.get(program_hash);
         auto program_factory_index = cached_program_factory.program_factory_index;
 
