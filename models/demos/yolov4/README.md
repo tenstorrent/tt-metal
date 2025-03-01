@@ -26,4 +26,4 @@
 - To be added soon
 
 ### Web Demo
-- You may try the interactive web demo (35 FPS end-2-end) following the [instructions](https://github.com/tenstorrent/tt-metal/edit/main/models/demos/yolov4/README.md)
+- You may try the interactive web demo (35 FPS end-2-end) following the [instructions](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/yolov4/README.md)
