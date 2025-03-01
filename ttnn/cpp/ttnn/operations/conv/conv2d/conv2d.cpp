@@ -34,6 +34,67 @@ using OutputWidth = uint32_t;
 using Result = std::tuple<ttnn::Tensor, OutputHeight, OutputWidth, ttnn::Tensor, std::optional<ttnn::Tensor>>;
 
 template <typename T>
+Result conv2d(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& weight_tensor,
+    T* device,
+    uint32_t in_channels,
+    uint32_t out_channels,
+    uint32_t batch_size,
+    uint32_t input_height,
+    uint32_t input_width,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::array<uint32_t, 2> padding,
+    std::array<uint32_t, 2> dilation,
+    uint32_t groups,
+    std::optional<const ttnn::Tensor> bias_tensor,
+    const std::optional<const Conv2dConfig>& conv_config_,
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
+    const std::optional<const MemoryConfig>& memory_config_,
+    const std::optional<const ConvSliceConfig>& slice_config_) {
+    if (slice_config_.has_value()) {
+        return conv2d_DRAM(
+            input_tensor,
+            weight_tensor,
+            device,
+            in_channels,
+            out_channels,
+            batch_size,
+            input_height,
+            input_width,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            groups,
+            bias_tensor,
+            conv_config_,
+            compute_config_,
+            memory_config_,
+            slice_config_.value());
+    } else {
+        return conv2d_L1(
+            input_tensor,
+            weight_tensor,
+            device,
+            in_channels,
+            out_channels,
+            batch_size,
+            input_height,
+            input_width,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            groups,
+            bias_tensor,
+            conv_config_,
+            compute_config_,
+            memory_config_);
+    }
+}
+template <typename T>
 Result conv2d_DRAM(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
@@ -51,7 +112,7 @@ Result conv2d_DRAM(
     std::optional<const ttnn::Tensor> bias_tensor,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
-    const std::optional<const MemoryConfig>& memory_config,
+    const std::optional<const MemoryConfig>& memory_config_,
     const ConvSliceConfig& dram_slice_config) {
     uint32_t output_height = ((input_height - kernel_size[0] - ((kernel_size[0] - 1 ) * (dilation[0] - 1)) + 2 * padding[0]) / stride[0]) + 1;
     uint32_t output_width = ((input_width - kernel_size[1] - ((kernel_size[0] - 1 ) * (dilation[0] - 1)) + 2 * padding[1]) / stride[1]) + 1;
@@ -94,11 +155,7 @@ Result conv2d_DRAM(
                     auto sliced_input_tensor = ttnn::slice(
                         input_tensor,
                         std::array<uint32_t, 4>{batch_index, input_slice_height_start, 0, 0},  // Start
-                        std::array<uint32_t, 4>{
-                            batch_index,
-                            input_slice_height_end - 1,
-                            input_width - 1,
-                            in_channels - 1},                // End - Inclusive
+                        std::array<uint32_t, 4>{batch_index + 1, input_slice_height_end, input_width, in_channels},
                         std::array<uint32_t, 4>{1, 1, 1, 1}  // Step
                     );
                     log_debug(tt::LogOp, "Sliced input tensor shape: {}", sliced_input_tensor.get_logical_shape());
@@ -138,7 +195,9 @@ Result conv2d_DRAM(
                             dilation,
                             groups,
                             first_run ? bias_tensor : (std::optional<const ttnn::Tensor>)(bias_tensor_on_device),
-                            conv_config_l1);
+                            conv_config_l1,
+                            compute_config_,
+                            memory_config_);
                     sliced_output_tensor = ttnn::to_layout(
                         sliced_output_tensor,
                         Layout::ROW_MAJOR,
@@ -165,6 +224,8 @@ Result conv2d_DRAM(
                 }
             }
         }
+    } else {
+        TT_THROW("Slice along width is not supported yet.");
     }
     return {dram_output_tensor, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
 }
@@ -222,6 +283,7 @@ Result conv2d_L1(
             bias_tensor.has_value(),
             compute_config);
         auto_shard = true;
+    }
 
     ShardOrientation shard_orientation =
         conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
@@ -386,7 +448,6 @@ Result conv2d_L1(
         return {matmul_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     }
 }
-}
 
 Result Conv2dOperation::invoke(
     QueueId queue_id,
@@ -407,7 +468,7 @@ Result Conv2dOperation::invoke(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config_,
-    const std::optional<const ConvSliceConfig>& dram_slice_config_) {
+    const std::optional<const ConvSliceConfig>& slice_config_) {
     return conv2d(
         input_tensor,
         weight_tensor,
@@ -426,7 +487,7 @@ Result Conv2dOperation::invoke(
         std::move(conv_config_),
         std::move(compute_config_),
         std::move(memory_config_),
-        std::move(dram_slice_config_));
+        std::move(slice_config_));
 }
 
 Result Conv2dOperation::invoke(
@@ -448,7 +509,7 @@ Result Conv2dOperation::invoke(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config,
-    const std::optional<const ConvSliceConfig>& dram_slice_config_) {
+    const std::optional<const ConvSliceConfig>& slice_config_) {
     return conv2d(
         input_tensor,
         weight_tensor,
@@ -467,7 +528,7 @@ Result Conv2dOperation::invoke(
         std::move(conv_config_),
         std::move(compute_config_),
         std::move(memory_config),
-        std::move(dram_slice_config_));
+        std::move(slice_config_));
 }
 
 }  // namespace conv2d
