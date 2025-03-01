@@ -251,8 +251,10 @@ public:
     std::shared_ptr<Buffer> device_buffer() const { return std::get<DeviceStorage>(this->get_storage()).get_buffer(); }
 
     distributed::MeshDevice* mesh_device() const {
-        TT_FATAL(this->mesh_device_.has_value(), "Tensor is not a mesh tensor");
-        return this->mesh_device_.value();
+        if (this->mesh_device_.has_value()) {
+            return this->mesh_device_.value();
+        }
+        return nullptr;
     }
 
     IDevice* device() const {
