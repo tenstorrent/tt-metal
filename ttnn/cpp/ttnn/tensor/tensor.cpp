@@ -537,6 +537,11 @@ Tensor Tensor::to_device(distributed::MeshDevice* mesh_device, const MemoryConfi
 }
 
 Tensor Tensor::to_device(const std::vector<IDevice*>& workers, const MemoryConfig& mem_config, QueueId cq_id) const {
+    if (workers.size() == 1) {
+        if (auto mesh_device = dynamic_cast<distributed::MeshDevice*>(workers[0])) {
+            return to_device(mesh_device, mem_config, cq_id);
+        }
+    }
     return tensor_ops::tensor_to_device(*this, workers, mem_config, cq_id);
 }
 
