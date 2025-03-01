@@ -65,7 +65,7 @@ Fold::SingleCore::cached_program_t fold_single_core(
 
     // Setup kernels
     uint32_t src_unit_size_is_power_of_two = is_power_of_two_at_least_32(aligned_pixel_size);
-    uint32_t src_log2_unit_size = src_unit_size_is_power_of_two ? (std::uint32_t)log2(aligned_pixel_size) : 0;
+    uint32_t src_log2_unit_size = src_unit_size_is_power_of_two ? (std::uint32_t)std::log2(aligned_pixel_size) : 0;
     std::vector<uint32_t> reader_compile_time_args = {
         cb_src0_index,
         src_is_dram,
@@ -74,7 +74,7 @@ Fold::SingleCore::cached_program_t fold_single_core(
     };
 
     uint32_t dst_unit_size_is_power_of_two = is_power_of_two_at_least_32(aligned_dst_pixel_size);
-    uint32_t dst_log2_unit_size = dst_unit_size_is_power_of_two ? (std::uint32_t)log2(aligned_dst_pixel_size) : 0;
+    uint32_t dst_log2_unit_size = dst_unit_size_is_power_of_two ? (std::uint32_t)std::log2(aligned_dst_pixel_size) : 0;
 
     std::vector<uint32_t> writer_compile_time_args = {
         cb_dst0_index,
