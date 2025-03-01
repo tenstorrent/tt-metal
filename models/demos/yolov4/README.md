@@ -3,7 +3,7 @@
 ## How to run yolov4
 
 ### Model code running with Trace+2CQ
-- Use the following command to run the yolov4 performant implementation (71 FPS):
+- Use the following command to run the yolov4 performant implementation (95 FPS):
   ```bash
   pytest models/demos/wormhole/yolov4/test_yolov4_performant_webdemo.py::test_run_yolov4_trace_2cqs_inference[True-1-act_dtype0-weight_dtype0-device_params0]
   ```
@@ -26,7 +26,4 @@
 - To be added soon
 
 ### Web Demo
-- You may try the interactive web demo (35 FPS end-2-end) following the instructions:
-```
-models/demos/yolov4/web_demo/README.md
-```
+- You may try the interactive web demo (35 FPS end-2-end) following the [instructions](https://github.com/tenstorrent/tt-metal/edit/main/models/demos/yolov4/README.md)
