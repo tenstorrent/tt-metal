@@ -27,10 +27,11 @@ CPMAddPackage(
         "BOOST_ENABLE_CMAKE ON"
         "BOOST_SKIP_INSTALL_RULES ON"
         "BUILD_SHARED_LIBS OFF"
-        "BOOST_INCLUDE_LIBRARIES core\\\;container\\\;smart_ptr\\\;interprocess"
+        "BOOST_INCLUDE_LIBRARIES core\\\;container\\\;smart_ptr\\\;interprocess\\\;asio"
     FIND_PACKAGE_ARGUMENTS "CONFIG REQUIRED"
 )
 
+ensureboosttarget(asio)
 ensureboosttarget(core)
 ensureboosttarget(container)
 ensureboosttarget(smart_ptr)
