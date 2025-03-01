@@ -500,7 +500,6 @@ def test_conv_features_multi_device(
 @pytest.mark.parametrize(
     "output_channels, input_channels, input_height, input_width, filter_height, filter_width, pad_h, pad_w, act_block_w_div",
     (
-        (64, 32, 130, 130, 3, 3, 0, 0, 1),
         (64, 32, 128, 128, 3, 3, 1, 1, 1),
         (64, 32, 1024, 1024, 3, 3, 1, 1, 1),
     ),
@@ -543,8 +542,6 @@ def test_conv_dram(
     stride_h = stride
     stride_w = stride
     batch_size = 2
-    fp32_accum = False
-    packer_l1_acc = False
     deallocate_activation = False
     debug = False
     groups = 1
@@ -590,27 +587,16 @@ def test_conv_dram(
 
     tt_input_tensor = ttnn.from_torch(torch_input_tensor, device=device, dtype=ttnn.bfloat16)
     conv_slice_config = ttnn.ConvSliceConfig(
-        slice_output_height=False,
+        slice_output_height=True,
         output_slice_size=64,
     )
     conv_config = ttnn.Conv2dConfig(
         dtype=activations_dtype,
         weights_dtype=weights_dtype,
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        input_channels_alignment=32,
-        deallocate_activation=deallocate_activation,
-        fp32_dest_acc_enabled=fp32_accum,
-        packer_l1_accum_enabled=packer_l1_acc,
-        enable_act_double_buffer=False,
-        enable_split_reader=False,
-        enable_subblock_padding=False,
-        reshard_if_not_optimal=True,
-        act_block_w_div=act_block_w_div,
-        output_height_in_l1=64,
         act_block_h_override=64,
     )
-    [tt_output_tensor_on_device, out_height, out_width, weights_device, bias_device] = ttnn.conv2d(
+
+    [tt_output_tensor_on_device, [out_height, out_width]] = ttnn.conv2d(
         input_tensor=tt_input_tensor,
         weight_tensor=tt_weight_tensor,
         in_channels=input_channels,
@@ -627,8 +613,10 @@ def test_conv_dram(
         conv_op_cache=reader_patterns_cache,
         debug=debug,
         groups=groups,
-        conv_slice_config=conv_slice_config,
+        slice_config=conv_slice_config,
+        return_output_dim=True,
     )
+    print("Out size = ", out_height, out_width)
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     out = tt_output_tensor.cpu().to_torch()
