@@ -171,7 +171,6 @@ std::vector<bool> generate_pad_metadata(const SlidingWindowConfig& config) {
             }
         }
         return pad_metadata;
-
     } else {
         uint32_t ceil_padding_h = config.get_ceil_pad_h();
         uint32_t ceil_padding_w = config.get_ceil_pad_w();
@@ -471,6 +470,83 @@ bool validate_reblocked_data(const PerCoreGatherData& original, const ReblockedD
     return true;
 }
 
+// Converts "reblocked" data -> vector of PerCoreGatherData_Tuples, indexed by block ID.
+std::vector<PerCoreGatherData> reshuffle_reblocked_gather(const ReblockedData& reblocked_data, uint32_t block_size) {
+    // Find the maximum block_id in the reblocked data
+    uint32_t max_block_id = 0;
+    for (const auto& [src_dst, block_map] : reblocked_data) {
+        for (const auto& [block_id, runs] : block_map) {
+            if (block_id > max_block_id) {
+                max_block_id = block_id;
+            }
+        }
+    }
+
+    // Prepare the output vector:
+    // Each index i => a PerCoreGatherData
+    // We'll have (max_block_id + 1) entries for block IDs in [0..max_block_id].
+    std::vector<PerCoreGatherData> result(max_block_id + 1);
+
+    // For each (src_core, dst_core), and for each block_id => partial runs convert partial runs into absolute
+    // src_start, then store them in result[block_id].
+    for (const auto& [src_dst, block_map] : reblocked_data) {
+        for (const auto& [block_id, partial_runs] : block_map) {
+            auto& block_map_for_this_block = result[block_id];
+
+            // Convert each run from (offset_in_block, dst_start, length) to (absolute_src_start, dst_start, length).
+            std::vector<GatherRun> new_runs;
+            new_runs.reserve(partial_runs.size());
+
+            for (const auto& [offset_in_block, dst_start, length] : partial_runs) {
+                uint32_t absolute_src_start = block_id * block_size + offset_in_block;
+                new_runs.push_back({absolute_src_start, dst_start, length});
+            }
+
+            block_map_for_this_block[src_dst].insert(
+                block_map_for_this_block[src_dst].end(), new_runs.begin(), new_runs.end());
+        }
+    }
+
+    return result;
+}
+
+using GatherStep = std::tuple<uint32_t, uint32_t, uint32_t>;
+
+const uint16_t PAD_LOCAL_SPECIAL_VALUE = 0xFFFF;
+
+static std::map<uint32_pair_t, std::vector<GatherStep>> generate_gather_data_per_core(
+    const std::vector<ShardBoundary>& shard_boundaries, const std::vector<PixelMetadata>& tensor_metadata) {
+    std::map<uint32_pair_t, std::vector<GatherStep>> output;
+    uint32_t core_id = 0;
+    for (auto [output_boundary, input_boundary] : shard_boundaries) {
+        auto [input_start, input_end] = input_boundary;
+        for (uint32_t global_idx = input_start; global_idx <= input_end; ++global_idx) {
+            uint32_t dst_core_id = core_id;
+            uint32_t local_idx = global_idx - input_start;
+            auto [is_pad_stick, src_core_id, src_local_idx] = tensor_metadata[global_idx];
+
+            TT_ASSERT(local_idx < PAD_LOCAL_SPECIAL_VALUE && src_local_idx < PAD_LOCAL_SPECIAL_VALUE, "Index overflow");
+
+            if (is_pad_stick) {
+                TT_ASSERT(src_local_idx == 0);
+                src_core_id = PAD_LOCAL_SPECIAL_VALUE;
+            }
+
+            if (output.find({src_core_id, dst_core_id}) != output.end()) {
+                auto& [src_start, dst_start, length] = output[{src_core_id, dst_core_id}].back();
+                // src idx is 0 if it is a pad
+                if ((src_local_idx == (src_start + length) || is_pad_stick) && local_idx == (dst_start + length)) {
+                    ++length;
+                    continue;
+                }
+            }
+            output[{src_core_id, dst_core_id}].push_back({src_local_idx, local_idx, 1});
+        }
+        ++core_id;
+    }
+    return output;
+};
+
 std::tuple<std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>>
 generate_halo_kernel_config_tensors(
     const std::vector<PixelMetadata>& tensor_metadata,
@@ -486,45 +562,11 @@ generate_halo_kernel_config_tensors(
         return device->worker_core_from_logical_core(core_coord);
     };
 
-    const uint16_t pad_local = 0xFFFF;
-    std::map<uint32_pair_t, std::vector<std::tuple<uint32_t, uint32_t, uint32_t>>> per_core_gather_data;
+    const auto per_core_gather_data = generate_gather_data_per_core(shard_boundaries, tensor_metadata);
 
-    uint32_t num_cores_nhw = shard_boundaries.size();
-
-    uint32_t core_id = 0;
-    for (auto [output_boundary, input_boundary] : shard_boundaries) {
-        auto [input_start, input_end] = input_boundary;
-        for (uint32_t global_idx = input_start; global_idx <= input_end; ++global_idx) {
-            uint32_t dst_core_id = core_id;
-            uint32_t local_idx = global_idx - input_start;
-            auto [is_pad_stick, src_core_id, src_local_idx] = tensor_metadata[global_idx];
-            TT_ASSERT(local_idx < pad_local && src_local_idx < pad_local, "Index overflow");
-            if (is_pad_stick) {
-                TT_ASSERT(src_local_idx == 0);
-                src_core_id = pad_local;
-            }
-            if (per_core_gather_data.find({src_core_id, dst_core_id}) != per_core_gather_data.end()) {
-                auto& [src_start, dst_start, length] = per_core_gather_data[{src_core_id, dst_core_id}].back();
-                // src idx is 0 if it is a pad
-                if ((src_local_idx == (src_start + length) || is_pad_stick) && local_idx == (dst_start + length)) {
-                    ++length;
-                    continue;
-                }
-            }
-            // insert new tuple
-            per_core_gather_data[{src_core_id, dst_core_id}].push_back({src_local_idx, local_idx, 1});
-        }
-        ++core_id;
+    for (auto [route, step] : per_core_gather_data) {
+        const auto& [src_core_id, dst_core_id] = route;
     }
-
-    tt::log_info("per core gather data = {}", per_core_gather_data);
-
-    auto output = reblock_per_core_gather_data(per_core_gather_data, 32);
-    auto is_valid = validate_reblocked_data(per_core_gather_data, output, 32);
-    TT_FATAL(is_valid, "wasnt valid");
-
-    tt::log_info("reblocked per core gather data (valid? {}) -> {}", is_valid, output);
-
     // construct the config tensors
     /**
      * pad_config: length num_cores_nhw
@@ -537,36 +579,47 @@ generate_halo_kernel_config_tensors(
      * length0, src_start1, dst_start1, length1, ...], ...}
      */
     using uint32_triplet_t = std::tuple<uint32_t, uint32_t, uint32_t>;
-    std::vector<std::vector<uint32_pair_t>> pad_config;
-    std::vector<std::pair<uint32_triplet_t, std::vector<uint32_triplet_t>>> local_config;
-    std::vector<std::vector<std::pair<uint32_triplet_t, std::vector<uint32_triplet_t>>>> remote_config;
-    pad_config.resize(num_cores_nhw);
-    local_config.resize(num_cores_nhw);
-    remote_config.resize(num_cores_nhw);
 
-    for (auto [src_dst, data] : per_core_gather_data) {
-        auto [src_core_id, dst_core_id] = src_dst;
-        bool is_pad = src_core_id == pad_local;
-        bool is_local = src_core_id == dst_core_id;
-        bool is_remote = !is_local && !is_pad;
-        if (is_pad) {
-            for (auto [src_start, dst_start, length] : data) {
-                pad_config[dst_core_id].push_back({dst_start, length});
-            }
-        } else if (is_local) {
-            CoreCoord noc_xy = core_id_to_noc_coords(dst_core_id);
-            local_config[src_core_id].first = {noc_xy.x, noc_xy.y, 3 * data.size()};
-            local_config[src_core_id].second = data;
-        } else if (is_remote) {
-            if (remote_read) {
-                CoreCoord noc_xy = core_id_to_noc_coords(src_core_id);
-                remote_config[dst_core_id].push_back({{noc_xy.x, noc_xy.y, 3 * data.size()}, data});
-            } else {
+    struct HaloGatherConfig {
+        std::vector<std::vector<uint32_pair_t>> pad_config;
+        std::vector<std::pair<uint32_triplet_t, std::vector<uint32_triplet_t>>> local_config;
+        std::vector<std::vector<std::pair<uint32_triplet_t, std::vector<uint32_triplet_t>>>> remote_config;
+
+        HaloGatherConfig(int num_cores_nhw) :
+            pad_config{num_cores_nhw}, local_config{num_cores_nhw}, remote_config{num_cores_nhw} {}
+    };
+
+    uint32_t num_cores_nhw = shard_boundaries.size();
+    const auto construct_configs = [&num_cores_nhw, &core_id_to_noc_coords, &remote_read](
+                                       const std::map<uint32_pair_t, std::vector<GatherStep>>& per_core_gather_data) {
+        auto config = HaloGatherConfig(num_cores_nhw);
+        for (auto [src_dst, data] : per_core_gather_data) {
+            auto [src_core_id, dst_core_id] = src_dst;
+            bool is_pad = src_core_id == PAD_LOCAL_SPECIAL_VALUE;
+            bool is_local = src_core_id == dst_core_id;
+            bool is_remote = !is_local && !is_pad;
+            if (is_pad) {
+                for (auto [src_start, dst_start, length] : data) {
+                    config.pad_config[dst_core_id].push_back({dst_start, length});
+                }
+            } else if (is_local) {
                 CoreCoord noc_xy = core_id_to_noc_coords(dst_core_id);
-                remote_config[src_core_id].push_back({{noc_xy.x, noc_xy.y, 3 * data.size()}, data});
+                config.local_config[src_core_id].first = {noc_xy.x, noc_xy.y, 3 * data.size()};
+                config.local_config[src_core_id].second = data;
+            } else if (is_remote) {
+                if (remote_read) {
+                    CoreCoord noc_xy = core_id_to_noc_coords(src_core_id);
+                    config.remote_config[dst_core_id].push_back({{noc_xy.x, noc_xy.y, 3 * data.size()}, data});
+                } else {
+                    CoreCoord noc_xy = core_id_to_noc_coords(dst_core_id);
+                    config.remote_config[src_core_id].push_back({{noc_xy.x, noc_xy.y, 3 * data.size()}, data});
+                }
             }
         }
-    }
+        return config;
+    };
+
+    const auto [pad_config, local_config, remote_config] = construct_configs(per_core_gather_data);
 
     // flatten and uniformize the lengths of each config list
     auto flatten_pad_config = [](auto& config) -> std::vector<std::vector<uint16_t>> {
@@ -657,10 +710,6 @@ generate_halo_kernel_config_tensors(
         return flattened_config;
     };
 
-    auto flattened_pad_config = flatten_pad_config(pad_config);
-    auto flattened_local_config = flatten_local_config(local_config);
-    auto flattened_remote_config = flatten_remote_config(remote_config);
-
     auto align_config = [](auto& config, size_t align_granularity = 1, uint16_t align_value = 0) {
         size_t max_len = 0;
         for (auto& core_config : config) {
@@ -679,6 +728,10 @@ generate_halo_kernel_config_tensors(
             }
         }
     };
+
+    auto flattened_pad_config = flatten_pad_config(pad_config);
+    auto flattened_local_config = flatten_local_config(local_config);
+    auto flattened_remote_config = flatten_remote_config(remote_config);
 
     align_config(flattened_pad_config, 2);
     align_config(flattened_local_config, 2);
