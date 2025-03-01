@@ -216,6 +216,7 @@ void Hal::initialize_gs() {
     this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
+    this->eth_fw_is_cooperative_ = false;
 
     this->eps_ = EPS_GS;
     this->nan_ = NAN_GS;

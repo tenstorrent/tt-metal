@@ -21,6 +21,7 @@
 #include <sub_device_manager_tracker.hpp>
 #include <sub_device_manager.hpp>
 #include <sub_device_types.hpp>
+#include "tt_metal/common/thread_pool.hpp"
 
 #include <hal.hpp>
 #include <mesh_coord.hpp>
@@ -131,7 +132,8 @@ MeshDevice::MeshDevice(
     scoped_devices_(std::move(mesh_handle)),
     view_(std::move(mesh_device_view)),
     mesh_id_(generate_unique_mesh_id()),
-    parent_mesh_(std::move(parent_mesh)) {}
+    parent_mesh_(std::move(parent_mesh)),
+    thread_pool_(create_boost_thread_pool(view_->shape().mesh_size())) {}
 
 std::shared_ptr<MeshDevice> MeshDevice::create(
     const MeshDeviceConfig& config,
@@ -685,7 +687,7 @@ bool MeshDevice::initialize(
     mesh_command_queues_.reserve(this->num_hw_cqs());
     if (this->using_fast_dispatch()) {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
-            mesh_command_queues_.push_back(std::make_unique<MeshCommandQueue>(this, cq_id));
+            mesh_command_queues_.push_back(std::make_unique<MeshCommandQueue>(this, cq_id, thread_pool_));
         }
     }
     return true;
@@ -727,11 +729,6 @@ HalProgrammableCoreType MeshDevice::get_programmable_core_type(CoreCoord virtual
 std::vector<std::pair<transfer_info_cores, uint32_t>> MeshDevice::extract_dst_noc_multicast_info(
     const std::vector<CoreRange>& ranges, const CoreType core_type) {
     return reference_device()->extract_dst_noc_multicast_info(ranges, core_type);
-}
-
-size_t MeshDevice::get_device_kernel_defines_hash() {
-    return validate_and_get_reference_value(
-        scoped_devices_->root_devices(), [](const auto& device) { return device->get_device_kernel_defines_hash(); });
 }
 
 // Methods for SubDevice Management
@@ -783,10 +780,6 @@ bool MeshDevice::is_mmio_capable() const {
     TT_THROW("is_mmio_capable() is not supported on MeshDevice - use individual devices instead");
     return reference_device()->is_mmio_capable();
 }
-std::vector<std::vector<chip_id_t>> MeshDevice::get_tunnels_from_mmio() const {
-    TT_THROW("get_tunnels_from_mmio() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->get_tunnels_from_mmio();
-}
 
 // Allocator methods
 std::optional<DeviceAddr> MeshDevice::lowest_occupied_compute_l1_address() const {
@@ -824,7 +817,7 @@ MeshSubDeviceManagerId MeshDevice::mesh_create_sub_device_manager(
 
 std::tuple<MeshSubDeviceManagerId, SubDeviceId> MeshDevice::mesh_create_sub_device_manager_with_fabric(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
     MeshSubDeviceManagerId mesh_sub_device_manager_id(*this);
-    SubDeviceId fabric_sub_device_id;
+    SubDeviceId fabric_sub_device_id(0);
     const auto& devices = scoped_devices_->root_devices();
     for (uint32_t i = 0; i < devices.size(); i++) {
         auto* device = devices[i];
@@ -877,8 +870,10 @@ void MeshDevice::mesh_reset_sub_device_stall_group() {
 }
 
 MeshSubDeviceManagerId::MeshSubDeviceManagerId(const MeshDevice& mesh_device) {
-    this->sub_device_manager_ids.resize(mesh_device.num_devices());
+    this->sub_device_manager_ids.reserve(mesh_device.num_devices());
+    for (uint32_t i = 0; i < mesh_device.num_devices(); i++) {
+        this->sub_device_manager_ids.push_back(SubDeviceManagerId(0));
+    }
 }
-
 
 }  // namespace tt::tt_metal::distributed

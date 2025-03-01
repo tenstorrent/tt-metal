@@ -195,19 +195,19 @@ public:
     // ======================================================================================
     // Non-Blocking Getters. Query attributes directly, without waiting for worker completion
     // ======================================================================================
-    inline const Storage& storage() const { return this->tensor_attributes->storage; };
-    inline const ttnn::Shape& logical_shape() const { return this->tensor_attributes->tensor_spec.logical_shape(); };
-    inline const ttnn::Shape& padded_shape() const { return this->tensor_attributes->tensor_spec.padded_shape(); };
-    inline DataType dtype() const { return this->tensor_attributes->tensor_spec.tensor_layout().get_data_type(); };
-    inline Layout layout() const { return this->tensor_attributes->tensor_spec.tensor_layout().get_layout(); };
-    inline const TensorSpec& tensor_spec() const { return this->tensor_attributes->tensor_spec; }
+    const Storage& storage() const { return this->tensor_attributes->storage; };
+    const ttnn::Shape& logical_shape() const { return this->tensor_attributes->tensor_spec.logical_shape(); };
+    const ttnn::Shape& padded_shape() const { return this->tensor_attributes->tensor_spec.padded_shape(); };
+    DataType dtype() const { return this->tensor_attributes->tensor_spec.tensor_layout().get_data_type(); };
+    Layout layout() const { return this->tensor_attributes->tensor_spec.tensor_layout().get_layout(); };
+    const TensorSpec& tensor_spec() const { return this->tensor_attributes->tensor_spec; }
 
     // ======================================================================================
     //                                      Setters
     // ======================================================================================
-    inline void set_storage(const Storage& storage) { this->tensor_attributes->storage = storage; }
+    void set_storage(const Storage& storage) { this->tensor_attributes->storage = storage; }
     // We intend to remove this API once we migrate all ops to compute_output_specs, and provide TensorSpec at creation
-    inline void set_tensor_spec(const TensorSpec& tensor_spec) { this->tensor_attributes->tensor_spec = tensor_spec; }
+    void set_tensor_spec(const TensorSpec& tensor_spec) { this->tensor_attributes->tensor_spec = tensor_spec; }
     // ======================================================================================
     //                                      Extra Helper Functions
     // ======================================================================================
@@ -251,8 +251,10 @@ public:
     std::shared_ptr<Buffer> device_buffer() const { return std::get<DeviceStorage>(this->get_storage()).get_buffer(); }
 
     distributed::MeshDevice* mesh_device() const {
-        TT_FATAL(this->mesh_device_.has_value(), "Tensor is not a mesh tensor");
-        return this->mesh_device_.value();
+        if (this->mesh_device_.has_value()) {
+            return this->mesh_device_.value();
+        }
+        return nullptr;
     }
 
     IDevice* device() const {

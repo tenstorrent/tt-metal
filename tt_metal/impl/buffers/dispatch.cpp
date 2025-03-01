@@ -277,7 +277,7 @@ void issue_buffer_dispatch_command_sequence(
             DispatchMemMap::get(dispatch_core_type)
                 .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
         for (const auto& sub_device_id : sub_device_ids) {
-            auto offset_index = sub_device_id.to_index();
+            auto offset_index = *sub_device_id;
             uint32_t dispatch_message_addr =
                 dispatch_message_base_addr +
                 DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(offset_index);
@@ -642,14 +642,14 @@ void issue_read_buffer_dispatch_command_sequence(
     uint32_t last_index = num_worker_counters - 1;
     // We only need the write barrier + prefetch stall for the last wait cmd
     for (uint32_t i = 0; i < last_index; ++i) {
-        auto offset_index = sub_device_ids[i].to_index();
+        auto offset_index = *sub_device_ids[i];
         uint32_t dispatch_message_addr =
             dispatch_message_base_addr +
             DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(offset_index);
         command_sequence.add_dispatch_wait(
             false, dispatch_message_addr, dispatch_params.expected_num_workers_completed[offset_index]);
     }
-    auto offset_index = sub_device_ids[last_index].to_index();
+    auto offset_index = *sub_device_ids[last_index];
     uint32_t dispatch_message_addr =
         dispatch_message_base_addr + DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(offset_index);
     command_sequence.add_dispatch_wait_with_prefetch_stall(
@@ -999,10 +999,7 @@ tt::stl::Span<const SubDeviceId> select_sub_device_ids(
         return device->get_sub_device_stall_group();
     } else {
         for (const auto& sub_device_id : sub_device_ids) {
-            TT_FATAL(
-                sub_device_id.to_index() < device->num_sub_devices(),
-                "Invalid sub-device id specified {}",
-                sub_device_id.to_index());
+            TT_FATAL(*sub_device_id < device->num_sub_devices(), "Invalid sub-device id specified {}", *sub_device_id);
         }
         return sub_device_ids;
     }

@@ -9,7 +9,7 @@
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"
-#include "work_executor.hpp"
+#include "work_executor_types.hpp"
 #include "basic_allocator.hpp"
 #include "l1_banking_allocator.hpp"
 #include "data_types.hpp"
@@ -185,8 +185,6 @@ public:
 
     virtual std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const std::vector<CoreRange>& ranges, const CoreType core_type) = 0;
 
-    virtual size_t get_device_kernel_defines_hash() = 0;
-
     virtual uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const = 0;
     virtual uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const = 0;
     virtual uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data=true, bool unicast_data=true) const = 0;
@@ -209,7 +207,6 @@ public:
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) = 0;
 
     virtual bool is_mmio_capable() const = 0;
-    virtual std::vector<std::vector<chip_id_t>> get_tunnels_from_mmio() const = 0;
 
     static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
 };
