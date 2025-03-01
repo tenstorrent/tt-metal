@@ -1392,6 +1392,7 @@ void detail::Program_::compile(IDevice* device, bool fd_bootloader_mode) {
                 if (kernel->get_kernel_core_type() != dispatch_core_type) {
                     return false;
                 }
+
                 return kernel->is_on_logical_core(dispatch_core);
             });
 
