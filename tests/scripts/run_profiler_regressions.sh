@@ -87,7 +87,7 @@ run_profiling_test(){
 
     echo "Make sure this test runs in a build with cmake option ENABLE_TRACY=ON"
 
-    if [[ -z "$NO_USE_VENV_PLZ" ]]; then
+    if [[ -z "$DONT_USE_VIRTUAL_ENVIRONMENT" ]]; then
       source python_env/bin/activate
     fi
 
