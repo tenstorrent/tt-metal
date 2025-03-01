@@ -391,7 +391,6 @@ void launch_on_mesh_device(
     }
 
     if (is_program_cache_enabled) {
-        tt::log_info("Creating mesh workload from cache");
         auto& mesh_workload = create_or_get_meshworkload_from_cache<device_operation_t>(
             program_cache,
             program_cache_hit,
