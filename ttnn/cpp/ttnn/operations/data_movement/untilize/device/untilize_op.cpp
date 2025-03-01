@@ -115,13 +115,17 @@ operation::ProgramWithCallbacks Untilize::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-    if (this->use_multicore) {
-        return detail::untilize_multi_core(
-            input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en, this->sub_core_grids);
-    } else {
+
+    if (!this->use_multicore) {
         return detail::untilize_single_core(
             input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
     }
+    if (!this->enough_space_height) {
+        return detail::untilize_multi_core_block(
+            input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
+    }
+    return detail::untilize_multi_core(
+        input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en, this->sub_core_grids);
 }
 
 }  // namespace ttnn::operations::data_movement
