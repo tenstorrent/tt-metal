@@ -5,6 +5,8 @@
 
 #include <device_impl.hpp>
 #include <program_impl.hpp>
+#include "core_coord.hpp"
+#include "mesh_graph.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "tt_cluster.hpp"
 
@@ -48,7 +50,7 @@ public:
         device_id_(device_id),
         servicing_device_id_(servicing_device_id),
         cq_id_(cq_id),
-        noc_selection_(noc_selection) {};
+        noc_selection_(noc_selection) {}
     virtual ~FDKernel() = default;
 
     // Populate the static configs for this kernel (ones that do not depend on configs from other kernels), including
@@ -64,7 +66,12 @@ public:
 
     // Override for specific kernels that need host-side configureation (special values written to l1, etc.). Is called
     // after above functions and before FD kernels are launched.
-    virtual void ConfigureCore() {};
+    virtual void ConfigureCore() {}
+
+    // Override for specific kernels that can be configured for fabric. Will be called by the FABRIC_ROUTER_VC, which is
+    // an intermediary FDKernel for indicating a fabric router path needs to be found.
+    virtual void UpdateArgsForFabric(
+        const CoreCoord& fabric_router, tt::tt_fabric::mesh_id_t dst_mesh_id, chip_id_t dst_chip_id) {}
 
     // Generator function to create a kernel of a given type. New kernels need to be added here.
     static FDKernel* Generate(
@@ -94,7 +101,7 @@ public:
     void AddDeviceAndProgram(tt::tt_metal::IDevice* device, tt::tt_metal::Program* program) {
         device_ = device;
         program_ = program;
-    };
+    }
 
 protected:
     void configure_kernel_variant(

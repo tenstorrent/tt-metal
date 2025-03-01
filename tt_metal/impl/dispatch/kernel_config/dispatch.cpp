@@ -384,3 +384,6 @@ void DispatchKernel::ConfigureCore() {
         detail::WriteToDeviceL1(device_, logical_core_, completion_q1_last_event_ptr, zero, GetCoreType());
     }
 }
+
+void DispatchKernel::UpdateArgsForFabric(
+    const CoreCoord& fabric_router, tt::tt_fabric::mesh_id_t dst_mesh_id, chip_id_t dst_chip_id) {}

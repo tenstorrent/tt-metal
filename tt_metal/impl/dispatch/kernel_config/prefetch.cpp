@@ -27,9 +27,6 @@ void PrefetchKernel::GenerateStaticConfigs() {
         uint32_t issue_queue_start_addr = command_queue_start_addr + cq_start;
         uint32_t issue_queue_size = device_->sysmem_manager().get_issue_queue_size(cq_id_);
 
-        dependent_config_.downstream_cb_base = my_dispatch_constants.dispatch_buffer_base();
-        static_config_.downstream_cb_log_page_size = DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;
-        static_config_.downstream_cb_pages = my_dispatch_constants.dispatch_buffer_pages();
         static_config_.my_downstream_cb_sem_id = tt::tt_metal::CreateSemaphore(
             *program_, logical_core_, my_dispatch_constants.dispatch_buffer_pages(), GetCoreType());
 
@@ -85,13 +82,6 @@ void PrefetchKernel::GenerateStaticConfigs() {
         uint32_t issue_queue_start_addr = command_queue_start_addr + cq_start;
         uint32_t issue_queue_size = device_->sysmem_manager().get_issue_queue_size(cq_id_);
 
-        static_config_.downstream_cb_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
-        if (tt::Cluster::instance().is_galaxy_cluster()) {  // TODO: whys is this hard-coded for galaxy?
-            static_config_.downstream_cb_pages = my_dispatch_constants.mux_buffer_pages(1);
-        } else {
-            static_config_.downstream_cb_pages = my_dispatch_constants.mux_buffer_pages(device_->num_hw_cqs());
-        }
-
         static_config_.pcie_base = issue_queue_start_addr;
         static_config_.pcie_size = issue_queue_size;
         static_config_.prefetch_q_base =
@@ -112,8 +102,19 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.cmddat_q_pages = my_dispatch_constants.prefetch_d_buffer_pages();
         static_config_.my_upstream_cb_sem_id =
             tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
-        static_config_.my_downstream_cb_sem_id = tt::tt_metal::CreateSemaphore(
-            *program_, logical_core_, static_config_.downstream_cb_pages.value(), GetCoreType());
+
+        // Workaround for now. Need downstream to initialize my semaphore. Can't defer creating semaphore yet
+        {
+            uint32_t downstream_cb_pages;
+            if (tt::Cluster::instance().is_galaxy_cluster()) {  // TODO: whys is this hard-coded for galaxy?
+                downstream_cb_pages = my_dispatch_constants.mux_buffer_pages(1);
+            } else {
+                downstream_cb_pages = my_dispatch_constants.mux_buffer_pages(device_->num_hw_cqs());
+            }
+
+            static_config_.my_downstream_cb_sem_id =
+                tt::tt_metal::CreateSemaphore(*program_, logical_core_, downstream_cb_pages, GetCoreType());
+        }
         static_config_.cmddat_q_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
         static_config_.cmddat_q_blocks = DispatchSettings::PREFETCH_D_BUFFER_BLOCKS;
 
@@ -123,9 +124,6 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.dispatch_s_buffer_size = 0;
         static_config_.dispatch_s_cb_log_page_size = 0;
     } else if (static_config_.is_d_variant.value()) {
-        dependent_config_.downstream_cb_base = my_dispatch_constants.dispatch_buffer_base();
-        static_config_.downstream_cb_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
-        static_config_.downstream_cb_pages = my_dispatch_constants.dispatch_buffer_pages();
         static_config_.my_downstream_cb_sem_id = tt::tt_metal::CreateSemaphore(
             *program_, logical_core_, my_dispatch_constants.dispatch_buffer_pages(), GetCoreType());
 
@@ -202,7 +200,12 @@ void PrefetchKernel::GenerateDependentConfigs() {
                 found_dispatch = true;
 
                 dependent_config_.downstream_logical_core = dispatch_kernel->GetLogicalCore();
-                dependent_config_.downstream_cb_sem_id = dispatch_kernel->GetStaticConfig().my_dispatch_cb_sem_id;
+                dependent_config_.downstream_cb_sem_id =
+                    dispatch_kernel->GetStaticConfig().my_dispatch_cb_sem_id.value();
+                dependent_config_.downstream_cb_base = dispatch_kernel->GetStaticConfig().dispatch_cb_base.value();
+                dependent_config_.downstream_cb_log_page_size =
+                    dispatch_kernel->GetStaticConfig().dispatch_cb_log_page_size.value();
+                dependent_config_.downstream_cb_pages = dispatch_kernel->GetStaticConfig().dispatch_cb_pages.value();
             } else if (auto dispatch_s_kernel = dynamic_cast<DispatchSKernel*>(k)) {
                 TT_ASSERT(!found_dispatch_s, "PREFETCH kernel has multiple downstream DISPATCH kernels.");
                 found_dispatch_s = true;
@@ -236,11 +239,16 @@ void PrefetchKernel::GenerateDependentConfigs() {
         dependent_config_.downstream_logical_core = router_kernel->GetLogicalCore();
         dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE;
         uint32_t router_idx = router_kernel->GetUpstreamPort(this);  // Need the port that this connects to downstream
+        auto downstream_buffer_size = router_kernel->GetStaticConfig().rx_queue_size_words.value() << 4;
         dependent_config_.downstream_cb_base =
             (router_kernel->GetStaticConfig().rx_queue_start_addr_words.value() << 4) +
-            (router_kernel->GetStaticConfig().rx_queue_size_words.value() << 4) * router_idx;
+            downstream_buffer_size * router_idx;
         dependent_config_.downstream_cb_sem_id = router_kernel->GetStaticConfig().input_packetize_local_sem[router_idx];
         dependent_config_.downstream_dispatch_s_cb_sem_id = 0;  // No downstream DISPATCH_S in this case
+
+        dependent_config_.downstream_cb_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
+        dependent_config_.downstream_cb_pages =
+            downstream_buffer_size / (1 << DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE);
     } else if (static_config_.is_d_variant.value()) {
         // Upstream, expect just one ROUTER
         TT_ASSERT(upstream_kernels_.size() == 1);
@@ -265,7 +273,12 @@ void PrefetchKernel::GenerateDependentConfigs() {
                 found_dispatch = true;
 
                 dependent_config_.downstream_logical_core = dispatch_kernel->GetLogicalCore();
-                dependent_config_.downstream_cb_sem_id = dispatch_kernel->GetStaticConfig().my_dispatch_cb_sem_id;
+                dependent_config_.downstream_cb_sem_id =
+                    dispatch_kernel->GetStaticConfig().my_dispatch_cb_sem_id.value();
+                dependent_config_.downstream_cb_base = dispatch_kernel->GetStaticConfig().dispatch_cb_base.value();
+                dependent_config_.downstream_cb_log_page_size =
+                    dispatch_kernel->GetStaticConfig().dispatch_cb_log_page_size.value();
+                dependent_config_.downstream_cb_pages = dispatch_kernel->GetStaticConfig().dispatch_cb_pages.value();
             } else if (auto dispatch_s_kernel = dynamic_cast<DispatchSKernel*>(k)) {
                 TT_ASSERT(!found_dispatch_s, "PREFETCH kernel has multiple downstream DISPATCH kernels.");
                 found_dispatch_s = true;
@@ -297,8 +310,8 @@ void PrefetchKernel::GenerateDependentConfigs() {
 void PrefetchKernel::CreateKernel() {
     std::vector<uint32_t> compile_args = {
         dependent_config_.downstream_cb_base.value(),
-        static_config_.downstream_cb_log_page_size.value(),
-        static_config_.downstream_cb_pages.value(),
+        dependent_config_.downstream_cb_log_page_size.value(),
+        dependent_config_.downstream_cb_pages.value(),
         static_config_.my_downstream_cb_sem_id.value(),
         dependent_config_.downstream_cb_sem_id.value(),
         static_config_.pcie_base.value(),
@@ -400,3 +413,6 @@ void PrefetchKernel::ConfigureCore() {
         detail::WriteToDeviceL1(device_, logical_core_, prefetch_q_base, prefetch_q, GetCoreType());
     }
 }
+
+void PrefetchKernel::UpdateArgsForFabric(
+    const CoreCoord& fabric_router, tt::tt_fabric::mesh_id_t dst_mesh_id, chip_id_t dst_chip_id) {}

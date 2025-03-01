@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "topology.hpp"
+#include "dispatch_core_common.hpp"
 #include "kernel_config/fd_kernel.hpp"
 #include <device_pool.hpp>
 #include <tt_metal.hpp>
@@ -79,6 +80,25 @@ static const std::vector<DispatchKernelNode> two_chip_arch_1cq = {
     {11, 1, x, 0, US_TUNNELER_LOCAL, {7, 12, x, x}, {7, 13, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
     {12, 1, x, 0, MUX_D, {9, x, x, x}, {11, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
     {13, 1, x, 0, PACKET_ROUTER_DEMUX, {11, x, x, x}, {8, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+};
+
+static const std::vector<DispatchKernelNode> two_chip_arch_1cq_fabric = {
+    {0, 0, 0, 0, PREFETCH_HD, /*up*/ {x, x, x, x}, /*down*/ {1, 2, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {2, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {2, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+
+    {3, 0, 1, 0, PREFETCH_H, {x, x, x, x}, {5, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {4, 0, 1, 0, DISPATCH_H, {6, x, x, x}, {3, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+
+    // Sender path PREFETCH_H -> PREFETCH_D
+    {5, 0, x, 0, FABRIC_ROUTER_VC, {3, x, x, x}, {7, x, x, x}},
+
+    // Return path DISPATCH_D -> DISPATCH_H
+    {6, 0, x, 0, FABRIC_ROUTER_VC, {8, x, x, x}, {4, x, x, x}},
+
+    {7, 1, 1, 0, PREFETCH_D, {5, x, x, x}, {8, 9, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {8, 1, 1, 0, DISPATCH_D, {7, x, x, x}, {9, 6, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {9, 1, 1, 0, DISPATCH_S, {7, x, x, x}, {8, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
 };
 
 static const std::vector<DispatchKernelNode> two_chip_arch_2cq = {

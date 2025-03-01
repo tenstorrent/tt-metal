@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
+#include "core_coord.hpp"
 #include "fd_kernel.hpp"
+#include "mesh_graph.hpp"
 
 typedef struct dispatch_static_config {
     std::optional<uint32_t> dispatch_cb_base;  // 0
@@ -88,6 +90,8 @@ public:
     void GenerateStaticConfigs() override;
     void GenerateDependentConfigs() override;
     void ConfigureCore() override;
+    void UpdateArgsForFabric(
+        const CoreCoord& fabric_router, tt::tt_fabric::mesh_id_t dst_mesh_id, chip_id_t dst_chip_id) override;
     const dispatch_static_config_t& GetStaticConfig() { return static_config_; }
 
 private:

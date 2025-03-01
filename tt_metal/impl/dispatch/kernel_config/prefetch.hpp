@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 #include "fd_kernel.hpp"
+#include "mesh_graph.hpp"
+#include "umd/device/types/cluster_descriptor_types.h"
 
 typedef struct prefetch_static_config {
-    std::optional<uint32_t> downstream_cb_log_page_size;
-    std::optional<uint32_t> downstream_cb_pages;
     std::optional<uint32_t> my_downstream_cb_sem_id;
 
     std::optional<uint32_t> pcie_base;
@@ -41,16 +41,18 @@ typedef struct prefetch_static_config {
 } prefetch_static_config_t;
 
 typedef struct prefetch_dependent_config {
-    std::optional<tt_cxy_pair> upstream_logical_core;      // Dependant
-    std::optional<tt_cxy_pair> downstream_logical_core;    // Dependant
-    std::optional<tt_cxy_pair> downstream_s_logical_core;  // Dependant
+    std::optional<tt_cxy_pair> upstream_logical_core;
+    std::optional<tt_cxy_pair> downstream_logical_core;
+    std::optional<tt_cxy_pair> downstream_s_logical_core;
 
-    std::optional<uint32_t> downstream_cb_base;    // Dependent
-    std::optional<uint32_t> downstream_cb_sem_id;  // Dependant
+    std::optional<uint32_t> downstream_cb_base;
+    std::optional<uint32_t> downstream_cb_log_page_size;
+    std::optional<uint32_t> downstream_cb_pages;
+    std::optional<uint32_t> downstream_cb_sem_id;
 
-    std::optional<uint32_t> upstream_cb_sem_id;  // Dependant
+    std::optional<uint32_t> upstream_cb_sem_id;
 
-    std::optional<uint32_t> downstream_dispatch_s_cb_sem_id;  // Dependant
+    std::optional<uint32_t> downstream_dispatch_s_cb_sem_id;
 } prefetch_dependent_config_t;
 
 class PrefetchKernel : public FDKernel {
@@ -84,6 +86,8 @@ public:
     void GenerateStaticConfigs() override;
     void GenerateDependentConfigs() override;
     void ConfigureCore() override;
+    void UpdateArgsForFabric(
+        const CoreCoord& fabric_router, tt::tt_fabric::mesh_id_t dst_mesh_id, chip_id_t dst_chip_id) override;
     const prefetch_static_config_t& GetStaticConfig() { return static_config_; }
 
 private:
