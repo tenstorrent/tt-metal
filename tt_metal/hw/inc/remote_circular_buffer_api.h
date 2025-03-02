@@ -100,7 +100,7 @@ FORCE_INLINE void update_pages_acked(
 #endif
 }  // namespace detail
 
-template <bool update_remote_over_noc = false, bool post_atomic_increments = true>
+template <bool update_remote_over_noc = false>
 FORCE_INLINE void resize_remote_sender_cb_interface(
     uint32_t cb_id,
     uint32_t page_size,
