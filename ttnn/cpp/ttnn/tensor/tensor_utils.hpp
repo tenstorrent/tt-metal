@@ -14,26 +14,6 @@ namespace tt {
 namespace tt_metal {
 const ttnn::Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape);
 
-static ttnn::SmallVector<uint32_t> compute_strides(const ttnn::Shape& shape) {
-    if (shape.rank() == 0) {
-        return {};
-    }
-
-    auto num_elements = shape.volume();
-    ttnn::SmallVector<uint32_t> strides;
-    for (std::int32_t index = 0; index < shape.rank(); index++) {
-        if (shape[index] == 0) {
-            // Insert 0 to indicate no memory access for this dimension
-            strides.push_back(0);
-            continue;
-        }
-
-        num_elements /= shape[index];
-        strides.push_back(num_elements);
-    }
-    return strides;
-}
-
 static int compute_flat_indices(tt::stl::Span<const int> indices, tt::stl::Span<const uint32_t> strides) {
     int flat_index = 0;
     for (auto i = 0; i < indices.size(); i++) {

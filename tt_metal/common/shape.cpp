@@ -67,4 +67,23 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Shape& shape) {
     return os;
 }
 
+tt::stl::SmallVector<uint32_t> compute_strides(const tt::tt_metal::Shape& shape) {
+    if (shape.rank() == 0) {
+        return {};
+    }
+
+    auto num_elements = shape.volume();
+    // If any dim is 0, volume would be 0
+    if (num_elements == 0) {
+        return tt::stl::SmallVector<uint32_t>(shape.rank(), 0);
+    }
+
+    ttnn::SmallVector<uint32_t> strides;
+    for (std::int32_t index = 0; index < shape.rank(); index++) {
+        num_elements /= shape[index];
+        strides.push_back(num_elements);
+    }
+    return strides;
+}
+
 }  // namespace tt::tt_metal
