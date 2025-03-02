@@ -152,6 +152,7 @@ class TtGenBoxes:
         by = ttnn.to_layout(by, ttnn.TILE_LAYOUT)
         bw = ttnn.to_layout(bw, ttnn.TILE_LAYOUT)
         bh = ttnn.to_layout(bh, ttnn.TILE_LAYOUT)
+
         bx = ttnn.sigmoid(bx, memory_config=ttnn.L1_MEMORY_CONFIG)
         by = ttnn.sigmoid(by, memory_config=ttnn.L1_MEMORY_CONFIG)
         bw = ttnn.exp(bw, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -172,14 +173,6 @@ class TtGenBoxes:
 
         ######
 
-        bx_a = ttnn.slice(bx, [0, 0, 0, 0], [1, 1, 1, HW])
-        bx_b = ttnn.slice(bx, [0, 1, 0, 0], [1, 2, 1, HW])
-        bx_c = ttnn.slice(bx, [0, 2, 0, 0], [1, 3, 1, HW])
-
-        by_a = ttnn.slice(by, [0, 0, 0, 0], [1, 1, 1, HW])
-        by_b = ttnn.slice(by, [0, 1, 0, 0], [1, 2, 1, HW])
-        by_c = ttnn.slice(by, [0, 2, 0, 0], [1, 3, 1, HW])
-
         bw_a = ttnn.slice(bw, [0, 0, 0, 0], [1, 1, 1, HW])
         bw_b = ttnn.slice(bw, [0, 1, 0, 0], [1, 2, 1, HW])
         bw_c = ttnn.slice(bw, [0, 2, 0, 0], [1, 3, 1, HW])
@@ -187,8 +180,6 @@ class TtGenBoxes:
         bh_a = ttnn.slice(bh, [0, 0, 0, 0], [1, 1, 1, HW])
         bh_b = ttnn.slice(bh, [0, 1, 0, 0], [1, 2, 1, HW])
         bh_c = ttnn.slice(bh, [0, 2, 0, 0], [1, 3, 1, HW])
-
-        ######
 
         bw_a = bw_a * (anchor_w_a / W)
         bw_b = bw_b * (anchor_w_b / W)
@@ -198,50 +189,26 @@ class TtGenBoxes:
         bh_b = bh_b * (anchor_h_b / H)
         bh_c = bh_c * (anchor_h_c / H)
 
-        bw_a_half = bw_a * (0.5)
-        bw_b_half = bw_b * (0.5)
-        bw_c_half = bw_c * (0.5)
+        bw = ttnn.concat([bw_a, bw_b, bw_c], dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        bh = ttnn.concat([bh_a, bh_b, bh_c], dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        bh_a_half = bh_a * (0.5)
-        bh_b_half = bh_b * (0.5)
-        bh_c_half = bh_c * (0.5)
+        bw_half = bw * (0.5)
+        bh_half = bh * (0.5)
 
-        bx1_a = bx_a - bw_a_half
-        by1_a = by_a - bh_a_half
-        bx2_a = bx1_a + bw_a
-        by2_a = by1_a + bh_a
+        ####
 
-        bx1_b = bx_b - bw_b_half
-        by1_b = by_b - bh_b_half
-        bx2_b = bx1_b + bw_b
-        by2_b = by1_b + bh_b
+        bx1 = bx - bw_half
+        by1 = by - bh_half
+        bx2 = bx1 + bw
+        by2 = by1 + bh
 
-        bx1_c = bx_c - bw_c_half
-        by1_c = by_c - bh_c_half
-        bx2_c = bx1_c + bw_c
-        by2_c = by1_c + bh_c
-
-        bx1_a = ttnn.to_layout(bx1_a, ttnn.ROW_MAJOR_LAYOUT)
-        bx2_a = ttnn.to_layout(bx2_a, ttnn.ROW_MAJOR_LAYOUT)
-        by1_a = ttnn.to_layout(by1_a, ttnn.ROW_MAJOR_LAYOUT)
-        by2_a = ttnn.to_layout(by2_a, ttnn.ROW_MAJOR_LAYOUT)
-
-        bx1_b = ttnn.to_layout(bx1_b, ttnn.ROW_MAJOR_LAYOUT)
-        bx2_b = ttnn.to_layout(bx2_b, ttnn.ROW_MAJOR_LAYOUT)
-        by1_b = ttnn.to_layout(by1_b, ttnn.ROW_MAJOR_LAYOUT)
-        by2_b = ttnn.to_layout(by2_b, ttnn.ROW_MAJOR_LAYOUT)
-
-        bx1_c = ttnn.to_layout(bx1_c, ttnn.ROW_MAJOR_LAYOUT)
-        bx2_c = ttnn.to_layout(bx2_c, ttnn.ROW_MAJOR_LAYOUT)
-        by1_c = ttnn.to_layout(by1_c, ttnn.ROW_MAJOR_LAYOUT)
-        by2_c = ttnn.to_layout(by2_c, ttnn.ROW_MAJOR_LAYOUT)
-
-        bx1 = ttnn.concat([bx1_a, bx1_b, bx1_c], dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
-        by1 = ttnn.concat([by1_a, by1_b, by1_c], dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
-        bx2 = ttnn.concat([bx2_a, bx2_b, bx2_c], dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
-        by2 = ttnn.concat([by2_a, by2_b, by2_c], dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        bx1 = ttnn.to_layout(bx1, ttnn.ROW_MAJOR_LAYOUT)
+        bx2 = ttnn.to_layout(bx2, ttnn.ROW_MAJOR_LAYOUT)
+        by1 = ttnn.to_layout(by1, ttnn.ROW_MAJOR_LAYOUT)
+        by2 = ttnn.to_layout(by2, ttnn.ROW_MAJOR_LAYOUT)
 
         # Shape: [batch, num_anchors * h * w, 4] -> [batch, num_anchors * h * w, 1, 4]
-        boxes = ttnn.concat((bx1, by1, bx2, by2), dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        boxes = ttnn.concat((bx1, by1, bx2, by2), dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        boxes = ttnn.permute(boxes, (0, 2, 1, 3))
 
         return boxes, confs

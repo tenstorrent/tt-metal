@@ -1,12 +1,14 @@
 # Yolov4 Demo
 
-## How to run yolov4
+## How to run yolov4 (320x320 resolution)
 
-### Model code running with Trace+2CQ
-- Use the following command to run the yolov4 performant implementation (110 FPS):
+### Model performant running with Trace+2CQ
+- Use the following command to run the yolov4 performant implementation (120 FPS):
   ```bash
   pytest models/demos/wormhole/yolov4/test_yolov4_performant_webdemo.py::test_run_yolov4_trace_2cqs_inference[True-1-act_dtype0-weight_dtype0-device_params0]
   ```
+- The device runtime is (185 FPS)
+
 
 ### Single Image Demo
 
