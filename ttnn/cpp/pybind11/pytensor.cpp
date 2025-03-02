@@ -89,9 +89,13 @@ Tensor create_typed_tt_tensor_from_py_data(
     tt::stl::Span<T> pydata_span(reinterpret_cast<T*>(py_data_ptr), tensor_spec.logical_shape().volume());
     if (pydata_borrowable && !force_disable_borrow) {
         auto output = Tensor::from_borrowed_data(
-            pydata_span, tensor_spec.logical_shape(), on_creation_callback, on_destruction_callback);
+            pydata_span,
+            tensor_spec.logical_shape(),
+            on_creation_callback,
+            on_destruction_callback,
+            tensor_spec.tile());
         if (device != nullptr) {
-            output = output.to_device(device);
+            output = output.to_device(device, tensor_spec.memory_config());
         }
         return output;
     } else {

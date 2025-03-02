@@ -250,6 +250,23 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, Callbacks) {
     EXPECT_EQ(dtor_count, 1);
 }
 
+TYPED_TEST(BorrowedStorageVectorConversionTest, CustomTile) {
+    ttnn::Shape shape{32, 32};
+    auto input = arange<TypeParam>(0, shape.volume(), 1);
+
+    auto tensor = Tensor::from_borrowed_data(
+        tt::stl::Span<TypeParam>(input),
+        shape,
+        /*on_creation_callback=*/[]() {},
+        /*on_destruction_callback=*/[]() {},
+        /*tile=*/Tile({16, 16}));
+
+    // Retain row major layout, but use custom tile.
+    // TODO: #18536 - this should be illegal.
+    EXPECT_EQ(tensor.get_tensor_spec().layout(), Layout::ROW_MAJOR);
+    EXPECT_EQ(tensor.get_tensor_spec().tile(), Tile({16, 16}));
+}
+
 class BlockFloatVectorConversionTest : public ::testing::TestWithParam<DataType> {};
 
 TEST_P(BlockFloatVectorConversionTest, InvalidLayout) {

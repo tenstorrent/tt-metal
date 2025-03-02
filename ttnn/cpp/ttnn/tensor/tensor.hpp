@@ -165,7 +165,8 @@ public:
         tt::stl::Span<T> buffer,
         const ttnn::Shape& shape,
         const std::function<void()>& on_creation_callback,
-        const std::function<void()>& on_destruction_callback);
+        const std::function<void()>& on_destruction_callback,
+        const std::optional<Tile>& tile = std::nullopt);
 
     // Same as `from_span`, but operates on a vector instead.
     template <typename T>
