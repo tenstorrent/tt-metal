@@ -14,6 +14,7 @@ import time
 import signal
 import psutil
 import json
+import matplotlib.pyplot as plt
 
 
 def ensure_less_installed():
@@ -1426,11 +1427,13 @@ def export_results_to_markdown(output_entries, stdscr):
         return "precision_cfg, fidelity_cfg = {" + precision_desc + "}, {" + fidelity_desc + "}"
 
     if precision_entries:
-        for i, (setting, entries) in enumerate(precision_entries.items()):
+        data_to_plot = {}
+        for setting, entries in precision_entries.items():
+            desc = gen_description(setting)
             markdown_lines.extend(
                 [
                     "",
-                    f"## {gen_description(setting)}",
+                    f"## {desc}",
                     "",
                     "| Model | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) | TTFT (ms) |",
                     "|-------|--------|-----------|-----------|---------------|-----------|",
@@ -1440,6 +1443,20 @@ def export_results_to_markdown(output_entries, stdscr):
                 model, device = key
                 top1, top5, speed, ttft = entry
                 markdown_lines.append(f"| {fullname[model]} | {device} | {top1} | {top5} | {speed} | {ttft} |")
+
+                code_name = fullname[model] + "_" + device
+                if code_name in data_to_plot:
+                    data_to_plot[code_name][0].append(float(speed))
+                    data_to_plot[code_name][1].append(float(top1))
+                    data_to_plot[code_name][2].append(float(top5))
+                    data_to_plot[code_name][3].append(desc)
+                else:
+                    data_to_plot[code_name] = ([float(speed)], [float(top1)], [float(top5)], [desc])
+
+        # plot the data into pareto front between speed and top1 for each mode-device pair
+        for code_name, data in data_to_plot.items():
+            speed, top1, top5, desc = data
+            plot_data_with_desc(speed, top1, "Speed (t/s/u)", "Top-1 (%)", desc, code_name)
 
     # Write to PERF.md
     with open("PERF.md", "w") as f:
@@ -1461,7 +1478,8 @@ def export_results_to_markdown(output_entries, stdscr):
 
     # display helpful message at the bottom of the screen
     stdscr.addstr(0, 0, f"Table written to {os.path.abspath('PERF.md')}")
-    stdscr.addstr(1, 0, "Press any key to return...")
+    stdscr.addstr(1, 0, f"Plots written to .svg files in {os.path.abspath('data_plots/')}")
+    stdscr.addstr(2, 0, "Press any key to return...")
     stdscr.refresh()
 
     # Temporarily make getch() blocking
@@ -1509,6 +1527,32 @@ def reparse_log_file(entry, screen_needs_update):
 
     except FileNotFoundError:
         pass  # Log file doesn't exist
+
+
+def plot_data_with_desc(objective1, objective2, objective1_label, objective2_label, point_desc, code_name):
+    # Plot all data points.
+    plt.scatter(objective1, objective2, label="Data Points", color="blue")
+
+    # add point_desc to all the points near the bottom of the plot
+    for i, (x, y) in enumerate(zip(objective1, objective2)):
+        plt.annotate(f"id:{i}", (x, y), textcoords="offset points", xytext=(0, -10), ha="center")
+
+    # write point_desc to a csv file in the same directory as the plot
+    os.makedirs("data_plots", exist_ok=True)
+    with open(f"data_plots/{code_name}_point_desc.csv", "w") as f:
+        f.write(f"index,{objective1_label},{objective2_label},point_desc\n")
+        for i, (x, y) in enumerate(zip(objective1, objective2)):
+            f.write(f"{i},{x},{y},{point_desc[i]}\n")
+
+    plt.xlabel(objective1_label)
+    plt.ylabel(objective2_label)
+    plt.title(
+        f"Pareto Front between {objective1_label} and {objective2_label}\n (use data-point index to find details in *_point_desc.csv)"
+    )
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(f"data_plots/{code_name}_precision_fidelity.svg")
+    plt.close()
 
 
 if __name__ == "__main__":
