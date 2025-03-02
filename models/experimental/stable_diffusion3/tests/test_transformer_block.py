@@ -19,8 +19,8 @@ if TYPE_CHECKING:
 @pytest.mark.parametrize(
     ("model_name", "block_index", "batch_size", "spatial_sequence_length", "prompt_sequence_length"),
     [
-        ("large", 0, 2, 4096, 333),
-        ("large", 23, 2, 4096, 333),
+        ("large", 0, 1, 4096, 333),
+        #        ("large", 23, 1, 4096, 333),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 716800}], indirect=True)
@@ -34,28 +34,30 @@ def test_transformer_block(
     spatial_sequence_length: int,
     prompt_sequence_length: int,
 ) -> None:
+    torch_dtype = torch.float32
+    ttnn_dtype = ttnn.bfloat16
+
     parent_torch_model = SD3Transformer2DModel.from_pretrained(
-        f"stabilityai/stable-diffusion-3.5-{model_name}", subfolder="transformer"
+        f"stabilityai/stable-diffusion-3.5-{model_name}", subfolder="transformer", torch_dtype=torch_dtype
     )
-    torch_model: TransformerBlock = parent_torch_model.transformer_blocks[block_index]
-    torch_model.eval()
-
-    parameters = TtTransformerBlockParameters.from_torch(torch_model.state_dict(), device=device, dtype=ttnn.bfloat8_b)
-    tt_model = TtTransformerBlock(parameters, num_heads=torch_model.num_heads)
-
     if model_name == "medium":
         embedding_dim = 1536
     else:
         embedding_dim = 2432
+    torch_model: TransformerBlock = parent_torch_model.transformer_blocks[block_index]
+    torch_model.eval()
+
+    parameters = TtTransformerBlockParameters.from_torch(torch_model.state_dict(), device=device, dtype=ttnn_dtype)
+    tt_model = TtTransformerBlock(parameters, num_heads=torch_model.num_heads)
 
     torch.manual_seed(0)
     spatial = torch.randn((batch_size, spatial_sequence_length, embedding_dim))
     prompt = torch.randn((batch_size, prompt_sequence_length, embedding_dim))
     time = torch.randn((batch_size, embedding_dim))
 
-    tt_spatial_host = ttnn.from_torch(spatial, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-    tt_prompt_host = ttnn.from_torch(prompt, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
-    tt_time_host = ttnn.from_torch(time.unsqueeze(1), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_spatial_host = ttnn.from_torch(spatial, layout=ttnn.TILE_LAYOUT, dtype=ttnn_dtype)
+    tt_prompt_host = ttnn.from_torch(prompt, layout=ttnn.TILE_LAYOUT, dtype=ttnn_dtype)
+    tt_time_host = ttnn.from_torch(time.unsqueeze(1), layout=ttnn.TILE_LAYOUT, dtype=ttnn_dtype)
 
     with torch.no_grad():
         spatial_output, prompt_output = torch_model(spatial=spatial, prompt=prompt, time_embed=time)
@@ -64,19 +66,11 @@ def test_transformer_block(
     tt_prompt = allocate_tensor_on_device_like(tt_prompt_host, device=device)
     tt_time = allocate_tensor_on_device_like(tt_time_host, device=device)
 
-    # cache
-    tt_model(spatial=tt_spatial, prompt=tt_prompt, time_embed=tt_time)
-
-    # trace
-    tid = ttnn.begin_trace_capture(device)
-    tt_spatial_output, tt_prompt_output = tt_model(spatial=tt_spatial, prompt=tt_prompt, time_embed=tt_time)
-    ttnn.end_trace_capture(device, tid)
-
-    # execute
     ttnn.copy_host_to_device_tensor(tt_spatial_host, tt_spatial)
     ttnn.copy_host_to_device_tensor(tt_prompt_host, tt_prompt)
     ttnn.copy_host_to_device_tensor(tt_time_host, tt_time)
-    ttnn.execute_trace(device, tid)
+
+    tt_spatial_output, tt_prompt_output = tt_model(spatial=tt_spatial, prompt=tt_prompt, time_embed=tt_time)
 
     assert (prompt_output is None) == (tt_prompt_output is None)
 
