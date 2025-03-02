@@ -140,6 +140,13 @@ void CaptureCreateCircularBuffer(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const CircularBufferConfig& config);
 
+void CaptureCreateSemaphore(
+    const Program& program,
+    const std::variant<CoreRange, CoreRangeSet>& core_spec,
+    uint32_t initial_value,
+    CoreType core_type,
+    uint32_t semaphore_id);
+
 void CaptureLightMetalCompare(
     CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,

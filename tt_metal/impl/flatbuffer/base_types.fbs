@@ -65,6 +65,19 @@ enum UnpackToDestMode : byte {
   UnpackToDestFp32
 }
 
+enum CoreType : byte {
+  ARC,
+  DRAM,
+  ACTIVE_ETH,
+  IDLE_ETH,
+  PCIE,
+  TENSIX,
+  ROUTER_ONLY,
+  HARVESTED,
+  ETH,
+  WORKER,
+}
+
 table DefineEntry {
   key: string;
   value: string;

@@ -347,6 +347,10 @@ void LightMetalReplay::execute(const tt::tt_metal::flatbuffer::Command* command)
             execute(command->cmd_as_CreateCircularBufferCommand());
             break;
         }
+        case ::tt::tt_metal::flatbuffer::CommandType::CreateSemaphoreCommand: {
+            execute(command->cmd_as_CreateSemaphoreCommand());
+            break;
+        }
         case ::tt::tt_metal::flatbuffer::CommandType::LightMetalCompareCommand: {
             execute(command->cmd_as_LightMetalCompareCommand());
             break;
@@ -638,6 +642,32 @@ void LightMetalReplay::execute(const tt::tt_metal::flatbuffer::CreateCircularBuf
     auto config = from_flatbuffer(cmd->config(), shadow_global_buffer);
     auto cb_handle = CreateCircularBuffer(*program, core_spec, config);
     add_cb_handle_to_map(cmd->global_id(), cb_handle);
+}
+
+void LightMetalReplay::execute(const tt::tt_metal::flatbuffer::CreateSemaphoreCommand* cmd) {
+    log_info(
+        tt::LogMetalTrace,
+        "LightMetalReplay(CreateSemaphoreCommand) program_global_id: {} semaphore_id: {} initial_value: {}",
+        cmd->program_global_id(),
+        cmd->semaphore_id(),
+        cmd->initial_value());
+
+    auto program = get_program_from_map(cmd->program_global_id());
+    TT_FATAL(
+        program,
+        "Attempted to CreateSemaphoreCommand using a Program w/ global_id: {} that was not previously created.",
+        cmd->program_global_id());
+
+    // Convert CoreSpec (3 variant version) to filtered 2 variant version for API
+    auto core_spec = core_spec_filtered_from_flatbuffer(cmd);
+    auto core_type = from_flatbuffer(cmd->core_type());
+    auto semaphore_id = CreateSemaphore(*program, core_spec, cmd->initial_value(), core_type);
+
+    TT_FATAL(
+        semaphore_id == cmd->semaphore_id(),
+        "Replay semaphore_id: {} does not match captured semaphore_id: {}",
+        semaphore_id,
+        cmd->semaphore_id());
 }
 
 // Verification command to compare readback of a buffer with golden from either capture or user expected values.

@@ -1118,6 +1118,7 @@ uint32_t CreateSemaphore(
     uint32_t initial_value,
     CoreType core_type) {
     PUBLIC_API_ENTRY();
+    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     return std::visit(
         [&](auto&& c) -> uint32_t {
             using T = std::decay_t<decltype(c)>;
@@ -1144,6 +1145,8 @@ uint32_t CreateSemaphore(
 
             program.add_semaphore(crs, semaphore_id.value(), initial_value, core_type);
 
+            LIGHT_METAL_TRACE_FUNCTION_CALL(
+                CaptureCreateSemaphore, program, core_spec, initial_value, core_type, semaphore_id.value());
             return semaphore_id.value();
         },
         core_spec);

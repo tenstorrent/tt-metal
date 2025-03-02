@@ -23,6 +23,8 @@ flatbuffer::MathFidelity to_flatbuffer(MathFidelity input);
 flatbuffer::UnpackToDestMode to_flatbuffer(UnpackToDestMode input);
 flatbuffer::DataFormat to_flatbuffer(tt::DataFormat input);
 
+flatbuffer::CoreType to_flatbuffer(CoreType input);
+
 flatbuffer::Tile to_flatbuffer(const Tile& tile);
 
 flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<flatbuffer::Tile>>> to_flatbuffer(

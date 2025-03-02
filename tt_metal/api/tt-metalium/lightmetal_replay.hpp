@@ -36,6 +36,7 @@ struct SetRuntimeArgsUint32Command;
 struct SetRuntimeArgsUint32VecPerCoreCommand;
 struct SetRuntimeArgsCommand;
 struct CreateCircularBufferCommand;
+struct CreateSemaphoreCommand;
 struct LightMetalCompareCommand;
 struct RuntimeArg;
 
@@ -80,6 +81,7 @@ private:
     void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32VecPerCoreCommand* cmd);
     void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsCommand* command);
     void execute(const tt::tt_metal::flatbuffer::CreateCircularBufferCommand* command);
+    void execute(const tt::tt_metal::flatbuffer::CreateSemaphoreCommand* command);
     void execute(const tt::tt_metal::flatbuffer::LightMetalCompareCommand* command);
 
     // Object maps public accessors

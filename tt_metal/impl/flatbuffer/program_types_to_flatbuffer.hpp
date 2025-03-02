@@ -27,6 +27,8 @@ flatbuffers::Offset<flatbuffer::CoreRangeSet> to_flatbuffer(
 
 std::pair<flatbuffer::CoreSpec, ::flatbuffers::Offset<void>> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec);
+std::pair<flatbuffer::CoreSpec, ::flatbuffers::Offset<void>> to_flatbuffer(
+    flatbuffers::FlatBufferBuilder& builder, const std::variant<CoreRange, CoreRangeSet>& core_spec);
 
 FlatbufferCoreCoordVector to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const std::vector<CoreCoord>& core_spec);

@@ -85,6 +85,22 @@ tt::DataFormat from_flatbuffer(flatbuffer::DataFormat input) {
     TT_THROW("Unsupported DataFormat from flatbuffer.");
 }
 
+CoreType from_flatbuffer(flatbuffer::CoreType input) {
+    switch (input) {
+        case flatbuffer::CoreType::ARC: return CoreType::ARC;
+        case flatbuffer::CoreType::DRAM: return CoreType::DRAM;
+        case flatbuffer::CoreType::ACTIVE_ETH: return CoreType::ACTIVE_ETH;
+        case flatbuffer::CoreType::IDLE_ETH: return CoreType::IDLE_ETH;
+        case flatbuffer::CoreType::PCIE: return CoreType::PCIE;
+        case flatbuffer::CoreType::TENSIX: return CoreType::TENSIX;
+        case flatbuffer::CoreType::ROUTER_ONLY: return CoreType::ROUTER_ONLY;
+        case flatbuffer::CoreType::HARVESTED: return CoreType::HARVESTED;
+        case flatbuffer::CoreType::ETH: return CoreType::ETH;
+        case flatbuffer::CoreType::WORKER: return CoreType::WORKER;
+    }
+    TT_THROW("Unsupported CoreType from flatbuffer.");
+}
+
 Tile from_flatbuffer(const flatbuffer::Tile& tile_fb) {
     const auto& shape = *tile_fb.tile_shape();
     // Tile shape is already 2D in flatbuffer schema.

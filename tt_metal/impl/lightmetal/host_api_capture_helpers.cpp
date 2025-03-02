@@ -406,6 +406,37 @@ void CaptureCreateCircularBuffer(
     CaptureCommand(tt::tt_metal::flatbuffer::CommandType::CreateCircularBufferCommand, cmd.Union());
 }
 
+void CaptureCreateSemaphore(
+    const Program& program,
+    const std::variant<CoreRange, CoreRangeSet>& core_spec,
+    uint32_t initial_value,
+    CoreType core_type,
+    uint32_t semaphore_id) {
+    auto& ctx = LightMetalCaptureContext::get();
+    auto& fbb = ctx.get_builder();
+    uint32_t program_global_id = ctx.get_global_id(&program);
+    // This API uses CoreSpec variant of 2 types, but re-use fbs schema with 3 types.
+    auto [core_spec_type, core_spec_offset] = to_flatbuffer(fbb, core_spec);
+
+    log_info(
+        tt::LogMetalTrace,
+        "{}: program_global_id: {} semaphore_id: {} initial_value: {}",
+        __FUNCTION__,
+        program_global_id,
+        semaphore_id,
+        initial_value);
+
+    auto cmd = flatbuffer::CreateCreateSemaphoreCommand(
+        fbb,
+        semaphore_id,
+        program_global_id,
+        core_spec_type,
+        core_spec_offset,
+        initial_value,
+        to_flatbuffer(core_type));
+    CaptureCommand(flatbuffer::CommandType::CreateSemaphoreCommand, cmd.Union());
+}
+
 void CaptureLightMetalCompare(
     CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,

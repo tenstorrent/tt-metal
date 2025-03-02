@@ -47,6 +47,16 @@ std::pair<flatbuffer::CoreSpec, ::flatbuffers::Offset<void>> to_flatbuffer(
         core_spec);
 }
 
+// Version for users of variants with only 2 types.
+std::pair<flatbuffer::CoreSpec, ::flatbuffers::Offset<void>> to_flatbuffer(
+    flatbuffers::FlatBufferBuilder& builder, const std::variant<CoreRange, CoreRangeSet>& core_spec) {
+    return std::visit(
+        [&](auto&& spec) -> std::pair<flatbuffer::CoreSpec, ::flatbuffers::Offset<void>> {
+            return to_flatbuffer(builder, std::variant<CoreCoord, CoreRange, CoreRangeSet>(spec));
+        },
+        core_spec);
+}
+
 FlatbufferCoreCoordVector to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const std::vector<CoreCoord>& core_spec) {
     std::vector<flatbuffers::Offset<flatbuffer::CoreCoord>> core_offsets;

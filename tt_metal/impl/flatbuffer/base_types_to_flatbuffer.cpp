@@ -96,4 +96,20 @@ flatbuffer::Tile to_flatbuffer(const Tile& tile) {
         flatbuffers::span<const uint32_t, 2>(shape), tile.get_transpose_within_face() && tile.get_transpose_of_faces());
 }
 
+flatbuffer::CoreType to_flatbuffer(CoreType input) {
+    switch (input) {
+        case CoreType::ARC: return flatbuffer::CoreType::ARC;
+        case CoreType::DRAM: return flatbuffer::CoreType::DRAM;
+        case CoreType::ACTIVE_ETH: return flatbuffer::CoreType::ACTIVE_ETH;
+        case CoreType::IDLE_ETH: return flatbuffer::CoreType::IDLE_ETH;
+        case CoreType::PCIE: return flatbuffer::CoreType::PCIE;
+        case CoreType::TENSIX: return flatbuffer::CoreType::TENSIX;
+        case CoreType::ROUTER_ONLY: return flatbuffer::CoreType::ROUTER_ONLY;
+        case CoreType::HARVESTED: return flatbuffer::CoreType::HARVESTED;
+        case CoreType::ETH: return flatbuffer::CoreType::ETH;
+        case CoreType::WORKER: return flatbuffer::CoreType::WORKER;
+    }
+    TT_THROW("Unsupported CoreType to flatbuffer.");
+}
+
 }  // namespace tt::tt_metal

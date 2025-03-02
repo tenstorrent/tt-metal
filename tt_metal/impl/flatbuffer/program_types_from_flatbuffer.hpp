@@ -37,6 +37,17 @@ std::variant<CoreCoord, CoreRange, CoreRangeSet> core_spec_from_flatbuffer(const
 }
 
 template <typename CommandType>
+std::variant<CoreRange, CoreRangeSet> core_spec_filtered_from_flatbuffer(const CommandType* cmd) {
+    switch (cmd->core_spec_type()) {
+        case flatbuffer::CoreSpec::CoreRange: return from_flatbuffer(cmd->core_spec_as_CoreRange());
+        case flatbuffer::CoreSpec::CoreRangeSet: return from_flatbuffer(cmd->core_spec_as_CoreRangeSet());
+        case flatbuffer::CoreSpec::CoreCoord: TT_THROW("CoreCoord is not supported in this API.");
+        case flatbuffer::CoreSpec::NONE: TT_THROW("Invalid CoreSpec type. NONE cannot be processed.");
+    }
+    TT_THROW("Unhandled CoreSpec type in from_flatbuffer.");
+}
+
+template <typename CommandType>
 std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> kernel_config_from_flatbuffer(const CommandType* cmd) {
     switch (cmd->kernel_config_type()) {
         case flatbuffer::KernelConfig::DataMovementConfig:

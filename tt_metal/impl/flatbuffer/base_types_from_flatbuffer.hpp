@@ -24,6 +24,8 @@ MathFidelity from_flatbuffer(flatbuffer::MathFidelity input);
 UnpackToDestMode from_flatbuffer(flatbuffer::UnpackToDestMode input);
 tt::DataFormat from_flatbuffer(flatbuffer::DataFormat input);
 
+CoreType from_flatbuffer(flatbuffer::CoreType input);
+
 Tile from_flatbuffer(const flatbuffer::Tile& tile_fb);
 
 }  // namespace tt::tt_metal

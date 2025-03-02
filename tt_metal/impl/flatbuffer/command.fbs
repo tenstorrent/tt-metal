@@ -109,6 +109,14 @@ table CreateCircularBufferCommand {
   config: CircularBufferConfig;
 }
 
+table CreateSemaphoreCommand {
+  semaphore_id: uint32;       // ID from capture-time.
+  program_global_id: uint32;  // Reference to Program
+  core_spec: CoreSpec;
+  initial_value: uint32;
+  core_type: CoreType;
+}
+
 table LightMetalCompareCommand {
   cq_global_id: uint32;       // reference to CommandQueue
   buffer_global_id: uint32;   // Reference to Buffer used as destination
@@ -133,6 +141,7 @@ union CommandType {
   SetRuntimeArgsUint32VecPerCoreCommand,
   SetRuntimeArgsCommand,
   CreateCircularBufferCommand,
+  CreateSemaphoreCommand,
   LightMetalCompareCommand,
 }
 
