@@ -109,6 +109,9 @@ RunTimeOptions::RunTimeOptions() {
         }
     }
 
+    const char* fb_fabric = getenv("TT_METAL_FB_FABRIC_EN");
+    fb_fabric_en = fb_fabric != nullptr;
+
     const char* dispatch_data_collection_str = std::getenv("TT_METAL_DISPATCH_DATA_COLLECTION");
     if (dispatch_data_collection_str != nullptr) {
         enable_dispatch_data_collection = true;

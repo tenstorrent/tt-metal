@@ -18,6 +18,8 @@
 
 #define ENABLE_DPRINTS true
 
+namespace tt::packet_queue {
+
 constexpr ProgrammableCoreType fd_core_type = static_cast<ProgrammableCoreType>(FD_CORE_TYPE);
 
 constexpr uint32_t NUM_WR_CMD_BUFS = 4;
@@ -1099,3 +1101,5 @@ bool wait_all_input_output_ready(packet_input_queue_state_t* input_queue_array, 
     }
     return true;
 }
+
+} // namespace tt::packet_queue

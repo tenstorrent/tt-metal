@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "prefetch.hpp"
 #include "dispatch.hpp"
+#include "dispatch/kernel_config/fd_kernel.hpp"
 #include "dispatch_s.hpp"
 #include "eth_router.hpp"
 
@@ -19,6 +20,13 @@ void PrefetchKernel::GenerateStaticConfigs() {
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_->id());
     uint8_t cq_id_ = this->cq_id_;
     auto& my_dispatch_constants = DispatchMemMap::get(GetCoreType());
+
+    if (tt::llrt::RunTimeOptions::get_instance().get_fd_fabric()) {
+        static_config_.client_interface_addr =
+            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_INTERFACE);
+    } else {
+        static_config_.client_interface_addr = 0;
+    }
 
     if (static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
@@ -232,34 +240,57 @@ void PrefetchKernel::GenerateDependentConfigs() {
         dependent_config_.upstream_logical_core = UNUSED_LOGICAL_CORE;
         dependent_config_.upstream_cb_sem_id = 0;  // Used in prefetch_d only
 
-        // Downstream, expect just one ROUTER
+        // Downstream
+        // one ROUTER or direct connection to PREFETCH_D if using fabric
         TT_ASSERT(downstream_kernels_.size() == 1);
-        auto router_kernel = dynamic_cast<EthRouterKernel*>(downstream_kernels_[0]);
-        TT_ASSERT(router_kernel);
-        dependent_config_.downstream_logical_core = router_kernel->GetLogicalCore();
-        dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE;
-        uint32_t router_idx = router_kernel->GetUpstreamPort(this);  // Need the port that this connects to downstream
-        auto downstream_buffer_size = router_kernel->GetStaticConfig().rx_queue_size_words.value() << 4;
-        dependent_config_.downstream_cb_base =
-            (router_kernel->GetStaticConfig().rx_queue_start_addr_words.value() << 4) +
-            downstream_buffer_size * router_idx;
-        dependent_config_.downstream_cb_sem_id = router_kernel->GetStaticConfig().input_packetize_local_sem[router_idx];
-        dependent_config_.downstream_dispatch_s_cb_sem_id = 0;  // No downstream DISPATCH_S in this case
+        if (auto router_kernel = dynamic_cast<EthRouterKernel*>(downstream_kernels_[0])) {
+            dependent_config_.downstream_logical_core = router_kernel->GetLogicalCore();
+            dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE;
+            uint32_t router_idx =
+                router_kernel->GetUpstreamPort(this);  // Need the port that this connects to downstream
+            auto downstream_buffer_size = router_kernel->GetStaticConfig().rx_queue_size_words.value() << 4;
+            dependent_config_.downstream_cb_base =
+                (router_kernel->GetStaticConfig().rx_queue_start_addr_words.value() << 4) +
+                downstream_buffer_size * router_idx;
+            dependent_config_.downstream_cb_sem_id =
+                router_kernel->GetStaticConfig().input_packetize_local_sem[router_idx];
+            dependent_config_.downstream_dispatch_s_cb_sem_id = 0;  // No downstream DISPATCH_S in this case
 
-        dependent_config_.downstream_cb_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
-        dependent_config_.downstream_cb_pages =
-            downstream_buffer_size / (1 << DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE);
+            dependent_config_.downstream_cb_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
+            dependent_config_.downstream_cb_pages =
+                downstream_buffer_size / (1 << DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE);
+        } else if (auto prefetch_d = dynamic_cast<PrefetchKernel*>(downstream_kernels_[0])) {
+            dependent_config_.downstream_logical_core = prefetch_d->GetLogicalCore();
+            dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE;
+            dependent_config_.downstream_cb_base = prefetch_d->GetStaticConfig().cmddat_q_base.value();
+            dependent_config_.downstream_cb_sem_id = prefetch_d->GetStaticConfig().my_upstream_cb_sem_id.value();
+            dependent_config_.downstream_dispatch_s_cb_sem_id = 0;
+
+            static_assert(
+                DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE == DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE);
+            dependent_config_.downstream_cb_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
+            dependent_config_.downstream_cb_pages = prefetch_d->GetStaticConfig().cmddat_q_pages.value();
+        } else {
+            TT_FATAL(false, "Path not implemented");
+        }
     } else if (static_config_.is_d_variant.value()) {
-        // Upstream, expect just one ROUTER
+        // Upstream
+        // One ROUTER or direct connection to PREFETCH_H if using fabric
         TT_ASSERT(upstream_kernels_.size() == 1);
-        auto router_kernel = dynamic_cast<EthRouterKernel*>(upstream_kernels_[0]);
-        TT_ASSERT(router_kernel);
-        dependent_config_.upstream_logical_core = router_kernel->GetLogicalCore();
-        int router_idx = router_kernel->GetDownstreamPort(this);
-        dependent_config_.upstream_cb_sem_id =
-            router_kernel->GetStaticConfig().output_depacketize_local_sem[router_idx];
+        if (auto router_kernel = dynamic_cast<EthRouterKernel*>(upstream_kernels_[0])) {
+            dependent_config_.upstream_logical_core = router_kernel->GetLogicalCore();
+            int router_idx = router_kernel->GetDownstreamPort(this);
+            dependent_config_.upstream_cb_sem_id =
+                router_kernel->GetStaticConfig().output_depacketize_local_sem[router_idx];
+        } else if (auto prefetch_h = dynamic_cast<PrefetchKernel*>(upstream_kernels_[0])) {
+            dependent_config_.upstream_logical_core = prefetch_h->GetLogicalCore();
+            dependent_config_.upstream_cb_sem_id = prefetch_h->GetStaticConfig().my_downstream_cb_sem_id.value();
+        } else {
+            TT_FATAL(false, "Path not implemented");
+        }
 
         // Downstream, expect a DISPATCH_D and s DISPATCH_S
+        // Prefetch_d will always be local with dispatch_d
         if (DispatchQueryManager::instance().dispatch_s_enabled()) {
             TT_ASSERT(downstream_kernels_.size() == 2);
         } else {
@@ -335,10 +366,15 @@ void PrefetchKernel::CreateKernel() {
         dependent_config_.downstream_dispatch_s_cb_sem_id.value(),
         static_config_.dispatch_s_buffer_size.value(),
         static_config_.dispatch_s_cb_log_page_size.value(),
+        dependent_config_.downstream_mesh_id.value_or(0),
+        dependent_config_.downstream_chip_id.value_or(0),
+        dependent_config_.upstream_mesh_id.value_or(0),
+        dependent_config_.upstream_chip_id.value_or(0),
+        static_config_.client_interface_addr.value(),
         static_config_.is_d_variant.value(),
         static_config_.is_h_variant.value(),
     };
-    TT_ASSERT(compile_args.size() == 28);
+    TT_ASSERT(compile_args.size() == 33);
     auto my_virtual_core = device_->virtual_core_from_logical_core(logical_core_, GetCoreType());
     auto upstream_virtual_core =
         device_->virtual_core_from_logical_core(dependent_config_.upstream_logical_core.value(), GetCoreType());
@@ -415,4 +451,15 @@ void PrefetchKernel::ConfigureCore() {
 }
 
 void PrefetchKernel::UpdateArgsForFabric(
-    const CoreCoord& fabric_router, tt::tt_fabric::mesh_id_t dst_mesh_id, chip_id_t dst_chip_id) {}
+    const CoreCoord& fabric_router,
+    tt::tt_fabric::mesh_id_t upstream_mesh_id,
+    chip_id_t upstream_chip_id,
+    tt::tt_fabric::mesh_id_t downstream_mesh_id,
+    chip_id_t downstream_chip_id) {
+    dependent_config_.fabric_router_logical_core =
+        this->device_->virtual_core_from_logical_core(fabric_router, CoreType::ETH);
+    dependent_config_.upstream_mesh_id = upstream_mesh_id;
+    dependent_config_.upstream_chip_id = upstream_chip_id;
+    dependent_config_.downstream_mesh_id = downstream_mesh_id;
+    dependent_config_.downstream_chip_id = downstream_chip_id;
+}

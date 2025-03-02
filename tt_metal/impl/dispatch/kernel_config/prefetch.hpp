@@ -38,6 +38,9 @@ typedef struct prefetch_static_config {
 
     std::optional<bool> is_d_variant;
     std::optional<bool> is_h_variant;
+
+    // Populated if fabric is being used to talk to downstream
+    std::optional<uint32_t> client_interface_addr;
 } prefetch_static_config_t;
 
 typedef struct prefetch_dependent_config {
@@ -53,6 +56,13 @@ typedef struct prefetch_dependent_config {
     std::optional<uint32_t> upstream_cb_sem_id;
 
     std::optional<uint32_t> downstream_dispatch_s_cb_sem_id;
+
+    // Populated if fabric is being used to talk to downstream
+    std::optional<CoreCoord> fabric_router_logical_core;
+    std::optional<uint32_t> upstream_mesh_id;
+    std::optional<uint32_t> upstream_chip_id;
+    std::optional<uint32_t> downstream_mesh_id;
+    std::optional<uint32_t> downstream_chip_id;
 } prefetch_dependent_config_t;
 
 class PrefetchKernel : public FDKernel {
@@ -87,7 +97,11 @@ public:
     void GenerateDependentConfigs() override;
     void ConfigureCore() override;
     void UpdateArgsForFabric(
-        const CoreCoord& fabric_router, tt::tt_fabric::mesh_id_t dst_mesh_id, chip_id_t dst_chip_id) override;
+        const CoreCoord& fabric_router,
+        tt::tt_fabric::mesh_id_t src_mesh_id,
+        chip_id_t src_chip_id,
+        tt::tt_fabric::mesh_id_t dst_mesh_id,
+        chip_id_t dst_chip_id) override;
     const prefetch_static_config_t& GetStaticConfig() { return static_config_; }
 
 private:

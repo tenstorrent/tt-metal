@@ -11,6 +11,8 @@
 
 #include <cq_commands.hpp>
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
 #include "debug/dprint.h"
 #include "noc/noc_parameters.h"  // PCIE_ALIGNMENT
 
@@ -61,8 +63,16 @@ constexpr uint32_t my_dispatch_s_cb_sem_id = get_compile_time_arg_val(22);
 constexpr uint32_t downstream_dispatch_s_cb_sem_id = get_compile_time_arg_val(23);
 constexpr uint32_t dispatch_s_buffer_size = get_compile_time_arg_val(24);
 constexpr uint32_t dispatch_s_cb_log_page_size = get_compile_time_arg_val(25);
-constexpr uint32_t is_d_variant = get_compile_time_arg_val(26);
-constexpr uint32_t is_h_variant = get_compile_time_arg_val(27);
+
+// used for fd on fabric
+constexpr uint32_t downstream_mesh_id = get_compile_time_arg_val(26);
+constexpr uint32_t downstream_chip_id = get_compile_time_arg_val(27);
+constexpr uint32_t upstream_mesh_id = get_compile_time_arg_val(28);
+constexpr uint32_t upstream_chip_id = get_compile_time_arg_val(29);
+constexpr uint32_t client_interface_addr = get_compile_time_arg_val(30);
+
+constexpr uint32_t is_d_variant = get_compile_time_arg_val(31);
+constexpr uint32_t is_h_variant = get_compile_time_arg_val(32);
 
 constexpr uint32_t prefetch_q_end = prefetch_q_base + prefetch_q_size;
 constexpr uint32_t cmddat_q_end = cmddat_q_base + cmddat_q_size;
@@ -156,6 +166,9 @@ static uint32_t downstream_data_ptr_s = dispatch_s_buffer_base;
 static uint32_t block_next_start_addr[cmddat_q_blocks];
 static uint32_t rd_block_idx = 0;
 static uint32_t upstream_total_acquired_page_count = 0;
+static auto client_interface =
+    reinterpret_cast<volatile tt_l1_ptr fabric_pull_client_interface_t*>(client_interface_addr);
+
 // Feature to stall the prefetcher, mainly for ExecBuf impl which reuses CmdDataQ
 static enum StallState { STALL_NEXT = 2, STALLED = 1, NOT_STALLED = 0 } stall_state = NOT_STALLED;
 

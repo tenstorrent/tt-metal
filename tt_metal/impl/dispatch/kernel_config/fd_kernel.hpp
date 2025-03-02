@@ -37,6 +37,7 @@ static std::vector<string> dispatch_kernel_file_names = {
     "tt_metal/impl/dispatch/kernels/vc_eth_tunneler.cpp",    // US_TUNNELER_REMOTE
     "tt_metal/impl/dispatch/kernels/vc_packet_router.cpp",   // PACKET_ROUTER_MUX
     "tt_metal/impl/dispatch/kernels/vc_packet_router.cpp",   // PACKET_ROUTER_DEMUX
+    "",                                                      // FABRIC_ROUTER_VC
     ""                                                       // COUNT
 };
 
@@ -71,7 +72,11 @@ public:
     // Override for specific kernels that can be configured for fabric. Will be called by the FABRIC_ROUTER_VC, which is
     // an intermediary FDKernel for indicating a fabric router path needs to be found.
     virtual void UpdateArgsForFabric(
-        const CoreCoord& fabric_router, tt::tt_fabric::mesh_id_t dst_mesh_id, chip_id_t dst_chip_id) {}
+        const CoreCoord& fabric_router,
+        tt::tt_fabric::mesh_id_t upstream_mesh_id,
+        chip_id_t upstream_chip_id,
+        tt::tt_fabric::mesh_id_t downstream_mesh_id,
+        chip_id_t downstream_chip_id) {}
 
     // Generator function to create a kernel of a given type. New kernels need to be added here.
     static FDKernel* Generate(

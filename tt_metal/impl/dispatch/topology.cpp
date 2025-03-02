@@ -18,6 +18,7 @@
 #include "kernel_config/eth_tunneler.hpp"
 #include "fabric_host_interface.h"
 
+#include "rtoptions.hpp"
 #include "tt_cluster.hpp"
 
 namespace tt::tt_metal {
@@ -87,8 +88,8 @@ static const std::vector<DispatchKernelNode> two_chip_arch_1cq_fabric = {
     {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {2, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
     {2, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
 
-    {3, 0, 1, 0, PREFETCH_H, {x, x, x, x}, {5, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {4, 0, 1, 0, DISPATCH_H, {6, x, x, x}, {3, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {3, 0, 1, 0, PREFETCH_H, {x, x, x, x}, {7, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {4, 0, 1, 0, DISPATCH_H, {8, x, x, x}, {3, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
 
     // Sender path PREFETCH_H -> PREFETCH_D
     {5, 0, x, 0, FABRIC_ROUTER_VC, {3, x, x, x}, {7, x, x, x}},
@@ -96,9 +97,9 @@ static const std::vector<DispatchKernelNode> two_chip_arch_1cq_fabric = {
     // Return path DISPATCH_D -> DISPATCH_H
     {6, 0, x, 0, FABRIC_ROUTER_VC, {8, x, x, x}, {4, x, x, x}},
 
-    {7, 1, 1, 0, PREFETCH_D, {5, x, x, x}, {8, 9, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {8, 1, 1, 0, DISPATCH_D, {7, x, x, x}, {9, 6, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {9, 1, 1, 0, DISPATCH_S, {7, x, x, x}, {8, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {7, 1, 1, 0, PREFETCH_D, {3, x, x, x}, {8, 9, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {8, 1, 1, 0, DISPATCH_D, {7, x, x, x}, {9, 4, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {9, 1, 1, 0, DISPATCH_S, {7, x, x, x}, {8, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
 };
 
 static const std::vector<DispatchKernelNode> two_chip_arch_2cq = {
@@ -490,8 +491,14 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device
             TT_ASSERT(
                 mmio_devices.size() == remote_devices.size() or remote_devices.empty(),
                 "N300/T3K expects devices in mmio/remote pairs.");
-            const std::vector<DispatchKernelNode>* nodes_for_one_mmio =
-                (num_hw_cqs == 1) ? &two_chip_arch_1cq : &two_chip_arch_2cq;
+            std::vector<DispatchKernelNode> nodes_for_one_mmio;
+            if (llrt::RunTimeOptions::get_instance().get_fd_fabric()) {
+                TT_FATAL(num_hw_cqs == 1, "Only 1 CQ is supported at this time for FD on Fabric");
+                nodes_for_one_mmio = two_chip_arch_1cq_fabric;
+            } else {
+                nodes_for_one_mmio = (num_hw_cqs == 1) ? two_chip_arch_1cq : two_chip_arch_2cq;
+            }
+
             uint32_t index_offset = 0;
             for (auto mmio_device_id : mmio_devices) {
                 // Find the corresponding remote chip
@@ -507,7 +514,7 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device
                 TT_ASSERT(found_remote, "Couldn't find paired remote chip for device {}", mmio_device_id);
 
                 // Add dispatch kernels for the mmio/remote pair
-                for (DispatchKernelNode node : *nodes_for_one_mmio) {
+                for (DispatchKernelNode node : nodes_for_one_mmio) {
                     TT_ASSERT(node.device_id == 0 || node.device_id == 1);
                     if (node.device_id == 0) {
                         node.device_id = mmio_device_id;
@@ -522,7 +529,7 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device
                     increment_node_ids(node, index_offset);
                     nodes.push_back(node);
                 }
-                index_offset += nodes_for_one_mmio->size();
+                index_offset += nodes_for_one_mmio.size();
             }
         }
     }

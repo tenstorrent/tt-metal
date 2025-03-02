@@ -125,6 +125,8 @@ class RunTimeOptions {
     bool validate_kernel_binaries = false;
     unsigned num_hw_cqs = 1;
 
+    bool fb_fabric_en = false;
+
     bool enable_dispatch_data_collection = false;
 
     // HW can clear Blackhole's L1 data cache psuedo-randomly once every 128 transactions
@@ -303,6 +305,8 @@ public:
 
     inline unsigned get_num_hw_cqs() { return num_hw_cqs; }
     inline void set_num_hw_cqs(unsigned num) { num_hw_cqs = num; }
+
+    inline bool get_fd_fabric() { return fb_fabric_en; }
 
     inline uint32_t get_watcher_debug_delay() { return watcher_debug_delay; }
     inline void set_watcher_debug_delay(uint32_t delay) { watcher_debug_delay = delay; }

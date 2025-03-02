@@ -25,10 +25,6 @@ public:
     void GenerateStaticConfigs() override;
     void GenerateDependentConfigs() override;
     void ConfigureCore() override;
-
-private:
-    std::pair<tt_fabric::routing_plane_id_t, CoreCoord> get_closest_router(
-        const IDevice* source, const IDevice* destination);
 };
 
 }  // namespace tt::tt_metal
