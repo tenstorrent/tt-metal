@@ -27,8 +27,7 @@ std::vector<Tensor> split_dim_n_chunks_rm(
     const auto& input_shape = input_tensor.get_logical_shape();
     auto input_rank = input_shape.size();
 
-    const bool on_host =
-        input_tensor.storage_type() == StorageType::OWNED || input_tensor.storage_type() == StorageType::BORROWED;
+    const bool on_host = input_tensor.is_host_tensor();
     std::optional<IDevice*> device = on_host ? std::nullopt : std::make_optional(input_tensor.device());
 
     Tensor preprocessed = ttnn::unsqueeze_to_4D(input_tensor);  // ensure we're 4D before slicing

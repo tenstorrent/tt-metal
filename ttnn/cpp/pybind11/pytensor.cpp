@@ -417,9 +417,7 @@ owned_buffer::Buffer<T> create_row_major_owned_buffer(
 
 std::variant<OwnedBuffer, BorrowedBuffer> get_host_buffer_from_tensor(
     const Tensor& tt_tensor, const bool padded_output) {
-    TT_ASSERT(
-        tt_tensor.storage_type() == StorageType::OWNED || tt_tensor.storage_type() == StorageType::BORROWED ||
-        tt_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST);
+    TT_ASSERT(tt_tensor.is_host_tensor());
 
     using RetType = std::variant<OwnedBuffer, BorrowedBuffer>;
     const auto& tensor_spec = tt_tensor.get_tensor_spec();
