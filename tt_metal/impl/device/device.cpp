@@ -564,7 +564,7 @@ void Device::reset_cores() {
                 launch_msg_t* launch_msg = (launch_msg_t*)(&data[0]);
                 log_info(
                     tt::LogMetal,
-                    "While initializing Device {}, ethernet tunneler core {} on Device {} detected as still running, "
+                    "While initializing Device {}, active ethernet core {} on Device {} detected as still running, "
                     "issuing exit signal.",
                     this->id(),
                     virtual_core.str(),
@@ -591,7 +591,8 @@ void Device::reset_cores() {
                 if (erisc_app_still_running(virtual_core)) {
                     log_info(
                         tt::LogMetal,
-                        "While initializing device {}, ethernet dispatch core {} on Device {} detected as still running, issuing exit signal.",
+                        "While initializing device {}, idle ethernet dispatch core {} on Device {} detected as still "
+                        "running, issuing exit signal.",
                         this->id(),
                         virtual_core.str(),
                         id_and_cores.first);
