@@ -29,18 +29,15 @@ inline Tensor convert_to_cpp_supported_dtype(const Tensor& input_tensor) {
             if constexpr (std::is_same_v<T, tt::tt_metal::OwnedStorage>) {
                 return storage.buffer;
             } else if constexpr (std::is_same_v<T, tt::tt_metal::DeviceStorage>) {
-                TT_THROW("Device input_tensor cannot be MultiDeviceStorageconverted to torch");
+                TT_THROW("Device input_tensor cannot be converted to torch");
             } else if constexpr (std::is_same_v<T, tt::tt_metal::BorrowedStorage>) {
                 return storage.buffer;
-            } /*else if constexpr (std::is_same_v<T, tt::tt_metal::MultiDeviceStorage>) {
-                TT_THROW("Tensor with  cannot be converted to torch");
-            } */
-            else if constexpr (std::is_same_v<T, tt::tt_metal::MultiDeviceHostStorage>) {
+            } else if constexpr (std::is_same_v<T, tt::tt_metal::MultiDeviceHostStorage>) {
                 TT_THROW(
                     "Tensor MultiDeviceHostStorage cannot be converted to torch directly. Use composer(..) "
                     "functionality.");
             } else {
-                TT_THROW("Unsupported storage type");
+                raise_unsupported_storage<T>();
             }
         },
         input_tensor.get_storage());

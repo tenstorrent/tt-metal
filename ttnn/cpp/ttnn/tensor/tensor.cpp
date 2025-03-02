@@ -630,7 +630,6 @@ StorageType Tensor::storage_type() const {
             [](const OwnedStorage&) { return StorageType::OWNED; },
             [](const DeviceStorage&) { return StorageType::DEVICE; },
             [](const BorrowedStorage&) { return StorageType::BORROWED; },
-            //[](const MultiDeviceStorage& s) { return StorageType::MULTI_DEVICE; },
             [](const MultiDeviceHostStorage&) { return StorageType::MULTI_DEVICE_HOST; },
         },
         this->get_storage());
@@ -900,21 +899,60 @@ Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshD
 }
 
 void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id) {
-    void* host_data = std::visit(
-        tt::stl::overloaded{
-            [](BorrowedStorage s) { return std::visit([](auto&& b) { return b.data(); }, s.buffer); },
-            [](OwnedStorage s) { return std::visit([](auto&& b) { return static_cast<void*>(b.begin()); }, s.buffer); },
-            [](const MultiDeviceHostStorage& host_storage) {
-                TT_ASSERT(host_storage.num_buffers() == 1, "Cannot copy multi-buffer host storage to a single device");
-                return std::visit([](auto&& b) -> void* { return b.begin(); }, host_storage.get_buffer(0));
-            },
-            [](auto&&) -> void* { TT_THROW("Unreachable"); },
-        },
-        host_tensor.get_storage());
-    if (auto mesh_device = device_tensor.mesh_device()) {
-        tt::tt_metal::memcpy(mesh_device->mesh_command_queue(*cq_id), device_tensor, host_data);
-    } else {
-        tt::tt_metal::memcpy(device_tensor.device()->command_queue(*cq_id), device_tensor, host_data);
+    // Top level wrapper to copy a host tensor to a preallocated device tensor
+    TT_ASSERT(device_tensor.workers.size(), "Workers must be specified for device_tensor in write_tensor");
+
+    Tensor async_safe_tensor = copy_borrowed_tensor_in_async_mode(device_tensor.workers.at(0), host_tensor);
+    TT_FATAL(
+        async_safe_tensor.storage_type() == StorageType::BORROWED or
+            async_safe_tensor.storage_type() == StorageType::OWNED or
+            async_safe_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST,
+        "write_tensor only supports host_tensor to device_tensor data transfer");
+
+    for (int worker_index = 0; worker_index < device_tensor.workers.size(); ++worker_index) {
+        auto& worker = device_tensor.workers[worker_index];
+        worker->push_work([cq_id, worker, worker_index, async_safe_tensor, device_tensor]() mutable {
+            TT_FATAL(
+                device_tensor.storage_type() == StorageType::DEVICE,
+                "write_tensor only supports host_tensor to device_tensor data transfer");
+            TT_FATAL(async_safe_tensor.get_logical_shape() == device_tensor.get_logical_shape(), "Error");
+            TT_FATAL(async_safe_tensor.get_dtype() == device_tensor.get_dtype(), "Error");
+            TT_FATAL(
+                async_safe_tensor.get_tensor_spec().page_config() == device_tensor.get_tensor_spec().page_config(),
+                "Error");
+            std::visit(
+                tt::stl::overloaded{
+                    [worker, worker_index, cq_id, &async_safe_tensor, &device_tensor](
+                        const DeviceStorage& device_storage) {
+                        // Copying from host to a single device.
+                        void* host_data = std::visit(
+                            tt::stl::overloaded{
+                                [](BorrowedStorage s) {
+                                    return std::visit([](auto&& b) { return b.data(); }, s.buffer);
+                                },
+                                [](OwnedStorage s) {
+                                    return std::visit([](auto&& b) { return static_cast<void*>(b.begin()); }, s.buffer);
+                                },
+                                [](const MultiDeviceHostStorage& host_storage) {
+                                    TT_ASSERT(
+                                        host_storage.num_buffers() == 1,
+                                        "Cannot copy multi-buffer host storage to a single device");
+                                    return std::visit(
+                                        [](auto&& b) -> void* { return b.begin(); }, host_storage.get_buffer(0));
+                                },
+                                [](auto&&) -> void* { TT_THROW("Unreachable"); },
+                            },
+                            async_safe_tensor.get_storage());
+                        if (auto mesh_device = device_tensor.mesh_device()) {
+                            tt::tt_metal::memcpy(mesh_device->mesh_command_queue(*cq_id), device_tensor, host_data);
+                        } else {
+                            tt::tt_metal::memcpy(
+                                device_tensor.device()->command_queue(*cq_id), device_tensor, host_data);
+                        }
+                    },
+                    [](auto&& s) { TT_THROW("Unreachable"); }},
+                device_tensor.get_storage());
+        });
     }
 }
 
