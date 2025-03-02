@@ -140,7 +140,7 @@ def open_mesh_device(
     dispatch_core_config: ttnn.DispatchCoreConfig = ttnn.DispatchCoreConfig(),
     offset: Optional[ttnn.MeshCoordinate] = None,
     physical_device_ids: List[int] = [],
-    fabric_config: Optional[ttnn._ttnn.fabric.FabricConfig] = None,
+    **kwargs,
 ):
     """
     Open a mesh device with the specified configuration.
@@ -158,8 +158,6 @@ def open_mesh_device(
         ttnn._ttnn.multi_device.MeshDevice: The opened mesh device.
 
     """
-    if fabric_config is not None:
-        ttnn._ttnn.fabric.initialize_fabric_config(fabric_config)
     return ttnn._ttnn.multi_device.MeshDevice(
         mesh_shape=mesh_shape,
         l1_small_size=l1_small_size,

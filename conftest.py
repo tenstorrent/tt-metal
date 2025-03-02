@@ -183,6 +183,26 @@ def all_devices(request, device_params):
     ttnn.CloseDevices(devices)
 
 
+def reset_fabric(**kwargs):
+    import ttnn
+
+    # Extract the 'fabric_config' from kwargs, or set it to None if not present
+    fabric_config = kwargs.get("fabric_config", None)
+    # If fabric_config is not None, set it to FABRIC_2D
+    if fabric_config is not None:
+        ttnn._ttnn.fabric.initialize_fabric_config(ttnn.FabricConfig.DISABLED)
+
+
+def set_fabric(**kwargs):
+    import ttnn
+
+    # Extract the 'fabric_config' from kwargs, or set it to None if not present
+    fabric_config = kwargs.get("fabric_config", None)
+    # If fabric_config is not None, set it to FABRIC_2D
+    if fabric_config is not None:
+        ttnn._ttnn.fabric.initialize_fabric_config(fabric_config)
+
+
 @pytest.fixture(scope="function")
 def mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
     """
@@ -225,6 +245,7 @@ def mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_par
     request.node.pci_ids = [ttnn.GetPCIeDeviceID(i) for i in device_ids[:num_devices_requested]]
 
     updated_device_params = get_updated_device_params(device_params)
+    set_fabric(**updated_device_params)
     mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **updated_device_params)
 
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
@@ -234,6 +255,7 @@ def mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_par
         ttnn.DumpDeviceProfiler(device)
 
     ttnn.close_mesh_device(mesh_device)
+    reset_fabric(**updated_device_params)
     del mesh_device
 
 
@@ -253,6 +275,7 @@ def pcie_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
     request.node.pci_ids = device_ids[:num_pcie_devices_requested]
 
     updated_device_params = get_updated_device_params(device_params)
+    set_fabric(**updated_device_params)
     mesh_device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(2, 2),
         **updated_device_params,
@@ -267,6 +290,7 @@ def pcie_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
         ttnn.DumpDeviceProfiler(device)
 
     ttnn.close_mesh_device(mesh_device)
+    reset_fabric(**updated_device_params)
     del mesh_device
 
 
@@ -278,6 +302,7 @@ def n300_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
         pytest.skip()
 
     updated_device_params = get_updated_device_params(device_params)
+    set_fabric(**updated_device_params)
     mesh_device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(1, 2),
         **updated_device_params,
@@ -290,6 +315,7 @@ def n300_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
         ttnn.DumpDeviceProfiler(device)
 
     ttnn.close_mesh_device(mesh_device)
+    reset_fabric(**updated_device_params)
     del mesh_device
 
 
@@ -302,6 +328,7 @@ def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device
 
     request.node.pci_ids = ttnn.get_pcie_device_ids()
     updated_device_params = get_updated_device_params(device_params)
+    set_fabric(**updated_device_params)
     mesh_device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(1, 8),
         **updated_device_params,
@@ -314,6 +341,7 @@ def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device
         ttnn.DumpDeviceProfiler(device)
 
     ttnn.close_mesh_device(mesh_device)
+    reset_fabric(**updated_device_params)
     del mesh_device
 
 
