@@ -52,7 +52,7 @@ def test_attention(
     torch_model: Attention = parent_torch_model.transformer_blocks[block_index].attn
     torch_model.eval()
 
-    parameters = TtAttentionParameters.from_torch(torch_model.state_dict(), device=device, dtype=ttnn.bfloat8_b)
+    parameters = TtAttentionParameters.from_torch(torch_model.state_dict(), device=device, dtype=ttnn_dtype)
     tt_model = TtAttention(parameters, num_heads=torch_model.num_heads)
 
     torch.manual_seed(0)
@@ -70,19 +70,10 @@ def test_attention(
     tt_spatial = allocate_tensor_on_device_like(tt_spatial_host, device=device)
     tt_prompt = allocate_tensor_on_device_like(tt_prompt_host, device=device) if joint_attention else None
 
-    # cache
-    tt_model(spatial=tt_spatial, prompt=tt_prompt)
-
-    # trace
-    tid = ttnn.begin_trace_capture(device)
-    tt_spatial_output, tt_prompt_output = tt_model(spatial=tt_spatial, prompt=tt_prompt)
-    ttnn.end_trace_capture(device, tid)
-
-    # execute
     ttnn.copy_host_to_device_tensor(tt_spatial_host, tt_spatial)
     if joint_attention:
         ttnn.copy_host_to_device_tensor(tt_prompt_host, tt_prompt)
-    ttnn.execute_trace(device, tid)
+    tt_spatial_output, tt_prompt_output = tt_model(spatial=tt_spatial, prompt=tt_prompt)
 
     assert_quality(spatial_output, tt_spatial_output, pcc=0.990)
 
