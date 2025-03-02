@@ -490,15 +490,18 @@ int main() {
             noc_mode = launch_msg_address->kernel_config.brisc_noc_mode;
 
             // re-initialize the NoCs
+            uint8_t cmd_buf;
             if (noc_mode == DM_DEDICATED_NOC) {
                 if (prev_noc_mode != noc_mode) {
                     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
                 }
+                cmd_buf = BRISC_AT_CMD_BUF;
             } else {
                 if (prev_noc_mode != noc_mode) {
                     dynamic_noc_init();
                 }
                 dynamic_noc_local_state_init();
+                cmd_buf = DYNAMIC_NOC_BRISC_AT_CMD_BUF;
             }
             prev_noc_mode = noc_mode;
 
@@ -518,7 +521,7 @@ int main() {
                     (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.remote_cb_offset);
                 end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
                 experimental::setup_remote_cb_interfaces<true>(
-                    cb_l1_base, end_cb_index, noc_index, noc_mode, post_atomic_increments);
+                    cb_l1_base, end_cb_index, noc_index, noc_mode, post_atomic_increments, cmd_buf);
                 int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
                 void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
                     (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
@@ -540,7 +543,7 @@ int main() {
                         (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.remote_cb_offset);
                     uint32_t end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
                     experimental::setup_remote_cb_interfaces<true>(
-                        cb_l1_base, end_cb_index, noc_index, noc_mode, post_atomic_increments);
+                        cb_l1_base, end_cb_index, noc_index, noc_mode, post_atomic_increments, cmd_buf);
                 }
                 wait_for_go_message();
             }
