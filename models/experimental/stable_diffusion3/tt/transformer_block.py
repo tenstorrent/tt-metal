@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import ttnn
+import tracy
 
 from .attention import TtAttention, TtAttentionParameters
 from .feed_forward import TtFeedForward, TtFeedForwardParameters
@@ -50,10 +51,10 @@ class TtTransformerBlockParameters:
                 substate(state, "norm1_context.norm"), dtype=dtype, device=device
             ),
             spatial_time_embed=TtLinearParameters.from_torch(
-                substate(state, "norm1.linear"), dtype=dtype, device=device, unsqueeze_bias=True
+                substate(state, "norm1.linear"), dtype=dtype, device=device
             ),
             prompt_time_embed=TtLinearParameters.from_torch(
-                substate(state, "norm1_context.linear"), dtype=dtype, device=device, unsqueeze_bias=True
+                substate(state, "norm1_context.linear"), dtype=dtype, device=device
             ),
             spatial_ff=TtFeedForwardParameters.from_torch(substate(state, "ff"), dtype=dtype, device=device),
             prompt_ff=TtFeedForwardParameters.from_torch(substate(state, "ff_context"), dtype=dtype, device=device)
@@ -92,13 +93,11 @@ class TtTransformerBlock:
     def _spatial_attn_block(
         self, inp: ttnn.Tensor, *, gate: ttnn.Tensor, scale: ttnn.Tensor, shift: ttnn.Tensor
     ) -> ttnn.Tensor:
-        assert self._spatial_attn is not None
-
+        assert self._spatial_attn is not Non
         scaled = inp * (1 + scale) + shift
         attn, _ = self._spatial_attn(spatial=scaled, deallocate=True)
 
         result = gate * attn
-
         ttnn.deallocate(scaled)
         ttnn.deallocate(attn)
         return result
@@ -165,7 +164,6 @@ class TtTransformerBlock:
         spatial_time = self._spatial_time_embed(t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         prompt_time = self._prompt_time_embed(t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(t)
-
         if self._spatial_attn is not None:
             [
                 spatial_shift_dual_attn,
@@ -215,9 +213,6 @@ class TtTransformerBlock:
         spatial_normed = self._spatial_norm_1(spatial)
         prompt_normed = self._prompt_norm_1(prompt)
 
-        spatial_normed = ttnn.clone(spatial_normed, dtype=ttnn.bfloat8_b)
-        prompt_normed = ttnn.clone(prompt_normed, dtype=ttnn.bfloat8_b)
-
         spatial_attn, prompt_attn = self._dual_attn_block(
             spatial=spatial_normed,
             prompt=prompt_normed,
@@ -255,11 +250,12 @@ class TtTransformerBlock:
 
         spatial_normed = self._spatial_norm_2(spatial)
 
-        spatial_normed = ttnn.clone(spatial_normed, dtype=ttnn.bfloat8_b)
+        #        spatial_normed = ttnn.clone(spatial_normed, dtype=ttnn.bfloat8_b)
 
         spatial += self._spatial_ff_block(
             spatial_normed, gate=spatial_gate_ff, scale=spatial_scale_ff, shift=spatial_shift_ff
         )
+
         ttnn.deallocate(spatial_normed)
         ttnn.deallocate(spatial_gate_ff)
         ttnn.deallocate(spatial_scale_ff)
