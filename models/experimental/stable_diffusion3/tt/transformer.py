@@ -51,7 +51,7 @@ class TtSD3Transformer2DModelParameters:
                 for s in indexed_substates(state, "transformer_blocks")
             ],
             time_embed_out=TtLinearParameters.from_torch(
-                substate(state, "norm_out.linear"), dtype=dtype, device=device, unsqueeze_bias=True
+                substate(state, "norm_out.linear"), dtype=dtype, device=device
             ),
             norm_out=TtLayerNormParameters.from_torch(substate(state, "norm_out.norm"), dtype=dtype, device=device),
             proj_out=TtLinearParameters.from_torch(substate(state, "proj_out"), dtype=dtype, device=device),

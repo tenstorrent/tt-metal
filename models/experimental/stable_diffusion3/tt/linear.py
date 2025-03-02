@@ -29,17 +29,10 @@ class TtLinearParameters:
         dtype: ttnn.DataType | None = None,
         device: ttnn.Device | None,
         on_host: bool = False,
-        unsqueeze_bias: bool = False,
     ) -> TtLinearParameters:
         if "bias" in state:
+            orig_bias = state["bias"]
             bias = state["bias"].unsqueeze(0)
-            if unsqueeze_bias:
-                # TODO: Remove this workaround for issue https://github.com/tenstorrent/tt-metal/issues/16599
-                bias = bias.unsqueeze(0)
-
-                # TODO: Remove this workaround for issue https://github.com/tenstorrent/tt-metal/issues/17741
-                # This fixes the batch size to two for now.
-                bias = bias.repeat([2, 1, 1])
         else:
             bias = None
 
