@@ -123,70 +123,70 @@ This configuration uses bfp4 MLP FF1+FF3 for all models. **Batch_size=32 and pre
 
 | Model          | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) | TTFT (ms) |
 |----------------|--------|-----------|-----------|---------------|-----------|
-| Llama3.2-1B    | N300   | 85        | 98        | 69            | 100.3     |
+| Llama3.2-1B    | N300   | 85        | 98        | 100.3         | 69        |
 
 ## precision_cfg, fidelity_cfg = {ff1_3: bfp4, ff2: bfp8, wqkv: bfp8, wo: bfp8, kv_cache: bfp8, activation: orig}, {li_ff1_3: lofi, li_ff2: hifi2, li_qkv_decode: hifi2, li_o_decode: hifi2, sdpa_decode: hifi2na, li_qkv_prefill: hifi2, li_o_prefill: hifi2fp16, sdpa_prefill: hifi4}
 
 | Model          | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) | TTFT (ms) |
 |----------------|--------|-----------|-----------|---------------|-----------|
-| Llama3.2-1B    | N300   | 88        | 98        | 55            | 100.3     |
+| Llama3.2-1B    | N300   | 88        | 98        | 100.3         | 55        |
 
 ## precision_cfg, fidelity_cfg = {ff1_3: bfp4, ff2: bf16, wqkv: bfp8, wo: bfp8, kv_cache: bfp8, activation: orig}, {li_ff1_3: lofi, li_ff2: hifi4, li_qkv_decode: hifi2, li_o_decode: hifi2, sdpa_decode: hifi2na, li_qkv_prefill: hifi2, li_o_prefill: hifi2fp16, sdpa_prefill: hifi4}
 
 | Model          | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) | TTFT (ms) |
 |----------------|--------|-----------|-----------|---------------|-----------|
-| Llama3.2-1B    | N300   | 87        | 98        | 51            | 96.8      |
+| Llama3.2-1B    | N300   | 87        | 98        | 96.8          | 51        |
 
 ## precision_cfg, fidelity_cfg = {ff1_3: bfp8, ff2: bfp4, wqkv: bfp8, wo: bfp8, kv_cache: bfp8, activation: orig}, {li_ff1_3: hifi2, li_ff2: lofi, li_qkv_decode: hifi2, li_o_decode: hifi2, sdpa_decode: hifi2na, li_qkv_prefill: hifi2, li_o_prefill: hifi2fp16, sdpa_prefill: hifi4}
 
 | Model          | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) | TTFT (ms) |
 |----------------|--------|-----------|-----------|---------------|-----------|
-| Llama3.2-1B    | N300   | 87        | 98        | 50            | 98.5      |
+| Llama3.2-1B    | N300   | 87        | 98        | 98.5          | 50        |
 
 ## precision_cfg, fidelity_cfg = {ff1_3: bfp8, ff2: bfp8, wqkv: bfp8, wo: bfp8, kv_cache: bfp8, activation: orig}, {li_ff1_3: hifi2, li_ff2: hifi2, li_qkv_decode: hifi2, li_o_decode: hifi2, sdpa_decode: hifi2na, li_qkv_prefill: hifi2, li_o_prefill: hifi2fp16, sdpa_prefill: hifi4}
 
 | Model          | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) | TTFT (ms) |
 |----------------|--------|-----------|-----------|---------------|-----------|
-| Llama3.2-1B    | N300   | 91        | 98        | 60            | 99.0      |
+| Llama3.2-1B    | N300   | 91        | 98        | 99.0          | 60        |
 
 ## precision_cfg, fidelity_cfg = {ff1_3: bfp8, ff2: bf16, wqkv: bfp8, wo: bfp8, kv_cache: bfp8, activation: orig}, {li_ff1_3: hifi2, li_ff2: hifi4, li_qkv_decode: hifi2, li_o_decode: hifi2, sdpa_decode: hifi2na, li_qkv_prefill: hifi2, li_o_prefill: hifi2fp16, sdpa_prefill: hifi4}
 
 | Model          | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) | TTFT (ms) |
 |----------------|--------|-----------|-----------|---------------|-----------|
-| Llama3.2-1B    | N300   | 89        | 99        | 49            | 95.2      |
+| Llama3.2-1B    | N300   | 89        | 99        | 95.2          | 49        |
 
 ## precision_cfg, fidelity_cfg = {ff1_3: bf16, ff2: bfp4, wqkv: bfp8, wo: bfp8, kv_cache: bfp8, activation: orig}, {li_ff1_3: hifi4, li_ff2: lofi, li_qkv_decode: hifi2, li_o_decode: hifi2, sdpa_decode: hifi2na, li_qkv_prefill: hifi2, li_o_prefill: hifi2fp16, sdpa_prefill: hifi4}
 
 | Model          | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) | TTFT (ms) |
 |----------------|--------|-----------|-----------|---------------|-----------|
-| Llama3.2-1B    | N300   | 89        | 98        | 53            | 95.2      |
+| Llama3.2-1B    | N300   | 89        | 98        | 95.2          | 53        |
 
 ## precision_cfg, fidelity_cfg = {ff1_3: bf16, ff2: bfp8, wqkv: bfp8, wo: bfp8, kv_cache: bfp8, activation: orig}, {li_ff1_3: hifi4, li_ff2: hifi2, li_qkv_decode: hifi2, li_o_decode: hifi2, sdpa_decode: hifi2na, li_qkv_prefill: hifi2, li_o_prefill: hifi2fp16, sdpa_prefill: hifi4}
 
 | Model          | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) | TTFT (ms) |
 |----------------|--------|-----------|-----------|---------------|-----------|
-| Llama3.2-1B    | N300   | 91        | 98        | 57            | 94.4      |
+| Llama3.2-1B    | N300   | 91        | 98        | 94.4          | 57        |
 
 ## precision_cfg, fidelity_cfg = {ff1_3: bf16, ff2: bf16, wqkv: bfp8, wo: bfp8, kv_cache: bfp8, activation: orig}, {li_ff1_3: hifi4, li_ff2: hifi4, li_qkv_decode: hifi2, li_o_decode: hifi2, sdpa_decode: hifi2na, li_qkv_prefill: hifi2, li_o_prefill: hifi2fp16, sdpa_prefill: hifi4}
 
 | Model          | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) | TTFT (ms) |
 |----------------|--------|-----------|-----------|---------------|-----------|
-| Llama3.2-1B    | N300   | 90        | 98        | 60            | 91.2      |
+| Llama3.2-1B    | N300   | 90        | 98        | 91.2          | 60        |
 
 ## precision_cfg, fidelity_cfg = {ff1_3: bfp8, ff2: bfp8, wqkv: bfp8, wo: bfp4, kv_cache: bfp8, activation: bf16}, {li_ff1_3: hifi2, li_ff2: hifi2, li_qkv_decode: hifi2, li_o_decode: lofi, sdpa_decode: hifi2na, li_qkv_prefill: hifi2, li_o_prefill: lofi, sdpa_prefill: hifi4}
 
 | Model          | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) | TTFT (ms) |
 |----------------|--------|-----------|-----------|---------------|-----------|
-| Llama3.2-1B    | N300   | 88        | 98        | 45            | 98.2      |
+| Llama3.2-1B    | N300   | 88        | 98        | 98.2          | 45        |
 
 ## precision_cfg, fidelity_cfg = {ff1_3: bfp8, ff2: bfp8, wqkv: bfp8, wo: bfp4, kv_cache: bfp8, activation: bfp8}, {li_ff1_3: hifi2, li_ff2: hifi2, li_qkv_decode: hifi2, li_o_decode: lofi, sdpa_decode: hifi2na, li_qkv_prefill: hifi2, li_o_prefill: lofi, sdpa_prefill: hifi4}
 
 | Model          | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) | TTFT (ms) |
 |----------------|--------|-----------|-----------|---------------|-----------|
-| Llama3.2-1B    | N300   | 90        | 98        | 57            | 101.0     |
+| Llama3.2-1B    | N300   | 90        | 98        | 101.0         | 57        |
 
 ## precision_cfg, fidelity_cfg = {ff1_3: bfp8, ff2: bfp8, wqkv: bfp8, wo: bfp4, kv_cache: bfp8, activation: orig}, {li_ff1_3: hifi2, li_ff2: hifi2, li_qkv_decode: hifi2, li_o_decode: lofi, sdpa_decode: hifi2na, li_qkv_prefill: hifi2, li_o_prefill: lofi, sdpa_prefill: hifi4}
 
 | Model          | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) | TTFT (ms) |
 |----------------|--------|-----------|-----------|---------------|-----------|
-| Llama3.2-1B    | N300   | 90        | 98        | 73            | 99.4      |
+| Llama3.2-1B    | N300   | 90        | 98        | 99.4          | 73        |
