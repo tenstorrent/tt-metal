@@ -5,7 +5,6 @@
 #pragma once
 
 #include <tt-metalium/math.hpp>
-#include <tt-metalium/overloaded.hpp>
 #include <optional>
 #include <random>
 #include <ttnn/tensor/host_buffer/functions.hpp>
@@ -25,24 +24,6 @@ using tt::tt_metal::MemoryConfig;
 using tt::tt_metal::OwnedStorage;
 using tt::tt_metal::StorageType;
 using tt::tt_metal::Tensor;
-
-namespace detail {
-template <typename T>
-owned_buffer::Buffer<T> get_host_buffer(const Tensor& tensor) {
-    auto cpu_tensor = tensor.cpu();
-    auto& storage = cpu_tensor.storage();
-    OwnedBuffer buffer = std::visit(
-        tt::stl::overloaded{
-            [](const OwnedStorage& storage) { return storage.get_buffer(); },
-            [](const MultiDeviceHostStorage& storage) {
-                TT_FATAL(storage.num_buffers() == 1, "Can't get a single buffer from multi device host storage");
-                return storage.get_buffer(0);
-            },
-            [](const auto&) -> OwnedBuffer { TT_THROW("Not supported storage type"); }},
-        storage);
-    return std::get<owned_buffer::Buffer<T>>(buffer);
-}
-}  // namespace detail
 
 template <typename T, bool IS_UPPER>
 static Tensor index_trilu(
@@ -261,9 +242,20 @@ static Tensor fill_first_val_into_tensor(
     IDevice* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
-    auto input_buffer = detail::get_host_buffer<T>(input_tensor);
     auto physical_volume = input_tensor.volume();
     auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(physical_volume);  // ouput
+    auto device_buffer = input_tensor.device_buffer();
+    uint32_t size_in_bytes = device_buffer->size();
+    std::vector<T> data_vec;
+    const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
+        data_vec.resize(size_in_bytes / sizeof(T));
+        tt::tt_metal::tensor_impl::read_data_from_device_buffer<T>(
+            input_tensor.device()->command_queue(), device_buffer, data_vec.data(), true);
+    } else {
+        tt::tt_metal::tensor_impl::read_data_from_device_buffer<T>(device_buffer, data_vec);
+    }
+    auto input_buffer = owned_buffer::create<T>(std::move(data_vec));
     const ttnn::Shape input_tensor_strides = input_tensor.strides();
     for (uint32_t i = 0; i < physical_volume; i++) {
         owned_buffer[i] = input_buffer[0];
@@ -295,7 +287,18 @@ static Tensor prod_result_computation_GS(
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
     const ttnn::Shape& s_a = input_tensor.get_padded_shape();
     auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(input_tensor.volume());  // ouput
-    auto input_buffer = detail::get_host_buffer<T>(input_tensor);
+    auto device_buffer = input_tensor.device_buffer();
+    uint32_t size_in_bytes = device_buffer->size();
+    std::vector<T> data_vec;
+    const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
+        data_vec.resize(size_in_bytes / sizeof(T));
+        tt::tt_metal::tensor_impl::read_data_from_device_buffer<T>(
+            input_tensor.device()->command_queue(), device_buffer, data_vec.data(), true);
+    } else {
+        tt::tt_metal::tensor_impl::read_data_from_device_buffer<T>(device_buffer, data_vec);
+    }
+    auto input_buffer = owned_buffer::create<T>(std::move(data_vec));
     const ttnn::Shape input_tensor_strides = input_tensor.strides();
     auto result = static_cast<T>(1.0f);
     for (uint32_t i = s_a[0] - 1; i < s_a[0]; i++) {
@@ -343,7 +346,18 @@ static Tensor prod_result_computation_WH_B0(
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
     const auto& s_a = input_tensor.get_padded_shape();
     auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(s_a.volume());  // ouput
-    auto input_buffer = detail::get_host_buffer<T>(input_tensor);
+    auto device_buffer = input_tensor.device_buffer();
+    uint32_t size_in_bytes = device_buffer->size();
+    std::vector<T> data_vec;
+    const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
+        data_vec.resize(size_in_bytes / sizeof(T));
+        tt::tt_metal::tensor_impl::read_data_from_device_buffer<T>(
+            input_tensor.device()->command_queue(), device_buffer, data_vec.data(), true);
+    } else {
+        tt::tt_metal::tensor_impl::read_data_from_device_buffer<T>(device_buffer, data_vec);
+    }
+    auto input_buffer = owned_buffer::create<T>(std::move(data_vec));
     const ttnn::Shape input_tensor_strides = input_tensor.strides();
     auto result = static_cast<T>(1.0f);
     // need to access the last 4 rows and alternating columns of index 17 ,19, 21, 23, 25, 27, 29, 31
@@ -482,7 +496,18 @@ static Tensor manual_insertion(
     TT_ASSERT(
         padded_shape[0] * padded_shape[1] * padded_shape[2] * padded_shape[3] == input_tensor.volume(),
         "Required shape volume must match old shape volume");
-    auto owned_buffer = detail::get_host_buffer<T>(input_tensor);
+    auto device_buffer = input_tensor.device_buffer();
+    uint32_t size_in_bytes = device_buffer->size();
+    std::vector<T> data_vec;
+    const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
+        data_vec.resize(size_in_bytes / sizeof(T));
+        tt::tt_metal::tensor_impl::read_data_from_device_buffer<T>(
+            input_tensor.device()->command_queue(), device_buffer, data_vec.data(), true);
+    } else {
+        tt::tt_metal::tensor_impl::read_data_from_device_buffer<T>(device_buffer, data_vec);
+    }
+    auto owned_buffer = owned_buffer::create<T>(std::move(data_vec));
     auto output = Tensor(
                       OwnedStorage{owned_buffer},
                       TensorSpec(
