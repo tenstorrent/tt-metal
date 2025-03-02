@@ -73,11 +73,8 @@ def run_conv(
     weight_mesh_mapper=None,
     output_mesh_composer=None,
     enable_split_reader=False,
-<<<<<<< HEAD
     activation="",
-=======
     preprocess_weights_on_device=True,
->>>>>>> 55b6f9b444 (#0: First commit for loading weights on device)
 ):
     if isinstance(device, ttnn.MeshDevice):
         assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when using device mesh"
