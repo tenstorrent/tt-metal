@@ -228,7 +228,7 @@ FORCE_INLINE void remote_cb_pop_front(uint32_t cb_id, uint32_t num_pages, uint8_
         remote_cb.fifo_rd_ptr += len_bytes;
     }
     uint32_t num_aligned_pages = len_bytes / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
-    detail::update_pages_acked(remote_cb, num_aligned_pages, noc, true, write_at_cmd_buf);
+    detail::update_pages_acked(remote_cb, num_aligned_pages, noc, false, write_at_cmd_buf);
 }
 
 FORCE_INLINE void remote_cb_reserve_back(uint32_t cb_id, uint32_t num_pages) {
