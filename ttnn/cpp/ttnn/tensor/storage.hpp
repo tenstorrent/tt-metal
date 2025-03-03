@@ -330,7 +330,7 @@ struct MultiDeviceStorage {
         TT_ASSERT(
             buffer_it->device() == device,
             "Mismatch between device derived from buffer and device derived from MultiDeviceStorage.");
-        return buffer_it;
+        return *buffer_it;
     }
 
     inline std::shared_ptr<Buffer>& get_buffer_for_device(IDevice* device) {
