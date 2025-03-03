@@ -101,13 +101,19 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
     const auto& pad_config = std::get<0>(kernel_config);
     const auto& local_config = std::get<1>(kernel_config);
     const auto& remote_config = std::get<2>(kernel_config);
+    const auto& blocking_local_config = std::get<3>(kernel_config);
+    const auto& blocking_remote_config = std::get<4>(kernel_config);
 
-    auto pad_config_tensor =
+    const auto pad_config_tensor =
         sliding_window::construct_on_host_config_tensor(pad_config, this->config_, this->parallel_config_);
-    auto local_config_tensor =
+    const auto local_config_tensor =
         sliding_window::construct_on_host_config_tensor(local_config, this->config_, this->parallel_config_);
-    auto remote_config_tensor =
+    const auto remote_config_tensor =
         sliding_window::construct_on_host_config_tensor(remote_config, this->config_, this->parallel_config_);
+    const auto blocking_local_config_tensor =
+        sliding_window::construct_on_host_config_tensor(blocking_local_config, this->config_, this->parallel_config_);
+    const auto blocking_remote_config_tensor =
+        sliding_window::construct_on_host_config_tensor(blocking_remote_config, this->config_, this->parallel_config_);
 
     auto pad_config_device_tensor =
         sliding_window::move_config_tensor_to_device(pad_config_tensor, parallel_config_, is_block_sharded, device);
@@ -115,6 +121,11 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
         sliding_window::move_config_tensor_to_device(local_config_tensor, parallel_config_, is_block_sharded, device);
     auto remote_config_device_tensor =
         sliding_window::move_config_tensor_to_device(remote_config_tensor, parallel_config_, is_block_sharded, device);
+    auto blocking_local_config_device_tensor = sliding_window::move_config_tensor_to_device(
+        blocking_local_config_tensor, parallel_config_, is_block_sharded, device);
+    auto blocking_remote_config_device_tensor = sliding_window::move_config_tensor_to_device(
+        blocking_remote_config_tensor, parallel_config_, is_block_sharded, device);
+    tt::log_info("Created sine guys {} {}", blocking_local_config_device_tensor, blocking_remote_config_device_tensor);
 
     Program program = CreateProgram();
 
@@ -127,6 +138,8 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
         pad_config_device_tensor,
         local_config_device_tensor,
         remote_config_device_tensor,
+        blocking_local_config_device_tensor,
+        blocking_remote_config_device_tensor,
         remote_read_,
         transpose_mcast_,
         output_tensor,
