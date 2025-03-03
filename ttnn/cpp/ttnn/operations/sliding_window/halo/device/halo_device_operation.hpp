@@ -25,6 +25,7 @@ struct HaloDeviceOperation {
     uint32_t max_out_nsticks_per_core_;
     MemoryConfig output_memory_config_;
     bool is_out_tiled_;
+    bool enable_split_reader_;
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
@@ -41,7 +42,8 @@ struct HaloDeviceOperation {
         "reshard_num_cores_nhw_",
         "max_out_nsticks_per_core_",
         "output_memory_config_",
-        "is_out_tiled_");
+        "is_out_tiled_",
+        "enable_split_reader_");
     const auto attribute_values() const {
         return std::make_tuple(
             std::cref(config_),
@@ -52,7 +54,8 @@ struct HaloDeviceOperation {
             std::cref(reshard_num_cores_nhw_),
             std::cref(max_out_nsticks_per_core_),
             std::cref(output_memory_config_),
-            std::cref(is_out_tiled_));
+            std::cref(is_out_tiled_),
+            std::cref(enable_split_reader_));
     }
 };
 
@@ -64,7 +67,8 @@ Tensor halo_op(
     bool transpose_mcast = true,
     uint32_t reshard_num_cores_nhw = 0,
     const MemoryConfig& output_memory_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    bool is_out_tiled = true);
+    bool is_out_tiled = true,
+    bool enable_split_reader = false);
 
 }  // namespace halo
 

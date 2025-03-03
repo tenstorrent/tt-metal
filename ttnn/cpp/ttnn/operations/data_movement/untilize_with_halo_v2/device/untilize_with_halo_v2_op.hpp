@@ -19,6 +19,7 @@ struct UntilizeWithHaloV2 {
     const tt::tt_metal::MemoryConfig out_mem_config_;
     const bool remote_read_;
     const bool transpose_mcast_;
+    const bool enable_split_reader_;
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
