@@ -31,7 +31,6 @@ autograd::TensorPtr RowParallelLinear::operator()(autograd::TensorPtr tensor) {
     if (!m_input_is_parallel) {
         tensor = ops::distributed::scatter(tensor, tensor->get_rank() - 1U);
     }
-
     // do not pass bias
     tensor = ops::linear_op(tensor, m_weight, /* bias */ nullptr);
     tensor = ops::distributed::all_reduce(tensor);

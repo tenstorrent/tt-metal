@@ -411,6 +411,12 @@ int main(int argc, char **argv) {
     app.add_option("-n,--name", run_name, "Run name")->default_val(run_name);
     CLI11_PARSE(app, argc, argv);
 
+    // DEBUG
+    // ddp = true;
+    enable_tp = true;
+    // config_name = std::string(CONFIGS_FOLDER) + "/training_shakespear_gpt2l.yaml";
+    config_name = std::string(CONFIGS_FOLDER) + "/training_shakespear_gpt2xl.yaml";
+
     if (ddp && enable_tp) {
         throw std::logic_error("DDP and TP cannot be enabled at the same time. Disable DDP or TP.");
     }
