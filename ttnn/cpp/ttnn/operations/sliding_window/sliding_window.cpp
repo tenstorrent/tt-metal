@@ -551,6 +551,7 @@ generate_halo_kernel_config_tensors(
     local_config.resize(num_cores_nhw);
     remote_config.resize(num_cores_nhw);
 
+    // Split off padding, local transfer, remote transfer operations into their own configs
     for (auto [src_dst, data] : per_core_gather_data) {
         auto [src_core_id, dst_core_id] = src_dst;
         bool is_pad = src_core_id == PAD_LOCAL_SENTINAL_VALUE;

@@ -32,11 +32,11 @@ template <
     bool is_read,
     bool is_col_major>
 void copy_sticks_async(
-    tt_l1_ptr uint16_t const* config_data,
+    const tt_l1_ptr uint16_t* config_data,
     const uint16_t my_noc_x,
     const uint16_t my_noc_y,
-    uint32_t const in_base_l1_addr,
-    uint32_t const out_base_l1_addr) {
+    const uint32_t in_base_l1_addr,
+    const uint32_t out_base_l1_addr) {
     int i = 0;
     int length = config_data[i + 2];
 
@@ -86,21 +86,23 @@ void copy_sticks_async(
 }
 
 void kernel_main() {
-    constexpr uint32_t padding_config_cb_id = get_compile_time_arg_val(0);  // has untilized input shard
-    constexpr uint32_t local_config_cb_id = get_compile_time_arg_val(1);    // has untilized input shard
-    constexpr uint32_t remote_config_cb_id = get_compile_time_arg_val(2);   // has untilized input shard
-    constexpr uint32_t src_cb_id = get_compile_time_arg_val(3);             // has untilized input shard
-    constexpr uint32_t in_cb_id = get_compile_time_arg_val(4);              // has untilized input shard
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(5);     // output shard with padding and halo goes here
-    constexpr uint32_t pad_cb_id = get_compile_time_arg_val(6);     // cb for const pad val buffer
-    constexpr uint32_t pad_val_u32 = get_compile_time_arg_val(7);   // pad value to fill pad buffer with
-    constexpr uint32_t in_nsticks = get_compile_time_arg_val(8);    // number of sticks
-    constexpr uint32_t stick_nbytes = get_compile_time_arg_val(9);  // stick size in bytes (post untilize)
-    constexpr uint32_t is_block_sharded = get_compile_time_arg_val(10);
-    constexpr uint32_t remote_read = get_compile_time_arg_val(11);
-    constexpr bool is_col_major = get_compile_time_arg_val(12) == 1;
-    constexpr uint32_t is_width_sharded = get_compile_time_arg_val(13);
-    constexpr uint32_t input_aligned_page_size = get_compile_time_arg_val(14);
+    constexpr uint32_t padding_config_cb_id = get_compile_time_arg_val(0);          // has untilized input shard
+    constexpr uint32_t local_config_cb_id = get_compile_time_arg_val(1);            // has untilized input shard
+    constexpr uint32_t remote_config_cb_id = get_compile_time_arg_val(2);           // has untilized input shard
+    constexpr uint32_t blocking_local_config_cb_id = get_compile_time_arg_val(3);   // has untilized input shard
+    constexpr uint32_t blocking_remote_config_cb_id = get_compile_time_arg_val(4);  // has untilized input shard
+    constexpr uint32_t src_cb_id = get_compile_time_arg_val(5);                     // has untilized input shard
+    constexpr uint32_t in_cb_id = get_compile_time_arg_val(6);                      // has untilized input shard
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(7);      // output shard with padding and halo goes here
+    constexpr uint32_t pad_cb_id = get_compile_time_arg_val(8);      // cb for const pad val buffer
+    constexpr uint32_t pad_val_u32 = get_compile_time_arg_val(9);    // pad value to fill pad buffer with
+    constexpr uint32_t in_nsticks = get_compile_time_arg_val(10);    // number of sticks
+    constexpr uint32_t stick_nbytes = get_compile_time_arg_val(11);  // stick size in bytes (post untilize)
+    constexpr uint32_t is_block_sharded = get_compile_time_arg_val(12);
+    constexpr uint32_t remote_read = get_compile_time_arg_val(13);
+    constexpr bool is_col_major = get_compile_time_arg_val(14) == 1;
+    constexpr uint32_t is_width_sharded = get_compile_time_arg_val(15);
+    constexpr uint32_t input_aligned_page_size = get_compile_time_arg_val(16);
 
     constexpr uint32_t elem_nbytes = sizeof(uint16_t);
     constexpr uint16_t pad_core_id = 0xFFFF;
@@ -145,7 +147,7 @@ void kernel_main() {
     cb_wait_front(in_cb_id, in_nsticks);  // make sure untilized data is available
     if constexpr (remote_config_cb_id) {
         uint32_t config_data_l1_addr = get_read_ptr(remote_config_cb_id);
-        tt_l1_ptr uint16_t const* config_data = reinterpret_cast<tt_l1_ptr uint16_t const*>(config_data_l1_addr);
+        const tt_l1_ptr uint16_t* config_data = reinterpret_cast<const tt_l1_ptr uint16_t*>(config_data_l1_addr);
         copy_sticks_async<
             stick_nbytes,
             input_aligned_page_size,
@@ -157,7 +159,7 @@ void kernel_main() {
 
     if constexpr (local_config_cb_id) {
         uint32_t config_data_l1_addr = get_read_ptr(local_config_cb_id);
-        tt_l1_ptr uint16_t const* config_data = reinterpret_cast<tt_l1_ptr uint16_t const*>(config_data_l1_addr);
+        const tt_l1_ptr uint16_t* config_data = reinterpret_cast<const tt_l1_ptr uint16_t*>(config_data_l1_addr);
         copy_sticks_async<
             stick_nbytes,
             input_aligned_page_size,
