@@ -78,7 +78,7 @@ def init_conditional_generation_tt_model(hf_ref_model, config, ttnn_model, devic
         device=device,
     )
 
-    # Note: config.max_length is 448 for current whisper models
+    # Note: config.max_length is 448 for distil-whisper/distil-large-v3
     kv_cache = init_kv_cache(config, device, max_batch_size, max_seq_len=max_seq_len)
 
     return parameters, ttnn_linear_weight, kv_cache
@@ -86,11 +86,10 @@ def init_conditional_generation_tt_model(hf_ref_model, config, ttnn_model, devic
 
 def run_generate(
     config,
-    input_embeds,
-    input_features,
+    audio_data,
+    sampling_rate,
+    feature_extractor,
     ttnn_model,
-    decoder_hidden_states,
-    decoder_attention_mask,
     parameters,
     processor,
     ttnn_linear_weight,
@@ -98,42 +97,59 @@ def run_generate(
     generation_config,
     kv_cache=None,
     stream_generation=False,
+    feature_dtype_to_use=torch.bfloat16,
 ):
-    unpadded_batch_size = input_embeds.shape[0]
+    start_encode = time.time()
+
+    # Compute features
+    inputs = feature_extractor(audio_data, sampling_rate=sampling_rate, return_tensors="pt")
+    input_features = inputs.input_features.type(feature_dtype_to_use)
+    unpadded_batch_size = input_features.shape[0]
     assert unpadded_batch_size == 1, "Only batch size 1 is supported for inference"
 
-    input_ids = torch.tensor([[1]]) * config.decoder_start_token_id
-
-    logits_processor = get_logits_processor(input_ids, config)
-
-    # Initial decode positions
-    if kv_cache:
-        current_decode_pos = torch.zeros(unpadded_batch_size)
-        current_decode_pos = ttnn.from_torch(
-            current_decode_pos,
-            device=device,
-            dtype=ttnn.int32,
-        )
-    else:
-        input_ids = pad_input_32(input_ids, config.pad_token_id).to(torch.long)
-        decoder_start_values = generation_config.pad_token_id * torch.ones(1, 32).to(torch.long)
-        current_decode_pos = None
+    # Compute embeddings
+    input_embeds = ttnn_model.preprocess_encoder_inputs(
+        config, input_features, parameters=parameters.encoder, device=device
+    )
 
     # Run encoder
-    start_encode = time.time()
     encoder_hidden_states = ttnn_model.encoder(config, input_embeds, parameters=parameters.encoder)
     ttnn.synchronize_device(device)
-    logger.info(f"Encode time: {time.time() - start_encode}")
+    logger.info(f"Time to encoder states: {(time.time() - start_encode)*1000:.3f}ms")
 
-    # Decode inference run
-    MAX_GEN_LEN = 128
-    print_each_iter = True
-    output_ids = []
-    logger.info("Starting decode inference run")
+    # Run decoder
+    logger.info("Starting decode inference")
 
-    def _run_generate(decoder_hidden_states, decoder_attention_mask):
+    def _run_generate():
+        # Input ids
+        input_ids = torch.tensor([[1]]) * config.decoder_start_token_id
+        logits_processor = get_logits_processor(input_ids, config)
+        if not kv_cache:
+            input_ids = pad_input_32(input_ids, config.pad_token_id).to(torch.long)
+            decoder_start_values = generation_config.pad_token_id * torch.ones(1, 32).to(torch.long)
+
+        # Initial decode position
+        current_decode_pos = (
+            ttnn.from_torch(torch.zeros(unpadded_batch_size), device=device, dtype=ttnn.int32) if kv_cache else None
+        )
+
+        MAX_GEN_LEN = config.max_length  # 448 for distil-whisper/distil-large-v3
+        print_each_iter = False
+        output_ids = []
+        total_decode_time = 0
         for i in tqdm(range(MAX_GEN_LEN), desc="Decode inference iterations"):
             start_iter = time.time()
+
+            decoder_hidden_states, decoder_attention_mask = ttnn_model.preprocess_decoder_inputs(
+                config=config,
+                input_ids=input_ids,
+                attention_mask=None,
+                parameters=parameters.decoder,
+                device=device,
+                decode_pos=i if kv_cache else None,
+                create_attention_mask=(not kv_cache),
+            )
+
             output = ttnn_model.decoder(
                 config,
                 decoder_hidden_states,
@@ -170,16 +186,7 @@ def run_generate(
                 input_ids = next_tokens[:, None]
                 ttnn.plus_one(current_decode_pos)
 
-            decoder_hidden_states, decoder_attention_mask = ttnn_model.preprocess_decoder_inputs(
-                config=config,
-                input_ids=input_ids,
-                attention_mask=None,
-                parameters=parameters.decoder,
-                device=device,
-                decode_pos=(i + 1) if kv_cache else None,
-                create_attention_mask=(not kv_cache),
-            )
-            logger.info(f"Decode iter time: {time.time() - start_iter}")
+            total_decode_time += time.time() - start_iter
 
             ttnn_transcription = processor.batch_decode(next_tokens.unsqueeze(dim=1), skip_special_tokens=True)[0]
             if print_each_iter:
@@ -189,11 +196,13 @@ def run_generate(
             if next_tokens == config.eos_token_id:
                 break
 
+        logger.info(f"Average decode throughput: {(i+1) / total_decode_time:.3f} t/s/u")
+
     # conditionally return generator or full response
     if stream_generation:
-        return _run_generate(decoder_hidden_states, decoder_attention_mask)
+        return _run_generate()
     else:
-        return "".join(_run_generate(decoder_hidden_states, decoder_attention_mask))
+        return "".join(_run_generate())
 
 
 def create_functional_whisper_for_conditional_generation_inference_pipeline(ttnn_model, device):
@@ -208,40 +217,20 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(ttnn
         hf_ref_model, config, ttnn_model, device
     )
 
-    dtype_to_use = torch.bfloat16
-
     def _model_pipeline(data, sampling_rate, stream=False):
-        inputs = feature_extractor(data, sampling_rate=sampling_rate, return_tensors="pt")
-        input_features = inputs.input_features.type(dtype_to_use)
+        logger.info(f"Running model on audio data with duration {data.shape[0]/sampling_rate:.3f}s")
 
-        decoder_input_ids = torch.tensor([[1, 1]]) * config.decoder_start_token_id
-        decoder_input_ids = pad_input_32(decoder_input_ids, config.pad_token_id).to(torch.long)
-
-        attention_mask = None
-
-        (input_embeds, decoder_hidden_states, decoder_attention_mask) = ttnn_model.preprocess_inputs(
-            config=config,
-            input_features=input_features,
-            input_ids=decoder_input_ids,
-            attention_mask=attention_mask,
-            parameters=parameters,
-            device=device,
-            create_attention_mask=(not kv_cache),
-        )
-
-        generation_config = hf_ref_model.generation_config
         return run_generate(
             config,
-            input_embeds,
-            input_features,
+            data,
+            sampling_rate,
+            feature_extractor,
             ttnn_model,
-            decoder_hidden_states,
-            decoder_attention_mask=decoder_attention_mask,
             parameters=parameters,
             processor=processor,
             ttnn_linear_weight=ttnn_linear_weight,
             device=device,
-            generation_config=generation_config,
+            generation_config=hf_ref_model.generation_config,
             kv_cache=kv_cache,
             stream_generation=stream,
         )
@@ -392,13 +381,14 @@ def run_demo_functional_whisper_for_conditional_generation_dataset(ttnn_model, d
 
     # load data
     ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
-    data = ds[4]["audio"]["array"]
-    sampling_rate = 16000
 
     # perform model inference
-    ttnn_output = model_pipeline(data, sampling_rate, stream=False)
-    logger.info("Model Output")
-    logger.info(ttnn_output)
+    for ds_idx in [0, 4]:  # Test two sample inputs
+        data = ds[ds_idx]["audio"]["array"]
+        sampling_rate = 16000
+        ttnn_output = model_pipeline(data, sampling_rate, stream=False)
+        logger.info("Model output:")
+        logger.info(ttnn_output)
 
 
 @pytest.mark.parametrize(
