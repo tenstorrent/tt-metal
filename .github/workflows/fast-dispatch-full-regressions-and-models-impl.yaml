@@ -139,7 +139,7 @@ jobs:
       matrix:
         test-config:
           - model: "stable_diffusion"
-            cmd: pytest --timeout 900 -n auto tests/nightly/single_card/stable_diffusion
+            cmd: SLOW_MATMULS=1 pytest --timeout 900 -n auto tests/nightly/single_card/stable_diffusion
               # Skipping due to issue #15932
               # - model: "mamba 1"
               # cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 1
