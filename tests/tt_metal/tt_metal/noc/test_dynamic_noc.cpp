@@ -181,6 +181,4 @@ TEST_F(DeviceSingleCardFastSlowDispatchFixture, TestDynamicNoCMutlipleProgramMix
 
     build_and_run_program(this->device_, this->slow_dispatch_, NUM_PROGRAMS, MAX_LOOP, page_size, mix_noc_mode);
 }
-
 }  // namespace tt::tt_metal
-
