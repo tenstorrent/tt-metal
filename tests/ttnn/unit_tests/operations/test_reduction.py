@@ -3,14 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-
 import torch
-
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import skip_for_grayskull, torch_random
-
 
 @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [32, 64])
