@@ -140,7 +140,6 @@ def open_mesh_device(
     dispatch_core_config: ttnn.DispatchCoreConfig = ttnn.DispatchCoreConfig(),
     offset: Optional[ttnn.MeshCoordinate] = None,
     physical_device_ids: List[int] = [],
-    **kwargs,
 ):
     """
     Open a mesh device with the specified configuration.
