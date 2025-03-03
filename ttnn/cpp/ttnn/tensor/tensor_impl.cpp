@@ -831,6 +831,36 @@ Tensor to_device_mesh_tensor(
     return Tensor(std::move(mesh_storage), tensor_spec);
 }
 
+template <typename T>
+void copy_to_mesh_tensor(const Tensor& host_tensor, const Tensor& mesh_tensor) {
+    TT_FATAL(host_tensor.storage_type() != StorageType::DEVICE, "Host tensor is on device.");
+    TT_FATAL(mesh_tensor.storage_type() == StorageType::DEVICE, "Mesh tensor is not on device.");
+    TT_FATAL(tt::tt_metal::detail::InMainThread(), "copy_to_mesh_tensor must be called from the main thread");
+    TT_FATAL(mesh_tensor.is_allocated(), "Need data to exist in order to move it to device");
+    TT_FATAL(host_tensor.get_logical_shape() == mesh_tensor.get_logical_shape(), "Host tensor has different shape");
+    TT_FATAL(host_tensor.get_dtype() == mesh_tensor.get_dtype(), "Host tensor has different dtype");
+    TT_FATAL(
+        host_tensor.get_tensor_spec().page_config() == mesh_tensor.get_tensor_spec().page_config(),
+        "Host tensor has different page config");
+
+    const auto& tensor_spec = mesh_tensor.get_tensor_spec();
+    auto mesh_buffer = std::get<DeviceStorage>(mesh_tensor.get_storage()).mesh_buffer;
+    auto* mesh_device = mesh_buffer->device();
+
+    DeviceStorage mesh_storage = std::visit(
+        tt::stl::overloaded{
+            [mesh_device, &mesh_buffer, &tensor_spec]<OwnedOrBorrowedStorage StorageType>(const StorageType& storage) {
+                // Replicate data across devices in a mesh.
+                return replicate_to_mesh_buffer<T>(storage, mesh_device, mesh_buffer, tensor_spec);
+            },
+            [mesh_device, &mesh_buffer, &tensor_spec](const MultiDeviceHostStorage& storage) {
+                // Shard multi device host shards across devices in a mesh..
+                return shard_to_mesh_buffer<T>(storage, mesh_device, mesh_buffer, tensor_spec);
+            },
+            [](const auto& s) -> DeviceStorage { TT_THROW("Unexpected storage type {}", tt::stl::get_type_name(s)); }},
+        host_tensor.get_storage());
+}
+
 template Tensor to_device_mesh_tensor<bfloat16>(
     const Tensor& tensor, distributed::MeshDevice* target_device, const MemoryConfig& memory_config);
 template Tensor to_device_mesh_tensor<float>(
@@ -854,6 +884,23 @@ template <>
 Tensor to_device_mesh_tensor<bfloat8_b>(
     const Tensor& tensor, distributed::MeshDevice* target_device, const MemoryConfig& memory_config) {
     return to_device_mesh_tensor<uint32_t>(tensor, target_device, memory_config);
+}
+
+template void copy_to_mesh_tensor<bfloat16>(const Tensor& host_tensor, const Tensor& mesh_tensor);
+template void copy_to_mesh_tensor<float>(const Tensor& host_tensor, const Tensor& mesh_tensor);
+template void copy_to_mesh_tensor<int32_t>(const Tensor& host_tensor, const Tensor& mesh_tensor);
+template void copy_to_mesh_tensor<uint32_t>(const Tensor& host_tensor, const Tensor& mesh_tensor);
+template void copy_to_mesh_tensor<uint16_t>(const Tensor& host_tensor, const Tensor& mesh_tensor);
+template void copy_to_mesh_tensor<uint8_t>(const Tensor& host_tensor, const Tensor& mesh_tensor);
+
+template <>
+void copy_to_mesh_tensor<bfloat4_b>(const Tensor& host_tensor, const Tensor& mesh_tensor) {
+    copy_to_mesh_tensor<uint32_t>(host_tensor, mesh_tensor);
+}
+
+template <>
+void copy_to_mesh_tensor<bfloat8_b>(const Tensor& host_tensor, const Tensor& mesh_tensor) {
+    copy_to_mesh_tensor<uint32_t>(host_tensor, mesh_tensor);
 }
 
 // ======================================================================================
