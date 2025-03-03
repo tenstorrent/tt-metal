@@ -735,7 +735,6 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
 
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores_total);
 
-    // uint32_t max_read_size = 2048;
     auto& front_pad = input_tensor_start;
     uint32_t curr_c = 0, curr_h = 0, curr_n = 0;
     uint32_t num_stick_per_barrier = get_num_stick_per_barrier(input_tensor);
@@ -752,15 +751,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
             num_sticks_per_core = 0;
         }
 
-        // issue more reads before calling barrier
-        // uint32_t num_sticks_per_core_read = 0, num_read_per_barrier = 0;
-        // if (num_sticks_per_core != 0) {
-        //     num_sticks_per_core_read =
-        //         tt::tt_metal::merge_num_sticks_to_read(num_sticks_per_core, W_bytes, max_read_size);
-        //     num_read_per_barrier = num_sticks_per_core / num_sticks_per_core_read;
-        // }
         uint32_t num_sticks_per_barrier = get_num_stick_per_barrier(input_tensor);
-
         // reader
         std::vector<uint32_t> reader_runtime_args = {
             input_buffer->address(),
