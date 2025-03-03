@@ -92,7 +92,7 @@ std::vector<Tensor> impl_split_last_dim_two_chunks_tiled(const Tensor& input_ten
     auto padded_input_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_shape);
     ttnn::operations::experimental::auto_format::FormatParams input_format_params = {
         .pad_shape = padded_input_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
-    return operation::run_with_autoformat(
+    return tt::tt_metal::operation::run_with_autoformat(
         SplitDeviceOperation{2, 3, mem_config}, {input_tensor}, {input_format_params}, {Layout::TILE, Layout::TILE});
 }
 

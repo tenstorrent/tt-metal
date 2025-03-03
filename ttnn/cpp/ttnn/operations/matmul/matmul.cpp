@@ -118,7 +118,7 @@ Tensor MatmulOperation::invoke(
     const std::optional<const CoreGrid> core_grid,
     const std::optional<const tt::tt_metal::Tile>& output_tile,
     std::optional<Tensor> optional_output_tensor,
-    const std::optional<const DeviceGlobalCircularBuffer>& global_cb) {
+    const std::optional<const tt::tt_metal::DeviceGlobalCircularBuffer>& global_cb) {
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
@@ -160,7 +160,7 @@ Tensor LinearOperation::invoke(
     const std::optional<const CoreGrid> core_grid,
     const std::optional<const tt::tt_metal::Tile>& output_tile,
     std::optional<ttnn::Tensor> optional_output_tensor,
-    const std::optional<const DeviceGlobalCircularBuffer>& global_cb) {
+    const std::optional<const tt::tt_metal::DeviceGlobalCircularBuffer>& global_cb) {
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);

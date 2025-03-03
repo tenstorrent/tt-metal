@@ -7,6 +7,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel.hpp>
 
+namespace tt::tt_metal {
+
 struct TestBufferConfig {
     uint32_t num_pages;
     uint32_t page_size;
@@ -93,3 +95,5 @@ inline std::pair<std::vector<uint32_t>, std::vector<uint32_t>> create_runtime_ar
 
     return create_runtime_args(num_rt_args_unique, num_rt_args_common, unique_base, common_base);
 }
+
+}  // namespace tt::tt_metal

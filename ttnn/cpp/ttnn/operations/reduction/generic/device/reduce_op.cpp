@@ -14,22 +14,20 @@ using namespace tt::constants;
 
 namespace reduce_op_utils {
 
-using namespace tt::tt_metal;
-
-std::map<string, string> get_defines(ReduceOpMath reduce_op, ReduceOpDim reduce_dim) {
+std::map<string, string> get_defines(tt::tt_metal::ReduceOpMath reduce_op, tt::tt_metal::ReduceOpDim reduce_dim) {
     std::map<string, string> defines;
     // TOOD(AP): need a sync with Reduce::Max from HLK headers
-    bool do_max = reduce_op == ReduceOpMath::MAX;
+    bool do_max = reduce_op == tt::tt_metal::ReduceOpMath::MAX;
     string reduce_dim_str;
     switch (reduce_dim) {
-        case ReduceOpDim::W: reduce_dim_str = "ReduceDim::REDUCE_ROW"; break;
-        case ReduceOpDim::H: reduce_dim_str = "ReduceDim::REDUCE_COL"; break;
-        case ReduceOpDim::HW: reduce_dim_str = "ReduceDim::REDUCE_SCALAR"; break;
+        case tt::tt_metal::ReduceOpDim::W: reduce_dim_str = "ReduceDim::REDUCE_ROW"; break;
+        case tt::tt_metal::ReduceOpDim::H: reduce_dim_str = "ReduceDim::REDUCE_COL"; break;
+        case tt::tt_metal::ReduceOpDim::HW: reduce_dim_str = "ReduceDim::REDUCE_SCALAR"; break;
         default: TT_ASSERT(false && "Invalid reduce_op!");
     }
     defines["REDUCE_OP"] = (do_max ? "PoolType::MAX" : "PoolType::SUM");
     defines["REDUCE_DIM"] = reduce_dim_str;
-    if (reduce_dim == ReduceOpDim::W && reduce_op == ReduceOpMath::SUM) {
+    if (reduce_dim == tt::tt_metal::ReduceOpDim::W && reduce_op == tt::tt_metal::ReduceOpMath::SUM) {
         defines["REDUCE_ROW_SUM_VIA_MM"] = 1;
     }
     return defines;
@@ -158,7 +156,7 @@ Tensor reduce_min(
     const Tensor& input_tensor,
     ReduceOpDim reduce_dim,
     float scaler = 1.0f,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt) {
     Tensor input = input_tensor;
     if (input.get_layout() == Layout::ROW_MAJOR && input.storage_type() == StorageType::DEVICE) {

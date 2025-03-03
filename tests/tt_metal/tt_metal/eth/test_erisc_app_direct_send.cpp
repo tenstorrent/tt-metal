@@ -50,7 +50,7 @@ const size_t get_rand_32_byte_aligned_address(const size_t& base, const size_t& 
 }
 
 bool eth_direct_sender_receiver_kernels(
-    DispatchFixture* fixture,
+    tt_metal::DispatchFixture* fixture,
     tt_metal::IDevice* sender_device,
     tt_metal::IDevice* receiver_device,
     const size_t& byte_size,
@@ -227,11 +227,12 @@ bool send_over_eth(
         receiver_device->id(), receiver_core, args_1, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
 
     // TODO: this should be updated to use kernel api
-    uint32_t active_eth_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
-    auto sender_firmware_path = BuildEnvManager::get_instance()
+    uint32_t active_eth_index =
+        tt_metal::hal.get_programmable_core_type_index(tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+    auto sender_firmware_path = tt_metal::BuildEnvManager::get_instance()
                                     .get_firmware_build_state(sender_device->build_id(), active_eth_index, 0, 0)
                                     .get_target_out_path("");
-    auto receiver_firmware_path = BuildEnvManager::get_instance()
+    auto receiver_firmware_path = tt_metal::BuildEnvManager::get_instance()
                                       .get_firmware_build_state(receiver_device->build_id(), active_eth_index, 0, 0)
                                       .get_target_out_path("");
     const ll_api::memory& binary_mem_send = llrt::get_risc_binary(sender_firmware_path);
@@ -269,6 +270,8 @@ bool send_over_eth(
 }
 
 }  // namespace unit_tests::erisc::direct_send
+
+namespace tt::tt_metal {
 
 TEST_F(N300DeviceFixture, ActiveEthSingleCoreDirectSendChip0ToChip1) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
@@ -875,3 +878,5 @@ TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsDirectSendAllConne
         }
     }
 }
+
+}  // namespace tt::tt_metal

@@ -76,7 +76,9 @@ ttnn::Tensor allocate_tensor_on_device(
     const std::optional<MemoryConfig>& memory_config) {
     return allocate_tensor_on_device(
         TensorSpec(
-            shape, TensorLayout(data_type, PageConfig(layout), memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG))),
+            shape,
+            tt::tt_metal::TensorLayout(
+                data_type, tt::tt_metal::PageConfig(layout), memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG))),
         device);
 }
 
@@ -88,7 +90,9 @@ ttnn::Tensor allocate_tensor_on_device(
     const std::optional<MemoryConfig>& memory_config) {
     return allocate_tensor_on_device(
         TensorSpec(
-            shape, TensorLayout(data_type, PageConfig(layout), memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG))),
+            shape,
+            tt::tt_metal::TensorLayout(
+                data_type, tt::tt_metal::PageConfig(layout), memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG))),
         mesh_device);
 }
 

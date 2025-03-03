@@ -93,7 +93,7 @@ std::vector<Tensor> AllGatherMatmul::create_output_tensors(const std::vector<Ten
     return {all_gather_output_tensor, matmul_output_tensor, datacopy_output_tensor};
 }
 
-operation::ProgramWithCallbacks AllGatherMatmul::create_program(
+tt::tt_metal::operation::ProgramWithCallbacks AllGatherMatmul::create_program(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
@@ -153,12 +153,12 @@ std::vector<ttnn::Tensor> all_gather_matmul(
 
     auto devices = input_tensor.get_workers();
     std::vector<Tensor> output_tensors = {
-        ttnn::Tensor(operation::get_workers_for_op_output({input_tensor, weight_tensor})),
-        ttnn::Tensor(operation::get_workers_for_op_output({input_tensor, weight_tensor})),
-        ttnn::Tensor(operation::get_workers_for_op_output({input_tensor, weight_tensor}))};
+        ttnn::Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor, weight_tensor})),
+        ttnn::Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor, weight_tensor})),
+        ttnn::Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor, weight_tensor}))};
     std::vector<std::optional<const ttnn::Tensor>> optional_input_tensors = {std::nullopt};
 
-    operation::launch_op(
+    tt::tt_metal::operation::launch_op(
         [dim,
          all_gather_core_grid_offset,
          num_links,
@@ -222,7 +222,7 @@ std::vector<ttnn::Tensor> all_gather_matmul(
                     /*output_tile=*/std::nullopt,
                     /*global_cb=*/std::nullopt});
 
-            return operation::run(
+            return tt::tt_metal::operation::run(
                 ttnn::experimental::AllGatherMatmul{/* All Gather Params */
                                                     all_gather_struct,
                                                     /* Matmul params */

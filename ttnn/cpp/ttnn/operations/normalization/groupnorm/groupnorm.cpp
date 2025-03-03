@@ -87,7 +87,7 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
         .inplace = inplace.value_or(false),
         .output_layout = output_layout.value_or(input_tensor.get_layout())};
 
-    return operation::run(
+    return tt::tt_metal::operation::run(
                GroupNorm{
                    .eps = epsilon,
                    .num_groups = static_cast<uint32_t>(num_groups),

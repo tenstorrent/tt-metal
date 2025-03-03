@@ -10,7 +10,7 @@
 
 namespace ttnn::operations::experimental::paged_cache::detail {
 
-operation::ProgramWithCallbacks paged_update_cache_multi_core(
+tt::tt_metal::operation::ProgramWithCallbacks paged_update_cache_multi_core(
     const Tensor& cache_tensor,
     const Tensor& input_tensor,
     std::optional<const Tensor> update_idxs_tensor,

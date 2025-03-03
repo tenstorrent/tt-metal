@@ -10,15 +10,15 @@
 namespace ttnn::operations::experimental::ssm {
 
 struct RepeatAndInterleaveEltwiseMul {
-    MemoryConfig memory_config;
-    DataType dtype;
+    tt::tt_metal::MemoryConfig memory_config;
+    tt::tt_metal::DataType dtype;
     MathFidelity math_fidelity;
 
     const uint32_t HIDDEN_SIZE = 5120;
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
-    operation::ProgramWithCallbacks create_program(
+    tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
 };
 

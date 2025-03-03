@@ -18,8 +18,9 @@
 #include <tt-metalium/kernel.hpp>
 #include "umd/device/tt_soc_descriptor.h"
 
+namespace tt::tt_metal {
+
 using std::vector;
-using namespace tt::tt_metal;
 
 struct CBConfig {
     uint32_t cb_id;
@@ -2127,3 +2128,5 @@ TEST_F(RandomProgramFixture, TensixTestLargeProgramInBetweenFiveSmallPrograms) {
 }
 
 }  // namespace stress_tests
+
+}  // namespace tt::tt_metal

@@ -33,7 +33,8 @@ bool requires_padding_change(const ttnn::Tensor& tensor, ttnn::Layout layout) {
     // It's okay for conversion to tile layout to preserve arbitrary padding as long as it satisfies the alignment
     TensorSpec padded_spec(
         tensor.get_padded_shape(),
-        TensorLayout(tensor.get_dtype(), PageConfig(layout, std::move(tile)), tensor.memory_config()));
+        tt::tt_metal::TensorLayout(
+            tensor.get_dtype(), tt::tt_metal::PageConfig(layout, std::move(tile)), tensor.memory_config()));
     return tensor.get_padded_shape() != padded_spec.padded_shape();
 }
 
@@ -79,7 +80,8 @@ Tensor to_layout_impl(
 
     TensorSpec tile_spec(
         tensor_arg.get_logical_shape(),
-        TensorLayout(tensor_arg.dtype(), PageConfig(Layout::TILE, tile), output_memory_config));
+        tt::tt_metal::TensorLayout(
+            tensor_arg.dtype(), tt::tt_metal::PageConfig(Layout::TILE, tile), output_memory_config));
     auto padded_output_shape = tile_spec.padded_shape();
     auto original_rank = tensor_arg.get_logical_shape().rank();
     auto original_shape = tensor_arg.get_logical_shape();

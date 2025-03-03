@@ -25,7 +25,7 @@ ttnn::Tensor ExecuteRMSNormPostAllGather::invoke(
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
     if (input_tensor.is_sharded()) {
-        return operation::run(
+        return tt::tt_metal::operation::run(
                    LayerNorm{
                        .norm_type = LayerNormType::RMSNORM,
                        .distributed_norm_stage = DistributedLayerNormStage::POST_ALL_GATHER,
@@ -38,7 +38,7 @@ ttnn::Tensor ExecuteRMSNormPostAllGather::invoke(
                    {std::nullopt, weight, bias, stats})
             .at(0);
     } else {
-        return operation::run(
+        return tt::tt_metal::operation::run(
                    LayerNormPostAllGather{
                        .norm_type = LayerNormDistributedType::RMSNORM,
                        .eps = epsilon,

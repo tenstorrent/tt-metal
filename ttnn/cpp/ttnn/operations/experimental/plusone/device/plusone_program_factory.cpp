@@ -13,9 +13,8 @@
 namespace ttnn::operations::experimental::detail {
 
 using namespace tt::constants;
-using namespace tt::tt_metal;
 
-operation::ProgramWithCallbacks plusone_single_core(const Tensor& input) {
+tt::tt_metal::operation::ProgramWithCallbacks plusone_single_core(const Tensor& input) {
     tt::tt_metal::Program program{};
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
@@ -68,18 +67,19 @@ operation::ProgramWithCallbacks plusone_single_core(const Tensor& input) {
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, {src_buffer->address()});
     }
 
-    auto override_runtime_args_callback =
-        [reader_kernel_id, cores](
-            const Program& program, const std::vector<Buffer*>& input_buffers, const std::vector<Buffer*>&) {
-            auto src_buffer = input_buffers.at(0);
+    auto override_runtime_args_callback = [reader_kernel_id, cores](
+                                              const tt::tt_metal::Program& program,
+                                              const std::vector<tt::tt_metal::Buffer*>& input_buffers,
+                                              const std::vector<tt::tt_metal::Buffer*>&) {
+        auto src_buffer = input_buffers.at(0);
 
-            for (const auto& core : cores) {
-                {
-                    auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                    runtime_args[0] = src_buffer->address();
-                }
+        for (const auto& core : cores) {
+            {
+                auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                runtime_args[0] = src_buffer->address();
             }
-        };
+        }
+    };
 
     return {std::move(program), override_runtime_args_callback};
 }
