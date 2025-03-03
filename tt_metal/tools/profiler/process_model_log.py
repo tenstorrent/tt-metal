@@ -21,7 +21,9 @@ def get_latest_ops_log_filename(output_logs_subdir):
     return filename
 
 
-def post_process_ops_log(output_logs_subdir, columns, sum_vals=True, op_name="", has_signposts=False):
+def post_process_ops_log(
+    output_logs_subdir, columns, sum_vals=True, op_name="", has_signposts=False, detailed=False, warmup_iters=0
+):
     filename = get_latest_ops_log_filename(output_logs_subdir)
     df = pd.read_csv(filename)
 
@@ -34,6 +36,9 @@ def post_process_ops_log(output_logs_subdir, columns, sum_vals=True, op_name="",
     if op_name != "":
         df = df[df["OP CODE"] == op_name]
 
+    if warmup_iters > 0:
+        df = df.iloc[warmup_iters:]
+
     results = {}
     for col in columns:
         df_filtered = df[df[col] != "-"]
@@ -41,6 +46,13 @@ def post_process_ops_log(output_logs_subdir, columns, sum_vals=True, op_name="",
             results[col] = df_filtered[col].astype(float).sum()
         else:
             results[col] = df_filtered[col].astype(float).to_numpy()
+
+        if detailed:
+            results[f"AVG {col}"] = df_filtered[col].astype(float).sum() / len(df_filtered)
+            results[f"MIN {col}"] = df_filtered[col].astype(float).min()
+            results[f"MAX {col}"] = df_filtered[col].astype(float).max()
+            results[f"STD {col}"] = df_filtered[col].astype(float).std()
+
     return results
 
 
