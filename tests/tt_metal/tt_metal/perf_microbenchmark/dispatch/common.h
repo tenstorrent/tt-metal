@@ -564,7 +564,8 @@ void configure_kernel_variant(
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = my_noc_index,
             .compile_args = compile_args,
-            .defines = defines});
+            .defines = defines,
+            .opt_level = KernelBuildOptLevel::Os});
 }
 
 // Specific to this test. This test doesn't use Buffers, and for Storage cores in L1 that have 2 banks, they are
