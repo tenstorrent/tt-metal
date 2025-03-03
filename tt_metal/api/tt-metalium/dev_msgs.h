@@ -133,10 +133,15 @@ struct kernel_config_msg_t {
 } __attribute__((packed));
 
 struct go_msg_t {
-    volatile uint8_t dispatch_message_offset;
-    volatile uint8_t master_x;
-    volatile uint8_t master_y;
-    volatile uint8_t signal;  // INIT, GO, DONE, RESET_RD_PTR
+    union {
+        uint32_t all;
+        struct {
+            uint8_t dispatch_message_offset;
+            uint8_t master_x;
+            uint8_t master_y;
+            uint8_t signal;  // INIT, GO, DONE, RESET_RD_PTR
+        };
+    };
 } __attribute__((packed));
 
 struct launch_msg_t {  // must be cacheline aligned
@@ -338,7 +343,7 @@ struct mailboxes_t {
     struct slave_sync_msg_t slave_sync;
     uint32_t launch_msg_rd_ptr;
     struct launch_msg_t launch[launch_msg_buffer_num_entries];
-    struct go_msg_t go_message;
+    volatile struct go_msg_t go_message;
     struct watcher_msg_t watcher;
     struct dprint_buf_msg_t dprint_buf;
     uint32_t pads_2[PROFILER_NOC_ALIGNMENT_PAD_COUNT];

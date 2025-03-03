@@ -69,7 +69,6 @@ private:
     CoreType dispatch_core_type;
     uint32_t expected_num_workers_completed;
     uint32_t packed_write_max_unicast_sub_cmds;
-    uint32_t dispatch_message_addr;
     uint32_t multicast_cores_launch_message_wptr = 0;
     uint32_t unicast_cores_launch_message_wptr = 0;
     // TODO: There will be multiple ids once programs support spanning multiple sub_devices

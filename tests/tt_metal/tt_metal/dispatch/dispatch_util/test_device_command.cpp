@@ -15,7 +15,7 @@ TEST(DeviceCommandTest, AddDispatchWait) {
     calculator.add_dispatch_wait();
 
     HostMemDeviceCommand command(calculator.write_offset_bytes());
-    command.add_dispatch_wait(0, 0, 0);
+    command.add_dispatch_wait(0, 0, 0, 0);
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
 
@@ -24,7 +24,7 @@ TEST(DeviceCommandTest, AddDispatchWaitWithPrefetchStall) {
     calculator.add_dispatch_wait_with_prefetch_stall();
 
     HostMemDeviceCommand command(calculator.write_offset_bytes());
-    command.add_dispatch_wait_with_prefetch_stall(0, 0, 0);
+    command.add_dispatch_wait_with_prefetch_stall(0, 0, 0, 0);
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
 
