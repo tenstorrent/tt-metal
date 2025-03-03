@@ -22,8 +22,7 @@ struct LlamaReduceScatterDeviceOperation {
         const MemoryConfig output_mem_config;
     };
     struct tensor_args_t {
-        const Tensor& input_tensor;
-        std::optional<Tensor> optional_output_tensor;
+        const Tensor input_tensor;
     };
 
     using spec_return_value_t = ttnn::TensorSpec;
@@ -80,14 +79,13 @@ struct LlamaReduceScatterDeviceOperation {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const ttnn::Tensor& input_tensor,
         const int32_t dim,
-        const std::optional<ttnn::MemoryConfig>& memory_config,
-        std::optional<Tensor> optional_output_tensor);
+        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
 };
 }  // namespace ttnn::operations::experimental::ccl
 
 namespace ttnn::prim {
 // Register the operation with the ttnn::register_operation API to make it available to the user as ttnn::prim::example
-constexpr auto llama_reduce_scatter = ttnn::register_operation<
+constexpr auto llama_reduce_scatter = ttnn::register_operation_with_auto_launch_op<
     "ttnn::prim::llama_reduce_scatter",
     ttnn::operations::experimental::ccl::LlamaReduceScatterDeviceOperation>();
 }  // namespace ttnn::prim

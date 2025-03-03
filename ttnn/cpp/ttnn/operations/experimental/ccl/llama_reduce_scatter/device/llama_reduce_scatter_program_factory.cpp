@@ -7,40 +7,20 @@
 #include <vector>
 #include <tt-metalium/hal_exp.hpp>
 
-namespace tnn::operations::experimental::ccl {
+namespace ttnn::operations::experimental::ccl {
 
 LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::cached_program_t
 LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    // X = output width
-    // Y = output height
-    // input shape = (..., H, W)
-    // output shape = (..., Y, X)
-
-    /**
-     * The algorithm is as follows:
-     * 1. Read in blocks of data along the X and W dimensions (XW blocks, W is contiguous)
-     *  a. TILE_HEIGHT rows along X with TILE_WIDTH elements across W
-     * 2. Tilize, transpose, and untilize the data into a WX block
-     * 3. Write out all the data in WX block to its correct position in the permuted output tensor buffer
-     *  a. We write out on face/subtile line at a time
-     *  a. X is the output width dimension, but it's tiled so we can only write out face/subtile line at a time
-     * 4. Repeat until all XW blocks are processed
-     * 5. If X is not a multiple of TILE_WIDTH, we pad the last face/subtile line with the pad value
-     * 6. If Y is not a multiple of TILE_HEIGHT, we pad the last set of tiles on the Y dimension with the pad value
-     *
-     */
-
     using namespace tt;
     using namespace tt::tt_metal;
-    const std::optional<float> pad_value = operation_attributes.pad_value;
 
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& input_shape = input_tensor.get_logical_shape();
-    const auto& dims = operation_attributes.dims;
-    uint32_t rank = dims.size();
+    const auto dim = operation_attributes.dim;
+    uint32_t rank = input_shape.size();
     auto& output_tensor = tensor_return_value;
     auto& output_shape = output_tensor.get_logical_shape();
     auto& padded_output_shape = output_tensor.get_padded_shape();
@@ -68,8 +48,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles);
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
-    uint32_t input_page_size =
-        input_tensor.data_types() != tt::DataType::BFLOAT8_B ? tile_shape[0] * tile_shape[1] : 1088;
+    uint32_t input_page_size = input_tensor.get_dtype() != DataType::BFLOAT8_B ? tile_shape[0] * tile_shape[1] : 1088;
 
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(num_input_pages_to_read * input_page_size, {{src0_cb_index, cb_data_format}})
@@ -83,8 +62,8 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/"
-        "reader_permute_interleaved_tiled_generic.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/device/kernels/dataflow/"
+        "reader_llama_reduce_scatter.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -94,7 +73,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/llama_reduce_scatter/device/kernels/dataflow/"
+        "ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/device/kernels/dataflow/"
         "writer_llama_reduce_scatter.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
@@ -161,4 +140,4 @@ void LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::override_runtime_
     }
 }
 
-}  // namespace tnn::operations::experimental::ccl
+}  // namespace ttnn::operations::experimental::ccl

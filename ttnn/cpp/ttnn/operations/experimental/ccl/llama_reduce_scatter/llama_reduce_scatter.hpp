@@ -9,7 +9,7 @@
 namespace ttnn {
 namespace operations::experimental::ccl {
 
-struct ExecuteLLamaReduceScatter {
+struct ExecuteLlamaReduceScatter {
     static ttnn::Tensor invoke(
         QueueId queue_id,
         const ttnn::Tensor& input_tensor,
@@ -19,8 +19,10 @@ struct ExecuteLLamaReduceScatter {
 
 }  // namespace operations::experimental::ccl
 
+namespace experimental {
 constexpr auto llama_reduce_scatter = ttnn::register_operation<
     "ttnn::experimental::llama_reduce_scatter",
-    ttnn::operations::experimental::ccl::ExecuteLLamaReduceScatter>();
+    ttnn::operations::experimental::ccl::ExecuteLlamaReduceScatter>();
+}  // namespace experimental
 
 }  // namespace ttnn
