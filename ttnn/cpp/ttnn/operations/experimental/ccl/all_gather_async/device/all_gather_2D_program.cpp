@@ -246,7 +246,7 @@ operation::ProgramWithCallbacks all_gather_2D_multi_core_with_workers(
     //const size_t packet_size_bytes = tt::tt_fabric::PACKET_HEADER_SIZE_BYTES + data_size;
     uint32_t cb_num_pages = lower_pages * higher_pages;
 
-    uint32_t input_cb_index = tt::CBIndex::c_0;
+    uint32_t input_cb_index = 0;
     tt::tt_metal::CircularBufferConfig cb_input_config =
         tt::tt_metal::CircularBufferConfig(
             cb_num_pages * page_size * input_tensor.element_size(), {{input_cb_index, input_cb_data_format}})
@@ -258,13 +258,20 @@ operation::ProgramWithCallbacks all_gather_2D_multi_core_with_workers(
 
     // Allocate space for the client interface
     uint32_t num_directions = (!first_device && !last_device) ? 2 : 1;
-    uint32_t client_interface_cb_index = tt::CBIndex::c_12;
+    uint32_t client_interface_cb_index = 2;
     tt::tt_metal::CircularBufferConfig client_interface_cb_config =
         tt::tt_metal::CircularBufferConfig(
             num_directions * tt::tt_fabric::CLIENT_INTERFACE_SIZE, {{client_interface_cb_index, tt::DataFormat::UInt32}})
             .set_page_size(client_interface_cb_index, tt::tt_fabric::CLIENT_INTERFACE_SIZE);
     auto client_interface_cb =
         tt::tt_metal::CreateCircularBuffer(program, core, client_interface_cb_config);
+
+    uint32_t align_buffer_idx = 1;
+    tt::tt_metal::CircularBufferConfig cb_align_output_config =
+        tt::tt_metal::CircularBufferConfig(
+            4 * page_size * input_tensor.element_size(), {{align_buffer_idx, input_cb_data_format}})
+            .set_page_size(align_buffer_idx, page_size);
+    CBHandle cb_worker_align = CreateCircularBuffer(program, core, cb_align_output_config);
 
     Buffer* src0_buffer = input_tensor.buffer();
     Buffer* dst_buffer = output_tensor.buffer();
@@ -286,13 +293,14 @@ operation::ProgramWithCallbacks all_gather_2D_multi_core_with_workers(
     uint32_t dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> bd_writer_compile_time_args = {
         client_interface_cb_index,
-        is_horizontal,
+        is_horizontal ? 1 : 0,
         dst_is_dram,
         input_cb_index,
         num_devices,
         device_order,
         output_tensor.element_size(),
-        semaphore_target_value};
+        semaphore_target_value,
+        align_buffer_idx};
 
     auto bd_writer_kernel = tt::tt_metal::CreateKernel(
         program,

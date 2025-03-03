@@ -48,14 +48,14 @@ void kernel_main() {
         l1_write_addr += num_bytes;
     }
     noc_async_read_barrier();
-    /*
+
     auto* ptr_orig = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(original_addr);
-    for (uint32_t ii1 = 0; ii1 < 1024; ii1 = ii1 + 1) {
+    for (uint16_t ii1 = 0; ii1 < 1024; ii1 = ii1 + 1) {
         if (ii1 % 16 == 0) {
             DPRINT << "CHECK HERE ";
         }
-        DPRINT << "value at i1 = " << (uint32_t)ii1 << " is: " << BF16((uint16_t)ptr_orig[ii1]) << ENDL();
+        DPRINT << "value at i1 = " << (uint16_t)ii1 << " is: " << BF16((uint16_t)ptr_orig[ii1]) << ENDL();
     }
-    */
+
     cb_push_back(cb_id_in0, higher_pages * lower_pages);
 }

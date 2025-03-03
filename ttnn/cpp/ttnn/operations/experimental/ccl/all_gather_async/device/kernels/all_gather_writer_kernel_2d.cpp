@@ -20,13 +20,14 @@ uint64_t xy_local_addr;
 
 void kernel_main() {
     constexpr uint32_t client_interface_cb = get_compile_time_arg_val(0);
-    constexpr uint32_t is_horizontal = get_compile_time_arg_val(1);
+    constexpr bool is_horizontal = get_compile_time_arg_val(1) == 1;
     constexpr bool dst_is_dram = get_compile_time_arg_val(2) == 1;
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(3);
     constexpr uint32_t num_devices = get_compile_time_arg_val(4);
     constexpr uint32_t this_device_id = get_compile_time_arg_val(5);
     constexpr uint32_t element_size = get_compile_time_arg_val(6);
     constexpr uint32_t semaphore_target_value = get_compile_time_arg_val(7);
+    constexpr uint32_t cb_align_index = get_compile_time_arg_val(8);
 
     uint32_t rt_args_idx = 0;
     uint32_t src_addr = get_arg_val<uint32_t>(rt_args_idx++);
@@ -58,7 +59,7 @@ void kernel_main() {
         .bank_base_address = dst_addr, .page_size = num_bytes, .data_format = data_format};
 
     uint32_t packet_size_bytes = num_bytes + PACKET_HEADER_SIZE_BYTES;
-    /*
+
     DPRINT << "dst_is_dram: " << (uint32_t)dst_is_dram << ENDL();
     DPRINT << "cb_id_in0: " << (uint32_t)cb_id_in0 << ENDL();
     DPRINT << "num_devices: " << (uint32_t)num_devices << ENDL();
@@ -90,7 +91,9 @@ void kernel_main() {
 
     DPRINT << "num_dirs: " << (uint32_t)num_dirs << ENDL();
     DPRINT << "packet_size_bytes: " << (uint32_t)packet_size_bytes << ENDL();
-    */
+
+    DPRINT << "is horizontal " << (uint32_t)is_horizontal << ENDL();
+
     uint32_t client_interface_addr = get_write_ptr(client_interface_cb);
     volatile tt_l1_ptr fabric_pull_client_interface_t* client_interface =
         reinterpret_cast<volatile tt_l1_ptr fabric_pull_client_interface_t*>(client_interface_addr);
@@ -106,6 +109,7 @@ void kernel_main() {
             for (uint32_t k = 0; k < lower_pages; k++) {
                 uint32_t src_page = i * lower_pages + k;
                 uint32_t dst_page = i * num_devices * lower_pages + k + this_device_id * lower_pages;
+                DPRINT << " this device id: " << (uint32_t)this_device_id << ENDL();
                 DPRINT << "dst_page: " << (uint32_t)dst_page << ENDL();
                 DPRINT << "src_page: " << (uint32_t)src_page << ENDL();
                 uint64_t dst_noc_addr = get_noc_addr(dst_page, s);
@@ -150,6 +154,7 @@ void kernel_main() {
                 uint64_t dst_noc_addr = get_noc_addr(dst_page, s);
                 if (!first_device) {
                     fabric_async_write_multicast<AsyncWriteMode::ADD_AND_SEND_PR>(
+                        // fabric_async_write_multicast(
                         client_interface,
                         router_noc_xy_dir1,
                         l1_read_addr + src_page * num_bytes,  // source address in sender’s memory
@@ -209,6 +214,7 @@ void kernel_main() {
                 uint64_t dst_noc_addr = get_noc_addr(dst_page, s);
                 if (!first_device) {
                     fabric_async_write_multicast<AsyncWriteMode::ADD_AND_SEND_PR>(
+                        // fabric_async_write_multicast(
                         client_interface,
                         router_noc_xy_dir1,
                         l1_read_addr + src_page * num_bytes,  // source address in sender’s memory
@@ -274,14 +280,22 @@ void kernel_main() {
         client_interface++;
     }
     noc_async_write_barrier();
-    /*
-    for(uint32_t ii =0; ii< higher_pages* lower_pages * 4; ii++) {
-        uint32_t dst_noc_address = get_noc_addr(ii, s);
-        volatile tt_l1_ptr uint32_t* dst_noc2 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_noc_address);
-        for (uint32_t value =0; value < 1024; value++) {
-            DPRINT << "value at " << (uint32_t)value << " is: " << BF16((uint16_t)dst_noc2[value]) << ENDL();
-        }
+
+    cb_reserve_back(cb_align_index, 4);
+    uint32_t l1_write_addr_align = get_write_ptr(cb_align_index);
+    uint32_t original_addr_align = get_write_ptr(cb_align_index);
+
+    for (uint32_t j = 0; j < 4; j++) {
+        noc_async_read_tile(j, s, l1_write_addr_align);
+        l1_write_addr_align += num_bytes;
     }
-    */
+    noc_async_read_barrier();
+    volatile tt_l1_ptr uint16_t* dst_noc2 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(original_addr_align);
+    for (uint16_t value = 0; value < 1024 * 4; value++) {
+        DPRINT << "value at " << (uint16_t)value << " is: " << BF16((uint16_t)dst_noc2[value]) << ENDL();
+    }
+
+    cb_push_back(cb_align_index, 4);
+
     cb_pop_front(cb_id_in0, higher_pages * lower_pages);
 }

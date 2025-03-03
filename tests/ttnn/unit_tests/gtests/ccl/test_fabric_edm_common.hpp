@@ -2095,18 +2095,26 @@ void run_all_gather_2D_test(const size_t dim, const size_t num_links, const ttnn
         num_devices);
     const MemoryConfig in_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
     const auto num_elems = input_shape.volume();
+    printf("num elems: %zu\n", num_elems);
 
     // INPUT TENSOR setup
     log_info(tt::LogTest, "setting up input tensors");
     size_t page_size = tile_size(DataFormat::Float16);
     std::vector<Tensor> device_input_tensors;
     for (size_t i = 0; i < num_devices; i++) {
-        auto t = ttnn::experimental::view(ttnn::arange(0, num_elems, 1), input_shape).to_layout(layout);
+        auto t = ttnn::experimental::view(
+                     ttnn::arange(0 + num_elems * i, num_elems * i + num_elems, 1, DataType::BFLOAT16), input_shape)
+                     .to_layout(layout);
+        // auto t = ttnn::experimental::view(ttnn::ones(input_shape, DataType::BFLOAT16, Layout::TILE),
+        // input_shape).to_layout(layout);
         t.set_tensor_spec(TensorSpec(
             input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(layout, tt_metal::Tile()), in_memory_config)));
 
         device_input_tensors.push_back(t.to_device(devices[i]));
+        printf("for device %zu\n", i);
+        t.print();
     }
+
     // Need to make it a mesh tensor for use with the op
     const Tensor input_mesh_tensor = ttnn::distributed::aggregate_as_tensor(device_input_tensors, AllGatherTensor{});
 
