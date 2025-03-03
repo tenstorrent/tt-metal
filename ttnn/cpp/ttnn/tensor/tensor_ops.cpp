@@ -200,7 +200,7 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, distri
             auto& worker = workers[worker_index];
             worker->push_work([input_tensor, tensor_modified_layout, target_layout, worker, worker_index]() mutable {
                 TT_ASSERT(
-                    input_tensor.is_host_tensor() &&
+                    input_tensor.is_host_tensor(),
                     "to(layout) must be called on host tensors with MULTI_DEVICE_HOST_STORAGE when multiple "
                     "workers "
                     "are specified");
@@ -246,7 +246,7 @@ Tensor tensor_pad(
     ZoneScoped;
     GraphTracker::instance().track_function_start(
         "Tensor::pad", input_tensor, output_padded_shape, input_tensor_start, pad_value);
-    TT_ASSERT(input_tensor.is_host_tensor() && "Tensor must be on host for padding");
+    TT_ASSERT(input_tensor.is_host_tensor(), "Tensor must be on host for padding");
     // TODO: Flip to assert when we remove use cases in python and c++
     if (input_tensor.get_layout() != Layout::ROW_MAJOR) {
         log_warning(
