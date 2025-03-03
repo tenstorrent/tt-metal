@@ -6,11 +6,11 @@
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
@@ -44,7 +44,7 @@ void move_common_entries(std::vector<CoreCoord>& v1, std::vector<CoreCoord>& v2,
     }
 }
 
-void get_optimal_dram_bank_to_reader_assignment(Device* device, std::vector<CoreCoord>& all_worker_cores_ordered, CoreRangeSet& all_worker_cores) {
+void get_optimal_dram_bank_to_reader_assignment(IDevice* device, std::vector<CoreCoord>& all_worker_cores_ordered, CoreRangeSet& all_worker_cores) {
     all_worker_cores_ordered = device->get_optimal_dram_bank_to_logical_worker_assignment();
     std::set<CoreRange> all_cores_set;
     for (const auto& worker_core : all_worker_cores_ordered) {
@@ -54,7 +54,7 @@ void get_optimal_dram_bank_to_reader_assignment(Device* device, std::vector<Core
 }
 
 operation::ProgramWithCallbacks create_program_dram_sharded(
-    tt::tt_metal::Device* device,
+    tt::tt_metal::IDevice* device,
     const CoreRangeSet& all_storage_cores,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -442,7 +442,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     log_debug(LogOp, "in1_single_tile_size: {}", in1_single_tile_size);
 
     // Create circular buffers
-    uint32_t src0_cb_index = 0;
+    uint32_t src0_cb_index = tt::CBIndex::c_0;
     tt_metal::CircularBufferConfig src0_cb_config =
         tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
             .set_page_size(src0_cb_index, in0_single_tile_size)
@@ -456,7 +456,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         in0_CB_size / in0_single_tile_size,
         in0_CB_size);
 
-    uint32_t src1_cb_index = 1;
+    uint32_t src1_cb_index = tt::CBIndex::c_1;
     tt_metal::CircularBufferConfig src1_cb_config =
         tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
             .set_page_size(src1_cb_index, in1_single_tile_size)
@@ -470,7 +470,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         in1_CB_size / in1_single_tile_size,
         in1_CB_size);
 
-    uint32_t src2_cb_index = 2;
+    uint32_t src2_cb_index = tt::CBIndex::c_2;
     tt_metal::CircularBufferConfig src2_cb_config =
         tt_metal::CircularBufferConfig(in2_CB_size, {{src2_cb_index, in0_data_format}})
             .set_page_size(src2_cb_index, in0_single_tile_size)
@@ -485,8 +485,8 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         in2_CB_size / in0_single_tile_size,
         in2_CB_size);
 
-    uint32_t output_cb_index = tt::CBIndex::c_16;
-    uint32_t interm0_cb_index = 24;
+    uint32_t output_cb_index = tt::CBIndex::c_4;
+    uint32_t interm0_cb_index = tt::CBIndex::c_5;
     tt_metal::CircularBufferConfig interm0_cb_config =
         tt_metal::CircularBufferConfig(0, {{interm0_cb_index, interm0_data_format}});
     tt_metal::CircularBufferConfig output_cb_config =
@@ -537,7 +537,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         out_CB_size);
 
     // resharded output
-    uint32_t output_reshard_cb_index = 17;
+    uint32_t output_reshard_cb_index = tt::CBIndex::c_6;
     std::map<uint8_t, tt::DataFormat> output_reshard_cb_data_format_spec{
         {output_reshard_cb_index, output_data_format},
     };
@@ -549,7 +549,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     auto cb_output_reshard = tt_metal::CreateCircularBuffer(program, all_cores_in_rect_grid, output_reshard_cb_config);
 
     if (bias_buffer != nullptr) {
-        uint32_t src3_cb_index = 3;
+        uint32_t src3_cb_index = tt::CBIndex::c_3;
         tt_metal::CircularBufferConfig cb_src3_config =
             tt_metal::CircularBufferConfig(in3_CB_size, {{src3_cb_index, bias_data_format}})
                 .set_page_size(src3_cb_index, bias_single_tile_size)
@@ -903,7 +903,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
     bool skip_compute,
     bool skip_in0_mcast,
     bool skip_write_back) {
-    const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
+    const auto &ashape = a.get_padded_shape(), bshape = b.get_padded_shape();
     auto in0_tile = a.get_tensor_spec().tile();
     auto in1_tile = b.get_tensor_spec().tile();
     auto in0_tile_shape = in0_tile.get_tile_shape();
@@ -929,7 +929,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.get_dtype());
     }
 
-    tt::tt_metal::Device* device = a.device();
+    tt::tt_metal::IDevice* device = a.device();
 
     TT_FATAL(a.shard_spec().has_value() && output.shard_spec().has_value(), "Error");
     CoreRangeSet all_cores_storage = a.shard_spec().value().grid;

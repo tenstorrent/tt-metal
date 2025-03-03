@@ -22,11 +22,11 @@ Fold::SingleCore::cached_program_t fold_single_core(
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
 
-    uint32_t pixel_size = input.get_legacy_shape()[-1] * input.element_size();
-    uint32_t num_pixels = input.volume() / input.get_legacy_shape()[-1];
+    uint32_t pixel_size = input.get_padded_shape()[-1] * input.element_size();
+    uint32_t num_pixels = input.volume() / input.get_padded_shape()[-1];
 
     // chunk consists of channel values of stride_w neighboring pixels along the W dimension
-    uint32_t width = input.get_legacy_shape()[2];
+    uint32_t width = input.get_padded_shape()[2];
     uint32_t chunk_size = stride_w * pixel_size;
     uint32_t row_size = width * pixel_size;
     uint32_t dst_pixel_size = stride_h * chunk_size;
@@ -35,7 +35,7 @@ Fold::SingleCore::cached_program_t fold_single_core(
     uint32_t cb_pages_per_dst_row = stride_h * width;
 
     // This should allocate a DRAM buffer on the device
-    tt::tt_metal::Device* device = output.device();
+    tt::tt_metal::IDevice* device = output.device();
 
     tt::tt_metal::Buffer* src_buffer = input.buffer();
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
@@ -65,7 +65,7 @@ Fold::SingleCore::cached_program_t fold_single_core(
 
     // Setup kernels
     uint32_t src_unit_size_is_power_of_two = is_power_of_two_at_least_32(aligned_pixel_size);
-    uint32_t src_log2_unit_size = src_unit_size_is_power_of_two ? (std::uint32_t)log2(aligned_pixel_size) : 0;
+    uint32_t src_log2_unit_size = src_unit_size_is_power_of_two ? (std::uint32_t)std::log2(aligned_pixel_size) : 0;
     std::vector<uint32_t> reader_compile_time_args = {
         cb_src0_index,
         src_is_dram,
@@ -74,7 +74,7 @@ Fold::SingleCore::cached_program_t fold_single_core(
     };
 
     uint32_t dst_unit_size_is_power_of_two = is_power_of_two_at_least_32(aligned_dst_pixel_size);
-    uint32_t dst_log2_unit_size = dst_unit_size_is_power_of_two ? (std::uint32_t)log2(aligned_dst_pixel_size) : 0;
+    uint32_t dst_log2_unit_size = dst_unit_size_is_power_of_two ? (std::uint32_t)std::log2(aligned_dst_pixel_size) : 0;
 
     std::vector<uint32_t> writer_compile_time_args = {
         cb_dst0_index,

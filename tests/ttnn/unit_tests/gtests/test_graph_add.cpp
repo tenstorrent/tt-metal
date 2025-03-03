@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "gtest/gtest.h"
-#include "tt_metal/common/logger.hpp"
+#include <tt-metalium/logger.hpp>
 #include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -155,8 +155,24 @@ INSTANTIATE_TEST_SUITE_P(
                 .expected_calltrace =
                     {"ttnn::add",
                      "ttnn::repeat",
+                     "ttnn::to_layout",
+                     "ttnn::untilize",
+                     "ttnn::prim::old_infra_device_operation",
+                     "Untilize",
+                     "tt::tt_metal::create_device_tensor",
+                     "ttnn::view",
+                     "ttnn::experimental::view",
+                     "Tensor::reshape",
                      "ttnn::prim::old_infra_device_operation",
                      "RepeatDeviceOperation",
+                     "tt::tt_metal::create_device_tensor",
+                     "ttnn::view",
+                     "ttnn::experimental::view",
+                     "Tensor::reshape",
+                     "ttnn::to_layout",
+                     "ttnn::tilize",
+                     "ttnn::prim::old_infra_device_operation",
+                     "Tilize",
                      "tt::tt_metal::create_device_tensor",
                      "ttnn::prim::binary",
                      "BinaryDeviceOperation",

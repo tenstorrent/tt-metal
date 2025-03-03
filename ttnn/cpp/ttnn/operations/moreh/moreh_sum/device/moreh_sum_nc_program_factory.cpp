@@ -6,7 +6,7 @@
 
 #include "moreh_sum_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::operations::moreh::moreh_sum {

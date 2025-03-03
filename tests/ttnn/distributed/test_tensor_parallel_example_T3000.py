@@ -35,8 +35,7 @@ def test_tensor_parallel_falcon_mlp():
         pytest.skip()
 
     mesh_device = ttnn.open_mesh_device(
-        ttnn.MeshShape(2, 4),
-        mesh_type=ttnn.MeshType.Ring,
+        ttnn.MeshShape(1, 8),
     )
 
     # Set PyTorch seed for reproducibility

@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "bernoulli_device_operation.hpp"
-#include "common/constants.hpp"
-#include "impl/kernels/kernel_types.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::bernoulli {
@@ -23,7 +23,7 @@ BernoulliDeviceOperation::ProgramFactory::cached_program_t BernoulliDeviceOperat
     tensor_return_value_t& output) {
     const Tensor& input = tensor_args.input;
 
-    Device* device = output.device();
+    IDevice* device = output.device();
     auto grid = device->compute_with_storage_grid_size();
     auto core_h = grid.y;
 

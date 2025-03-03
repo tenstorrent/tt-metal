@@ -170,7 +170,6 @@ grid_size = [8, 7]
                     ttnn.num_cores_to_corerangeset(56, grid_size, True),
                     [48, 32],
                     ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
                     ttnn.ShardMode.LOGICAL,
                 ),
             ),
@@ -184,7 +183,6 @@ grid_size = [8, 7]
                     ttnn.num_cores_to_corerangeset(3, grid_size, True),
                     [20, 2],
                     ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
                     ttnn.ShardMode.LOGICAL,
                 ),
             ),
@@ -198,7 +196,6 @@ grid_size = [8, 7]
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 5))}),
                     [64, 64],
                     ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
                     ttnn.ShardMode.LOGICAL,
                 ),
             ),
@@ -213,7 +210,6 @@ grid_size = [8, 7]
                     [48, 10],
                     [64, 64],  # NOTE: This value is compatible with all PageConfigs in this sweep
                     ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
                 ),
             ),
         ),
@@ -247,8 +243,8 @@ def test_tensor_creation_with_memory_config(shape, memory_config, tt_dtype, layo
     tt_tensor_1 = tt_tensor_1.cpu()
     tt_tensor_2 = tt_tensor_2.cpu()
 
-    py_tensor_after_round_trip_1 = tt_tensor_1.to_torch_with_logical_shape()
-    py_tensor_after_round_trip_2 = tt_tensor_2.to_torch_with_logical_shape()
+    py_tensor_after_round_trip_1 = tt_tensor_1.to_torch()
+    py_tensor_after_round_trip_2 = tt_tensor_2.to_torch()
     py_tensor_after_round_trip_3 = ttnn.to_torch(tt_tensor_1)
     py_tensor_after_round_trip_4 = ttnn.to_torch(tt_tensor_2)
 

@@ -1,0 +1,30 @@
+arch: {
+   0: Wormhole,
+   1: Wormhole,
+}
+
+chips: {
+   0: [0,0,0,0],
+   1: [1,0,0,0],
+}
+
+ethernet_connections: [
+   [{chip: 0, chan: 8}, {chip: 1, chan: 0}],
+   [{chip: 0, chan: 9}, {chip: 1, chan: 1}],
+]
+
+chips_with_mmio: [
+   0: 0,
+]
+
+# harvest_mask is the bit indicating which tensix row is harvested. So bit 0 = first tensix row; bit 1 = second tensix row etc...
+harvesting: {
+   0: {noc_translation: true, harvest_mask: 3},
+   1: {noc_translation: true, harvest_mask: 17},
+}
+
+# This value will be null if the boardtype is unknown, should never happen in practice but to be defensive it would be useful to throw an error on this case.
+boardtype: {
+   0: n300,
+   1: n300,
+}

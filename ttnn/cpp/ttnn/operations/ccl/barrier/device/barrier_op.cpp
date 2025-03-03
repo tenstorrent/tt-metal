@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/ccl/barrier/device/barrier_op.hpp"
-#include "tt_metal/host_api.hpp"
 
 #include <cstdint>
 
@@ -14,10 +13,14 @@ void Barrier::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(this->topology == ccl::Topology::Ring, "We currently only support Ring topologies on the barrier op");
 }
 
-std::vector<SimpleShape> Barrier::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<TensorSpec> Barrier::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     // For a Barrier the output shape should match the input
-    SimpleShape shape = input_tensors[0].get_logical_shape();
-    return std::vector<SimpleShape>(input_tensors.size(), shape);
+    std::vector<TensorSpec> result;
+    result.reserve(input_tensors.size());
+    for (const auto& input_tensor : input_tensors) {
+        result.push_back(input_tensor.get_tensor_spec());
+    }
+    return result;
 }
 
 std::vector<Tensor> Barrier::create_output_tensors(const std::vector<Tensor>& input_tensors) const {

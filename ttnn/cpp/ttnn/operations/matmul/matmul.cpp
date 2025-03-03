@@ -4,7 +4,7 @@
 
 #include "matmul.hpp"
 
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
@@ -18,7 +18,7 @@ namespace matmul {
 
 namespace detail {
 
-bool is_input_batched(const ttnn::SimpleShape& shape) {
+bool is_input_batched(const ttnn::Shape& shape) {
     auto is_batched = false;
     for (auto i = 0; i < shape.rank() - 2; ++i) {
         if (shape[i] > 1) {
@@ -52,8 +52,8 @@ ttnn::Tensor bound_matmul(
                                               ? ttnn::transpose(input_tensor_b, -1, -2, input_tensor_b.memory_config())
                                               : input_tensor_b;
 
-    const auto input_tensor_a_shape = input_tensor_a_adjusted.get_shape();
-    const auto input_tensor_b_shape = input_tensor_b_adjusted.get_shape();
+    const auto input_tensor_a_shape = input_tensor_a_adjusted.get_logical_shape();
+    const auto input_tensor_b_shape = input_tensor_b_adjusted.get_logical_shape();
 
     const auto width_a = input_tensor_a_shape[-1];
     const auto height_b = input_tensor_b_shape[-2];
@@ -82,7 +82,7 @@ ttnn::Tensor bound_matmul(
         input_tensor_b_adjusted,
         post_process_bias ? std::nullopt : bias,
         parameters,
-        0,
+        DefaultQueueId,
         optional_output_tensor = optional_output_tensor);
 
     if (post_process_bias) {
@@ -117,7 +117,8 @@ Tensor MatmulOperation::invoke(
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const CoreGrid> core_grid,
     const std::optional<const tt::tt_metal::Tile>& output_tile,
-    std::optional<Tensor> optional_output_tensor) {
+    std::optional<Tensor> optional_output_tensor,
+    const std::optional<const DeviceGlobalCircularBuffer>& global_cb) {
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
@@ -139,7 +140,8 @@ Tensor MatmulOperation::invoke(
             user_run_batched,
             transpose_a,
             transpose_b,
-            output_tile},
+            output_tile,
+            global_cb},
         /*queue_id=*/0,
         optional_output_tensor);
 }
@@ -157,7 +159,8 @@ Tensor LinearOperation::invoke(
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const CoreGrid> core_grid,
     const std::optional<const tt::tt_metal::Tile>& output_tile,
-    std::optional<ttnn::Tensor> optional_output_tensor) {
+    std::optional<ttnn::Tensor> optional_output_tensor,
+    const std::optional<const DeviceGlobalCircularBuffer>& global_cb) {
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
@@ -181,7 +184,8 @@ Tensor LinearOperation::invoke(
             /*user_run_batched=*/false,
             transpose_a,
             transpose_b,
-            output_tile},
+            output_tile,
+            global_cb},
         /*queue_id=*/0,
         optional_output_tensor);
 }

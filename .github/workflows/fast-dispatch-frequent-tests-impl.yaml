@@ -16,15 +16,13 @@ jobs:
       fail-fast: false
       matrix:
         test-group:
-          [
-            {
-              name: "WH N300 pgm dispatch nightly",
-              arch: wormhole_b0,
-              runs-on: ["cloud-virtual-machine", "N300", "in-service"],
-              cmd: ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_pgm_dispatch_perf_ci.sh,
-              timeout: 10
-            },
-          ]
+          - name: "WH N300 pgm dispatch nightly"
+            arch: wormhole_b0
+            runs-on: ["cloud-virtual-machine", "N300", "in-service"]
+            run-args: |
+              ./build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_wormhole_b0 --benchmark_out_format=json --benchmark_out=bench.json
+              ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_pgm_dispatch_perf_ci.py bench.json
+            timeout: 10
     name: ${{ matrix.test-group.name }}
     env:
       LOGURU_LEVEL: INFO
@@ -32,8 +30,6 @@ jobs:
     steps:
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - uses: ./.github/actions/prepare-metal-run
-        with:
-          arch: ${{ matrix.test-group.arch }}
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
         uses: ./.github/actions/docker-run
@@ -44,8 +40,7 @@ jobs:
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=${{ matrix.test-group.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-          run_args: |
-            ${{ matrix.test-group.cmd }}
+          run_args: ${{ matrix.test-group.run-args }}
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
@@ -57,3 +52,9 @@ jobs:
           path: |
             generated/test_reports/
           prefix: "test_reports_"
+      - uses: ./.github/actions/upload-artifact-with-job-uuid
+        if: ${{ !cancelled() }}
+        with:
+          path: |
+            bench.json
+          prefix: "pgm_benchmarks_json_"

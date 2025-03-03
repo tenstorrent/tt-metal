@@ -12,6 +12,7 @@ namespace ttnn::operations::normalization {
 ttnn::Tensor ExecuteRMSNormPreAllGather::invoke(
     const ttnn::Tensor& input_tensor,
     const DataType dtype,
+    const std::optional<const ttnn::Tensor>& residual_input_tensor,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const LayerNormProgramConfig>& program_config,
     const std::optional<MemoryConfig>& memory_config) {
@@ -30,7 +31,7 @@ ttnn::Tensor ExecuteRMSNormPreAllGather::invoke(
                        .program_config = program_config.value_or(LayerNormDefaultProgramConfig{}),
                        .compute_kernel_config = kernel_config_val},
                    {input_tensor},
-                   {std::nullopt, std::nullopt, std::nullopt, std::nullopt})
+                   {residual_input_tensor, std::nullopt, std::nullopt, std::nullopt})
             .at(0);
     } else {
         return operation::run(

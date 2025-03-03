@@ -7,7 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 
 #include "ttnn/operations/reduction/argmax/argmax.hpp"
 
@@ -70,7 +70,7 @@ void bind_reduction_argmax_operation(py::module& module) {
             py::arg("use_multicore") = false,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 }  // namespace ttnn::operations::reduction::detail

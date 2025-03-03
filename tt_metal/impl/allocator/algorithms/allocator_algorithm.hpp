@@ -9,8 +9,8 @@
 #include <vector>
 #include "hostdevcommon/common_values.hpp"
 
-#include "tt_metal/impl/allocator/allocator_types.hpp"
-#include "llrt/hal.hpp"
+#include <allocator_types.hpp>
+#include <hal.hpp>
 
 namespace tt {
 
@@ -64,6 +64,8 @@ public:
     virtual Statistics get_statistics() const = 0;
 
     virtual void dump_blocks(std::ostream& out) const = 0;
+
+    virtual MemoryBlockTable get_memory_block_table() const = 0;
 
     virtual void shrink_size(DeviceAddr shrink_size, bool bottom_up = true) = 0;
 

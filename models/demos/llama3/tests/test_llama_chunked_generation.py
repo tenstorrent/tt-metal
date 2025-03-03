@@ -11,7 +11,6 @@ from models.demos.llama3.tt.llama_common import (
     PagedAttentionConfig,
     get_block_size,
     num_blocks_in_seq,
-    HostEmbedding,
 )
 from models.demos.llama3.tt.llama_model import TtTransformer
 from models.demos.llama3.tt.model_config import TtModelArgs, LlamaOptimizations
@@ -47,7 +46,7 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "seq_len, prefill_chunk_size",
-    [(4096, 1024)],
+    [(4096, 2048)],
 )
 @pytest.mark.parametrize(
     "optimizations",
@@ -102,7 +101,7 @@ def test_chunked_prefill_single_user(
 
     reference_model = Transformer(model_args)
     reference_model.load_state_dict(reference_state_dict)
-    embd = HostEmbedding(model_args)
+    embd = model_args.reference_embedding()
     embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
 
     # Setup page table

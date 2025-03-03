@@ -97,10 +97,15 @@ inline __attribute__((always_inline)) uint32_t buf_ptr_dec_wrap(uint32_t buf_ptr
     return result;
 }
 
+// This definition of reg_read conflicts with the one in
+// tt_metal/third_party/tt_llk_wormhole_b0/common/inc/ckernel.h, which trisc
+// kernels bring into the global namespace using "using namespace ckernel".
+#if !defined(COMPILE_FOR_TRISC)  // BRISC, NCRISC, ERISC, IERISC
 inline __attribute__((always_inline)) uint32_t reg_read(uint32_t addr) {
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(addr);
     return p_reg[0];
 }
+#endif
 
 inline void assert_trisc_reset() {
     uint32_t soft_reset_0 = READ_REG(RISCV_DEBUG_REG_SOFT_RESET_0);
@@ -181,24 +186,18 @@ inline __attribute__((always_inline)) void configure_l1_data_cache() {
 #if defined(DISABLE_L1_DATA_CACHE)
     // Disables Blackhole's L1 cache. Grayskull and Wormhole do not have L1 cache
     // L1 cache can be disabled by setting `TT_METAL_DISABLE_L1_DATA_CACHE_RISCVS` env var
-    // export TT_METAL_DISABLE_L1_DATA_CACHE_RISCVS=<BR,NC,TR,ER>
+    // export TT_METAL_DISABLE_L1_DATA_CACHE_RISCVS=<BR,NC,TR*,ER*>
     asm(R"ASM(
-        .option push
-        li   t1, 0x1
-        slli t1, t1, 3
+        li t1, 0x8
         csrrs zero, 0x7c0, t1
-        .option pop
          )ASM" ::
             : "t1");
 #elif !defined(ENABLE_HW_CACHE_INVALIDATION)
     // Disable gathering to stop HW from invalidating the data cache after 128 transactions
     // This is default enabled
     asm(R"ASM(
-        .option push
-        li   t1, 0x1
-        slli t1, t1, 18
+        lui  t1, 0x40
         csrrs zero, 0x7c0, t1
-        .option pop
          )ASM" ::
             : "t1");
 #endif

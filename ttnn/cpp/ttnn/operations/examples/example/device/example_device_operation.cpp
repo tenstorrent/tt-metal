@@ -21,16 +21,18 @@ void ExampleDeviceOperation::validate_on_program_cache_miss(
 void ExampleDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {}
 
-ExampleDeviceOperation::shape_return_value_t ExampleDeviceOperation::compute_output_shapes(
+ExampleDeviceOperation::spec_return_value_t ExampleDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    return tensor_args.input_tensor.shape();
+    const auto& input_tensor = tensor_args.input_tensor;
+    return TensorSpec(
+        input_tensor.get_logical_shape(),
+        TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), MemoryConfig{}));
 }
 
 ExampleDeviceOperation::tensor_return_value_t ExampleDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto output_shape = compute_output_shapes(operation_attributes, tensor_args);
-    const auto& input_tensor = tensor_args.input_tensor;
-    return create_device_tensor(output_shape, input_tensor.dtype(), input_tensor.layout(), input_tensor.device());
+    auto output_spec = compute_output_specs(operation_attributes, tensor_args);
+    return create_device_tensor(output_spec, tensor_args.input_tensor.device());
 }
 
 std::tuple<ExampleDeviceOperation::operation_attributes_t, ExampleDeviceOperation::tensor_args_t>

@@ -5,7 +5,7 @@
 #pragma once
 #include <iostream>
 
-#include "tt_metal/common/logger.hpp"
+#include <tt-metalium/logger.hpp>
 
 namespace tt::test_utils::df {
 

@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "tt_metal/host_api.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 #include "ttnn/operation.hpp"

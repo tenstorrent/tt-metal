@@ -6,7 +6,6 @@ Table of Contents
 - [Table of Contents](#table-of-contents)
   - [Contributing to tt-metal](#contributing-to-tt-metal)
   - [Machine setup](#machine-setup)
-    - [Hugepages setup](#hugepages-setup)
   - [Developing tt-metal](#developing-tt-metal)
     - [Setting logger level](#setting-logger-level)
     - [Building and viewing the documentation locally](#building-and-viewing-the-documentation-locally)
@@ -68,25 +67,6 @@ All contributions require:
 
 Furthermore, all PRs must follow the [contribution
 standards](#contribution-standards).
-
-## Machine setup
-
-### Hugepages setup
-
-Hugepages is required to both run and develop on the Metalium project.
-
-If you ever need to re-enable Hugepages, you can try the script we homemade
-for this:
-
-```
-sudo python3 infra/machine_setup/scripts/setup_hugepages.py enable
-```
-
-Then to check if Hugepages is enabled:
-
-```
-python3 infra/machine_setup/scripts/setup_hugepages.py check
-```
 
 ## Developing tt-metal
 

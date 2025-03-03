@@ -12,20 +12,20 @@ jobs:
       matrix:
         test-group:
           [
-            {
-              name: "Common models GS",
-              arch: grayskull,
-              runs-on: ["cloud-virtual-machine", "E150", "in-service"],
-              cmd: tests/scripts/single_card/nightly/run_common_models.sh,
-              timeout: 40
-            },
-            {
-              name: "GS ttnn nightly",
-              arch: grayskull,
-              runs-on: ["cloud-virtual-machine", "E150", "in-service"],
-              cmd: tests/scripts/single_card/nightly/run_ttnn.sh,
-              timeout: 40
-            },
+            # {
+            #   name: "Common models GS",
+            #   arch: grayskull,
+            #   runs-on: ["cloud-virtual-machine", "E150", "in-service"],
+            #   cmd: tests/scripts/single_card/nightly/run_common_models.sh,
+            #   timeout: 40
+            # },
+            # {
+            #   name: "GS ttnn nightly",
+            #   arch: grayskull,
+            #   runs-on: ["cloud-virtual-machine", "E150", "in-service"],
+            #   cmd: tests/scripts/single_card/nightly/run_ttnn.sh,
+            #   timeout: 40
+            # },
             {
               name: "WH N150 ttnn nightly",
               arch: wormhole_b0,
@@ -40,13 +40,13 @@ jobs:
               cmd: tests/scripts/single_card/nightly/run_ttnn.sh,
               timeout: 70
             },
-            {
-              name: "GS-only models",
-              arch: grayskull,
-              runs-on: ["cloud-virtual-machine", "E150", "in-service"],
-              cmd: tests/scripts/single_card/nightly/run_gs_only.sh,
-              timeout: 40
-            },
+            # {
+            #   name: "GS-only models",
+            #   arch: grayskull,
+            #   runs-on: ["cloud-virtual-machine", "E150", "in-service"],
+            #   cmd: tests/scripts/single_card/nightly/run_gs_only.sh,
+            #   timeout: 40
+            # },
           ]
     name: FD ${{ matrix.test-group.name }} ${{ matrix.test-group.arch }}
     env:
@@ -66,8 +66,6 @@ jobs:
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - uses: ./.github/actions/prepare-metal-run
-        with:
-          arch: ${{ matrix.test-group.arch }}
       - uses: ./.github/actions/install-python-deps
       - name: Run frequent reg tests scripts
         timeout-minutes: ${{ matrix.test-group.timeout }}
@@ -112,8 +110,6 @@ jobs:
         run: |
           echo "WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml" >> $GITHUB_ENV
       - uses: ./.github/actions/prepare-metal-run
-        with:
-          arch: wormhole_b0
       - uses: ./.github/actions/install-python-deps
       - name: Run frequent reg tests scripts
         timeout-minutes: 30
@@ -179,8 +175,6 @@ jobs:
         run: |
           echo "WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml" >> $GITHUB_ENV
       - uses: ./.github/actions/prepare-metal-run
-        with:
-          arch: wormhole_b0
       - uses: ./.github/actions/install-python-deps
       - name: Run frequent reg tests scripts
         timeout-minutes: 60

@@ -9,7 +9,7 @@
 //    double buffered ScratchBuf for out of band data (e.g., from DRAM)
 //  - syncs w/ dispatcher via 2 semaphores, page_ready, page_done
 
-#include "tt_metal/impl/dispatch/cq_commands.hpp"
+#include <cq_commands.hpp>
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "debug/dprint.h"
 #include "noc/noc_parameters.h"  // PCIE_ALIGNMENT
@@ -64,6 +64,28 @@ constexpr uint32_t dispatch_s_cb_log_page_size = get_compile_time_arg_val(25);
 constexpr uint32_t is_d_variant = get_compile_time_arg_val(26);
 constexpr uint32_t is_h_variant = get_compile_time_arg_val(27);
 
+constexpr uint32_t prefetch_q_end = prefetch_q_base + prefetch_q_size;
+constexpr uint32_t cmddat_q_end = cmddat_q_base + cmddat_q_size;
+constexpr uint32_t scratch_db_end = scratch_db_base + scratch_db_size;
+
+// hd and h: fetch_q, cmddat_q, scratch_db
+static_assert(
+    !(is_h_variant) || (prefetch_q_base >= cmddat_q_end || cmddat_q_base >= prefetch_q_end),
+    "prefetch_q and cmddat_q overlap");
+
+static_assert(
+    !(is_h_variant) || (prefetch_q_base >= scratch_db_end || scratch_db_base >= prefetch_q_end),
+    "prefetch_q and scratch_db overlap");
+
+static_assert(
+    !(is_h_variant) || (scratch_db_base >= cmddat_q_end || cmddat_q_base >= scratch_db_end),
+    "cmddat_q and scratch_db overlap");
+
+// d: cmddat_q, scratch_db
+static_assert(
+    !(is_d_variant && !is_h_variant) || (scratch_db_base >= cmddat_q_end || cmddat_q_base >= scratch_db_end),
+    "cmddat_q and scratch_db overlap");
+
 constexpr uint8_t my_noc_index = NOC_INDEX;
 constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
@@ -75,9 +97,7 @@ constexpr uint32_t downstream_cb_page_size = 1 << downstream_cb_log_page_size;
 constexpr uint32_t dispatch_s_cb_page_size = 1 << dispatch_s_cb_log_page_size;
 constexpr uint32_t downstream_cb_end = downstream_cb_base + (1 << downstream_cb_log_page_size) * downstream_cb_pages;
 constexpr uint32_t dispatch_s_buffer_end = dispatch_s_buffer_base + dispatch_s_buffer_size;
-constexpr uint32_t prefetch_q_end = prefetch_q_base + prefetch_q_size;
 constexpr uint32_t cmddat_q_page_size = 1 << cmddat_q_log_page_size;
-constexpr uint32_t cmddat_q_end = cmddat_q_base + cmddat_q_size;
 
 constexpr uint32_t scratch_db_half_size = scratch_db_size / 2;
 constexpr uint32_t scratch_db_base0 = scratch_db_base;
@@ -603,10 +623,11 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr, uint32_t& downstream__data_pt
     uint32_t base_addr = cmd->relay_paged.base_addr;
     uint32_t page_size = cmd->relay_paged.page_size;
     uint32_t pages = cmd->relay_paged.pages;
+    uint16_t length_adjust = cmd->relay_paged.is_dram_and_length_adjust & CQ_PREFETCH_RELAY_PAGED_LENGTH_ADJUST_MASK;
 
     if (page_size > scratch_db_half_size) {
         return process_relay_paged_cmd_large<is_dram>(
-            cmd_ptr, downstream_data_ptr, page_id, base_addr, page_size, pages, cmd->relay_paged.length_adjust);
+            cmd_ptr, downstream_data_ptr, page_id, base_addr, page_size, pages, length_adjust);
     }
 
     InterleavedAddrGen<is_dram> addr_gen{.bank_base_address = base_addr, .page_size = page_size};
@@ -665,9 +686,9 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr, uint32_t& downstream__data_pt
     // Third step - write from DB
     // Note that we may write less than full pages despite reading full pages based on length_adjust
     // Expectation is that the gain from reading less is small to 0, revisit as needed
-    ASSERT(cmd->relay_paged.length_adjust < page_size);
+    ASSERT(length_adjust < page_size);
     scratch_write_addr = scratch_db_top[db_toggle];
-    uint32_t amt_to_write = amt_read - cmd->relay_paged.length_adjust;
+    uint32_t amt_to_write = amt_read - length_adjust;
     uint32_t npages = write_pages_to_dispatcher<1, true>(downstream_data_ptr, scratch_write_addr, amt_to_write);
 
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
@@ -1144,10 +1165,9 @@ bool process_cmd(
         case CQ_PREFETCH_CMD_RELAY_PAGED:
             // DPRINT << "relay dram page: " << cmd_ptr << ENDL();
             {
-                uint32_t packed_page_flags = cmd->relay_paged.packed_page_flags;
-                uint32_t is_dram = packed_page_flags & (1 << CQ_PREFETCH_RELAY_PAGED_IS_DRAM_SHIFT);
-                uint32_t start_page = (packed_page_flags >> CQ_PREFETCH_RELAY_PAGED_START_PAGE_SHIFT) &
-                                      CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK;
+                uint32_t is_dram_and_length_adjust = cmd->relay_paged.is_dram_and_length_adjust;
+                uint32_t is_dram = is_dram_and_length_adjust & (1 << CQ_PREFETCH_RELAY_PAGED_IS_DRAM_SHIFT);
+                uint32_t start_page = cmd->relay_paged.start_page;
                 if (is_dram) {
                     stride = process_relay_paged_cmd<true>(cmd_ptr, downstream_data_ptr, start_page);
                 } else {
@@ -1457,6 +1477,8 @@ void kernel_main() {
 
     // Confirm expected number of pages, spinning here is a leak
     cb_wait_all_pages<my_downstream_cb_sem_id>(downstream_cb_pages);
+
+    noc_async_full_barrier();
 
     DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": out" << ENDL();
 }

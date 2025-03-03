@@ -4,18 +4,21 @@
 
 #pragma once
 
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
+#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
 #include "debug/assert.h"
 
 namespace tt::fabric {
 
-FORCE_INLINE void validate(PacketHeader const& packet_header) {
-    ASSERT(packet_header.command_type == CommandType::WRITE || packet_header.command_type == CommandType::ATOMIC_INC);
-    ASSERT(packet_header.chip_send_type < 2);
-    ASSERT(packet_header.noc_send_type < 2);
+FORCE_INLINE void validate(const PacketHeader& packet_header) {
+    ASSERT(packet_header.chip_send_type <= CHIP_SEND_TYPE_LAST);
 }
 FORCE_INLINE bool is_valid(PacketHeader const& packet_header) {
-    return (packet_header.command_type < 2) && (packet_header.chip_send_type < 2) && (packet_header.noc_send_type < 2);
+    return (packet_header.chip_send_type <= CHIP_SEND_TYPE_LAST) && (packet_header.noc_send_type <= NOC_SEND_TYPE_LAST);
+}
+
+FORCE_INLINE void validate(const LowLatencyPacketHeader& packet_header) {}
+FORCE_INLINE bool is_valid(const LowLatencyPacketHeader& packet_header) {
+    return (packet_header.noc_send_type <= NOC_SEND_TYPE_LAST);
 }
 
 }  // namespace tt::fabric

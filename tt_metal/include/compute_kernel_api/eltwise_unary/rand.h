@@ -14,7 +14,7 @@
 #endif
 
 namespace ckernel {
-
+// clang-format off
 /**
  * Performs element-wise rand on each element of a of a tile in DST register at index tile_index.
  * That is each element is overwritten with a randomly generated float.
@@ -23,14 +23,13 @@ namespace ckernel {
  *
  * Return value: None
  *
- * | Argument       | Description                                                                | Type     | Valid
- * Range                                           | Required  |
+ * | Argument       | Description                                                                | Type     | Valid Range                                           | Required  |
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|-----------|
- * | tile_index     | The index of the tile in DST register buffer to perform typecast operation | uint32_t | Must be
- * less than the size of the DST register buffer | True      | | from           | Random range lowerbound(inclusive) |
- * uint     | Any number                                            | True      | | scale          | Random scale rand
- * float in range [from, from + scale]                      | uint     | Must be greater than 0 | True      |
+ * | tile_index     | The index of the tile in DST register buffer to perform typecast operation | uint32_t | Must be less than the size of the DST register buffer | True      | 
+ * | from           | Random range lowerbound(inclusive)                                         | uint     | Any number                                            | True      | 
+ * | scale          | Random scale rand float in range [from, from + scale]                      | uint     | Must be greater than 0                                | True      |
  */
+ // clang-format on
 ALWI void rand_tile(uint32_t idst, uint32_t from, uint32_t scale) {
     MATH((llk_math_eltwise_unary_sfpu_rand<APPROX>(idst, from, scale)));
 }

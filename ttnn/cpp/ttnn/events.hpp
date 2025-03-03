@@ -1,30 +1,47 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024-2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <memory>
-#include "tt_metal/host_api.hpp"
+#include "tt-metalium/mesh_event.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/distributed/types.hpp"
 
-namespace ttnn::events {
+#include "tt-metalium/device.hpp"
+#include "tt-metalium/event.hpp"
+#include "tt-metalium/sub_device_types.hpp"
 
-struct MultiDeviceEvent {
-    MultiDeviceEvent(MeshDevice* mesh_device);
-    std::vector<std::shared_ptr<Event>> events;
-};
+namespace ttnn {
+
+using MeshEvent = tt::tt_metal::distributed::MeshEvent;
+
+namespace events {
+
 // Single Device APIs
-std::shared_ptr<Event> create_event(Device* device);
+std::shared_ptr<Event> create_event(IDevice* device);
 void record_event(
-    uint8_t cq_id,
+    QueueId cq_id,
     const std::shared_ptr<Event>& event,
     const std::vector<tt::tt_metal::SubDeviceId>& sub_device_ids = {});
-void wait_for_event(uint8_t cq_id, const std::shared_ptr<Event>& event);
+void wait_for_event(QueueId cq_id, const std::shared_ptr<Event>& event);
+
 // Multi Device APIs
+struct MultiDeviceEvent {
+    std::vector<std::shared_ptr<Event>> events;
+};
 MultiDeviceEvent create_event(MeshDevice* mesh_device);
 void record_event(
-    uint8_t cq_id, const MultiDeviceEvent& event, const std::vector<tt::tt_metal::SubDeviceId>& sub_device_ids = {});
-void wait_for_event(uint8_t cq_id, const MultiDeviceEvent& event);
+    QueueId cq_id, const MultiDeviceEvent& event, const std::vector<tt::tt_metal::SubDeviceId>& sub_device_ids = {});
+void wait_for_event(QueueId cq_id, const MultiDeviceEvent& event);
 
-}  // namespace ttnn::events
+MeshEvent record_mesh_event(
+    MeshDevice* mesh_device,
+    QueueId cq_id,
+    const std::vector<tt::tt_metal::SubDeviceId>& sub_device_ids = {},
+    const std::optional<ttnn::MeshCoordinateRange>& device_range = std::nullopt);
+void wait_for_mesh_event(MeshDevice* mesh_device, QueueId cq_id, const MeshEvent& event);
+
+}  // namespace events
+}  // namespace ttnn

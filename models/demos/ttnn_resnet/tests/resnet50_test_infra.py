@@ -7,20 +7,23 @@ import os
 import pytest
 import torch
 import torchvision
+import copy
 
 import ttnn
 from ttnn.model_preprocessing import (
     preprocess_model_parameters,
 )
 from models.utility_functions import (
+    is_blackhole,
     is_wormhole_b0,
     is_grayskull,
     divup,
 )
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
 from models.demos.ttnn_resnet.tt.custom_preprocessing import create_custom_mesh_preprocessor
-from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_new_conv_api import resnet50
+
+from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50 import resnet50
 
 
 def load_resnet50_model(model_location_generator):
@@ -39,7 +42,7 @@ def load_resnet50_model(model_location_generator):
 
 ## copied from ttlib version test:
 # golden pcc is ordered fidelity, weight dtype, activation dtype
-golden_pcc = {
+golden_pcc_obj = {
     8: {
         (
             ttnn.MathFidelity.HiFi4,
@@ -139,11 +142,29 @@ golden_pcc = {
             ttnn.bfloat8_b,
         ): 0.884609,  # Max ATOL Delta: 6.455164909362793, Max RTOL Delta: inf, PCC: 0.8846098380419433
     },
+    32: {
+        (
+            ttnn.MathFidelity.HiFi4,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+        ): 0.97,
+        (
+            ttnn.MathFidelity.HiFi2,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+        ): 0.95,
+        (
+            ttnn.MathFidelity.LoFi,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+        ): 0.88,
+    },
 }
 
 golden_pcc = {
-    ttnn.device.Arch.WORMHOLE_B0: golden_pcc,
-    ttnn.device.Arch.GRAYSKULL: golden_pcc,
+    ttnn.device.Arch.WORMHOLE_B0: copy.deepcopy(golden_pcc_obj),
+    ttnn.device.Arch.GRAYSKULL: copy.deepcopy(golden_pcc_obj),
+    ttnn.device.Arch.BLACKHOLE: copy.deepcopy(golden_pcc_obj),
 }
 
 golden_pcc[ttnn.device.Arch.GRAYSKULL][16][
@@ -252,10 +273,12 @@ class ResNet50TestInfra:
         if self.batch_size == 16:
             core_grid = ttnn.CoreGrid(y=8, x=6)
         elif self.batch_size == 20:
-            if is_grayskull():
+            if is_grayskull() or is_blackhole():
                 core_grid = ttnn.CoreGrid(y=8, x=10)
             elif is_wormhole_b0():
                 core_grid = ttnn.CoreGrid(y=5, x=6)  # untested due to unsupported batch20 on WH
+        elif self.batch_size == 32:
+            core_grid = ttnn.CoreGrid(y=10, x=13)
         num_devices = 1 if isinstance(device, ttnn.Device) else device.get_num_devices()
         # torch tensor
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
@@ -270,7 +293,7 @@ class ResNet50TestInfra:
         grid_size = core_grid
         grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
         shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-        shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, w), ttnn.ShardOrientation.ROW_MAJOR, False)
+        shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, w), ttnn.ShardOrientation.ROW_MAJOR)
         input_mem_config = ttnn.MemoryConfig(
             ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
         )
@@ -292,7 +315,6 @@ class ResNet50TestInfra:
                 tt_inputs_host.shape[-1],
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         )
         sharded_mem_config_DRAM = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec
@@ -331,11 +353,13 @@ class ResNet50TestInfra:
                     valid_pcc = 0.93
                 else:
                     valid_pcc = 0.982
-        self.pcc_passed, self.pcc_message = assert_with_pcc(self.torch_output_tensor, output_tensor, pcc=valid_pcc)
+        self.pcc_passed, self.pcc_message = check_with_pcc(self.torch_output_tensor, output_tensor, pcc=valid_pcc)
 
         logger.info(
             f"ResNet50 batch_size={batch_size}, act_dtype={self.act_dtype}, weight_dtype={self.weight_dtype}, math_fidelity={self.math_fidelity}, PCC={self.pcc_message}"
         )
+
+        return self.pcc_passed, self.pcc_message
 
 
 def create_test_infra(

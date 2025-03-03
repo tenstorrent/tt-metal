@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_op.hpp"
-#include "tt_metal/host_api.hpp"
 
 #include <cstdint>
 
@@ -19,7 +18,7 @@ ReduceScatter create_reduce_scatter_struct(
     const MemoryConfig& output_mem_config,
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel,
-    const std::vector<Device*>& devices,
+    const std::vector<IDevice*>& devices,
     const ttnn::ccl::Topology topology) {
     uint32_t num_devices = devices.size();
 
@@ -51,31 +50,28 @@ ReduceScatter create_reduce_scatter_struct(
 void ReduceScatter::validate(const std::vector<Tensor>& input_tensors) const {
     for (auto const& t : input_tensors) {
         TT_FATAL(
-            t.get_legacy_shape()[this->scatter_dim] / this->ring_size > 0,
+            t.get_padded_shape()[this->scatter_dim] / this->ring_size > 0,
             "Reduce scatter input tensor shape on dim {} must be divisible by ring size",
             this->scatter_dim);
         TT_FATAL(
-            t.get_legacy_shape()[this->scatter_dim] % this->ring_size == 0,
+            t.get_padded_shape()[this->scatter_dim] % this->ring_size == 0,
             "Reduce scatter input tensor shape on dim {} must be divisible by ring size",
             this->scatter_dim);
     }
 }
 
-std::vector<ttnn::SimpleShape> ReduceScatter::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    auto shape = input_tensors[0].get_logical_shape();
+std::vector<ttnn::TensorSpec> ReduceScatter::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    auto shape = input_tensor.get_logical_shape();
     TT_FATAL(
         shape[this->scatter_dim] % this->ring_size == 0,
         "The size of the scatter dimension must be a multiple of the ring size. Dimension size: {}, ring Size: {}",
         shape[this->scatter_dim],
         this->ring_size);
     shape[this->scatter_dim] /= this->ring_size;
-    return std::vector<ttnn::SimpleShape>(input_tensors.size(), shape);
-}
-
-std::vector<Tensor> ReduceScatter::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(
-        *this, input_tensors, input_tensor.get_dtype(), input_tensor.get_layout(), this->output_mem_config);
+    TensorSpec spec(
+        shape, TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), output_mem_config));
+    return std::vector<ttnn::TensorSpec>(input_tensors.size(), spec);
 }
 
 operation::ProgramWithCallbacks ReduceScatter::create_program(
@@ -227,18 +223,22 @@ Tensor reduce_scatter(
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_device_tensor = input_tensors.at(0);
 
+            TT_FATAL(
+                mesh_view.is_mesh_2d(),
+                "reduce-scatter invoked with cluster_axis API on >2D mesh, which is currently unsupported");
             const auto coordinate = mesh_view.find_device(input_device_tensor.device()->id());
-            const auto view_index = (cluster_axis == 0) ? coordinate.col : coordinate.row;
-            const auto device_index = (cluster_axis == 0) ? coordinate.row : coordinate.col;
+            const auto view_index = (cluster_axis == 0) ? coordinate[1] : coordinate[0];
+            const auto device_index = (cluster_axis == 0) ? coordinate[0] : coordinate[1];
 
             auto get_chip_id = [&](std::size_t line_index) -> std::optional<chip_id_t> {
-                auto new_coord = coordinate;
+                auto new_row = coordinate[0];
+                auto new_col = coordinate[1];
                 if (cluster_axis == 0) {
-                    new_coord.row = line_index % num_devices;
+                    new_row = line_index % num_devices;
                 } else {
-                    new_coord.col = line_index % num_devices;
+                    new_col = line_index % num_devices;
                 }
-                return mesh_view.find_device_id(new_coord);
+                return mesh_view.find_device_id(MeshCoordinate(new_row, new_col));
             };
 
             bool is_last_chip_in_clockwise_direction = device_index == (num_devices - 1);

@@ -119,25 +119,20 @@ def run_reduce_scatter_test(
     # Generate input tensors
     canonical_input_shape = per_chip_output_shape.copy()
     canonical_input_shape[dim] *= num_devices
-    tt_input_tensors = []
+    torch_tensor_shape = canonical_input_shape.copy()
+    torch_tensor_shape[dim] *= num_devices
 
-    numel = canonical_input_shape[0] * canonical_input_shape[1] * canonical_input_shape[2] * canonical_input_shape[3]
-    input_tensors = [
-        torch.rand(canonical_input_shape).bfloat16() if not debug else torch.ones(canonical_input_shape).bfloat16()
-        for _ in range(num_devices)
-    ]
+    torch_tensor = torch.rand(torch_tensor_shape).bfloat16()
     if debug:
-        input_tensors[-1] = torch.arange(numel).reshape(canonical_input_shape).bfloat16()
-    for i, canonical_input_tensor in enumerate(input_tensors):
-        tt_input_tensors.append(
-            ttnn.Tensor(canonical_input_tensor, input_dtype)
-            .to(layout)
-            .to(mesh_device.get_device(mesh_device.get_device_ids()[i]), mem_config)
-        )
-
-    assert len(tt_input_tensors) == num_devices
-
-    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
+        torch_tensor = torch.arange(torch_tensor.numel()).reshape(canonical_input_shape).bfloat16()
+    input_tensors = torch.chunk(torch_tensor, num_devices, dim)
+    input_tensor_mesh = ttnn.from_torch(
+        torch_tensor,
+        dtype=input_dtype,
+        layout=layout,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim),
+        device=mesh_device,
+    )
     # Run the op
     if trace_mode:
         output_tensor_mesh = run_with_trace(
@@ -453,14 +448,12 @@ def run_reduce_scatter_sharded_test(
         in_shard_grid,
         tuple(input_shard_shape),
         orientation,
-        False,
     )
 
     output_shard_spec = ttnn.ShardSpec(
         shard_grid,
         output_shard_shape,
         orientation,
-        False,
     )
     input_mem_config = ttnn.MemoryConfig(tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec)
     output_mem_config = ttnn.MemoryConfig(

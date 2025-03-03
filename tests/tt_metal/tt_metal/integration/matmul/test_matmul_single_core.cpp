@@ -3,12 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dispatch_fixture.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
-#include "test_tiles.hpp"
+#include <tt-metalium/test_tiles.hpp>
 #include "tests/tt_metal/test_utils/tilization.hpp"
 #include "tests/tt_metal/test_utils/print_helpers.hpp"
 #include "matmul_test_utils.hpp"
@@ -19,7 +19,7 @@ using namespace tt;
 namespace unit_tests_common::matmul::test_matmul_single_core {
 
 bool matmul_single_core(
-    DispatchFixture* fixture, tt_metal::Device* device, int M, int N, int K, int out_subblock_h, int out_subblock_w) {
+    DispatchFixture* fixture, tt_metal::IDevice* device, int M, int N, int K, int out_subblock_h, int out_subblock_w) {
     bool pass = true;
 
     tt_metal::Program program = tt_metal::CreateProgram();

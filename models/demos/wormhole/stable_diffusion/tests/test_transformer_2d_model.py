@@ -16,163 +16,32 @@ from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_p
 
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_transformer_2d_new_conv import transformer_2d_model
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
-    pre_process_input,
-    post_process_output,
+    post_process_output_and_move_to_host,
+    preprocess_and_push_input_to_device,
 )
+from models.demos.wormhole.stable_diffusion.tests.parameterizations import TRANSFORMER_PARAMETERIZATIONS
 
 
 @skip_for_grayskull()
 @pytest.mark.parametrize(
-    "input_shape, index1, index2, attention_head_dim, block",
-    [
-        (
-            (2, 320, 32, 32),
-            3,
-            2,
-            40,
-            "up",
-        ),
-        (
-            (2, 640, 16, 16),
-            1,
-            1,
-            80,
-            "down",
-        ),
-        (
-            (2, 1280, 4, 4),
-            2,
-            1,
-            160,
-            "down",
-        ),
-        (
-            (2, 1280, 8, 8),
-            2,
-            1,
-            160,
-            "down",
-        ),
-    ],
-)
-@pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
-def test_transformer_2d_model_256x256(
-    input_shape, index1, index2, block, attention_head_dim, model_name, device, reset_seeds
-):
-    pytest.skip()
-    encoder_hidden_states = [1, 2, 77, 768]
-    timestep = (None,)
-    class_labels = (None,)
-    cross_attention_kwargs = (None,)
-    return_dict = True
-
-    num_layers = 1
-    num_attention_heads = 8
-    norm_num_groups = 32
-    norm_type = "layer_norm"
-    cross_attention_dim = 768
-    upcast_attention = False
-
-    _, in_channels, _, _ = input_shape
-
-    input = torch.randn(input_shape) * 0.01
-    encoder_hidden_states = torch.randn(encoder_hidden_states)
-
-    pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
-    unet = pipe.unet
-    unet.eval()
-    config = unet.config
-    transformer = pipe.unet.mid_block.attentions[0]
-
-    parameters = preprocess_model_parameters(
-        model_name=model_name, initialize_model=lambda: unet, custom_preprocessor=custom_preprocessor, device=device
-    )
-
-    if block == "up":
-        parameters = parameters.up_blocks[index1].attentions[index2]
-        transformer = pipe.unet.up_blocks[index1].attentions[index2]
-    elif block == "down":
-        parameters = parameters.down_blocks[index1].attentions[index2]
-        transformer = pipe.unet.down_blocks[index1].attentions[index2]
-    elif block == "mid":
-        parameters = parameters.mid_block.attentions[0]
-        transformer = pipe.unet.mid_block.attentions[0]
-
-    torch_output = transformer(input, encoder_hidden_states.squeeze(0)).sample
-
-    ttnn_hidden_state = ttnn.from_torch(input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-    ttnn_encoder_hidden_states = ttnn.from_torch(
-        encoder_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-    )
-
-    ttnn_transformer = transformer_2d_model(
-        hidden_states=ttnn_hidden_state,
-        parameters=parameters,
-        config=config,
-        encoder_hidden_states=ttnn_encoder_hidden_states,
-        timestep=timestep,
-        class_labels=class_labels,
-        cross_attention_kwargs=cross_attention_kwargs,
-        return_dict=return_dict,
-        num_attention_heads=num_attention_heads,
-        attention_head_dim=attention_head_dim,
-        in_channels=in_channels,
-        out_channels=in_channels,
-        num_layers=num_layers,
-        norm_num_groups=norm_num_groups,
-        norm_type=norm_type,
-        device=device,
-        cross_attention_dim=cross_attention_dim,
-        upcast_attention=upcast_attention,
-    )
-
-    ttnn_output_torch = ttnn.to_torch(ttnn.to_layout(ttnn.from_device(ttnn_transformer), layout=ttnn.ROW_MAJOR_LAYOUT))
-
-    assert_with_pcc(torch_output, ttnn_output_torch, 0.99)
-
-
-@skip_for_grayskull()
-@pytest.mark.skip(reason="#9599: Tests are failing.")
-@pytest.mark.parametrize(
-    "input_shape, index1, index2, attention_head_dim, block ",
-    [
-        (
-            (2, 320, 64, 64),
-            3,
-            2,
-            40,
-            "up",
-        ),
-        (
-            (2, 640, 32, 32),
-            1,
-            1,
-            80,
-            "down",
-        ),
-        (
-            (2, 1280, 16, 16),
-            2,
-            1,
-            160,
-            "down",
-        ),
-        (
-            (2, 1280, 8, 8),
-            2,
-            1,
-            160,
-            "down",
-        ),
-    ],
+    "input_shape, shard_layout, shard_end_core, shard_shape, attention_head_dim, block, block_index, attention_index",
+    TRANSFORMER_PARAMETERIZATIONS,
 )
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_transformer_2d_model_512x512(
-    input_shape, index1, index2, block, attention_head_dim, model_name, device, reset_seeds
+    device,
+    model_name,
+    input_shape,
+    shard_layout,
+    shard_end_core,
+    shard_shape,
+    attention_head_dim,
+    block,
+    block_index,
+    attention_index,
+    reset_seeds,
 ):
-    # TODO
     torch.manual_seed(0)
     encoder_hidden_states = [1, 2, 77, 768]
     timestep = (None,)
@@ -202,11 +71,11 @@ def test_transformer_2d_model_512x512(
     )
 
     if block == "up":
-        parameters = parameters.up_blocks[index1].attentions[index2]
-        transformer = pipe.unet.up_blocks[index1].attentions[index2]
+        parameters = parameters.up_blocks[block_index].attentions[attention_index]
+        transformer = pipe.unet.up_blocks[block_index].attentions[attention_index]
     elif block == "down":
-        parameters = parameters.down_blocks[index1].attentions[index2]
-        transformer = pipe.unet.down_blocks[index1].attentions[index2]
+        parameters = parameters.down_blocks[block_index].attentions[attention_index]
+        transformer = pipe.unet.down_blocks[block_index].attentions[attention_index]
     elif block == "mid":
         parameters = parameters.mid_block.attentions[0]
         transformer = pipe.unet.mid_block.attentions[0]
@@ -227,9 +96,30 @@ def test_transformer_2d_model_512x512(
         packer_l1_acc=False,
     )
     model = transformer_2d_model(
-        device, parameters, {}, input_shape[0], input_shape[2], input_shape[3], compute_kernel_config
+        device, parameters, input_shape[0], input_shape[2], input_shape[3], compute_kernel_config
     )
-    ttnn_hidden_state = pre_process_input(model.device, ttnn_hidden_state)
+
+    ttnn_hidden_state = preprocess_and_push_input_to_device(
+        device,
+        input,
+        memory_config=ttnn.MemoryConfig(
+            shard_layout,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet(
+                    {
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0),
+                            ttnn.CoreCoord(shard_end_core[0], shard_end_core[1]),
+                        ),
+                    }
+                ),
+                shard_shape,
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        ),
+    )
+
     output = model(
         hidden_states=ttnn_hidden_state,
         config=config,
@@ -249,14 +139,12 @@ def test_transformer_2d_model_512x512(
         upcast_attention=upcast_attention,
     )
 
-    output = post_process_output(
-        model.device,
+    ttnn_output_torch = post_process_output_and_move_to_host(
         output,
         model.batch_size,
         model.input_height,
         model.input_width,
         model.proj_out_out_channels,
     )
-    ttnn_output_torch = ttnn.to_torch(ttnn.to_layout(ttnn.from_device(output), layout=ttnn.ROW_MAJOR_LAYOUT))
 
     assert_with_pcc(torch_output, ttnn_output_torch, 0.99)

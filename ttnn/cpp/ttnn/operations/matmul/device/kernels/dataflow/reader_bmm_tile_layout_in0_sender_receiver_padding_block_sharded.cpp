@@ -6,7 +6,7 @@
 
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
+#include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 
 void kernel_main() {
     constexpr bool core_has_output_block_work = (bool)get_compile_time_arg_val(0);
@@ -66,7 +66,7 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_mcast_sender_semaphore_addr);
 
     // L1 array
-    constexpr uint32_t cb_l1_array = tt::CBIndex::c_5;
+    constexpr uint32_t cb_l1_array = tt::CBIndex::c_6;
     uint32_t in0_mcast_sender_semaphore_valid_addr = get_write_ptr(cb_l1_array);
     volatile tt_l1_ptr uint32_t* in0_mcast_sender_semaphore_valid_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_mcast_sender_semaphore_valid_addr);
@@ -270,7 +270,6 @@ void kernel_main() {
                         // wait on in0 semaphore value to become VALID (set by mcast sender after it multicasts data)
                         noc_semaphore_wait(in0_mcast_receiver_semaphore_addr_ptr, VALID);
                     }
-
                     cb_push_back(cb_id_in0, in0_block_num_tiles);
 
                     // If core does not produce output block work, free cb_id_in0 immediately.
@@ -285,4 +284,6 @@ void kernel_main() {
             in0_tensor_current_h_dim_block_start_addr += in0_tensor_next_h_dim_block_stride;
         }
     }
+
+    noc_async_write_barrier();
 }

@@ -110,7 +110,7 @@ def get_updated_device_params(device_params):
     new_device_params = device_params.copy()
     dispatch_core_axis = new_device_params.pop(
         "dispatch_core_axis",
-        ttnn.DispatchCoreAxis.COL if os.environ["ARCH_NAME"] == "blackhole" else ttnn.DispatchCoreAxis.ROW,
+        ttnn.DispatchCoreAxis.COL if ttnn.get_arch_name() == "blackhole" else ttnn.DispatchCoreAxis.ROW,
     )
     dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis)
     new_device_params["dispatch_core_config"] = dispatch_core_config
@@ -256,9 +256,9 @@ def pcie_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
     mesh_device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(2, 2),
         **updated_device_params,
-        offset=ttnn.MeshOffset(0, 1),
-        mesh_type=ttnn.MeshType.Ring,
+        offset=ttnn.MeshCoordinate(0, 1),
     )
+    mesh_device.reshape(ttnn.MeshShape(1, 4))
 
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
@@ -303,9 +303,8 @@ def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device
     request.node.pci_ids = ttnn.get_pcie_device_ids()
     updated_device_params = get_updated_device_params(device_params)
     mesh_device = ttnn.open_mesh_device(
-        mesh_shape=ttnn.MeshShape(2, 4),
+        mesh_shape=ttnn.MeshShape(1, 8),
         **updated_device_params,
-        mesh_type=ttnn.MeshType.Ring,
     )
 
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
@@ -343,13 +342,13 @@ def get_devices(request):
     elif "pcie_devices" in request.fixturenames:
         devices = request.getfixturevalue("pcie_devices")
     elif "mesh_device" in request.fixturenames:
-        devices = request.getfixturevalue("mesh_device").get_devices()
+        devices = [request.getfixturevalue("mesh_device")]
     elif "n300_mesh_device" in request.fixturenames:
-        devices = request.getfixturevalue("n300_mesh_device").get_devices()
+        devices = [request.getfixturevalue("n300_mesh_device")]
     elif "t3k_mesh_device" in request.fixturenames:
-        devices = request.getfixturevalue("t3k_mesh_device").get_devices()
+        devices = [request.getfixturevalue("t3k_mesh_device")]
     elif "pcie_mesh_device" in request.fixturenames:
-        devices = request.getfixturevalue("pcie_mesh_device").get_devices()
+        devices = [request.getfixturevalue("pcie_mesh_device")]
     else:
         devices = []
     return devices
@@ -403,10 +402,12 @@ ALL_ARCHS = set(
 
 
 def pytest_addoption(parser):
+    import ttnn
+
     parser.addoption(
         "--tt-arch",
         choices=[*ALL_ARCHS],
-        default=os.environ.get("ARCH_NAME", "grayskull"),
+        default=ttnn.get_arch_name(),
         help="Target arch, ex. grayskull, wormhole_b0",
     )
     parser.addoption(
@@ -643,8 +644,9 @@ def pytest_handlecrashitem(crashitem, report, sched):
 
 
 def reset_tensix(tt_open_devices=None):
-    metal_env = copy.deepcopy(os.environ)
-    arch = metal_env.get("ARCH_NAME")
+    import ttnn
+
+    arch = ttnn.get_arch_name()
     if arch != "grayskull" and arch != "wormhole_b0":
         raise Exception(f"Unrecognized arch for tensix-reset: {arch}")
 
@@ -675,3 +677,20 @@ def record_test_timestamp(record_property):
     yield
     end_timestamp = datetime.strftime(datetime.now(), "%Y-%m-%dT%H:%M:%S%z")
     record_property("end_timestamp", end_timestamp)
+
+
+def pytest_configure(config):
+    xmlpath = config.option.xmlpath
+    # https://github.com/tenstorrent/tt-metal/pull/18372
+    # Only override the xmlpath if it's set, and we're in a CI env (GHA)
+    # Problem: t3k unit tests run pytest multiple times overwriting the junit xml file each time, so the generated xml artifact only contains test case info from the last running testsuite.
+    # Fix: when running in CI env, override config.option.xmlpath to rename the xml filepath to include timestamp, so that serial pytest invocations running in scripts do not clobber the junit xml test report
+    if xmlpath and os.getenv("CI") == "true":
+        # Get the dir and filename for the generated xml
+        directory, filename = os.path.split(xmlpath)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Append timestamp to the end of the xml filename
+        # This avoids clobbering the xml file when pytest is invoked multiple times during a test script
+        new_filename = f"{os.path.splitext(filename)[0]}_{timestamp}{os.path.splitext(filename)[1]}"
+        new_xmlpath = os.path.join(directory, new_filename)
+        config.option.xmlpath = new_xmlpath

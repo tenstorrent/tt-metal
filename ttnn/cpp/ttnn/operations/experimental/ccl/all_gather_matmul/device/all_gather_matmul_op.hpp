@@ -5,12 +5,11 @@
 #pragma once
 
 #include <cstdint>
-#include "common/core_coord.hpp"
-#include "impl/buffers/buffer.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/buffer.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/constants.hpp>
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
@@ -21,8 +20,8 @@
 #include <algorithm>
 
 /* Fusion includes */
-#include "ttnn/cpp/ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
-#include "ttnn/cpp/ttnn/operations/matmul/device/matmul_op.hpp"
+#include "cpp/ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
+#include "cpp/ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 namespace ttnn {
@@ -49,6 +48,10 @@ struct AllGatherMatmul {
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors) const;
+    static constexpr auto attribute_names = std::forward_as_tuple("all_gather_struct", "all_gather_core_grid_offset");
+    const auto attribute_values() const {
+        return std::forward_as_tuple(this->all_gather_struct, this->all_gather_core_grid_offset);
+    }
 };
 
 operation::ProgramWithCallbacks all_gather_matmul_multi_core_with_workers(

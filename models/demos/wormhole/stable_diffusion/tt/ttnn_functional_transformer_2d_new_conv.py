@@ -28,9 +28,7 @@ def ttnn_to_torch(input):
 
 
 class transformer_2d_model:
-    def __init__(
-        self, device, parameters, reader_patterns_cache, batch_size, input_height, input_width, compute_kernel_config
-    ):
+    def __init__(self, device, parameters, batch_size, input_height, input_width, compute_kernel_config):
         self.device = device
         self.compute_kernel_config = compute_kernel_config
         parameters.proj_in.weight, parameters.proj_in.bias = permute_conv_parameters(
@@ -252,24 +250,49 @@ class transformer_2d_model:
             math_fidelity=ttnn.MathFidelity.LoFi,
             fp32_dest_acc_en=self.compute_kernel_config.fp32_dest_acc_en,
         )
-        [hidden_states, [self.proj_in_conv_weights, self.proj_in_conv_bias]] = ttnn.conv2d(
+
+        conv_kwargs = {
+            "in_channels": self.proj_in_in_channels,
+            "out_channels": self.proj_in_out_channels,
+            "batch_size": self.batch_size,
+            "input_height": self.input_height,
+            "input_width": self.input_width,
+            "kernel_size": (1, 1),
+            "stride": (1, 1),
+            "padding": (0, 0),
+            "dilation": (1, 1),
+            "groups": 1,
+            "device": self.device,
+            "conv_config": conv_config,
+        }
+
+        if not ttnn.is_tensor_storage_on_device(self.proj_in_conv_weights):
+            self.proj_in_conv_weights = ttnn.prepare_conv_weights(
+                weight_tensor=self.proj_in_conv_weights,
+                weights_format="OIHW",
+                input_memory_config=hidden_states.memory_config(),
+                input_layout=hidden_states.get_layout(),
+                has_bias=True,
+                **conv_kwargs,
+            )
+            self.proj_in_conv_bias = ttnn.prepare_conv_bias(
+                bias_tensor=self.proj_in_conv_bias,
+                input_memory_config=hidden_states.memory_config(),
+                input_layout=hidden_states.get_layout(),
+                **conv_kwargs,
+            )
+            self.proj_in_conv_weights = ttnn.to_device(self.proj_in_conv_weights, self.device)
+            self.proj_in_conv_bias = ttnn.to_device(self.proj_in_conv_bias, self.device)
+
+        hidden_states = ttnn.conv2d(
             input_tensor=hidden_states,
-            in_channels=self.proj_in_in_channels,
-            out_channels=self.proj_in_out_channels,
-            kernel_size=(1, 1),
-            stride=(1, 1),
-            padding=(0, 0),
-            device=self.device,
-            batch_size=self.batch_size,
-            input_height=self.input_height,
-            input_width=self.input_width,
             weight_tensor=self.proj_in_conv_weights,
             bias_tensor=self.proj_in_conv_bias,
-            conv_config=conv_config,
+            **conv_kwargs,
             compute_config=compute_config,
             conv_op_cache=conv_cache,
             return_output_dim=False,
-            return_weights_and_bias=True,
+            return_weights_and_bias=False,
         )
 
         inner_dim = hidden_states.shape[-1]
@@ -296,6 +319,38 @@ class transformer_2d_model:
         out_channels = in_channels if out_channels is None else out_channels
         if is_input_continuous:
             if not use_linear_projection:
+                conv_kwargs_1 = {
+                    "in_channels": self.proj_out_in_channels,
+                    "out_channels": self.proj_out_out_channels,
+                    "batch_size": self.batch_size,
+                    "input_height": self.input_height,
+                    "input_width": self.input_width,
+                    "kernel_size": (1, 1),
+                    "stride": (1, 1),
+                    "padding": (0, 0),
+                    "dilation": (1, 1),
+                    "groups": 1,
+                    "device": self.device,
+                    "conv_config": conv_config,
+                }
+
+                if not ttnn.is_tensor_storage_on_device(self.proj_out_conv_weights):
+                    self.proj_out_conv_weights = ttnn.prepare_conv_weights(
+                        weight_tensor=self.proj_out_conv_weights,
+                        weights_format="OIHW",
+                        input_memory_config=hidden_states.memory_config(),
+                        input_layout=hidden_states.get_layout(),
+                        has_bias=True,
+                        **conv_kwargs_1,
+                    )
+                    self.proj_out_conv_bias = ttnn.prepare_conv_bias(
+                        bias_tensor=self.proj_out_conv_bias,
+                        input_memory_config=hidden_states.memory_config(),
+                        input_layout=hidden_states.get_layout(),
+                        **conv_kwargs_1,
+                    )
+                    self.proj_out_conv_weights = ttnn.to_device(self.proj_out_conv_weights, self.device)
+                    self.proj_out_conv_bias = ttnn.to_device(self.proj_out_conv_bias, self.device)
                 # hidden_states = ttnn.to_memory_config(hidden_states, self.proj_out.conv.input_sharded_memory_config)
                 [
                     hidden_states,
@@ -303,18 +358,9 @@ class transformer_2d_model:
                     [self.proj_out_conv_weights, self.proj_out_conv_bias],
                 ] = ttnn.conv2d(
                     input_tensor=hidden_states,
-                    in_channels=self.proj_out_in_channels,
-                    out_channels=self.proj_out_out_channels,
-                    kernel_size=(1, 1),
-                    stride=(1, 1),
-                    padding=(0, 0),
-                    device=self.device,
-                    batch_size=self.batch_size,
-                    input_height=self.input_height,
-                    input_width=self.input_width,
+                    **conv_kwargs_1,
                     weight_tensor=self.proj_out_conv_weights,
                     bias_tensor=self.proj_out_conv_bias,
-                    conv_config=conv_config,
                     conv_op_cache=conv_cache,
                     return_output_dim=True,
                     return_weights_and_bias=True,

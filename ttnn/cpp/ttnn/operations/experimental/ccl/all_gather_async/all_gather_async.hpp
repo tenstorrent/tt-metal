@@ -6,6 +6,7 @@
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include "cpp/ttnn/global_semaphore.hpp"
 
 namespace ttnn {
 namespace operations::experimental::ccl {
@@ -14,12 +15,12 @@ struct ExecuteAllGatherAsync {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         const int32_t dim,
+        const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
         const uint32_t num_links = 1,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
         std::optional<SubDeviceId> subdevice_id = std::nullopt,
-        bool enable_persistent_fabric_mode = false,
-        bool create_semaphore_handles = true);
+        bool enable_persistent_fabric_mode = false);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
@@ -27,11 +28,11 @@ struct ExecuteAllGatherAsync {
         const uint32_t cluster_axis,
         const MeshDevice& mesh_device,
         const ttnn::ccl::Topology topology,
+        const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<size_t> num_preferred_links = std::nullopt,
         std::optional<SubDeviceId> subdevice_id = std::nullopt,
-        bool enable_persistent_fabric_mode = false,
-        bool create_semaphore_handles = true);
+        bool enable_persistent_fabric_mode = false);
 };
 
 }  // namespace operations::experimental::ccl

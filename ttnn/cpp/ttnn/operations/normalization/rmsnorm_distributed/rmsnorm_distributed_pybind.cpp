@@ -7,7 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 
 #include "rmsnorm_pre_all_gather.hpp"
 #include "rmsnorm_post_all_gather.hpp"
@@ -27,6 +27,7 @@ void bind_normalization_rmsnorm_pre_all_gather_operation(py::module& module) {
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg("dtype") = DataType::BFLOAT16,
+            py::arg("residual_input_tensor") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt,
             py::arg("program_config") = std::nullopt,
             py::arg("memory_config") = std::nullopt});
@@ -48,7 +49,8 @@ void bind_normalization_rmsnorm_post_all_gather_operation(py::module& module) {
             py::arg("bias") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt,
-            py::arg("program_config") = std::nullopt});
+            py::arg("program_config") = std::nullopt,
+            py::arg("dtype") = std::nullopt});
 }
 
 void bind_normalization_rms_norm_distributed(py::module& module) {

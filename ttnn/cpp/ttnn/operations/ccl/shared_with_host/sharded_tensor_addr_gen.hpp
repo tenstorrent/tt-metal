@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <array>
 #include <bit>
-#include "tt_metal/impl/buffers/buffer_constants.hpp"
+#include <tt-metalium/buffer_constants.hpp>
 
 /*
  *    ------   ATTENTION  ATTENTION  ATTENTION  ATTENTION  ATTENTION   ------
@@ -47,17 +47,20 @@ struct VirtualCoordWormholeWorkerToNocLookup
     : address_generators::WorkerToNocCoordLookup<VirtualCoordWormholeWorkerToNocLookup> {
     VirtualCoordWormholeWorkerToNocLookup() : address_generators::WorkerToNocCoordLookup<VirtualCoordWormholeWorkerToNocLookup>() {}
     noc_grid_index_t get_noc_x_from_worker_x(noc_grid_index_t worker_x) const {
-        return worker_x
         #if defined(KERNEL_BUILD)
-        + VIRTUAL_TENSIX_START_X
+        return worker_x + VIRTUAL_TENSIX_START_X;
+        #else
+        constexpr noc_grid_index_t HOST_PLACEHOLDER_VIRTUAL_TENSIX_START_X = 18;
+        return worker_x + HOST_PLACEHOLDER_VIRTUAL_TENSIX_START_X;
         #endif
-        ;
     }
 
     noc_grid_index_t get_noc_y_from_worker_y(noc_grid_index_t worker_y) const {
-        return worker_y
         #if defined(KERNEL_BUILD)
-        + VIRTUAL_TENSIX_START_Y
+        return worker_y + VIRTUAL_TENSIX_START_Y
+        #else
+        constexpr noc_grid_index_t HOST_PLACEHOLDER_VIRTUAL_TENSIX_START_Y = 18;
+        return worker_y + HOST_PLACEHOLDER_VIRTUAL_TENSIX_START_Y;
         #endif
         ;
     }

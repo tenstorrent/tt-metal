@@ -10,7 +10,6 @@ enum class BinaryOpType {
     ADD,
     SUB,
     MUL,
-    DIV,
     GT,
     LT,
     LTE,
@@ -25,5 +24,13 @@ enum class BinaryOpType {
     LDEXP,
     LOGADDEXP,
     LOGADDEXP2,
+    DIV,
+    RSUB,
+    POWER,
+    BITWISE_XOR,
+    BITWISE_AND,
+    BITWISE_OR,
+    LEFT_SHIFT,
+    RIGHT_SHIFT
 };
 }

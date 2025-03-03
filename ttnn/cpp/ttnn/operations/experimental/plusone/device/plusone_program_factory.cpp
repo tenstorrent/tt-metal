@@ -4,10 +4,10 @@
 #include <algorithm>
 
 #include "ttnn/operations/math.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/operation.hpp"
 
 namespace ttnn::operations::experimental::detail {
@@ -22,7 +22,7 @@ operation::ProgramWithCallbacks plusone_single_core(
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     uint32_t input_unit_size = input.element_size();
 
-    tt::tt_metal::Device* device = input.device();
+    tt::tt_metal::IDevice* device = input.device();
 
     CoreRangeSet all_cores = CoreRangeSet(std::vector{CoreRange({0, 0}, {0, 0})});
     uint32_t num_cores = 1;  // single-core
@@ -32,7 +32,7 @@ operation::ProgramWithCallbacks plusone_single_core(
         num_cores = all_cores.num_cores();
     }
 
-    const auto& input_shape = input.get_legacy_shape();
+    const auto& input_shape = input.get_padded_shape();
     const uint32_t W = input_shape[0];
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;

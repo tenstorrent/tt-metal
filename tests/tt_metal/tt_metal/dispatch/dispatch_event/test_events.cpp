@@ -4,17 +4,17 @@
 
 #include "command_queue_fixture.hpp"
 #include "gtest/gtest.h"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "impl/debug/watcher_server.hpp"
-#include "tt_metal/impl/event/event.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include <tt-metalium/event.hpp>
+#include <tt-metalium/command_queue.hpp>
 
 using std::vector;
 using namespace tt::tt_metal;
 
 constexpr uint32_t completion_queue_event_offset = sizeof(CQDispatchCmd);
-constexpr uint32_t completion_queue_page_size = dispatch_constants::TRANSFER_PAGE_SIZE;
+constexpr uint32_t completion_queue_page_size = DispatchSettings::TRANSFER_PAGE_SIZE;
 
 enum class DataMovementMode : uint8_t { WRITE = 0, READ = 1 };
 

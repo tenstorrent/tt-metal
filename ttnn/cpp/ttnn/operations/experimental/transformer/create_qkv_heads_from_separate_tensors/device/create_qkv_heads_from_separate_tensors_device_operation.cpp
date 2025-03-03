@@ -3,9 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "create_qkv_heads_from_separate_tensors_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
-
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::experimental::transformer {
 
@@ -54,8 +52,8 @@ void CreateQKVHeadsSeparateTensorsDeviceOperation::validate(const std::vector<Te
         this->num_kv_heads,
         num_w_cores);
 
-    const auto q_input_shape = q_input_tensor.get_legacy_shape();
-    const auto kv_input_shape = kv_input_tensor.get_legacy_shape();
+    const auto q_input_shape = q_input_tensor.get_padded_shape();
+    const auto kv_input_shape = kv_input_tensor.get_padded_shape();
     TT_FATAL(q_input_shape[1] == 1 && kv_input_shape[1] == 1, "Unsupported input shape");
     TT_FATAL(
         q_input_shape[0] == kv_input_shape[0],
@@ -131,42 +129,17 @@ void CreateQKVHeadsSeparateTensorsDeviceOperation::validate(const std::vector<Te
         q_input_shape[0] == num_h_cores, "Batch size {} must be equal to num cores {}", q_input_shape[0], num_h_cores);
 }
 
-std::vector<tt::tt_metal::LegacyShape> CreateQKVHeadsSeparateTensorsDeviceOperation::compute_output_shapes(
+std::vector<ttnn::TensorSpec> CreateQKVHeadsSeparateTensorsDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     const auto& input_tensor_kv = input_tensors.at(1);
-    const auto input_shape = input_tensor.get_legacy_shape();
-    const auto input_shape_kv = input_tensor_kv.get_legacy_shape();
+    const auto input_shape = input_tensor.get_padded_shape();
+    const auto input_shape_kv = input_tensor_kv.get_padded_shape();
 
-    const auto q_output_shape = {input_shape[0], this->num_q_heads, input_shape[2], this->head_dim};
-    const auto v_output_shape = {input_shape_kv[0], this->num_kv_heads, input_shape_kv[2], this->head_dim};
-    const auto k_output_shape =
-        this->transpose_k_heads
-            ? tt::tt_metal::LegacyShape{input_shape_kv[0], this->num_kv_heads, head_dim, input_shape_kv[2]}
-            : v_output_shape;
-    return {q_output_shape, k_output_shape, v_output_shape};
-}
-
-operation::ProgramWithCallbacks CreateQKVHeadsSeparateTensorsDeviceOperation::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    const auto& input_tensor_q = input_tensors.at(0);
-    const auto& input_tensor_kv = input_tensors.at(1);
-    CoreCoord compute_with_storage_grid_size = input_tensor_q.device()->compute_with_storage_grid_size();
-    return multi_core_create_q_and_kv_heads_sharded(
-        input_tensor_q,
-        input_tensor_kv,
-        this->num_q_heads,
-        this->num_kv_heads,
-        this->head_dim,
-        this->transpose_k_heads,
-        output_tensors,
-        compute_with_storage_grid_size);
-}
-
-std::vector<Tensor> CreateQKVHeadsSeparateTensorsDeviceOperation::create_output_tensors(
-    const std::vector<Tensor>& input_tensors) const {
-    // no create_output_tensors variant that takes in optional input tensors?
-    const auto& input_tensor = input_tensors.at(0);
+    Shape q_shape({input_shape[0], this->num_q_heads, input_shape[2], this->head_dim});
+    Shape v_shape({input_shape_kv[0], this->num_kv_heads, input_shape_kv[2], this->head_dim});
+    const auto k_shape =
+        this->transpose_k_heads ? Shape({input_shape_kv[0], this->num_kv_heads, head_dim, input_shape_kv[2]}) : v_shape;
 
     CoreRangeSet all_cores = input_tensor.shard_spec().value().grid;
     ShardOrientation shard_orientation = input_tensor.shard_spec().value().orientation;
@@ -176,11 +149,6 @@ std::vector<Tensor> CreateQKVHeadsSeparateTensorsDeviceOperation::create_output_
     // uint32_t num_h_cores = rm ? bbox.end_coord.y + 1 : bbox.end_coord.x + 1;
     // uint32_t num_w_cores = rm ? bbox.end_coord.x + 1 : bbox.end_coord.y + 1;
     uint32_t num_cores = bbox.size();
-
-    auto shapes = compute_output_shapes(input_tensors);
-    auto q_shape = shapes.at(0);
-    auto k_shape = shapes.at(1);
-    auto v_shape = shapes.at(2);
 
     // TODO: Do we need?
     // uint32_t num_kv_heads_per_shard = k_shape[1] / num_w_cores;
@@ -207,11 +175,28 @@ std::vector<Tensor> CreateQKVHeadsSeparateTensorsDeviceOperation::create_output_
     mem_config_v.shard_spec = v_spec;
 
     auto out_tensor_q =
-        create_device_tensor(q_shape, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config_q);
+        TensorSpec(q_shape, TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), mem_config_q));
     auto out_tensor_k =
-        create_device_tensor(k_shape, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config_k);
+        TensorSpec(k_shape, TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), mem_config_k));
     auto out_tensor_v =
-        create_device_tensor(v_shape, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config_v);
+        TensorSpec(v_shape, TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), mem_config_v));
     return {out_tensor_q, out_tensor_k, out_tensor_v};
 }
+
+operation::ProgramWithCallbacks CreateQKVHeadsSeparateTensorsDeviceOperation::create_program(
+    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+    const auto& input_tensor_q = input_tensors.at(0);
+    const auto& input_tensor_kv = input_tensors.at(1);
+    CoreCoord compute_with_storage_grid_size = input_tensor_q.device()->compute_with_storage_grid_size();
+    return multi_core_create_q_and_kv_heads_sharded(
+        input_tensor_q,
+        input_tensor_kv,
+        this->num_q_heads,
+        this->num_kv_heads,
+        this->head_dim,
+        this->transpose_k_heads,
+        output_tensors,
+        compute_with_storage_grid_size);
+}
+
 }  // namespace ttnn::operations::experimental::transformer

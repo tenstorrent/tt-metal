@@ -8,7 +8,7 @@
 #include <vector>
 #include <optional>
 
-#include "tt_metal/impl/allocator/algorithms/allocator_algorithm.hpp"
+#include "allocator_algorithm.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -48,6 +48,8 @@ public:
     Statistics get_statistics() const override;
 
     void dump_blocks(std::ostream& out) const override;
+
+    MemoryBlockTable get_memory_block_table() const override;
 
     void shrink_size(DeviceAddr shrink_size, bool bottom_up = true) override;
 

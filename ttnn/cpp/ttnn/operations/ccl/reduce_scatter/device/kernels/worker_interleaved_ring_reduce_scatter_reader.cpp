@@ -8,13 +8,13 @@
 
 #include "dataflow_api.h"
 #include "debug/assert.h"
-#include "impl/buffers/buffer_constants.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include <tt-metalium/buffer_constants.hpp>
+#include "cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
+#include "cpp/ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp"
+#include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 
-#include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
+#include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
+#include "cpp/ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
 
 using tt::tt_metal::TensorMemoryLayout;
 using ttnn::ccl::coord_t;
@@ -581,4 +581,6 @@ void kernel_main() {
 
     reader.close();
     WAYPOINT("DONE");
+
+    noc_async_full_barrier();
 }

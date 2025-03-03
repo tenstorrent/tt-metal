@@ -890,14 +890,10 @@ def fill_rm(x, *args, **kwargs):
     return y
 
 
-def fill_bw(x, *args, **kwargs):
-    grad_data = x.detach().clone()
-
-    put_y = torch.zeros_like(grad_data)
-    grad_sum = grad_data.sum()
-    put_y.fill_(grad_sum)
-
-    return put_y
+def fill_bw(x, y, *args, **kwargs):
+    y.requires_grad = True
+    golden_function = ttnn.get_golden_function(ttnn.fill_bw)
+    return golden_function(x, y)[0]
 
 
 def fill_zero_bw(x, *args, **kwargs):
@@ -938,7 +934,7 @@ def lerp_ternary(x, y, z, *args, **kwargs):
 
 
 ## Binary Ops
-def atan2(x, y, *args, **kwargs):
+def atan2(y, x, *args, **kwargs):
     return torch.atan2(y, x)
 
 
@@ -982,7 +978,7 @@ def prod(x, *args, all_dimensions, dim, **kwargs):
     if all_dimensions:
         result = torch.prod(x)
         return result.view(1, 1, 1, 1)
-    return torch.prod(x, dim, keepdim=True)
+    return torch.prod(x, dim, keepdim=kwargs["keepdim"])
 
 
 def ldexp(x, y, *args, **kwargs):

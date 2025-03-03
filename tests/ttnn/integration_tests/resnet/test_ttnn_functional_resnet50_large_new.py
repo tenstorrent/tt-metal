@@ -19,7 +19,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import (
     pad_and_fold_conv_filters_for_unity_stride,
     enable_memory_reports,
-    skip_for_grayskull,
     is_wormhole_b0,
     is_blackhole,
 )

@@ -5,7 +5,7 @@
 #include <string>
 
 #include "hostdevcommon/common_values.hpp"
-#include "tt_metal/impl/allocator/algorithms/allocator_algorithm.hpp"
+#include "allocator_algorithm.hpp"
 #include <boost/smart_ptr/local_shared_ptr.hpp>
 
 namespace tt {
@@ -37,6 +37,8 @@ public:
     Statistics get_statistics() const;
 
     void dump_blocks(std::ostream& out) const;
+
+    MemoryBlockTable get_memory_block_table() const;
 
     void shrink_size(DeviceAddr shrink_size, bool bottom_up = true);
 

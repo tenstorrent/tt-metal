@@ -52,15 +52,14 @@ jobs:
       matrix:
         os: ["${{ inputs.os }}"]
         test-group: [
-          {name: eager unit tests 1, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 1 },
-          {name: eager unit tests 2, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 2 },
-          {name: eager unit tests 3, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 3 },
-          {name: eager unit tests 4, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 4 },
-          {name: eager unit tests 5, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 5 },
-          {name: eager unit tests 6, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 6 },
-          {name: eager unit tests 7, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 7 },
-          {name: eager trace tests, cmd: pytest tests/tt_eager/python_api_testing/trace_testing/ -xvvv},
-          {name: sweep, cmd: pytest tests/tt_eager/python_api_testing/sweep_tests/pytests/ -xvvv},
+          {name: eager unit tests 1, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 1 --exclude-warning-annotations },
+          {name: eager unit tests 2, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 2 --exclude-warning-annotations },
+          {name: eager unit tests 3, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 3 --exclude-warning-annotations },
+          {name: eager unit tests 4, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 4 --exclude-warning-annotations },
+          {name: eager unit tests 5, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 5 --exclude-warning-annotations },
+          {name: eager unit tests 6, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 6 --exclude-warning-annotations },
+          {name: eager unit tests 7, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 7 --exclude-warning-annotations },
+          {name: sweep, cmd: pytest tests/tt_eager/python_api_testing/sweep_tests/pytests/ -xvvv --exclude-warning-annotations },
         ]
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     env:
@@ -73,7 +72,7 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - uses: actions/download-artifact@v4
         with:
-          name: eager-dist-${{ matrix.os }}-${{ inputs.arch }}
+          name: eager-dist-${{ matrix.os }}-any
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         uses: ./.github/actions/docker-run
@@ -81,6 +80,9 @@ jobs:
           docker_os_arch: tt-metalium/${{ inputs.os }}-amd64
           install_wheel: true
           docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e ARCH_NAME=${{ inputs.arch }}
+            -e GITHUB_ACTIONS=true
           run_args: |
             ${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/slack-report

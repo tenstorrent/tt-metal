@@ -64,7 +64,7 @@ With the N300 form-factor, it houses two wormhole chips. The host is connected t
 
 <img src="../EthernetMultichip/images/TG.png" style="width:500px;"/>
 
-*Figure 2: TG System Topology. TG is composed of 16x N300 wormhole cards, totalling 32 wormhole chips, connected in a 8x4 mesh configuration. Each pair of wormhole-chips are connected via four ethernet links.*
+*Figure 2: TG System Topology. TG is composed of 32x galaxy wormhole cards, totalling 32 wormhole chips, connected in a 8x4 mesh configuration. Each pair of wormhole-chips are connected via four ethernet links.*
 
 
 [tt-topology](https://github.com/tenstorrent/tt-topology) can be used to flash multiple wormhole cards on a system to a specific ethernet routing configuration (linear, ring, mesh) and used to visualize the organization of the chip layout.
@@ -296,7 +296,7 @@ Let's see an example of how to use the Ring All-Gather operation:
 ```py
 import ttnn
 
-mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(2, 4), mesh_type=ttnn.MeshType.Ring)
+mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(2, 4))
 
 # Construct test tensor of data; 8 chunks of 32x32
 torch_tensor = torch.rand((1,1,32,256), dtype=torch.bfloat16)
@@ -328,7 +328,7 @@ The result tensor for each device in the column is the concatenation in `dim=3` 
 ```py
 import ttnn
 
-mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(2, 4), mesh_type=ttnn.MeshType.Ring)
+mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(2, 4))
 
 # Construct test tensor of data; 8 chunks of 32x32
 torch_tensor = torch.rand((1,1,32,256), dtype=torch.bfloat16)
@@ -534,7 +534,7 @@ torch_hidden_states = (torch.rand(batch_size, 1, sequence_length, config.hidden_
 torch_output = model.forward(torch_hidden_states)
 
 # Device Initialization
-mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(2,4), mesh_type=ttnn.MeshType.Ring)
+mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(2,4))
 
 # Initialize input activations on all devices in the mesh
 # Alternatively, we can shard the input activations on the height dimension and
@@ -602,7 +602,7 @@ See `models/demos/t3000/llama2_70b/tests/test_llama_perf_decode.py::test_Llama_p
 1. Submesh Creation
 
 ```py
-    submesh_devices: List[ttnn.MeshDevice] = mesh_device.create_submeshes((2, 4), ttnn.MeshType.Ring)
+    submesh_devices: List[ttnn.MeshDevice] = mesh_device.create_submeshes((2, 4))
 ```
 
 2. Compile & Run the Model on Each Submesh

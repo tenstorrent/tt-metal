@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "third_party/taskflow/taskflow/taskflow.hpp"
+#include <taskflow/taskflow.hpp>
 #include <thread>
 #include <stdexcept>
 

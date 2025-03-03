@@ -167,7 +167,6 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                 64,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
     if num_devices == 4:
@@ -189,7 +188,6 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     1,  # Dynamic - must set before using this config
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
     elif num_devices == 8:
@@ -211,7 +209,6 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     1,  # Dynamic - must set before using this config
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
 
@@ -234,7 +231,6 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                 64,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
     model_config["DROPOUT_ADD_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
@@ -254,7 +250,6 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                 64,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
     # Decoder
@@ -275,7 +270,6 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                 256,  # per_core_N * TILE_WIDTH
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
     model_config["LN_ATTN_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
@@ -295,7 +289,6 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                 256,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
     model_config["LN_ATTN_PROGCFG"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
@@ -332,7 +325,6 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     256,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
     elif num_devices == 4:
@@ -353,7 +345,6 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     512,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
     elif num_devices == 8:
@@ -375,7 +366,6 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     1024,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
         # Padded version
@@ -396,7 +386,6 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
         #             128,
         #         ],
         #         ttnn.ShardOrientation.ROW_MAJOR,
-        #         False,
         #     ),
         # )
     model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"] = WIDTH_SHARDED_MEMCFG
@@ -492,7 +481,6 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                 32,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
 
@@ -513,7 +501,6 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                 256,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
     if num_devices == 4:
@@ -534,7 +521,6 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     1280,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
     elif num_devices == 8:
@@ -555,7 +541,6 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     1280,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
     model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
@@ -576,7 +561,6 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
     #             128,  # Dynamic
     #         ],
     #         ttnn.ShardOrientation.ROW_MAJOR,
-    #         False,
     #     ),
     # )
 
@@ -627,7 +611,6 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                 128,  # Dynamic
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
     if num_devices == 4:
@@ -648,7 +631,6 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     128,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
     elif num_devices == 8:
@@ -669,7 +651,6 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     128,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
     model_config["K_TRANSPOSED_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
@@ -708,7 +689,6 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     128,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
     elif num_devices == 8:
@@ -729,7 +709,6 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     256,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
     model_config["SELFOUT_MM_OUTPUT_MEMCFG"] = WIDTH_SHARDED_MEMCFG
@@ -778,7 +757,6 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     128,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
     elif num_devices == 4:
@@ -799,7 +777,6 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     256,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
     elif num_devices == 8:
@@ -820,7 +797,6 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     512,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
     # Llama MLP config
@@ -847,7 +823,6 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     896,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
     elif num_devices == 8:
@@ -868,7 +843,6 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     896,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
     # FF1 & FF3 Matmul Config Variables
@@ -989,7 +963,6 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                 128,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
     if num_devices == 4:
@@ -1032,7 +1005,6 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     512,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
         model_config["PADDED_FF2_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -1087,7 +1059,6 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     1024,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
         model_config["PADDED_FF2_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -1119,7 +1090,6 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                 256,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
     model_config["LN_F_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
@@ -1139,7 +1109,6 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                 256,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
     model_config["LN_F_PROGCFG"] = ttnn.LayerNormShardedMultiCoreProgramConfig(

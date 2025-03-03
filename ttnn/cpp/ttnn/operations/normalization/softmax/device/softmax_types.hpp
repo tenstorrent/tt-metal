@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "common/core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 
 namespace ttnn::operations::normalization {
 

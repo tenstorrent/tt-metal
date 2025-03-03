@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "debug_tools_fixture.hpp"
 #include "gtest/gtest.h"
-#include "impl/debug/dprint_server.hpp"
+#include "dprint_server.hpp"
 #include "debug_tools_test_utils.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking that the DPRINT server can be muted/unmuted.
@@ -20,7 +20,7 @@ const std::string golden_output =
 R"(Printing int from arg: 0
 Printing int from arg: 2)";
 
-static void RunTest(DPrintFixture* fixture, Device* device) {
+static void RunTest(DPrintFixture* fixture, IDevice* device) {
     // Set up program
     Program program = Program();
 
@@ -67,7 +67,7 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
 }
 
 TEST_F(DPrintFixture, TensixTestPrintMuting) {
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunTest, device);
     }
 }

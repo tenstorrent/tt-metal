@@ -10,8 +10,8 @@
 #include <utility>
 
 #include "pybind11/decorators.hpp"
-#include "tt_metal/common/core_coord.hpp"
-#include "ttnn/cpp/pybind11/json_class.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include "cpp/pybind11/json_class.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/types.hpp"
 
@@ -130,7 +130,9 @@ void py_module(py::module& module) {
                         bool fuse_batch,
                         std::optional<UnaryWithParam> fused_activation,
                         bool mcast_in0,
-                        bool gather_in0) {
+                        bool gather_in0,
+                        CoreRangeSet hop_cores,
+                        std::size_t num_global_cb_receivers) {
                 // Set out_block_h and out_block_w to defaults if they are not provided
                 std::size_t actual_out_block_h = out_block_h.value_or(per_core_M);
                 std::size_t actual_out_block_w = out_block_w.value_or(per_core_N);
@@ -147,7 +149,9 @@ void py_module(py::module& module) {
                     fuse_batch,
                     std::move(fused_activation),
                     mcast_in0,
-                    gather_in0);
+                    gather_in0,
+                    std::move(hop_cores),
+                    num_global_cb_receivers);
             }),
             py::kw_only(),
             py::arg("compute_with_storage_grid_size"),
@@ -161,7 +165,9 @@ void py_module(py::module& module) {
             py::arg("fuse_batch").noconvert(),
             py::arg("fused_activation"),
             py::arg("mcast_in0").noconvert(),
-            py::arg("gather_in0").noconvert() = false)
+            py::arg("gather_in0").noconvert() = false,
+            py::arg("hop_cores").noconvert() = CoreRangeSet(),
+            py::arg("num_global_cb_receivers").noconvert() = 1)
         .def_readwrite(
             "compute_with_storage_grid_size",
             &MatmulMultiCoreReuseMultiCast1DProgramConfig::compute_with_storage_grid_size)
@@ -175,7 +181,10 @@ void py_module(py::module& module) {
         .def_readwrite("fuse_batch", &MatmulMultiCoreReuseMultiCast1DProgramConfig::fuse_batch)
         .def_readwrite("fused_activation", &MatmulMultiCoreReuseMultiCast1DProgramConfig::fused_activation)
         .def_readwrite("mcast_in0", &MatmulMultiCoreReuseMultiCast1DProgramConfig::mcast_in0)
-        .def_readwrite("gather_in0", &MatmulMultiCoreReuseMultiCast1DProgramConfig::gather_in0);
+        .def_readwrite("gather_in0", &MatmulMultiCoreReuseMultiCast1DProgramConfig::gather_in0)
+        .def_readwrite("hop_cores", &MatmulMultiCoreReuseMultiCast1DProgramConfig::hop_cores)
+        .def_readwrite(
+            "num_global_cb_receivers", &MatmulMultiCoreReuseMultiCast1DProgramConfig::num_global_cb_receivers);
 
     auto matmul_multi_core_reuse_multicast_dram_sharded_program_config =
         tt_serializable_class<MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(
@@ -336,7 +345,8 @@ void py_module(py::module& module) {
                const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
                const std::optional<const ttnn::CoreGrid> core_grid,
                const std::optional<const Tile>& output_tile,
-               std::optional<Tensor>& optional_output_tensor) -> ttnn::Tensor {
+               std::optional<Tensor>& optional_output_tensor,
+               const std::optional<const DeviceGlobalCircularBuffer>& global_cb) -> ttnn::Tensor {
                 return self(
                     input_tensor_a,
                     input_tensor_b,
@@ -349,7 +359,8 @@ void py_module(py::module& module) {
                     compute_kernel_config,
                     core_grid,
                     output_tile,
-                    optional_output_tensor);
+                    optional_output_tensor,
+                    global_cb);
             },
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
@@ -364,6 +375,7 @@ void py_module(py::module& module) {
             py::arg("core_grid") = std::nullopt,
             py::arg("output_tile") = std::nullopt,
             py::arg("optional_output_tensor") = std::nullopt,
+            py::arg("global_cb") = std::nullopt,
         });
 
     bind_registered_operation(
@@ -417,7 +429,8 @@ void py_module(py::module& module) {
                const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
                const std::optional<const ttnn::CoreGrid> core_grid,
                const std::optional<const Tile>& output_tile,
-               std::optional<Tensor>& optional_output_tensor) -> ttnn::Tensor {
+               std::optional<Tensor>& optional_output_tensor,
+               const std::optional<const DeviceGlobalCircularBuffer>& global_cb) -> ttnn::Tensor {
                 return self(
                     input_tensor_a,
                     input_tensor_b,
@@ -431,7 +444,8 @@ void py_module(py::module& module) {
                     compute_kernel_config,
                     core_grid,
                     output_tile,
-                    optional_output_tensor);
+                    optional_output_tensor,
+                    global_cb);
             },
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
@@ -447,6 +461,7 @@ void py_module(py::module& module) {
             py::arg("core_grid") = std::nullopt,
             py::arg("output_tile") = std::nullopt,
             py::arg("optional_output_tensor") = std::nullopt,
+            py::arg("global_cb") = std::nullopt,
         });
 }
 

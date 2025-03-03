@@ -25,8 +25,7 @@ struct ReduceScatter {
     const std::optional<size_t> user_defined_num_buffers_per_channel;
 
     void validate(const std::vector<Tensor>& input_tensors) const;
-    std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
+    std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
 };
@@ -59,7 +58,7 @@ ReduceScatter create_reduce_scatter_struct(
     const MemoryConfig& output_mem_config,
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel,
-    const std::vector<Device*>& devices,
+    const std::vector<IDevice*>& devices,
     const ttnn::ccl::Topology topology);
 }  // namespace reduce_scatter_detail
 }  // namespace ccl

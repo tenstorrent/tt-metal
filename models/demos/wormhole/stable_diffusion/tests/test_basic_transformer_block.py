@@ -12,65 +12,55 @@ from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_p
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_basic_transformer_block import basic_transformer_block
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
-    pre_process_input,
-    post_process_output,
-)
 from models.utility_functions import (
     skip_for_grayskull,
 )
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
+    preprocess_and_push_input_to_device,
+)
+from models.demos.wormhole.stable_diffusion.tests.parameterizations import TRANSFORMER_PARAMETERIZATIONS
 
 
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize(
-    "N, C, H, W, index, attention_head_dim",
-    [
-        (
-            1,
-            2,
-            4096,
-            320,
-            3,
-            40,
-        ),
-        (
-            1,
-            2,
-            1024,
-            640,
-            2,
-            80,
-        ),
-        (
-            1,
-            2,
-            256,
-            1280,
-            1,
-            160,
-        ),
-        (
-            1,
-            2,
-            64,
-            1280,
-            1,
-            160,
-        ),
-    ],
+    "input_shape, shard_layout, shard_end_core, shard_shape, attention_head_dim, block, block_index, attention_index",
+    TRANSFORMER_PARAMETERIZATIONS,
 )
-def test_basic_transformer_block_512x512(device, model_name, N, C, H, W, index, attention_head_dim):
+def test_basic_transformer_block_512x512(
+    device,
+    model_name,
+    input_shape,
+    shard_layout,
+    shard_end_core,
+    shard_shape,
+    attention_head_dim,
+    block,
+    block_index,
+    attention_index,
+):
     torch.manual_seed(0)
+
+    N, C, H, W = input_shape
 
     pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
     model = pipe.unet
     model.eval()
     config = model.config
-    basic_transformer = pipe.unet.up_blocks[index].attentions[1].transformer_blocks[0]
 
-    hidden_states_shape = torch.Size([N, C, H, W])
+    if block == "up":
+        basic_transformer = pipe.unet.up_blocks[block_index].attentions[attention_index].transformer_blocks[0]
+    elif block == "down":
+        basic_transformer = pipe.unet.down_blocks[block_index].attentions[attention_index].transformer_blocks[0]
+    elif block == "mid":
+        basic_transformer = pipe.unet.mid_block.attentions[0].transformer_blocks[0]
+
+    parameters = preprocess_model_parameters(
+        initialize_model=lambda: basic_transformer, custom_preprocessor=custom_preprocessor, device=device
+    )
+
+    hidden_states_shape = torch.Size(input_shape)
     hidden_states = torch.rand(hidden_states_shape) * 0.01
     encoder_hidden_states_shape = [1, 2, 77, 768]
     encoder_hidden_states = torch.rand(encoder_hidden_states_shape)
@@ -80,32 +70,37 @@ def test_basic_transformer_block_512x512(device, model_name, N, C, H, W, index, 
     cross_attention_kwargs = None
     class_labels = None
 
-    torch_output = basic_transformer(hidden_states.squeeze(0), encoder_hidden_states.squeeze(0))
+    torch_hidden_states = torch.permute(hidden_states, [0, 2, 3, 1])
+    torch_hidden_states = torch.reshape(torch_hidden_states, [N, H * W, C])
+    torch_output = basic_transformer(torch_hidden_states, encoder_hidden_states.squeeze(0))
 
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: basic_transformer, custom_preprocessor=custom_preprocessor, device=device
-    )
-    model = basic_transformer_block(device, parameters, seq_len=H)
+    model = basic_transformer_block(device, parameters, seq_len=H * W)
 
-    hidden_states = ttnn.from_torch(hidden_states, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
-    hidden_states = ttnn.to_device(hidden_states, device, memory_config=ttnn.L1_MEMORY_CONFIG)
     encoder_hidden_states = torch.nn.functional.pad(encoder_hidden_states, (0, 0, 0, 19))
     encoder_hidden_states = ttnn.from_torch(encoder_hidden_states, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
     encoder_hidden_states = ttnn.to_device(encoder_hidden_states, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-    grid_sizes = {8192: (5, 8), 2048: (5, 8), 512: (8, 8), 128: (8, 4)}
-    hidden_states = ttnn.reshape(
-        hidden_states, [1, 1, hidden_states.shape[-3] * hidden_states.shape[-2], hidden_states.shape[-1]]
+    hidden_states = preprocess_and_push_input_to_device(
+        device,
+        hidden_states,
+        memory_config=ttnn.MemoryConfig(
+            shard_layout,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet(
+                    {
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0),
+                            ttnn.CoreCoord(shard_end_core[0], shard_end_core[1]),
+                        ),
+                    }
+                ),
+                shard_shape,
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        ),
     )
 
-    grid_size = grid_sizes[hidden_states.shape[-2]]
-    hidden_states = ttnn.interleaved_to_sharded(
-        hidden_states,
-        grid_size,
-        [hidden_states.volume() // hidden_states.shape[-1] // grid_size[1], hidden_states.shape[-1] // grid_size[0]],
-        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
     ttnn_output = model(
         hidden_states=hidden_states,
         encoder_hidden_states=encoder_hidden_states,

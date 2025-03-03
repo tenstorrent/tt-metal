@@ -5,13 +5,16 @@
 #include "prefetch.hpp"
 #include "eth_tunneler.hpp"
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include <host_api.hpp>
+#include <tt_metal.hpp>
+
+#include <tt-metalium/command_queue_interface.hpp>
+#include <tt-metalium/dispatch_settings.hpp>
 
 using namespace tt::tt_metal;
 
 void EthRouterKernel::GenerateStaticConfigs() {
-    auto& my_dispatch_constants = dispatch_constants::get(GetCoreType());
+    auto& my_dispatch_constants = DispatchMemMap::get(GetCoreType());
     if (as_mux_) {
         uint16_t channel =
             tt::Cluster::instance().get_assigned_channel_for_device(servicing_device_id_);  // TODO: can be mmio
@@ -35,7 +38,7 @@ void EthRouterKernel::GenerateStaticConfigs() {
 
         for (int idx = 0; idx < upstream_kernels_.size(); idx++) {
             static_config_.input_packetize[idx] = 0x1;
-            static_config_.input_packetize_log_page_size[idx] = dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE;
+            static_config_.input_packetize_log_page_size[idx] = DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;
             static_config_.input_packetize_local_sem[idx] =
                 tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
             dependent_config_.remote_rx_queue_id[idx] = 1;
@@ -45,8 +48,7 @@ void EthRouterKernel::GenerateStaticConfigs() {
     } else {
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_->id());
         logical_core_ = dispatch_core_manager::instance().demux_d_core(device_->id(), channel, placement_cq_id_);
-        static_config_.rx_queue_start_addr_words =
-            hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED) >> 4;
+        static_config_.rx_queue_start_addr_words = my_dispatch_constants.dispatch_buffer_base() >> 4;
         static_config_.rx_queue_size_words = 0x8000 >> 4;
 
         static_config_.kernel_status_buf_addr_arg = 0;
@@ -72,7 +74,7 @@ void EthRouterKernel::GenerateStaticConfigs() {
         }
 
         for (int idx = 0; idx < static_config_.vc_count.value(); idx++) {
-            static_config_.output_depacketize_log_page_size[idx] = dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
+            static_config_.output_depacketize_log_page_size[idx] = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
             static_config_.output_depacketize_remove_header[idx] = 0;
         }
     }

@@ -7,7 +7,7 @@
 #include <stdint.h>
 
 #include "noc_parameters.h"
-#include "dev_msgs.h"
+#include <dev_msgs.h>
 #include "noc_overlay_parameters.h"
 
 // Helper functions to convert NoC coordinates to NoC-0 coordinates, used in metal as "physical" coordinates.

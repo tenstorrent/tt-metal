@@ -23,7 +23,6 @@ def test_sub_fp32(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt = ttnn.from_torch(z_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_sub = ttnn.subtract(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_sub)
 
@@ -45,7 +44,6 @@ def test_rsub_fp32(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt = ttnn.from_torch(z_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_sub = ttnn.rsub(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_sub)
 
@@ -67,7 +65,6 @@ def test_add_fp32(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt = ttnn.from_torch(z_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_add = ttnn.add(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_add)
 
@@ -89,12 +86,31 @@ def test_add_int32(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt = ttnn.from_torch(z_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_add = ttnn.add(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_add)
 
     status = torch.allclose(z_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
     assert status
+
+
+@skip_for_grayskull("Unsupported dtype for Grayskull")
+@pytest.mark.parametrize(
+    "ttnn_function",
+    [
+        ttnn.sub,
+    ],
+)
+def test_sub_int32(device, ttnn_function):
+    x_torch = torch.tensor([[11, 23, 0, -23, -1, -100]], dtype=torch.int32)
+    y_torch = torch.tensor([[78, 99, 34, -33, -1, 100]], dtype=torch.int32)
+    golden_fn = ttnn.get_golden_function(ttnn_function)
+    z_torch = golden_fn(x_torch, y_torch)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt = ttnn.from_torch(z_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt_sub = ttnn.sub(x_tt, y_tt)
+    tt_out = ttnn.to_torch(z_tt_sub)
+    assert torch.allclose(z_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
 
 
 @skip_for_grayskull("Unsupported dtype for Grayskull")
@@ -111,7 +127,6 @@ def test_mul_fp32(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt = ttnn.from_torch(z_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_out = ttnn.mul(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
@@ -139,7 +154,6 @@ def test_div_fp32(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt = ttnn.from_torch(z_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_div = ttnn.divide(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_div)
 
@@ -220,7 +234,6 @@ def test_pow_fp32(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt = ttnn.from_torch(z_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_pow = ttnn.pow(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_pow)
 
@@ -241,7 +254,6 @@ def test_add_fp32_activ(device, ttnn_function):
     z_torch = torch.square(x_torch + y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt = ttnn.from_torch(z_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_add = ttnn.add(x_tt, y_tt, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.POWER, 2)])
     tt_out = ttnn.to_torch(z_tt_add)
 
@@ -271,7 +283,6 @@ def test_add_fp32_input_activ(device, ttnn_function, shape):
     z_torch = torch.square(torch.nn.functional.silu(x_torch) + y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt = ttnn.from_torch(z_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_add = ttnn.add(
         x_tt,
         y_tt,
@@ -298,7 +309,6 @@ def test_logaddexp_fp32(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt = ttnn.from_torch(z_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_out = ttnn.logaddexp(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
@@ -320,7 +330,6 @@ def test_logaddexp2_fp32(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt = ttnn.from_torch(z_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_out = ttnn.logaddexp2(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
@@ -342,7 +351,6 @@ def test_ldexp_fp32(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt = ttnn.from_torch(z_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_out = ttnn.ldexp(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
@@ -364,7 +372,6 @@ def test_bias_gelu_fp32(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt = ttnn.from_torch(z_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_out = ttnn.bias_gelu(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
@@ -386,7 +393,6 @@ def test_squared_difference_fp32(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt = ttnn.from_torch(z_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_out = ttnn.squared_difference(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
@@ -408,7 +414,6 @@ def test_logical_or_fp32(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt = ttnn.from_torch(z_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_out = ttnn.logical_or(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
@@ -430,7 +435,6 @@ def test_logical_xor_fp32(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt = ttnn.from_torch(z_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_out = ttnn.logical_xor(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
@@ -452,7 +456,6 @@ def test_logical_and_fp32(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt = ttnn.from_torch(z_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_out = ttnn.logical_and(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
@@ -479,7 +482,6 @@ def test_relational_fp32(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt = ttnn.from_torch(z_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_out = ttnn_function(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
@@ -501,7 +503,6 @@ def test_bitwise_and(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt = ttnn.from_torch(z_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_out = ttnn.bitwise_and(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
@@ -523,7 +524,6 @@ def test_bitwise_or(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt = ttnn.from_torch(z_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_out = ttnn.bitwise_or(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
@@ -545,7 +545,6 @@ def test_bitwise_xor(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt = ttnn.from_torch(z_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_out = ttnn.bitwise_xor(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
@@ -567,7 +566,6 @@ def test_bitwise_left_shift(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt = ttnn.from_torch(z_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_out = ttnn.bitwise_left_shift(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
@@ -589,7 +587,6 @@ def test_bitwise_right_shift(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt = ttnn.from_torch(z_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_out = ttnn.bitwise_right_shift(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 

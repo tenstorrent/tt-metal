@@ -12,11 +12,12 @@
 
 #include "umd/device/types/arch.h"
 // #include "tt_backend_api_types.hpp"
-#include "tt_metal/common/core_coord.hpp"
-#include "tt_metal/common/math.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/kernel.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
@@ -26,11 +27,12 @@
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"
 
-// #include "impl/kernels/kernel_types.hpp"
+// #include <tt-metalium/kernel_types.hpp>
 
 using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
+using namespace tt::tt_metal::experimental;
 
 // Taken from ccl_common... some dependency annoyance to deal with so just copying it here for now... resolve before
 // merging
@@ -85,7 +87,7 @@ public:
         }
     }
 
-    std::map<chip_id_t, Device*> devices_;
+    std::map<chip_id_t, IDevice*> devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 
@@ -111,7 +113,7 @@ struct KernelXY {
 
 void generate_receiver_worker_kernels(
     Program& program,
-    Device* device,
+    IDevice* device,
     CoreCoord const& worker_core,
     CoreCoord const& edm_core,
     ttnn::ccl::EriscDatamoverBuilder::ChannelBufferInterface const& edm_channel,
@@ -193,7 +195,7 @@ void generate_receiver_worker_kernels(
 
 void generate_sender_worker_kernels(
     Program& program,
-    Device* device,
+    IDevice* device,
     CoreCoord const& worker_core,
     CoreCoord const& edm_core,
     ttnn::ccl::EriscDatamoverBuilder::ChannelBufferInterface const& edm_channel,
@@ -268,8 +270,8 @@ void generate_sender_worker_kernels(
 }
 
 bool RunWriteBWTest(
-    tt_metal::Device* sender_device,
-    tt_metal::Device* receiver_device,
+    tt_metal::IDevice* sender_device,
+    tt_metal::IDevice* receiver_device,
 
     const CoreCoord& eth_sender_core,
     const CoreCoord& eth_receiver_core,
@@ -378,7 +380,7 @@ bool RunWriteBWTest(
         tt_metal::detail::WriteToBuffer(buffer_id, all_zeros);
     }
 
-    uint32_t erisc_handshake_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    uint32_t erisc_handshake_address = hal::get_erisc_l1_unreserved_base();
 
     uint32_t chip0_next_buffer_address = erisc_handshake_address + 16;
     std::vector<uint32_t> chip0_edm_args = {erisc_handshake_address};

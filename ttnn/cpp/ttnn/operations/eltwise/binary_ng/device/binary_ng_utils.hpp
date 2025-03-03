@@ -6,6 +6,7 @@
 
 #include "binary_ng_device_operation.hpp"
 #include "ttnn/operations/eltwise/binary_ng/types.hpp"
+#include "ttnn/tensor/types.hpp"
 
 #include <optional>
 #include <string>
@@ -38,35 +39,39 @@ struct BinaryNgKernelConfig {
     std::optional<uint32_t> bcast_input;
 };
 
-std::string get_kernel_file_path(KernelName kernel_name);
+std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu);
 
 struct OpConfig {
-    struct SfpuConfig {
-        SfpuConfig() = default;
-        constexpr SfpuConfig(
-            std::string_view init, std::string_view apply, std::string_view include = "compute_kernel_api.h") :
-            init{init}, apply{apply}, include{include} {}
-        std::string_view init{};
-        std::string_view apply{};
-        std::string_view include{};
-
-        std::map<std::string, std::string> as_defines(std::string_view prefix) const;
+    enum class FpuBinaryOp { ADD, SUB, MUL };
+    enum class SfpuBinaryOp {
+        ADD,
+        SUB,
+        MUL,
+        DIV,
+        POWER,
+        RSUB,
+        LEFT_SHIFT,
+        RIGHT_SHIFT,
+        BITWISE_AND,
+        BITWISE_OR,
+        BITWISE_XOR
     };
 
-    enum class FpuBinaryOp { ADD, SUB, MUL };
+    template <class EnumT>
+    OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>);
 
-    OpConfig(BinaryOpType binary_op_type);
+    std::map<std::string, std::string> as_defines(DataType dtype) const;
 
-    std::map<std::string, std::string> as_defines() const;
-
-    SfpuConfig preprocess_a{};
-    SfpuConfig preprocess_b{};
-    SfpuConfig postprocess{};
-    FpuBinaryOp fpu_binary_op;
+    std::optional<unary::UnaryOpType> process_lhs{};
+    std::optional<unary::UnaryOpType> process_rhs{};
+    std::optional<unary::UnaryOpType> postprocess{};
+    std::variant<FpuBinaryOp, SfpuBinaryOp> binary_op;
+    bool is_sfpu_op() const;
 };
 
-struct Lowercase {
-    std::string_view view;
-};
+void add_activation_defines(
+    std::map<std::string, std::string>& defines,
+    tt::stl::Span<const unary::UnaryWithParam> activations,
+    std::string_view operand);
 
 }  // namespace ttnn::operations::binary_ng

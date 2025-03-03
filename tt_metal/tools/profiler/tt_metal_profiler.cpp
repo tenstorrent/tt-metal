@@ -5,24 +5,29 @@
 #include <thread>
 #include <cmath>
 
-#include "llrt/hal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "impl/debug/dprint_server.hpp"
+#include <hal.hpp>
+#include <host_api.hpp>
 
-#include "tools/profiler/profiler.hpp"
+#include <profiler.hpp>
 #include "hostdevcommon/profiler_common.h"
 
-#include "tt_metal/detail/tt_metal.hpp"
+#include <tt_metal.hpp>
 
 #include "tracy/TracyTTDevice.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include <device.hpp>
+#include <device_pool.hpp>
+#include <tt_cluster.hpp>
+
+#include "llrt.hpp"
+
+#include "dprint_server.hpp"
 
 namespace tt {
 
 namespace tt_metal {
 inline namespace v0 {
 
-void DumpDeviceProfileResults(Device* device, const Program& program) {
+void DumpDeviceProfileResults(IDevice* device, const Program& program) {
 #if defined(TRACY_ENABLE)
     std::vector<CoreCoord> worker_cores_in_program;
     std::vector<CoreCoord> eth_cores_in_program;
@@ -52,45 +57,57 @@ namespace detail {
 
 std::map<uint32_t, DeviceProfiler> tt_metal_device_profiler_map;
 
-std::unordered_map<uint32_t, std::vector<std::pair<uint64_t, uint64_t>>> deviceHostTimePair;
-std::unordered_map<uint32_t, uint64_t> smallestHostime;
+std::unordered_map<chip_id_t, std::vector<std::pair<uint64_t, uint64_t>>> deviceHostTimePair;
+std::unordered_map<chip_id_t, uint64_t> smallestHostime;
 
+std::unordered_map<chip_id_t, std::unordered_map<chip_id_t, std::vector<std::pair<uint64_t, uint64_t>>>>
+    deviceDeviceTimePair;
 std::mutex device_mutex;
 
+bool do_sync_on_close = true;
+std::set<chip_id_t> sync_set_devices;
 constexpr CoreCoord SYNC_CORE = {0, 0};
 
-void setControlBuffer(uint32_t device_id, std::vector<uint32_t>& control_buffer) {
+void setControlBuffer(chip_id_t device_id, std::vector<uint32_t>& control_buffer) {
 #if defined(TRACY_ENABLE)
     const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device_id);
 
     control_buffer[kernel_profiler::CORE_COUNT_PER_DRAM] = soc_d.profiler_ceiled_core_count_perf_dram_bank;
 
-    for (auto& core : tt::Cluster::instance().get_virtual_routing_to_profiler_flat_id(device_id)) {
-        profiler_msg_t* profiler_msg;
-        if (tt::Cluster::instance().is_worker_core(core.first, device_id)) {
-            profiler_msg =
-                hal.get_dev_addr<profiler_msg_t*>(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
+    for (auto core : tt::Cluster::instance().get_virtual_routing_to_profiler_flat_id(device_id)) {
+        HalProgrammableCoreType CoreType;
+        auto curr_core = core.first;
+        if (tt::Cluster::instance().is_worker_core(curr_core, device_id)) {
+            CoreType = HalProgrammableCoreType::TENSIX;
         } else {
-            // ETH
-            profiler_msg =
-                hal.get_dev_addr<profiler_msg_t*>(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::PROFILER);
+            CoreType = tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
+            auto active_eth_cores = tt::Cluster::instance().get_active_ethernet_cores(device_id);
+            if (active_eth_cores.find(tt::Cluster::instance().get_logical_ethernet_core_from_virtual(
+                    device_id, curr_core)) != active_eth_cores.end()) {
+                CoreType = tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
+            }
+            auto idle_eth_cores = tt::Cluster::instance().get_inactive_ethernet_cores(device_id);
+            if (idle_eth_cores.find(tt::Cluster::instance().get_logical_ethernet_core_from_virtual(
+                    device_id, curr_core)) != idle_eth_cores.end()) {
+                CoreType = tt_metal::HalProgrammableCoreType::IDLE_ETH;
+            }
         }
+        profiler_msg_t* profiler_msg = hal.get_dev_addr<profiler_msg_t*>(CoreType, HalL1MemAddrType::PROFILER);
 
         control_buffer[kernel_profiler::FLAT_ID] = core.second;
         tt::llrt::write_hex_vec_to_core(
-            device_id, core.first, control_buffer, reinterpret_cast<uint64_t>(profiler_msg->control_vector));
+            device_id, curr_core, control_buffer, reinterpret_cast<uint64_t>(profiler_msg->control_vector));
     }
 #endif
 }
 
-void syncDeviceHost(
-    Device* device, CoreCoord logical_core, std::shared_ptr<tt_metal::Program>& sync_program, bool doHeader) {
+void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
+    ZoneScopedC(tracy::Color::Tomato3);
     if (!tt::llrt::RunTimeOptions::get_instance().get_profiler_sync_enabled()) {
         return;
     }
-    ZoneScopedC(tracy::Color::Tomato3);
-    auto core = device->worker_core_from_logical_core(logical_core);
     auto device_id = device->id();
+    auto core = device->worker_core_from_logical_core(logical_core);
 
     deviceHostTimePair.emplace(device_id, (std::vector<std::pair<uint64_t, uint64_t>>){});
     smallestHostime.emplace(device_id, 0);
@@ -98,7 +115,7 @@ void syncDeviceHost(
     constexpr uint16_t sampleCount = 249;
     // TODO(MO): Always recreate a new program until subdevice
     // allows using the first program generated by default manager
-    sync_program = std::make_shared<tt_metal::Program>();
+    auto sync_program = std::make_shared<tt_metal::Program>();
 
     std::map<string, string> kernel_defines = {
         {"SAMPLE_COUNT", std::to_string(sampleCount)},
@@ -121,7 +138,7 @@ void syncDeviceHost(
 
     int64_t writeSum = 0;
 
-    constexpr int millisecond_wait = 4;
+    constexpr int millisecond_wait = 10;
 
     const double tracyToSecRatio = TracyGetTimerMul();
     const int64_t tracyBaseTime = TracyGetBaseTime();
@@ -224,18 +241,21 @@ void syncDeviceHost(
 
     double delay = (deviceSum - frequencyFit * hostSum * tracyToSecRatio) / accumulateSampleCount;
 
-    log_file.open(log_path, std::ios_base::app);
     if (doHeader) {
+        log_file.open(log_path);
         log_file << fmt::format(
                         "device id,core_x, "
                         "core_y,device,host_tracy,host_real,write_overhead,host_start,delay,frequency,tracy_ratio,"
-                        "tracy_base_time")
+                        "tracy_base_time,device_frequency_ratio,device_shift")
                  << std::endl;
+    } else {
+        log_file.open(log_path, std::ios_base::app);
     }
+
     int init = deviceHostTimePair[device_id].size() - sampleCount;
     for (int i = init; i < deviceHostTimePair[device_id].size(); i++) {
         log_file << fmt::format(
-                        "{:5},{:5},{:5},{:20},{:20},{:20.2f},{:20},{:20},{:20.2f},{:20.15f},{:20.15f},{:20}",
+                        "{:5},{:5},{:5},{:20},{:20},{:20.2f},{:20},{:20},{:20.2f},{:20.15f},{:20.15f},{:20},1.0,0",
                         device_id,
                         core.x,
                         core.y,
@@ -250,38 +270,325 @@ void syncDeviceHost(
                         tracyBaseTime)
                  << std::endl;
     }
-
-    log_info("Sync data for device: {}, c:{}, d:{}, f:{}", device_id, smallestHostime[device_id], delay, frequencyFit);
+    log_file.close();
+    log_info(
+        "Host sync data for device: {}, cpu_start:{}, delay:{}, freq:{} Hz",
+        device_id,
+        smallestHostime[device_id],
+        delay,
+        frequencyFit);
 
     tt_metal_device_profiler_map.at(device_id).device_core_sync_info.emplace(
         core, std::make_tuple(smallestHostime[device_id], delay, frequencyFit));
-    tt_metal_device_profiler_map.at(device_id).device_core_sync_info[core] =
-        std::make_tuple(smallestHostime[device_id], delay, frequencyFit);
+}
+void setShift(int device_id, int64_t shift, double scale) {
+    if (std::isnan(scale)) {
+        return;
+    }
+    log_info("Device sync data for device: {}, delay: {} ns, freq scale: {}", device_id, shift, scale);
+    if (tt_metal_device_profiler_map.find(device_id) != tt_metal_device_profiler_map.end()) {
+        tt_metal_device_profiler_map.at(device_id).shift = shift;
+        tt_metal_device_profiler_map.at(device_id).freqScale = scale;
+
+        std::filesystem::path output_dir = std::filesystem::path(get_profiler_logs_dir());
+        std::filesystem::path log_path = output_dir / "sync_device_info.csv";
+        std::ofstream log_file;
+        log_file.open(log_path, std::ios_base::app);
+        log_file << fmt::format("{:5},,,,,,,,,,,,{:20.15f},{:20}", device_id, scale, shift) << std::endl;
+        log_file.close();
+    }
 }
 
-void ClearProfilerControlBuffer(Device* device) {
+void peekDeviceData(IDevice* device, std::vector<CoreCoord>& worker_cores) {
+    ZoneScoped;
+    auto device_id = device->id();
+    std::string zoneName = fmt::format("peek {}", device_id);
+    ZoneName(zoneName.c_str(), zoneName.size());
+    if (tt_metal_device_profiler_map.find(device_id) != tt_metal_device_profiler_map.end()) {
+        tt_metal_device_profiler_map.at(device_id).device_sync_new_events.clear();
+        tt_metal_device_profiler_map.at(device_id).dumpResults(device, worker_cores);
+        for (auto& event : tt_metal_device_profiler_map.at(device_id).device_events) {
+            if (event.zone_name.find("SYNC-ZONE") != std::string::npos) {
+                ZoneScopedN("Adding_device_sync_event");
+                auto ret = tt_metal_device_profiler_map.at(device_id).device_sync_events.insert(event);
+                if (ret.second) {
+                    tt_metal_device_profiler_map.at(device_id).device_sync_new_events.insert(event);
+                }
+            }
+        }
+    }
+}
+
+void syncDeviceDevice(chip_id_t device_id_sender, chip_id_t device_id_receiver) {
+    ZoneScopedC(tracy::Color::Tomato4);
+    std::string zoneName = fmt::format("sync_device_device_{}->{}", device_id_sender, device_id_receiver);
+    ZoneName(zoneName.c_str(), zoneName.size());
+    if (!tt::llrt::RunTimeOptions::get_instance().get_profiler_sync_enabled()) {
+        return;
+    }
+
+    IDevice* device_sender = nullptr;
+    IDevice* device_receiver = nullptr;
+
+    if (tt::DevicePool::instance().is_device_active(device_id_receiver)) {
+        device_receiver = tt::DevicePool::instance().get_active_device(device_id_receiver);
+    }
+
+    if (tt::DevicePool::instance().is_device_active(device_id_sender)) {
+        device_sender = tt::DevicePool::instance().get_active_device(device_id_sender);
+    }
+
+    if (device_sender != nullptr and device_receiver != nullptr) {
+        constexpr std::uint16_t sample_count = 240;
+        constexpr std::uint16_t sample_size = 16;
+        constexpr std::uint16_t channel_count = 1;
+
+        auto const& active_eth_cores = device_sender->get_active_ethernet_cores(true);
+        auto eth_sender_core_iter = active_eth_cores.begin();
+        tt_xy_pair eth_receiver_core;
+        tt_xy_pair eth_sender_core;
+
+        chip_id_t device_id_receiver_curr = std::numeric_limits<chip_id_t>::max();
+        while ((device_id_receiver != device_id_receiver_curr) and (eth_sender_core_iter != active_eth_cores.end())) {
+            eth_sender_core = *eth_sender_core_iter;
+            if (not tt::Cluster::instance().is_ethernet_link_up(device_sender->id(), eth_sender_core)) {
+                eth_sender_core_iter++;
+                continue;
+            }
+            std::tie(device_id_receiver_curr, eth_receiver_core) =
+                device_sender->get_connected_ethernet_core(eth_sender_core);
+            eth_sender_core_iter++;
+        }
+
+        if (device_id_receiver != device_id_receiver_curr) {
+            log_warning(
+                "No eth connection could be found between device {} and {}", device_id_sender, device_id_receiver);
+            return;
+        }
+
+        const std::vector<uint32_t>& ct_args = {
+            channel_count, static_cast<uint32_t>(sample_count), static_cast<uint32_t>(sample_size)};
+
+        Program program_sender;
+        Program program_receiver;
+
+        auto local_kernel = tt_metal::CreateKernel(
+            program_sender,
+            "tt_metal/tools/profiler/sync/sync_device_kernel_sender.cpp",
+            eth_sender_core,
+            tt_metal::EthernetConfig{.noc = tt_metal::NOC::RISCV_0_default, .compile_args = ct_args});
+
+        auto remote_kernel = tt_metal::CreateKernel(
+            program_receiver,
+            "tt_metal/tools/profiler/sync/sync_device_kernel_receiver.cpp",
+            eth_receiver_core,
+            tt_metal::EthernetConfig{.noc = tt_metal::NOC::RISCV_0_default, .compile_args = ct_args});
+
+        try {
+            tt::tt_metal::detail::CompileProgram(device_sender, program_sender);
+            tt::tt_metal::detail::CompileProgram(device_receiver, program_receiver);
+        } catch (std::exception& e) {
+            log_error("Failed compile: {}", e.what());
+            throw e;
+        }
+
+        tt_metal::EnqueueProgram(device_sender->command_queue(), program_sender, false);
+        tt_metal::EnqueueProgram(device_receiver->command_queue(), program_receiver, false);
+
+        tt_metal::Finish(device_sender->command_queue());
+        tt_metal::Finish(device_receiver->command_queue());
+
+        CoreCoord sender_core = {eth_sender_core.x, eth_sender_core.y};
+        std::vector<CoreCoord> sender_cores = {
+            device_sender->virtual_core_from_logical_core(sender_core, CoreType::ETH)};
+
+        CoreCoord receiver_core = {eth_receiver_core.x, eth_receiver_core.y};
+        std::vector<CoreCoord> receiver_cores = {
+            device_receiver->virtual_core_from_logical_core(receiver_core, CoreType::ETH)};
+
+        peekDeviceData(device_sender, sender_cores);
+        peekDeviceData(device_receiver, receiver_cores);
+
+        TT_ASSERT(
+            tt_metal_device_profiler_map.at(device_id_sender).device_sync_new_events.size() ==
+            tt_metal_device_profiler_map.at(device_id_receiver).device_sync_new_events.size());
+
+        auto event_receiver = tt_metal_device_profiler_map.at(device_id_receiver).device_sync_new_events.begin();
+
+        for (auto event_sender = tt_metal_device_profiler_map.at(device_id_sender).device_sync_new_events.begin();
+             event_sender != tt_metal_device_profiler_map.at(device_id_sender).device_sync_new_events.end();
+             event_sender++) {
+            TT_ASSERT(event_receiver != tt_metal_device_profiler_map.at(device_id_receiver).device_sync_events.end());
+            deviceDeviceTimePair.at(device_id_sender)
+                .at(device_id_receiver)
+                .push_back({event_sender->timestamp, event_receiver->timestamp});
+            event_receiver++;
+        }
+    }
+}
+
+void setSyncInfo(
+    chip_id_t device_id,
+    std::pair<double, int64_t> syncInfo,
+    std::unordered_map<chip_id_t, std::unordered_map<chip_id_t, std::pair<double, int64_t>>>& deviceDeviceSyncInfo,
+    const std::string& parentInfo = "") {
+    if (sync_set_devices.find(device_id) == sync_set_devices.end()) {
+        sync_set_devices.insert(device_id);
+        if (deviceDeviceSyncInfo.find(device_id) != deviceDeviceSyncInfo.end()) {
+            std::string parentInfoNew =
+                parentInfo + fmt::format("->{}: ({},{})", device_id, syncInfo.second, syncInfo.first);
+            for (auto child_device : deviceDeviceSyncInfo.at(device_id)) {
+                std::pair<double, int64_t> childSyncInfo = child_device.second;
+                childSyncInfo.second *= syncInfo.first;
+                childSyncInfo.second += syncInfo.second;
+                childSyncInfo.first *= syncInfo.first;
+                setSyncInfo(child_device.first, childSyncInfo, deviceDeviceSyncInfo, parentInfo);
+            }
+        }
+        detail::setShift(device_id, syncInfo.second, syncInfo.first);
+    }
+}
+
+void ProfilerSync(ProfilerSyncState state) {
+#if defined(TRACY_ENABLE)
+    ZoneScoped;
+    if (!getDeviceProfilerState()) {
+        return;
+    }
+    static chip_id_t first_connected_device_id = -1;
+    if (state == ProfilerSyncState::INIT) {
+        do_sync_on_close = true;
+        sync_set_devices.clear();
+        auto ethernet_connections = tt::Cluster::instance().get_ethernet_connections();
+        std::set<chip_id_t> visited_devices = {};
+        constexpr int TOTAL_DEVICE_COUNT = 36;
+        for (int sender_device_id = 0; sender_device_id < TOTAL_DEVICE_COUNT; sender_device_id++) {
+            if (tt::DevicePool::instance().is_device_active(sender_device_id)) {
+                auto sender_device = tt::DevicePool::instance().get_active_device(sender_device_id);
+                auto const& active_eth_cores = sender_device->get_active_ethernet_cores(true);
+
+                chip_id_t receiver_device_id;
+                tt_xy_pair receiver_eth_core;
+                bool doSync = true;
+                for (auto& sender_eth_core : active_eth_cores) {
+                    if (not tt::Cluster::instance().is_ethernet_link_up(sender_device_id, sender_eth_core)) {
+                        continue;
+                    }
+                    doSync = false;
+                    std::tie(receiver_device_id, receiver_eth_core) =
+                        sender_device->get_connected_ethernet_core(sender_eth_core);
+
+                    // std::cout << sender_device_id << ":" << sender_eth_core.x << "," << sender_eth_core.y;
+                    // std::cout << "->" << receiver_device_id << ":" << receiver_eth_core.x << ",";
+                    // std::cout << receiver_eth_core.y << std::endl;
+
+                    if (visited_devices.find(sender_device_id) == visited_devices.end() or
+                        visited_devices.find(receiver_device_id) == visited_devices.end()) {
+                        visited_devices.insert(sender_device_id);
+                        visited_devices.insert(receiver_device_id);
+                        std::pair<chip_id_t, chip_id_t> ping_pair = {sender_device_id, receiver_device_id};
+
+                        deviceDeviceTimePair.emplace(
+                            sender_device_id,
+                            (std::unordered_map<chip_id_t, std::vector<std::pair<uint64_t, uint64_t>>>){});
+                        deviceDeviceTimePair.at(sender_device_id)
+                            .emplace(receiver_device_id, (std::vector<std::pair<uint64_t, uint64_t>>){});
+                    }
+                }
+                if (doSync or first_connected_device_id == -1) {
+                    if (first_connected_device_id == -1 and !doSync) {
+                        first_connected_device_id = sender_device_id;
+                    }
+                    syncDeviceHost(sender_device, SYNC_CORE, true);
+                }
+            }
+        }
+
+        for (const auto& device : ethernet_connections) {
+            for (const auto& connection : device.second) {
+                chip_id_t sender_device = device.first;
+                chip_id_t receiver_device = std::get<0>(connection.second);
+            }
+        }
+    }
+
+    if (state == ProfilerSyncState::INIT or (state == ProfilerSyncState::CLOSE_DEVICE and do_sync_on_close)) {
+        for (const auto& sender : deviceDeviceTimePair) {
+            for (const auto& receiver : sender.second) {
+                syncDeviceDevice(sender.first, receiver.first);
+            }
+        }
+        if (state == ProfilerSyncState::CLOSE_DEVICE) {
+            do_sync_on_close = false;
+            std::unordered_map<chip_id_t, std::unordered_map<chip_id_t, std::pair<double, int64_t>>>
+                deviceDeviceSyncInfo;
+            for (auto& sender : deviceDeviceTimePair) {
+                for (auto& receiver : sender.second) {
+                    std::vector<std::pair<uint64_t, uint64_t>> timePairs;
+                    for (int i = 0; i < receiver.second.size(); i += 2) {
+                        uint64_t senderTime = (receiver.second[i].first + receiver.second[i + 1].first) / 2;
+                        timePairs.push_back({senderTime, receiver.second[i].second});
+                    }
+                    double senderSum = 0;
+                    double receiverSum = 0;
+                    double receiverSquareSum = 0;
+                    double senderReceiverProductSum = 0;
+
+                    for (auto& timePair : timePairs) {
+                        double senderTime = timePair.first;
+                        double recieverTime = timePair.second;
+
+                        receiverSum += recieverTime;
+                        senderSum += senderTime;
+                        receiverSquareSum += (recieverTime * recieverTime);
+                        senderReceiverProductSum += (senderTime * recieverTime);
+                    }
+
+                    uint16_t accumulateSampleCount = timePairs.size();
+
+                    double freqScale = (senderReceiverProductSum * accumulateSampleCount - senderSum * receiverSum) /
+                                       (receiverSquareSum * accumulateSampleCount - receiverSum * receiverSum);
+
+                    uint64_t shift = (double)(senderSum - freqScale * (double)receiverSum) / accumulateSampleCount;
+                    deviceDeviceSyncInfo.emplace(
+                        sender.first, (std::unordered_map<chip_id_t, std::pair<double, int64_t>>){});
+                    deviceDeviceSyncInfo.at(sender.first)
+                        .emplace(receiver.first, (std::pair<double, int64_t>){freqScale, shift});
+
+                    deviceDeviceSyncInfo.emplace(
+                        receiver.first, (std::unordered_map<chip_id_t, std::pair<double, int64_t>>){});
+                    deviceDeviceSyncInfo.at(receiver.first)
+                        .emplace(sender.first, (std::pair<double, int64_t>){1.0 / freqScale, -1 * shift});
+                }
+            }
+            setSyncInfo(first_connected_device_id, (std::pair<double, int64_t>){1.0, 0}, deviceDeviceSyncInfo);
+        }
+    }
+
+#endif
+}
+
+void ClearProfilerControlBuffer(IDevice* device) {
+#if defined(TRACY_ENABLE)
     auto device_id = device->id();
     std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
     setControlBuffer(device_id, control_buffer);
+#endif
 }
 
-void InitDeviceProfiler(Device* device) {
+void InitDeviceProfiler(IDevice* device) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
-
     auto device_id = device->id();
     CoreCoord logical_grid_size = device->logical_grid_size();
     TracySetCpuTime(TracyGetCpuTime());
 
-    bool doSync = false;
     if (getDeviceProfilerState()) {
         static std::atomic<bool> firstInit = true;
-        bool doHeader = firstInit;
 
         auto device_id = device->id();
 
         if (tt_metal_device_profiler_map.find(device_id) == tt_metal_device_profiler_map.end()) {
-            doSync = true;
             if (firstInit.exchange(false)) {
                 tt_metal_device_profiler_map.emplace(device_id, DeviceProfiler(true));
             } else {
@@ -289,7 +596,7 @@ void InitDeviceProfiler(Device* device) {
             }
         }
 
-        uint32_t dramBankCount = tt::Cluster::instance().get_soc_desc(device_id).get_num_dram_channels();
+        uint32_t dramBankCount = tt::Cluster::instance().get_soc_desc(device_id).get_num_dram_views();
         uint32_t coreCountPerDram =
             tt::Cluster::instance().get_soc_desc(device_id).profiler_ceiled_core_count_perf_dram_bank;
 
@@ -302,6 +609,8 @@ void InitDeviceProfiler(Device* device) {
                 .page_size = pageSize,
                 .buffer_type = tt::tt_metal::BufferType::DRAM};
             tt_metal_device_profiler_map.at(device_id).output_dram_buffer = tt_metal::CreateBuffer(dram_config);
+            tt_metal_device_profiler_map.at(device_id).profile_buffer.resize(
+                tt_metal_device_profiler_map.at(device_id).output_dram_buffer->size() / sizeof(uint32_t));
         }
 
         std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
@@ -312,14 +621,11 @@ void InitDeviceProfiler(Device* device) {
         std::vector<uint32_t> inputs_DRAM(
             tt_metal_device_profiler_map.at(device_id).output_dram_buffer->size() / sizeof(uint32_t), 0);
         tt_metal::detail::WriteToBuffer(tt_metal_device_profiler_map.at(device_id).output_dram_buffer, inputs_DRAM);
-        if (doSync) {
-            syncDeviceHost(device, SYNC_CORE, tt_metal_device_profiler_map.at(device_id).sync_program, doHeader);
-        }
     }
 #endif
 }
 
-void DumpDeviceProfileResults(Device* device, bool lastDump) {
+void DumpDeviceProfileResults(IDevice* device, ProfilerDumpState state) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
     std::vector<CoreCoord> workerCores;
@@ -334,16 +640,25 @@ void DumpDeviceProfileResults(Device* device, bool lastDump) {
         auto virtualCore = device->virtual_core_from_logical_core(core, CoreType::ETH);
         workerCores.push_back(virtualCore);
     }
-    device->push_work(
-        [device, workerCores, lastDump]() mutable { DumpDeviceProfileResults(device, workerCores, lastDump); });
+    device->push_work([device, workerCores, state]() mutable {
+        DumpDeviceProfileResults(device, workerCores, state);
+        if (deviceDeviceTimePair.find(device->id()) != deviceDeviceTimePair.end() and
+            state == ProfilerDumpState::CLOSE_DEVICE_SYNC) {
+            for (auto& connected_device : deviceDeviceTimePair.at(device->id())) {
+                chip_id_t sender_id = device->id();
+                chip_id_t receiver_id = connected_device.first;
+            }
+        }
+    });
 
 #endif
 }
 
-void DumpDeviceProfileResults(Device* device, std::vector<CoreCoord>& worker_cores, bool lastDump) {
+void DumpDeviceProfileResults(IDevice* device, std::vector<CoreCoord>& worker_cores, ProfilerDumpState state) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
-
+    std::string name = fmt::format("Device Dump {}", device->id());
+    ZoneName(name.c_str(), name.size());
     std::scoped_lock<std::mutex> lock(device_mutex);
     const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(device->id());
     auto dispatch_core_type = dispatch_core_config.get_core_type();
@@ -355,72 +670,63 @@ void DumpDeviceProfileResults(Device* device, std::vector<CoreCoord>& worker_cor
             const auto curr_core = device->virtual_core_from_logical_core(core, dispatch_core_type);
             worker_cores.push_back(curr_core);
         }
-        for (const CoreCoord& core : tt::Cluster::instance().get_virtual_eth_cores(device_id)) {
-            worker_cores.push_back(core);
-        }
     }
     if (getDeviceProfilerState()) {
-        if (!lastDump) {
+        if (state != ProfilerDumpState::LAST_CLOSE_DEVICE) {
             const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
             if (USE_FAST_DISPATCH) {
                 Finish(device->command_queue());
             }
         } else {
             if (tt::llrt::RunTimeOptions::get_instance().get_profiler_do_dispatch_cores()) {
-                bool waitForDispatch = true;
-                uint8_t loopCount = 0;
-                CoreCoord unfinishedCore = {0, 0};
+                auto device_id = device->id();
                 constexpr uint8_t maxLoopCount = 10;
                 constexpr uint32_t loopDuration_us = 10000;
-                while (waitForDispatch) {
-                    waitForDispatch = false;
-                    std::this_thread::sleep_for(std::chrono::microseconds(loopDuration_us));
-                    auto device_id = device->id();
-                    auto device_num_hw_cqs = device->num_hw_cqs();
-                    loopCount++;
-                    if (loopCount > maxLoopCount) {
-                        std::string msg = fmt::format(
-                            "Device profiling never finished on device {}, worker core {}, {}",
-                            device_id,
-                            unfinishedCore.x,
-                            unfinishedCore.y);
-                        TracyMessageC(msg.c_str(), msg.size(), tracy::Color::Tomato3);
-                        log_warning(msg.c_str());
-                        break;
+                auto device_num_hw_cqs = device->num_hw_cqs();
+                std::vector<CoreCoord> dispatchCores =
+                    tt::get_logical_dispatch_cores(device_id, device_num_hw_cqs, dispatch_core_config);
+
+                while (dispatchCores.size() > 0) {
+                    bool coreDone = false;
+
+                    auto curr_core = device->virtual_core_from_logical_core(dispatchCores[0], dispatch_core_type);
+
+                    HalProgrammableCoreType CoreType;
+                    if (tt::Cluster::instance().is_worker_core(curr_core, device_id)) {
+                        CoreType = HalProgrammableCoreType::TENSIX;
+                    } else {
+                        auto active_eth_cores = tt::Cluster::instance().get_active_ethernet_cores(device_id);
+                        bool is_active_eth_core =
+                            active_eth_cores.find(tt::Cluster::instance().get_logical_ethernet_core_from_virtual(
+                                device_id, curr_core)) != active_eth_cores.end();
+
+                        CoreType = is_active_eth_core ? tt_metal::HalProgrammableCoreType::ACTIVE_ETH
+                                                      : tt_metal::HalProgrammableCoreType::IDLE_ETH;
                     }
-                    for (const CoreCoord& core :
-                         tt::get_logical_dispatch_cores(device_id, device_num_hw_cqs, dispatch_core_config)) {
-                        const auto curr_core = device->virtual_core_from_logical_core(core, dispatch_core_type);
-                        profiler_msg_t* profiler_msg =
-                            device->get_dev_addr<profiler_msg_t*>(curr_core, HalL1MemAddrType::PROFILER);
+                    profiler_msg_t* profiler_msg =
+                        hal.get_dev_addr<profiler_msg_t*>(CoreType, HalL1MemAddrType::PROFILER);
+                    for (int i = 0; i < maxLoopCount; i++) {
                         std::vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
                             device_id,
                             curr_core,
                             reinterpret_cast<uint64_t>(profiler_msg->control_vector),
                             kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
-                        if (control_buffer[kernel_profiler::PROFILER_DONE] == 0) {
-                            unfinishedCore = curr_core;
-                            waitForDispatch = true;
-                            continue;
+                        if (control_buffer[kernel_profiler::PROFILER_DONE] == 1) {
+                            coreDone = true;
+                            break;
                         }
+                        std::this_thread::sleep_for(std::chrono::microseconds(loopDuration_us));
                     }
-                    if (waitForDispatch) {
-                        continue;
-                    }
-                    for (const CoreCoord& virtual_core : tt::Cluster::instance().get_virtual_eth_cores(device_id)) {
-                        profiler_msg_t* profiler_msg =
-                            device->get_dev_addr<profiler_msg_t*>(virtual_core, HalL1MemAddrType::PROFILER);
-                        std::vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
+                    if (!coreDone) {
+                        std::string msg = fmt::format(
+                            "Device profiling never finished on device {}, worker core {}, {}",
                             device_id,
-                            virtual_core,
-                            reinterpret_cast<uint64_t>(profiler_msg->control_vector),
-                            kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
-                        if (control_buffer[kernel_profiler::PROFILER_DONE] == 0) {
-                            unfinishedCore = virtual_core;
-                            waitForDispatch = true;
-                            continue;
-                        }
+                            curr_core.x,
+                            curr_core.y);
+                        TracyMessageC(msg.c_str(), msg.size(), tracy::Color::Tomato3);
+                        log_warning(msg.c_str());
                     }
+                    dispatchCores.erase(dispatchCores.begin());
                 }
             }
         }
@@ -428,12 +734,15 @@ void DumpDeviceProfileResults(Device* device, std::vector<CoreCoord>& worker_cor
         auto device_id = device->id();
 
         if (tt_metal_device_profiler_map.find(device_id) != tt_metal_device_profiler_map.end()) {
-            if (!lastDump) {
-                syncDeviceHost(device, SYNC_CORE, tt_metal_device_profiler_map.at(device_id).sync_program, false);
+            if (state != ProfilerDumpState::LAST_CLOSE_DEVICE) {
+                if (deviceHostTimePair.find(device_id) != deviceHostTimePair.end()) {
+                    syncDeviceHost(device, SYNC_CORE, false);
+                }
             }
             tt_metal_device_profiler_map.at(device_id).setDeviceArchitecture(device->arch());
-            tt_metal_device_profiler_map.at(device_id).dumpResults(device, worker_cores, lastDump);
-            if (lastDump) {
+            tt_metal_device_profiler_map.at(device_id).dumpResults(device, worker_cores, state);
+
+            if (state == ProfilerDumpState::LAST_CLOSE_DEVICE) {
                 // Process is ending, no more device dumps are coming, reset your ref on the buffer so deallocate is the
                 // last owner. Sync program also contains a buffer so it is safter to release it here
                 tt_metal_device_profiler_map.at(device_id).output_dram_buffer.reset();

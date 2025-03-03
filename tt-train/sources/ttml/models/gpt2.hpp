@@ -6,16 +6,23 @@
 
 #include <yaml-cpp/yaml.h>
 
-#include "modules/embedding_module.hpp"
-#include "modules/gpt_block.hpp"
-#include "modules/layer_norm_module.hpp"
-#include "modules/positional_embeddings.hpp"
+#include "autograd/module_base.hpp"
 
 namespace ttml::models::gpt2 {
 
 enum class PositionalEmbeddingType {
     Trainable,
     Fixed,
+};
+
+enum class RunnerType {
+    MemoryEfficient,
+    Default,
+};
+
+enum class WeightTyingType {
+    Disabled,
+    Enabled,
 };
 
 struct TransformerConfig {
@@ -25,6 +32,8 @@ struct TransformerConfig {
     uint32_t num_blocks = 6;
     uint32_t vocab_size = 256;
     uint32_t max_sequence_length = 256;
+    RunnerType runner_type = RunnerType::Default;
+    WeightTyingType weight_tying = WeightTyingType::Disabled;
     PositionalEmbeddingType positional_embedding_type = PositionalEmbeddingType::Trainable;
 
     struct Experimental {
@@ -35,11 +44,12 @@ struct TransformerConfig {
 
 class Transformer : public ttml::autograd::ModuleBase {
 private:
-    std::shared_ptr<ttml::modules::Embedding> tok_emb;
-    std::shared_ptr<ttml::modules::PositionalEmbeddingBase> pos_emb;
-    std::vector<std::shared_ptr<ttml::modules::GPTBlock>> blocks;
-    std::shared_ptr<ttml::modules::LayerNormLayer> ln_fc;
-    std::shared_ptr<ttml::modules::LinearLayer> fc;
+    RunnerType runner_type = RunnerType::Default;
+    std::shared_ptr<ttml::autograd::ModuleBase> tok_emb;
+    std::shared_ptr<ttml::autograd::ModuleBase> pos_emb;
+    std::vector<std::shared_ptr<ttml::autograd::ModuleBase>> blocks;
+    std::shared_ptr<ttml::autograd::ModuleBase> ln_fc;
+    std::shared_ptr<ttml::autograd::ModuleBase> fc;
 
 public:
     explicit Transformer(const TransformerConfig& config);

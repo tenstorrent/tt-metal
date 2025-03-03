@@ -13,7 +13,7 @@ from models.demos.llama3.tt.llama_common import (
     get_rot_transformation_mat,
     PagedAttentionConfig,
 )
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Attention, precompute_freqs_cis
+from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import precompute_freqs_cis
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -51,7 +51,7 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "max_seq_len",
     (
-        2048,
+        256,  # 4096,
         # 1024 * 32,
         # 1024 * 64,
     ),
@@ -80,18 +80,20 @@ def test_llama_attention_inference(
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
-    reference_model = Attention(args=model_args)
+    reference_model = model_args.reference_attention()
     reference_model.load_state_dict(partial_state_dict)
 
     # pre-compute the rotational embedding matrix and send to device
     rot_mats = get_prefill_rot_mat(
         model_args.head_dim,
-        model_args.max_seq_len,
         mesh_device,
-        seq_len=max_seq_len,
-        scale_factor=model_args.rope_scaling_factor,
+        max_seq_len,
+        model_args.rope_theta,
+        model_args.rope_scaling_factor,
+        model_args.orig_context_len,
     )
     transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
+
     transformation_mats_prefill = ttnn.as_tensor(
         transformation_mat_torch,
         dtype=ttnn.bfloat16,
@@ -165,7 +167,6 @@ def test_llama_attention_inference(
         model_args.head_dim,
         model_args.max_seq_len * 2,
         model_args.rope_theta,
-        model_args.use_scaled_rope,
         model_args.rope_scaling_factor,
     )[positions]
     attn_mask = torch.full((max_seq_len, max_seq_len), torch.finfo(torch.float32).min)

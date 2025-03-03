@@ -15,25 +15,20 @@
 
 namespace ttml::ops {
 
-autograd::TensorPtr dropout(const autograd::TensorPtr& tensor, float probability) {
+autograd::TensorPtr dropout(const autograd::TensorPtr& tensor, float probability, bool use_per_device_seed) {
     if (probability == 0.0F) {
         return tensor;
     }
-    auto mask = core::ones_like(tensor->get_value());
-    // dropout seed is not properly used in ttnn::dropout
-    // auto dropout_seed = autograd::ctx().get_generator()();
 
-    // currently seed is not used in ttnn::dropout
-    // we use default seed for now to simplify job of program cache
-    // it will require to generate only one program and reuse it later
-    auto dropout_seed = 0U;
+    auto dropout_seed = autograd::ctx().get_generator()();
     auto scaler = 1.0F / (1.0F - probability);
-    mask = ttnn::dropout(mask, dropout_seed, probability, scaler);
+    auto masked_out = ttnn::experimental::dropout(
+        tensor->get_value(), probability, scaler, static_cast<uint32_t>(dropout_seed), use_per_device_seed);
     auto out = autograd::create_tensor();
-    auto masked_out = ttnn::multiply(tensor->get_value(), mask);
     out->set_value(masked_out);
-    autograd::GradFunction grad = [tensor, out, mask]() {
-        auto res = ttnn::multiply(out->get_grad(), mask);
+    autograd::GradFunction grad = [tensor, probability, scaler, out, dropout_seed, use_per_device_seed]() {
+        auto res = ttnn::experimental::dropout(
+            out->get_grad(), probability, scaler, static_cast<uint32_t>(dropout_seed), use_per_device_seed);
         tensor->add_grad(res);
     };
 

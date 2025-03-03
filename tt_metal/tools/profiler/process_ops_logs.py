@@ -53,6 +53,10 @@ OPS_CSV_HEADER = [
     "OP TO OP LATENCY [ns]",
     "DEVICE FW DURATION [ns]",
     "DEVICE KERNEL DURATION [ns]",
+    "DEVICE KERNEL DURATION PER CORE MIN [ns]",
+    "DEVICE KERNEL DURATION PER CORE MAX [ns]",
+    "DEVICE KERNEL DURATION PER CORE AVG [ns]",
+    "DEVICE KERNEL FIRST TO LAST START [ns]",
     "DEVICE BRISC KERNEL DURATION [ns]",
     "DEVICE NCRISC KERNEL DURATION [ns]",
     "DEVICE TRISC0 KERNEL DURATION [ns]",
@@ -201,6 +205,34 @@ def import_tracy_op_logs(logFolder):
     return ops, signposts, traceReplays
 
 
+def host_device_op_compare(op):
+    if "metal_trace_replay_session_id" in op:
+        return int(op["global_call_count"]), int(op["metal_trace_replay_session_id"])
+    else:
+        return int(op["global_call_count"]), 0
+
+
+def device_op_compare_time(op):
+    if "timeseries" in op and len(op["timeseries"]) > 0 and len(op["timeseries"][0]) > 1:
+        return int(op["timeseries"][0][1])
+    else:
+        return 0
+
+
+def device_op_compare_opID_time(op):
+    if (
+        "timeseries" in op
+        and len(op["timeseries"]) > 0
+        and len(op["timeseries"][0]) > 1
+        and "run_host_id" in op["timeseries"][0][0]
+    ):
+        return int(op["timeseries"][0][0]["run_host_id"]), int(op["timeseries"][0][1])
+    elif "timeseries" in op and len(op["timeseries"]) > 0 and len(op["timeseries"][0]) > 1:
+        return 0, int(op["timeseries"][0][1])
+    else:
+        return 0, 0
+
+
 # Generate a map of OP reference list per device.
 def get_device_op_data(ops):
     logger.info(f"Getting device ops")
@@ -216,20 +248,10 @@ def get_device_op_data(ops):
         if "metal_trace_id" in opData.keys() and opData["metal_trace_id"] is not None:
             hasTraceRuns = True
 
-    def device_ops_compare(op):
-        return int(op["global_call_count"])
-
     for deviceID in deviceOps:
-        deviceOps[deviceID].sort(key=device_ops_compare)
+        deviceOps[deviceID].sort(key=host_device_op_compare)
 
     return deviceOps, hasTraceRuns
-
-
-def device_log_ops_compare(op):
-    if "timeseries" in op and len(op["timeseries"]) > 0 and len(op["timeseries"][0]) > 1:
-        return int(op["timeseries"][0][1])
-    else:
-        return 0
 
 
 # Append device data to device ops and return the list of mapped device op ref list
@@ -251,7 +273,7 @@ def append_device_data(ops, traceReplays, logFolder):
         for device in devicesOps:
             assert device in deviceData["devices"].keys()
             deviceOpsTime = deviceData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]["ops"]
-            deviceOpsTime.sort(key=device_log_ops_compare)
+            deviceOpsTime.sort(key=device_op_compare_time)
             if hasTraceRuns:
                 generatedHostData = []
                 opIDHostDataDict = {}
@@ -294,6 +316,8 @@ def append_device_data(ops, traceReplays, logFolder):
                         generatedHostData.append(copy.deepcopy(opIDHostDataDict[deviceOpID]))
                 devicesOps[device] = generatedHostData
 
+            deviceOpsTime.sort(key=device_op_compare_opID_time)
+            devicesOps[device].sort(key=host_device_op_compare)
             if len(devicesOps[device]) != len(deviceOpsTime):
                 deviceOPId = None
                 hostOPId = None
@@ -316,7 +340,7 @@ def append_device_data(ops, traceReplays, logFolder):
                 else:
                     assert (
                         False
-                    ), f"Device data mismatch: Expected {len(deviceOps[device])} but received {len(deviceOpsTime)} ops on device {device}"
+                    ), f"Device data mismatch: Expected {len(devicesOps[device])} but received {len(deviceOpsTime)} ops on device {device}"
             for deviceOp, deviceOpTime in zip(devicesOps[device], deviceOpsTime):
                 cores = set()
                 for timeID, ts, statData, risc, core in deviceOpTime["timeseries"]:
@@ -324,15 +348,16 @@ def append_device_data(ops, traceReplays, logFolder):
                         if "run_host_id" in timeID.keys():
                             assert (
                                 timeID["run_host_id"] == deviceOp["global_call_count"]
-                            ), f"op id {timeID['run_host_id']} reproted by device {device} is not matching assigned op id {deviceOp['global_call_count']}"
+                            ), f"op id {timeID['run_host_id']} reported by device {device} is not matching assigned op id {deviceOp['global_call_count']}"
                         if core not in cores:
                             cores.add(core)
                 deviceOp["core_usage"] = {"count": len(cores), "cores": [str(core) for core in cores]}
                 deviceOp["device_time"] = {
-                    analysis: data["series"] for analysis, data in deviceOpTime["analysis"].items()
+                    analysis: {"series": data["series"], "stats": data["stats"]}
+                    for analysis, data in deviceOpTime["analysis"].items()
                 }
                 for analysis, data in deviceOp["device_time"].items():
-                    for sample in data:
+                    for sample in data["series"]:
                         sample["duration_ns"] = sample["duration_cycles"] * 1000 / freq
             traceOps = {}
 
@@ -402,7 +427,8 @@ def get_device_data_generate_report(
                             cores.add(core)
                 deviceOp["core_usage"] = {"count": len(cores), "cores": [str(core) for core in cores]}
                 deviceOp["device_time"] = {
-                    analysis: data["series"] for analysis, data in deviceOpTime["analysis"].items()
+                    analysis: {"series": data["series"], "stats": data["stats"]}
+                    for analysis, data in deviceOpTime["analysis"].items()
                 }
 
                 if "run_host_id" in timeID.keys():
@@ -410,18 +436,30 @@ def get_device_data_generate_report(
                 else:
                     deviceOp["global_call_count"] = i
                 for analysis, data in deviceOp["device_time"].items():
-                    for sample in data:
+                    for sample in data["series"]:
                         sample["duration_ns"] = sample["duration_cycles"] * 1000 / freq
                 deviceOps[device].append(deviceOp)
 
                 rowDict = {csv_header_format("global_call_count"): deviceOp["global_call_count"]}
-                for analysis, analysisData in deviceOp["device_time"].items():
-                    headerField = f"{csv_header_format(analysis)} [ns]"
-                    assert len(analysisData) == 1, "Unexpected device data format"
-                    rowDict[headerField] = f"{analysisData[0]['duration_ns']:.0f}"
+                for analysis, data in deviceOp["device_time"].items():
+                    analysisData = data["series"]
+                    analysisStats = data["stats"]
+                    if "core" in analysis:
+                        assert len(analysisData) >= 1, "Unexpected device data format"
+                        headerField = f"{csv_header_format(analysis)} MIN [ns]"
+                        rowDict[headerField] = f"{analysisStats['Min']:.0f}"
+                        headerField = f"{csv_header_format(analysis)} MAX [ns]"
+                        rowDict[headerField] = f"{analysisStats['Max']:.0f}"
+                        headerField = f"{csv_header_format(analysis)} AVG [ns]"
+                        rowDict[headerField] = f"{analysisStats['Average']:.0f}"
+                    else:
+                        headerField = f"{csv_header_format(analysis)} [ns]"
+                        assert len(analysisData) == 1, "Unexpected device data format"
+                        rowDict[headerField] = f"{analysisData[0]['duration_ns']:.0f}"
                     if analysis == "device_fw_duration":
                         rowDict["DEVICE FW START CYCLE"] = analysisData[0]["start_cycle"]
                         rowDict["DEVICE FW END CYCLE"] = analysisData[0]["end_cycle"]
+                    if analysis == "device_kernel_duration":
                         if device in devicePreOpTime.keys():
                             rowDict["OP TO OP LATENCY [ns]"] = round(
                                 1000 * (analysisData[0]["start_cycle"] - devicePreOpTime[device]) / freq
@@ -625,14 +663,26 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
                 if "device_time" in opData.keys():
                     assert "device_id" in opData.keys(), "Op has device data without device_id"
                     deviceID = opData["device_id"]
-                    for analysis, analysisData in opData["device_time"].items():
-                        headerField = f"{csv_header_format(analysis)} [ns]"
-                        assert len(analysisData) == 1, "Unexpected device data format"
-                        rowDict[headerField] = f"{analysisData[0]['duration_ns']:.0f}"
+                    for analysis, data in opData["device_time"].items():
+                        analysisData = data["series"]
+                        analysisStats = data["stats"]
+                        if "core" in analysis:
+                            assert len(analysisData) >= 1, "Unexpected device data format"
+                            headerField = f"{csv_header_format(analysis)} MIN [ns]"
+                            rowDict[headerField] = f"{analysisStats['Min']:.0f}"
+                            headerField = f"{csv_header_format(analysis)} MAX [ns]"
+                            rowDict[headerField] = f"{analysisStats['Max']:.0f}"
+                            headerField = f"{csv_header_format(analysis)} AVG [ns]"
+                            rowDict[headerField] = f"{analysisStats['Average']:.0f}"
+                        else:
+                            headerField = f"{csv_header_format(analysis)} [ns]"
+                            assert len(analysisData) == 1, "Unexpected device data format"
+                            rowDict[headerField] = f"{analysisData[0]['duration_ns']:.0f}"
                         if analysis == "device_fw_duration":
                             rowDict["DEVICE FW START CYCLE"] = analysisData[0]["start_cycle"]
                             rowDict["DEVICE FW END CYCLE"] = analysisData[0]["end_cycle"]
                             freq = analysisData[0]["duration_cycles"] / analysisData[0]["duration_ns"]
+                        if analysis == "device_kernel_duration":
                             if deviceID in devicePreOpTime.keys():
                                 rowDict["OP TO OP LATENCY [ns]"] = round(
                                     (analysisData[0]["start_cycle"] - devicePreOpTime[deviceID]) / freq

@@ -14,7 +14,7 @@
 namespace ttnn::operations::reduction {
 
 ttnn::Tensor ArgMaxOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor,
     const std::optional<int> dim,
     const std::optional<CoreRangeSet>& sub_core_grids,
@@ -33,23 +33,6 @@ ttnn::Tensor ArgMaxOperation::invoke(
                {std::move(optional_output_tensor)},
                queue_id)
         .at(0);
-}
-
-ttnn::Tensor ArgMaxOperation::invoke(
-    const Tensor& input_tensor,
-    const std::optional<int> dim,
-    const std::optional<CoreRangeSet>& sub_core_grids,
-    const bool use_muticore,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> optional_output_tensor) {
-    return invoke(
-        DefaultQueueId,
-        input_tensor,
-        dim,
-        sub_core_grids,
-        use_muticore,
-        memory_config,
-        std::move(optional_output_tensor));
 }
 
 }  // namespace ttnn::operations::reduction

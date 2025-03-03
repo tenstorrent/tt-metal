@@ -7,8 +7,8 @@
 #include <functional>
 #include <random>
 
-#include "tt_metal/host_api.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -34,7 +34,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Input Data Setup

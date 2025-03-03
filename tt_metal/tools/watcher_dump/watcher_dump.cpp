@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <iostream>
 #include <filesystem>
-#include "tt_metal/host_api.hpp"
+#include <host_api.hpp>
 #include "impl/debug/watcher_server.hpp"
 #include "impl/debug/noc_logging.hpp"
 #include "impl/dispatch/debug_tools.hpp"
@@ -44,14 +44,14 @@ void dump_data(
     }
 
     // Only look at user-specified devices
-    vector<Device*> devices;
+    vector<IDevice*> devices;
     for (unsigned id : device_ids) {
         string cq_fname = cq_dir.string() + fmt::format("device_{}_completion_q.txt", id);
         std::ofstream cq_file = std::ofstream(cq_fname);
         string iq_fname = cq_dir.string() + fmt::format("device_{}_issue_q.txt", id);
         std::ofstream iq_file = std::ofstream(iq_fname);
         // Minimal setup, since we'll be attaching to a potentially hanging chip.
-        Device* device = tt::tt_metal::CreateDeviceMinimal(
+        IDevice* device = tt::tt_metal::CreateDeviceMinimal(
             id, num_hw_cqs, DispatchCoreConfig{eth_dispatch ? DispatchCoreType::ETH : DispatchCoreType::WORKER});
         devices.push_back(device);
         if (dump_cqs) {

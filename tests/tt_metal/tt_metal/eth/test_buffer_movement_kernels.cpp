@@ -9,10 +9,10 @@
 #include "command_queue_fixture.hpp"
 #include "dispatch_fixture.hpp"
 #include "multi_device_fixture.hpp"
-#include "tt_metal/common/math.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 
 // FIXME: ARCH_NAME
@@ -41,8 +41,8 @@ namespace unit_tests::erisc::kernels {
 
 bool chip_to_chip_dram_buffer_transfer(
     DispatchFixture* fixture,
-    tt_metal::Device* sender_device,
-    tt_metal::Device* receiver_device,
+    tt_metal::IDevice* sender_device,
+    tt_metal::IDevice* receiver_device,
     const CoreCoord& eth_sender_core,
     const CoreCoord& eth_receiver_core,
     const size_t& byte_size) {
@@ -172,8 +172,8 @@ bool chip_to_chip_dram_buffer_transfer(
 
 bool chip_to_chip_interleaved_buffer_transfer(
     DispatchFixture* fixture,
-    tt_metal::Device* sender_device,
-    tt_metal::Device* receiver_device,
+    tt_metal::IDevice* sender_device,
+    tt_metal::IDevice* receiver_device,
     const CoreCoord& eth_sender_core,
     const CoreCoord& eth_receiver_core,
     const CMAKE_UNIQUE_NAMESPACE::BankedConfig& cfg,
@@ -300,11 +300,17 @@ bool chip_to_chip_interleaved_buffer_transfer(
 
 }  // namespace unit_tests::erisc::kernels
 
-TEST_F(N300DeviceFixture, ActiveEthKernelsSendDramBufferChip0ToChip1) {
+TEST_F(TwoDeviceFixture, ActiveEthKernelsSendDramBufferChip0ToChip1) {
+    if (arch_ == ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "See GH Issue #18384";
+    }
     const auto& sender_device = devices_.at(0);
     const auto& receiver_device = devices_.at(1);
 
     for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
+        if (not tt::Cluster::instance().is_ethernet_link_up(sender_device->id(), sender_eth_core)) {
+            continue;
+        }
         CoreCoord receiver_eth_core = std::get<1>(sender_device->get_connected_ethernet_core(sender_eth_core));
 
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
@@ -338,11 +344,17 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsSendDramBufferChip0ToChip1) {
     }
 }
 
-TEST_F(N300DeviceFixture, ActiveEthKernelsSendDramBufferChip1ToChip0) {
+TEST_F(TwoDeviceFixture, ActiveEthKernelsSendDramBufferChip1ToChip0) {
+    if (arch_ == ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "See GH Issue #18384";
+    }
     const auto& sender_device = devices_.at(1);
     const auto& receiver_device = devices_.at(0);
 
     for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
+        if (not tt::Cluster::instance().is_ethernet_link_up(sender_device->id(), sender_eth_core)) {
+            continue;
+        }
         CoreCoord receiver_eth_core = std::get<1>(sender_device->get_connected_ethernet_core(sender_eth_core));
 
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
@@ -452,6 +464,9 @@ TEST_F(DeviceFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips) {
                 continue;
             }
             for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
+                if (not tt::Cluster::instance().is_ethernet_link_up(sender_device->id(), sender_eth_core)) {
+                    continue;
+                }
                 auto [device_id, receiver_eth_core] = sender_device->get_connected_ethernet_core(sender_eth_core);
                 if (receiver_device->id() != device_id) {
                     continue;
@@ -515,12 +530,18 @@ TEST_F(DeviceFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips) {
 }
 
 TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsSendDramBufferAllConnectedChips) {
+    if (arch_ == ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "See GH Issue #18384";
+    }
     for (const auto& sender_device : devices_) {
         for (const auto& receiver_device : devices_) {
             if (sender_device->id() >= receiver_device->id()) {
                 continue;
             }
             for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
+                if (not tt::Cluster::instance().is_ethernet_link_up(sender_device->id(), sender_eth_core)) {
+                    continue;
+                }
                 auto [device_id, receiver_eth_core] = sender_device->get_connected_ethernet_core(sender_eth_core);
                 if (receiver_device->id() != device_id) {
                     continue;
@@ -574,6 +595,9 @@ TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBuf
                 continue;
             }
             for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
+                if (not tt::Cluster::instance().is_ethernet_link_up(sender_device->id(), sender_eth_core)) {
+                    continue;
+                }
                 auto [device_id, receiver_eth_core] = sender_device->get_connected_ethernet_core(sender_eth_core);
                 if (receiver_device->id() != device_id) {
                     continue;

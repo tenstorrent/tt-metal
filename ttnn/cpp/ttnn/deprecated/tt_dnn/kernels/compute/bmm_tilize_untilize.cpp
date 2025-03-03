@@ -32,7 +32,7 @@ inline void tilize_in(
     // UNPACK(( kernel_sleep(100) ));
     UNPACK((llk_unpack_reconfig_data_format(1, 0, 0, 0)));
     MATH((llk_math_reconfig_data_format(1, 0, 0, 0)));
-    tilize_init_short(in_cb_id, in_block_w);
+    tilize_init_short(in_cb_id, in_block_w, out_cb_id);
     for (uint32_t in_subblock = 0; in_subblock < in_num_subblocks; ++in_subblock) {
         for (uint32_t h = 0; h < in_subblock_h; ++h) {
             cb_wait_front(in_cb_id, in_block_w);
@@ -42,7 +42,7 @@ inline void tilize_in(
             cb_pop_front(in_cb_id, in_block_w);
         }
     }
-    tilize_uninit_with_dt(0, 1);
+    tilize_uninit_with_dt(0, 1, out_cb_id);
 }  // tilize_in()
 
 // NOTE: Bias is not supported with the untilize option
@@ -65,7 +65,7 @@ inline void reblock_and_untilize(
         int block_offset = 0;
 
         // Reblock
-        copy_tile_to_dst_init_short();
+        copy_tile_to_dst_init_short(interm_cb_id);
         cb_reserve_back(reblock_cb_id, out_block_w);
         for (uint32_t n = 0; n < num_out_subblocks_in_col; n++) {
             for (uint32_t w = 0; w < out_subblock_w; w++) {
@@ -157,7 +157,7 @@ void MAIN {
                 bool last_out = (in0_block_w_i == in0_num_blocks_w - 1);
                 if (tilize_in0) {
                     tilize_in(in0_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks, tilized_in0_cb_id);
-                    mm_init_short();
+                    mm_init_short(tilized_in0_cb_id, in1_cb_id);
                     cb_wait_front(tilized_in0_cb_id, in0_block_num_tiles);
                 } else {
                     cb_wait_front(in0_cb_id, in0_block_num_tiles);
@@ -170,7 +170,7 @@ void MAIN {
                         tile_regs_acquire();
                         if (enable_reload) {
                             // Reconfigure input
-                            copy_tile_to_dst_init_short();
+                            copy_tile_to_dst_init_short(matmul_partials_cb);
                             UNPACK((llk_unpack_reconfig_data_format(1, matmul_partials_cb, 0, 0)));
                             MATH((llk_math_reconfig_data_format(1, matmul_partials_cb, 0, 0)));
                             cb_wait_front(matmul_partials_cb, out_subblock_num_tiles);
@@ -213,7 +213,7 @@ void MAIN {
                             // bcast add data from bias_cb_id
                             cb_wait_front(bias_cb_id, bias_ntiles_w);
                             cb_wait_front(out_for_bias_cb_id, out_subblock_num_tiles);
-                            add_bcast_rows_init_short();
+                            add_bcast_rows_init_short(out_for_bias_cb_id, bias_cb_id);
                             // reconfig packer df for out
                             // pack_reconfig_data_format(out_cb_id);
                             tile_regs_acquire();
@@ -229,7 +229,7 @@ void MAIN {
                             // do not pop front bias as it may be used again for subsequent blocks
                             cb_pop_front(out_for_bias_cb_id, out_subblock_num_tiles);
                             // reconfig for matmul
-                            mm_init_short();
+                            mm_init_short(tilize_in0 ? tilized_in0_cb_id : in0_cb_id, in1_cb_id);
                             // reconfig unpacker df for srcB
                             // reconfig_data_format(in1_cb_id, in0_cb_id);
                         }
@@ -266,7 +266,7 @@ void MAIN {
                             untilize_mode_final_matmul_partials_cb,
                             untilize_mode_reblock_cb,
                             out_cb_id);
-                        mm_init_short();
+                        mm_init_short(tilize_in0 ? tilized_in0_cb_id : in0_cb_id, in1_cb_id);
                         reconfig_data_format(in1_cb_id, in0_cb_id);
                     }  // last_out
 #endif
