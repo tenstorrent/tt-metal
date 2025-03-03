@@ -232,13 +232,14 @@ std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& conf
     return op_trace_metadata;
 }
 
-std::vector<std::pair<uint32_pair_t, uint32_pair_t>> generate_shard_boundaries(
+std::vector<ShardBoundary> generate_shard_boundaries(
     const SlidingWindowConfig& config, const std::vector<uint32_t>& op_trace_metadata) {
-    std::vector<std::pair<uint32_pair_t, uint32_pair_t>> shard_boundaries;
-    uint32_t num_cores = config.num_cores_nhw;
-    uint32_t output_shard_h = config.get_output_shard_y(config.snap_to_tile);
+    std::vector<ShardBoundary> shard_boundaries;
 
-    uint32_t ceil_padding_w = config.get_ceil_pad_w();
+    const uint32_t num_cores = config.num_cores_nhw;
+    const uint32_t output_shard_h = config.get_output_shard_y(config.snap_to_tile);
+
+    const uint32_t ceil_padding_w = config.get_ceil_pad_w();
     uint32_t padded_input_w = config.input_hw.second + 2 * config.pad_hw.second + ceil_padding_w;
 
     uint32_t max_index = op_trace_metadata.size();
@@ -253,9 +254,10 @@ std::vector<std::pair<uint32_pair_t, uint32_pair_t>> generate_shard_boundaries(
     if (config.is_bilinear) {
         halo_with_pad_len = (config.window_hw.first) * padded_input_w;
     }
+
     uint32_t output_index_start = 0;
     for (uint32_t core = 0; core < num_cores; ++core) {
-        uint32_t output_index_end = std::min(output_index_start + output_shard_h, max_index) - 1;
+        const uint32_t output_index_end = std::min(output_index_start + output_shard_h, max_index) - 1;
         uint32_t input_index_start = op_trace_metadata[std::min(output_index_start, max_index - 1)];
         uint32_t input_index_end = op_trace_metadata[output_index_end] + halo_with_pad_len;
         if (input_index_start == 0 and output_index_start != 0) {
@@ -273,21 +275,15 @@ std::vector<std::pair<uint32_pair_t, uint32_pair_t>> generate_shard_boundaries(
         shard_boundaries.push_back({{output_index_start, output_index_end}, {input_index_start, input_index_end}});
         output_index_start = output_index_end + 1;
     }
-#if 1
-    for (auto [output_shard, input_shard] : shard_boundaries) {
-        log_debug(
-            tt::LogOp,
-            "output_shard: ({}, {}), input_shard: ({}, {})",
-            output_shard.first,
-            output_shard.second,
-            input_shard.first,
-            input_shard.second);
-    }
-#endif
+
+    for (auto& boundary : shard_boundaries) {
+        log_debug(tt::LogOp, "shard_boundary={}", boundary);
+    };
+
     return shard_boundaries;
 }
 
-std::vector<std::pair<bool, uint32_pair_t>> generate_tensor_metadata(
+std::vector<PixelMetadata> generate_tensor_metadata(
     const std::vector<bool>& pad_metadata,
     const SlidingWindowConfig& config,
     uint32_t reshard_num_cores_nhw,
@@ -316,14 +312,20 @@ std::vector<std::pair<bool, uint32_pair_t>> generate_tensor_metadata(
         }
     };
 
-    std::vector<std::pair<bool, uint32_pair_t>> tensor_metadata;
+    std::vector<PixelMetadata> tensor_metadata;
+    tensor_metadata.reserve(pad_metadata.size());
+
     uint32_t core_id = 0;
     uint32_t input_reshard_local_idx = 0;
-    for (bool is_pad_stick : pad_metadata) {
-        if (is_pad_stick) {
-            tensor_metadata.push_back(std::make_pair(is_pad_stick, std::make_pair(0, 0)));
+
+    for (bool is_pad_flag : pad_metadata) {
+        if (is_pad_flag) {
+            tensor_metadata.push_back(PixelMetadata{true, 0, 0});
         } else {
-            tensor_metadata.push_back(std::make_pair(is_pad_stick, remap(core_id, input_reshard_local_idx++)));
+            auto [new_core_id, new_local_idx] = remap(core_id, input_reshard_local_idx);
+            tensor_metadata.push_back(PixelMetadata{false, new_core_id, new_local_idx});
+
+            input_reshard_local_idx++;
             if (input_reshard_local_idx == input_shard_height) {
                 core_id++;
                 input_reshard_local_idx = 0;
@@ -334,8 +336,7 @@ std::vector<std::pair<bool, uint32_pair_t>> generate_tensor_metadata(
     return tensor_metadata;
 }
 
-uint32_t generate_max_out_nsticks_per_core(
-    const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries) {
+uint32_t generate_max_out_nsticks_per_core(const std::vector<ShardBoundary>& shard_boundaries) {
     // calculate max_out_nsticks_per_core
     uint32_t max_out_nsticks_per_core = 0;
     for (auto [_, in_shard] : shard_boundaries) {
@@ -347,8 +348,8 @@ uint32_t generate_max_out_nsticks_per_core(
 
 std::tuple<std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>>
 generate_halo_kernel_config_tensors(
-    const std::vector<std::pair<bool, uint32_pair_t>>& tensor_metadata,
-    const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries,
+    const std::vector<PixelMetadata>& tensor_metadata,
+    const std::vector<ShardBoundary>& shard_boundaries,
     bool is_block_sharded,
     bool transpose_mcast,
     bool remote_read,
@@ -371,8 +372,7 @@ generate_halo_kernel_config_tensors(
         for (uint32_t global_idx = input_start; global_idx <= input_end; ++global_idx) {
             uint32_t dst_core_id = core_id;
             uint32_t local_idx = global_idx - input_start;
-            auto [is_pad_stick, src_idx] = tensor_metadata[global_idx];
-            auto [src_core_id, src_local_idx] = src_idx;
+            auto [is_pad_stick, src_core_id, src_local_idx] = tensor_metadata[global_idx];
             TT_ASSERT(local_idx < pad_local && src_local_idx < pad_local, "Index overflow");
             if (is_pad_stick) {
                 TT_ASSERT(src_local_idx == 0);
@@ -556,13 +556,13 @@ generate_halo_kernel_config_tensors(
 
 std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
     const std::vector<uint32_t>& op_trace_metadata,
-    const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries,
+    const std::vector<ShardBoundary>& shard_boundaries,
     bool pad_tile,
     bool pad_cores) {
     std::vector<std::vector<uint16_t>> sharded_input_top_left_indices;
     for (const auto& item : shard_boundaries) {
-        const auto& [output_shard_start, output_shard_end] = item.first;
-        const auto& [input_shard_start, input_shard_end] = item.second;
+        const auto& [output_shard_start, output_shard_end] = item.output_range;
+        const auto& [input_shard_start, input_shard_end] = item.input_range;
         std::vector<uint16_t> local_top_left_indices;
         // sanity check
         if (output_shard_start >= op_trace_metadata.size()) {
@@ -734,8 +734,8 @@ auto fmt::formatter<ttnn::operations::sliding_window::ParallelConfig>::format(
 }
 
 auto fmt::formatter<ttnn::operations::sliding_window::SlidingWindowConfig>::format(
-    const ttnn::operations::sliding_window::SlidingWindowConfig& t,
-    format_context& ctx) const -> format_context::iterator {
+    const ttnn::operations::sliding_window::SlidingWindowConfig& t, format_context& ctx) const
+    -> format_context::iterator {
     std::string str = fmt::format(
         "SlidingWindowConfig(batch_size={}, input_hw=({},{}), window_hw=({},{}), stride_hw=({},{}), pad_hw=({},{}), "
         "dilation_hw=({},{}), num_cores_nhw={}, num_cores_c={}, core_range_set_={})",
@@ -754,4 +754,15 @@ auto fmt::formatter<ttnn::operations::sliding_window::SlidingWindowConfig>::form
         t.num_cores_c,
         t.core_range_set.str());
     return fmt::format_to(ctx.out(), "{}", str);
+}
+
+auto fmt::formatter<ttnn::operations::sliding_window::ShardBoundary>::format(
+    const ttnn::operations::sliding_window::ShardBoundary& t, format_context& ctx) const -> format_context::iterator {
+    return fmt::format_to(
+        ctx.out(),
+        "[output_shard=({}, {}), input_shard=({}, {})]",
+        t.output_range.start,
+        t.output_range.end,
+        t.input_range.start,
+        t.input_range.end);
 }

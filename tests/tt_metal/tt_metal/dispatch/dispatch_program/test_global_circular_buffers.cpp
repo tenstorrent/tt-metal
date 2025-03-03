@@ -14,6 +14,8 @@
 #include <tt-metalium/global_circular_buffer.hpp>
 #include "tt_metal/include/tt_metal/program.hpp"
 
+namespace tt::tt_metal {
+
 TEST_F(DispatchFixture, TensixProgramGlobalCircularBuffers) {
     CoreCoord sender_core = CoreCoord(0, 0);
     CoreRangeSet sender_cores = CoreRangeSet(CoreRange(sender_core));
@@ -119,3 +121,5 @@ TEST_F(DispatchFixture, TensixProgramGlobalCircularBuffers) {
     }
     this->RunProgram(device, program);
 }
+
+}  // namespace tt::tt_metal

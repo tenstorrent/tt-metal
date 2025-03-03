@@ -16,8 +16,8 @@ namespace conv2d {
 
 constexpr uint32_t l1_scratchpad_CB_size = 64;
 struct Conv2dConfig {
-    DataType dtype = DataType::BFLOAT16;
-    DataType weights_dtype = DataType::BFLOAT16;
+    tt::tt_metal::DataType dtype = tt::tt_metal::DataType::BFLOAT16;
+    tt::tt_metal::DataType weights_dtype = tt::tt_metal::DataType::BFLOAT16;
 
     // Either "relu" or ""
     string activation = "";
@@ -49,7 +49,7 @@ struct Conv2dConfig {
     // if override_sharding_config is true, reshard_if_not_optimal should not be set to true
     bool override_sharding_config = false;
 
-    std::optional<TensorMemoryLayout> shard_layout;
+    std::optional<tt::tt_metal::TensorMemoryLayout> shard_layout;
 
     // used only if override_sharding_config is true
     std::optional<CoreRangeSet> core_grid = std::nullopt;
@@ -59,7 +59,7 @@ struct Conv2dConfig {
 
     // Useful when output is BFLOAT16.
     // BFLOAT8 is always Tile layout.
-    Layout output_layout = Layout::TILE;
+    tt::tt_metal::Layout output_layout = tt::tt_metal::Layout::TILE;
 
     // Doubles the size of the CBs for activation.
     // Increased perf, but increased L1 usage.
@@ -305,7 +305,7 @@ conv_op_l1_usage calculate_L1_usage(
     const ttnn::Shape& weights_shape,
     std::array<uint32_t, 2> kernel_size,
     const Conv2dConfig& conv_config,
-    const MemoryConfig& output_memory_config,
+    const tt::tt_metal::MemoryConfig& output_memory_config,
     bool enable_bias,
     bool is_1d_depthwise_conv);
 

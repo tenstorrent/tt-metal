@@ -35,6 +35,7 @@ inline void concat_db_print(bool condition, const std::string& msg) {
 namespace ttnn {
 namespace operations {
 namespace data_movement {
+
 using OwnedConcatArgs = std::tuple<std::vector<ttnn::Tensor>, int, unsigned int>;
 
 using MassagedConcat = MassagedOperation<ttnn::Tensor, const std::vector<ttnn::Tensor>&, int, unsigned int>;
@@ -126,7 +127,7 @@ MassagedConcat build_untilize_rm_retilize_concat(
                     // FIXME: change this to a legit slice call once
                     // padding-oblivious entry point is uplifted to the slice
                     // op.
-                    untilized_tensor = operation::run(
+                    untilized_tensor = tt::tt_metal::operation::run(
                         SliceDeviceOperation{
                             ttnn::Shape(begins), ttnn::Shape(ends), ttnn::Shape(steps), output_memory_config},
                         {untilized_tensor},

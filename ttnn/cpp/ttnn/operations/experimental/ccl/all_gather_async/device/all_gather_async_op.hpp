@@ -41,7 +41,7 @@ struct AllGatherAsync {
     const MemoryConfig output_mem_config;
     const ccl::Topology topology;
     const GlobalSemaphore semaphore;
-    std::optional<SubDeviceId> sub_device_id;
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     bool enable_persistent_fabric_mode;
 
     AllGatherAsync(
@@ -54,7 +54,7 @@ struct AllGatherAsync {
         MemoryConfig output_mem_config,
         ccl::Topology topology,
         GlobalSemaphore semaphore,
-        std::optional<SubDeviceId>& sub_device_id,
+        std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
         bool enable_persistent_fabric_mode) :
         forward_device(forward_device),
         backward_device(backward_device),
@@ -86,9 +86,9 @@ struct AllGatherAsync {
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
-    operation::ProgramWithCallbacks create_program(
+    tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
-    const operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
+    const tt::tt_metal::operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
 
     AllGatherAsyncVersion select_version(const Tensor& input_tensor) const;
 };
@@ -103,15 +103,19 @@ AllGatherAsync create_all_gather_async_struct(
     const std::vector<IDevice*>& devices,
     const ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphores,
-    std::optional<SubDeviceId> sub_device_id,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     bool enable_persistent_fabric_mode);
 }  // namespace all_gather_async_detail
 }  // namespace ccl
 
 // All Gather Variants
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
-    size_t num_links, size_t num_workers_per_link, bool persistent_fabric_mode, IDevice* device, const std::optional<SubDeviceId>& sub_device_id);
-operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
+    size_t num_links,
+    size_t num_workers_per_link,
+    bool persistent_fabric_mode,
+    IDevice* device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
+tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     const Tensor& input_tensor,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
@@ -122,9 +126,9 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     const uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore semaphore,
-    const std::optional<SubDeviceId>& sub_device_id,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode);
-operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32_any(
+tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32_any(
     const Tensor& input_tensor,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
@@ -135,9 +139,9 @@ operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32
     const uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
-    const std::optional<SubDeviceId>& sub_device_id,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode);
-operation::ProgramWithCallbacks all_gather_async_llama_post_binary_matmul(
+tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_post_binary_matmul(
     const Tensor& input_tensor,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
@@ -148,7 +152,7 @@ operation::ProgramWithCallbacks all_gather_async_llama_post_binary_matmul(
     const uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
-    const std::optional<SubDeviceId>& sub_device_id,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode);
 
 namespace operations {
@@ -162,7 +166,7 @@ Tensor all_gather_async(
     const uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
-    std::optional<SubDeviceId> sub_device_id = std::nullopt,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
     bool enable_persistent_fabric_mode = false);  // TODO make reference
 
 Tensor all_gather_async(
@@ -174,7 +178,7 @@ Tensor all_gather_async(
     const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<size_t> num_preferred_links = std::nullopt,
-    std::optional<SubDeviceId> sub_device_id = std::nullopt,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
     bool enable_persistent_fabric_mode = false);
 
 }  // namespace ccl

@@ -40,7 +40,7 @@ static Tensor manual_insertion(
     } else {
         tt::tt_metal::tensor_impl::read_data_from_device_buffer<uint16_t>(device_buffer, data_vec);
     }
-    auto owned_buffer = owned_buffer::create<uint16_t>(std::move(data_vec));
+    auto owned_buffer = tt::tt_metal::owned_buffer::create<uint16_t>(std::move(data_vec));
     auto output =
         Tensor(
             OwnedStorage{owned_buffer},
@@ -91,7 +91,7 @@ ttnn::Tensor ReshapeOperation::invoke(
             output_mem_config);
     }
     std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
-    return operation::run(
+    return tt::tt_metal::operation::run(
                ReshapeDeviceOperation{logical_output_shape, padded_output_shape, output_mem_config}, {input_tensor})
         .at(0);
 }

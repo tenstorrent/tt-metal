@@ -4,6 +4,8 @@
 
 #include "moreh_softmax_device_operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::moreh::moreh_softmax {
 
 #define L1_512KB (512 * 1024)

@@ -15,6 +15,20 @@ namespace data_movement {
 ttnn::Shape squeeze_shape_to_4D(ttnn::Shape output_shape);
 ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor);
 
+uint32_t get_estimated_size_of_cbs(
+    const Tensor& input_tensor_a,
+    const uint32_t input_single_tile_size,
+    const uint32_t output_single_tile_size,
+    const uint32_t num_tiles_per_row);
+
+uint32_t get_max_l1_space(const Tensor& input_tensor_a);
+
+bool is_enough_space(
+    const Tensor& input_tensor_a,
+    const uint32_t input_single_tile_size,
+    const uint32_t output_single_tile_size,
+    const uint32_t num_tiles_per_row);
+
 ttnn::Tensor pad_to_tile_vol(
     QueueId queue_id,
     const ttnn::Tensor& tensor,

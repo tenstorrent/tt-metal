@@ -24,12 +24,12 @@ struct ReplayTraceCommand;
 struct EnqueueTraceCommand;
 struct LoadTraceCommand;
 struct ReleaseTraceCommand;
-struct CreateBufferCommand;
+struct BufferCreateCommand;
 struct DeallocateBufferCommand;
 struct EnqueueWriteBufferCommand;
 struct EnqueueReadBufferCommand;
 struct FinishCommand;
-struct CreateProgramCommand;
+struct ProgramConstructorCommand;
 struct EnqueueProgramCommand;
 struct CreateKernelCommand;
 struct SetRuntimeArgsUint32Command;
@@ -46,7 +46,7 @@ struct LightMetalBinary;
 
 using FlatbufferRuntimeArgVector =
     const flatbuffers::Vector<flatbuffers::Offset<tt::tt_metal::flatbuffer::RuntimeArg>>*;
-using RuntimeArgs = std::vector<std::variant<Buffer*, uint32_t>>;
+using RuntimeArgs = std::vector<std::variant<tt::tt_metal::Buffer*, uint32_t>>;
 
 namespace tt::tt_metal {
 inline namespace v0 {
@@ -68,12 +68,12 @@ private:
     void execute(const tt::tt_metal::flatbuffer::ReplayTraceCommand* command);
     void execute(const tt::tt_metal::flatbuffer::LoadTraceCommand* command);
     void execute(const tt::tt_metal::flatbuffer::ReleaseTraceCommand* command);
-    void execute(const tt::tt_metal::flatbuffer::CreateBufferCommand* command);
+    void execute(const tt::tt_metal::flatbuffer::BufferCreateCommand* cmd);
     void execute(const tt::tt_metal::flatbuffer::DeallocateBufferCommand* command);
     void execute(const tt::tt_metal::flatbuffer::EnqueueWriteBufferCommand* command);
     void execute(const tt::tt_metal::flatbuffer::EnqueueReadBufferCommand* command);
     void execute(const tt::tt_metal::flatbuffer::FinishCommand* command);
-    void execute(const tt::tt_metal::flatbuffer::CreateProgramCommand* command);
+    void execute(const tt::tt_metal::flatbuffer::ProgramConstructorCommand* command);
     void execute(const tt::tt_metal::flatbuffer::EnqueueProgramCommand* command);
     void execute(const tt::tt_metal::flatbuffer::CreateKernelCommand* command);
     void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32Command* command);
@@ -116,6 +116,8 @@ private:
     const tt::tt_metal::flatbuffer::LightMetalBinary* fb_binary_;  // Parsed FlatBuffer binary
     bool show_reads_ = false;                                      // Flag to show read buffer contents
     bool disable_checking_ = false;  // Optionally disable equality checking in Compare command.
+
+    void clear_object_maps();
 
     // System related members ----------------------
     void setup_devices();

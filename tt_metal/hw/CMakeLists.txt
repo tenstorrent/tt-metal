@@ -165,19 +165,23 @@ foreach(ARCH IN LISTS ARCHS)
     set(HWLIBS
         tmu-crt0
         tmu-crt0k
+        tmu-crt0k-ncrisc
         substitutes
         tdma_xmov
         noc
         ncrisc-halt
+        ncrisc-halt-wormhole
     )
 
     # Map each .o to its source file
     set(tmu-crt0_SOURCE "${PROJECT_SOURCE_DIR}/tt_metal/hw/toolchain/tmu-crt0.S")
     set(tmu-crt0k_SOURCE "${PROJECT_SOURCE_DIR}/tt_metal/hw/toolchain/tmu-crt0k.S")
+    set(tmu-crt0k-ncrisc_SOURCE "${PROJECT_SOURCE_DIR}/tt_metal/hw/toolchain/tmu-crt0k-ncrisc.S")
     set(substitutes_SOURCE "${PROJECT_SOURCE_DIR}/tt_metal/hw/toolchain/substitutes.cpp")
     set(tdma_xmov_SOURCE "${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src/tdma_xmov.c")
     set(noc_SOURCE "${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src/${ARCH}/noc.c")
     set(ncrisc-halt_SOURCE "${PROJECT_SOURCE_DIR}/tt_metal/hw/toolchain/ncrisc-halt.S")
+    set(ncrisc-halt-wormhole_SOURCE "${PROJECT_SOURCE_DIR}/tt_metal/hw/toolchain/ncrisc-halt-wormhole.S")
 
     # Set GPP_FLAGS based on ARCH
     set(GPP_FLAGS
@@ -213,8 +217,27 @@ foreach(ARCH IN LISTS ARCHS)
     list(APPEND GPP_INCLUDES -I${PROJECT_SOURCE_DIR}/tt_metal/third_party/tt_llk/tt_llk_${ARCH_B0}/llk_lib)
 
     foreach(HWLIB IN LISTS HWLIBS)
-        if("${ARCH}" STREQUAL "blackhole" AND "${HWLIB}" STREQUAL "ncrisc-halt")
+        if(
+            "${ARCH}"
+                STREQUAL
+                "blackhole"
+            AND (
+                (
+                    "${HWLIB}"
+                        STREQUAL
+                        "ncrisc-halt"
+                )
+                OR (
+                    "${HWLIB}"
+                        STREQUAL
+                        "tmu-crt0k-ncrisc"
+                )
+            )
+        )
             continue() # Skip the iteration, blackhole doesn't have IRAM
+        endif()
+        if((NOT "${ARCH}" STREQUAL "wormhole") AND "${HWLIB}" STREQUAL "ncrisc-halt-wormhole")
+            continue() # Skip the iteration, only wormhole has ncrisc-halt-wormhole
         endif()
 
         set(HW_OUTPUT_FILE "${HW_LIB_DIR}/${HWLIB}.o")

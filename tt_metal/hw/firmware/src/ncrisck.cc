@@ -15,6 +15,7 @@
 #include "risc_perf.h"
 #endif
 #include "firmware_common.h"
+#include "dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "tensix_functions.h"
 #include "c_tensix_core.h"
@@ -39,9 +40,9 @@ void kernel_launch(uint32_t kernel_base_addr) {
 #endif
 #else
     extern uint32_t __kernel_init_local_l1_base[];
-    extern uint32_t __fw_export_end_text[];
+    extern uint32_t __kernel_text_start[];
     do_crt1((uint32_t tt_l1_ptr*)(kernel_base_addr + (uint32_t)__kernel_init_local_l1_base -
-                                  (uint32_t)__fw_export_end_text));
+                                  (uint32_t)__kernel_text_start));
 
     if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
         noc_local_state_init(NOC_INDEX);

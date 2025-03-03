@@ -19,6 +19,8 @@
 #include "sub_device_test_utils.hpp"
 #include "dispatch_test_utils.hpp"
 
+namespace tt::tt_metal {
+
 TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceSynchronization) {
     auto* device = devices_[0];
     uint32_t local_l1_size = 3200;
@@ -142,3 +144,5 @@ TEST_F(CommandQueueSingleCardFixture, TensixActiveEthTestSubDeviceBasicEthProgra
     Synchronize(device);
     detail::DumpDeviceProfileResults(device);
 }
+
+}  // namespace tt::tt_metal

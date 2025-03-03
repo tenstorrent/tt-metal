@@ -342,13 +342,13 @@ def get_devices(request):
     elif "pcie_devices" in request.fixturenames:
         devices = request.getfixturevalue("pcie_devices")
     elif "mesh_device" in request.fixturenames:
-        devices = request.getfixturevalue("mesh_device").get_devices()
+        devices = [request.getfixturevalue("mesh_device")]
     elif "n300_mesh_device" in request.fixturenames:
-        devices = request.getfixturevalue("n300_mesh_device").get_devices()
+        devices = [request.getfixturevalue("n300_mesh_device")]
     elif "t3k_mesh_device" in request.fixturenames:
-        devices = request.getfixturevalue("t3k_mesh_device").get_devices()
+        devices = [request.getfixturevalue("t3k_mesh_device")]
     elif "pcie_mesh_device" in request.fixturenames:
-        devices = request.getfixturevalue("pcie_mesh_device").get_devices()
+        devices = [request.getfixturevalue("pcie_mesh_device")]
     else:
         devices = []
     return devices
@@ -677,3 +677,20 @@ def record_test_timestamp(record_property):
     yield
     end_timestamp = datetime.strftime(datetime.now(), "%Y-%m-%dT%H:%M:%S%z")
     record_property("end_timestamp", end_timestamp)
+
+
+def pytest_configure(config):
+    xmlpath = config.option.xmlpath
+    # https://github.com/tenstorrent/tt-metal/pull/18372
+    # Only override the xmlpath if it's set, and we're in a CI env (GHA)
+    # Problem: t3k unit tests run pytest multiple times overwriting the junit xml file each time, so the generated xml artifact only contains test case info from the last running testsuite.
+    # Fix: when running in CI env, override config.option.xmlpath to rename the xml filepath to include timestamp, so that serial pytest invocations running in scripts do not clobber the junit xml test report
+    if xmlpath and os.getenv("CI") == "true":
+        # Get the dir and filename for the generated xml
+        directory, filename = os.path.split(xmlpath)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Append timestamp to the end of the xml filename
+        # This avoids clobbering the xml file when pytest is invoked multiple times during a test script
+        new_filename = f"{os.path.splitext(filename)[0]}_{timestamp}{os.path.splitext(filename)[1]}"
+        new_xmlpath = os.path.join(directory, new_filename)
+        config.option.xmlpath = new_xmlpath

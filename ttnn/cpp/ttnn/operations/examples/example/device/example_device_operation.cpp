@@ -26,7 +26,8 @@ ExampleDeviceOperation::spec_return_value_t ExampleDeviceOperation::compute_outp
     const auto& input_tensor = tensor_args.input_tensor;
     return TensorSpec(
         input_tensor.get_logical_shape(),
-        TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), MemoryConfig{}));
+        tt::tt_metal::TensorLayout(
+            input_tensor.get_dtype(), tt::tt_metal::PageConfig(input_tensor.get_layout()), MemoryConfig{}));
 }
 
 ExampleDeviceOperation::tensor_return_value_t ExampleDeviceOperation::create_output_tensors(

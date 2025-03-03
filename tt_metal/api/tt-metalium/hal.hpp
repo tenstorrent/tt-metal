@@ -160,6 +160,7 @@ private:
     bool coordinate_virtualization_enabled_;
     uint32_t virtual_worker_start_x_;
     uint32_t virtual_worker_start_y_;
+    bool eth_fw_is_cooperative_ = false;  // set when eth riscs have to context switch
 
     float eps_ = 0.0f;
     float nan_ = 0.0f;
@@ -228,6 +229,7 @@ public:
     bool is_coordinate_virtualization_enabled() const { return this->coordinate_virtualization_enabled_; };
     std::uint32_t get_virtual_worker_start_x() const { return this->virtual_worker_start_x_; }
     std::uint32_t get_virtual_worker_start_y() const { return this->virtual_worker_start_y_; }
+    bool get_eth_fw_is_cooperative() const { return this->eth_fw_is_cooperative_; }
     uint32_t get_programmable_core_type_count() const;
     HalProgrammableCoreType get_programmable_core_type(uint32_t core_type_index) const;
     uint32_t get_programmable_core_type_index(HalProgrammableCoreType programmable_core_type_index) const;

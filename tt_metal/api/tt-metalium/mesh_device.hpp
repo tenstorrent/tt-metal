@@ -11,16 +11,17 @@
 
 #include "device.hpp"
 
-#include "mesh_common.hpp"
 #include "mesh_config.hpp"
 #include "mesh_coord.hpp"
 #include "mesh_device_view.hpp"
+#include "mesh_trace_id.hpp"
 #include "sub_device_types.hpp"
 #include "span.hpp"
 
 namespace tt::tt_metal {
 
 class SubDeviceManagerTracker;
+class ThreadPool;
 
 namespace distributed {
 
@@ -65,12 +66,15 @@ private:
     std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
     std::unordered_map<MeshTraceId, std::shared_ptr<MeshTraceBuffer>> trace_buffer_pool_;
     uint32_t trace_buffers_size_ = 0;
+    std::shared_ptr<ThreadPool> thread_pool_;
     std::recursive_mutex push_work_mutex_;
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
 
     // Returns the devices in row-major order for the new mesh shape
     std::vector<IDevice*> get_row_major_devices(const MeshShape& new_shape) const;
+
+    std::shared_ptr<MeshTraceBuffer>& create_mesh_trace(const MeshTraceId& trace_id);
 
 public:
     MeshDevice(
@@ -151,9 +155,9 @@ public:
     // MeshTrace Internal APIs - these should be used to deprecate the single device backed trace APIs
     void begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
     void end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
+    void replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking);
     void release_mesh_trace(const MeshTraceId& trace_id);
     std::shared_ptr<MeshTraceBuffer> get_mesh_trace(const MeshTraceId& trace_id);
-    std::shared_ptr<MeshTraceBuffer>& create_mesh_trace(const MeshTraceId& trace_id);
     uint32_t get_trace_buffers_size() const override;
     void set_trace_buffers_size(uint32_t size) override;
 
@@ -188,7 +192,6 @@ public:
     HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const override;
     std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(
         const std::vector<CoreRange>& ranges, const CoreType core_type) override;
-    size_t get_device_kernel_defines_hash() override;
     uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const override;
     uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;
     uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data=true, bool unicast_data=true) const override;
@@ -208,7 +211,6 @@ public:
     std::tuple<SubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     bool is_mmio_capable() const override;
-    std::vector<std::vector<chip_id_t>> get_tunnels_from_mmio() const override;
 
     // A MeshDevice is a collection of devices arranged in a 2D grid.
     // The type parameter allows the caller to specify how to linearize the devices in the mesh.

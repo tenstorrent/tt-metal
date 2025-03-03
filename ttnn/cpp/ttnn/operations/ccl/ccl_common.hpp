@@ -110,7 +110,7 @@ class CclOpTensorConfig {
     CclOpTensorConfig(Tensor const& tensor);
     uint32_t get_page_size() const;
     uint32_t get_tile_size() const;
-    Tile get_tile() const;
+    tt::tt_metal::Tile get_tile() const;
 
     uint32_t get_buffer_start_address() const;
 
@@ -119,7 +119,7 @@ class CclOpTensorConfig {
    protected:
     uint32_t page_size;
     uint32_t tile_size;
-    Tile tile;
+    tt::tt_metal::Tile tile;
     uint32_t buffer_start_address;
     tt::DataFormat df;
 };
@@ -542,14 +542,14 @@ tt::tt_metal::KernelHandle generate_edm_kernel(
     tt::tt_metal::IDevice const* device,
     FabricEriscDatamoverBuilder const& edm_builder,
     CoreCoord const& eth_core,
-    NOC noc_id);
+    tt::tt_metal::NOC noc_id);
 
 tt::tt_metal::KernelHandle generate_edm_kernel(
    tt::tt_metal::Program& program,
     IDevice const* device,
     EriscDatamoverBuilder const& edm_builder,
     CoreCoord const& eth_core,
-    NOC noc_id);
+    tt::tt_metal:: NOC noc_id);
 
 void generate_edm_kernels_for_ring_or_linear_topology(
    tt::tt_metal::Program& program,

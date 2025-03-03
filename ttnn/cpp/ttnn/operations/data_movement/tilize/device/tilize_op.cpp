@@ -69,10 +69,18 @@ operation::ProgramWithCallbacks Tilize::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-    if (this->use_multicore) {
-        return detail::tilize_multi_core(input_tensor_a, output_tensor);
+
+    if (input_tensor_a.memory_config().is_sharded()) {
+        return detail::tilize_multi_core_sharded(input_tensor_a, output_tensor);
     }
-    return detail::tilize_single_core(input_tensor_a, output_tensor);
+    if (!this->enough_space_height) {
+        return detail::tilize_multi_core_block(input_tensor_a, output_tensor);
+    }
+    if (!this->use_multicore) {
+        return detail::tilize_single_core(input_tensor_a, output_tensor);
+    }
+
+    return detail::tilize_multi_core_interleaved(input_tensor_a, output_tensor);
 }
 
 }  // namespace ttnn::operations::data_movement

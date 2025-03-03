@@ -129,50 +129,55 @@ std::vector<ttnn::TensorSpec> NLPCreateHeadsDecodeDeviceOperation::compute_outpu
     CoreRangeSet q_shard_grid, k_shard_grid, v_shard_grid;
     if (!this->input_on_subcoregrids) {
         auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
-        q_shard_grid = num_cores_to_corerangeset(batch, core_grid, true);
+        q_shard_grid = tt::tt_metal::num_cores_to_corerangeset(batch, core_grid, true);
         if (this->overlap_qk_coregrid) {
             k_shard_grid = q_shard_grid;
         } else {
-            k_shard_grid =
-                num_cores_to_corerangeset(CoreCoord{batch % core_grid.x, batch / core_grid.x}, batch, core_grid, true);
+            k_shard_grid = tt::tt_metal::num_cores_to_corerangeset(
+                CoreCoord{batch % core_grid.x, batch / core_grid.x}, batch, core_grid, true);
         }
         v_shard_grid = q_shard_grid;
     } else {
         auto input_core_grid = input_tensor.shard_spec().value().grid;
         auto start_core_coord = input_core_grid.bounding_box().start_coord;
-        q_shard_grid = num_cores_to_corerangeset_in_subcoregrids(start_core_coord, batch, input_core_grid, true);
+        q_shard_grid =
+            tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(start_core_coord, batch, input_core_grid, true);
         if (this->overlap_qk_coregrid) {
             k_shard_grid = q_shard_grid;
         } else {
-            CoreRangeSet q_plus_one_grid =
-                num_cores_to_corerangeset_in_subcoregrids(start_core_coord, batch + 1, input_core_grid, true);
+            CoreRangeSet q_plus_one_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
+                start_core_coord, batch + 1, input_core_grid, true);
             if (!q_plus_one_grid.ranges().empty()) {
                 start_core_coord = q_plus_one_grid.ranges().back().end_coord;
             }
-            k_shard_grid = num_cores_to_corerangeset_in_subcoregrids(start_core_coord, batch, input_core_grid, true);
+            k_shard_grid =
+                tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(start_core_coord, batch, input_core_grid, true);
         }
         v_shard_grid = q_shard_grid;
     }
-    ShardSpec q_shard_spec{q_shard_grid, {num_q_heads_padded, this->head_dim}};
+    tt::tt_metal::ShardSpec q_shard_spec{q_shard_grid, {num_q_heads_padded, this->head_dim}};
     q_mem_config.shard_spec = q_shard_spec;
-    ShardSpec k_shard_spec{k_shard_grid, {num_kv_heads_padded, this->head_dim}};
+    tt::tt_metal::ShardSpec k_shard_spec{k_shard_grid, {num_kv_heads_padded, this->head_dim}};
     k_mem_config.shard_spec = k_shard_spec;
-    ShardSpec v_shard_spec{v_shard_grid, {num_kv_heads_padded, this->head_dim}};
+    tt::tt_metal::ShardSpec v_shard_spec{v_shard_grid, {num_kv_heads_padded, this->head_dim}};
     v_mem_config.shard_spec = v_shard_spec;
 
     return {
         TensorSpec(
             q_output_shape,
-            TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), q_mem_config)),
+            tt::tt_metal::TensorLayout(
+                input_tensor.get_dtype(), tt::tt_metal::PageConfig(input_tensor.get_layout()), q_mem_config)),
         TensorSpec(
             k_output_shape,
-            TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), k_mem_config)),
+            tt::tt_metal::TensorLayout(
+                input_tensor.get_dtype(), tt::tt_metal::PageConfig(input_tensor.get_layout()), k_mem_config)),
         TensorSpec(
             v_output_shape,
-            TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), v_mem_config))};
+            tt::tt_metal::TensorLayout(
+                input_tensor.get_dtype(), tt::tt_metal::PageConfig(input_tensor.get_layout()), v_mem_config))};
 }
 
-operation::ProgramWithCallbacks NLPCreateHeadsDecodeDeviceOperation::create_program(
+tt::tt_metal::operation::ProgramWithCallbacks NLPCreateHeadsDecodeDeviceOperation::create_program(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
