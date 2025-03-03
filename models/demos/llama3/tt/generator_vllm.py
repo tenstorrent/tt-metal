@@ -32,7 +32,7 @@ def generate_submeshes(mesh_device):
     return data_parallel, mesh_device.create_submeshes(ttnn.MeshShape(1, num_devices // data_parallel))
 
 
-def allocate_kv_cache(kv_cache_shape, dtype, num_layers, mesh_device=None):
+def allocate_kv_cache(kv_cache_shape, dtype, num_layers, mesh_device):
     _, submesh_devices = generate_submeshes(mesh_device)
     kv_cache = []
     for submesh in submesh_devices:
@@ -221,6 +221,9 @@ class TtMllamaForConditionalGeneration(LlamaGenerator, SupportsMultiModal):
             cross_page_table=cross_page_table,
         )
 
+    def allocate_kv_cache(self, *args, **kwargs):
+        return allocate_kv_cache(*args, **kwargs)
+
 
 @INPUT_REGISTRY.register_input_processor(input_processor_for_llama_text)
 class TtLlamaForCausalLM(LlamaGenerator):
@@ -250,6 +253,9 @@ class TtLlamaForCausalLM(LlamaGenerator):
     def decode_forward(self, *args, **kwargs):
         return super().decode_forward_text(*args, **kwargs)
 
+    def allocate_kv_cache(self, *args, **kwargs):
+        return allocate_kv_cache(*args, **kwargs)
+
 
 class TtQwen2ForCausalLM(LlamaGenerator):
     def __init__(self, *args, **kwargs):
@@ -277,3 +283,6 @@ class TtQwen2ForCausalLM(LlamaGenerator):
 
     def decode_forward(self, *args, **kwargs):
         return super().decode_forward_text(*args, **kwargs)
+
+    def allocate_kv_cache(self, *args, **kwargs):
+        return allocate_kv_cache(*args, **kwargs)
