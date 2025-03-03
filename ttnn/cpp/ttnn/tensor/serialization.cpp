@@ -295,12 +295,9 @@ Storage load_storage(
     if (storage_type == StorageType::MULTI_DEVICE_HOST or storage_type == StorageType::DEVICE) {
         if constexpr (std::is_same_v<T, MeshDevice*>) {
             return load_multi_device_host_storage(input_file, data_type, layout, device, version_id);
-        } else {
-            TT_THROW("MeshDevice is required for MULTI_DEVICE_HOST storage");
         }
-    } else {
-        return load_owned_storage(input_file, data_type);
     }
+    return load_owned_storage(input_file, data_type);
 }
 
 template <typename T>

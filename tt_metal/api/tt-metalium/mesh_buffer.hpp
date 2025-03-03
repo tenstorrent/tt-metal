@@ -98,7 +98,7 @@ public:
     const ShardedBufferConfig& global_shard_spec() const;
     const DeviceLocalBufferConfig& device_local_config() const { return device_local_config_; }
 
-    std::shared_ptr<Buffer> get_device_buffer(const MeshCoordinate& device_coord) const;
+    const std::shared_ptr<Buffer>& get_device_buffer(const MeshCoordinate& device_coord) const;
     uint32_t datum_size_bytes() const;
     Shape2D physical_shard_shape() const;
     std::pair<bool, bool> replicated_dims() const;

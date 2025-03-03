@@ -210,6 +210,9 @@ template <typename T>
 Tensor to_device_mesh_tensor(
     const Tensor& tensor, distributed::MeshDevice* mesh_device, const MemoryConfig& memory_config);
 
+template <typename T>
+void copy_to_mesh_tensor(const Tensor& host_tensor, const Tensor& mesh_tensor);
+
 // ======================================================================================
 //                                  .to_layout()
 // ======================================================================================

@@ -35,7 +35,7 @@ DeviceStorage::DeviceStorage(std::shared_ptr<distributed::MeshBuffer> mesh_buffe
 
 void DeviceStorage::insert_buffer(const std::shared_ptr<Buffer>& buffer_) { this->buffer = buffer_; }
 
-std::shared_ptr<Buffer> DeviceStorage::get_buffer() const {
+const std::shared_ptr<Buffer>& DeviceStorage::get_buffer() const {
     if (this->mesh_buffer.get() == nullptr) {
         TT_FATAL(this->buffer != nullptr, "Buffer is not allocated");
         return this->buffer;

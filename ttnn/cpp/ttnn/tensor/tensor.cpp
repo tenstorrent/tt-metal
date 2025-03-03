@@ -27,6 +27,8 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
 #include <tracy/Tracy.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 #include "ttnn/core.hpp"
@@ -908,6 +910,12 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id
             async_safe_tensor.storage_type() == StorageType::OWNED or
             async_safe_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST,
         "write_tensor only supports host_tensor to device_tensor data transfer");
+
+    auto& device_storage = std::get<DeviceStorage>(device_tensor.get_storage());
+    if (auto mesh_buffer = device_storage.mesh_buffer; mesh_buffer != nullptr) {
+        tensor_impl::copy_to_mesh_tensor_wrapper(async_safe_tensor, device_tensor);
+        return;
+    }
 
     for (int worker_index = 0; worker_index < device_tensor.workers.size(); ++worker_index) {
         auto& worker = device_tensor.workers[worker_index];
