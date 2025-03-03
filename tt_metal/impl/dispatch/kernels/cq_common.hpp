@@ -304,9 +304,12 @@ void cb_acquire_pages(uint32_t n) {
     noc_semaphore_inc(get_noc_addr_helper(noc_xy, (uint32_t)sem_addr), -n);
 }
 
-template <uint8_t noc_idx, uint32_t noc_xy, uint32_t sem_id>
+template <uint8_t noc_idx, uint32_t noc_xy, uint32_t sem_id, bool fabric_path = false>
 FORCE_INLINE void cb_release_pages(uint32_t n) {
-    noc_semaphore_inc(get_noc_addr_helper(noc_xy, get_semaphore<fd_core_type>(sem_id)), n, noc_idx);
+    if constexpr (fabric_path) {
+    } else {
+        noc_semaphore_inc(get_noc_addr_helper(noc_xy, get_semaphore<fd_core_type>(sem_id)), n, noc_idx);
+    }
 }
 
 template <uint32_t sem_id, uint32_t cb_log_page_size>

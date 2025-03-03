@@ -59,7 +59,7 @@ typedef struct dispatch_dependent_config {
     std::optional<uint32_t> prefetch_h_local_downstream_sem_addr;  // Dependent. Used if split_prefetch is true
 
     // Populated if fabric is being used to talk to downstream
-    std::optional<CoreCoord> fabric_router_logical_core;
+    std::optional<uint32_t> fabric_router_noc_xy;
     std::optional<uint32_t> upstream_mesh_id;
     std::optional<uint32_t> upstream_chip_id;
     std::optional<uint32_t> downstream_mesh_id;

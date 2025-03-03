@@ -62,7 +62,7 @@ public:
     // after GenerateStaticConfigs for all upstream/downstream kernels.
     virtual void GenerateDependentConfigs() = 0;
 
-    // Use all configs and add this kernel to its Program. Called agter GenerateStaticConfigs/GenerateDependentConfigs.
+    // Use all configs and add this kernel to its Program. Called after GenerateStaticConfigs/GenerateDependentConfigs.
     virtual void CreateKernel() = 0;
 
     // Override for specific kernels that need host-side configureation (special values written to l1, etc.). Is called
@@ -72,7 +72,7 @@ public:
     // Override for specific kernels that can be configured for fabric. Will be called by the FABRIC_ROUTER_VC, which is
     // an intermediary FDKernel for indicating a fabric router path needs to be found.
     virtual void UpdateArgsForFabric(
-        const CoreCoord& fabric_router,
+        const CoreCoord& fabric_router_virtual,
         tt::tt_fabric::mesh_id_t upstream_mesh_id,
         chip_id_t upstream_chip_id,
         tt::tt_fabric::mesh_id_t downstream_mesh_id,
@@ -103,10 +103,8 @@ public:
     // Get the port index for which a given kernel is upstream/downstream of this one
     int GetUpstreamPort(FDKernel* other) { return GetPort(other, this->upstream_kernels_); }
     int GetDownstreamPort(FDKernel* other) { return GetPort(other, this->downstream_kernels_); }
-    void AddDeviceAndProgram(tt::tt_metal::IDevice* device, tt::tt_metal::Program* program) {
-        device_ = device;
-        program_ = program;
-    }
+    void AddDevice(tt::tt_metal::IDevice* device) { device_ = device; }
+    void AddProgram(tt::tt_metal::Program* program) { program_ = program; }
 
 protected:
     void configure_kernel_variant(

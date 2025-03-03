@@ -802,8 +802,6 @@ void Device::clear_l1_state() {
 
 void Device::compile_command_queue_programs() {
     ZoneScoped;
-    auto command_queue_program_ptr = std::make_unique<Program>();
-    auto mmio_command_queue_program_ptr = std::make_unique<Program>();
     if (this->is_mmio_capable()) {
         auto command_queue_program_ptr = create_and_compile_cq_program(this);
         this->command_queue_programs_.push_back(std::move(command_queue_program_ptr));

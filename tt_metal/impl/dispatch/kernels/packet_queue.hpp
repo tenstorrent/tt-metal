@@ -16,7 +16,7 @@
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "debug/dprint.h"
 
-#define ENABLE_DPRINTS true
+#define ENABLE_DPRINTS false
 
 namespace tt::packet_queue {
 

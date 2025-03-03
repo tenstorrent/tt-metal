@@ -6,8 +6,10 @@
 #include "dispatch_core_common.hpp"
 #include "kernel_config/fd_kernel.hpp"
 #include <device_pool.hpp>
+#include <memory>
 #include <tt_metal.hpp>
 #include <host_api.hpp>
+#include <unordered_map>
 #include "kernel_config/fd_kernel.hpp"
 #include "kernel_config/prefetch.hpp"
 #include "kernel_config/dispatch.hpp"
@@ -18,6 +20,7 @@
 #include "kernel_config/eth_tunneler.hpp"
 #include "fabric_host_interface.h"
 
+#include "program_impl.hpp"
 #include "rtoptions.hpp"
 #include "tt_cluster.hpp"
 
@@ -404,6 +407,7 @@ static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_2cq = {
 };
 
 std::vector<FDKernel*> node_id_to_kernel;
+std::unordered_map<chip_id_t, std::unique_ptr<Program>> command_queue_pgms;
 
 // Helper function to automatically generate dispatch nodes given devices + num hw CQs + detection of card type.
 std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device_ids, uint32_t num_hw_cqs) {
@@ -492,8 +496,10 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device
                 mmio_devices.size() == remote_devices.size() or remote_devices.empty(),
                 "N300/T3K expects devices in mmio/remote pairs.");
             std::vector<DispatchKernelNode> nodes_for_one_mmio;
+            // TODO: Put this in a better place
             if (llrt::RunTimeOptions::get_instance().get_fd_fabric()) {
                 TT_FATAL(num_hw_cqs == 1, "Only 1 CQ is supported at this time for FD on Fabric");
+                // Must call tt::tt_metal::detail::InitializeFabricConfig upstream
                 nodes_for_one_mmio = two_chip_arch_1cq_fabric;
             } else {
                 nodes_for_one_mmio = (num_hw_cqs == 1) ? two_chip_arch_1cq : two_chip_arch_2cq;
@@ -540,9 +546,18 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device
 // Populate node_id_to_kernel and set up kernel objects. Do this once at the beginning since they (1) don't need a valid
 // Device until fields are populated, (2) need to be connected to kernel objects for devices that aren't created yet,
 // and (3) the table to choose depends on total number of devices, not know at Device creation.
+void populate_fd_kernels(const std::vector<IDevice*>& devices, uint32_t num_hw_cqs) {
+    std::set<chip_id_t> device_ids;
+    for (const auto& device : devices) {
+        device_ids.insert(device->id());
+    }
+    populate_fd_kernels(generate_nodes(device_ids, num_hw_cqs));
+}
+
 void populate_fd_kernels(const std::set<chip_id_t>& device_ids, uint32_t num_hw_cqs) {
     populate_fd_kernels(generate_nodes(device_ids, num_hw_cqs));
 }
+
 void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
     // If we already had nodes from a previous run, clear them (since we could have a different # of devices or CQs).
     if (!node_id_to_kernel.empty()) {
@@ -691,33 +706,53 @@ void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
     }
 }
 
-std::unique_ptr<Program> create_and_compile_cq_program(IDevice* device) {
+void populate_cq_static_args(const std::vector<IDevice*>& devices) {
     TT_ASSERT(
         node_id_to_kernel.size() > 0,
-        "Tried to create CQ program without nodes populated (need to run populate_fd_kernels()");
+        "Tried to populate static args on nodes without the nodes populated (need to run populate_fd_kernels()");
+    for (const auto& device : devices) {
+        // First pass, add device/program to all kernels for this device and generate static configs.
+        auto cq_program_ptr = std::make_unique<Program>();
 
-    // First pass, add device/program to all kernels for this device and generate static configs.
-    auto cq_program_ptr = std::make_unique<Program>();
-    // for (auto &node_and_kernel : node_id_to_kernel) {
-    for (int idx = 0; idx < node_id_to_kernel.size(); idx++) {
-        if (node_id_to_kernel[idx]->GetDeviceId() == device->id()) {
-            node_id_to_kernel[idx]->AddDeviceAndProgram(device, cq_program_ptr.get());
-            node_id_to_kernel[idx]->GenerateStaticConfigs();
+        for (auto node_and_kernel : node_id_to_kernel) {
+            if (node_and_kernel->GetDeviceId() == device->id()) {
+                node_and_kernel->AddDevice(device);
+                // TODO: Be careful downstream. Using get() on a smart pointer defeats the purpose of using them
+                // Memory could be changed at that location later.
+                node_and_kernel->AddProgram(cq_program_ptr.get());
+                node_and_kernel->GenerateStaticConfigs();
+            }
+        }
+
+        // Move program into the storage for create_and_compile_cq_program to be called later
+        command_queue_pgms[device->id()] = std::move(cq_program_ptr);
+    }
+}
+
+std::unique_ptr<Program> create_and_compile_cq_program(IDevice* device) {
+    TT_ASSERT(
+        command_queue_pgms.contains(device->id()),
+        "Tried to create and compile CQ program without static args populated (need to run populate_cq_static_args())");
+    std::unique_ptr<Program> cq_program = std::move(command_queue_pgms[device->id()]);
+    // Third pass, populate dependent configs and create kernels for each node
+    for (auto node_and_kernel : node_id_to_kernel) {
+        if (node_and_kernel->GetDeviceId() == device->id()) {
+            node_and_kernel->GenerateDependentConfigs();
         }
     }
 
-    // Third pass, populate dependent configs and create kernels for each node
-    // for (auto &node_and_kernel : node_id_to_kernel) {
-    for (int idx = 0; idx < node_id_to_kernel.size(); idx++) {
-        if (node_id_to_kernel[idx]->GetDeviceId() == device->id()) {
-            node_id_to_kernel[idx]->GenerateDependentConfigs();
-            node_id_to_kernel[idx]->CreateKernel();
+    for (auto node_and_kernel : node_id_to_kernel) {
+        if (node_and_kernel->GetDeviceId() == device->id()) {
+            node_and_kernel->CreateKernel();
         }
     }
 
     // Compile the program and return it so Device can register it
-    detail::CompileProgram(device, *cq_program_ptr, /*fd_bootloader_mode=*/true);
-    return cq_program_ptr;
+    detail::CompileProgram(device, *cq_program, /*fd_bootloader_mode=*/true);
+    // Erase from map. Note: program in map is no longer valid
+    // It is returned from this function and the caller will take ownership of it
+    command_queue_pgms.erase(device->id());
+    return cq_program;
 }
 
 void configure_dispatch_cores(IDevice* device) {

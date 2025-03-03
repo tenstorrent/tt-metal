@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "dispatch.hpp"
 #include "assert.hpp"
+#include "hal.hpp"
 #include "prefetch.hpp"
 #include "dispatch_s.hpp"
 #include "demux.hpp"
@@ -22,13 +23,6 @@ void DispatchKernel::GenerateStaticConfigs() {
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_->id());
     uint8_t cq_id_ = this->cq_id_;
     auto& my_dispatch_constants = DispatchMemMap::get(GetCoreType());
-
-    if (tt::llrt::RunTimeOptions::get_instance().get_fd_fabric()) {
-        static_config_.client_interface_addr =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_INTERFACE);
-    } else {
-        static_config_.client_interface_addr = 0;
-    }
 
     if (static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
@@ -366,12 +360,13 @@ void DispatchKernel::CreateKernel() {
         dependent_config_.downstream_chip_id.value_or(0),
         dependent_config_.upstream_mesh_id.value_or(0),
         dependent_config_.upstream_chip_id.value_or(0),
-        static_config_.client_interface_addr.value(),
+        dependent_config_.fabric_router_noc_xy.value_or(0),
+        static_config_.client_interface_addr.value_or(0),
 
         static_config_.is_d_variant.value(),
         static_config_.is_h_variant.value(),
     };
-    TT_ASSERT(compile_args.size() == 36);
+    TT_ASSERT(compile_args.size() == 37);
     auto my_virtual_core = device_->virtual_core_from_logical_core(logical_core_, GetCoreType());
     auto upstream_virtual_core =
         device_->virtual_core_from_logical_core(dependent_config_.upstream_logical_core.value(), GetCoreType());
@@ -431,15 +426,18 @@ void DispatchKernel::ConfigureCore() {
 }
 
 void DispatchKernel::UpdateArgsForFabric(
-    const CoreCoord& fabric_router,
+    const CoreCoord& fabric_router_virtual,
     tt::tt_fabric::mesh_id_t upstream_mesh_id,
     chip_id_t upstream_chip_id,
     tt::tt_fabric::mesh_id_t downstream_mesh_id,
     chip_id_t downstream_chip_id) {
-    dependent_config_.fabric_router_logical_core =
-        this->device_->virtual_core_from_logical_core(fabric_router, CoreType::ETH);
+    dependent_config_.fabric_router_noc_xy =
+        tt::tt_metal::hal.noc_xy_encoding(fabric_router_virtual.x, fabric_router_virtual.y);
     dependent_config_.upstream_mesh_id = upstream_mesh_id;
     dependent_config_.upstream_chip_id = upstream_chip_id;
     dependent_config_.downstream_mesh_id = downstream_mesh_id;
     dependent_config_.downstream_chip_id = downstream_chip_id;
+    auto& my_dispatch_constants = DispatchMemMap::get(GetCoreType());
+    static_config_.client_interface_addr =
+        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_INTERFACE);
 }

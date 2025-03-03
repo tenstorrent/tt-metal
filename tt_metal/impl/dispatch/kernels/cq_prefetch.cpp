@@ -10,6 +10,8 @@
 //  - syncs w/ dispatcher via 2 semaphores, page_ready, page_done
 
 #include <cq_commands.hpp>
+#include "dataflow_api.h"
+#include "dataflow_api_addrgen.h"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
@@ -69,10 +71,11 @@ constexpr uint32_t downstream_mesh_id = get_compile_time_arg_val(26);
 constexpr uint32_t downstream_chip_id = get_compile_time_arg_val(27);
 constexpr uint32_t upstream_mesh_id = get_compile_time_arg_val(28);
 constexpr uint32_t upstream_chip_id = get_compile_time_arg_val(29);
-constexpr uint32_t client_interface_addr = get_compile_time_arg_val(30);
+constexpr uint32_t fabric_router_noc_xy = get_compile_time_arg_val(30);
+constexpr uint32_t client_interface_addr = get_compile_time_arg_val(31);
 
-constexpr uint32_t is_d_variant = get_compile_time_arg_val(31);
-constexpr uint32_t is_h_variant = get_compile_time_arg_val(32);
+constexpr uint32_t is_d_variant = get_compile_time_arg_val(32);
+constexpr uint32_t is_h_variant = get_compile_time_arg_val(33);
 
 constexpr uint32_t prefetch_q_end = prefetch_q_base + prefetch_q_size;
 constexpr uint32_t cmddat_q_end = cmddat_q_base + cmddat_q_size;
@@ -1476,6 +1479,9 @@ void kernel_main_hd() {
 
 void kernel_main() {
     DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": start" << ENDL();
+    if constexpr (client_interface_addr) {
+        tt::tt_fabric::fabric_endpoint_init(client_interface, 0 /*Unused*/);
+    }
 
     if (is_h_variant and is_d_variant) {
         kernel_main_hd();
