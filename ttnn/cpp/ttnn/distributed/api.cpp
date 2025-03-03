@@ -117,6 +117,7 @@ Tensor aggregate_as_tensor(
         auto storage = MultiDeviceHostStorage{config, std::move(host_owned_buffers), specs};
         return Tensor(std::move(storage), reference_shard.get_tensor_spec());
     } else {
+        TT_FATAL(storage_type == StorageType::DEVICE, "Unexpected storage type {}", storage_type);
         std::vector<int> ordered_device_ids;
         std::unordered_map<int, ttnn::TensorSpec> specs;
         std::unordered_map<int, std::shared_ptr<Buffer>> device_buffers;
