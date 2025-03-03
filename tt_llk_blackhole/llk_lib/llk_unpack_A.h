@@ -140,13 +140,13 @@ inline void _llk_unpack_A_mop_config_(const bool transpose_of_faces, const std::
     }
 }
 
-template <bool is_fp32_dest_acc_en = false, StochRndType stoch_rnd_mode = StochRndType::None>
+template <bool is_fp32_dest_acc_en = false, StochRndType stoch_rnd_mode = StochRndType::None, bool disable_src_zero_flag = false>
 inline void _llk_unpack_A_hw_configure_(const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM,  const std::uint32_t within_face_16x16_transpose = 0, const std::uint32_t num_faces = 4) {
     constexpr bool is_row_pool = false;
     constexpr bool stoch_rnd_en = (stoch_rnd_mode == StochRndType::All);
     constexpr bool fpu_srnd_en = stoch_rnd_en || (stoch_rnd_mode == StochRndType::Fpu);
     constexpr bool pack_srnd_en = stoch_rnd_en ||(stoch_rnd_mode == StochRndType::Pack);
-    configure_unpack_AB<is_row_pool, is_fp32_dest_acc_en, fpu_srnd_en, pack_srnd_en>(
+    configure_unpack_AB<is_row_pool, is_fp32_dest_acc_en, fpu_srnd_en, pack_srnd_en, disable_src_zero_flag>(
         unpack_src_format,
         unpack_src_format,
         unpack_dst_format,
