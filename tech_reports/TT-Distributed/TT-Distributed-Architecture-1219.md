@@ -2296,9 +2296,6 @@ CoreCoord Device::grid_size() const;
 // Get the Tensix Grid Size for this device. Queries SOC Descriptor + harvesting info + system type.
 CoreCoord Device::logical_grid_size() const;
 
-// Get the devices connected to this device. Relies on UMD for the cluster descriptor
-std::unordered_set<chip_id_t> Device::get_ethernet_connected_device_ids();
-
 // Get the worker core grid-size on this device. Queries SOC Descriptor + harvesting info + system type + core descriptor.
 CoreCoord Device::compute_with_storage_grid_size() const;
 

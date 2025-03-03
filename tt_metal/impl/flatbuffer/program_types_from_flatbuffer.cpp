@@ -83,10 +83,14 @@ EthernetConfig from_flatbuffer(const flatbuffer::EthernetConfig* fb_config) {
 }
 
 std::vector<SubDeviceId> from_flatbuffer(const flatbuffers::Vector<uint8_t>* fb_sub_device_ids) {
-    std::vector<SubDeviceId> sub_device_ids(fb_sub_device_ids ? fb_sub_device_ids->size() : 0);
+    if (!fb_sub_device_ids) {
+        return {};
+    }
 
+    std::vector<SubDeviceId> sub_device_ids;
+    sub_device_ids.reserve(fb_sub_device_ids->size());
     for (size_t i = 0; i < sub_device_ids.size(); ++i) {
-        sub_device_ids[i] = SubDeviceId{(*fb_sub_device_ids)[i]};
+        sub_device_ids.push_back(SubDeviceId{(*fb_sub_device_ids)[i]});
     }
 
     return sub_device_ids;
@@ -113,6 +117,29 @@ std::vector<std::vector<uint32_t>> from_flatbuffer(
         result.push_back(std::move(sub_vector));
     }
     return result;
+}
+
+CoreCoord from_flatbuffer(const flatbuffer::CoreCoord* fb_core_coord) {
+    TT_FATAL(fb_core_coord, "Invalid CoreCoord data from flatbuffer.");
+    return CoreCoord{fb_core_coord->x(), fb_core_coord->y()};
+}
+
+CoreRange from_flatbuffer(const flatbuffer::CoreRange* fb_core_range) {
+    TT_FATAL(
+        fb_core_range && fb_core_range->start() && fb_core_range->end(), "Invalid CoreRange data from flatbuffer.");
+    return CoreRange{
+        from_flatbuffer(fb_core_range->start()),  // Reuse CoreCoord deserialization
+        from_flatbuffer(fb_core_range->end())};
+}
+
+CoreRangeSet from_flatbuffer(const flatbuffer::CoreRangeSet* fb_core_range_set) {
+    TT_FATAL(fb_core_range_set, "Invalid CoreRangeSet data from flatbuffer.");
+
+    std::vector<CoreRange> ranges;
+    for (const auto* range : *fb_core_range_set->ranges()) {
+        ranges.emplace_back(from_flatbuffer(range));  // Reuse CoreRange deserialization
+    }
+    return CoreRangeSet{ranges};
 }
 
 }  // namespace tt::tt_metal

@@ -10,6 +10,7 @@
 #include <mesh_command_queue.hpp>
 #include <mesh_workload.hpp>
 #include <tt_align.hpp>
+#include <sub_device_types.hpp>
 #include <vector>
 
 #include "tt_metal/impl/dispatch/data_collection.hpp"
@@ -378,8 +379,8 @@ void finalize_program_offsets(T& workload, IDevice* device) {
         if constexpr (std::is_same_v<T, Program>) {
             set_program_offsets_and_sizes(workload, index);
         } else {
-            for (const auto& device_range : workload.get_logical_device_ranges()) {
-                set_program_offsets_and_sizes(workload.get_program_on_device_range(device_range), index);
+            for (auto& [_, program] : workload.get_programs()) {
+                set_program_offsets_and_sizes(program, index);
             }
         }
     }
@@ -387,8 +388,8 @@ void finalize_program_offsets(T& workload, IDevice* device) {
     if constexpr (std::is_same_v<T, Program>) {
         set_program_attrs_across_core_types(workload);
     } else {
-        for (const auto& device_range : workload.get_logical_device_ranges()) {
-            set_program_attrs_across_core_types(workload.get_program_on_device_range(device_range));
+        for (auto& [_, program] : workload.get_programs()) {
+            set_program_attrs_across_core_types(program);
         }
     }
     workload.set_finalized();
@@ -413,7 +414,7 @@ void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDevi
     uint32_t dispatch_message_addr =
         DispatchMemMap::get(dispatch_core_type)
             .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE) +
-        DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(sub_device_id.to_index());
+        DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(*sub_device_id);
     uint32_t uncached_stall_cmd_sizeB = hal.get_alignment(HalMemType::HOST) + hal.get_alignment(HalMemType::HOST);
     uint32_t cached_stall_cmd_seqB = hal.get_alignment(HalMemType::HOST);
 
@@ -1378,7 +1379,7 @@ void assemble_device_commands(
     }
 
     DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
-    auto sub_device_index = sub_device_id.to_index();
+    auto sub_device_index = *sub_device_id;
     uint32_t dispatch_message_addr =
         DispatchMemMap::get(dispatch_core_type)
             .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE) +
@@ -1603,7 +1604,7 @@ void update_program_dispatch_commands(
     run_program_go_signal.master_x = (uint8_t)dispatch_core.x;
     run_program_go_signal.master_y = (uint8_t)dispatch_core.y;
     run_program_go_signal.dispatch_message_offset =
-        (uint8_t)DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(sub_device_id.to_index());
+        (uint8_t)DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(*sub_device_id);
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->go_signal =
         *reinterpret_cast<uint32_t*>(&run_program_go_signal);
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
@@ -1791,7 +1792,7 @@ uint32_t program_base_addr_on_core(
     // Addresses are not the same across sub-devices
     TT_FATAL(
         sub_device_ids.size() == 1, "get_sem_base_addr currently only supports programs spanning a single sub-device");
-    auto sub_device_index = sub_device_ids.begin()->to_index();
+    auto sub_device_index = **sub_device_ids.begin();
     auto cq = workload.get_last_used_command_queue();
     return cq ? (cq->get_config_buffer_mgr(sub_device_index).get_last_slot_addr(programmable_core_type))
               : hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
@@ -1862,13 +1863,14 @@ void reset_worker_dispatch_state_on_device(
             uint32_t dispatch_message_addr =
                 dispatch_message_base_addr + DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(i);
             // Wait to ensure that all kernels have completed. Then send the reset_rd_ptr go_signal.
+            SubDeviceId sub_device_id(static_cast<uint8_t>(i));
             command_sequence.add_dispatch_go_signal_mcast(
                 expected_num_workers_completed[i],
                 *reinterpret_cast<uint32_t*>(&reset_launch_message_read_ptr_go_signal),
                 dispatch_message_addr,
-                device->num_noc_mcast_txns({i}),
-                device->num_noc_unicast_txns({i}),
-                device->noc_data_start_index({i}),
+                device->num_noc_mcast_txns(sub_device_id),
+                device->num_noc_unicast_txns(sub_device_id),
+                device->noc_data_start_index(sub_device_id),
                 dispatcher_for_go_signal);
         }
     }
@@ -1878,9 +1880,10 @@ void reset_worker_dispatch_state_on_device(
     for (uint32_t i = 0; i < num_sub_devices; ++i) {
         uint32_t dispatch_message_addr =
             dispatch_message_base_addr + DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(i);
+        SubDeviceId sub_device_id(static_cast<uint8_t>(i));
         uint32_t expected_num_workers = expected_num_workers_completed[i] +
-                                        device->num_worker_cores(HalProgrammableCoreType::TENSIX, {i}) +
-                                        device->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, {i});
+                                        device->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id) +
+                                        device->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
         if (DispatchQueryManager::instance().distributed_dispatcher()) {
             command_sequence.add_dispatch_wait(
                 false, dispatch_message_addr, expected_num_workers, clear_count, false, true, 1);

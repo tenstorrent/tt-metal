@@ -37,9 +37,14 @@
 #include "impl/dispatch/hardware_command_queue.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 
+#include "work_executor.hpp"
+
 namespace tt {
 
 namespace tt_metal {
+
+Device::Device(Device&& other) = default;
+Device& Device::operator=(Device&& other) = default;
 
 Device::Device(
     chip_id_t device_id,
@@ -50,8 +55,10 @@ Device::Device(
     bool minimal,
     uint32_t worker_thread_core,
     uint32_t completion_queue_reader_core) :
-    id_(device_id), worker_thread_core_(worker_thread_core), completion_queue_reader_core_(completion_queue_reader_core), work_executor_(worker_thread_core, device_id)
-{
+    id_(device_id),
+    worker_thread_core_(worker_thread_core),
+    completion_queue_reader_core_(completion_queue_reader_core),
+    work_executor_(std::make_unique<WorkExecutor>(worker_thread_core, device_id)) {
     ZoneScoped;
     update_dispatch_cores_for_multi_cq_eth_dispatch();
     this->initialize(num_hw_cqs, l1_small_size, trace_region_size, l1_bank_remap, minimal);
@@ -412,8 +419,14 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
         case HalProgrammableCoreType::ACTIVE_ETH:
         case HalProgrammableCoreType::IDLE_ETH: {
             bool is_idle_eth = core_type == HalProgrammableCoreType::IDLE_ETH;
-            if (is_idle_eth) {
-                tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(this->id(), virtual_core));
+            TensixSoftResetOptions reset_val = TENSIX_ASSERT_SOFT_RESET;
+            if (not is_idle_eth) {
+                reset_val =
+                    reset_val & static_cast<TensixSoftResetOptions>(
+                                    ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::BRISC));
+            }
+            if (is_idle_eth or !hal.get_eth_fw_is_cooperative()) {
+                tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(this->id(), virtual_core), reset_val);
             }
             if (not llrt::RunTimeOptions::get_instance().get_skip_loading_fw()) {
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
@@ -488,23 +501,27 @@ void Device::reset_cores() {
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> dispatch_cores, other_dispatch_cores, device_to_early_exit_cores;
     go_msg_t go_msg;
     std::memset(&go_msg, 0, sizeof(go_msg_t));
-    for (const auto &eth_core : this->get_active_ethernet_cores()) {
-        CoreCoord virtual_core = this->ethernet_core_from_logical_core(eth_core);
-        if (erisc_app_still_running(virtual_core)) {
-            std::vector<uint32_t> data(sizeof(launch_msg_t) / sizeof(uint32_t));
-            DeviceAddr launch_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::LAUNCH);
+    if (hal.get_eth_fw_is_cooperative()) {
+        for (const auto& eth_core : this->get_active_ethernet_cores()) {
+            CoreCoord virtual_core = this->ethernet_core_from_logical_core(eth_core);
+            if (erisc_app_still_running(virtual_core)) {
+                std::vector<uint32_t> data(sizeof(launch_msg_t) / sizeof(uint32_t));
+                DeviceAddr launch_addr =
+                    hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::LAUNCH);
 
-            data = tt::llrt::read_hex_vec_from_core(this->id(), virtual_core, launch_addr, sizeof(launch_msg_t));
-            launch_msg_t* launch_msg = (launch_msg_t*)(&data[0]);
-            log_info(
-                tt::LogMetal,
-                "While initializing Device {}, ethernet tunneler core {} on Device {} detected as still running, issuing exit signal.",
-                this->id(),
-                virtual_core.str(),
-                this->id());
-            launch_msg->kernel_config.exit_erisc_kernel = 1;
-            llrt::write_launch_msg_to_core(this->id(), virtual_core, launch_msg, &go_msg, launch_addr, false);
-            device_to_early_exit_cores[this->id()].insert(virtual_core);
+                data = tt::llrt::read_hex_vec_from_core(this->id(), virtual_core, launch_addr, sizeof(launch_msg_t));
+                launch_msg_t* launch_msg = (launch_msg_t*)(&data[0]);
+                log_info(
+                    tt::LogMetal,
+                    "While initializing Device {}, ethernet tunneler core {} on Device {} detected as still running, "
+                    "issuing exit signal.",
+                    this->id(),
+                    virtual_core.str(),
+                    this->id());
+                launch_msg->kernel_config.exit_erisc_kernel = 1;
+                llrt::write_launch_msg_to_core(this->id(), virtual_core, launch_msg, &go_msg, launch_addr, false);
+                device_to_early_exit_cores[this->id()].insert(virtual_core);
+            }
         }
     }
 
@@ -597,14 +614,14 @@ void Device::initialize_and_launch_firmware() {
     core_info->noc_dram_addr_base = 0;
     core_info->noc_dram_addr_end = soc_d.dram_core_size;
 
-    const std::vector<CoreCoord> &pcie_cores = soc_d.get_pcie_cores();
-    const std::vector<CoreCoord> &dram_cores = soc_d.get_dram_cores();
+    const std::vector<tt::umd::CoreCoord>& pcie_cores = soc_d.get_cores(CoreType::PCIE, soc_d.get_umd_coord_system());
+    const std::vector<tt::umd::CoreCoord>& dram_cores = soc_d.get_cores(CoreType::DRAM, soc_d.get_umd_coord_system());
     const std::vector<tt::umd::CoreCoord>& eth_cores = soc_d.get_cores(CoreType::ETH, CoordSystem::PHYSICAL);
     // The SOC descriptor can list a dram core multiple times, depending on how GDDR is assigned to banks
     // Get a list of unique DRAM cores.
     std::unordered_set<CoreCoord> unique_dram_cores(dram_cores.begin(), dram_cores.end());
     TT_ASSERT(
-        pcie_cores.size() + unique_dram_cores.size() + eth_cores.size() <= MAX_NON_WORKER_CORES,
+        pcie_cores.size() + dram_cores.size() + eth_cores.size() <= MAX_NON_WORKER_CORES,
         "Detected more pcie/dram/eth cores than fit in the device mailbox.");
     TT_ASSERT(
         eth_cores.size() <= MAX_VIRTUAL_NON_WORKER_CORES,
@@ -617,10 +634,10 @@ void Device::initialize_and_launch_firmware() {
     }
 
     int non_worker_cores_idx = 0;
-    for (const CoreCoord &core : pcie_cores) {
+    for (const tt::umd::CoreCoord& core : pcie_cores) {
         core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::PCIE};
     }
-    for (const CoreCoord &core : unique_dram_cores) {
+    for (const tt::umd::CoreCoord& core : dram_cores) {
         core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::DRAM};
     }
     for (const tt::umd::CoreCoord& core : eth_cores) {
@@ -692,12 +709,17 @@ void Device::initialize_and_launch_firmware() {
             this->id(), virtual_core, zero_vec_erisc_init, hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::APP_SYNC_INFO));
     }
 
-    // Load erisc app base FW to eth cores
+    // Load erisc app base FW to eth cores on WH and active_erisc FW on second risc of BH active eth cores
+    std::unordered_set<CoreCoord> active_eth_cores;
     for (const auto &eth_core : this->get_active_ethernet_cores()) {
         CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
         tt::llrt::write_hex_vec_to_core(
             this->id(), phys_eth_core, core_info_vec, this->get_dev_addr(phys_eth_core, HalL1MemAddrType::CORE_INFO));
         this->initialize_firmware(HalProgrammableCoreType::ACTIVE_ETH, phys_eth_core, &launch_msg, &go_msg);
+        if (!hal.get_eth_fw_is_cooperative()) {
+            active_eth_cores.insert(phys_eth_core);
+            not_done_cores.insert(phys_eth_core);
+        }
     }
 
     for (const auto &eth_core : this->get_inactive_ethernet_cores()) {
@@ -712,8 +734,18 @@ void Device::initialize_and_launch_firmware() {
     tt::Cluster::instance().l1_barrier(this->id());
 
     // Deassert worker cores
-    for(const auto& worker_core : not_done_cores)
-        tt::Cluster::instance().deassert_risc_reset_at_core(tt_cxy_pair(this->id(), worker_core));
+    TensixSoftResetOptions reset_val;
+    for (const auto& worker_core : not_done_cores) {
+        if (active_eth_cores.find(worker_core) != active_eth_cores.end()) {
+            // bit 12 needs to be deasserted to run second erisc on BH
+            reset_val = TENSIX_DEASSERT_SOFT_RESET &
+                        static_cast<TensixSoftResetOptions>(
+                            ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::TRISC0));
+        } else {
+            reset_val = TENSIX_DEASSERT_SOFT_RESET;
+        }
+        tt::Cluster::instance().deassert_risc_reset_at_core(tt_cxy_pair(this->id(), worker_core), reset_val);
+    }
 
     // Wait until fw init is done, ensures the next launch msg doesn't get
     // written while fw is still in init
@@ -744,21 +776,25 @@ void Device::clear_l1_state() {
     // These L1 ranges are restricted becase UMD base routing FW uses L1 below FIRMWARE_BASE and
     // between TILE_HEADER_BUFFER_BASE to COMMAND_Q_BASE
     // Clear erisc sync info
-    for (const auto &eth_core : this->get_active_ethernet_cores()) {
+    for (const auto& eth_core : this->get_active_ethernet_cores()) {
+        static const uint32_t max_l1_loading_size =
+            hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED) +
+            hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
-        static const uint32_t max_l1_loading_size = hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED) + hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        static uint32_t zero_vec_size = max_l1_loading_size;
+        auto zero_vec_addr = HalL1MemAddrType::UNRESERVED;
+        if (hal.get_eth_fw_is_cooperative()) {
+            zero_vec_size -=
+                hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::TILE_HEADER_BUFFER);
+            zero_vec_addr = HalL1MemAddrType::TILE_HEADER_BUFFER;
+        }
 
-        static std::vector<uint32_t> zero_vec_above_tile_header_buffer(
-            (max_l1_loading_size - hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::TILE_HEADER_BUFFER)) / sizeof(uint32_t), 0);
-
+        static std::vector<uint32_t> zero_vec(zero_vec_size / sizeof(uint32_t), 0);
 
         CoreCoord virtual_core = this->ethernet_core_from_logical_core(eth_core);
 
         llrt::write_hex_vec_to_core(
-            this->id(),
-            virtual_core,
-            zero_vec_above_tile_header_buffer,
-            hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::TILE_HEADER_BUFFER));
+            this->id(), virtual_core, zero_vec, hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, zero_vec_addr));
     }
     // TODO: clear idle eriscs as well
     tt::Cluster::instance().l1_barrier(this->id());
@@ -907,8 +943,8 @@ void Device::init_fabric() {
 
     program_dispatch::finalize_program_offsets(*fabric_program_, this);
 
-    detail::WriteRuntimeArgsToDevice(this, *fabric_program_);
-    detail::ConfigureDeviceWithProgram(this, *fabric_program_);
+    detail::WriteRuntimeArgsToDevice(this, *fabric_program_, this->using_fast_dispatch());
+    detail::ConfigureDeviceWithProgram(this, *fabric_program_, this->using_fast_dispatch());
 
     // Note: the l1_barrier below is needed to be sure writes to cores that
     // don't get the GO mailbox (eg, storage cores) have all landed
@@ -954,7 +990,7 @@ bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t t
         return true;
 
     // Mark initialized before compiling and sending dispatch kernels to device because compilation expects device to be initialized
-    this->work_executor_.initialize();
+    this->work_executor_->initialize();
     this->initialized_ = true;
 
     return true;
@@ -968,7 +1004,7 @@ void Device::push_work(std::function<void()> work, bool blocking) {
         }
         return;
     }
-    this->work_executor_.push_work(std::move(work), blocking);
+    this->work_executor_->push_work(std::move(work), blocking);
 }
 
 bool Device::close() {
@@ -984,7 +1020,7 @@ bool Device::close() {
         hw_command_queue->terminate();
     }
 
-    this->work_executor_.reset();
+    this->work_executor_->reset();
     tt_metal::detail::DumpDeviceProfileResults(this, ProfilerDumpState::LAST_CLOSE_DEVICE);
 
     sub_device_manager_tracker_.reset(nullptr);
@@ -1015,6 +1051,17 @@ bool Device::close() {
             } else {
                 log_debug(tt::LogMetal, "{} will not be Reset when closing Device {}", worker_core.str(), this->id());
             }
+        }
+    }
+
+    if (!hal.get_eth_fw_is_cooperative()) {
+        for (const auto& eth_core : this->get_active_ethernet_cores()) {
+            CoreCoord virtual_eth_core = this->ethernet_core_from_logical_core(eth_core);
+            TensixSoftResetOptions reset_val =
+                TENSIX_ASSERT_SOFT_RESET &
+                static_cast<TensixSoftResetOptions>(
+                    ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::BRISC));
+            tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(this->id(), virtual_eth_core), reset_val);
         }
     }
 
@@ -1067,7 +1114,7 @@ CoreCoord Device::grid_size() const {
 }
 
 CoreCoord Device::logical_grid_size() const {
-    return tt::Cluster::instance().get_soc_desc(id_).worker_grid_size;
+    return tt::Cluster::instance().get_soc_desc(id_).get_grid_size(CoreType::TENSIX);
 }
 
 CoreCoord Device::dram_grid_size() const {
@@ -1248,14 +1295,20 @@ void Device::synchronize() {
         log_warning("Attempting to synchronize Device {} which is not initialized. Ignoring...", this->id_);
         return;
     }
-    this->work_executor_.synchronize();
+    this->work_executor_->synchronize();
 }
 
-void Device::set_worker_mode(const WorkExecutorMode& mode) {
-    this->work_executor_.set_worker_mode(mode);
-}
+void Device::set_worker_mode(const WorkExecutorMode& mode) { this->work_executor_->set_worker_mode(mode); }
 
 void Device::enable_async(bool enable) {
+    if (enable) {
+        tt::log_warning("Async mode is always disabled for a single device, ignoring enable_async call");
+    } else {
+        force_enable_async(false);
+    }
+}
+
+void Device::force_enable_async(bool enable) {
     auto mode = enable ? WorkExecutorMode::ASYNCHRONOUS : WorkExecutorMode::SYNCHRONOUS;
     this->set_worker_mode(mode);
     // If a worker thread is spawned for a device, register/track it in a runtime structure.
@@ -1263,7 +1316,8 @@ void Device::enable_async(bool enable) {
     // This is required for checking if a call is made from an application thread or a worker thread.
     // See InWorkerThread().
     if (enable) {
-        tt::DevicePool::instance().register_worker_thread_for_device(this, this->work_executor_.get_worker_thread_id());
+        tt::DevicePool::instance().register_worker_thread_for_device(
+            this, this->work_executor_->get_worker_thread_id());
     } else {
         tt::DevicePool::instance().unregister_worker_thread_for_device(this);
     }
@@ -1467,10 +1521,6 @@ void Device::generate_device_bank_to_noc_tables()
             l1_bank_to_noc_xy_.push_back(xy);
         }
     }
-}
-
-size_t Device::get_device_kernel_defines_hash() {
-    return tt::utils::DefinesHash{}(this->device_kernel_defines_);
 }
 
 uint8_t Device::num_noc_mcast_txns(SubDeviceId sub_device_id) const {
@@ -1697,6 +1747,9 @@ float v1::GetSfpuNan(IDevice* device) { return tt::tt_metal::experimental::hal::
 float v1::GetSfpuInf(IDevice* device) { return tt::tt_metal::experimental::hal::get_inf(); }
 
 std::size_t v1::GetNumProgramCacheEntries(IDevice* device) { return device->num_program_cache_entries(); }
+
+tt::WorkExecutorMode Device::get_worker_mode() { return work_executor_->get_worker_mode(); }
+bool Device::is_worker_queue_empty() const { return work_executor_->worker_queue.empty(); }
 
 }  // namespace tt_metal
 

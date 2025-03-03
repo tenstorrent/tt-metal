@@ -206,8 +206,7 @@ static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreC
                 run_state,
                 RUN_MSG_DONE);
             TT_FATAL(
-                run == run_state || run == RUN_MSG_DONE,
-                "Read unexpected run_mailbox value");
+                run == run_state || run == RUN_MSG_DONE, "Read unexpected run_mailbox value from core {}", core.str());
         }
 
         return run == RUN_MSG_DONE;

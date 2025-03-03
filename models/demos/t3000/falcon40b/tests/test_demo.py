@@ -17,6 +17,7 @@ def test_demo_generate_reference_output(
         pytest.skip("Skip generating reference output in CI")
 
     input_file = "models/demos/t3000/falcon40b/demo/input_data.json"
+    t3k_mesh_device.enable_async(True)
 
     generated_text, measurements = run_falcon_demo_kv(
         user_input=input_file,

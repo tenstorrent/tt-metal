@@ -7,7 +7,7 @@
 #include <cstddef>
 
 #include <buffer_constants.hpp>
-#include <work_executor.hpp>
+#include <work_executor_types.hpp>
 #include <types.hpp>
 
 //==================================================

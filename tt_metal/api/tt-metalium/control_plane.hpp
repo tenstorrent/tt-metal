@@ -43,10 +43,16 @@ class ControlPlane {
            chip_id_t dst_chip_id,
            chan_id_t src_chan_id) const;
 
+       // Return routers to get to the destination chip, avoid local eth to eth routing
+       std::vector<std::pair<routing_plane_id_t, CoreCoord>> get_routers_to_chip(
+           mesh_id_t src_mesh_id, chip_id_t src_chip_id, mesh_id_t dst_mesh_id, chip_id_t dst_chip_id) const;
+
        std::vector<chip_id_t> get_intra_chip_neighbors(
            mesh_id_t src_mesh_id, chip_id_t src_chip_id, RoutingDirection routing_direction) const;
 
        routing_plane_id_t get_routing_plane_id(chan_id_t eth_chan_id) const;
+
+       size_t get_num_active_fabric_routers(mesh_id_t mesh_id, chip_id_t chip_id) const;
 
    private:
        std::unique_ptr<RoutingTableGenerator> routing_table_generator_;

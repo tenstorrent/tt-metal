@@ -27,9 +27,10 @@ on:
       - "(Single-card) Nightly model and ttnn tests"
       - "(Single-card) Tests for new models"
       - "(T3K) T3000 demo tests"
+      - "(T3K) T3000 frequent tests"
       - "(T3K) T3000 model perf tests"
+      - "(T3K) T3000 nightly tests"
       - "(T3K) T3000 perplexity tests"
-      - "(T3K) T3000 model perf tests"
       - "(T3K) T3000 profiler tests"
       - "(T3K) T3000 unit tests"
       - "(TG) TG unit tests"
@@ -44,6 +45,7 @@ on:
       - "Blackhole post-commit tests"
       - "Custom test dispatch"
       - "PR Gate"
+      - "Nightly tt-metal L2 tests"
     types:
       - completed
 
