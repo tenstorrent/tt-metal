@@ -88,7 +88,7 @@ initialize_noc_counter_addresses() {
     return arr;
 }
 
-static constexpr std::array<std::array<std::array<uint32_t, NUM_NOCS>, NUM_BARRIER_TYPES>, MaxDMProcessorsPerCoreType>
+inline constexpr std::array<std::array<std::array<uint32_t, NUM_NOCS>, NUM_BARRIER_TYPES>, MaxDMProcessorsPerCoreType>
     noc_counter_addresses = initialize_noc_counter_addresses();
 
 static_assert(
@@ -473,46 +473,26 @@ inline __attribute__((always_inline)) void noc_local_state_init(int noc) {
     noc_posted_writes_num_issued[noc] = posted_writes_num_issued;
 }
 
-inline __attribute__((always_inline)) void dynamic_noc_local_state_init() {
+template <NocBarrierType barrier_type, uint32_t status_register>
+inline __attribute__((always_inline)) void dynamic_noc_local_barrier_init() {
     using underlying_tensix_processor_types_t = std::underlying_type_t<TensixProcessorTypes>;
     constexpr underlying_tensix_processor_types_t dm0 =
         static_cast<underlying_tensix_processor_types_t>(TensixProcessorTypes::DM0);
     constexpr underlying_tensix_processor_types_t dm1 =
         static_cast<underlying_tensix_processor_types_t>(TensixProcessorTypes::DM1);
-    set_noc_counter_val<dm0, NocBarrierType::READS_NUM_ISSUED>(
-        NOC_0, NOC_STATUS_READ_REG(NOC_0, NIU_MST_RD_RESP_RECEIVED));
-    set_noc_counter_val<dm0, NocBarrierType::READS_NUM_ISSUED>(NOC_1, 0);
-    set_noc_counter_val<dm1, NocBarrierType::READS_NUM_ISSUED>(NOC_0, 0);
-    set_noc_counter_val<dm1, NocBarrierType::READS_NUM_ISSUED>(
-        NOC_1, NOC_STATUS_READ_REG(NOC_1, NIU_MST_RD_RESP_RECEIVED));
 
-    set_noc_counter_val<dm0, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(
-        NOC_0, NOC_STATUS_READ_REG(NOC_0, NIU_MST_NONPOSTED_WR_REQ_SENT));
-    set_noc_counter_val<dm0, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(NOC_1, 0);
-    set_noc_counter_val<dm1, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(NOC_0, 0);
-    set_noc_counter_val<dm1, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(
-        NOC_1, NOC_STATUS_READ_REG(NOC_1, NIU_MST_NONPOSTED_WR_REQ_SENT));
+    set_noc_counter_val<dm0, barrier_type>(NOC_0, NOC_STATUS_READ_REG(NOC_0, status_register));
+    set_noc_counter_val<dm0, barrier_type>(NOC_1, 0);
+    set_noc_counter_val<dm1, barrier_type>(NOC_0, 0);
+    set_noc_counter_val<dm1, barrier_type>(NOC_1, NOC_STATUS_READ_REG(NOC_1, status_register));
+}
 
-    set_noc_counter_val<dm0, NocBarrierType::NONPOSTED_WRITES_ACKED>(
-        NOC_0, NOC_STATUS_READ_REG(NOC_0, NIU_MST_WR_ACK_RECEIVED));
-    set_noc_counter_val<dm0, NocBarrierType::NONPOSTED_WRITES_ACKED>(NOC_1, 0);
-    set_noc_counter_val<dm1, NocBarrierType::NONPOSTED_WRITES_ACKED>(NOC_0, 0);
-    set_noc_counter_val<dm1, NocBarrierType::NONPOSTED_WRITES_ACKED>(
-        NOC_1, NOC_STATUS_READ_REG(NOC_1, NIU_MST_WR_ACK_RECEIVED));
-
-    set_noc_counter_val<dm0, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(
-        NOC_0, NOC_STATUS_READ_REG(NOC_0, NIU_MST_ATOMIC_RESP_RECEIVED));
-    set_noc_counter_val<dm0, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(NOC_1, 0);
-    set_noc_counter_val<dm1, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(NOC_0, 0);
-    set_noc_counter_val<dm1, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(
-        NOC_1, NOC_STATUS_READ_REG(NOC_1, NIU_MST_ATOMIC_RESP_RECEIVED));
-
-    set_noc_counter_val<dm0, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(
-        NOC_0, NOC_STATUS_READ_REG(NOC_0, NIU_MST_POSTED_WR_REQ_SENT));
-    set_noc_counter_val<dm0, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(NOC_1, 0);
-    set_noc_counter_val<dm1, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(NOC_0, 0);
-    set_noc_counter_val<dm1, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(
-        NOC_1, NOC_STATUS_READ_REG(NOC_1, NIU_MST_POSTED_WR_REQ_SENT));
+inline __attribute__((always_inline)) void dynamic_noc_local_state_init() {
+    dynamic_noc_local_barrier_init<NocBarrierType::READS_NUM_ISSUED, NIU_MST_RD_RESP_RECEIVED>();
+    dynamic_noc_local_barrier_init<NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED, NIU_MST_NONPOSTED_WR_REQ_SENT>();
+    dynamic_noc_local_barrier_init<NocBarrierType::NONPOSTED_WRITES_ACKED, NIU_MST_WR_ACK_RECEIVED>();
+    dynamic_noc_local_barrier_init<NocBarrierType::NONPOSTED_ATOMICS_ACKED, NIU_MST_ATOMIC_RESP_RECEIVED>();
+    dynamic_noc_local_barrier_init<NocBarrierType::POSTED_WRITES_NUM_ISSUED, NIU_MST_POSTED_WR_REQ_SENT>();
 }
 
 inline __attribute__((always_inline)) void ncrisc_noc_counters_init() {
