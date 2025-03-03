@@ -290,14 +290,18 @@ struct PacketHeader : public PacketHeaderBase<PacketHeader> {
 };
 
 struct LowLatencyRoutingFields {
-    static constexpr uint32_t FIELD_WIDTH = 2;
-    static constexpr uint32_t FIELD_MASK = 0b11;
-    static constexpr uint32_t NOOP = 0b00;
-    static constexpr uint32_t WRITE_ONLY = 0b01;
-    static constexpr uint32_t FORWARD_ONLY = 0b10;
-    static constexpr uint32_t WRITE_AND_FORWARD = 0b11;
-    static constexpr uint32_t FWD_ONLY_FIELD = 0xAAAAAAAA;
-    static constexpr uint32_t WR_ONLY_FIELD = 0x55555555;
+    static constexpr uint32_t FIELD_WIDTH = 3;
+    static constexpr uint32_t FIELD_MASK = 0b111;
+    static constexpr uint32_t PATH_ROUTING_FIELD_MASK = 0b011;
+    static constexpr uint32_t VC_FIELD_MASK = 0b100;
+    static constexpr uint32_t NOOP = 0b000;
+    static constexpr uint32_t WRITE_ONLY = 0b001;
+    static constexpr uint32_t FORWARD_ONLY = 0b010;
+    static constexpr uint32_t WRITE_AND_FORWARD = 0b011;
+    static constexpr uint32_t MAX_NUM_ENCODINGS = sizeof(uint32_t) * CHAR_BIT / FIELD_WIDTH;
+    static constexpr uint32_t FWD_ONLY_FIELD = 0x92492492;
+    static constexpr uint32_t WR_ONLY_FIELD = 0x49249249;
+    static constexpr uint32_t HIGH_VC_FIELD = 0x24924924;
     uint32_t value;
 };
 
@@ -307,17 +311,18 @@ struct LowLatencyPacketHeader : public PacketHeaderBase<LowLatencyPacketHeader> 
 
     private:
 
-    inline static uint32_t calculate_chip_unicast_routing_fields_value(uint8_t distance_in_hops) {
+    inline static uint32_t calculate_chip_unicast_routing_fields_value(uint8_t distance_in_hops, uint8_t distance_to_high_vc = LowLatencyRoutingFields::MAX_NUM_ENCODINGS) {
         // Example of unicast 3 hops away
         // First line will do 0xAAAAAAAA & 0b1111 = 0b1010. This means starting from our neighbor, we will forward twice (forward to neighbor is not encoded in the field)
         // Last line will do 0b01 << 4 = 0b010000. This means that on the 3rd chip, we will write only
         // Together this means the final encoding is 0b011010
         return
             (LowLatencyRoutingFields::FWD_ONLY_FIELD & ((1 << (distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH) - 1)) |
-            (LowLatencyRoutingFields::WRITE_ONLY << (distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH);
+            (LowLatencyRoutingFields::WRITE_ONLY << (distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH) |
+            (LowLatencyRoutingFields::HIGH_VC_FIELD << (distance_to_high_vc - 1) * LowLatencyRoutingFields::FIELD_WIDTH);
     }
     inline static uint32_t calculate_chip_multicast_routing_fields_value(
-        const MulticastRoutingCommandHeader& chip_multicast_command_header) {
+        const MulticastRoutingCommandHeader& chip_multicast_command_header, uint8_t distance_to_high_vc = LowLatencyRoutingFields::MAX_NUM_ENCODINGS) {
         // Example of starting 3 hops away mcasting to 2 chips
         // First line will do 0xAAAAAAAA & 0b1111 = 0b1010. This means starting from our neighbor, we will forward twice (forward to neighbor is not encoded in the field)
         // Second line will do 0xFFFFFFFF & 0b11 = 0b11. 0b11 << 4 = 0b110000. This means starting from the 3rd chip, we will write and forward once
@@ -327,7 +332,8 @@ struct LowLatencyPacketHeader : public PacketHeaderBase<LowLatencyPacketHeader> 
             (LowLatencyRoutingFields::FWD_ONLY_FIELD & ((1 << (chip_multicast_command_header.start_distance_in_hops + chip_multicast_command_header.range_hops - 2) * LowLatencyRoutingFields::FIELD_WIDTH) - 1)) |
             // TODO: We can skip the masking of the upper bits for improved performance on the workers, at the cost of readability of the packet header
             ((LowLatencyRoutingFields::WR_ONLY_FIELD & ((1 << (chip_multicast_command_header.range_hops) * LowLatencyRoutingFields::FIELD_WIDTH) - 1)) <<
-            ((chip_multicast_command_header.start_distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH));
+            ((chip_multicast_command_header.start_distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH)) |
+            (LowLatencyRoutingFields::HIGH_VC_FIELD << (distance_to_high_vc - 1) * LowLatencyRoutingFields::FIELD_WIDTH);
     }
 
     public:
