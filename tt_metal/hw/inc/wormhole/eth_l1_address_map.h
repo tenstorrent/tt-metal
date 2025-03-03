@@ -33,7 +33,7 @@ struct address_map {
 
     // Kernel config buffer is WIP
     // Size is presently based on the old sizes of the RTAs + CB config + Sems
-    static constexpr std::int32_t ERISC_L1_KERNEL_CONFIG_SIZE = 96 * 4 + 8 * 16;
+    static constexpr std::int32_t ERISC_L1_KERNEL_CONFIG_SIZE = 96 * 4 + 16 * 16;
 
     // Base addresses
     static constexpr std::int32_t FIRMWARE_BASE = 0x9040;
