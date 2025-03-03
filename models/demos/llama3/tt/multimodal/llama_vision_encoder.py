@@ -19,11 +19,6 @@ from models.demos.llama3.tt.multimodal.llama_image_transformer import TtLlamaIma
 from models.demos.llama3.tt.multimodal.llama_positional_embedding import TtLlamaPositionalEmbedding
 from models.demos.llama3.tt.multimodal.llama_class_embedding import TtLlamaClassEmbedding
 
-
-from models.demos.falcon7b_common.tests.test_utils import (
-    synchronize_devices,
-)
-
 import llama_models.llama3.reference_impl.multimodal.encoder_utils as encoder_utils
 
 
