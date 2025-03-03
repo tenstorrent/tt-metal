@@ -9,6 +9,7 @@
 #include <tt-metalium/global_circular_buffer_impl.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/buffer_constants.hpp>
 
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -18,12 +19,15 @@ namespace ttnn {
 namespace types {
 
 using IDevice = tt::tt_metal::IDevice;
+using Program = tt::tt_metal::Program;
 
 constexpr auto TILE_SIZE = 32;
 
 using tt::tt_metal::BufferType;
 using tt::tt_metal::DataType;
 using tt::tt_metal::MemoryConfig;
+using tt::tt_metal::ShardMode;
+using tt::tt_metal::ShardOrientation;
 using tt::tt_metal::TensorMemoryLayout;
 
 static const auto DRAM_MEMORY_CONFIG = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};

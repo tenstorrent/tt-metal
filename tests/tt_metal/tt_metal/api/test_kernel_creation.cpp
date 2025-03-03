@@ -9,6 +9,8 @@
 #include <tt-metalium/host_api.hpp>
 #include "compile_program_with_kernel_path_env_var_fixture.hpp"
 
+namespace tt::tt_metal {
+
 using namespace tt;
 
 // Ensures we can successfully create kernels on available compute grid
@@ -110,3 +112,5 @@ TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixNonExistentKernel) {
     this->create_kernel(kernel_file);
     EXPECT_THROW(detail::CompileProgram(this->device_, this->program_), std::exception);
 }
+
+}  // namespace tt::tt_metal

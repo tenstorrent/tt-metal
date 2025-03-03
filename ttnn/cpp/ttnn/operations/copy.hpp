@@ -91,14 +91,14 @@ struct Typecast {
     //     const Tensor& input_tensor,
     //     uint32_t tt_input_dtype,
     //     uint32_t tt_output_dtype,
-    //     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG)
+    //     const MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG)
 
     static ttnn::Tensor invoke(
         const QueueId queue_id,
         const Tensor& input_tensor,
         const DataType& tt_input_dtype,
         const DataType& tt_output_dtype,
-        const std::optional<MemoryConfig>& memory_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        const std::optional<MemoryConfig>& memory_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
         TT_ASSERT(
             input_tensor.device()->arch() != tt::ARCH::GRAYSKULL,

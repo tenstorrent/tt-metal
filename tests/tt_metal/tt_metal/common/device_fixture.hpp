@@ -13,6 +13,8 @@
 #include <tt-metalium/device_pool.hpp>
 #include "llrt.hpp"
 
+namespace tt::tt_metal {
+
 class DeviceFixture : public DispatchFixture {
 protected:
     void SetUp() override {
@@ -113,3 +115,5 @@ class DeviceSingleCardFastSlowDispatchFixture : public DeviceSingleCardFixture {
         }
     }
 };
+
+}  // namespace tt::tt_metal

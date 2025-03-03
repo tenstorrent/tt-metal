@@ -12,8 +12,9 @@
 #include <tt-metalium/event.hpp>
 #include <tt-metalium/device.hpp>
 
+namespace tt::tt_metal {
+
 using std::vector;
-using namespace tt::tt_metal;
 
 namespace local_test_functions {
 
@@ -465,3 +466,5 @@ TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsReadWriteWithWaitFor
 }
 
 }  // end namespace basic_tests
+
+}  // namespace tt::tt_metal

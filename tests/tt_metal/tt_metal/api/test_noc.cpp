@@ -19,7 +19,7 @@ namespace unit_tests::basic::test_noc {
 
 const uint32_t init_value = 0x1234B33F;
 
-uint32_t read_reg(IDevice* device, CoreCoord logical_node, uint32_t reg_addr) {
+uint32_t read_reg(tt::tt_metal::IDevice* device, CoreCoord logical_node, uint32_t reg_addr) {
     // Read and return reg value form reading
     uint32_t reg_data = unit_tests::basic::test_noc::init_value;
     tt_metal::detail::ReadRegFromDevice(device, logical_node, reg_addr, reg_data);
@@ -27,7 +27,10 @@ uint32_t read_reg(IDevice* device, CoreCoord logical_node, uint32_t reg_addr) {
 }
 
 void read_translation_table(
-    IDevice* device, CoreCoord logical_node, std::vector<unsigned int>& x_remap, std::vector<unsigned int>& y_remap) {
+    tt::tt_metal::IDevice* device,
+    CoreCoord logical_node,
+    std::vector<unsigned int>& x_remap,
+    std::vector<unsigned int>& y_remap) {
 #ifdef NOC_X_ID_TRANSLATE_TABLE_0
     std::vector<uint32_t> x_reg_addrs = {
         NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_0),
@@ -169,6 +172,8 @@ TEST(NOC, TensixVerifyNocIdentityTranslationTable) {
     ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
 }
 
+namespace tt::tt_metal {
+
 // Tests that kernel can write to and read from a stream register address
 // This is meant to exercise noc_inline_dw_write API
 TEST_F(DeviceFixture, TensixDirectedStreamRegWriteRead) {
@@ -228,3 +233,5 @@ TEST_F(DeviceFixture, TensixDirectedStreamRegWriteRead) {
         }
     }
 }
+
+}  // namespace tt::tt_metal

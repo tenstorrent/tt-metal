@@ -7,6 +7,8 @@
 #include "device/sharded_to_interleaved_partial_op.hpp"
 #include "sharded_to_interleaved_partial.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::data_movement {
 
 ttnn::Tensor ShardedToInterleavedPartialOperation::invoke(

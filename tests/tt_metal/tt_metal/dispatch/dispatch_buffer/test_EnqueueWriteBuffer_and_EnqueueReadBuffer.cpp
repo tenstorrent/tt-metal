@@ -19,8 +19,9 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
 
+namespace tt::tt_metal {
+
 using std::vector;
-using namespace tt::tt_metal;
 
 struct BufferStressTestConfig {
     // Used for normal write/read tests
@@ -230,7 +231,7 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(IDevice* device, CommandQueue
             if (cq_write) {
                 EnqueueWriteBuffer(cq, *bufa, src.data(), false);
             } else {
-                ::detail::WriteToBuffer(*bufa, src);
+                detail::WriteToBuffer(*bufa, src);
                 if (config.buftype == BufferType::DRAM) {
                     tt::Cluster::instance().dram_barrier(device->id());
                 } else {
@@ -248,7 +249,7 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(IDevice* device, CommandQueue
             if (cq_read) {
                 EnqueueReadBuffer(cq, *bufa, result.data(), true);
             } else {
-                ::detail::ReadFromBuffer(*bufa, result);
+                detail::ReadFromBuffer(*bufa, result);
             }
 
             EXPECT_EQ(src, result);
@@ -352,7 +353,7 @@ void stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                 if (cq_write) {
                     EnqueueWriteBuffer(cq, *buf, src2.data(), false);
                 } else {
-                    ::detail::WriteToBuffer(*buf, src);
+                    detail::WriteToBuffer(*buf, src);
                     if (buftype == BufferType::DRAM) {
                         tt::Cluster::instance().dram_barrier(device->id());
                     } else {
@@ -369,7 +370,7 @@ void stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                 if (cq_read) {
                     EnqueueReadBuffer(cq, *buf, res.data(), true);
                 } else {
-                    ::detail::ReadFromBuffer(*buf, res);
+                    detail::ReadFromBuffer(*buf, res);
                 }
                 EXPECT_EQ(src, res);
             }
@@ -1707,3 +1708,5 @@ TEST_F(CommandQueueSingleCardBufferFixture, StressWrapTest) {
 }
 
 }  // end namespace stress_tests
+
+}  // namespace tt::tt_metal

@@ -20,6 +20,8 @@
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 
+namespace tt::tt_metal {
+
 using std::vector;
 using namespace tt;
 using namespace tt::test_utils;
@@ -100,3 +102,5 @@ TEST_F(DeviceSingleCardFastSlowDispatchFixture, TestDynamicNoCAsyncWriteProgram)
         log_info(tt::LogTest, "Finish SD runs");
     }
 }
+
+}  // namespace tt::tt_metal

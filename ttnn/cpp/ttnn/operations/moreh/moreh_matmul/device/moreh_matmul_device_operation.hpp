@@ -35,8 +35,8 @@ struct MorehMatmulOperation {
 
     struct MultiCoreProgramFactory {
         struct shared_variable_t {
-            KernelHandle reader_kernel_id;
-            KernelHandle writer_kernel_id;
+            tt::tt_metal::KernelHandle reader_kernel_id;
+            tt::tt_metal::KernelHandle writer_kernel_id;
             std::size_t num_cores;
             std::size_t num_cores_y;
         };

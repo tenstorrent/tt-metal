@@ -7,6 +7,8 @@
 #include <tt-metalium/bfloat8.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 
+namespace tt::tt_metal {
+
 using std::vector;
 using namespace tt;
 using namespace tt::test_utils;
@@ -376,3 +378,5 @@ TEST_F(DeviceFixture, TensixTileCopyReconfigL1Acc) {
         }
     }
 }
+
+}  // namespace tt::tt_metal

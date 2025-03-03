@@ -21,6 +21,7 @@ using ttnn::ccl::cmd::CclCommandArgCode;
 using ttnn::ccl::cmd::CclCommandCode;
 using ttnn::ccl::cmd::CclCommandHeader;
 using shape4d = ttnn::ccl::Shape4D<uint32_t>;
+
 TEST(LineReduceScatter, EmitCclSendSliceSequenceCommands_8Slices_1x1x32x2048Tensor_Dim3_Slice0to7) {
     const std::size_t num_slices = 8;
     const std::int64_t start_slice_index = 0;

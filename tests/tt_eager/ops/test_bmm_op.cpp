@@ -51,7 +51,7 @@ int main(int argc, char** argv) {
                         ttnn::operations::matmul::Matmul{
                             /*program_config=*/std::nullopt,
                             /*bcast_batch=*/std::nullopt,
-                            operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+                            tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
                             /*output_dtype=*/std::nullopt,
                             /*compute_kernel_config=*/std::nullopt,
                             /*untilize_out=*/false,

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "all_gather_async_op.hpp"
+#include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/math.hpp"
 #include "cpp/ttnn/global_semaphore.hpp"
 
@@ -20,7 +21,7 @@ AllGatherAsync create_all_gather_async_struct(
     const std::vector<IDevice*>& devices,
     const ttnn::ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphores,
-    std::optional<SubDeviceId> sub_device_id,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     bool enable_persistent_fabric_mode) {
     uint32_t num_devices = devices.size();
 
@@ -178,7 +179,7 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
     return AllGatherAsyncVersion::GENERIC;
 }
 
-operation::ProgramWithCallbacks AllGatherAsync::create_program(
+tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     tt::log_debug(tt::LogOp, "DEBUG: create_program is called");
 
@@ -243,7 +244,8 @@ operation::ProgramWithCallbacks AllGatherAsync::create_program(
     }
 }
 
-const operation::Hash AllGatherAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
+const tt::tt_metal::operation::Hash AllGatherAsync::compute_program_hash(
+    const std::vector<Tensor>& input_tensors) const {
     log_trace(tt::LogOp, "compute_program_hash is called");
     AllGatherAsyncVersion version = select_version(input_tensors[0]);
     log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
@@ -254,7 +256,7 @@ const operation::Hash AllGatherAsync::compute_program_hash(const std::vector<Ten
     if (version == AllGatherAsyncVersion::GENERIC) {
         // Generic version should hash semaphore address as well
         uint32_t semaphore_address = this->semaphore.address();
-        return operation::hash_operation<AllGatherAsync>(
+        return tt::tt_metal::operation::hash_operation<AllGatherAsync>(
             this->dim,
             this->num_links,
             this->ring_size,
@@ -267,7 +269,7 @@ const operation::Hash AllGatherAsync::compute_program_hash(const std::vector<Ten
             input_memory_config,
             semaphore_address);
     }
-    return operation::hash_operation<AllGatherAsync>(
+    return tt::tt_metal::operation::hash_operation<AllGatherAsync>(
         this->dim,
         this->num_links,
         this->ring_size,
@@ -291,7 +293,7 @@ Tensor all_gather_async(
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
-    std::optional<SubDeviceId> sub_device_id,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     bool enable_persistent_fabric_mode) {
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
@@ -304,7 +306,7 @@ Tensor all_gather_async(
     if (num_devices == 2) {
         ccl_topology = ttnn::ccl::Topology::Linear;
     }
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
+    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
 
     tt::log_debug(
         tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", devices.size(), num_links);
@@ -316,7 +318,7 @@ Tensor all_gather_async(
 
     std::vector<GlobalSemaphore> semaphores = multi_device_global_semaphore.global_semaphores;
 
-    operation::launch_op(
+    tt::tt_metal::operation::launch_op(
         [dim,
          num_links,
          num_devices,
@@ -331,7 +333,7 @@ Tensor all_gather_async(
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_tensor = input_tensors.at(0);
 
-            return operation::run(
+            return tt::tt_metal::operation::run(
                 ttnn::ccl::all_gather_detail::create_all_gather_async_struct(
                     input_tensor,
                     dim,
@@ -358,7 +360,7 @@ Tensor all_gather_async(
     const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
-    std::optional<SubDeviceId> sub_device_id,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     bool enable_persistent_fabric_mode) {
     TT_FATAL(
         topology == ttnn::ccl::Topology::Linear,
@@ -378,12 +380,12 @@ Tensor all_gather_async(
         rank - 1,
         dim);
 
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
+    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
     CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     std::vector<GlobalSemaphore> semaphores = multi_device_global_semaphore.global_semaphores;
 
-    operation::launch_op(
+    tt::tt_metal::operation::launch_op(
         [gather_dim,
          num_preferred_links,
          memory_config,
@@ -408,7 +410,7 @@ Tensor all_gather_async(
 
             const auto& input_tensor = input_tensors.at(0);
 
-            return operation::run(
+            return tt::tt_metal::operation::run(
                 ttnn::ccl::all_gather_detail::create_all_gather_async_struct(
                     input_device_tensor,
                     gather_dim,

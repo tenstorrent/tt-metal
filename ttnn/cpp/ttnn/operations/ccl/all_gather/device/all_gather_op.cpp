@@ -195,20 +195,22 @@ std::vector<ttnn::TensorSpec> AllGather::compute_output_specs(const std::vector<
     const auto& input_tensor = input_tensors[0];
     TensorSpec spec(
         output_shape,
-        TensorLayout(input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config));
+        tt::tt_metal::TensorLayout(
+            input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config));
     if (this->output_mem_config.is_sharded()) {
         return {TensorSpec(
             output_shape,
-            TensorLayout(input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config))};
+            tt::tt_metal::TensorLayout(
+                input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config))};
     }
     return std::vector<TensorSpec>(input_tensors.size(), spec);
 }
 
 std::vector<Tensor> AllGather::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    return operation::default_create_output_tensors(*this, input_tensors, {});
+    return tt::tt_metal::operation::default_create_output_tensors(*this, input_tensors, {});
 }
 
-operation::ProgramWithCallbacks AllGather::create_program(
+tt::tt_metal::operation::ProgramWithCallbacks AllGather::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     return all_gather_multi_core_with_workers(
         input_tensors[0],
@@ -257,8 +259,8 @@ Tensor all_gather(
         rank - 1,
         dim);
 
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
+    tt::tt_metal::operation::launch_op(
         [gather_dim,
          num_links,
          dim,
@@ -293,7 +295,7 @@ Tensor all_gather(
                 }
             }
 
-            auto output_tensor = operation::run(
+            auto output_tensor = tt::tt_metal::operation::run(
                 ttnn::ccl::all_gather_detail::create_all_gather_struct(
                     input_tensor,
                     gather_dim,
@@ -344,9 +346,9 @@ Tensor all_gather(
         rank - 1,
         dim);
 
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
+    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
 
-    operation::launch_op(
+    tt::tt_metal::operation::launch_op(
         [gather_dim,
          num_links,
          memory_config,
@@ -387,7 +389,7 @@ Tensor all_gather(
                                         ? std::nullopt
                                         : get_chip_id(device_index + num_devices - 1);
 
-            return operation::run(
+            return tt::tt_metal::operation::run(
                 ttnn::AllGather{
                     gather_dim,
                     num_links,

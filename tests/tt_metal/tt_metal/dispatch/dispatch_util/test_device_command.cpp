@@ -8,6 +8,8 @@
 #include <gtest/gtest.h>
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 
+namespace tt::tt_metal {
+
 TEST(DeviceCommandTest, AddDispatchWait) {
     DeviceCommandCalculator calculator;
     calculator.add_dispatch_wait();
@@ -275,3 +277,5 @@ TYPED_TEST(WritePackedCommandTest, RandomAddDispatchWritePacked) {
         EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
     }
 }
+
+}  // namespace tt::tt_metal

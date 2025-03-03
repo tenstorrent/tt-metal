@@ -87,9 +87,9 @@ std::vector<ttnn::TensorSpec> CreateQKVHeadsDeviceOperation::compute_output_spec
     uint32_t v_shard_h =
         v_shape[0] * v_shape[1] * v_shape[2] / num_cores;  // want the API to work for different sequence lengths
 
-    auto q_spec = ShardSpec(all_cores, {q_shard_h, q_shape[-1]}, shard_orientation);
-    auto k_spec = ShardSpec(all_cores, {k_shard_h, k_shape[-1]}, shard_orientation);
-    auto v_spec = ShardSpec(all_cores, {v_shard_h, v_shape[-1]}, shard_orientation);
+    auto q_spec = tt::tt_metal::ShardSpec(all_cores, {q_shard_h, q_shape[-1]}, shard_orientation);
+    auto k_spec = tt::tt_metal::ShardSpec(all_cores, {k_shard_h, k_shape[-1]}, shard_orientation);
+    auto v_spec = tt::tt_metal::ShardSpec(all_cores, {v_shard_h, v_shape[-1]}, shard_orientation);
     // create sharded tensors
     auto mem_config_q = this->output_mem_config;
     mem_config_q.shard_spec = q_spec;
@@ -100,9 +100,15 @@ std::vector<ttnn::TensorSpec> CreateQKVHeadsDeviceOperation::compute_output_spec
     auto mem_config_v = this->output_mem_config;
     mem_config_v.shard_spec = v_spec;
 
-    TensorSpec out_tensor_q(q_shape, TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), mem_config_q));
-    TensorSpec out_tensor_k(k_shape, TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), mem_config_k));
-    TensorSpec out_tensor_v(v_shape, TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), mem_config_v));
+    TensorSpec out_tensor_q(
+        q_shape,
+        tt::tt_metal::TensorLayout(input_tensor.get_dtype(), tt::tt_metal::PageConfig(Layout::TILE), mem_config_q));
+    TensorSpec out_tensor_k(
+        k_shape,
+        tt::tt_metal::TensorLayout(input_tensor.get_dtype(), tt::tt_metal::PageConfig(Layout::TILE), mem_config_k));
+    TensorSpec out_tensor_v(
+        v_shape,
+        tt::tt_metal::TensorLayout(input_tensor.get_dtype(), tt::tt_metal::PageConfig(Layout::TILE), mem_config_v));
     return {out_tensor_q, out_tensor_k, out_tensor_v};
 }
 
@@ -116,7 +122,7 @@ std::vector<Tensor> CreateQKVHeadsDeviceOperation::create_output_tensors(
     };
 }
 
-operation::ProgramWithCallbacks CreateQKVHeadsDeviceOperation::create_program(
+tt::tt_metal::operation::ProgramWithCallbacks CreateQKVHeadsDeviceOperation::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
 

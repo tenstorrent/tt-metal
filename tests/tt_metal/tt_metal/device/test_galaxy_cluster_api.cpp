@@ -8,6 +8,8 @@
 #include "tt_cluster.hpp"
 #include <tt-metalium/host_api.hpp>
 
+namespace tt::tt_metal {
+
 using namespace tt;
 
 bool is_galaxy_device(const chip_id_t device_id) {
@@ -192,3 +194,5 @@ TEST_F(TGGFixture, ValidateChipBoardTypes) {
     ASSERT_TRUE(num_galaxy_chips == 64) << "Detected " << num_galaxy_chips << " Galaxy chips" << std::endl;
     ASSERT_TRUE(num_n150_chips == 8) << "Detected " << num_n150_chips << " N150 chips" << std::endl;
 }
+
+}  // namespace tt::tt_metal

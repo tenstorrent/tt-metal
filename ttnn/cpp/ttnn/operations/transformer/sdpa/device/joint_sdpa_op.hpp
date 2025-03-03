@@ -16,7 +16,7 @@ namespace ttnn::operations::transformer {
 struct JointScaledDotProductAttention {
     const std::string joint_strategy;
     const std::optional<float> scale;
-    const MemoryConfig output_mem_config;
+    const tt::tt_metal::MemoryConfig output_mem_config;
     const std::optional<SDPAProgramConfig> program_config;
     const DeviceComputeKernelConfig compute_kernel_config;
 
@@ -24,7 +24,7 @@ struct JointScaledDotProductAttention {
 
     std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
 
-    operation::ProgramWithCallbacks create_program(
+    tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
 
     std::uint32_t get_q_chunk_size() const;

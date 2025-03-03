@@ -78,7 +78,7 @@ void weights_initialization(DistributedTransformer& model) {
             core::XTensorToMeshVariant<float> shard_composer = core::ShardXTensorToMesh<float>(device->shape(), 0);
             auto weight_xtensor = init::normal_init(tensor_shape, {0.F, 0.02F});
             tensor_ptr->set_value(
-                core::from_xtensor<float, DataType::BFLOAT16>(weight_xtensor, device, shard_composer));
+                core::from_xtensor<float, ttnn::DataType::BFLOAT16>(weight_xtensor, device, shard_composer));
         } else if (name.find("bias") != std::string::npos) {
             init::constant_init(tensor_ptr, tensor.get_logical_shape(), 0.F);
         }

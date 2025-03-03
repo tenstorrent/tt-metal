@@ -41,7 +41,7 @@ namespace unit_tests::erisc::kernels {
  */
 
 bool reader_kernel_no_send(
-    DispatchFixture* fixture,
+    tt_metal::DispatchFixture* fixture,
     tt_metal::IDevice* device,
     const size_t& byte_size,
     const size_t& eth_l1_byte_address,
@@ -107,7 +107,7 @@ bool reader_kernel_no_send(
 }
 
 bool writer_kernel_no_receive(
-    DispatchFixture* fixture,
+    tt_metal::DispatchFixture* fixture,
     tt_metal::IDevice* device,
     const size_t& byte_size,
     const size_t& eth_l1_byte_address,
@@ -277,6 +277,8 @@ bool noc_reader_and_writer_kernels(
 }
 
 }  // namespace unit_tests::erisc::kernels
+
+namespace tt::tt_metal {
 
 TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthKernelsNocReadNoSend) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
@@ -489,3 +491,5 @@ TEST_F(BlackholeSingleCardFixture, IdleEthKernelOnBothIdleEriscs) {
             erisc1_ethernet_config));
     }
 }
+
+}  // namespace tt::tt_metal

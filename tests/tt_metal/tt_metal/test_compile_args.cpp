@@ -69,7 +69,9 @@ int main(int argc, char** argv) {
         // Remove old compiled kernels
         static const std::string kernel_name = "test_compile_args";
         auto binary_path_str =
-            kernel->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env)
+            kernel
+                ->binaries(
+                    tt::tt_metal::BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env)
                 .get_out_kernel_root_path() +
             kernel_name;
         std::filesystem::remove_all(binary_path_str);

@@ -40,10 +40,10 @@ struct Pool2D {
 
     struct MultiCore {
         struct shared_variables_t {
-            KernelHandle reader0_kernel;
-            KernelHandle reader1_kernel;
-            CBHandle raw_in_cb;
-            CBHandle cb_out;
+            tt::tt_metal::KernelHandle reader0_kernel;
+            tt::tt_metal::KernelHandle reader1_kernel;
+            tt::tt_metal::CBHandle raw_in_cb;
+            tt::tt_metal::CBHandle cb_out;
             uint32_t ncores;
             uint32_t ncores_w;
             std::shared_ptr<Buffer> reader_indices_buffer;
@@ -70,7 +70,7 @@ struct Pool2D {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static Tensor create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-    static operation::OpPerformanceModel create_op_performance_model(
+    static tt::tt_metal::operation::OpPerformanceModel create_op_performance_model(
         const operation_attributes_t&, const tensor_args_t&, const Tensor&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(

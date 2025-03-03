@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "tt-metalium/circular_buffer.hpp"
+#include "tt-metalium/circular_buffer_types.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
@@ -60,7 +62,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     bool enable_subblock_padding);
 
 // TODO: Add namespace for utilities?
-std::tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
+std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle> create_CBs_for_sharded_input_v2(
     tt_metal::Program& program,
     const Tensor& input,
     CoreRange core,
@@ -85,6 +87,9 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
     bool fp32_dest_acc_en,
     bool packer_l1_acc_en) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
+    using tt::tt_metal::CBHandle;
+    using tt::tt_metal::CircularBuffer;
+    using tt::tt_metal::CircularBufferConfig;
 
     tt::DataFormat interm0_df =
         packer_l1_acc_en ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) : out_df;
@@ -265,7 +270,7 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
 }
 
 // TODO: Add namespace for utilities?
-std::tuple<CBHandle, CBHandle> create_CBs_for_depthwise_sharded_input(
+std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle> create_CBs_for_depthwise_sharded_input(
     tt_metal::Program& program,
     const Tensor& input,
     CoreRange core,
@@ -289,6 +294,10 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_depthwise_sharded_input(
     bool fp32_dest_acc_en,
     bool packer_l1_acc_en) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
+    using tt::tt_metal::CBHandle;
+    using tt::tt_metal::CircularBuffer;
+    using tt::tt_metal::CircularBufferConfig;
+
     tt::DataFormat interm0_df =
         packer_l1_acc_en ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) : out_df;
 
@@ -374,7 +383,7 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_depthwise_sharded_input(
     return {cb_sharded_act, cb_output};
 }
 
-operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
+tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     tt_metal::Program& program,
     const Tensor& a,
     const Tensor& b,
@@ -398,6 +407,10 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     bool enable_split_reader,
     bool enable_subblock_padding) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
+    using tt::tt_metal::CBHandle;
+    using tt::tt_metal::CircularBuffer;
+    using tt::tt_metal::CircularBufferConfig;
+
     bool pass = true;
     tt_metal::IDevice* device = a.device();
     TT_FATAL(a.get_layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
@@ -1378,26 +1391,27 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         bias_ntiles_per_core,
         out0_cb};
 
-    auto writer_mcast_noc = NOC::NOC_0;
-    auto reader_noc = writer_mcast_noc == NOC::NOC_0 ? NOC::NOC_1 : NOC::NOC_0;
+    auto writer_mcast_noc = tt::tt_metal::NOC::NOC_0;
+    auto reader_noc =
+        writer_mcast_noc == tt::tt_metal::NOC::NOC_0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
     auto writer_mcast_sender_id = CreateKernel(
         program,
         writer_mcast_sender_kernel,
         mcast_sender_cores,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = writer_mcast_noc,
             .compile_args = writer_compile_time_args,
             .defines = writer_mcast_sender_defines});
 
-    KernelHandle writer_mcast_receiver_id = -1;
+    tt::tt_metal::KernelHandle writer_mcast_receiver_id = -1;
     if (total_num_cores > 1) {
         writer_mcast_receiver_id = CreateKernel(
             program,
             writer_mcast_receiver_kernel,
             mcast_receiver_cores,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_0,
+            tt::tt_metal::DataMovementConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = writer_mcast_noc,
                 .compile_args = writer_compile_time_args,
                 .defines = writer_defines});
@@ -1407,8 +1421,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         program,
         reader_kernel,
         all_active_cores,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = reader_noc,
             .compile_args = reader_compile_time_args,
             .defines = reader_defines});
@@ -1419,7 +1433,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         program,
         compute_kernel,
         all_active_cores,
-        ComputeConfig{
+        tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .compile_args = compute_kernel_args,
@@ -1454,7 +1468,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
             auto shard_shape = a.shard_spec().value().shape;
             uint32_t tilized_act_tile_size = tt_metal::detail::TileSize(tilized_act_df);
 
-            bool reader_is_noc_0 = reader_noc == NOC::NOC_0;
+            bool reader_is_noc_0 = reader_noc == tt::tt_metal::NOC::NOC_0;
 
             TT_FATAL(!reader_is_noc_0, "Error");
 
@@ -1563,7 +1577,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
                 auto right_core_physical = device->worker_core_from_logical_core(right_core);
                 if (core_x_i == 0) {
                     // sender
-                    if (writer_mcast_noc == NOC::NOC_0) {
+                    if (writer_mcast_noc == tt::tt_metal::NOC::NOC_0) {
                         writer_rt_args.push_back(top_left_core_plus_one_physical.x);  // weights_mcast_dest_noc_start_x
                         writer_rt_args.push_back(right_core_physical.y);              // weights_mcast_dest_noc_start_y
                         writer_rt_args.push_back(bottom_right_core_physical.x);       // weights_mcast_dest_noc_end_x
@@ -1595,10 +1609,10 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
             } else {
                 CoreCoord top_core = {(std::size_t)core_x_i, 0};
                 auto top_core_physical = device->worker_core_from_logical_core(top_core);
-                TT_FATAL(writer_mcast_noc == NOC::NOC_0, "Error");
+                TT_FATAL(writer_mcast_noc == tt::tt_metal::NOC::NOC_0, "Error");
                 if (core_y_i == 0) {
                     // sender
-                    if (writer_mcast_noc == NOC::NOC_0) {
+                    if (writer_mcast_noc == tt::tt_metal::NOC::NOC_0) {
                         writer_rt_args.push_back(top_core_physical.x);                // weights_mcast_dest_noc_start_x
                         writer_rt_args.push_back(top_left_core_plus_one_physical.y);  // weights_mcast_dest_noc_start_y
                         writer_rt_args.push_back(top_core_physical.x);                // weights_mcast_dest_noc_end_x
@@ -1632,7 +1646,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
             // 1D mcast
             if (core_x_i == 0 and core_y_i == 0) {
                 // sender
-                if (writer_mcast_noc == NOC::NOC_0) {
+                if (writer_mcast_noc == tt::tt_metal::NOC::NOC_0) {
                     writer_rt_args.push_back(top_left_core_physical.x);      // weights_mcast_dest_noc_start_x
                     writer_rt_args.push_back(top_left_core_physical.y);      // weights_mcast_dest_noc_start_y
                     writer_rt_args.push_back(bottom_right_core_physical.x);  // weights_mcast_dest_noc_end_x
@@ -1743,7 +1757,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
+tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
     const Tensor& a,
     const Tensor& b,
     const std::optional<const Tensor>& bias,

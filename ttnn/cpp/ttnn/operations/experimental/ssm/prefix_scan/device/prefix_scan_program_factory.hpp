@@ -8,7 +8,7 @@
 
 namespace ttnn::operations::experimental::ssm::detail {
 
-operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
+tt::tt_metal::operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
     const Tensor& a,
     const Tensor& bx,
     const Tensor& h,

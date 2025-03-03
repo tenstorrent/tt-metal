@@ -30,7 +30,8 @@ ExampleMultipleReturnDeviceOperation::spec_return_value_t ExampleMultipleReturnD
     const auto& input_tensor = tensor_args.input_tensor;
     TensorSpec spec(
         input_tensor.get_logical_shape(),
-        TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), MemoryConfig{}));
+        tt::tt_metal::TensorLayout(
+            input_tensor.get_dtype(), tt::tt_metal::PageConfig(input_tensor.get_layout()), MemoryConfig{}));
     spec_return_value_t result = {std::nullopt, std::nullopt};
     if (operation_attributes.return_output1) {
         std::get<0>(result) = spec;

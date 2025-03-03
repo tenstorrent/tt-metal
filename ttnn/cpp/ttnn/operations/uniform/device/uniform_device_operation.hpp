@@ -27,8 +27,8 @@ struct UniformDeviceOperation {
 
     struct ProgramFactory {
         struct shared_variables_t {
-            KernelHandle compute_kernel_id;
-            KernelHandle writer_kernel_id;
+            tt::tt_metal::KernelHandle compute_kernel_id;
+            tt::tt_metal::KernelHandle writer_kernel_id;
             std::vector<CoreCoord> cores;
         };
 

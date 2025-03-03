@@ -9,8 +9,6 @@
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
 
-using namespace tt::tt_metal;
-
 namespace ttnn::operations::experimental::transformer {
 
 using namespace tt::constants;
@@ -50,7 +48,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_unpad_r
     return ret_val;
 }
 
-operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice(
+tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice(
     const Tensor& a, Tensor& output, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) {
     const auto output_shape = output.get_padded_shape();
     const auto input_shape = a.get_padded_shape();
@@ -135,7 +133,7 @@ operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice(
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id, cb_src0](
                                               const void* operation,
-                                              Program& program,
+                                              tt::tt_metal::Program& program,
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
@@ -161,8 +159,12 @@ operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice(
 
         for (uint32_t i = 0; i < num_cores_total; i++) {
             CoreCoord core = {i % num_cores_x, i / num_cores_x};
-            { SetRuntimeArgs(program, unary_reader_kernel_id, core, all_runtime_args[i].first); }
-            { SetRuntimeArgs(program, unary_writer_kernel_id, core, all_runtime_args[i].second); }
+            {
+                SetRuntimeArgs(program, unary_reader_kernel_id, core, all_runtime_args[i].first);
+            }
+            {
+                SetRuntimeArgs(program, unary_writer_kernel_id, core, all_runtime_args[i].second);
+            }
         }
     };
 

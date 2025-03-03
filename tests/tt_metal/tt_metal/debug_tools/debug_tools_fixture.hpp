@@ -11,6 +11,8 @@
 
 #include "dprint_server.hpp"
 
+namespace tt::tt_metal {
+
 class DebugToolsFixture : public DispatchFixture {
    protected:
     bool watcher_previous_enabled;
@@ -222,3 +224,5 @@ public:
         tt::llrt::RunTimeOptions::get_instance().set_feature_targets(tt::llrt::RunTimeDebugFeatureAtomicDebugDelay, saved_target_selection[tt::llrt::RunTimeDebugFeatureAtomicDebugDelay]);
     }
 };
+
+} // namespace tt::tt_metal

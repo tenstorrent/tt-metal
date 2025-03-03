@@ -23,7 +23,8 @@ struct DRAMtoL1MulticastConfig {
     CoreCoord exclude_direction;
 };
 
-bool dram_to_l1_multicast(DispatchFixture* fixture, tt_metal::IDevice* device, const DRAMtoL1MulticastConfig& cfg) {
+bool dram_to_l1_multicast(
+    tt::tt_metal::DispatchFixture* fixture, tt_metal::IDevice* device, const DRAMtoL1MulticastConfig& cfg) {
     bool pass = true;
     tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -127,6 +128,8 @@ bool dram_to_l1_multicast(DispatchFixture* fixture, tt_metal::IDevice* device, c
 }
 }  // namespace unit_tests_common::dram::test_dram_to_l1_multicast
 
+namespace tt::tt_metal {
+
 TEST_F(DispatchFixture, TensixDRAMtoL1Multicast) {
     unit_tests_common::dram::test_dram_to_l1_multicast::DRAMtoL1MulticastConfig test_config = {
         .dest_buffer_addr = 200 * 1024,
@@ -216,3 +219,5 @@ TEST_F(DispatchFixture, TensixDRAMtoL1MulticastExcludeRegionDownRight) {
             this, devices_.at(id), test_config));
     }
 }
+
+}  // namespace tt::tt_metal

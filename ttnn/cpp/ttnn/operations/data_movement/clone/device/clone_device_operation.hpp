@@ -11,7 +11,7 @@ namespace ttnn::operations::data_movement::clone {
 
 struct CloneOperation {
     struct operation_attributes_t {
-        const DataType dtype;
+        const tt::tt_metal::DataType dtype;
         const MemoryConfig memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
     };
@@ -25,8 +25,8 @@ struct CloneOperation {
 
     struct ProgramFactory {
         struct shared_variables_t {
-            KernelHandle read_kernel_id;
-            KernelHandle write_kernel_id;
+            tt::tt_metal::KernelHandle read_kernel_id;
+            tt::tt_metal::KernelHandle write_kernel_id;
             std::vector<CoreCoord> cores;
         };
 

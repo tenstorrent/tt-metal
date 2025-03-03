@@ -74,7 +74,7 @@ TEST_F(TensorUtilsTest, TestUint32ToFromTensorEven) {
     std::vector<uint32_t> test_data = {1, 5, 10, 15};
 
     auto shape = ttml::core::create_shape({1, 1, 1, 4});
-    auto tensor = ttml::core::from_vector<uint32_t, DataType::UINT32>(test_data, shape, device);
+    auto tensor = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(test_data, shape, device);
 
     auto vec_back = ttml::core::to_vector<uint32_t>(tensor);
 
@@ -89,7 +89,7 @@ TEST_F(TensorUtilsTest, TestUint32ToFromTensorOdd) {
     std::vector<uint32_t> test_data = {30, 20, 2};
 
     auto shape = ttml::core::create_shape({1, 1, 1, 3});
-    auto tensor = ttml::core::from_vector<uint32_t, DataType::UINT32>(test_data, shape, device);
+    auto tensor = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(test_data, shape, device);
 
     auto vec_back = ttml::core::to_vector<uint32_t>(tensor);
 
@@ -109,7 +109,7 @@ TEST_F(TensorUtilsTest, TestUint32ToFromTensorLargeWithBatch) {
     }
 
     auto shape = ttml::core::create_shape({batch_size, 1, 1, vec_size / batch_size});
-    auto tensor = ttml::core::from_vector<uint32_t, DataType::UINT32>(test_data, shape, device);
+    auto tensor = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(test_data, shape, device);
     auto vec_back = ttml::core::to_vector<uint32_t>(tensor);
     ASSERT_EQ(vec_back.size(), test_data.size());
     for (size_t i = 0; i < test_data.size(); i++) {
@@ -261,7 +261,7 @@ TEST_F(TensorUtilsTest, TestUint32XTensor) {
     auto shape = ttml::core::create_shape({1, 1, 1, 3});
     xt::xarray<uint32_t> xtensor =
         ttml::core::span_to_xtensor_view(std::span<uint32_t>{test_data.data(), test_data.size()}, shape);
-    auto tensor = ttml::core::from_xtensor<uint32_t, DataType::UINT32>(xtensor, device);
+    auto tensor = ttml::core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(xtensor, device);
 
     auto xtensor_back = ttml::core::to_xtensor<uint32_t>(tensor);
 

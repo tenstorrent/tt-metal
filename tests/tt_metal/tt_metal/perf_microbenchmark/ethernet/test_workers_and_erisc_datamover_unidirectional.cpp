@@ -8,6 +8,7 @@
 #include <limits>
 #include <random>
 
+#include "buffer_constants.hpp"
 #include "umd/device/types/arch.h"
 #include "tt_backend_api_types.hpp"
 #include <tt-metalium/core_coord.hpp>
@@ -119,6 +120,11 @@ bool RunWriteBWTest(
     bool dest_is_dram
 
 ) {
+    using tt_metal::BufferType;
+    using tt_metal::CBHandle;
+    using tt_metal::DataMovementProcessor;
+    using tt_metal::InterleavedBufferConfig;
+
     // number of bytes to send per eth send (given that eth l1 buf size not
     // guaranteed to be multiple of page size, we won't send the left over
     // bytes at the end

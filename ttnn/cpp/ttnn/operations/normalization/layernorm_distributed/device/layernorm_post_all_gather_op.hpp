@@ -16,7 +16,7 @@ using namespace tt::constants;
 
 namespace ttnn::operations::normalization {
 
-operation::ProgramWithCallbacks layernorm_post_allgather_multi_core(
+tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_core(
     const Tensor& a,
     const Tensor& stats,
     const std::optional<const Tensor>& gamma,
@@ -37,7 +37,7 @@ struct LayerNormPostAllGather {
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
-    operation::ProgramWithCallbacks create_program(
+    tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors) const;

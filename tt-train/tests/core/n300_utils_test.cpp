@@ -13,6 +13,8 @@
 #include "core/distributed_mapping.hpp"
 #include "core/tt_tensor_utils.hpp"
 
+using namespace ttml;
+
 auto check_board_is_n300() {
     return tt_ClusterDescriptor::create()->get_board_type(0) == BoardType::N300;
 }
@@ -39,7 +41,7 @@ TEST_F(N300UtilsTest, TestXTensorReplicateInt32) {
     xt::xarray<int32_t> xtensor = test_data.reshape({1, 1, 1, 3});
     ttml::core::XTensorToMeshVariant<int32_t> replicate_composer =
         ttml::core::ReplicateXTensorToMesh<int32_t>(mesh_shape);
-    auto tensor = ttml::core::from_xtensor<int32_t, DataType::INT32>(xtensor, device, replicate_composer);
+    auto tensor = ttml::core::from_xtensor<int32_t, ttnn::DataType::INT32>(xtensor, device, replicate_composer);
     ttml::core::MeshToXTensorVariant<int32_t> identity_composer = ttml::core::VectorMeshToXTensor<int32_t>(mesh_shape);
     auto xtensors_back = ttml::core::to_xtensor<int32_t>(tensor, identity_composer);
 
@@ -54,7 +56,7 @@ TEST_F(N300UtilsTest, TestXTensorReplicateUInt32) {
     xt::xarray<uint32_t> xtensor = test_data.reshape({1, 1, 1, 3});
     ttml::core::XTensorToMeshVariant<uint32_t> replicate_composer =
         ttml::core::ReplicateXTensorToMesh<uint32_t>(mesh_shape);
-    auto tensor = ttml::core::from_xtensor<uint32_t, DataType::UINT32>(xtensor, device, replicate_composer);
+    auto tensor = ttml::core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(xtensor, device, replicate_composer);
     ttml::core::MeshToXTensorVariant<uint32_t> identity_composer =
         ttml::core::VectorMeshToXTensor<uint32_t>(mesh_shape);
     auto xtensors_back = ttml::core::to_xtensor<uint32_t>(tensor, identity_composer);

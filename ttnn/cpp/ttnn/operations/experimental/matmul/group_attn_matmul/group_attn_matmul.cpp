@@ -57,7 +57,7 @@ ttnn::Tensor GroupAttnMatmulOperation::invoke(
         },
         kernel_config_val);
 
-    return operation::run(
+    return tt::tt_metal::operation::run(
                GroupAttnMatmulDeviceOperation{
                    std::nullopt,
                    std::nullopt,

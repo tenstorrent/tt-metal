@@ -12,8 +12,9 @@ using namespace constants;
 namespace operations {
 namespace primary {
 
-operation::ProgramWithCallbacks prod_single_core(const Tensor& a, const Tensor& output) {
-    Program program{};
+tt::tt_metal::operation::ProgramWithCallbacks prod_single_core(
+    const tt::tt_metal::Tensor& a, const tt::tt_metal::Tensor& output) {
+    tt::tt_metal::Program program{};
 
     CoreRange core({0, 0}, {0, 0});
 
@@ -86,9 +87,9 @@ operation::ProgramWithCallbacks prod_single_core(const Tensor& a, const Tensor& 
     SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_buffer->address(), num_tiles, 0});
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
-                                              const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
+                                              const tt::tt_metal::Program& program,
+                                              const std::vector<tt::tt_metal::Buffer*>& input_buffers,
+                                              const std::vector<tt::tt_metal::Buffer*>& output_buffers) {
         auto src_buffer = input_buffers.at(0);
 
         auto dst_buffer = output_buffers.at(0);

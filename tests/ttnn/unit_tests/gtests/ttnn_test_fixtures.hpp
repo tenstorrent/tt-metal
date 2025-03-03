@@ -18,6 +18,8 @@
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/mesh_device.hpp>
 
+using namespace tt::tt_metal;  // For test
+
 namespace ttnn {
 
 class TTNNFixture : public ::testing::Test {

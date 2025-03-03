@@ -25,7 +25,6 @@
 
 namespace ttnn::operations::data_movement {
 
-
 namespace detail {
 
 ttnn::Tensor convert_tile_to_rm(
@@ -207,7 +206,7 @@ ttnn::Tensor perform_reshape_on_2D_RM(
     }
     //Guaranteed to be interleaved
     //We are guaranteed to be working 2D->2D in this function
-    auto temp_tensor2 = operation::run(
+    auto temp_tensor2 = tt::tt_metal::operation::run(
                             RM_RESHAPE_STRUCT{logical_shape, padded_shape, intermediate_out_memory_config},
                             {temp_tensor},
                             {},

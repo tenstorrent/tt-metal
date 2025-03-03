@@ -87,6 +87,8 @@
  *
  */
 
+using namespace tt::tt_metal;
+
 namespace ttnn::ccl::reduce_scatter_detail {
 
 using ttnn::ccl::Shape4D;

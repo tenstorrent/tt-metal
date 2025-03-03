@@ -333,6 +333,8 @@ bool reader_datacopy_writer(tt_metal::IDevice* device, const ReaderDatacopyWrite
 }
 }  // namespace unit_tests::dram::direct
 
+namespace tt::tt_metal {
+
 TEST_F(DeviceFixture, TensixSingleCoreDirectDramReaderOnly) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         uint32_t l1_unreserved_base = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1);
@@ -386,3 +388,5 @@ TEST_F(DeviceFixture, TensixSingleCoreDirectDramReaderDatacopyWriter) {
         ASSERT_TRUE(unit_tests::dram::direct::reader_datacopy_writer(devices_.at(id), test_config));
     }
 }
+
+}  // namespace tt::tt_metal

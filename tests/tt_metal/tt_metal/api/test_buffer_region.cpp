@@ -9,6 +9,8 @@
 
 #include "device_fixture.hpp"
 
+namespace tt::tt_metal {
+
 TEST_F(DeviceSingleCardBufferFixture, TestInvalidBufferRegion) {
     const InterleavedBufferConfig& buffer_config{
         .device = this->device_, .size = 2048, .page_size = 32, .buffer_type = BufferType::DRAM};
@@ -65,3 +67,5 @@ TEST_F(DeviceSingleCardBufferFixture, TestFullBufferRegion) {
     const BufferRegion buffer_region(0, 2048);
     EXPECT_FALSE(buffer.get()->is_valid_partial_region(buffer_region));
 }
+
+}  // namespace tt::tt_metal

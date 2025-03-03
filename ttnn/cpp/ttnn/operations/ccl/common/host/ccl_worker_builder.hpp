@@ -66,12 +66,12 @@ void generate_ccl_command_stream_to_kernel_args(
  * @return the runtime args
  */
 std::vector<uint32_t> generate_edm_connection_rt_args(
-    const ttnn::ccl::SenderWorkerAdapterSpec& connection_info, Program& program, CoreRangeSet worker_cores);
+    const ttnn::ccl::SenderWorkerAdapterSpec& connection_info, tt::tt_metal::Program& program, CoreRangeSet worker_cores);
 
 // TODO: eventually take a fabric handle
 void generate_multi_input_command_stream_kernel_rt_args(
-    Program& program,
-    KernelHandle kernel_id,
+    tt::tt_metal::Program& program,
+    tt::tt_metal::KernelHandle kernel_id,
     std::vector<Tensor const*> const& tensors,
     std::vector<size_t> const& page_sizes,
     IDevice* device,
@@ -88,8 +88,8 @@ void generate_multi_input_command_stream_kernel_rt_args(
 // TODO: Bundle into command bundle per command stream to cut down
 //       on args and improve usability
 void generate_multi_command_stream_kernel_rt_args(
-    Program& program,
-    KernelHandle kernel_id,
+    tt::tt_metal::Program& program,
+    tt::tt_metal::KernelHandle kernel_id,
     std::vector<uint32_t> const& cb_ids,
     std::vector<const Tensor*> const& tensors,
     IDevice* device,
@@ -102,12 +102,12 @@ void generate_multi_command_stream_kernel_rt_args(
     std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& backward_fabric_connections,
     std::optional<std::vector<ttnn::ccl::edm_termination_info_t>> const& edm_termination_infos,
     std::vector<ttnn::ccl::cmd::CclCommandDestArgs> const& dest_args);
-KernelHandle generate_multi_command_stream_kernel_ct_args(
-    Program& program,
+tt::tt_metal::KernelHandle generate_multi_command_stream_kernel_ct_args(
+    tt::tt_metal::Program& program,
     std::vector<uint32_t> const& cb_indices,
     std::vector<Tensor const*> const& tensors,
     CoreRangeSet const& worker_core_range,
-    DataMovementConfig datamovement_kernel_config,
+    tt::tt_metal::DataMovementConfig datamovement_kernel_config,
     const size_t num_command_streams = 2,
     std::optional<chip_id_t> my_chip_id = std::nullopt);
 

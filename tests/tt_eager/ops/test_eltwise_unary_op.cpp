@@ -116,7 +116,7 @@ void test_operation_infrastructure() {
     ttnn::operations::unary::operation_attributes_t op_args{
         {UnaryWithParam{UnaryOpType::SQRT}},
         DataType::BFLOAT16,
-        MemoryConfig{.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
+        tt::tt_metal::MemoryConfig{.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
         false,
         false};
     ttnn::operations::unary::tensor_args_t tensor_args{input_tensor};
@@ -159,7 +159,7 @@ namespace tt_metal {
 template <bool approx_value = false>
 struct exp_with_param {
     static Tensor fn(const tt::tt_metal::Tensor& t) {
-        return ttnn::exp(t, approx_value, operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+        return ttnn::exp(t, approx_value, tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
     }
 };
 }  // namespace tt_metal

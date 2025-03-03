@@ -68,8 +68,8 @@ struct ExampleMultipleReturnDeviceOperation {
     struct SingleCore {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
         struct shared_variables_t {
-            KernelHandle unary_reader_kernel_id;
-            KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::KernelHandle unary_reader_kernel_id;
+            tt::tt_metal::KernelHandle unary_writer_kernel_id;
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
@@ -122,7 +122,7 @@ struct ExampleMultipleReturnDeviceOperation {
 
     // In case the operation needs a custom create_op_performance_model, this method can be implemented
     /*
-    static operation::OpPerformanceModel create_op_performance_model(
+    static tt::tt_metal::tt::tt_metal::operation::OpPerformanceModel create_op_performance_model(
         const operation_attributes_t&,
         const tensor_args_t&,
         tensor_return_value_t&);

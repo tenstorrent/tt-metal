@@ -9,6 +9,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/bfloat16.hpp>
+#include "tt_metal.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -42,8 +43,8 @@ int main(int argc, char** argv) {
         std::array<uint32_t, 4> shape = {1, 1, 32, 1024 * 32};
 
         uint32_t seed_from_systime = std::chrono::system_clock::now().time_since_epoch().count();
-        Tensor<bfloat16> tensor = initialize_tensor<bfloat16>(
-            shape, Initialize::RANDOM, 0, 100, seed_from_systime);  // TODO: make randomized!
+        tt::deprecated::Tensor<bfloat16> tensor = initialize_tensor<bfloat16>(
+            shape, tt::deprecated::Initialize::RANDOM, 0, 100, seed_from_systime);  // TODO: make randomized!
         auto golden = tensor.get_values();
         auto src_vec = pack_bfloat16_vec_into_uint32_vec(golden);
 

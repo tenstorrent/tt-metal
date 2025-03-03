@@ -13,13 +13,21 @@
 #include "tests/tt_metal/test_utils/print_helpers.hpp"
 #include "matmul_test_utils.hpp"
 
+namespace tt::tt_metal {
+
 using std::vector;
 using namespace tt;
 
 namespace unit_tests_common::matmul::test_matmul_single_core {
 
 bool matmul_single_core(
-    DispatchFixture* fixture, tt_metal::IDevice* device, int M, int N, int K, int out_subblock_h, int out_subblock_w) {
+    tt_metal::DispatchFixture* fixture,
+    tt_metal::IDevice* device,
+    int M,
+    int N,
+    int K,
+    int out_subblock_h,
+    int out_subblock_w) {
     bool pass = true;
 
     tt_metal::Program program = tt_metal::CreateProgram();
@@ -190,7 +198,7 @@ bool matmul_single_core(
     auto activations_tilized = test_utils::tilize(tensor.get_values(), M * 32, K * 32);
     auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
     auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
-    auto activations_tile_transposed = transpose_tiles(activations, M, K, in0_block_w);
+    auto activations_tile_transposed = tt_metal::transpose_tiles(activations, M, K, in0_block_w);
     fixture->WriteBuffer(device, src0_dram_buffer, activations_tile_transposed);
 
     auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32);  // bflaot16 32x32 identity
@@ -213,7 +221,7 @@ bool matmul_single_core(
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
     auto result_flat_layout = convert_to_flat_layout(result_bfp16);
     auto result_untilized = test_utils::untilize(result_flat_layout, M * 32, N * 32);
-    auto golden = select_columns(tensor.get_values(), M, K, std::min(K, N));
+    auto golden = tt_metal::select_columns(tensor.get_values(), M, K, std::min(K, N));
     pass &= test_utils::is_close_vectors<bfloat16>(golden, result_untilized, [&](const bfloat16& a, const bfloat16& b) {
         return tt::test_utils::is_close<bfloat16>(a, b, 0.015f);
     });
@@ -249,3 +257,5 @@ TEST_F(DispatchFixture, TensixMatmulSingleCore) {
             this, devices_.at(id), M, N, K, out_subblock_h, out_subblock_w));
     }
 }
+
+}  // namespace tt::tt_metal

@@ -40,9 +40,9 @@ namespace ttnn {
 namespace ccl {
 void set_edm_runtime_args(
     tt_metal::Program& program,
-    KernelHandle edm_kernel_handle,
-    ccl::EriscDatamoverBuilder const& edm_builder,
-    CoreCoord const& eth_core) {
+    tt_metal::KernelHandle edm_kernel_handle,
+    const ccl::EriscDatamoverBuilder& edm_builder,
+    const CoreCoord& eth_core) {
     std::vector<uint32_t> const& edm_clockwise_kernel_rt_args = edm_builder.get_runtime_args();
     tt_metal::SetRuntimeArgs(program, edm_kernel_handle, eth_core, edm_clockwise_kernel_rt_args);
 
@@ -87,7 +87,7 @@ public:
         }
     }
 
-    std::map<chip_id_t, IDevice*> devices_;
+    std::map<chip_id_t, tt_metal::IDevice*> devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 
@@ -99,8 +99,8 @@ struct BankedConfig {
     size_t num_pages;
     size_t size_bytes;
     size_t page_size_bytes;
-    BufferType input_buffer_type;   // = BufferType::L1;
-    BufferType output_buffer_type;  // = BufferType::L1;
+    tt_metal::BufferType input_buffer_type;   // = BufferType::L1;
+    tt_metal::BufferType output_buffer_type;  // = BufferType::L1;
     tt::DataFormat l1_data_format;  // = tt::DataFormat::Float16_b;
 };
 
@@ -112,11 +112,11 @@ struct KernelXY {
 };
 
 void generate_receiver_worker_kernels(
-    Program& program,
-    IDevice* device,
-    CoreCoord const& worker_core,
-    CoreCoord const& edm_core,
-    ttnn::ccl::EriscDatamoverBuilder::ChannelBufferInterface const& edm_channel,
+    tt_metal::Program& program,
+    tt_metal::IDevice* device,
+    const CoreCoord& worker_core,
+    const CoreCoord& edm_core,
+    const ttnn::ccl::EriscDatamoverBuilder::ChannelBufferInterface& edm_channel,
     uint32_t page_size,
     uint32_t num_pages,
     std::size_t num_buffers_per_edm_channel,
@@ -134,7 +134,7 @@ void generate_receiver_worker_kernels(
         tt_metal::CircularBufferConfig(2 * num_pages_per_edm_buffer * page_size, {{src0_cb_index, df}})
             .set_page_size(src0_cb_index, page_size);
 
-    CBHandle receiver_workers_cb = CreateCircularBuffer(program, worker_core, cb_src0_config);
+    tt_metal::CBHandle receiver_workers_cb = CreateCircularBuffer(program, worker_core, cb_src0_config);
     std::vector<uint32_t> receiver_worker_writer_compile_args{
         dest_is_dram,  //
         num_pages,     //
@@ -194,11 +194,11 @@ void generate_receiver_worker_kernels(
 }
 
 void generate_sender_worker_kernels(
-    Program& program,
-    IDevice* device,
-    CoreCoord const& worker_core,
-    CoreCoord const& edm_core,
-    ttnn::ccl::EriscDatamoverBuilder::ChannelBufferInterface const& edm_channel,
+    tt_metal::Program& program,
+    tt_metal::IDevice* device,
+    const CoreCoord& worker_core,
+    const CoreCoord& edm_core,
+    const ttnn::ccl::EriscDatamoverBuilder::ChannelBufferInterface& edm_channel,
     uint32_t page_size,
     uint32_t num_pages_total,
     std::size_t num_buffers_per_edm_channel,
@@ -248,7 +248,7 @@ void generate_sender_worker_kernels(
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(2 * num_pages_per_edm_buffer * page_size, {{src0_cb_index, df}})
             .set_page_size(src0_cb_index, page_size);
-    CBHandle sender_workers_cb = CreateCircularBuffer(program, worker_core, cb_src0_config);
+    tt_metal::CBHandle sender_workers_cb = CreateCircularBuffer(program, worker_core, cb_src0_config);
     auto sender_worker_reader_kernel = tt_metal::CreateKernel(
         program,
         "tests/ttnn/unit_tests/gtests/ccl/kernels/erisc_datamover_sender_worker_reader.cpp",
@@ -335,15 +335,15 @@ bool RunWriteBWTest(
         .num_pages = num_pages_total,
         .size_bytes = tensor_size_bytes,
         .page_size_bytes = page_size,
-        .input_buffer_type = src_is_dram ? BufferType::DRAM : BufferType::L1,
-        .output_buffer_type = dest_is_dram ? BufferType::DRAM : BufferType::L1,
+        .input_buffer_type = src_is_dram ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1,
+        .output_buffer_type = dest_is_dram ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1,
         .l1_data_format = tt::DataFormat::Float16_b};
 
-    auto local_input_buffer = CreateBuffer(InterleavedBufferConfig{
+    auto local_input_buffer = CreateBuffer(tt_metal::InterleavedBufferConfig{
         sender_device, test_config.size_bytes, test_config.page_size_bytes, test_config.input_buffer_type});
-    auto remote_input_buffer = CreateBuffer(InterleavedBufferConfig{
+    auto remote_input_buffer = CreateBuffer(tt_metal::InterleavedBufferConfig{
         receiver_device, test_config.size_bytes, test_config.page_size_bytes, test_config.input_buffer_type});
-    bool input_is_dram = test_config.input_buffer_type == BufferType::DRAM;
+    bool input_is_dram = test_config.input_buffer_type == tt_metal::BufferType::DRAM;
 
     tt_metal::detail::WriteToBuffer(local_input_buffer, inputs);
     tt_metal::detail::WriteToBuffer(remote_input_buffer, inputs);
@@ -358,21 +358,21 @@ bool RunWriteBWTest(
     // Clear expected value at ethernet L1 address
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
 
-    std::vector<std::shared_ptr<Buffer>> local_output_buffers;
-    std::vector<std::shared_ptr<Buffer>> remote_output_buffers;
+    std::vector<std::shared_ptr<tt_metal::Buffer>> local_output_buffers;
+    std::vector<std::shared_ptr<tt_metal::Buffer>> remote_output_buffers;
 
     for (std::size_t i = 0; i < num_local_sender_channels; i++) {
-        auto output_buffer = CreateBuffer(InterleavedBufferConfig{
+        auto output_buffer = CreateBuffer(tt_metal::InterleavedBufferConfig{
             receiver_device, test_config.size_bytes, test_config.page_size_bytes, test_config.output_buffer_type});
         remote_output_buffers.push_back(output_buffer);
     }
     for (std::size_t i = 0; i < num_remote_sender_channels; i++) {
-        auto output_buffer = CreateBuffer(InterleavedBufferConfig{
+        auto output_buffer = CreateBuffer(tt_metal::InterleavedBufferConfig{
             sender_device, test_config.size_bytes, test_config.page_size_bytes, test_config.output_buffer_type});
         local_output_buffers.push_back(output_buffer);
     }
 
-    bool output_is_dram = test_config.output_buffer_type == BufferType::DRAM;
+    bool output_is_dram = test_config.output_buffer_type == tt_metal::BufferType::DRAM;
     for (const auto& buffer_id : local_output_buffers) {
         tt_metal::detail::WriteToBuffer(buffer_id, all_zeros);
     }
@@ -537,11 +537,11 @@ bool RunWriteBWTest(
     // Build EDMs
     ////////////////////////////////////////////////////////////////////////////
     auto local_edm_kernel = ttnn::ccl::generate_edm_kernel(
-        sender_program, sender_device, local_chip_edm_builder, eth_sender_core, NOC::NOC_0);
+        sender_program, sender_device, local_chip_edm_builder, eth_sender_core, tt_metal::NOC::NOC_0);
     set_edm_runtime_args(sender_program, local_edm_kernel, local_chip_edm_builder, eth_sender_core);
 
     auto remote_edm_kernel = ttnn::ccl::generate_edm_kernel(
-        receiver_program, receiver_device, remote_chip_edm_builder, eth_receiver_core, NOC::NOC_0);
+        receiver_program, receiver_device, remote_chip_edm_builder, eth_receiver_core, tt_metal::NOC::NOC_0);
     set_edm_runtime_args(receiver_program, remote_edm_kernel, remote_chip_edm_builder, eth_receiver_core);
 
     ////////////////////////////////////////////////////////////////////////////
@@ -576,7 +576,7 @@ bool RunWriteBWTest(
     // tt::tt_metal::detail::DumpDeviceProfileResults(sender_device);
     log_info(tt::LogTest, "Reading back outputs");
 
-    auto is_output_correct = [&all_zeros, &inputs](const std::shared_ptr<Buffer>& output_buffer) {
+    auto is_output_correct = [&all_zeros, &inputs](const std::shared_ptr<tt_metal::Buffer>& output_buffer) {
         constexpr bool debug_mode = false;
         std::vector<uint32_t> readback_data_vec;  // init to 0 data for easier debug
         readback_data_vec.reserve(all_zeros.size());

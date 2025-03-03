@@ -23,7 +23,7 @@ ttnn::Tensor PagedUpdateCacheOperation::invoke(
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) {
     auto kernel_config_val = init_device_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config);
     const bool share_cache_arg = share_cache.has_value() ? share_cache.value() : false;  // Default share cache to false
-    operation::run(
+    tt::tt_metal::operation::run(
         PagedUpdateCacheDeviceOperation{
             0, update_idxs, batch_offset, PagedUpdateCacheOpType::UPDATE, kernel_config_val, share_cache_arg},
         {cache_tensor, input_tensor},
@@ -45,7 +45,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> PagedFusedUpdateCacheOperation::invoke(
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) {
     auto kernel_config_val = init_device_compute_kernel_config(input_tensor1.device()->arch(), compute_kernel_config);
     const bool share_cache_arg = share_cache.has_value() ? share_cache.value() : false;  // Default share cache to false
-    operation::run(
+    tt::tt_metal::operation::run(
         PagedUpdateCacheDeviceOperation{
             0, update_idxs, batch_offset, PagedUpdateCacheOpType::FUSED_UPDATE, kernel_config_val, share_cache_arg},
         {cache_tensor1, input_tensor1, cache_tensor2, input_tensor2},
@@ -61,7 +61,7 @@ ttnn::Tensor PagedFillCacheOperation::invoke(
     const uint32_t batch_idx,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) {
     auto kernel_config_val = init_device_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config);
-    operation::run(
+    tt::tt_metal::operation::run(
         PagedUpdateCacheDeviceOperation{batch_idx, {}, 0, PagedUpdateCacheOpType::FILL, kernel_config_val},
         {cache_tensor, input_tensor, page_table},
         {std::nullopt, std::nullopt});

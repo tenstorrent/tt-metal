@@ -240,7 +240,7 @@ static void log_sharded_tensor_kernel_args(const Tensor& tensor, const std::stri
 // For ring all-gather, we can send sub-sections of input tensor in opposite directions
 // For linear all-gather though, we must ensure we send full tensors in BOTH directions
 //   (in other words, disable the "bidirectional" send flag)
-operation::ProgramWithCallbacks all_gather_multi_core_with_workers(
+tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers(
     const Tensor& input_tensor,
     Tensor& output_tensor,
     const uint32_t dim,
@@ -252,7 +252,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(
     ccl::Topology topology,
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel) {
-    tt::tt_metal::Program program{};
+    Program program{};
     std::optional<experimental::ccl::AllGatherFusedOpSignaler> empty_fused_op_signaler;
     return all_gather_multi_core_with_workers_helper(
         program,
@@ -270,8 +270,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(
         empty_fused_op_signaler);
 }
 
-operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
-    tt::tt_metal::Program& program,
+tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
+    Program& program,
     const Tensor& input_tensor,
     Tensor& output_tensor,
     const uint32_t dim,
@@ -461,11 +461,12 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     const uint32_t cb_size_in_pages = cb_n_packets * max_pages_per_chunk;
     const uint32_t CB_buffer_size = cb_n_packets * max_buffer_per_chunk;
     log_trace(tt::LogOp, "max_pages_per_chunk: {}", max_pages_per_chunk);
-    CircularBufferConfig cb_src0_config = CircularBufferConfig(CB_buffer_size, {{src0_cb_index, df}})
-                                              .set_page_size(src0_cb_index, input_page_size)
-                                              .set_tile_dims(src0_cb_index, input_tensor_config->get_tile());
-    CBHandle cb_src0_sender_workers = CreateCircularBuffer(program, all_sender_workers, cb_src0_config);
-    CBHandle cb_src0_receiver_workers = CreateCircularBuffer(program, all_receiver_workers, cb_src0_config);
+    auto cb_src0_config = tt::tt_metal::CircularBufferConfig(CB_buffer_size, {{src0_cb_index, df}})
+                              .set_page_size(src0_cb_index, input_page_size)
+                              .set_tile_dims(src0_cb_index, input_tensor_config->get_tile());
+    tt::tt_metal::CBHandle cb_src0_sender_workers = CreateCircularBuffer(program, all_sender_workers, cb_src0_config);
+    tt::tt_metal::CBHandle cb_src0_receiver_workers =
+        CreateCircularBuffer(program, all_receiver_workers, cb_src0_config);
 
     // This semaphore is used by the receiver core to tell workers that data is available to read
     auto receiver_worker_semaphore_id = CreateSemaphore(program, all_receiver_workers, 0);
@@ -517,7 +518,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     std::string const& send_reader_kernel_path =
         "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/"
         "worker_interleaved_ring_gather_send_reader.cpp";
-    KernelHandle worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::KernelHandle worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         send_reader_kernel_path,
         all_sender_workers,
@@ -559,7 +560,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     std::string const& sender_writer_kernel_path =
         "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/"
         "worker_interleaved_ring_gather_send_writer.cpp";
-    KernelHandle worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::KernelHandle worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         sender_writer_kernel_path,
         all_sender_workers,
@@ -584,7 +585,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     std::string const& receiver_reader_kernel_path =
         "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/"
         "worker_interleaved_ring_gather_receive_reader.cpp";
-    KernelHandle worker_receiver_reader_kernel_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::KernelHandle worker_receiver_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         receiver_reader_kernel_path,
         all_receiver_workers,
@@ -626,7 +627,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     std::string const& receiver_writer_kernel_path =
         "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/"
         "worker_interleaved_ring_gather_receive_writer.cpp";
-    KernelHandle worker_receiver_writer_kernel_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::KernelHandle worker_receiver_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         receiver_writer_kernel_path,
         all_receiver_workers,

@@ -15,16 +15,16 @@ bool is_power_of_two_at_least_32(uint32_t value) { return value >= 32 && (value 
 
 using namespace tt;
 
-std::map<DataType, uint32_t> data_type_to_size = {
-    {DataType::BFLOAT16, 2},
-    {DataType::FLOAT32, 4},
-    {DataType::UINT32, 4},
-    {DataType::UINT8, 1},
+std::map<ttnn::DataType, uint32_t> data_type_to_size = {
+    {ttnn::DataType::BFLOAT16, 2},
+    {ttnn::DataType::FLOAT32, 4},
+    {ttnn::DataType::UINT32, 4},
+    {ttnn::DataType::UINT8, 1},
 };
 
 namespace ttnn::operations::data_movement::detail {
 
-operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& input_tensor, float fill_value) {
+tt::tt_metal::operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& input_tensor, float fill_value) {
     tt::tt_metal::IDevice* device = input_tensor.device();
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 

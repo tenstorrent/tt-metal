@@ -8,7 +8,7 @@
 
 namespace ttnn::operations::experimental::ssm::detail {
 
-operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
+tt::tt_metal::operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
     const Tensor& a,
     const Tensor& b,
     Tensor& output,

@@ -5,6 +5,7 @@
 #include "softmax_op.hpp"
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/base_types.hpp>
+#include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -25,6 +26,10 @@ namespace ttnn::operations::normalization {
 void Softmax::validate(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
+    using tt::tt_metal::DataType;
+    using tt::tt_metal::Layout;
+    using tt::tt_metal::StorageType;
+
     TT_FATAL(input_tensors.size() == 1 and optional_input_tensors.size() <= 1, "Must have 1 or 2 input tensors");
     auto& input_tensor = input_tensors.at(0);
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
@@ -94,7 +99,9 @@ void Softmax::validate(
                             TT_FATAL(mask.is_sharded() == false, "Error");
                             TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Error");
                             TT_FATAL(input_tensor.is_sharded(), "Error");
-                            TT_FATAL(input_tensor.shard_spec()->orientation == ShardOrientation::ROW_MAJOR, "Error");
+                            TT_FATAL(
+                                input_tensor.shard_spec()->orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR,
+                                "Error");
                             TT_FATAL(this->scale.has_value(), "Error");
                         }
                     }
@@ -116,7 +123,8 @@ std::vector<TensorSpec> Softmax::compute_output_specs(const std::vector<Tensor>&
     }
     return {TensorSpec(
         input_tensor.get_logical_shape(),
-        TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), output_mem_config))};
+        tt::tt_metal::TensorLayout(
+            input_tensor.get_dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), output_mem_config))};
 }
 
 std::vector<Tensor> Softmax::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
@@ -127,7 +135,7 @@ std::vector<Tensor> Softmax::create_output_tensors(const std::vector<Tensor>& in
     return {create_device_tensor(compute_output_specs(input_tensors)[0], input_tensors.at(0).device())};
 }
 
-operation::ProgramWithCallbacks Softmax::create_program(
+tt::tt_metal::operation::ProgramWithCallbacks Softmax::create_program(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
@@ -139,7 +147,7 @@ operation::ProgramWithCallbacks Softmax::create_program(
     bool causal_mask = this->is_causal_mask;
 
     return std::visit(
-        [&](const auto& program_config) -> operation::ProgramWithCallbacks {
+        [&](const auto& program_config) -> tt::tt_metal::operation::ProgramWithCallbacks {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (std::is_same_v<ProgramConfigType, SoftmaxShardedMultiCoreProgramConfig>) {
                 return scale_mask_softmax_sharded_multi_core(
@@ -169,14 +177,15 @@ operation::ProgramWithCallbacks Softmax::create_program(
         this->program_config);
 }
 
-const operation::Hash Softmax::compute_program_hash(
+const tt::tt_metal::operation::Hash Softmax::compute_program_hash(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
-    return operation::hash_operation<Softmax>(
-        std::get<DeviceStorage>(input_tensors.at(0).storage()).memory_config(),
+    return tt::tt_metal::operation::hash_operation<Softmax>(
+        std::get<tt::tt_metal::DeviceStorage>(input_tensors.at(0).storage()).memory_config(),
         input_tensors.at(0).dtype(),
         optional_input_tensors.at(0).has_value()
-            ? std::optional{std::get<DeviceStorage>(optional_input_tensors.at(0).value().storage()).memory_config()}
+            ? std::optional{std::get<tt::tt_metal::DeviceStorage>(optional_input_tensors.at(0).value().storage())
+                                .memory_config()}
             : std::nullopt,
         optional_input_tensors.at(0).has_value() ? std::optional{optional_input_tensors.at(0).value().dtype()}
                                                  : std::nullopt,
@@ -200,8 +209,9 @@ Tensor scale_mask_softmax_in_place(
     const bool is_causal_mask,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const bool numeric_stable) {
-    std::vector<Tensor> dummy_output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    operation::launch_op(
+    std::vector<Tensor> dummy_output_tensors = {
+        Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
+    tt::tt_metal::operation::launch_op(
         [scale, mask, program_config, is_causal_mask, compute_kernel_config, numeric_stable](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -210,7 +220,7 @@ Tensor scale_mask_softmax_in_place(
             auto& mask = optional_input_tensors.at(0);
             auto kernel_config_val = init_device_compute_kernel_config(
                 input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, false, false);
-            return operation::run(
+            return tt::tt_metal::operation::run(
                 Softmax{
                     .scale = scale,
                     .inplace = true,
@@ -235,8 +245,9 @@ Tensor scale_causal_mask_hw_dims_softmax_in_place(
     const SoftmaxProgramConfig& program_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const bool numeric_stable) {
-    std::vector<Tensor> dummy_output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    operation::launch_op(
+    std::vector<Tensor> dummy_output_tensors = {
+        Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
+    tt::tt_metal::operation::launch_op(
         [scale, mask, program_config, compute_kernel_config, numeric_stable](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -245,7 +256,7 @@ Tensor scale_causal_mask_hw_dims_softmax_in_place(
             auto& mask = optional_input_tensors.at(0);
             auto kernel_config_val = init_device_compute_kernel_config(
                 input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, false, false);
-            return operation::run(
+            return tt::tt_metal::operation::run(
                 Softmax{
                     .scale = scale,
                     .inplace = true,
@@ -266,7 +277,7 @@ Tensor scale_causal_mask_hw_dims_softmax_in_place(
 
 Tensor softmax(
     const Tensor& input_tensor,
-    const MemoryConfig& output_mem_config,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const bool numeric_stable) {
     return scale_mask_softmax(
@@ -277,12 +288,12 @@ Tensor scale_mask_softmax(
     const Tensor& input_tensor,
     std::optional<float> scale,
     const std::optional<const Tensor>& mask,
-    const MemoryConfig& output_mem_config,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
     const bool is_causal_mask,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const bool numeric_stable) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    operation::launch_with_autoformat(
+    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
+    tt::tt_metal::operation::launch_with_autoformat(
         [scale, mask, output_mem_config, is_causal_mask, compute_kernel_config, numeric_stable](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -294,7 +305,7 @@ Tensor scale_mask_softmax(
             ttnn::operations::experimental::auto_format::FormatParams input_format_params = {
                 .pad_shape = input_pad_shape,
                 .pad_value = -std::numeric_limits<float>::infinity(),
-                .target_layout = Layout::TILE};
+                .target_layout = tt::tt_metal::Layout::TILE};
             std::optional<ttnn::operations::experimental::auto_format::FormatParams> mask_format_params = std::nullopt;
             if (mask.has_value()) {
                 TT_FATAL(input_tensor.get_padded_shape()[-1] == mask.value().get_padded_shape()[-1], "Error");
@@ -310,11 +321,11 @@ Tensor scale_mask_softmax(
                 mask_format_params = {
                     .pad_shape = mask_pad_shape,
                     .pad_value = -std::numeric_limits<float>::infinity(),
-                    .target_layout = Layout::TILE};
+                    .target_layout = tt::tt_metal::Layout::TILE};
             }
             auto kernel_config_val = init_device_compute_kernel_config(
                 input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, false, false);
-            return operation::run_with_autoformat(
+            return tt::tt_metal::operation::run_with_autoformat(
                 Softmax{
                     .scale = scale,
                     .inplace = false,
@@ -324,7 +335,7 @@ Tensor scale_mask_softmax(
                     .numeric_stable = numeric_stable},
                 {input_tensor},
                 {input_format_params},
-                {Layout::TILE},
+                {tt::tt_metal::Layout::TILE},
                 {mask},
                 {mask_format_params});
         },

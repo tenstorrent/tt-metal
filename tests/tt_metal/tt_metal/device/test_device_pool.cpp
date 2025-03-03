@@ -7,6 +7,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device_pool.hpp>
 
+namespace tt::tt_metal {
+
 using namespace tt;
 
 TEST(DevicePool, DevicePoolOpenClose) {
@@ -129,3 +131,5 @@ TEST(DevicePool, DevicePoolReduceDevices) {
     ASSERT_TRUE(dev->is_initialized());
     DevicePool::instance().close_device(0);
 }
+
+}  // namespace tt::tt_metal

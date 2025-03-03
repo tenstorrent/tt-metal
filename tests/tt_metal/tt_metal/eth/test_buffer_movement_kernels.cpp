@@ -40,7 +40,7 @@ struct BankedConfig {
 namespace unit_tests::erisc::kernels {
 
 bool chip_to_chip_dram_buffer_transfer(
-    DispatchFixture* fixture,
+    tt_metal::DispatchFixture* fixture,
     tt_metal::IDevice* sender_device,
     tt_metal::IDevice* receiver_device,
     const CoreCoord& eth_sender_core,
@@ -171,7 +171,7 @@ bool chip_to_chip_dram_buffer_transfer(
 }
 
 bool chip_to_chip_interleaved_buffer_transfer(
-    DispatchFixture* fixture,
+    tt_metal::DispatchFixture* fixture,
     tt_metal::IDevice* sender_device,
     tt_metal::IDevice* receiver_device,
     const CoreCoord& eth_sender_core,
@@ -210,7 +210,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
         .page_size = cfg.page_size_bytes,
         .buffer_type = cfg.output_buffer_type};
     auto input_buffer = CreateBuffer(sender_config);
-    bool input_is_dram = cfg.input_buffer_type == BufferType::DRAM;
+    bool input_is_dram = cfg.input_buffer_type == tt_metal::BufferType::DRAM;
 
     fixture->WriteBuffer(sender_device, input_buffer, input_packed);
 
@@ -244,7 +244,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
     tt_metal::Program receiver_program = tt_metal::Program();
 
     auto output_buffer = CreateBuffer(receiver_config);
-    bool output_is_dram = cfg.output_buffer_type == BufferType::DRAM;
+    bool output_is_dram = cfg.output_buffer_type == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> all_zeros(cfg.size_bytes / sizeof(uint32_t), 0);
 
     tt_metal::detail::WriteToBuffer(output_buffer, all_zeros);
@@ -299,6 +299,8 @@ bool chip_to_chip_interleaved_buffer_transfer(
 }
 
 }  // namespace unit_tests::erisc::kernels
+
+namespace tt::tt_metal {
 
 TEST_F(TwoDeviceFixture, ActiveEthKernelsSendDramBufferChip0ToChip1) {
     if (arch_ == ARCH::BLACKHOLE) {
@@ -659,3 +661,5 @@ TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBuf
         }
     }
 }
+
+}  // namespace tt::tt_metal

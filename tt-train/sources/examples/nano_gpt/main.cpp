@@ -268,11 +268,11 @@ void generate(
             prompt_tokens_padded[i - start_idx] = prompt_tokens[i];
         }
         auto prompt_tokens_padded_size = static_cast<uint32_t>(prompt_tokens_padded.size());
-        auto prompt_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, DataType::UINT32>(
+        auto prompt_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
             prompt_tokens_padded,
             ttml::core::create_shape({1, 1, 1, prompt_tokens_padded_size}),
             device,
-            Layout::ROW_MAJOR));
+            ttnn::Layout::ROW_MAJOR));
 
         // Forward pass
         // 'output' shape is presumably [batch=1, 1, seq_len, vocab_size] or something similar
@@ -551,21 +551,26 @@ int main(int argc, char **argv) {
                     auto data_xtensor = xt::adapt(data, {batch_size, 1U, 1U, sequence_length});
                     auto data_composer = ttml::core::ShardXTensorToMesh<uint32_t>(device->shape(), 0);
                     auto data_tensor =
-                        ttml::autograd::create_tensor(ttml::core::from_xtensor<uint32_t, DataType::UINT32>(
-                            data_xtensor, device, data_composer, Layout::ROW_MAJOR));
+                        ttml::autograd::create_tensor(ttml::core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
+                            data_xtensor, device, data_composer, ttnn::Layout::ROW_MAJOR));
 
                     auto targets_xtensor = xt::adapt(targets, {batch_size * sequence_length});
                     auto targets_composer = ttml::core::ShardXTensorToMesh<int32_t>(device->shape(), 0);
-                    auto targets_tt_tensor =
-                        ttml::core::from_xtensor<int32_t, DataType::INT32>(targets_xtensor, device, targets_composer);
+                    auto targets_tt_tensor = ttml::core::from_xtensor<int32_t, ttnn::DataType::INT32>(
+                        targets_xtensor, device, targets_composer);
                     auto targets_tensor = ttml::autograd::create_tensor(targets_tt_tensor);
                     return {data_tensor, targets_tensor};
                 }
 
-                auto data_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, DataType::UINT32>(
-                    data, ttml::core::create_shape({batch_size, 1, 1, sequence_length}), device, Layout::ROW_MAJOR));
-                auto targets_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<int32_t, DataType::INT32>(
-                    targets, ttnn::Shape({batch_size * sequence_length}), device));
+                auto data_tensor =
+                    ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+                        data,
+                        ttml::core::create_shape({batch_size, 1, 1, sequence_length}),
+                        device,
+                        ttnn::Layout::ROW_MAJOR));
+                auto targets_tensor =
+                    ttml::autograd::create_tensor(ttml::core::from_vector<int32_t, ttnn::DataType::INT32>(
+                        targets, ttnn::Shape({batch_size * sequence_length}), device));
                 return {data_tensor, targets_tensor};
             };
 

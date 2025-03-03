@@ -28,7 +28,7 @@ std::vector<Tensor> Barrier::create_output_tensors(const std::vector<Tensor>& in
     return input_tensors;
 }
 
-operation::ProgramWithCallbacks Barrier::create_program(
+tt::tt_metal::operation::ProgramWithCallbacks Barrier::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     return ccl::barrier::detail::barrier_with_workers(
         input_tensors.at(0),
@@ -72,8 +72,8 @@ void Barrier::update_structure(const Tensor& input_tensor) {
 namespace operations::ccl {
 
 Tensor barrier_function(const Tensor& input_tensor, const ttnn::Barrier& barrier_struct) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
+    tt::tt_metal::operation::launch_op(
         [barrier_struct](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -82,7 +82,7 @@ Tensor barrier_function(const Tensor& input_tensor, const ttnn::Barrier& barrier
             // need to copy and update barrier struct for this particular tensor
             ttnn::Barrier new_barrier_struct = barrier_struct;
             new_barrier_struct.update_structure(input_tensor);
-            return operation::run(new_barrier_struct, {input_tensor});
+            return tt::tt_metal::operation::run(new_barrier_struct, {input_tensor});
         },
         {input_tensor},
         output_tensors);

@@ -11,10 +11,10 @@ namespace ttnn::operations::experimental::dropout::program {
 
 struct DropoutProgramFactory {
     struct shared_variables_t {
-        KernelHandle dropout_reader_kernel_id;
-        KernelHandle dropout_writer_kernel_id;
-        KernelHandle dropout_kernel_group_1_id;
-        KernelHandle dropout_kernel_group_2_id;
+        tt::tt_metal::KernelHandle dropout_reader_kernel_id;
+        tt::tt_metal::KernelHandle dropout_writer_kernel_id;
+        tt::tt_metal::KernelHandle dropout_kernel_group_1_id;
+        tt::tt_metal::KernelHandle dropout_kernel_group_2_id;
         CoreRangeSet core_group_1;
         CoreRangeSet core_group_2;
         uint32_t num_cores;

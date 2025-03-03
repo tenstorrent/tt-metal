@@ -34,7 +34,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> CreateQKVHeadsSeparateTenso
     } else {
         optional_outputs = {};
     }
-    auto output_tensors = operation::run(
+    auto output_tensors = tt::tt_metal::operation::run(
         CreateQKVHeadsSeparateTensorsDeviceOperation{
             num_q_heads,
             num_kv_heads_val,

@@ -136,7 +136,7 @@ static ttnn::Tensor pad_impl(
             "output_w != output_memory_config.shard_spec().shape[1]");
 
         ttnn::Shape output_shape{output_padded_shape};
-        auto output_tensor = operation::run(
+        auto output_tensor = tt::tt_metal::operation::run(
                                  Pad{output_shape,
                                      output_shape,
                                      ttnn::Shape{input_tensor_start},

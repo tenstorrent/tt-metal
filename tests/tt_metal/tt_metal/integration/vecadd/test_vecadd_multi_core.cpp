@@ -12,8 +12,9 @@
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 
+namespace tt::tt_metal {
+
 using namespace tt;
-using namespace tt::tt_metal;
 
 using CoreSpec = std::variant<CoreCoord, CoreRange, CoreRangeSet>;
 
@@ -146,3 +147,5 @@ TEST_F(DispatchFixture, VecaddMultiCore) {
     uint32_t num_tiles = 64;
     ASSERT_TRUE(unit_tests_common::vecadd::test_vecadd_multi_core::vecadd_multi_core(this, devices_.at(0), num_tiles));
 }
+
+}  // namespace tt::tt_metal

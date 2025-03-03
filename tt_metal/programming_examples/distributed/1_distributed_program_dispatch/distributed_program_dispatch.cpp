@@ -8,6 +8,7 @@
 // Stand-alone example demonstrating usage of native multi-device TT-Metalium APIs
 // for issuing a program dispatch across a mesh of devices.
 int main(int argc, char** argv) {
+    using namespace tt::tt_metal;
     using namespace tt::tt_metal::distributed;
 
     auto mesh_device = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape(2, 4)});

@@ -29,7 +29,6 @@ using namespace tt::tt_metal::experimental;
 
 namespace ttnn::ccl {
 
-
 // The channel structure is as follows:
 //              &header->  |----------------| channel_base_address
 //                         |    header      |
@@ -696,11 +695,7 @@ void EdmLineFabricOpInterface::build_kernels() const {
                     device->ethernet_core_from_logical_core(edm_builder.my_eth_core_logical).y,
                     device->ethernet_core_from_logical_core(edm_builder.my_eth_core_logical).x);
                 auto local_edm_kernel = ttnn::ccl::generate_edm_kernel(
-                    *program,
-                    device,
-                    edm_builder,
-                    edm_builder.my_eth_core_logical,
-                    NOC::NOC_0);
+                    *program, device, edm_builder, edm_builder.my_eth_core_logical, tt::tt_metal::NOC::NOC_0);
             }
         }
     };

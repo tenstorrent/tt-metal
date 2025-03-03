@@ -9,6 +9,8 @@
 #include <tt-metalium/host_api.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 
+namespace tt::tt_metal {
+
 using namespace tt;
 using namespace tt::test_utils;
 
@@ -274,3 +276,5 @@ TEST_F(DeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
 
     EXPECT_EQ(src, result);
 }
+
+}  // namespace tt::tt_metal

@@ -345,8 +345,8 @@ void build_and_run_roundtrip_latency_test(
 
 auto is_device_pcie_connected(chip_id_t device_id) { return device_id < 4; }
 
-std::vector<hop_eth_sockets> build_eth_sockets_list(std::vector<IDevice*> const& devices) {
-    std::vector<hop_eth_sockets> sockets;
+std::vector<tt::tt_metal::hop_eth_sockets> build_eth_sockets_list(const std::vector<IDevice*>& devices) {
+    std::vector<tt::tt_metal::hop_eth_sockets> sockets;
     std::unordered_map<uint64_t, std::size_t> n_edge_visits;
     for (std::size_t i = 0; i < devices.size(); i++) {
         IDevice* curr_device = devices.at(i);
@@ -502,7 +502,7 @@ int main(int argc, char** argv) {
         constexpr std::size_t placeholder_arg_value = 1;
         for (auto n_hops : hop_counts) {
             auto devices = get_device_list(view, n_hops);
-            std::vector<hop_eth_sockets> hop_eth_sockets = build_eth_sockets_list(devices);
+            std::vector<tt::tt_metal::hop_eth_sockets> hop_eth_sockets = build_eth_sockets_list(devices);
 
             for (auto max_concurrent_samples : max_concurrent_samples) {
                 for (auto num_samples : sample_counts) {
@@ -516,9 +516,9 @@ int main(int argc, char** argv) {
                             sample_page_size,
                             max_concurrent_samples,
                             n_hops);
-                        std::vector<Program> programs = {};
-                        std::vector<KernelHandle> receiver_kernel_ids;
-                        std::vector<KernelHandle> sender_kernel_ids;
+                        std::vector<tt::tt_metal::Program> programs = {};
+                        std::vector<tt::tt_metal::KernelHandle> receiver_kernel_ids;
+                        std::vector<tt::tt_metal::KernelHandle> sender_kernel_ids;
                         tt::tt_metal::build_and_run_roundtrip_latency_test(
                             devices,
                             hop_eth_sockets,

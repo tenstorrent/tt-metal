@@ -60,7 +60,7 @@ void TopK::validate_with_output_tensors(
         input_shape[0] * input_shape[1] * input_shape[2]);
 
     TT_FATAL(this->output_mem_config.is_sharded() == false, "Sharded implementation not supported yet");
-    TT_FATAL(input_tensors.at(0).get_layout() == Layout::TILE, "The input must be in tiled format");
+    TT_FATAL(input_tensors.at(0).get_layout() == tt::tt_metal::Layout::TILE, "The input must be in tiled format");
     if (input_shape[dim] >= topk_utils::multi_core_min_width) {  // multicore implementation
         auto device = input_tensors.at(0).device();
 
@@ -95,10 +95,14 @@ std::vector<TensorSpec> TopK::compute_output_specs(
     auto output_shape = input_tensors.at(0).get_logical_shape();
     output_shape[-1] = this->k;
 
-    auto values_spec =
-        TensorSpec(output_shape, TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), output_mem_config));
-    auto index_spec =
-        TensorSpec(output_shape, TensorLayout(DataType::UINT16, PageConfig(Layout::TILE), output_mem_config));
+    auto values_spec = TensorSpec(
+        output_shape,
+        tt::tt_metal::TensorLayout(
+            input_tensor.get_dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), output_mem_config));
+    auto index_spec = TensorSpec(
+        output_shape,
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::UINT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), output_mem_config));
     return {values_spec, index_spec};
 }
 
@@ -117,7 +121,7 @@ std::vector<Tensor> TopK::create_output_tensors(
     };
 }
 
-operation::ProgramWithCallbacks TopK::create_program(
+tt::tt_metal::operation::ProgramWithCallbacks TopK::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     if (input_tensor.get_padded_shape()[dim] < topk_utils::multi_core_min_width) {

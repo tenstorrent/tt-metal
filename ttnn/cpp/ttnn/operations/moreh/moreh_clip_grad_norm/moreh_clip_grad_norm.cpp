@@ -80,8 +80,9 @@ Tensor MorehClipGradNorm::invoke(
         init_device_compute_kernel_config(inputs.at(0).device()->arch(), compute_kernel_config, MathFidelity::HiFi4));
 
     if (error_if_nonfinite) {
-        const auto fp32_total_norm =
-            tensor_impl::cast_vec<float>(owned_buffer::get_as<bfloat16>(output_total_norm.cpu())).at(0);
+        const auto fp32_total_norm = tt::tt_metal::tensor_impl::cast_vec<float>(
+                                         tt::tt_metal::owned_buffer::get_as<bfloat16>(output_total_norm.cpu()))
+                                         .at(0);
         TT_FATAL(
             std::isfinite(fp32_total_norm),
             "The total norm of order {} for gradients from `parameters` is non-finite, so it cannot be "

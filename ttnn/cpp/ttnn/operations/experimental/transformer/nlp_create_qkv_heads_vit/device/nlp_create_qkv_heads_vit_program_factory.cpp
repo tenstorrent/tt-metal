@@ -12,9 +12,8 @@ namespace ttnn::operations::experimental::transformer {
 
 using namespace tt::constants;
 using namespace tt;
-using namespace tt::tt_metal;
 
-operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_vit(
+tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_vit(
     const Tensor& a, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size) {
     const auto& ashape = a.get_padded_shape();
 

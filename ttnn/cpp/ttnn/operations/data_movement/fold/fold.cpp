@@ -136,7 +136,7 @@ ttnn::MemoryConfig create_sharded_memory_config(
     auto sharded_memory_config = ttnn::MemoryConfig{
         .memory_layout = ttnn::TensorMemoryLayout::HEIGHT_SHARDED,
         .buffer_type = ttnn::BufferType::L1,
-        .shard_spec = ShardSpec{grid_size, {shard_height, shard_width}, orientation}};
+        .shard_spec = tt::tt_metal::ShardSpec{grid_size, {shard_height, shard_width}, orientation}};
 
     tt::log_debug(tt::LogOp, "sharded_memory_config: {}", sharded_memory_config);
 

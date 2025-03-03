@@ -26,7 +26,7 @@ public:
     }
 
     tt::tt_metal::DistributedTensorConfig config() const override {
-        return tt::tt_metal::DistributedTensorConfig{ReplicateTensor{num_devices_}};
+        return tt::tt_metal::DistributedTensorConfig{tt::tt_metal::ReplicateTensor{num_devices_}};
     }
 
 private:
@@ -42,7 +42,7 @@ public:
     }
 
     tt::tt_metal::DistributedTensorConfig config() const override {
-        return tt::tt_metal::DistributedTensorConfig{ShardTensor{shard_dim_}};
+        return tt::tt_metal::DistributedTensorConfig{tt::tt_metal::ShardTensor{shard_dim_}};
     }
 
 private:
@@ -98,7 +98,8 @@ public:
     }
 
     tt::tt_metal::DistributedTensorConfig config() const override {
-        return DistributedTensorConfig{ShardTensor2D{ShardMesh{mesh_rows_, mesh_cols_}}};
+        return tt::tt_metal::DistributedTensorConfig{
+            tt::tt_metal::ShardTensor2D{tt::tt_metal::ShardMesh{mesh_rows_, mesh_cols_}}};
     }
 
 private:

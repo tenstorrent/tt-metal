@@ -66,7 +66,7 @@ uint32_t get_max_l1_space(const Tensor& input_tensor_a) {
     auto device = input_tensor_a.device();
     auto lowest_address = device->lowest_occupied_compute_l1_address();
     uint32_t max_l1_space = lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
-    max_l1_space = max_l1_space - device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    max_l1_space = max_l1_space - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     return max_l1_space;
 }
 
