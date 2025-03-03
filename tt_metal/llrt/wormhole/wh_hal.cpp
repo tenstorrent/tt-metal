@@ -71,7 +71,7 @@ void Hal::initialize_wh() {
     };
 
     this->iram_relocate_func_ = [](uint64_t addr, HalProgrammableCoreType type) {
-        if (std::getenv("TT_METAL_ENABLE_IRAM")) {
+        if (std::getenv("TT_METAL_ENABLE_ERISC_IRAM")) {
             if (type == HalProgrammableCoreType::ACTIVE_ETH &&
                 addr == static_cast<uint64_t>(static_cast<uint32_t>(eth_iram_mem::address_map::ERISC_IRAM_BASE))) {
                 // IRAM enabled program starts from ERISC_IRAM_BASE. This relocation is for where to put the program.

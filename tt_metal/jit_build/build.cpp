@@ -469,7 +469,7 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
             this->target_name_ = "erisc";
             this->cflags_ = env_.cflags_ + " -fno-delete-null-pointer-checks ";
 
-            if (std::getenv("TT_METAL_ENABLE_IRAM")) {
+            if (tt::llrt::RunTimeOptions::get_instance().get_erisc_iram_enabled()) {
                 this->defines_ += "-DENABLE_IRAM ";
             }
             this->defines_ +=
@@ -489,13 +489,13 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
 
             string linker_str;
             if (this->is_fw_) {
-                if (std::getenv("TT_METAL_ENABLE_IRAM")) {
+                if (tt::llrt::RunTimeOptions::get_instance().get_erisc_iram_enabled()) {
                     linker_str = "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/erisc-b0-app_iram.ld ";
                 } else {
                     linker_str = "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/erisc-b0-app.ld ";
                 }
             } else {
-                if (std::getenv("TT_METAL_ENABLE_IRAM")) {
+                if (tt::llrt::RunTimeOptions::get_instance().get_erisc_iram_enabled()) {
                     linker_str = "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/erisc-b0-kernel_iram.ld ";
                 } else {
                     linker_str = "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/erisc-b0-kernel.ld ";
