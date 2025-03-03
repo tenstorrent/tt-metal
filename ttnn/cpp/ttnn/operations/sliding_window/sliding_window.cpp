@@ -411,6 +411,65 @@ BlockingConfig generate_blocking_configs(const ReblockedData& reblocked_gather_d
     return {local_block_config, remote_block_config};
 }
 
+struct FlattenedBlockingConfig {
+    std::vector<std::vector<uint16_t>> local;
+    std::vector<std::vector<uint16_t>> remote;
+};
+
+FlattenedBlockingConfig flatten_blocking_config(const BlockingConfig& blocking, uint32_t num_cores_nhw) {
+    uint32_t max_block_id = 0;
+    for (const auto& core_map : blocking.local) {
+        if (!core_map.empty()) {
+            auto it = core_map.rbegin();  // last item = greatest block_id since map is ordered
+            if (it->first > max_block_id) {
+                max_block_id = it->first;
+            }
+        }
+    }
+    for (const auto& core_map : blocking.remote) {
+        if (!core_map.empty()) {
+            auto it = core_map.rbegin();
+            if (it->first > max_block_id) {
+                max_block_id = it->first;
+            }
+        }
+    }
+
+    // We want to return num_cores_nhw rows, each (max_block_id+1) columns
+    FlattenedBlockingConfig result;
+    result.local.resize(num_cores_nhw);
+    result.remote.resize(num_cores_nhw);
+
+    for (uint32_t core_id = 0; core_id < num_cores_nhw; ++core_id) {
+        // local
+        {
+            result.local[core_id].resize(max_block_id + 1, 0);
+            const auto& core_map = blocking.local[core_id];
+            for (const auto& kv : core_map) {
+                auto block_id = kv.first;
+                auto transfers = kv.second;
+                if (block_id <= max_block_id) {
+                    result.local[core_id][block_id] = transfers;
+                }
+            }
+        }
+        // remote
+        {
+            result.remote[core_id].resize(max_block_id + 1, 0);
+            const auto& core_map = blocking.remote[core_id];
+            for (const auto& kv : core_map) {
+                auto block_id = kv.first;
+                auto transfers = kv.second;
+                if (block_id <= max_block_id) {
+                    result.remote[core_id][block_id] = transfers;
+                }
+            }
+        }
+    }
+
+    return result;
+}
+
 std::tuple<std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>>
 generate_halo_kernel_config_tensors(
     const std::vector<std::pair<bool, uint32_pair_t>>& tensor_metadata,
@@ -464,7 +523,6 @@ generate_halo_kernel_config_tensors(
     const int block_size = 32;
     const auto blocked_gather_data = reblock_per_core_gather_data(per_core_gather_data, block_size);
     const auto blocking_configs = generate_blocking_configs(blocked_gather_data, num_cores_nhw);
-
     tt::log_info("reblocked per core gather data = {}", blocked_gather_data);
     tt::log_info("blocking configs {}", blocking_configs);
 
@@ -625,6 +683,9 @@ generate_halo_kernel_config_tensors(
             }
         }
     };
+
+    const auto flattened_blocking_configs = flatten_blocking_config(blocking_configs, num_cores_nhw);
+    tt::log_info("flattened blocking configs\n{}\n", flattened_blocking_configs);
 
     align_config(flattened_pad_config, 2);
     align_config(flattened_local_config, 2);
