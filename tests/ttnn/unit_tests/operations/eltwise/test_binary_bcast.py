@@ -1151,7 +1151,7 @@ def test_binary_sharded_bcast_w(device, dtype_pt, dtype_tt):
     "a_shape, b_shape, a_shard_size, b_shard_size, core_range",
     (
         [
-            torch.Size([5, 1, 2 * 32, 4 * 32]),
+            torch.Size([7, 5, 2 * 32, 4 * 32]),
             torch.Size([5, 7, 2 * 32, 1]),
             [10 * 32, 4 * 32],
             [10 * 32, 32],
@@ -1687,3 +1687,44 @@ def test_binary_sharded_bcast_w_size(a_shape, b_shape, a_shard_size, b_shard_siz
     out_tt_sharded = ttnn.experimental.add(a_tt, b_tt, memory_config=a_shard_config)
     out_tt_sharded = ttnn.to_torch(out_tt_sharded)
     torch.testing.assert_close(out_tt_sharded, out_pt)
+
+
+@pytest.mark.parametrize(
+    "a_shape, b_shape, a_strategy, b_strategy, a_shard_size, b_shard_size, a_core_range, b_core_range",
+    (
+        [
+            torch.Size([5, 7, 2 * 32, 32]),
+            torch.Size([5, 7, 2 * 32, 32]),
+            ttnn.ShardStrategy.HEIGHT,
+            ttnn.ShardStrategy.HEIGHT,
+            [10 * 32, 32],
+            [14 * 32, 32],
+            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 6))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 4))}),
+        ],
+    ),
+)
+def test_binary_sharded_invalid_spec(
+    a_shape, b_shape, a_strategy, b_strategy, a_shard_size, b_shard_size, a_core_range, b_core_range, device
+):
+    a_sharded_config = ttnn.create_sharded_memory_config(
+        a_shard_size,
+        core_grid=a_core_range,
+        strategy=a_strategy,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    b_sharded_config = ttnn.create_sharded_memory_config(
+        b_shard_size,
+        core_grid=b_core_range,
+        strategy=b_strategy,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    a_pt, a_tt = rand_bf16_gen(a_shape, device, memory_config=a_sharded_config)
+    b_pt, b_tt = rand_bf16_gen(b_shape, device, memory_config=b_sharded_config)
+
+    with pytest.raises(RuntimeError):
+        _ = ttnn.experimental.add(a_tt, b_tt, memory_config=a_sharded_config)
