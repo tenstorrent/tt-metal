@@ -2881,7 +2881,7 @@ def test_block_sharding_relu_act_block_h(
         [3, 8, 1],
     ],
 )
-@pytest.mark.parametrize("stride", [1])
+@pytest.mark.parametrize("stride", [1, 4])
 @pytest.mark.parametrize("enable_halo_split_reader", [True])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384*2}], indirect=True)
 def test_halo_split_reader(
