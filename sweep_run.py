@@ -2,7 +2,7 @@ import os
 import re
 
 # List of operations
-ops = ["i0", "i1", "erf", "tan", "abs_int32"]
+ops = ["rsub", "rdiv", "silu", "softplus", "fill"]
 
 
 # Function to modify the file
@@ -13,7 +13,7 @@ def modify_file(file_path):
     # Modify only if the exact range [-100, 100] is found
     modified_content = re.sub(
         r"low=-100,\s*high=100",  # Match `low=-100, high=100`
-        "low=-1000, high=1000",  # Replace with `low=-1000, high=1000`
+        "low=-1000000, high=1000000",  # Replace with `low=-1000, high=1000`
         content,
     )
 
@@ -30,8 +30,8 @@ for op in ops:
     file_path = f"tests/sweep_framework/sweeps/eltwise/unary/{op}/{op}_survey.py"  # Assuming file structure
 
     # Modify the file if it exists
-    # if os.path.exists(file_path):
-    #     modify_file(file_path)
+    if os.path.exists(file_path):
+        modify_file(file_path)
 
     # Run the commands
     command1 = f"python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name {module_name} --elastic cloud --clean"
