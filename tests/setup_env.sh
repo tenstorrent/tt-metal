@@ -35,8 +35,7 @@ if [[ "$REUSE" == false ]]; then
     # Update packages and install gawk (if necessary)
     echo "Updating system packages..."
     sudo apt update
-    sudo apt install -y gawk
-    sudo apt install software-properties-common build-essential libyaml-cpp-dev libhwloc-dev libzmq3-dev xxd
+    sudo apt install software-properties-common build-essential libyaml-cpp-dev libhwloc-dev libzmq3-dev git-lfs xxd
 
     pip install --upgrade pip
 
@@ -76,8 +75,6 @@ if [[ "$REUSE" == false ]]; then
     echo "Setting CHIP_ARCH variable..."
     export CHIP_ARCH="$result"
     echo "CHIP_ARCH is: $CHIP_ARCH"
-
-    sudo apt-get install git-lfs
 
     # Install torch and related packages
     echo "Installing PyTorch and related packages..."

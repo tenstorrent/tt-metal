@@ -109,7 +109,6 @@ struct address_map {
                                                                    // at RISC_LOCAL_MEM_BASE address
 
   static constexpr std::uint32_t NCRISC_IRAM_MEM_BASE = 0xffc00000; // NCRISC instruction RAM base address
-  static constexpr std::uint32_t NCRISC_HAS_IRAM = 1;
 
   // Perf buffer (FIXME - update once location of the perf data buffer is finalized)
   // Parameter UNPACK_PACK_PERF_BUF_SIZE_LEVEL_1 assumes the following PERF_BUF_SIZE = 12KB - 768
