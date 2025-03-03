@@ -615,7 +615,7 @@ FORCE_INLINE bool can_forward_packet_completely(
     if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::fabric::RoutingFields>) {
         deliver_locally_only = cached_routing_fields.value == tt::fabric::RoutingFields::LAST_MCAST_VAL;
     } else if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::fabric::LowLatencyRoutingFields>) {
-        deliver_locally_only = (cached_routing_fields.value & tt::fabric::LowLatencyRoutingFields::FIELD_MASK) == tt::fabric::LowLatencyRoutingFields::WRITE_ONLY;
+        deliver_locally_only = (cached_routing_fields.value & tt::fabric::LowLatencyRoutingFields::PATH_ROUTING_FIELD_MASK) == tt::fabric::LowLatencyRoutingFields::WRITE_ONLY;
     }
     return deliver_locally_only || downstream_edm_interface.edm_has_space_for_packet();
 }
@@ -641,7 +641,7 @@ FORCE_INLINE void receiver_forward_packet(
             execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id);
         }
     } else if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::fabric::LowLatencyRoutingFields>) {
-        uint32_t routing = cached_routing_fields.value & tt::fabric::LowLatencyRoutingFields::FIELD_MASK;
+        uint32_t routing = cached_routing_fields.value & tt::fabric::LowLatencyRoutingFields::PATH_ROUTING_FIELD_MASK;
         uint16_t payload_size_bytes = packet_start->payload_size_bytes;
         switch (routing) {
             case tt::fabric::LowLatencyRoutingFields::WRITE_ONLY:
