@@ -55,25 +55,52 @@ def test_graph_capture_with_all_parameters(device):
     ttnn.transpose(tt_input, 1, 2)
     captured_graph = ttnn.graph.end_graph_capture()
 
+    node1 = captured_graph[1]["arguments"]
     # ttnn:transpose
+    assert node1[0] == "\x00"
     assert (
-        captured_graph[1]["arguments"]
-        == "[ \x00, std::__1::reference_wrapper<tt::stl::StrongType<unsigned char, ttnn::QueueIdTag>>],[ Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt)),tensor_spec=TensorSpec(logical_shape=Shape([1, 2048, 4, 128]),tensor_layout=TensorLayout(dtype=BFLOAT16,page_config=PageConfig(config=RowMajorPageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt),alignment=Alignment([1])))), std::__1::reference_wrapper<tt::tt_metal::Tensor const>],[ 1, std::__1::reference_wrapper<long const>],[ 2, std::__1::reference_wrapper<long const>],[ nullopt, std::__1::reference_wrapper<std::__1::optional<tt::tt_metal::MemoryConfig> const>],[ 0, std::__1::reference_wrapper<std::__1::optional<float> const>]"
+        node1[1]
+        == "Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt)),tensor_spec=TensorSpec(logical_shape=Shape([1, 2048, 4, 128]),tensor_layout=TensorLayout(dtype=BFLOAT16,page_config=PageConfig(config=RowMajorPageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt),alignment=Alignment([1]))))"
     )
+    assert node1[2] == "1"
+    assert node1[3] == "2"
+    assert node1[4] == "nullopt"
+    assert node1[5] == "0"
+
     # ttnn::prim::permute
+    node4 = captured_graph[4]["arguments"]
     assert (
-        captured_graph[4]["arguments"]
-        == "[ Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt)),tensor_spec=TensorSpec(logical_shape=Shape([1, 2048, 4, 128]),tensor_layout=TensorLayout(dtype=BFLOAT16,page_config=PageConfig(config=RowMajorPageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt),alignment=Alignment([1])))), std::__1::reference_wrapper<tt::tt_metal::Tensor const>],[ SmallVector([0, 2, 1, 3]), std::__1::reference_wrapper<tt::stl::SmallVector<unsigned int, 8ul>>],[ MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt), std::__1::reference_wrapper<tt::tt_metal::MemoryConfig const>],[ unsupported type , std::__1::reference_wrapper<std::__1::nullopt_t const>],[ 0, std::__1::reference_wrapper<std::__1::optional<float> const>]"
+        node4[0]
+        == "Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt)),tensor_spec=TensorSpec(logical_shape=Shape([1, 2048, 4, 128]),tensor_layout=TensorLayout(dtype=BFLOAT16,page_config=PageConfig(config=RowMajorPageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt),alignment=Alignment([1]))))"
     )
+    assert node4[1] == "SmallVector([0, 2, 1, 3])"
+    assert (
+        node4[2]
+        == "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt)"
+    )
+    assert node4[3] == "[ unsupported type , std::__1::reference_wrapper<std::__1::nullopt_t const>]"
+    assert node4[4] == "0"
+
     # PermuteDeviceOperation
+    node6 = captured_graph[6]["arguments"]
     assert (
-        captured_graph[6]["arguments"]
-        == "[ unsupported type , std::__1::reference_wrapper<ttnn::operations::data_movement::PermuteDeviceOperation::operation_attributes_t const>],[ unsupported type , std::__1::reference_wrapper<ttnn::operations::data_movement::PermuteDeviceOperation::tensor_args_t const>]"
+        node6[0]
+        == "[ unsupported type , std::__1::reference_wrapper<ttnn::operations::data_movement::PermuteDeviceOperation::operation_attributes_t const>]"
     )
-    # tt::tt_metal::create_device_tensor
     assert (
-        captured_graph[7]["arguments"]
-        == "[ Shape([1, 4, 2048, 128]), std::__1::reference_wrapper<tt::tt_metal::Shape const>],[ BFLOAT16, std::__1::reference_wrapper<tt::tt_metal::DataType>],[ Row Major, std::__1::reference_wrapper<tt::tt_metal::Layout>],[ unsupported type , std::__1::reference_wrapper<tt::tt_metal::v0::IDevice*>],[ MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt), std::__1::reference_wrapper<tt::tt_metal::MemoryConfig const>]"
+        node6[1]
+        == "[ unsupported type , std::__1::reference_wrapper<ttnn::operations::data_movement::PermuteDeviceOperation::tensor_args_t const>]"
+    )
+
+    # tt::tt_metal::create_device_tensor
+    node7 = captured_graph[7]["arguments"]
+    assert node7[0] == "Shape([1, 4, 2048, 128])"
+    assert node7[1] == "BFLOAT16"
+    assert node7[2] == "Row Major"
+    assert node7[3] == "[ unsupported type , std::__1::reference_wrapper<tt::tt_metal::v0::IDevice*>]"
+    assert (
+        node7[4]
+        == "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt)"
     )
 
 
@@ -103,24 +130,61 @@ def test_graph_capture_without_memory_config(device):
     captured_graph = ttnn.graph.end_graph_capture()
 
     # ttnn::moreh_dot
+    node1 = captured_graph[1]["arguments"]
     assert (
-        captured_graph[1]["arguments"]
-        == "[ Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt)),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 1, 32]),tensor_layout=TensorLayout(dtype=BFLOAT16,page_config=PageConfig(config=TilePageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt),alignment=Alignment([32, 32])))), std::__1::reference_wrapper<tt::tt_metal::Tensor const>],[ Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt)),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 1, 32]),tensor_layout=TensorLayout(dtype=BFLOAT16,page_config=PageConfig(config=TilePageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt),alignment=Alignment([32, 32])))), std::__1::reference_wrapper<tt::tt_metal::Tensor const>],[ nullopt, std::__1::reference_wrapper<std::__1::optional<tt::tt_metal::Tensor> const>],[ BFLOAT16, std::__1::reference_wrapper<std::__1::optional<tt::tt_metal::DataType> const>],[ nullopt, std::__1::reference_wrapper<std::__1::optional<tt::tt_metal::MemoryConfig> const>],[ unsupported type , std::__1::reference_wrapper<std::__1::optional<std::__1::variant<ttnn::GrayskullComputeKernelConfig, ttnn::WormholeComputeKernelConfig>> const>]"
+        node1[0]
+        == "Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt)),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 1, 32]),tensor_layout=TensorLayout(dtype=BFLOAT16,page_config=PageConfig(config=TilePageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt),alignment=Alignment([32, 32]))))"
     )
+    assert (
+        node1[1]
+        == "Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt)),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 1, 32]),tensor_layout=TensorLayout(dtype=BFLOAT16,page_config=PageConfig(config=TilePageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt),alignment=Alignment([32, 32]))))"
+    )
+    assert node1[2] == "nullopt"
+    assert node1[3] == "BFLOAT16"
+    assert node1[4] == "nullopt"
+    assert (
+        node1[5]
+        == "[ unsupported type , std::__1::reference_wrapper<std::__1::optional<std::__1::variant<ttnn::GrayskullComputeKernelConfig, ttnn::WormholeComputeKernelConfig>> const>]"
+    )
+
     # ttnn::prim::moreh_dot
+    node6 = captured_graph[6]["arguments"]
     assert (
-        captured_graph[6]["arguments"]
-        == "[ Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt)),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 1, 32]),tensor_layout=TensorLayout(dtype=BFLOAT16,page_config=PageConfig(config=TilePageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt),alignment=Alignment([32, 32])))), std::__1::reference_wrapper<tt::tt_metal::Tensor const>],[ Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt)),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 1, 32]),tensor_layout=TensorLayout(dtype=BFLOAT16,page_config=PageConfig(config=TilePageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt),alignment=Alignment([32, 32])))), std::__1::reference_wrapper<tt::tt_metal::Tensor const>],[ nullopt, std::__1::reference_wrapper<std::__1::optional<tt::tt_metal::Tensor> const>],[ BFLOAT16, std::__1::reference_wrapper<std::__1::optional<tt::tt_metal::DataType> const>],[ nullopt, std::__1::reference_wrapper<std::__1::optional<tt::tt_metal::MemoryConfig> const>],[ unsupported type , std::__1::reference_wrapper<std::__1::optional<std::__1::variant<ttnn::GrayskullComputeKernelConfig, ttnn::WormholeComputeKernelConfig>> const>]"
+        node6[0]
+        == "Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt)),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 1, 32]),tensor_layout=TensorLayout(dtype=BFLOAT16,page_config=PageConfig(config=TilePageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt),alignment=Alignment([32, 32]))))"
     )
+    assert (
+        node6[1]
+        == "Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt)),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 1, 32]),tensor_layout=TensorLayout(dtype=BFLOAT16,page_config=PageConfig(config=TilePageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt),alignment=Alignment([32, 32]))))"
+    )
+    assert node6[2] == "nullopt"
+    assert node6[3] == "BFLOAT16"
+    assert node6[4] == "nullopt"
+    assert (
+        node6[5]
+        == "[ unsupported type , std::__1::reference_wrapper<std::__1::optional<std::__1::variant<ttnn::GrayskullComputeKernelConfig, ttnn::WormholeComputeKernelConfig>> const>]"
+    )
+
     # MorehDotOperation
+    node9 = captured_graph[9]["arguments"]
     assert (
-        captured_graph[9]["arguments"]
-        == "[ unsupported type , std::__1::reference_wrapper<ttnn::operations::moreh::moreh_dot::MorehDotOperation::operation_attributes_t const>],[ unsupported type , std::__1::reference_wrapper<ttnn::operations::moreh::moreh_dot::MorehDotOperation::tensor_args_t const>]"
+        node9[0]
+        == "[ unsupported type , std::__1::reference_wrapper<ttnn::operations::moreh::moreh_dot::MorehDotOperation::operation_attributes_t const>]"
     )
-    # tt::tt_metal::create_device_tensor
     assert (
-        captured_graph[10]["arguments"]
-        == "[ Shape([1, 1, 1, 1]), std::__1::reference_wrapper<tt::tt_metal::Shape const>],[ BFLOAT16, std::__1::reference_wrapper<tt::tt_metal::DataType>],[ Tile, std::__1::reference_wrapper<tt::tt_metal::Layout>],[ unsupported type , std::__1::reference_wrapper<tt::tt_metal::v0::IDevice*>],[ MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt), std::__1::reference_wrapper<tt::tt_metal::MemoryConfig const>]"
+        node9[1]
+        == "[ unsupported type , std::__1::reference_wrapper<ttnn::operations::moreh::moreh_dot::MorehDotOperation::tensor_args_t const>]"
+    )
+
+    # tt::tt_metal::create_device_tensor
+    node10 = captured_graph[10]["arguments"]
+    assert node10[0] == "Shape([1, 1, 1, 1])"
+    assert node10[1] == "BFLOAT16"
+    assert node10[2] == "Tile"
+    assert node10[3] == "[ unsupported type , std::__1::reference_wrapper<tt::tt_metal::v0::IDevice*>]"
+    assert (
+        node10[4]
+        == "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt)"
     )
 
 
@@ -132,22 +196,45 @@ def test_graph_capture_without_dtype(device):
     captured_graph = ttnn.graph.end_graph_capture()
 
     # ttnn::moreh_full_like
+    node1 = captured_graph[1]["arguments"]
     assert (
-        captured_graph[1]["arguments"]
-        == "[ Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt)),tensor_spec=TensorSpec(logical_shape=Shape([32, 32]),tensor_layout=TensorLayout(dtype=INT32,page_config=PageConfig(config=TilePageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt),alignment=Alignment([32, 32])))), std::__1::reference_wrapper<tt::tt_metal::Tensor const>],[ unsupported type , std::__1::reference_wrapper<std::__1::variant<float, int>>],[ nullopt, std::__1::reference_wrapper<std::__1::optional<tt::tt_metal::DataType> const>],[ nullopt, std::__1::reference_wrapper<std::__1::optional<tt::tt_metal::Layout> const>],[ nullopt, std::__1::reference_wrapper<std::__1::optional<tt::tt_metal::MemoryConfig> const>]"
+        node1[0]
+        == "Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt)),tensor_spec=TensorSpec(logical_shape=Shape([32, 32]),tensor_layout=TensorLayout(dtype=INT32,page_config=PageConfig(config=TilePageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt),alignment=Alignment([32, 32]))))"
     )
+    assert node1[1] == "[ unsupported type , std::__1::reference_wrapper<std::__1::variant<float, int>>]"
+    assert node1[2] == "nullopt"
+    assert node1[3] == "nullopt"
+    assert node1[4] == "nullopt"
+
     # ttnn::prim::moreh_full_like
+    node4 = captured_graph[4]["arguments"]
     assert (
-        captured_graph[4]["arguments"]
-        == "[ Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt)),tensor_spec=TensorSpec(logical_shape=Shape([32, 32]),tensor_layout=TensorLayout(dtype=INT32,page_config=PageConfig(config=TilePageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt),alignment=Alignment([32, 32])))), std::__1::reference_wrapper<tt::tt_metal::Tensor const>],[ unsupported type , std::__1::reference_wrapper<std::__1::variant<float, int> const>],[ nullopt, std::__1::reference_wrapper<std::__1::optional<tt::tt_metal::DataType> const>],[ nullopt, std::__1::reference_wrapper<std::__1::optional<tt::tt_metal::Layout> const>],[ nullopt, std::__1::reference_wrapper<std::__1::optional<tt::tt_metal::MemoryConfig> const>]"
+        node4[0]
+        == "Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt)),tensor_spec=TensorSpec(logical_shape=Shape([32, 32]),tensor_layout=TensorLayout(dtype=INT32,page_config=PageConfig(config=TilePageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt),alignment=Alignment([32, 32]))))"
     )
+    assert node4[1] == "[ unsupported type , std::__1::reference_wrapper<std::__1::variant<float, int> const>]"
+    assert node4[2] == "nullopt"
+    assert node4[3] == "nullopt"
+    assert node4[4] == "nullopt"
+
     # FullLikeOperation
+    node6 = captured_graph[6]["arguments"]
     assert (
-        captured_graph[6]["arguments"]
-        == "[ unsupported type , std::__1::reference_wrapper<ttnn::operations::full_like::FullLikeOperation::operation_attributes_t const>],[ unsupported type , std::__1::reference_wrapper<ttnn::operations::full_like::FullLikeOperation::tensor_args_t const>]"
+        node6[0]
+        == "[ unsupported type , std::__1::reference_wrapper<ttnn::operations::full_like::FullLikeOperation::operation_attributes_t const>]"
     )
-    # tt::tt_metal::create_device_tensor
     assert (
-        captured_graph[7]["arguments"]
-        == "[ Shape([32, 32]), std::__1::reference_wrapper<tt::tt_metal::Shape const>],[ INT32, std::__1::reference_wrapper<tt::tt_metal::DataType>],[ Tile, std::__1::reference_wrapper<tt::tt_metal::Layout>],[ unsupported type , std::__1::reference_wrapper<tt::tt_metal::v0::IDevice*>],[ MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt), std::__1::reference_wrapper<tt::tt_metal::MemoryConfig const>]"
+        node6[1]
+        == "[ unsupported type , std::__1::reference_wrapper<ttnn::operations::full_like::FullLikeOperation::tensor_args_t const>]"
+    )
+
+    # tt::tt_metal::create_device_tensor
+    node7 = captured_graph[7]["arguments"]
+    assert node7[0] == "Shape([32, 32])"
+    assert node7[1] == "INT32"
+    assert node7[2] == "Tile"
+    assert node7[3] == "[ unsupported type , std::__1::reference_wrapper<tt::tt_metal::v0::IDevice*>]"
+    assert (
+        node7[4]
+        == "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt)"
     )
