@@ -277,7 +277,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
 
     std::optional<unary::UnaryWithParam> fused_activation = std::nullopt;
 
-    if (activation.length() > 2) {
+    if (!activation.empty()) {
         fused_activation = unary::utils::string_to_unary_with_param(activation);
     }
     auto program_with_cbs = multi_core_optimized_conv_sharded_v2_new(

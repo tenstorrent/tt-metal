@@ -274,7 +274,6 @@ void MAIN {
 
 #if not defined FUSE_BIAS and defined SFPU_OP_INIT_ACTIVATION
                         if (last_out) {
-                            SFPU_OP_INIT_ACTIVATION
                             for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
                                 SFPU_OP_FUNC_ACTIVATION
                             }
@@ -396,7 +395,6 @@ void MAIN {
                     }
 
 #ifdef SFPU_OP_INIT_ACTIVATION
-                    SFPU_OP_INIT_ACTIVATION
                     for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
                         SFPU_OP_FUNC_ACTIVATION
                     }
