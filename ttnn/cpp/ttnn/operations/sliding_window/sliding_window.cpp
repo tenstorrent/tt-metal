@@ -470,7 +470,12 @@ FlattenedBlockingConfig flatten_blocking_config(const BlockingConfig& blocking, 
     return result;
 }
 
-std::tuple<std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>>
+std::tuple<
+    std::vector<std::vector<uint16_t>>,
+    std::vector<std::vector<uint16_t>>,
+    std::vector<std::vector<uint16_t>>,
+    std::vector<std::vector<uint16_t>>,
+    std::vector<std::vector<uint16_t>>>
 generate_halo_kernel_config_tensors(
     const std::vector<std::pair<bool, uint32_pair_t>>& tensor_metadata,
     const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries,
@@ -485,9 +490,10 @@ generate_halo_kernel_config_tensors(
         return device->worker_core_from_logical_core(core_coord);
     };
 
-    std::map<uint32_pair_t, std::vector<std::tuple<uint32_t, uint32_t, uint32_t>>> per_core_gather_data;
-
     uint32_t num_cores_nhw = shard_boundaries.size();
+    PerCoreGatherData
+        per_core_gather_data;  // This maps all routes (src_core->dst_core) onto a sequence of operations on the input
+                               // sticks that can be padding, local copy/transfer, or remote copy/transfer
 
     uint32_t core_id = 0;
     for (auto [output_boundary, input_boundary] : shard_boundaries) {
@@ -691,7 +697,12 @@ generate_halo_kernel_config_tensors(
     align_config(flattened_local_config, 2);
     align_config(flattened_remote_config, 2);
 
-    return std::make_tuple(flattened_pad_config, flattened_local_config, flattened_remote_config);
+    return std::make_tuple(
+        flattened_pad_config,
+        flattened_local_config,
+        flattened_remote_config,
+        flattened_blocking_configs.local,
+        flattened_blocking_configs.remote);
 }
 
 std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(

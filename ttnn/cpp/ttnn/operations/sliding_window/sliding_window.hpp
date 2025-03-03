@@ -95,7 +95,12 @@ std::vector<std::pair<bool, uint32_pair_t>> generate_tensor_metadata(
     bool is_in_tiled = true);
 uint32_t generate_max_out_nsticks_per_core(
     const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries);
-std::tuple<std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>>
+std::tuple<
+    std::vector<std::vector<uint16_t>>,
+    std::vector<std::vector<uint16_t>>,
+    std::vector<std::vector<uint16_t>>,
+    std::vector<std::vector<uint16_t>>,
+    std::vector<std::vector<uint16_t>>>
 generate_halo_kernel_config_tensors(
     const std::vector<std::pair<bool, uint32_pair_t>>& tensor_metadata,
     const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries,

@@ -17,6 +17,8 @@ tt::tt_metal::operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     const Tensor& padding_config,
     const Tensor& local_config,
     const Tensor& remote_config,
+    const Tensor& blocking_local_config,
+    const Tensor& blocking_remote_config,
     const bool remote_read,
     const bool transpose_mcast,
     Tensor& output_tensor,
