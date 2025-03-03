@@ -20,6 +20,7 @@ enum class EthProcessorTypes : uint8_t { DM0 = 0, DM1 = 1, COUNT = 2 };
 enum class DramProcessorTypes : uint8_t { DM0 = 0, COUNT = 1 };
 
 constexpr uint8_t MaxProcessorsPerCoreType = 5;
+constexpr uint8_t MaxDMProcessorsPerCoreType = 2;
 constexpr uint8_t NumTensixDispatchClasses = 3;
 constexpr uint8_t NumEthDispatchClasses = 2;
 constexpr uint8_t NumDramDispatchClasses = 1;

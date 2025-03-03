@@ -74,7 +74,7 @@ uint32_t time_seed;
 inline void notify_traffic_controller() {
     // send semaphore increment to traffic controller kernel on this device.
     uint64_t dest_addr = get_noc_addr_helper(controller_noc_offset, signal_address);
-    noc_fast_atomic_increment<DM_DYNAMIC_NOC>(
+    noc_fast_atomic_increment<DM_DEDICATED_NOC, true>(
         noc_index,
         NCRISC_AT_CMD_BUF,
         dest_addr,

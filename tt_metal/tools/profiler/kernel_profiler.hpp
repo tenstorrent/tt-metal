@@ -188,7 +188,7 @@ inline void __attribute__((always_inline)) profiler_noc_async_write_posted(
     std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index) {
     WAYPOINT("NAWW");
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
-    ncrisc_noc_fast_write_any_len<proc_type, noc_mode>(
+    ncrisc_noc_fast_write_any_len<noc_mode>(
         noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, NOC_UNICAST_WRITE_VC, false, false, 1, true, true);
     WAYPOINT("NAWD");
 }

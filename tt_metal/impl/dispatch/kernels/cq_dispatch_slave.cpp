@@ -106,7 +106,7 @@ FORCE_INLINE
 void dispatch_s_noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t noc_id, uint8_t be = 0xF) {
     WAYPOINT("NWIW");
     DEBUG_SANITIZE_NOC_ADDR(noc_id, addr, 4);
-    noc_fast_write_dw_inline<proc_type, noc_mode>(
+    noc_fast_write_dw_inline<noc_mode>(
         noc_id,
         DISPATCH_S_WR_REG_CMD_BUF,
         val,

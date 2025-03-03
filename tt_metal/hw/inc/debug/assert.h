@@ -42,8 +42,12 @@ void assert_and_hang(uint32_t line_num) {
             assert_and_hang(__LINE__); \
     } while (0)
 
+#define WATCHER_ASSERT_ENABLED 1
+
 #else  // !WATCHER_ENABLED
 
 #define ASSERT(condition)
+
+#define WATCHER_ASSERT_ENABLED 0
 
 #endif  // WATCHER_ENABLED
