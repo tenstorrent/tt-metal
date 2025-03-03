@@ -18,6 +18,8 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/tilization.hpp"
 
+namespace tt::tt_metal {
+
 using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
@@ -623,3 +625,5 @@ TEST_F(DeviceFixture, TensixTestSingleCoreSingleBlockSingleTileNoAccumulationCom
         ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(this->devices_.at(id), 2, 1, 2));
     }
 }
+
+}  // namespace tt::tt_metal

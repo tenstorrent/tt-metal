@@ -13,7 +13,7 @@
 namespace ttml::ttnn_fixed {
 
 tt::tt_metal::Tensor sum_over_dim(const tt::tt_metal::Tensor& t, uint32_t dim) {
-    return sum_ttnn(t, dim, /* keepdim */ true);
+    return sum_moreh(t, dim, /* keepdim */ true);
 }
 
 tt::tt_metal::Tensor sum_over_batch(const tt::tt_metal::Tensor& t) {
@@ -64,14 +64,13 @@ tt::tt_metal::Tensor mean_ttnn(const tt::tt_metal::Tensor& t, int dim, bool keep
 }
 
 tt::tt_metal::Tensor sum_moreh(const tt::tt_metal::Tensor& t, int dim, bool keep_dim) {
-    auto res = ttnn::moreh_sum(
+    return ttnn::moreh_sum(
         t,
         dim,
         keep_dim,
         std::nullopt,
         std::nullopt,
         /* device_compute_kernel_config */ core::ComputeKernelConfig::precise());
-    return res;
 }
 tt::tt_metal::Tensor sum_ttnn(const tt::tt_metal::Tensor& t, int dim, bool keep_dim) {
     return ttnn::sum(t, dim, keep_dim, std::nullopt, core::ComputeKernelConfig::precise());

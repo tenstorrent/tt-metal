@@ -12,7 +12,6 @@ namespace ttnn::operations::experimental::transformer {
 
 using namespace tt::constants;
 using namespace tt;
-using namespace tt::tt_metal;
 
 NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDeviceOperation::Interleaved::create(
     const operation_attributes_t& operation_attributes,

@@ -19,7 +19,7 @@ namespace ttnn::operations::experimental::ccl {
 namespace detail {
 
 template <typename ccl_operation_t>
-void bind_all_reduce(pybind11::module& module, const ccl_operation_t& operation, const char* doc) {
+void bind_all_reduce_async(pybind11::module& module, const ccl_operation_t& operation, const char* doc) {
     bind_registered_operation(
         module,
         operation,
@@ -34,7 +34,7 @@ void bind_all_reduce(pybind11::module& module, const ccl_operation_t& operation,
                const ttnn::MemoryConfig& memory_config,
                ttnn::ccl::Topology topology,
                const std::optional<size_t> num_links,
-               std::optional<SubDeviceId> worker_subdevice_id_opt) -> ttnn::Tensor {
+               std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) -> ttnn::Tensor {
                 return self(
                     input_tensor,
                     from_remote_multi_device_global_semaphore,
@@ -69,7 +69,7 @@ void bind_all_reduce(pybind11::module& module, const ccl_operation_t& operation,
                const ttnn::MemoryConfig& memory_config,
                ttnn::ccl::Topology topology,
                const std::optional<size_t> num_links,
-               std::optional<SubDeviceId> worker_subdevice_id_opt) -> ttnn::Tensor {
+               std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) -> ttnn::Tensor {
                 return self(
                     input_tensor,
                     cluster_axis,
@@ -100,7 +100,7 @@ void bind_all_reduce(pybind11::module& module, const ccl_operation_t& operation,
 }  // namespace detail
 
 void py_bind_all_reduce_async(pybind11::module& module) {
-    detail::bind_all_reduce(
+    detail::bind_all_reduce_async(
         module,
         ttnn::experimental::all_reduce_async,
         R"doc(
