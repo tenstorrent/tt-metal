@@ -53,7 +53,14 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t in_nbytes = datum_size(in_df);
     uint32_t out_nbytes = datum_size(out_df);
 
-    uint32_t in_nbytes_c = input_shape[3] / num_shards_c * in_nbytes;     // row of input (channels)
+    uint32_t in_nbytes_c;
+    // non-tile multiple is possible just if C = 16, otherwise we pad shards to 32
+    if ((input_shape[3] / num_shards_c) % tt::constants::TILE_WIDTH != 0 &&
+        (input_shape[3] / num_shards_c) > tt::constants::TILE_WIDTH) {
+        in_nbytes_c = tt::round_up(input_shape[3], num_shards_c * tt::constants::TILE_WIDTH) / num_shards_c * in_nbytes;
+    } else {
+        in_nbytes_c = input_shape[3] / num_shards_c * in_nbytes;
+    }
     uint32_t out_nbytes_c = output_shape[3] / num_shards_c * out_nbytes;  // row of output (channels)
 
     tt::DataFormat indices_df =

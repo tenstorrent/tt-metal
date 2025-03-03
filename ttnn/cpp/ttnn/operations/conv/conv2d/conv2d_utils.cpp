@@ -232,12 +232,19 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(
 
     uint32_t nhw_shape = tensor_shape[0] * tensor_shape[1] * tensor_shape[2];
     uint32_t nhw_padded = nhw_shape;
+    uint32_t c_padded = channels;
     if (shard_scheme != TensorMemoryLayout::WIDTH_SHARDED) {
         nhw_padded = round_up(nhw_shape, num_cores_nhw * tile_size);
     }
+    // non-tile multiple is possible just if C = 16, otherwise we pad shards to 32
+    if (shard_scheme != TensorMemoryLayout::HEIGHT_SHARDED &&
+        (channels / num_cores_channels) % tt::constants::TILE_WIDTH != 0 &&
+        (channels / num_cores_channels) > tt::constants::TILE_WIDTH) {
+        c_padded = round_up(channels, num_cores_channels * tt::constants::TILE_WIDTH);
+    }
     uint32_t nhw_shard = nhw_padded / num_cores_nhw;
-    TT_ASSERT(channels % num_cores_channels == 0, "Channels: {}, num core channels: {}", channels, num_cores_channels);
-    uint32_t channel_shard = channels / num_cores_channels;
+    TT_ASSERT(c_padded % num_cores_channels == 0, "Channels: {}, num core channels: {}", c_padded, num_cores_channels);
+    uint32_t channel_shard = c_padded / num_cores_channels;
     auto shard_spec = tt::tt_metal::ShardSpec{parallel_config.grid, {nhw_shard, channel_shard}, shard_orientation};
     log_debug("Calculated Shard Spec = {}", shard_spec);
     return MemoryConfig{shard_scheme, BufferType::L1, shard_spec};
