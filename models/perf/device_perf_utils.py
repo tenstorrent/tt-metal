@@ -15,7 +15,7 @@ from tt_metal.tools.profiler.process_model_log import (
 from models.perf.perf_utils import today, process_perf_results
 
 
-def run_device_perf(command, subdir, num_iterations, cols, batch_size, has_signposts=False):
+def run_device_perf(command, subdir, num_iterations, cols, batch_size, op_name="", has_signposts=False):
     duration_cols = [col + " DURATION [ns]" for col in cols]
     samples_cols = [col + " SAMPLES/S" for col in cols]
 
@@ -29,7 +29,7 @@ def run_device_perf(command, subdir, num_iterations, cols, batch_size, has_signp
 
     for _ in range(num_iterations):
         run_device_profiler(command, subdir)
-        r = post_process_ops_log(subdir, duration_cols, has_signposts=has_signposts)
+        r = post_process_ops_log(subdir, duration_cols, op_name=op_name, has_signposts=has_signposts)
         for d_col in duration_cols:
             results[f"AVG {d_col}"] += r[d_col]
             results[f"MIN {d_col}"] = min(results[f"MIN {d_col}"], r[d_col])
