@@ -26,6 +26,7 @@ def run_device_perf(command, subdir, num_iterations, cols, batch_size, op_name="
         results[f"AVG {d_col}"] = 0
         results[f"MIN {d_col}"] = float("inf")
         results[f"MAX {d_col}"] = -float("inf")
+        results[f"STD {d_col}"] = 0
 
     for _ in range(num_iterations):
         run_device_profiler(command, subdir)
@@ -34,12 +35,19 @@ def run_device_perf(command, subdir, num_iterations, cols, batch_size, op_name="
             results[f"AVG {d_col}"] += r[d_col]
             results[f"MIN {d_col}"] = min(results[f"MIN {d_col}"], r[d_col])
             results[f"MAX {d_col}"] = max(results[f"MAX {d_col}"], r[d_col])
+            results[f"STD {d_col}"] += r[d_col] ** 2
 
     post_processed_results = {}
     for s_col, d_col in zip(samples_cols, duration_cols):
         post_processed_results[f"AVG {s_col}"] = get_samples_per_s(results[f"AVG {d_col}"] / num_iterations, batch_size)
         post_processed_results[f"MIN {s_col}"] = get_samples_per_s(results[f"MAX {d_col}"], batch_size)
         post_processed_results[f"MAX {s_col}"] = get_samples_per_s(results[f"MIN {d_col}"], batch_size)
+        post_processed_results[f"AVG {d_col}"] = results[f"AVG {d_col}"] / num_iterations
+        post_processed_results[f"MIN {d_col}"] = results[f"MAX {d_col}"]
+        post_processed_results[f"MAX {d_col}"] = results[f"MIN {d_col}"]
+        post_processed_results[f"STD {d_col}"] = (
+            results[f"STD {d_col}"] / num_iterations - post_processed_results[f"AVG {d_col}"] ** 2
+        ) ** 0.5
 
     logger.info(
         f"\nTest: {command}"
