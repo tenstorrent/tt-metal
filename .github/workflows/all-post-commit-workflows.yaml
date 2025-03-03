@@ -32,6 +32,7 @@ permissions:
   pages: write
   id-token: write
   packages: write
+  checks: write
 
 run-name: All post-commit tests${{ (github.event_name == 'workflow_dispatch' && inputs.with-retries) && ' (with retries)' || ''}}
 jobs:
