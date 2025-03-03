@@ -35,7 +35,7 @@ OPTIONS_ALL += $(filter -mcpu=%, $(ARCH_OPTS))
 OPTIONS_COMPILE += $(filter -DARCH_%, $(ARCH_OPTS))
 
 OPTIONS_LINK=-fexceptions -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -Wl,--trace
-INCLUDES = -I../$(ARCH_LLK_ROOT)/llk_lib -I../$(ARCH_LLK_ROOT)/common/inc -I../$(ARCH_LLK_ROOT)/common/inc/sfpu
+INCLUDES = -I../$(ARCH_LLK_ROOT)/llk_lib -I../$(ARCH_LLK_ROOT)/common/inc -I../$(ARCH_LLK_ROOT)/common/inc/sfpu -I../$(ARCH_LLK_ROOT)/hw_specific/inc
 INCLUDES += -Ifirmware/riscv/common -Ifirmware/riscv/$(CHIP_ARCH)/ -Isfpi/include -Ihelpers/include
 
 FORMAT_ARG:= -D$(format) 
