@@ -58,6 +58,9 @@ param_ids = [
 )
 def test_multiple_tiles(format, testname, tile_cnt, mathop, dest_acc, math_fidelity):
 
+    if mathop in range(1, 4) and format == "Float16" and dest_acc == "DEST_ACC":
+        pytest.skip(reason = "This combination is not fully implemented in testing")
+
     # prepare setup for running kernels
 
     pack_start_address = 0x1a000 + 2*4096*tile_cnt
