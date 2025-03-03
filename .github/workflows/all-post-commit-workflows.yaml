@@ -52,7 +52,7 @@ jobs:
     secrets: inherit
 
   smoke-tests:
-    needs: pr-gate-build
+    needs: build-artifact
     uses: ./.github/workflows/zzz_smoke.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
