@@ -94,7 +94,6 @@ class MLP(LightweightModule):
 
         # In decode mode (seqlen <= 32) do DRAM sharded matmuls
         # These use HiFi2; this drops 1 bit of the activations but would be FLOP-bound on 12 cores with HiFi4
-        # breakpoint()
         w1_out = ttnn.linear(
             x,
             self.w1,
@@ -109,7 +108,6 @@ class MLP(LightweightModule):
             memory_config=x.memory_config(),
         )
 
-        # breakpoint()
         w3_out = ttnn.linear(
             x,
             self.w3,
@@ -171,7 +169,6 @@ class MLP(LightweightModule):
                     memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == "decode" else None,
                 )
 
-        # breakpoint()
         w2_in = ttnn.mul(
             w1_out,
             w3_out,
@@ -200,7 +197,6 @@ class MLP(LightweightModule):
             if mode == "decode":
                 w2_in = ttnn.to_memory_config(w2_in, ttnn.L1_MEMORY_CONFIG)
 
-        # breakpoint()
         # sleep(1)
         # ttnn.synchronize_device(self.mesh_device.get_devices()[0])
         w2_out = ttnn.linear(
@@ -219,7 +215,6 @@ class MLP(LightweightModule):
         ttnn.deallocate(w2_in)
         # if mode == "decode" and not TG:
         #     w2_out = ttnn.sharded_to_interleaved(w2_out, ttnn.DRAM_MEMORY_CONFIG)
-        # breakpoint()
         w2_out_reduced = tt_all_reduce(
             w2_out,
             self.mesh_device,
