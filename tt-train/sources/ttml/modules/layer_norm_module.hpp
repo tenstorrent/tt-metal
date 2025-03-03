@@ -22,7 +22,7 @@ public:
     void initialize_tensors(uint32_t features);
     explicit LayerNormLayer(uint32_t features, bool use_composite_op = false);
 
-    [[nodiscard]] autograd::TensorPtr operator()(const autograd::TensorPtr& tensor);
+    [[nodiscard]] autograd::TensorPtr operator()(const autograd::TensorPtr& tensor) override;
 };
 
 }  // namespace ttml::modules

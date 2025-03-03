@@ -17,7 +17,7 @@ class DropoutLayer : public autograd::ModuleBase {
 public:
     explicit DropoutLayer(float probability, bool use_per_device_seed = true);
 
-    [[nodiscard]] autograd::TensorPtr operator()(const autograd::TensorPtr& tensor);
+    [[nodiscard]] autograd::TensorPtr operator()(const autograd::TensorPtr& tensor) override;
 };
 
 }  // namespace ttml::modules
