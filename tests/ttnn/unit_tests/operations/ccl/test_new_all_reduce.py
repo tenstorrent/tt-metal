@@ -43,6 +43,7 @@ def run_all_reduce_impl(
     num_links,
     input_num_cores,
     output_num_cores,
+    loopback_size=1,
     num_iters=1,
     warmup_iters=0,
     enable_async=False,
@@ -179,7 +180,6 @@ def run_all_reduce_impl(
 
         # All-Reduce Golden
         # Inputs reduce sequentially for 10 iters
-        loopback_size = 4
         output_tensor_goldens_list = []
         for i in range(num_iters):
             if i % loopback_size == 0:
@@ -217,7 +217,8 @@ def run_all_reduce_impl(
                     outs.append(out)
 
                 # Loop back the output to the input
-                tt_input = ttnn.reshard(out, input_mem_config)
+                if loopback_size != 1:
+                    tt_input = ttnn.reshard(out, input_mem_config)
 
             if store_all_results:
                 return outs
@@ -299,9 +300,10 @@ def run_all_reduce_impl(
             validate(tt_out_tensor, output_tensor)
 
         for i in range(mesh_device.get_num_devices()):
+            reshard_op_cnt = 1 if loopback_size > 1 else 0
             assert (
-                mesh_device.get_devices()[i].num_program_cache_entries() == 1 + 1
-                or mesh_device.get_devices()[i].num_program_cache_entries() == num_iters + 1
+                mesh_device.get_devices()[i].num_program_cache_entries() == 1 + reshard_op_cnt
+                or mesh_device.get_devices()[i].num_program_cache_entries() == num_iters + reshard_op_cnt
             ), f"Device {i} has {mesh_device.get_devices()[i].num_program_cache_entries()} program cache entries"
 
     finally:
@@ -396,3 +398,70 @@ def test_all_reduce(
     latency_us = time_taken / effective_iter * 1e6
     logger.info(f"Time taken: {time_taken} s")
     logger.info(f"Time per iter: {latency_us} us")
+
+
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "output_shape, cluster_axis, num_links, input_num_cores, output_num_cores",
+    [
+        ([1, 1, 32, 1280], 1, 1, 24, 40),  # QKV all reduce
+        ([1, 1, 32, 3584], 1, 1, 24, 24),  # FF1 all reduce
+        ([1, 1, 32, 2048], 0, 1, 24, 16),  # FF2/DO all reduce
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat8_b,
+    ],
+)
+@pytest.mark.parametrize(
+    "num_iters, warmup_iters",
+    [
+        (100, 10),
+    ],
+)
+@pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize(
+    "device_params",
+    [{"trace_region_size": 23887872}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        (8, 4),
+    ],
+    indirect=True,
+)
+def test_all_reduce_loopback(
+    mesh_device,
+    output_shape,
+    cluster_axis,
+    input_dtype,
+    num_links,
+    input_num_cores,
+    output_num_cores,
+    num_iters,
+    warmup_iters,
+    enable_async,
+    trace_mode,
+    use_program_cache,
+    function_level_defaults,
+):
+    run_all_reduce_impl(
+        mesh_device,
+        output_shape,
+        cluster_axis,
+        input_dtype,
+        num_links,
+        input_num_cores,
+        output_num_cores,
+        loopback_size=4,
+        num_iters=num_iters,
+        warmup_iters=warmup_iters,
+        enable_async=enable_async,
+        trace_mode=trace_mode,
+        validate_all=False,
+    )
