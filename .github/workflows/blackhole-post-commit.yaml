@@ -54,6 +54,7 @@ jobs:
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
+      build-wheel: true
       tracy: true
       version: "20.04"
   run-profiler-regression:
