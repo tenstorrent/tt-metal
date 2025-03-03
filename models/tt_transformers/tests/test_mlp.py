@@ -91,7 +91,11 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache, rese
         layout=ttnn.TILE_LAYOUT,
     )
 
+<<<<<<< HEAD:models/tt_transformers/tests/test_mlp.py
     logger.info("Run MLP")
+=======
+    logger.info("Run Llama_MLP")
+>>>>>>> Removed breakpoints:models/demos/llama3/tests/test_llama_mlp.py
     tt_output = tt_model(tt_input, mode)
 
     tt_output_torch = ttnn.to_torch(
