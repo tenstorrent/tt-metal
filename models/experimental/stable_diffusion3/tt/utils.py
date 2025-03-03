@@ -16,6 +16,31 @@ def allocate_tensor_on_device_like(
     return ttnn.allocate_tensor_on_device(t.shape, t.dtype, t.layout, device, memory_config=memory_config)
 
 
+def from_torch(tensor, mesh_device, dtype, shard_dim=None):
+    if shard_dim is None:
+        return ttnn.from_torch(
+            tensor,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            dtype=dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.TILE_LAYOUT,
+        )
+    else:
+        return ttnn.as_tensor(
+            tensor,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=shard_dim),
+            dtype=dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.TILE_LAYOUT,
+        )
+
+
+def to_torch(tensor, mesh_device, dtype, shard_dim=-1):
+    return ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=shard_dim), dtype=dtype)
+
+
 def from_torch_fast(
     t: torch.Tensor,
     *,
@@ -64,11 +89,12 @@ def assert_quality(
     *,
     pcc: float | None = None,
     mse: float | None = None,
+    shard_dim=None,
 ) -> None:
     if isinstance(a, ttnn.Tensor):
-        a = ttnn.to_torch(a)
+        a = to_torch(a, mesh_device=a.device(), dtype=a.get_dtype(), shard_dim=shard_dim)[0]
     if isinstance(b, ttnn.Tensor):
-        b = ttnn.to_torch(b)
+        b = to_torch(b, mesh_device=b.device(), dtype=b.get_dtype(), shard_dim=shard_dim)[0]
 
     a = a.to(torch.float32)
     b = b.to(torch.float32)

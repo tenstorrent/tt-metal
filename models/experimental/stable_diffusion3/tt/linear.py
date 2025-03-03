@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 import ttnn
 
-from .utils import from_torch_fast
+from .utils import from_torch
 
 if TYPE_CHECKING:
     import torch
@@ -19,7 +19,6 @@ if TYPE_CHECKING:
 class TtLinearParameters:
     weight: ttnn.Tensor
     bias: ttnn.Tensor | None
-    on_host: bool
 
     @classmethod
     def from_torch(
@@ -27,8 +26,7 @@ class TtLinearParameters:
         state: dict[str, torch.Tensor],
         *,
         dtype: ttnn.DataType | None = None,
-        device: ttnn.Device | None,
-        on_host: bool = False,
+        device: ttnn.Device,
     ) -> TtLinearParameters:
         if "bias" in state:
             orig_bias = state["bias"]
@@ -36,20 +34,13 @@ class TtLinearParameters:
         else:
             bias = None
 
-        on_host = on_host or device is None
-
         return cls(
-            weight=from_torch_fast(
+            weight=from_torch(
                 state["weight"].transpose(0, 1),
-                layout=ttnn.TILE_LAYOUT,
                 dtype=dtype,
-                device=device,
-                to_host=on_host,
+                mesh_device=device,
             ),
-            bias=from_torch_fast(bias, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device, to_host=on_host)
-            if bias is not None
-            else None,
-            on_host=on_host,
+            bias=from_torch(bias, dtype=dtype, mesh_device=device) if bias is not None else None,
         )
 
     @property
@@ -66,7 +57,6 @@ class TtLinear:
         self._in_channels = parameters.in_channels
         self._weight = parameters.weight
         self._bias = parameters.bias
-        self._paramters_on_host = parameters.on_host
 
     def __call__(
         self,
@@ -81,13 +71,8 @@ class TtLinear:
     ) -> ttnn.Tensor:
         assert x.shape[-1] == self._in_channels, "input tensor does not have the expected shape"
 
-        if self._paramters_on_host:
-            device = x.device()
-            weight = self._weight.to(device)
-            bias = self._bias.to(device) if self._bias is not None else None
-        else:
-            weight = self._weight
-            bias = self._bias
+        weight = self._weight
+        bias = self._bias
 
         output = ttnn.linear(
             x,
@@ -102,11 +87,6 @@ class TtLinear:
 
         if deallocate:
             ttnn.deallocate(x)
-
-        if self._paramters_on_host:
-            ttnn.deallocate(weight)
-            if bias is not None:
-                ttnn.deallocate(bias)
 
         return output
 
