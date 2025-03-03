@@ -29,29 +29,46 @@ def initialize_vllm_text_transformer(
     dtype=ttnn.bfloat8_b,
     optimizations=ModelOptimizations.performance,
 ):
-    # Load model args, weights
-    model_args = ModelArgs(
-        mesh_device,
-        instruct=("Instruct" in hf_config._name_or_path or "DeepSeek-R1-Distill-Llama-70B" in hf_config._name_or_path),
-        max_batch_size=max_batch_size,
-        optimizations=optimizations,
-        max_seq_len=max_seq_len,
-    )
-    assert model_args.model_name.replace("-", "") in hf_config._name_or_path.replace(
-        "-", ""
-    ), f"The model specified in vLLM ({hf_config._name_or_path}) does not match the model name ({model_args.model_name}) with model weights ({model_args.CKPT_DIR})."
-    if n_layers is not None:
-        model_args.n_layers = n_layers
-    state_dict = model_args.load_state_dict()
+    data_parallel = int(os.getenv("TT_DATA_PARALLEL", 1))
+    num_devices = mesh_device.get_num_devices()
+    assert num_devices % data_parallel == 0, f"Unsupported device split: {num_devices} devices, {data_parallel} groups"
 
-    tt_model = Transformer(
-        args=model_args,
-        mesh_device=mesh_device,
-        dtype=dtype,
-        state_dict=state_dict,
-        weight_cache_path=model_args.weight_cache_path(dtype),
-        use_paged_kv_cache=True,
-    )
+    submesh_devices = mesh_device.create_submeshes(ttnn.MeshShape(1, num_devices // data_parallel))
+    # Load model args, weights
+    model_args = []
+    for submesh in submesh_devices:
+        model_args_i = ModelArgs(
+            submesh,
+            instruct=(
+                "Instruct" in hf_config._name_or_path or "DeepSeek-R1-Distill-Llama-70B" in hf_config._name_or_path
+            ),
+            max_batch_size=max_batch_size // data_parallel,
+            optimizations=optimizations,
+            max_seq_len=max_seq_len,
+        )
+
+        assert model_args_i.model_name.replace("-", "") in hf_config._name_or_path.replace(
+            "-", ""
+        ), f"The model specified in vLLM ({hf_config._name_or_path}) does not match the model name ({model_args_i.model_name}) with model weights ({model_args_i.DEFAULT_CKPT_DIR})."
+        if n_layers is not None:
+            model_args_i.n_layers = n_layers
+
+        model_args.append(model_args_i)
+
+    state_dict = model_args[0].load_state_dict()
+
+    tt_model = []
+    for i, submesh in enumerate(submesh_devices):
+        tt_model_i = Transformer(
+            args=model_args[i],
+            mesh_device=submesh,
+            dtype=dtype,
+            state_dict=state_dict,
+            weight_cache_path=model_args[i].weight_cache_path(dtype),
+            use_paged_kv_cache=True,
+        )
+        tt_model.append(tt_model_i)
+
     return tt_model, model_args
 
 
@@ -191,7 +208,7 @@ class LlamaForCausalLM(Generator):
 
     @property
     def cache_path(self):
-        return self.model_args.model_cache_path
+        return self.model_args[0].model_cache_path
 
     def prefill_forward(self, *args, **kwargs):
         return super().prefill_forward_text(*args, **kwargs)
