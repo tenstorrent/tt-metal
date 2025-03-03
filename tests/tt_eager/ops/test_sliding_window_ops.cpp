@@ -57,13 +57,23 @@ uint32_t compare_conv_out_with_golden(
 uint32_t validate_generate_halo_kernel_config(
     tt::tt_metal::IDevice* device,
     const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries,
-    const std::tuple<vector<vector<uint16_t>>, std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>>&
-        halo_kernel_config,
+    const std::tuple<
+        vector<vector<uint16_t>>,
+        std::vector<std::vector<uint16_t>>,
+        std::vector<std::vector<uint16_t>>,
+        std::vector<std::vector<uint16_t>>,
+        std::vector<std::vector<uint16_t>>>& halo_kernel_config,
     const vector<bool>& pad_metadata,
     bool remote_read = false,
     bool is_block_sharded = false,
     bool transpose_mcast = false) {
-    auto [flattened_pad_config, flattened_local_config, flattened_remote_config] = halo_kernel_config;
+    // TODO: Validate blocking configs
+    auto
+        [flattened_pad_config,
+         flattened_local_config,
+         flattened_remote_config,
+         flattened_blocking_local_config,
+         flattened_blocking_remote_config] = halo_kernel_config;
 
     uint32_t padded_input_tensor_buf_idx = 0;
     uint32_t invalid_pads = 0, invalid_indices = 0;
