@@ -15,6 +15,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
     create_global_semaphore_with_same_address,
 )
 from models.perf.benchmarking_utils import BenchmarkProfiler
+from tracy import signpost
 
 
 def report_mismatches(golden, actual, max_printable=None):
@@ -146,17 +147,19 @@ def run_with_trace(
     profiler.end("all-gather-async-trace-warmup")
 
     profiler.start("all-gather-async-trace")
+    signpost("start")
     ttnn.execute_trace(mesh_device, trace_id, blocking=False)
     ttnn.release_trace(mesh_device, trace_id)
     ttnn.synchronize_device(mesh_device)
+    signpost("stop")
     profiler.end("all-gather-async-trace")
     time_taken = profiler.get_duration("all-gather-async-trace") - profiler.get_duration(
         "all-gather-async-trace-warmup"
     )
     effective_iter = num_iter - warmup_iters
-    logger.info(f"Time taken: {time_taken} s")
-    logger.info(f"Time per iter: {time_taken / effective_iter} s")
-    logger.info(f"Time per iter: {time_taken / effective_iter * 1e6} us")
+    logger.info(f"Time taken e2e: {time_taken} s")
+    logger.info(f"Time per iter e2e: {time_taken / effective_iter} s")
+    logger.info(f"Time per iter e2e: {time_taken / effective_iter * 1e6} us")
 
     return tt_out_tensor
 
@@ -299,6 +302,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
             )
 
         else:
+            signpost("start")
             for i in range(num_iters):
                 if use_all_gather_async:
                     logger.info("Running all-gather async")
@@ -325,7 +329,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
                         topology=ttnn.Topology.Linear,
                     )
             ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
-
+            signpost("stop")
     except Exception as e:
         logger.error(f"Exception: {e}")
         raise e
