@@ -56,10 +56,8 @@ class Generator:
         batch_per_device = batch // data_parallel
 
         if page_table is not None:
-            assert isinstance(
-                page_table, list
-            ), "page_table must be a list of torch.Tensor when passing into prefill_forward"
-            assert isinstance(page_table[0], torch.Tensor), "page_table elements mush be torch.Tensor"
+            assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
+            page_table = torch.chunk(page_table, self.data_parallel, 0)
 
         out_list = []
         for group_user_id in range(batch_per_device):
@@ -196,6 +194,7 @@ class Generator:
     ):
         tokens = torch.chunk(tokens, self.data_parallel, 0)
         start_pos = torch.chunk(start_pos, self.data_parallel, 0)
+        page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
 
         decode_kwargs = {
             "current_pos": start_pos,
