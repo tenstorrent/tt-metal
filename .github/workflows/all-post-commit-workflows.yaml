@@ -79,7 +79,7 @@ jobs:
         ]
     uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
     with:
-      os: ubuntu-20.04
+      os: ubuntu-22.04
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
   # Fabric Unit Tests
@@ -94,7 +94,7 @@ jobs:
         ]
     uses: ./.github/workflows/fabric-build-and-unit-tests.yaml
     with:
-      os: ubuntu-20.04
+      os: ubuntu-22.04
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
   # TTNN FD Unit tests
@@ -190,11 +190,11 @@ jobs:
     strategy:
       matrix:
         config:
-          - version: "20.04"
+          - version: "22.04"
             toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
             build-type: "Debug"
             publish-artifact: false
-          - version: "20.04"
+          - version: "22.04"
             toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
             build-type: "RelWithDebInfo"
             publish-artifact: false
