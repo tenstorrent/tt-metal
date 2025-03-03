@@ -5,16 +5,12 @@
 #include <tt_metal.hpp>
 
 #include <algorithm>
-#include <filesystem>
-#include <mutex>
 #include <optional>
-#include <string>
-#include <unordered_set>
-#include <utility>
 
 #include <dev_msgs.h>
 #include <hal.hpp>
 #include <allocator.hpp>
+#include "buffers/dispatch.hpp"
 #include "dprint_server.hpp"
 #include <command_queue.hpp>
 #include <profiler.hpp>
@@ -38,7 +34,6 @@
 #include "lightmetal/host_api_capture_helpers.hpp"
 
 #include "llrt.hpp"
-
 namespace tt {
 
 namespace tt_metal {
@@ -458,6 +453,28 @@ void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buff
     }
 }
 
+DeviceAddr CalculateAddressDeviceInterleavedContiguous(
+    const Buffer& buffer, uint32_t bank_index, uint32_t page_index, uint32_t num_round_robins) {
+    DeviceAddr addr = 0;
+    if (buffer.is_dram()) {
+        addr = buffer.bank_local_page_address(bank_index, page_index);
+    } else {
+        TT_ASSERT(buffer.is_l1());
+        addr = buffer.page_address(bank_index, page_index);
+    }
+
+    if (buffer_dispatch::are_pages_larger_than_max_prefetch_cmd_size(buffer)) {
+        const buffer_dispatch::PartialPageSpec& partial_page_spec =
+            buffer_dispatch::calculate_partial_page_spec(buffer);
+        const uint32_t full_padded_page_size =
+            partial_page_spec.partial_page_size * partial_page_spec.num_partial_pages_per_full_page;
+        const DeviceAddr full_page_address_offset =
+            (num_round_robins > 0) ? (full_padded_page_size - buffer.aligned_page_size()) * num_round_robins : 0;
+        addr += full_page_address_offset;
+    }
+    return addr;
+}
+
 void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
     uint32_t host_buffer_size_bytes = host_buffer.size();
     TT_FATAL(
@@ -471,26 +488,27 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
 
     auto device = buffer.device();
     auto num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
+    uint32_t num_round_robins = 0;
     uint32_t bank_index = 0;
     int data_index = 0;
     std::vector<uint32_t> page;
     page.resize(page_size / sizeof(uint32_t));
     for (int page_index = 0; page_index < num_pages; page_index++) {
-        auto absolute_address = buffer.page_address(bank_index, page_index);
-        // Get address offset of buffer in bank. Required when writing to DRAM.
-        auto bank_local_address = buffer.bank_local_page_address(bank_index, page_index);
+        const DeviceAddr address =
+            CalculateAddressDeviceInterleavedContiguous(buffer, bank_index, page_index, num_round_robins);
         std::memcpy(page.data(), host_buffer.data() + data_index, page_size);
         switch (buffer.buffer_type()) {
-            case BufferType::DRAM:
-                WriteToDeviceDRAMChannel(device, bank_index, bank_local_address, page);
-                break;
+            case BufferType::DRAM: WriteToDeviceDRAMChannel(device, bank_index, address, page); break;
             case BufferType::L1:
             case BufferType::L1_SMALL: {
-                auto core_coordinates =
-                    device->worker_core_from_logical_core(buffer.logical_core_from_bank_id(bank_index));
-                llrt::write_hex_vec_to_core(device->id(), core_coordinates, page, absolute_address);
+                CoreCoord logical_core = buffer.logical_core_from_bank_id(bank_index);
+                WriteToDeviceL1(device, logical_core, address, page, CoreType::WORKER);
             } break;
             default: TT_THROW("Unsupported buffer type to write to device!");
+        }
+
+        if (bank_index + 1 == num_banks) {
+            num_round_robins += 1;
         }
 
         bank_index = (bank_index + 1) % num_banks;
@@ -530,26 +548,25 @@ void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buf
 
     auto device = buffer.device();
     auto num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
-    size_t host_idx = 0;
 
+    uint32_t num_round_robins = 0;
+    size_t host_idx = 0;
     uint32_t bank_index = 0;
     std::vector<uint32_t> page;
     page.resize(page_size / sizeof(uint32_t));
     for (int page_index = 0; page_index < num_pages; page_index++) {
-        auto absolute_address = buffer.page_address(bank_index, page_index);
-        // Get address offset of buffer in bank. Required when reading from DRAM.
-        auto bank_local_address = buffer.bank_local_page_address(bank_index, page_index);
+        const DeviceAddr address =
+            CalculateAddressDeviceInterleavedContiguous(buffer, bank_index, page_index, num_round_robins);
         page.clear();
         switch (buffer.buffer_type()) {
             case BufferType::DRAM:
-            case BufferType::TRACE:
-                ReadFromDeviceDRAMChannel(device, bank_index, bank_local_address, page_size, page);
-                break;
+            case BufferType::TRACE: ReadFromDeviceDRAMChannel(device, bank_index, address, page_size, page); break;
             case BufferType::L1:
             case BufferType::L1_SMALL: {
                 auto core_coordinates =
                     device->worker_core_from_logical_core(buffer.logical_core_from_bank_id(bank_index));
-                tt::Cluster::instance().read_core(page.data(), page_size, tt_cxy_pair(device->id(), core_coordinates), absolute_address);
+                tt::Cluster::instance().read_core(
+                    page.data(), page_size, tt_cxy_pair(device->id(), core_coordinates), address);
             } break;
             default: TT_THROW("Unsupported buffer type to read from device!");
         }
@@ -557,6 +574,10 @@ void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buf
         // Copy page into host buffer
         std::memcpy(host_buffer + host_idx, page.data(), page_size);
         host_idx += page_size;
+
+        if (bank_index + 1 == num_banks) {
+            num_round_robins += 1;
+        }
 
         bank_index = (bank_index + 1) % num_banks;
     }
