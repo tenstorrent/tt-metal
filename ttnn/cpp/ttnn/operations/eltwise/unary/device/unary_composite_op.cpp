@@ -706,7 +706,8 @@ Tensor is_odd(const Tensor& input, const std::optional<MemoryConfig>& output_mem
 
 Tensor _round(const Tensor& input, int32_t decimals, const std::optional<MemoryConfig>& output_mem_config) {
     auto arch = input.device()->arch();
-    TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
+    TT_FATAL(
+        arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE, "Op is only supported on Wormhole & Blackhole");
     Tensor floor_res = ttnn::floor(input, output_mem_config);
     if (decimals != 0) {  // TODO: For decimal value!=0
         Tensor power_10 = ttnn::power(ttnn::full_like(input, 10.0f), decimals, output_mem_config);
