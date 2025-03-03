@@ -59,7 +59,7 @@ ALWI void mul_tiles_init(uint32_t icb0, uint32_t icb1) { binary_tiles_init<true,
  * |----------------|---------------------------------------------------------------|----------|-------------|----------|
  * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31     | True     |
  * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31     | True     |
- * | acc_to_dest    | If true, operation = A + B + dst_tile_idx of add_tiles        | bool     | 0,1         | False    |
+ * | acc_to_dest    | If true, operation = A [+,-,x]  B + dst_tile_idx of add_tiles | bool     | 0,1         | False |
  */
 // clang-format on
 ALWI void add_tiles_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = false) {
@@ -74,7 +74,7 @@ ALWI void add_tiles_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = false)
  * |----------------|---------------------------------------------------------------|----------|-------------|----------|
  * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31     | True     |
  * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31     | True     |
- * | acc_to_dest    | If true, operation = A - B + dst_tile_idx of sub_tiles        | bool     | 0,1         | False    |
+ * | acc_to_dest    | If true, operation = A [+,-,x]  B + dst_tile_idx of sub_tiles | bool     | 0,1         | False |
  */
 // clang-format on
 ALWI void sub_tiles_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = false) {
@@ -165,7 +165,7 @@ ALWI void sub_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itil
  /**
  * Template for initializing element-wise binary operations.
  * Template parameters:
- * full_init: if true, the full init is performed (unpack+math), otherwise a nof init is performed (only math)
+ * full_init: if true, the full init is performed (unpack+math), otherwise only math init is performed
  * eltwise_binary_op_type: the binary operation type
  *
  * Function
@@ -173,7 +173,7 @@ ALWI void sub_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itil
  * |----------------|---------------------------------------------------------------|----------|-------------|----------|
  * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31     | True     |
  * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31     | True     |
- * | acc_to_dest    | If true, operation = A - B + dst_tile_idx of sub_tiles        | bool     | 0,1         | False    |
+ * | acc_to_dest    | If true, operation = A [+,-,x]  B + dst_tile_idx of *_tiles, depending on the eltwise_binary_op_type | bool | 0,1  | False |
  */
 template <bool full_init, EltwiseBinaryType eltwise_binary_op_type>
 ALWI void binary_tiles_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = false) {
@@ -182,18 +182,6 @@ ALWI void binary_tiles_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = fal
     if constexpr (full_init) {
         UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1, 0 /*transpose*/, acc_to_dest)));
     }
-}
-
-/**
- * Init function with a specified op
- * template parameters:
- * full_init: if true, the full init is performed (unpack+math), otherwise a nof init is performed (only math)
- * eltwise_binary_op_type: the binary operation type
- */
-template <bool full_init = false, EltwiseBinaryType eltwise_binary_op_type = ELWADD>
-ALWI void binary_op_specific_init(uint32_t icb0, uint32_t icb1)  // TODO(AP): better naming
-{
-    binary_tiles_init<full_init, eltwise_binary_op_type>(icb0,icb1);
 }
 
 /**
