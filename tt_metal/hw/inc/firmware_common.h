@@ -16,6 +16,7 @@
 #include "noc/noc_parameters.h"
 #include "debug/dprint.h"
 #include "risc_common.h"
+#include "noc_nonblocking_api.h"
 
 extern uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS];
 extern int32_t bank_to_dram_offset[NUM_DRAM_BANKS];
@@ -81,4 +82,14 @@ void wait_for_go_message() {
     while (mailboxes->go_message.signal != RUN_MSG_GO) {
         invalidate_l1_cache();
     }
+}
+
+FORCE_INLINE uint64_t calculate_dispatch_addr(volatile go_msg_t* go_message_in) {
+    go_msg_t go_message;
+    go_message.all = go_message_in->all;
+    uint64_t addr = NOC_XY_ADDR(
+        NOC_X(go_message.master_x),
+        NOC_Y(go_message.master_y),
+        DISPATCH_MESSAGE_ADDR + NOC_STREAM_REG_SPACE_SIZE * go_message.dispatch_message_offset);
+    return addr;
 }

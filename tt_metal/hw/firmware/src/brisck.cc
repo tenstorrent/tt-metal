@@ -21,10 +21,14 @@
 #if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #include "remote_circular_buffer_api.h"
 #endif
+#include "debug/ring_buffer.h"
+
+extern uint32_t last_iteration_start;
 
 void kernel_launch(uint32_t kernel_base_addr) {
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
     wait_for_go_message();
+    WATCHER_RING_BUFFER_PUSH(0x08000000 | (memory_read(RISCV_DEBUG_REG_WALL_CLOCK_L) - last_iteration_start));
 #ifdef KERNEL_RUN_TIME
     uint64_t end_time = c_tensix_core::read_wall_clock() + KERNEL_RUN_TIME;
     while (c_tensix_core::read_wall_clock() < end_time);

@@ -90,13 +90,7 @@ public:
     vector_memcpy_aligned<uint32_t> cmd_vector() const { return this->cmd_region_vector; }
 
     void add_dispatch_wait(
-        uint8_t barrier,
-        uint32_t address,
-        uint32_t count,
-        uint8_t clear_count = 0,
-        bool notify_prefetch = false,
-        bool do_wait = true,
-        uint8_t dispatcher_type = 0) {
+        uint32_t flags, uint32_t address, uint32_t stream, uint32_t count, uint8_t dispatcher_type = 0) {
         auto initialize_wait_cmds = [&](CQPrefetchCmd* relay_wait, CQDispatchCmd* wait_cmd) {
             relay_wait->base.cmd_id = CQ_PREFETCH_CMD_RELAY_INLINE;
             relay_wait->relay_inline.dispatcher_type = dispatcher_type;
@@ -105,12 +99,10 @@ public:
                 tt::align(sizeof(CQDispatchCmd) + sizeof(CQPrefetchCmd), this->pcie_alignment);
 
             wait_cmd->base.cmd_id = CQ_DISPATCH_CMD_WAIT;
-            wait_cmd->wait.barrier = barrier;
-            wait_cmd->wait.notify_prefetch = notify_prefetch;
-            wait_cmd->wait.wait = do_wait;
+            wait_cmd->wait.flags = flags;
             wait_cmd->wait.addr = address;
             wait_cmd->wait.count = count;
-            wait_cmd->wait.clear_count = clear_count;
+            wait_cmd->wait.stream = stream;
         };
         CQPrefetchCmd* relay_wait_dst = this->reserve_space<CQPrefetchCmd*>(sizeof(CQPrefetchCmd));
         CQDispatchCmd* wait_cmd_dst = this->reserve_space<CQDispatchCmd*>(sizeof(CQDispatchCmd));
@@ -127,9 +119,8 @@ public:
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
-    void add_dispatch_wait_with_prefetch_stall(
-        uint8_t barrier, uint32_t address, uint32_t count, uint8_t clear_count = 0, bool do_wait = true) {
-        this->add_dispatch_wait(barrier, address, count, clear_count, true, do_wait);
+    void add_dispatch_wait_with_prefetch_stall(uint32_t flags, uint32_t address, uint32_t stream, uint32_t count) {
+        this->add_dispatch_wait(flags | CQ_DISPATCH_CMD_WAIT_FLAG_NOTIFY_PREFETCH, address, stream, count);
         uint32_t increment_sizeB = tt::align(sizeof(CQPrefetchCmd), this->pcie_alignment);
         auto initialize_stall_cmd = [&](CQPrefetchCmd* stall_cmd) {
             *stall_cmd = {};
@@ -280,7 +271,7 @@ public:
     void add_dispatch_go_signal_mcast(
         uint32_t wait_count,
         uint32_t go_signal,
-        uint32_t wait_addr,
+        uint32_t wait_stream,
         uint8_t num_mcast_txns,
         uint8_t num_unicast_txns,
         uint8_t noc_data_start_index,
@@ -308,7 +299,7 @@ public:
             mcast_cmd->mcast.num_mcast_txns = num_mcast_txns;
             mcast_cmd->mcast.num_unicast_txns = num_unicast_txns;
             mcast_cmd->mcast.noc_data_start_index = noc_data_start_index;
-            mcast_cmd->mcast.wait_addr = wait_addr;
+            mcast_cmd->mcast.wait_stream = wait_stream;
         };
         CQDispatchCmd* mcast_cmd_dst = this->reserve_space<CQDispatchCmd*>(sizeof(CQDispatchCmd));
 

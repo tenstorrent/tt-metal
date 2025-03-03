@@ -27,6 +27,7 @@ typedef struct dispatch_static_config {
     std::optional<uint32_t> mcast_go_signal_addr;
     std::optional<uint32_t> unicast_go_signal_addr;
     std::optional<uint32_t> distributed_dispatcher;
+    std::optional<uint32_t> first_stream_used;
 
     std::optional<uint32_t> host_completion_q_wr_ptr;  // 26
     std::optional<uint32_t> dev_completion_q_wr_ptr;
