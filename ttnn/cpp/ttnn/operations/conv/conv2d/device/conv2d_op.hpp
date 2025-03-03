@@ -155,7 +155,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     uint32_t output_channels,
     uint32_t groups,
     bool untilize_out,
-    std::optional<unary::UnaryWithParam> fused_activation,
+    const std::optional<unary::UnaryWithParam>& fused_activation,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
     tt::tt_metal::DataType dtype,
