@@ -53,6 +53,7 @@ def validate_outputs(tt_output, ref_output, test_name):
     assert passing, f"{test_name} output does not meet PCC requirement {PCC_REQUIRED}"
 
 
+@torch.no_grad()
 @pytest.mark.parametrize(
     "N, C, T, H, W",
     [
@@ -89,13 +90,14 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, use_program_cache, rese
         dtype=ttnn.DataType.BFLOAT16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
     )
+    logger.info(f"TT input shape: {tt_input.shape}")
     logger.info("Run TtResBlock forward")
     tt_output = tt_model.forward(tt_input)
 
     # Convert TT output to torch tensor
-    tt_output_torch = to_torch_tensor(tt_output, mesh_device)
+    tt_output_torch = to_torch_tensor(tt_output, mesh_device, dim=1)
     tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)  # [N, C, T, H, W]
 
     # Get reference output

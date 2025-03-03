@@ -4,14 +4,17 @@ import pytest
 from loguru import logger
 import os
 import ttnn
+import pickle
+from pathlib import Path
 from models.experimental.mochi.vae.conv1x1 import TtConv1x1
-from genmo.mochi_preview.vae.models import Conv1x1 as RefConv1x1
+from genmo.mochi_preview.vae.models import Conv1x1 as RefConv1x1, Decoder
 
 from models.experimental.mochi.common import (
     compute_metrics,
     to_tt_tensor,
     to_torch_tensor,
 )
+from models.experimental.mochi.vae.common import load_decoder_weights
 
 # Common test configurations
 PCC_REQUIRED = 0.99
@@ -22,10 +25,43 @@ class Conv3d1x1(nn.Conv3d):
         super().__init__(in_channels, out_channels, kernel_size=(1, 1, 1), bias=bias)
 
 
-def create_random_conv3d_models(mesh_device, in_channels, out_channels, bias=True):
+def extract_conv1x1_weights(decoder, layer_name):
+    """Extract weights for a specific Conv1x1 layer from the decoder"""
+    # For common layers like output_proj
+    if f"{layer_name}.weight" in decoder:
+        return {
+            "weight": decoder[f"{layer_name}.weight"],
+            "bias": decoder[f"{layer_name}.bias"] if f"{layer_name}.bias" in decoder else None,
+        }
+    # For layers in blocks
+    for key in decoder:
+        if layer_name in key:
+            prefix = key.split(layer_name)[0] + layer_name
+            return {
+                "weight": decoder[f"{prefix}.weight"],
+                "bias": decoder[f"{prefix}.bias"] if f"{prefix}.bias" in decoder else None,
+            }
+
+    raise ValueError(f"Could not find {layer_name} in decoder")
+
+
+def create_random_conv3d_models(mesh_device, in_channels, out_channels, bias=True, use_real_weights=False):
     """Initialize both reference Conv3d and TT models."""
     # Create reference model
     reference_model = Conv3d1x1(in_channels, out_channels, bias=bias)
+
+    # Optionally load real weights
+    if use_real_weights:
+        try:
+            decoder = load_decoder_weights()
+            # First layer in decoder is usually Conv3d 1x1x1
+            weights = extract_conv1x1_weights(decoder, "blocks.0.0")
+            reference_model.load_state_dict(weights)
+            logger.info("Loaded real weights for Conv3d 1x1x1")
+        except (FileNotFoundError, ValueError) as e:
+            logger.warning(f"Could not load real weights, using random: {e}")
+            use_real_weights = False
+
     ref_state_dict = reference_model.state_dict()
 
     # Create TT model
@@ -41,10 +77,23 @@ def create_random_conv3d_models(mesh_device, in_channels, out_channels, bias=Tru
     return reference_model, tt_model
 
 
-def create_random_conv1x1_models(mesh_device, in_channels, out_channels, bias=True):
+def create_random_conv1x1_models(mesh_device, in_channels, out_channels, bias=True, use_real_weights=False):
     """Initialize both reference Conv1x1 and TT models."""
     # Create reference model
     reference_model = RefConv1x1(in_channels, out_channels, bias=bias)
+
+    # Optionally load real weights
+    if use_real_weights:
+        try:
+            decoder = load_decoder_weights()
+            # output_proj is typically Conv1x1
+            weights = extract_conv1x1_weights(decoder, "output_proj")
+            reference_model.load_state_dict(weights)
+            logger.info("Loaded real weights for Conv1x1")
+        except (FileNotFoundError, ValueError) as e:
+            logger.warning(f"Could not load real weights, using random: {e}")
+            use_real_weights = False
+
     ref_state_dict = reference_model.state_dict()
 
     # Create TT model
@@ -84,6 +133,7 @@ def validate_outputs(tt_output, ref_output, test_name):
     ids=["12->768"],
 )
 @pytest.mark.parametrize("divide_T", [8, 1], ids=["T8", "T1"])  # Emulate T fracturing
+@pytest.mark.parametrize("use_real_weights", [False, True], ids=["random_weights", "real_weights"])
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -93,10 +143,12 @@ def validate_outputs(tt_output, ref_output, test_name):
     ],
     indirect=True,
 )
-def test_tt_conv3d_1x1x1(mesh_device, N, C_in, C_out, T, H, W, use_program_cache, reset_seeds, divide_T):
+def test_tt_conv3d_1x1x1(
+    mesh_device, N, C_in, C_out, T, H, W, use_program_cache, reset_seeds, divide_T, use_real_weights
+):
     """Test forward pass of TtConv1x1 against Conv3d with 1x1x1 kernel."""
     T = T // divide_T
-    reference_model, tt_model = create_random_conv3d_models(mesh_device, C_in, C_out)
+    reference_model, tt_model = create_random_conv3d_models(mesh_device, C_in, C_out, use_real_weights=use_real_weights)
 
     # Create input tensor
     torch_input = torch.randn(N, C_in, T, H, W)
@@ -132,6 +184,7 @@ def test_tt_conv3d_1x1x1(mesh_device, N, C_in, C_out, T, H, W, use_program_cache
     ids=["128->3"],
 )
 @pytest.mark.parametrize("divide_T", [8, 1], ids=["T8", "T1"])  # Emulate T fracturing
+@pytest.mark.parametrize("use_real_weights", [False, True], ids=["random_weights", "real_weights"])
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -141,10 +194,14 @@ def test_tt_conv3d_1x1x1(mesh_device, N, C_in, C_out, T, H, W, use_program_cache
     ],
     indirect=True,
 )
-def test_tt_conv1x1_linear(mesh_device, N, C_in, C_out, T, H, W, use_program_cache, reset_seeds, divide_T):
+def test_tt_conv1x1_linear(
+    mesh_device, N, C_in, C_out, T, H, W, use_program_cache, reset_seeds, divide_T, use_real_weights
+):
     """Test forward pass of TtConv1x1 against Conv1x1 (linear implementation)."""
     T = T // divide_T
-    reference_model, tt_model = create_random_conv1x1_models(mesh_device, C_in, C_out)
+    reference_model, tt_model = create_random_conv1x1_models(
+        mesh_device, C_in, C_out, use_real_weights=use_real_weights
+    )
 
     # Create input tensor
     torch_input = torch.randn(N, C_in, T, H, W)
@@ -182,6 +239,7 @@ def test_tt_conv1x1_linear(mesh_device, N, C_in, C_out, T, H, W, use_program_cac
     ids=["texp3_sexp2", "texp2_sexp2", "texp1_sexp2"],
 )
 @pytest.mark.parametrize("divide_T", [8, 1], ids=["T8", "T1"])  # Emulate T fracturing
+@pytest.mark.parametrize("use_real_weights", [False, True], ids=["random_weights", "real_weights"])
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -191,7 +249,9 @@ def test_tt_conv1x1_linear(mesh_device, N, C_in, C_out, T, H, W, use_program_cac
     ],
     indirect=True,
 )
-def test_tt_conv1x1_expand(mesh_device, texp, sexp, B, C_in, C_out, T, H, W, use_program_cache, reset_seeds, divide_T):
+def test_tt_conv1x1_expand(
+    mesh_device, texp, sexp, B, C_in, C_out, T, H, W, use_program_cache, reset_seeds, divide_T, use_real_weights
+):
     """Test TtConv1x1 with channel expansion similar to test_conv1x1.py."""
     T = T // divide_T
 
@@ -200,6 +260,37 @@ def test_tt_conv1x1_expand(mesh_device, texp, sexp, B, C_in, C_out, T, H, W, use
 
     # Create Conv1x1 module for reference
     reference_model = RefConv1x1(C_in, C_out)
+
+    # Optionally load real weights
+    if use_real_weights:
+        try:
+            state_dict = load_decoder_weights()
+            # Find matching proj layer based on dimensions
+            found = False
+            for block_idx in range(1, 4):  # Check blocks 1-3 which contain CausalUpsampleBlocks
+                weight_key = f"blocks.{block_idx}.proj.weight"
+                bias_key = f"blocks.{block_idx}.proj.bias"
+
+                if (
+                    weight_key in state_dict
+                    and bias_key in state_dict
+                    and state_dict[weight_key].shape[0] == C_out
+                    and state_dict[weight_key].shape[1] == C_in
+                ):
+                    weights = {"weight": state_dict[weight_key], "bias": state_dict[bias_key]}
+                    reference_model.load_state_dict(weights)
+                    logger.info(f"Loaded real weights for expansion Conv1x1 from {weight_key}")
+                    found = True
+                    break
+
+            if not found:
+                logger.warning("Could not find matching expansion layer, using random weights")
+                use_real_weights = False
+        except (FileNotFoundError, ValueError) as e:
+            logger.warning(f"Could not load real weights, using random: {e}")
+            use_real_weights = False
+
+    # Run reference forward
     torch_output = reference_model(torch_input)
 
     # Reshape for expansion (similar to test_conv1x1.py)

@@ -1,24 +1,58 @@
 import ttnn
 import torch
+import os
+from pathlib import Path
+from loguru import logger
 
 from models.experimental.mochi.common import (
     to_tt_tensor,
 )
 
 
-def get_conv3d_config(input_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size):
-    # Config is determined by C_in, H, W
-    H, W, C_in = input_shape[2], input_shape[3], input_shape[4]
+def get_vae_dir():
+    mochi_dir = os.environ.get("MOCHI_DIR")
+    if not mochi_dir:
+        raise ValueError("MOCHI_DIR environment variable must be set")
+    vae_dir = Path(mochi_dir) / "vae"
+    assert vae_dir.exists()
+    return vae_dir
+
+
+def load_decoder_weights():
+    """Load VAE decoder weights from safetensors file."""
+    vae_dir = get_vae_dir()
+    path = vae_dir / "decoder.safetensors"
+
+    try:
+        from safetensors.torch import load_file
+
+        logger.info(f"Loading VAE decoder weights from {path}")
+        return load_file(path)
+    except (ImportError, FileNotFoundError) as e:
+        logger.warning(f"Failed to load decoder weights: {e}")
+        return None
+
+
+def get_conv3d_config(in_channels, out_channels, kernel_size, stride, padding, padding_mode, grid_size):
     shape_to_blocking = {
-        (60, 106, 768): (128, 96, 1, 2, 16),
-        (120, 212, 512): (128, 128, 1, 8, 4),
-        (240, 424, 256): (128, 128, 4, 4, 2),
-        (480, 848, 128): (128, 128, 1, 2, 16),
+        # (60, 106, 768): (128, 96, 1, 2, 16),
+        # (120, 212, 512): (128, 128, 1, 8, 4),
+        # (240, 424, 256): (128, 128, 4, 4, 2),
+        # (480, 848, 128): (128, 128, 1, 2, 16),
+        768: (128, 96, 1, 2, 16),
+        512: (128, 128, 1, 8, 4),
+        256: (128, 128, 4, 4, 2),
+        128: (128, 128, 1, 2, 16),
     }
-    blocking = shape_to_blocking.get((H, W, C_in), None)
+    blocking = shape_to_blocking.get(in_channels, None)
     if blocking is None:
-        raise ValueError(f"No blocking found for input shape {input_shape}")
-    C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = blocking
+        # raise ValueError(f"No blocking found for input shape {input_shape}")
+        C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = 128, 32, 1, 2, 16
+        logger.warning(
+            f"No blocking found for input shape {in_channels}. Using default blocking: {C_in_block}, {C_out_block}, {T_out_block}, {H_out_block}, {W_out_block}"
+        )
+    else:
+        C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = blocking
     return ttnn.Conv3dConfig(
         dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
