@@ -701,7 +701,7 @@ uint32_t get_num_stick_per_barrier(const Tensor& input_tensor) {
     uint32_t W = input_tensor.get_padded_shape()[3];
     uint32_t W_bytes = W * input_tensor.element_size();
     uint32_t num_stick_per_barrier = 0;
-    for (uint32_t cur_bytes = 0; cur_bytes <= max_read_size; cur_bytes += W_bytes) {
+    for (uint32_t cur_bytes = 0; cur_bytes < max_read_size; cur_bytes += W_bytes) {
         num_stick_per_barrier++;
     }
     return num_stick_per_barrier;
@@ -851,14 +851,6 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, NCH_padded);
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
-    auto num_sticks = num_sticks_padded_per_core_group_1 > num_sticks_padded_per_core_group_2
-                          ? num_sticks_padded_per_core_group_1
-                          : num_sticks_padded_per_core_group_2;
-
-    // tt::tt_metal::CircularBufferConfig cb_src0_config =
-    //     tt::tt_metal::CircularBufferConfig(num_sticks * stick_size_padded_aligned, {{src0_cb_index, cb_data_format}})
-    //         .set_page_size(src0_cb_index, stick_size_padded_aligned);
-    // auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
     // construct const buffer with the pad_value
     bool not_pad_by_zero = pad_value != 0;
