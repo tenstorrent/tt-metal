@@ -211,6 +211,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libtbb-dev \
     libcapstone-dev \
     libgtest-dev \
+    uuid-runtime \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 ENV CCACHE_TEMPDIR=/tmp/ccache
