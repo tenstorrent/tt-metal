@@ -192,7 +192,7 @@ namespace ckernel::unpacker
       cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, ALU_ACC_CTRL_INT8_math_enabled_MASK>(alu_payload.val);
    }
 
-   template<bool row_pool=false, bool is_fp32_dest_acc_en = false, bool fpu_srnd_en = false, bool pack_srnd_en = false>
+   template<bool row_pool=false, bool is_fp32_dest_acc_en = false, bool fpu_srnd_en = false, bool pack_srnd_en = false, bool disable_src_zero_flag = false>
    inline void configure_unpack_AB(
      const uint unpA_src_format,
      const uint unpB_src_format,
@@ -272,6 +272,9 @@ namespace ckernel::unpacker
       cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, alu_mask>(alu_payload.val);
 
       uint32_t src_zeroflags_disable = ((uint)unpA_dst_format == (uint)DataFormat::UInt16) || ((uint)unpB_dst_format == (uint)DataFormat::UInt16);
+      if constexpr (disable_src_zero_flag) {
+         src_zeroflags_disable = true;
+      }
       cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(src_zeroflags_disable);
 
       //Set FP8 E4M3 mode, bit is accessible by unpacker/packer
