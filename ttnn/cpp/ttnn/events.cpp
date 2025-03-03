@@ -68,8 +68,8 @@ MeshEvent record_mesh_event(
     return EnqueueRecordEventToHost(mesh_device->mesh_command_queue(*cq_id), sub_device_ids, device_range);
 }
 
-void wait_for_mesh_event(MeshDevice* mesh_device, QueueId cq_id, const MeshEvent& event) {
-    EnqueueWaitForEvent(mesh_device->mesh_command_queue(*cq_id), event);
+void wait_for_mesh_event(QueueId cq_id, const MeshEvent& event) {
+    EnqueueWaitForEvent(event.device()->mesh_command_queue(*cq_id), event);
 }
 
 }  // namespace ttnn::events
