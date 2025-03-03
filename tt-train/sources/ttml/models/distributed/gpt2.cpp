@@ -176,6 +176,7 @@ ttml::autograd::TensorPtr DistributedTransformer::operator()(
     const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) {
     auto tok_emb_out = (*tok_emb)(x);
     auto out = (*pos_emb)(tok_emb_out);
+
     for (auto& block : blocks) {
         if (runner_type == RunnerType::MemoryEfficient) {
             out = memory_efficient_runner(*block, out, mask);
@@ -185,6 +186,7 @@ ttml::autograd::TensorPtr DistributedTransformer::operator()(
             throw std::runtime_error("Unknown runner type. Supported runner types ['default', 'memory_efficient']");
         }
     }
+
     out = (*ln_fc)(out);
     auto logits = (*fc)(out);
     auto log_softmax = ttml::ops::log_softmax_moreh(logits, 3);

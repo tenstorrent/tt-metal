@@ -40,13 +40,13 @@ bool was_broadcasted(const autograd::TensorPtr& input, const ttnn::Tensor& grad)
     return false;
 }
 
-ttnn::SmallVector<int> get_broadcast_dimensions(const autograd::TensorPtr& input, const ttnn::Tensor& grad) {
-    ttnn::SmallVector<int> broadcast_dims;
+ttnn::SmallVector<int64_t> get_broadcast_dimensions(const autograd::TensorPtr& input, const ttnn::Tensor& grad) {
+    ttnn::SmallVector<int64_t> broadcast_dims;
     auto input_shape = input->get_value().get_logical_shape();
     auto grad_shape = grad.get_logical_shape();
     for (size_t i = 0; i < input_shape.size(); ++i) {
         if (input_shape[i] != grad_shape[i]) {
-            broadcast_dims.push_back(static_cast<int>(i));
+            broadcast_dims.push_back(static_cast<int64_t>(i));
         }
     }
 
@@ -69,10 +69,11 @@ autograd::TensorPtr operator+(const autograd::TensorPtr& a, const autograd::Tens
     out->set_value(ttnn::experimental::add(a->get_value(), b->get_value()));
     autograd::GradFunction grad = [a, b, out]() {
         if (was_broadcasted(a, out->get_grad())) {
-            a->add_grad(ttnn::sum(
+            a->add_grad(ttnn::moreh_sum(
                 out->get_grad(),
                 get_broadcast_dimensions(a, out->get_grad()),
                 /* keep_dim */ true,
+                /* output_tensor */ std::nullopt,
                 /* memory_config_arg */ std::nullopt,
                 core::ComputeKernelConfig::precise()));
         } else {
@@ -80,10 +81,11 @@ autograd::TensorPtr operator+(const autograd::TensorPtr& a, const autograd::Tens
         }
 
         if (was_broadcasted(b, out->get_grad())) {
-            b->add_grad(ttnn::sum(
+            b->add_grad(ttnn::moreh_sum(
                 out->get_grad(),
                 get_broadcast_dimensions(b, out->get_grad()),
                 /* keep_dim */ true,
+                /* output_tensor */ std::nullopt,
                 /* memory_config_arg */ std::nullopt,
                 core::ComputeKernelConfig::precise()));
         } else {
