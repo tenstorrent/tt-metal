@@ -192,15 +192,7 @@ void GraphProcessor::track_function_start(std::string_view function_name, std::s
     };
 
     std::vector<std::string> serialized_arguments;
-    try{
-        serialized_arguments = GraphArgumentSerializer::to_list(input_parameters);
-        for(auto item : serialized_arguments)
-            std::cout << item << std::endl;
-    } catch (const std::exception& e) {  // ✅ Catches std::runtime_error, std::bad_any_cast, etc.
-        std::cerr << "Exception: " << e.what() << std::endl;
-    } catch (...) {  // ✅ Catches anything else (segfaults, etc.)
-        std::cerr << "Unknown Exception occurred." << std::endl;
-    }
+    serialized_arguments = GraphArgumentSerializer::to_list(input_parameters);
 
     auto counter = graph.size();
     {
