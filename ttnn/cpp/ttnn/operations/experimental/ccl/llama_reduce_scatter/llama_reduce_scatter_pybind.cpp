@@ -5,10 +5,10 @@
 #include "llama_reduce_scatter_pybind.hpp"
 #include "llama_reduce_scatter.hpp"
 
-namespace ttnn::operations::ccl::detail {
+namespace ttnn::operations::experimental::ccl {
 namespace py = pybind11;
 
-void bind_llama_reduce_scatter(py::module& module) {
+void py_bind_llama_reduce_scatter(py::module& module) {
     auto doc =
         R"doc(llama_reduce_scatter(input_tensor: ttnn.Tensor, dims: List[int], memory_config: Optional[MemoryConfig] = std::nullopt, queue_id: int = 0) -> ttnn.Tensor
 
@@ -28,8 +28,8 @@ void bind_llama_reduce_scatter(py::module& module) {
             Example:
 
                 >>> tensor = ttnn.to_device(ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16)), device)
-                >>> output = ttnn.llama_reduce_scatter(tensor, (0, 1, 3, 2)))doc";
-
+                >>> output = ttnn.llama_reduce_scatter(tensor, ))doc";
+    std::cout << "py bind definitions" << std::endl;
     using OperationType = decltype(ttnn::experimental::llama_reduce_scatter);
     ttnn::bind_registered_operation(
         module,
@@ -49,4 +49,4 @@ void bind_llama_reduce_scatter(py::module& module) {
         });
 }
 
-}  // namespace ttnn::operations::ccl::detail
+}  // namespace ttnn::operations::experimental::ccl

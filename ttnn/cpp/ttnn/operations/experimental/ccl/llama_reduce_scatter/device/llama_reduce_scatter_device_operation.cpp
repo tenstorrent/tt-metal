@@ -23,17 +23,11 @@ void LlamaReduceScatterDeviceOperation::validate_on_program_cache_hit(
 
 LlamaReduceScatterDeviceOperation::spec_return_value_t LlamaReduceScatterDeviceOperation::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.optional_output_tensor.has_value()) {
-        return tensor_args.optional_output_tensor->get_tensor_spec();
-    }
     return tensor_args.input_tensor.get_tensor_spec();
 }
 
 LlamaReduceScatterDeviceOperation::tensor_return_value_t LlamaReduceScatterDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.optional_output_tensor.has_value()) {
-        return tensor_args.optional_output_tensor.value();
-    }
     return create_device_tensor(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
 }
@@ -43,7 +37,7 @@ LlamaReduceScatterDeviceOperation::invoke(
     const ttnn::Tensor& input_tensor, const int32_t dim, const std::optional<ttnn::MemoryConfig>& memory_config) {
     return {
         operation_attributes_t{.dim = dim, .output_mem_config = memory_config.value_or(input_tensor.memory_config())},
-        tensor_args_t{.input_tensor = input_tensor, .optional_output_tensor = std::move(optional_output_tensor)}};
+        tensor_args_t{.input_tensor = input_tensor}};
 }
 
 }  // namespace ttnn::operations::experimental::ccl

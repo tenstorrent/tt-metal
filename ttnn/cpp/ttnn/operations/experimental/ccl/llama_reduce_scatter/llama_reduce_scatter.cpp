@@ -7,17 +7,18 @@
 #include <tt-metalium/constants.hpp>
 
 #include "llama_reduce_scatter.hpp"
+#include "device/llama_reduce_scatter_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 
-namespace operations::experimental::ccl {
+namespace ttnn::operations::experimental::ccl {
 namespace detail {}  // namespace detail
 
-ttnn::Tensor ExecuteLLamaReduceScatter::invoke(
+ttnn::Tensor ExecuteLlamaReduceScatter::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const int32_t dim,
-    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt) {
-    return ttnn::prim(input_tensor, dim, memory_config);
+    const std::optional<ttnn::MemoryConfig>& memory_config) {
+    return ttnn::prim::llama_reduce_scatter(input_tensor, dim, memory_config);
 }
 
-}  // namespace operations::experimental::ccl
+}  // namespace ttnn::operations::experimental::ccl

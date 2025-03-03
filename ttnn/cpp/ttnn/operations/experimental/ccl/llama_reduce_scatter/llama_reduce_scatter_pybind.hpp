@@ -9,9 +9,9 @@
 
 #include "cpp/pybind11/decorators.hpp"
 
-namespace ttnn::operations::ccl::detail {
+namespace ttnn::operations::experimental::ccl {
 namespace py = pybind11;
 
-void bind_llama_reduce_scatter(py::module& module);
+void py_bind_llama_reduce_scatter(py::module& module);
 
-}  // namespace ttnn::operations::ccl::detail
+}  // namespace ttnn::operations::experimental::ccl
