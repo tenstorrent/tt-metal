@@ -59,7 +59,7 @@ ALWI void mul_tiles_init(uint32_t icb0, uint32_t icb1) { binary_tiles_init<true,
  * |----------------|---------------------------------------------------------------|----------|-------------|----------|
  * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31     | True     |
  * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31     | True     |
- * | acc_to_dest    | If true, operation = A [+,-,x]  B + dst_tile_idx of add_tiles | bool     | 0,1         | False |
+ * | acc_to_dest    | If true, operation = A + B + dst_tile_idx of add_tiles | bool     | 0,1         | False |
  */
 // clang-format on
 ALWI void add_tiles_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = false) {
@@ -74,7 +74,7 @@ ALWI void add_tiles_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = false)
  * |----------------|---------------------------------------------------------------|----------|-------------|----------|
  * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31     | True     |
  * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31     | True     |
- * | acc_to_dest    | If true, operation = A [+,-,x]  B + dst_tile_idx of sub_tiles | bool     | 0,1         | False |
+ * | acc_to_dest    | If true, operation = A - B + dst_tile_idx of sub_tiles | bool     | 0,1         | False |
  */
 // clang-format on
 ALWI void sub_tiles_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = false) {
@@ -173,7 +173,7 @@ ALWI void sub_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itil
  * |----------------|---------------------------------------------------------------|----------|-------------|----------|
  * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31     | True     |
  * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31     | True     |
- * | acc_to_dest    | If true, operation = A [+,-,x]  B + dst_tile_idx of *_tiles, depending on the eltwise_binary_op_type | bool | 0,1  | False |
+ * | acc_to_dest    | If true, operation = A [+,-,x] B + dst_tile_idx of *_tiles, depending on the eltwise_binary_op_type | bool | 0,1  | False |
  */
 template <bool full_init, EltwiseBinaryType eltwise_binary_op_type>
 ALWI void binary_tiles_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = false) {
