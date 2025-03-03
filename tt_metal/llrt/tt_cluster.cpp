@@ -89,7 +89,7 @@ inline std::string get_soc_description_file(
 }  // namespace
 namespace tt {
 
-const Cluster &Cluster::instance() {
+Cluster& Cluster::instance() {
     static Cluster inst;
     return inst;
 }
@@ -131,6 +131,8 @@ void Cluster::detect_arch_and_target() {
 bool Cluster::is_galaxy_cluster() const { return this->cluster_type_ == ClusterType::TG; }
 
 ClusterType Cluster::get_cluster_type() const { return this->cluster_type_; }
+
+FabricConfig Cluster::get_fabric_config() const { return this->fabric_config_; }
 
 BoardType Cluster::get_board_type(chip_id_t chip_id) const {
   return this->cluster_desc_->get_board_type(chip_id);
@@ -328,6 +330,7 @@ Cluster::~Cluster() {
     this->device_to_host_mem_channel_.clear();
     this->device_eth_routing_info_.clear();
     this->tunnels_from_mmio_device.clear();
+    this->ethernet_sockets_.clear();
 }
 
 std::unordered_map<chip_id_t, eth_coord_t> Cluster::get_user_chip_ethernet_coordinates() const {
@@ -514,7 +517,7 @@ void Cluster::write_dram_vec(std::vector<uint32_t> &vec, tt_target_dram dram, ui
         desc_to_use.get_num_dram_views());
     int d_chan = desc_to_use.get_channel_for_dram_view(d_view);
     TT_ASSERT(
-        d_subchannel < desc_to_use.dram_cores.at(d_chan).size(),
+        d_subchannel < desc_to_use.get_dram_cores().at(d_chan).size(),
         "Trying to address dram sub channel that doesnt exist in the device descriptor");
     tt::umd::CoreCoord dram_core_coord =
         desc_to_use.get_dram_core_for_channel(d_chan, d_subchannel, CoordSystem::VIRTUAL);
@@ -535,7 +538,7 @@ void Cluster::read_dram_vec(
         desc_to_use.get_num_dram_views());
     int d_chan = desc_to_use.get_channel_for_dram_view(d_view);
     TT_ASSERT(
-        d_subchannel < desc_to_use.dram_cores.at(d_chan).size(),
+        d_subchannel < desc_to_use.get_dram_cores().at(d_chan).size(),
         "Trying to address dram sub channel that doesnt exist in the device descriptor");
     tt::umd::CoreCoord dram_core_coord =
         desc_to_use.get_dram_core_for_channel(d_chan, d_subchannel, CoordSystem::VIRTUAL);
@@ -896,7 +899,7 @@ std::unordered_set<chip_id_t> Cluster::get_ethernet_connected_device_ids(chip_id
     const auto &connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
     for (const auto &[other_chip_id, eth_cores] : connected_chips) {
         for (const auto &eth_core : eth_cores) {
-            if (this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::IDLE) {
+            if (this->device_eth_routing_info_.at(chip_id).at(eth_core) != EthRouterMode::BI_DIR_TUNNELING) {
                 device_ids.insert(other_chip_id);
             }
         }
@@ -932,6 +935,38 @@ std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(
         }
     }
     return active_ethernet_cores;
+}
+
+void Cluster::initialize_fabric_config(FabricConfig fabric_config) {
+    this->fabric_config_ = fabric_config;
+    if (fabric_config != FabricConfig::DISABLED) {
+        this->reserve_ethernet_cores_for_fabric_routers();
+    }
+}
+
+void Cluster::reserve_ethernet_cores_for_fabric_routers() {
+    for (const auto& [chip_id, eth_cores] : this->device_eth_routing_info_) {
+        for (const auto& [eth_core, mode] : eth_cores) {
+            if (mode == EthRouterMode::IDLE) {
+                this->device_eth_routing_info_[chip_id][eth_core] = EthRouterMode::FABRIC_ROUTER;
+            }
+        }
+    }
+    // Update sockets to reflect fabric routing
+    this->ethernet_sockets_.clear();
+}
+
+std::set<tt_fabric::chan_id_t> Cluster::get_fabric_ethernet_channels(chip_id_t chip_id) const {
+    std::set<tt_fabric::chan_id_t> fabric_ethernet_channels;
+    const auto& connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
+    for (const auto& [other_chip_id, eth_cores] : connected_chips) {
+        for (const auto& eth_core : eth_cores) {
+            if (this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::FABRIC_ROUTER) {
+                fabric_ethernet_channels.insert(this->get_soc_desc(chip_id).logical_eth_core_to_chan_map.at(eth_core));
+            }
+        }
+    }
+    return fabric_ethernet_channels;
 }
 
 std::unordered_set<CoreCoord> Cluster::get_inactive_ethernet_cores(chip_id_t chip_id) const {
