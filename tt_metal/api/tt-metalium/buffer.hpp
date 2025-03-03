@@ -209,6 +209,7 @@ class Buffer final {
     uint32_t num_dev_pages() const;
 
     BufferType buffer_type() const { return buffer_type_; }
+    HalMemType memory_type() const;
     CoreType core_type() const;
 
     bool is_l1() const;
