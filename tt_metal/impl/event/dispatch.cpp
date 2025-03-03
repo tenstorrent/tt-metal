@@ -59,26 +59,21 @@ void issue_record_event_commands(
     auto dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
 
-    uint32_t dispatch_message_base_addr =
-        DispatchMemMap::get(dispatch_core_type)
-            .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
-
     uint32_t last_index = num_worker_counters - 1;
     for (uint32_t i = 0; i < num_worker_counters; ++i) {
         auto offset_index = *sub_device_ids[i];
-        uint32_t dispatch_message_addr =
-            dispatch_message_base_addr +
-            DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(offset_index);
         // recording an event does not have any side-effects on the dispatch completion count
         // hence clear_count is set to false, i.e. the number of workers on the dispatcher is
         // not reset
         // We only need the write barrier for the last wait cmd.
+        /* write_barrier ensures that all writes initiated by the dispatcher are
+                                        flushed before the event is recorded */
         command_sequence.add_dispatch_wait(
-            (i == num_worker_counters - 1), /* write_barrier ensures that all writes initiated by the dispatcher are
-                                               flushed before the event is recorded */
-            dispatch_message_addr,
-            expected_num_workers_completed[offset_index],
-            false /* recording an event does not have any side-effects on the dispatch completion count */);
+            CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM |
+                ((i == num_worker_counters - 1) ? CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER : 0),
+            0,
+            DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(offset_index),
+            expected_num_workers_completed[offset_index]);
     }
 
     std::vector<CQDispatchWritePackedUnicastSubCmd> unicast_sub_cmds(num_command_queues);
@@ -142,7 +137,8 @@ void issue_wait_for_event_commands(
     uint32_t last_completed_event_address =
         event_cq_id == 0 ? completion_q0_last_event_addr : completion_q1_last_event_addr;
 
-    command_sequence.add_dispatch_wait(false, last_completed_event_address, event_id, false);
+    command_sequence.add_dispatch_wait(
+        CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY, last_completed_event_address, 0, event_id);
 
     sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
 

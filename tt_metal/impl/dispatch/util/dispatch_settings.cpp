@@ -77,8 +77,7 @@ DispatchSettings DispatchSettings::defaults(
 std::vector<std::string> DispatchSettings::get_errors() const {
     std::vector<std::string> msgs;
 
-    if (!prefetch_q_rd_ptr_size_ || !prefetch_q_pcie_rd_ptr_size_ || !dispatch_s_sync_sem_ || !dispatch_message_ ||
-        !other_ptrs_size) {
+    if (!prefetch_q_rd_ptr_size_ || !prefetch_q_pcie_rd_ptr_size_ || !dispatch_s_sync_sem_ || !other_ptrs_size) {
         msgs.push_back(fmt::format("configuration with_alignment() is a required\n"));
     }
 

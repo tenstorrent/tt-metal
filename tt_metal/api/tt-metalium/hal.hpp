@@ -157,6 +157,8 @@ private:
     uint32_t noc_stream_reg_space_size_;
     uint32_t noc_stream_remote_dest_buf_size_reg_index_;
     uint32_t noc_stream_remote_dest_buf_start_reg_index_;
+    uint32_t noc_stream_remote_dest_buf_space_available_reg_index_;
+    uint32_t noc_stream_remote_dest_buf_space_available_update_reg_index_;
     bool coordinate_virtualization_enabled_;
     uint32_t virtual_worker_start_x_;
     uint32_t virtual_worker_start_y_;
@@ -201,6 +203,12 @@ public:
     }
     uint32_t get_noc_stream_remote_dest_buf_start_reg_index() const {
         return noc_stream_remote_dest_buf_start_reg_index_;
+    }
+    uint32_t get_noc_stream_remote_dest_buf_space_available_reg_index() const {
+        return noc_stream_remote_dest_buf_space_available_reg_index_;
+    }
+    uint32_t get_noc_stream_remote_dest_buf_space_available_update_reg_index() const {
+        return noc_stream_remote_dest_buf_space_available_update_reg_index_;
     }
 
     float get_eps() const { return eps_; }

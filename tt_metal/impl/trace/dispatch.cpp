@@ -87,10 +87,6 @@ void issue_trace_commands(
     auto dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
     auto dispatch_core_type = dispatch_core_config.get_core_type();
 
-    uint32_t dispatch_message_base_addr =
-        DispatchMemMap::get(dispatch_core_type)
-            .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
-
     go_msg_t reset_launch_message_read_ptr_go_signal;
     reset_launch_message_read_ptr_go_signal.signal = RUN_MSG_RESET_READ_PTR;
     reset_launch_message_read_ptr_go_signal.master_x = (uint8_t)dispatch_core.x;
@@ -106,17 +102,15 @@ void issue_trace_commands(
             desc.num_traced_programs_needing_go_signal_multicast ? device->num_noc_mcast_txns(id) : 0;
         const auto& num_noc_unicast_txns =
             desc.num_traced_programs_needing_go_signal_unicast ? device->num_noc_unicast_txns(id) : 0;
-        reset_launch_message_read_ptr_go_signal.dispatch_message_offset =
-            (uint8_t)DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(*id);
-        uint32_t dispatch_message_addr =
-            dispatch_message_base_addr + DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(*id);
         auto index = *id;
+        reset_launch_message_read_ptr_go_signal.dispatch_message_offset =
+            DispatchMemMap::get(dispatch_core_type).get_dispatch_message_update_offset(index);
 
         // Wait to ensure that all kernels have completed. Then send the reset_rd_ptr go_signal.
         command_sequence.add_dispatch_go_signal_mcast(
             expected_num_workers_completed[index],
             *reinterpret_cast<uint32_t*>(&reset_launch_message_read_ptr_go_signal),
-            dispatch_message_addr,
+            DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(index),
             num_noc_mcast_txns,
             num_noc_unicast_txns,
             noc_data_start_idx,
@@ -126,7 +120,6 @@ void issue_trace_commands(
     // Wait to ensure that all workers have reset their read_ptr. dispatch_d will stall until all workers have completed
     // this step, before sending kernel config data to workers or notifying dispatch_s that its safe to send the
     // go_signal. Clear the dispatch <--> worker semaphore, since trace starts at 0.
-    constexpr bool clear_count = true;
     for (const auto& [id, desc] : dispatch_md.trace_worker_descriptors) {
         auto index = *id;
         uint32_t expected_num_workers = expected_num_workers_completed[index];
@@ -136,14 +129,20 @@ void issue_trace_commands(
         if (desc.num_traced_programs_needing_go_signal_unicast) {
             expected_num_workers += device->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, id);
         }
-        uint32_t dispatch_message_addr =
-            dispatch_message_base_addr + DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(index);
 
         if (DispatchQueryManager::instance().distributed_dispatcher()) {
             command_sequence.add_dispatch_wait(
-                false, dispatch_message_addr, expected_num_workers, clear_count, false, true, 1);
+                CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
+                0,
+                DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(index),
+                expected_num_workers,
+                1);
         }
-        command_sequence.add_dispatch_wait(false, dispatch_message_addr, expected_num_workers, clear_count);
+        command_sequence.add_dispatch_wait(
+            CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
+            0,
+            DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(index),
+            expected_num_workers);
     }
 
     uint32_t page_size_log2 = __builtin_ctz(dispatch_md.trace_buffer_page_size);
