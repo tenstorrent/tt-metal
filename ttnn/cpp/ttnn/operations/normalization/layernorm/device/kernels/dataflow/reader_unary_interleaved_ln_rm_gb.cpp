@@ -17,9 +17,9 @@ void kernel_main() {
     uint32_t beta_addr = get_arg_val<uint32_t>(7);
     uint32_t b_addr = get_arg_val<uint32_t>(8);
 
-    constexpr uint32_t cb_id_in0 = 0, cb_id_in1 = 1;
-    constexpr uint32_t cb_id_gamma = 5;
-    constexpr uint32_t cb_id_beta = 6;
+    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0, cb_id_in1 = tt::CBIndex::c_1;
+    constexpr uint32_t cb_id_gamma = tt::CBIndex::c_5;
+    constexpr uint32_t cb_id_beta = tt::CBIndex::c_6;
 
     // ublocks size defined in tiles
     const uint32_t src0_tile_bytes = get_tile_size(cb_id_in0);
@@ -67,7 +67,7 @@ void kernel_main() {
 
     // Generate constant tiles for layernorm compute
     {
-        constexpr uint32_t cb_in_2 = 2;
+        constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
         uint32_t scaler = get_arg_val<uint32_t>(4);
         generate_reduce_scaler(cb_in_2, scaler);
     }

@@ -16,7 +16,7 @@ void kernel_main() {
     constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t blk = get_compile_time_arg_val(1);  // needed for correctness of softmax/LN kernels
 
-    constexpr uint32_t cb_out = tt::CBIndex::c_16;
+    constexpr uint32_t cb_out = tt::CBIndex::c_14;
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_out);
     const DataFormat data_format = get_dataformat(cb_out);

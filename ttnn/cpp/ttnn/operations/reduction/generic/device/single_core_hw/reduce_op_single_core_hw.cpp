@@ -68,7 +68,7 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
             .set_page_size(CBIndex::c_2, scaler_single_tile_size);
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_scaler_config);
 
-    uint32_t output_cb_index = tt::CBIndex::c_16;
+    uint32_t output_cb_index = tt::CBIndex::c_3;
     uint32_t num_output_tiles = 2;
     tt_metal::CircularBufferConfig cb_output_config =
         tt_metal::CircularBufferConfig(num_output_tiles * dst_single_tile_size, {{output_cb_index, dst_cb_data_format}})

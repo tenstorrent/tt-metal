@@ -67,7 +67,7 @@ void MAIN {
 #if defined RMSNORM and not defined FUSE_PRE_ADD
     constexpr uint32_t cb_xmm = cb_in0;  // x minus mean
 #else
-    constexpr uint32_t cb_xmm = tt::CBIndex::c_25;  // x minus mean
+    constexpr uint32_t cb_xmm = tt::CBIndex::c_18;  // x minus mean
 #endif
     constexpr uint32_t cb_ex_partial = tt::CBIndex::c_8;  // E[x] partial reduce
     constexpr uint32_t cb_ex = tt::CBIndex::c_9;          // E[x] global reduce
@@ -77,8 +77,8 @@ void MAIN {
     constexpr uint32_t cb_ex_external2 = tt::CBIndex::c_13;
     constexpr uint32_t cb_ex_global = tt::CBIndex::c_15;  // E[x] global reduce
     constexpr uint32_t cb_xmm2 = cb_x;                    // xmm^2
-    constexpr uint32_t cb_ex2pe = tt::CBIndex::c_27;      // E[(x-E[x])^2]+eps
-    constexpr uint32_t cb_fusion = tt::CBIndex::c_25;     // stream gamma/beta
+    constexpr uint32_t cb_ex2pe = tt::CBIndex::c_20;      // E[(x-E[x])^2]+eps
+    constexpr uint32_t cb_fusion = tt::CBIndex::c_18;     // stream gamma/beta
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
     binary_op_init_common(cb_in0, cb_in0, cb_x);
