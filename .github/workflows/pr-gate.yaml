@@ -40,9 +40,10 @@ jobs:
     with:
       version: "22.04"
 
-  smoke-tests:
-    needs: pr-gate-build
-    uses: ./.github/workflows/zzz_smoke.yaml
-    with:
-      docker-image: ${{ needs.pr-gate-build.outputs.ci-build-docker-image }}
-      package-artifact-name: ${{ needs.pr-gate-build.outputs.packages-artifact-name }}
+  # TODO: Earmark some runners for low-latency jobs and activate Smoke tests here in PR Gate
+  #smoke-tests:
+  #  needs: pr-gate-build
+  #  uses: ./.github/workflows/zzz_smoke.yaml
+  #  with:
+  #    docker-image: ${{ needs.pr-gate-build.outputs.ci-build-docker-image }}
+  #    package-artifact-name: ${{ needs.pr-gate-build.outputs.packages-artifact-name }}
