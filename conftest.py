@@ -183,18 +183,23 @@ def all_devices(request, device_params):
     ttnn.CloseDevices(devices)
 
 
+# Reset fabric config to DISABLED if not None, and do nothing otherwise
+# Temporarily require previous state to be passed in as even setting it to DISABLED might be unstable
+# This is to ensure that we don't propagate the instability to the rest of CI
 def reset_fabric(fabric_config):
     import ttnn
 
-    # If fabric_config is not None, set it to FABRIC_2D
     if fabric_config:
         ttnn._ttnn.fabric.initialize_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
+# Set fabric config to passed in value
+# Do nothing if not set
+# Must be called before creating the mesh device
 def set_fabric(fabric_config):
     import ttnn
 
-    # If fabric_config is not None, set it to FABRIC_2D
+    # If fabric_config is not None, set it to fabric_config
     if fabric_config:
         ttnn._ttnn.fabric.initialize_fabric_config(fabric_config)
 
