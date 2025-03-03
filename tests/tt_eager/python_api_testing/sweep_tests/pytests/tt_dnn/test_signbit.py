@@ -35,7 +35,7 @@ mem_configs = [
     mem_configs,
 )
 class TestSignbit:
-    def test_run_signbit_negative_zero(
+    def test_run_signbit_op(
         self,
         input_shapes,
         dst_mem_config,
@@ -57,7 +57,7 @@ class TestSignbit:
             test_args,
         )
 
-    def test_run_signbit_op(
+    def test_run_signbit_negative_zero(
         self,
         input_shapes,
         dst_mem_config,
