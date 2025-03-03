@@ -235,7 +235,7 @@ def test_all_gather_tg_llama(
     "output_shape, cluster_axis, num_links, input_num_cores, output_num_cores, perf_target_us",
     [
         ([1, 1, 32, 2048], 0, 4, 24, 16, 34),  # FF2/DO all reduce
-        ([1, 1, 32, 1280], 1, 3, 24, 40, 28),  # QKV all reduce
+        ([1, 1, 32, 1280], 1, 3, 24, 40, 34),  # QKV all reduce
         ([1, 1, 32, 3584], 1, 3, 24, 24, 34),  # FF1 all reduce
     ],
 )
