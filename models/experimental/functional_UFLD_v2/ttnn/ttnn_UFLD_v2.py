@@ -41,7 +41,7 @@ class ttnn_UFLD_V2_Conv2D:
             device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
             fp32_dest_acc_en=False,
-            packer_l1_acc=True,
+            packer_l1_acc=False,
             math_approx_mode=True,
         )
         self.conv_config = ttnn.Conv2dConfig(
@@ -52,9 +52,9 @@ class ttnn_UFLD_V2_Conv2D:
             enable_act_double_buffer=False,
             enable_split_reader=False,
             enable_subblock_padding=False,
-            reshard_if_not_optimal=True,
+            reshard_if_not_optimal=False,
             activation=activation,
-            input_channels_alignment=16,
+            input_channels_alignment=8,
         )
         config_override = None
         if config_override and "act_block_h" in config_override:
@@ -69,9 +69,9 @@ class ttnn_UFLD_V2_Conv2D:
         self.weight = weight
 
     def __call__(self, x):
-        input_height = x.shape[1]
-        input_width = x.shape[2]
-        batch_size = x.shape[0]
+        input_height = self.conv.input_height
+        input_width = self.conv.input_width
+        batch_size = self.conv.batch_size
         [x, [output_height, output_width], [self.weight, self.bias]] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
@@ -91,7 +91,6 @@ class ttnn_UFLD_V2_Conv2D:
             compute_config=self.compute_config,
             return_output_dim=True,
             return_weights_and_bias=True,
-            # memory_config = ttnn.DRAM_MEMORY_CONFIG
         )
         return x, output_height, output_width
 
@@ -110,19 +109,19 @@ class ttnn_Basic_Block:
     def __call__(self, device, input):
         x_identity = input
         x, out_ht, out_wdth = self.conv1(input)
-        if x.is_sharded():
-            x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
-        x = ttnn.reshape(x, (1, out_ht, out_wdth, x.shape[-1]))  # RESHAPING FROM (1,1,NHW,C) TO (N,H,W,C) TO AVOID OOM
+        # if x.is_sharded():
+        #     x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # x = ttnn.reshape(x, (1, out_ht, out_wdth, x.shape[-1]))  # RESHAPING FROM (1,1,NHW,C) TO (N,H,W,C) TO AVOID OOM
         x, out_ht, out_wdth = self.conv2(x)
-        if x.is_sharded():
-            x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
-        x = ttnn.reshape(x, (1, out_ht, out_wdth, x.shape[-1]))
+        # if x.is_sharded():
+        #     x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # x = ttnn.reshape(x, (1, out_ht, out_wdth, x.shape[-1]))
         if self.is_downsample:
             x_identity, out_ht, out_wdth = self.downsample(input)
-            if x_identity.is_sharded():
-                x_identity = ttnn.sharded_to_interleaved(x_identity, memory_config=ttnn.L1_MEMORY_CONFIG)
-                x_identity = ttnn.reshape(x_identity, (1, out_ht, out_wdth, x_identity.shape[-1]))
-        x = ttnn.add(x, x_identity, memory_config=ttnn.L1_MEMORY_CONFIG)
+            # if x_identity.is_sharded():
+            #     x_identity = ttnn.sharded_to_interleaved(x_identity, memory_config=ttnn.L1_MEMORY_CONFIG)
+            # x_identity = ttnn.reshape(x_identity, (1, out_ht, out_wdth, x_identity.shape[-1]))
+        x = ttnn.add(x, x_identity, memory_config=x.memory_config())
         x = ttnn.relu(x)
 
         return x
@@ -180,10 +179,11 @@ class ttnn_Resnet_34:
         )
 
     def __call__(self, x):  # [1, 320, 800, 3]
+        batch_size = x.shape[0]
         x, out_ht, out_wdth = self.conv1(x)  # [1, 1, 64000, 64] #0.99974
         x = ttnn.max_pool2d(
             x,
-            batch_size=1,
+            batch_size=batch_size,
             input_h=out_ht,
             input_w=out_wdth,
             channels=x.shape[-1],
@@ -195,7 +195,7 @@ class ttnn_Resnet_34:
         if x.is_sharded():
             x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        x = ttnn.reshape(x, (1, 80, 200, x.shape[-1]))
+        # x = ttnn.reshape(x, (1, 80, 200, x.shape[-1]))
         x = self.layer1_0(device=self.device, input=x)
         x = self.layer1_1(device=self.device, input=x)
         x = self.layer1_2(device=self.device, input=x)
@@ -241,7 +241,7 @@ class ttnn_UFLD_V2:
         self.input_dim = self.input_height // 32 * self.input_width // 32 * 8
         self.device = device
         self.conv_pth = conv_pth
-        self.res_model = ttnn_Resnet_34(conv_args.res_model, conv_pth.res_model, device=device)
+        self.res_model = ttnn_Resnet_34(conv_args, conv_pth.res_model, device=device)
         self.pool = ttnn_UFLD_V2_Conv2D(conv_args.pool, conv_pth.pool, activation="", device=device)
 
     def __call__(self, input):
