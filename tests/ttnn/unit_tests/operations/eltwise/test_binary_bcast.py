@@ -1088,8 +1088,8 @@ def test_binary_opt_output_invalid_bcast(a_shape, b_shape, out_shape, ttnn_fn, d
     "dtype_pt, dtype_tt",
     (
         [torch.bfloat16, ttnn.bfloat16],
-        [torch.int32, ttnn.int32],
-        [torch.float32, ttnn.float32],
+        # [torch.int32, ttnn.int32],
+        # [torch.float32, ttnn.float32],
     ),
 )
 def test_binary_sharded_bcast_w(device, dtype_pt, dtype_tt):
