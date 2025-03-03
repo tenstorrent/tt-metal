@@ -5,7 +5,6 @@ on:
 
 jobs:
   tg-demo-tests:
-    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
