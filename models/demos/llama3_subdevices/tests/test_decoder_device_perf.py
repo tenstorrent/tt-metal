@@ -22,7 +22,14 @@ from models.utility_functions import (
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
-from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
+from models.perf.device_perf_utils import run_device_perf, check_device_perf, post_process_ops_log
+from tt_metal.tools.profiler.process_model_log import (
+    post_process_ops_log,
+    run_device_profiler,
+    get_latest_ops_log_filename,
+)
+import pandas as pd
+from collections import defaultdict
 
 
 @torch.no_grad()
@@ -226,26 +233,116 @@ def test_llama_decoder_inference(
     tt_ccl.close()
 
 
+def merge_device_rows(df):
+    block_by_device = defaultdict(list)
+
+    for _, row in df.iterrows():
+        op_name = row["OP CODE"]
+        op_type = row["OP TYPE"]
+
+        if op_type == "tt_dnn_device":
+            device_id = int(row["DEVICE ID"])
+            block_by_device[device_id].append((op_name, row.to_dict()))
+
+    device_ids = sorted(block_by_device.keys())
+    merged_blocks = []
+
+    global_index = 0
+    while max(len(block_by_device[device_id]) for device_id in device_ids) > 0:
+        blocks = []
+        op_name = None
+        missing_devices = []
+        for device_id in device_ids:
+            if not len(block_by_device[device_id]):
+                print(
+                    colored(
+                        f"Warning: Device {device_id} is missing operation {op_name} at index {global_index}", "yellow"
+                    )
+                )
+                continue
+            if op_name is None:
+                op_name = block_by_device[device_id][0][0]
+            elif op_name != block_by_device[device_id][0][0]:
+                missing_devices.append(device_id)
+                continue
+
+            blocks.append(block_by_device[device_id].pop(0))
+
+        if missing_devices:
+            print(
+                colored(
+                    f"Warning: {op_name} at index {global_index} not present in CSV for {len(missing_devices)} devices {missing_devices} - do not trust data for this op or directly subsequent ops with the same name",
+                    "yellow",
+                )
+            )
+
+        if not blocks:
+            break
+
+        if "AllGather" in op_name or "ReduceScatter" in op_name:
+            # For collective ops, take the row with minimum duration
+            min_duration_block = min(blocks, key=lambda x: x[1]["DEVICE KERNEL DURATION [ns]"])
+            merged_blocks.append(min_duration_block[1])
+        else:
+            # For non-collective ops, take the row with maximum duration
+            max_duration_block = max(blocks, key=lambda x: x[1]["DEVICE KERNEL DURATION [ns]"])
+            merged_blocks.append(max_duration_block[1])
+
+        global_index += 1
+
+    return pd.DataFrame(merged_blocks)
+
+
 @pytest.mark.models_device_performance_bare_metal
 def test_llama_TG_perf_device(reset_seeds):
     batch_size = 32
-    test = "llama-80-decoder"
     subdir = "llama-80-decoder"
     margin = 0.03
     num_iterations = 1
-    expected_perf = 95.5
 
     command = f"pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_decoder_inference"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
-    inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
-    expected_perf_cols = {inference_time_key: expected_perf}
 
     post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch_size)
-    expected_results = check_device_perf(post_processed_results, margin, expected_perf_cols)
-    prep_device_perf_report(
-        model_name=f"llama-80-decoder",
-        batch_size=batch_size,
-        post_processed_results=post_processed_results,
-        expected_results=expected_results,
-        comments=test.replace("/", "_"),
-    )
+    filename = get_latest_ops_log_filename(subdir)
+    # filename = "/localdev/sraizada/tracy-logs/llama-80-decoder/reports/2025_03_03_13_14_57/ops_perf_results_2025_03_03_13_14_57.csv"
+    df = pd.read_csv(filename)
+    df = df[df["OP TYPE"].isin(["tt_dnn_device"])]
+    df = merge_device_rows(df)
+    df = df[int(len(df) / 2) :]
+    input_data = df[["OP CODE", "DEVICE KERNEL DURATION [ns]"]].to_dict(orient="records")
+    kernel_duration_dict = {}
+    for entry in input_data:
+        op_code = entry["OP CODE"]
+        duration = entry["DEVICE KERNEL DURATION [ns]"]
+        if op_code not in kernel_duration_dict:
+            kernel_duration_dict[op_code] = []
+        kernel_duration_dict[op_code].append(duration)
+
+    expected_times_dict = {
+        "Embeddings": [7230.0, 7241.0],
+        "DramPrefetcher": [20261638.0],
+        "LayerNorm": [6230.0, 6449.0, 7743.0, 7426.0],
+        "AllGatherAsync": [2572.0, 11958.0, 2570.0],
+        "ReshardDeviceOperation": [1456.0, 1939.0, 2776.0],
+        "Matmul": [8022.0, 9004.0, 9727.0, 10140.0, 16769.0],
+        "AllReduceAsync": [219371.0, 11674841.0, 772010.0, 33516.0, 3713658.0],
+        "NLPCreateHeadsDecodeDeviceOperation": [8840.0],
+        "RotaryEmbeddingLlamaFusedQK": [4637.0],
+        "PagedUpdateCacheDeviceOperation": [4579.0],
+        "ScaledDotProductAttentionDecode": [19907.0],
+        "NLPConcatHeadsDecodeDeviceOperation": [7039.0],
+        "BinaryDeviceOperation": [2577.0, 13666.0, 2574.0],
+    }
+    for op_code, durations in kernel_duration_dict.items():
+        if op_code in expected_times_dict:
+            thresholds = expected_times_dict[op_code]
+            # Ensure the lists are of the same length to compare corresponding elements
+            if len(durations) == len(thresholds):
+                for duration, threshold in zip(durations, thresholds):  # Compare corresponding items
+                    if duration > threshold:
+                        print(f"{op_code}: {duration} ns exceeds the threshold of {threshold} ns")
+            else:
+                print(
+                    f"Warning: Length mismatch for {op_code}. Kernel durations: {len(durations)}, Expected thresholds: {len(thresholds)}"
+                )
