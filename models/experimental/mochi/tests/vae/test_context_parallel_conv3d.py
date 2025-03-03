@@ -62,13 +62,14 @@ def validate_outputs(tt_output, ref_output, test_name):
 @pytest.mark.parametrize(
     "input_shape, out_channels, kernel_size, stride",
     [
-        [(1, 768, 4, 60, 106), 768, (3, 3, 3), (1, 1, 1)],
-        [(1, 512, 11, 120, 212), 512, (3, 3, 3), (1, 1, 1)],
-        [(1, 256, 21, 240, 424), 256, (3, 3, 3), (1, 1, 1)],
-        [(1, 128, 21, 480, 848), 128, (3, 3, 3), (1, 1, 1)],
+        [(1, 768, 28, 60, 106), 768, (3, 3, 3), (1, 1, 1)],
+        [(1, 512, 82, 120, 212), 512, (3, 3, 3), (1, 1, 1)],
+        [(1, 256, 163, 240, 424), 256, (3, 3, 3), (1, 1, 1)],
+        [(1, 128, 163, 480, 848), 128, (3, 3, 3), (1, 1, 1)],
     ],
     ids=["768", "512", "256", "128"],
 )
+@pytest.mark.parametrize("divide_T", [8, 1], ids=["T8", "T1"])  # Emulate T fracturing
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -79,9 +80,12 @@ def validate_outputs(tt_output, ref_output, test_name):
     indirect=True,
 )
 def test_context_parallel_conv3d_forward(
-    mesh_device, input_shape, out_channels, kernel_size, stride, use_program_cache, reset_seeds
+    mesh_device, input_shape, out_channels, kernel_size, stride, divide_T, use_program_cache, reset_seeds
 ):
     """Test complete forward pass of TtContextParallelConv3d."""
+    N, C, T, H, W = input_shape
+    T = T // divide_T
+    input_shape = (N, C, T, H, W)
     input_channels = input_shape[1]
 
     model_args = conv3d_args.copy()
@@ -107,14 +111,14 @@ def test_context_parallel_conv3d_forward(
         dtype=ttnn.DataType.BFLOAT16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
     )
 
     logger.info("Run TtContextParallelConv3d forward")
     tt_output = tt_model.forward(tt_input_NTHWC)
 
     # Convert TT output to torch tensor (from NTHWC to NCHW format)
-    tt_output_torch = to_torch_tensor(tt_output, mesh_device)
+    tt_output_torch = to_torch_tensor(tt_output, mesh_device, dim=1)
     tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)  # NTHWC -> NCHW
 
     # Get reference output

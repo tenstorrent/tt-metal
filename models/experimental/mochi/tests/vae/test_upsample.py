@@ -11,6 +11,7 @@ from models.experimental.mochi.common import (
     to_tt_tensor,
     to_torch_tensor,
 )
+from models.experimental.mochi.vae.common import load_decoder_weights
 
 # Common test configurations
 PCC_REQUIRED = 0.99
@@ -63,13 +64,54 @@ test_configs = [
 ]
 
 
-def create_random_models(mesh_device, in_channels, out_channels, **model_args):
-    """Initialize both reference and TT models."""
+def create_random_models(mesh_device, in_channels, out_channels, use_real_weights=False, **model_args):
+    """Initialize both reference and TT models with optional real weights."""
     # Create reference model
     reference_model = RefCausalUpsampleBlock(in_channels=in_channels, out_channels=out_channels, **model_args)
+
+    # Try to load real weights if requested
+    if use_real_weights:
+        decoder_weights = load_decoder_weights()
+        if decoder_weights:
+            # Find the right upsample block based on channels
+            block_idx = None
+            if in_channels == 768 and out_channels == 512:
+                block_idx = 1  # First upsample block
+            elif in_channels == 512 and out_channels == 256:
+                block_idx = 2  # Second upsample block
+            elif in_channels == 256 and out_channels == 128:
+                block_idx = 3  # Third upsample block
+
+            if block_idx is not None:
+                # Extract weights with the correct prefix
+                block_prefix = f"blocks.{block_idx}"
+                block_state_dict = {}
+
+                # Find all weights belonging to this block
+                for key, value in decoder_weights.items():
+                    if key.startswith(block_prefix):
+                        # Remove the block prefix to match reference model keys
+                        local_key = key[len(block_prefix) + 1 :]  # +1 for the dot
+                        block_state_dict[local_key] = value
+
+                if block_state_dict:
+                    try:
+                        # Load weights that match the reference model
+                        reference_model.load_state_dict(block_state_dict, strict=False)
+                        logger.info(
+                            f"Loaded real weights for upsample block {block_idx} ({in_channels}->{out_channels})"
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to load weights for block {block_idx}: {e}")
+                else:
+                    logger.warning(f"No weights found for upsample block {block_idx}")
+            else:
+                logger.warning(f"No matching upsample block for {in_channels}->{out_channels}")
+
+    # Get state dict from reference model
     ref_state_dict = reference_model.state_dict()
 
-    # Create TT model
+    # Create TT model with same weights
     tt_model = TtCausalUpsampleBlock(
         mesh_device=mesh_device,
         state_dict=ref_state_dict,
@@ -96,6 +138,7 @@ def validate_outputs(tt_output, ref_output, test_name):
     ids=[cfg["name"] for cfg in test_configs],
 )
 @pytest.mark.parametrize("divide_T", [8, 1], ids=["T8", "T1"])  # Emulate T fracturing
+@pytest.mark.parametrize("use_real_weights", [False, True], ids=["random_weights", "real_weights"])
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -105,7 +148,7 @@ def validate_outputs(tt_output, ref_output, test_name):
     ],
     indirect=True,
 )
-def test_upsample(mesh_device, config, divide_T, use_program_cache, reset_seeds):
+def test_upsample(mesh_device, config, divide_T, use_program_cache, reset_seeds, use_real_weights):
     """Test TtCausalUpsampleBlock against reference implementation."""
     in_channels = config["in_channels"]
     out_channels = config["out_channels"]
@@ -132,11 +175,12 @@ def test_upsample(mesh_device, config, divide_T, use_program_cache, reset_seeds)
         f"Testing upsample with in_channels={in_channels}, out_channels={out_channels}, "
         f"temporal_expansion={temporal_expansion}, "
         f"spatial_expansion={spatial_expansion}, "
-        f"num_res_blocks={num_res_blocks}"
+        f"num_res_blocks={num_res_blocks}, "
+        f"use_real_weights={use_real_weights}"
     )
 
     reference_model, tt_model = create_random_models(
-        mesh_device, in_channels=in_channels, out_channels=out_channels, **block_args
+        mesh_device, in_channels=in_channels, out_channels=out_channels, use_real_weights=use_real_weights, **block_args
     )
 
     # Create input tensor with correct shape from the decoder
@@ -149,7 +193,7 @@ def test_upsample(mesh_device, config, divide_T, use_program_cache, reset_seeds)
         dtype=ttnn.DataType.BFLOAT16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
     )
 
     logger.info(f"Input shape: {torch_input.shape}")
@@ -157,7 +201,7 @@ def test_upsample(mesh_device, config, divide_T, use_program_cache, reset_seeds)
     tt_output = tt_model.forward(tt_input)
 
     # Convert TT output to torch tensor
-    tt_output_torch = to_torch_tensor(tt_output, mesh_device)
+    tt_output_torch = to_torch_tensor(tt_output, mesh_device, dim=1)
     tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)  # [N, C, T, H, W]
     logger.info(f"TT output shape: {tt_output_torch.shape}")
 
