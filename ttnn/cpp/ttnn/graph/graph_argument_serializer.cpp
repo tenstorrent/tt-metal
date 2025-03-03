@@ -96,11 +96,9 @@ void GraphArgumentSerializer::register_type() {
         if (value.type() == typeid(std::reference_wrapper<T>)) {
             auto referenced_value = std::any_cast<std::reference_wrapper<T>>(value);
             oss << referenced_value.get();
-            std::cout << "Parsed: " << typeid(referenced_value).name() << std::endl;
         } else if (value.type() == typeid(std::reference_wrapper<const T>)) {
             auto referenced_value = std::any_cast<std::reference_wrapper<const T>>(value);
             oss << referenced_value.get();
-            std::cout << "Parsed: " << typeid(referenced_value).name() << std::endl;
         } else {
             oss << "Unable to parse";
         }
