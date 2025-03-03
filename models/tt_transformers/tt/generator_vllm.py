@@ -22,6 +22,10 @@ from vllm.model_executor.models.mllama import MLLAMA_IMAGE_TOKEN_ID, MLLAMA_IMAG
 
 def generate_submeshes(mesh_device):
     data_parallel = int(os.getenv("TT_DATA_PARALLEL", 1))
+
+    if not isinstance(mesh_device, ttnn.MeshDevice) or data_parallel == 1:
+        return 1, [mesh_device]
+
     num_devices = mesh_device.get_num_devices()
     assert num_devices % data_parallel == 0, f"Unsupported device split: {num_devices} devices, {data_parallel} groups"
 
@@ -29,31 +33,28 @@ def generate_submeshes(mesh_device):
 
 
 def allocate_kv_cache(kv_cache_shape, dtype, num_layers, mesh_device=None):
-    if mesh_device is None:
-        pass
-    else:
-        _, submesh_devices = generate_submeshes(mesh_device)
-        kv_cache = []
-        for submesh in submesh_devices:
-            cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
-            kv_tt = []
-            for _ in range(num_layers):
-                kv_tt_i = [
-                    ttnn.as_tensor(
-                        lp,
-                        device=submesh,
-                        # TODO: this could be ShardTensorToMesh, removing need for init to know about TP=8. Could affect other calculations which use self.num_kv_heads, though.
-                        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-                        layout=ttnn.TILE_LAYOUT,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                        dtype=ttnn.bfloat8_b
-                        # TODO: Add caching to speed this up
-                    )
-                    for lp in (cache_kv, cache_kv)
-                ]
+    _, submesh_devices = generate_submeshes(mesh_device)
+    kv_cache = []
+    for submesh in submesh_devices:
+        cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
+        kv_tt = []
+        for _ in range(num_layers):
+            kv_tt_i = [
+                ttnn.as_tensor(
+                    lp,
+                    device=submesh,
+                    # TODO: this could be ShardTensorToMesh, removing need for init to know about TP=8. Could affect other calculations which use self.num_kv_heads, though.
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    dtype=ttnn.bfloat8_b
+                    # TODO: Add caching to speed this up
+                )
+                for lp in (cache_kv, cache_kv)
+            ]
 
-                kv_tt.append(kv_tt_i)
-            kv_cache.append(kv_tt)
+            kv_tt.append(kv_tt_i)
+        kv_cache.append(kv_tt)
     return kv_cache
 
 

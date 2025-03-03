@@ -183,7 +183,11 @@ def prepare_generator_args(
     paged_attention,
 ):
     # Partition the mesh, singular model implemented for TP on 1xN mesh
-    submesh_devices = mesh_device.create_submeshes(ttnn.MeshShape(1, num_devices // data_parallel))
+    submesh_devices = (
+        mesh_device.create_submeshes(ttnn.MeshShape(1, num_devices // data_parallel))
+        if isinstance(mesh_device, ttnn.MeshDevice) and data_parallel > 1
+        else [mesh_device]
+    )
     state_dict = None
 
     # Hybrid requires a model per submesh
@@ -416,7 +420,7 @@ def test_demo_text(
     ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
         stop_at_eos = request.config.getoption("--stop_at_eos")
 
-    num_devices = mesh_device.get_num_devices()
+    num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
     batch_size *= data_parallel  # input batch_size is interpreted as size per DP group
 
     # uneven split of devices per DP group not supported
