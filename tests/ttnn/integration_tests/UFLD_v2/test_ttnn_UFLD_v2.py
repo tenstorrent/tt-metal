@@ -392,19 +392,20 @@ def test_ufld_v2_basic_block(device, batch_size, input_channels, height, width):
 @pytest.mark.parametrize(
     "batch_size,input_channels,height,width",
     [
-        (1, 3, 320, 800),
+        # (1, 3, 320, 800),
+        (2, 3, 320, 800),
     ],
 )
 @skip_for_grayskull()
 @pytest.mark.parametrize(
     "use_pretrained_weight",
     [
-        False,
-        #  True
+        # False,
+        True
     ],  # uncomment  to run the model for real weights
     ids=[
-        "pretrained_weight_false",
-        # "pretrained_weight_true",  # uncomment to run the model for real weights
+        # "pretrained_weight_false",
+        "pretrained_weight_true",  # uncomment to run the model for real weights
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
@@ -424,12 +425,6 @@ def test_UFD_V2_Model(device, batch_size, input_channels, height, width, use_pre
         torch_model.load_state_dict(new_state_dict)
 
     ttnn_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
-    ttnn_input_tensor = ttnn_input_tensor.reshape(
-        1,
-        1,
-        (ttnn_input_tensor.shape[0] * ttnn_input_tensor.shape[1] * ttnn_input_tensor.shape[2]),
-        ttnn_input_tensor.shape[-1],
-    )
     ttnn_input_tensor = ttnn.from_torch(
         ttnn_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
     )
@@ -442,7 +437,6 @@ def test_UFD_V2_Model(device, batch_size, input_channels, height, width, use_pre
     parameters.conv_args = infer_ttnn_module_args(
         model=torch_model, run_model=lambda model: torch_model(torch_input_tensor), device=device
     )
-
     ttnn_model = ttnn_UFLD_V2(conv_args=parameters.conv_args, conv_pth=parameters, device=device)
     torch_output, pred_list = torch_model(torch_input_tensor)
     ttnn_output, tt_pred_list = ttnn_model(input=ttnn_input_tensor)

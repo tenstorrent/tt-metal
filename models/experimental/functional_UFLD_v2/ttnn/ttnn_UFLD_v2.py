@@ -106,21 +106,12 @@ class ttnn_Basic_Block:
                 self.conv_args.downsample[0], conv_pth.downsample, device=device, activation=""
             )
 
-    def __call__(self, device, input):
+    def __call__(self, input):
         x_identity = input
         x, out_ht, out_wdth = self.conv1(input)
-        # if x.is_sharded():
-        #     x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
-        # x = ttnn.reshape(x, (1, out_ht, out_wdth, x.shape[-1]))  # RESHAPING FROM (1,1,NHW,C) TO (N,H,W,C) TO AVOID OOM
         x, out_ht, out_wdth = self.conv2(x)
-        # if x.is_sharded():
-        #     x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
-        # x = ttnn.reshape(x, (1, out_ht, out_wdth, x.shape[-1]))
         if self.is_downsample:
             x_identity, out_ht, out_wdth = self.downsample(input)
-            # if x_identity.is_sharded():
-            #     x_identity = ttnn.sharded_to_interleaved(x_identity, memory_config=ttnn.L1_MEMORY_CONFIG)
-            # x_identity = ttnn.reshape(x_identity, (1, out_ht, out_wdth, x_identity.shape[-1]))
         x = ttnn.add(x, x_identity, memory_config=x.memory_config())
         x = ttnn.relu(x)
 
@@ -129,6 +120,7 @@ class ttnn_Basic_Block:
 
 class ttnn_Resnet_34:
     def __init__(self, conv_args, conv_pth, device):
+        self.maxpool_args = conv_args.maxpool
         self.device = device
         self.conv1 = ttnn_UFLD_V2_Conv2D(conv_args.conv1, conv_pth.conv1, device=self.device, activation="relu")
         # layer-1
@@ -178,49 +170,48 @@ class ttnn_Resnet_34:
             conv_args.layer4[2], conv_pth.layer4_2, device=self.device, is_downsample=False
         )
 
-    def __call__(self, x):  # [1, 320, 800, 3]
-        batch_size = x.shape[0]
-        x, out_ht, out_wdth = self.conv1(x)  # [1, 1, 64000, 64] #0.99974
+    def __call__(self, x, batch_size=1):  # [1, 320, 800, 3]
+        x, out_ht, out_wdth = self.conv1(x)
         x = ttnn.max_pool2d(
             x,
             batch_size=batch_size,
             input_h=out_ht,
             input_w=out_wdth,
             channels=x.shape[-1],
-            kernel_size=[3, 3],
-            stride=[2, 2],
-            padding=[1, 1],
-            dilation=[1, 1],
+            kernel_size=[self.maxpool_args.kernel_size, self.maxpool_args.kernel_size],
+            stride=[self.maxpool_args.stride, self.maxpool_args.stride],
+            padding=[self.maxpool_args.padding, self.maxpool_args.padding],
+            dilation=[self.maxpool_args.dilation, self.maxpool_args.dilation],
         )
         if x.is_sharded():
             x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        # x = ttnn.reshape(x, (1, 80, 200, x.shape[-1]))
-        x = self.layer1_0(device=self.device, input=x)
-        x = self.layer1_1(device=self.device, input=x)
-        x = self.layer1_2(device=self.device, input=x)
+        x = self.layer1_0(x)
+        x = self.layer1_1(x)
+        x = self.layer1_2(x)
 
-        x = self.layer2_0(device=self.device, input=x)
-        x = self.layer2_1(device=self.device, input=x)
-        x = self.layer2_2(device=self.device, input=x)
-        x = self.layer2_3(device=self.device, input=x)
+        x = self.layer2_0(x)
+        x = self.layer2_1(x)
+        x = self.layer2_2(x)
+        x = self.layer2_3(x)
 
-        x = self.layer3_0(device=self.device, input=x)
-        x = self.layer3_1(device=self.device, input=x)
-        x = self.layer3_2(device=self.device, input=x)
-        x = self.layer3_3(device=self.device, input=x)
-        x = self.layer3_4(device=self.device, input=x)
-        x = self.layer3_5(device=self.device, input=x)
+        x = self.layer3_0(x)
+        x = self.layer3_1(x)
+        x = self.layer3_2(x)
+        x = self.layer3_3(x)
+        x = self.layer3_4(x)
+        x = self.layer3_5(x)
 
-        x = self.layer4_0(device=self.device, input=x)
-        x = self.layer4_1(device=self.device, input=x)
-        x = self.layer4_2(device=self.device, input=x)
+        x = self.layer4_0(input=x)
+        x = self.layer4_1(input=x)
+        x = self.layer4_2(input=x)
 
         return x
 
 
 class ttnn_UFLD_V2:
     def __init__(self, conv_args, conv_pth, device):
+        self.device = device
         self.input_height = 320
         self.input_width = 800
         self.num_grid_row = 100
@@ -239,33 +230,54 @@ class ttnn_UFLD_V2:
         self.input_height = self.input_height
         self.input_width = self.input_width
         self.input_dim = self.input_height // 32 * self.input_width // 32 * 8
-        self.device = device
         self.conv_pth = conv_pth
-        self.res_model = ttnn_Resnet_34(conv_args, conv_pth.res_model, device=device)
-        self.pool = ttnn_UFLD_V2_Conv2D(conv_args.pool, conv_pth.pool, activation="", device=device)
+        self.res_model = ttnn_Resnet_34(conv_args, conv_pth.res_model, device=self.device)
+        self.pool = ttnn_UFLD_V2_Conv2D(conv_args.pool, conv_pth.pool, activation="", device=self.device)
 
     def __call__(self, input):
-        fea = self.res_model(input)  # 0.998
-        fea, out_h, out_w = self.pool(fea)  # 0.979
+        batch_size = input.shape[0]
+        fea = self.res_model(input, batch_size=batch_size)
+        fea, out_h, out_w = self.pool(fea)
         if fea.is_sharded():
             fea = ttnn.sharded_to_interleaved(fea, ttnn.L1_MEMORY_CONFIG)
+        fea = ttnn.reshape(fea, (batch_size, out_h, out_w, fea.shape[-1]))
         fea = ttnn.permute(fea, (0, 3, 1, 2))
-        fea = ttnn.reshape(fea, (1, 2000))
+        fea = ttnn.reshape(
+            fea, (batch_size, int(fea.shape[0] * fea.shape[1] * fea.shape[2] * fea.shape[3]) // batch_size)
+        )
+        grid_size = (8, 8)
+        shard_grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1),
+                )
+            }
+        )
+        shard_shape = [32, 32]
+        print("shard shape is", shard_shape)
+        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+        width_sharded_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec
+        )
+        fea = ttnn.to_memory_config(fea, width_sharded_mem_config)
         out = ttnn.linear(
             fea,
             self.conv_pth.cls.linear_1.weight,
             bias=self.conv_pth.cls.linear_1.bias,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
         )
-
         out = ttnn.relu(out)
         out = ttnn.linear(
             out,
             self.conv_pth.cls.linear_2.weight,
             bias=self.conv_pth.cls.linear_2.bias,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
         )
-        out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
+        if out.is_sharded():
+            out = ttnn.sharded_to_interleaved(out, ttnn.L1_MEMORY_CONFIG)
+        if out.layout != ttnn.ROW_MAJOR_LAYOUT:
+            out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
         loc_row, loc_col, exist_row, exist_col = (
             out[:, : self.dim1],
             out[:, self.dim1 : self.dim1 + self.dim2],
