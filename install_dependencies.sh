@@ -80,6 +80,8 @@ ub_runtime_packages()
      libnuma-dev \
      libc++-17-dev \
      libc++abi-17-dev \
+	 python3-dev \
+	 gcc \
     )
 }
 
