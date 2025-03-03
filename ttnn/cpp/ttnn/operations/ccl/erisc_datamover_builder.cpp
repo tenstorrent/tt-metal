@@ -557,7 +557,8 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     Program* program,
     bool enable_persistent_mode,
     std::optional<size_t> desired_num_links,
-    bool build_in_worker_connection_mode) :
+    bool build_in_worker_connection_mode,
+    std::array<std::optional<std::vector<CoreCoord>>, 2> forward_backward_ethernet_cores) :
     device_sequence({local_device}), programs({program}) {
     static constexpr std::size_t edm_buffer_size =
         FabricEriscDatamoverBuilder::default_packet_payload_size_bytes + sizeof(tt::fabric::PacketHeader);
@@ -599,7 +600,15 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
 
         TT_FATAL(edm_builders.size() == 0, "EDM builders already exist for this device");
         edm_builders.clear();
-        for (const auto& core : local_device->get_ethernet_sockets(remote_device->id())) {
+
+        std::vector<CoreCoord> eth_cores;
+        if (forward_backward_ethernet_cores[i].has_value()) {
+            eth_cores = forward_backward_ethernet_cores[i].value();
+        } else {
+            eth_cores = local_device->get_ethernet_sockets(remote_device->id());
+        }
+
+        for (const auto& core : eth_cores) {
             if (!local_device->is_active_ethernet_core(core, true)) {
                 continue;
             }
@@ -652,6 +661,10 @@ SenderWorkerAdapterSpec EdmLineFabricOpInterface::uniquely_connect_worker(IDevic
     const auto next_link = link_count_map[device->id()];
     link_count_map[device->id()] = (next_link + 1) %  edm_builders.size();
 
+    if (device->id() == 5) {
+        tt::log_info("next_link: {}", next_link);
+    }
+
     TT_FATAL(edm_builders.size() > 0, "No EDM builders found for device {}", device->id());
     TT_FATAL(next_link < edm_builders.size(), "Next link index {} is out of bounds for device {}", next_link, device->id());
     return edm_builders.at(next_link).build_connection_to_worker_channel();
@@ -671,7 +684,8 @@ EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_
     IDevice* backward_device,
     Program* program,
     bool enable_persistent_mode,
-    std::optional<size_t> desired_num_links) {
+    std::optional<size_t> desired_num_links,
+    std::array<std::optional<std::vector<CoreCoord>>, 2> forward_backward_ethernet_cores) {
     return EdmLineFabricOpInterface(
         local_device,
         forward_device == nullptr ? std::nullopt : std::optional<IDevice*>(forward_device),
@@ -679,7 +693,8 @@ EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_
         program,
         enable_persistent_mode,
         desired_num_links,
-        true);
+        true,
+        forward_backward_ethernet_cores);
 }
 
 void EdmLineFabricOpInterface::build_kernels() const {

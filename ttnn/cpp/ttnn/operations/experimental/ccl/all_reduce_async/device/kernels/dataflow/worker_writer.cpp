@@ -57,7 +57,7 @@ void kernel_main() {
     const uint32_t mcast_dest_noc_end_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t link = get_arg_val<uint32_t>(arg_idx++);
 
-    // DPRINT << "reduction_output_cb_id: " << reduction_semaphore_send_addr << "\n";
+    DPRINT << "reduction_output_cb_id: " << reduction_semaphore_send_addr << " noc_index " << (uint)noc_index << "\n";
 
     volatile tt_l1_ptr uint32_t* reduction_semaphore_send_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduction_semaphore_send_addr);
