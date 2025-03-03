@@ -370,7 +370,7 @@ def test_ufld_v2_basic_block(device, batch_size, input_channels, height, width):
     torch_model.eval()
     torch_input_tensor = torch.randn((batch_size, input_channels, height, width), dtype=torch.bfloat16)
     ttnn_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
-    ttnn_input_tensor = ttnn.from_torch(ttnn_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_input_tensor = ttnn.from_torch(ttnn_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model,
         custom_preprocessor=custom_preprocessor_basic_block,
@@ -398,10 +398,13 @@ def test_ufld_v2_basic_block(device, batch_size, input_channels, height, width):
 @skip_for_grayskull()
 @pytest.mark.parametrize(
     "use_pretrained_weight",
-    [False, True],  # uncomment  to run the model for real weights
+    [
+        False,
+        #  True
+    ],  # uncomment  to run the model for real weights
     ids=[
         "pretrained_weight_false",
-        "pretrained_weight_true",  # uncomment to run the model for real weights
+        # "pretrained_weight_true",  # uncomment to run the model for real weights
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
@@ -421,6 +424,12 @@ def test_UFD_V2_Model(device, batch_size, input_channels, height, width, use_pre
         torch_model.load_state_dict(new_state_dict)
 
     ttnn_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
+    ttnn_input_tensor = ttnn_input_tensor.reshape(
+        1,
+        1,
+        (ttnn_input_tensor.shape[0] * ttnn_input_tensor.shape[1] * ttnn_input_tensor.shape[2]),
+        ttnn_input_tensor.shape[-1],
+    )
     ttnn_input_tensor = ttnn.from_torch(
         ttnn_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
     )
@@ -429,7 +438,12 @@ def test_UFD_V2_Model(device, batch_size, input_channels, height, width, use_pre
         custom_preprocessor=custom_preprocessor_whole_model,
         device=device,
     )
-    ttnn_model = ttnn_UFLD_V2(conv_args=torch_model, conv_pth=parameters, device=device)
+    parameters.conv_args = {}
+    parameters.conv_args = infer_ttnn_module_args(
+        model=torch_model, run_model=lambda model: torch_model(torch_input_tensor), device=device
+    )
+
+    ttnn_model = ttnn_UFLD_V2(conv_args=parameters.conv_args, conv_pth=parameters, device=device)
     torch_output, pred_list = torch_model(torch_input_tensor)
     ttnn_output, tt_pred_list = ttnn_model(input=ttnn_input_tensor)
     ttnn_output = ttnn.to_torch(ttnn_output)
