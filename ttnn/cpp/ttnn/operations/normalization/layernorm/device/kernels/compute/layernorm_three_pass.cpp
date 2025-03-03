@@ -257,7 +257,7 @@ void MAIN {
 #endif
             binary_dest_reuse_tiles_init<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex2pe);
             for (uint32_t j = 0; j < blk; j++) {
-                binary_dest_reuse_tiles<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex2pe, j, j);
+                binary_dest_reuse_tiles<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex2pe, 0, j);
             }
             tile_regs_commit();
             for (uint32_t j = 0; j < blk; j++) {
@@ -267,7 +267,6 @@ void MAIN {
             cb_push_back(cb_out, blk);
             cb_wait_front(cb_out, blk);
             UNPACK(print_full_tile(cb_out, 0));
-            DPRINT << "THERE" << ENDL();
             //            DPRINT << wt << "Before cb_out reserve!\n\n\n" << ENDL();
         }
     }  // NCHt loop
