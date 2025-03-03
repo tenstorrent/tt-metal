@@ -7,6 +7,8 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import skip_for_grayskull
+
+
 def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device):
     torch.manual_seed(2005)
     shape = [N, C, H, W]
@@ -37,6 +39,8 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device):
     ttnn_torch_cosine = torch.mean(cosine(pyt_topk_values, ttnn_torch_gather_from_indices))
     assert ttnn_torch_cosine > 0.99, "Cosine similarity between topk values and gather from indices is less than 0.99"
     assert_with_pcc(pyt_topk_values, ttnn_torch_values, pcc_values)
+
+
 @skip_for_grayskull()
 @pytest.mark.parametrize(
     "dtype",
