@@ -54,11 +54,15 @@ void l1_to_erisc_iram_copy_wait(volatile uint32_t* iram_load_reg) {
 
 void iram_setup() {
     // Copy code from L1 to IRAM.
-    //  TODO: enable/disable mac
     volatile uint32_t* iram_load_reg = (volatile uint32_t*)(ETH_CTRL_REGS_START + ETH_CORE_IRAM_LOAD);
+
+    toggle_macpcs_ptr = (void (*)(uint32_t))RtosTable[1];
+    toggle_macpcs_ptr(0);  // To disable MAC
 
     l1_to_erisc_iram_copy(iram_load_reg);
     l1_to_erisc_iram_copy_wait(iram_load_reg);
+
+    toggle_macpcs_ptr(1);  // To re-enable MAC
 }
 
 #endif
