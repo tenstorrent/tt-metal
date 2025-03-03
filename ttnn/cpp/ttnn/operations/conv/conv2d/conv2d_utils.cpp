@@ -870,9 +870,9 @@ std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryC
             get_num_cores_channels_from_parallel_config(largest_parallel_config));
 
     uint32_t input_channels_alignment =
-        (input_parallel_config.shard_scheme == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED)
-            ? 32
-            : conv_config.input_channels_alignment;
+        (input_parallel_config.shard_scheme == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED)
+            ? conv_config.input_channels_alignment
+            : constants::TILE_WIDTH;
     uint32_t in_channels_padded = tt::round_up(
         in_channels, get_num_cores_channels_from_parallel_config(input_parallel_config) * input_channels_alignment);
 
