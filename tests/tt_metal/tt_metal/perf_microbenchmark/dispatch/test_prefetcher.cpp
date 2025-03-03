@@ -615,9 +615,8 @@ void gen_wait_and_stall_cmd(IDevice* device, vector<uint32_t>& prefetch_cmds, ve
 
     CQDispatchCmd wait;
     wait.base.cmd_id = CQ_DISPATCH_CMD_WAIT;
-    wait.wait.barrier = true;
-    wait.wait.notify_prefetch = true;
-    wait.wait.wait = true;
+    wait.wait.flags = CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER | CQ_DISPATCH_CMD_WAIT_FLAG_NOTIFY_PREFETCH |
+                      CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY;
     wait.wait.addr = dispatch_wait_addr_g;
     wait.wait.count = 0;
     add_bare_dispatcher_cmd(dispatch_cmds, wait);
@@ -2163,6 +2162,7 @@ void configure_for_single_chip(
         0,
         0,
         0,
+        DispatchMemMap::get(DISPATCH_CORE_TYPE).get_dispatch_stream_index(0),
     };
 
     CoreCoord phys_upstream_from_dispatch_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core_g;
