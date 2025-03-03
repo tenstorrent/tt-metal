@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_SCALAR
+#define REDUCE_DIM ReduceDim::REDUCE_ROW
 
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
@@ -15,47 +15,23 @@
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
+#include "compute_kernel_api/eltwise_binary_sfpu.h"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
-void tile_regs_commit_then_wait() {
-    tile_regs_commit();
-    tile_regs_wait();
+
+inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+    DPRINT << "======" << ENDL();
+    for (uint8_t r = 0; r < 32; ++r) {
+        SliceRange sr_left = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 16, .ws = 1};
+        SliceRange sr_right = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 17, .w1 = 32, .ws = 1};
+        DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " "
+               << TileSlice(cb_id, tile_id, sr_right, true, untilize) << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
 }
 
 namespace NAMESPACE {
-
-template <
-    EltwiseBinaryType eltwise_binary_type = ELWADD,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    BroadcastType b_type = BroadcastType::NONE>
-void Processes_blk_from_cb(uint32_t icb0, uint32_t blk) {
-    // Created this function since, binary size was getting too large
-    cb_wait_front(icb0, blk);
-    binary_dest_reuse_tiles_init_custom<eltwise_binary_type, binary_reuse_dest, b_type>(icb0);
-    for (uint32_t j = 0; j < blk; j++) {
-        binary_dest_reuse_tiles_custom<eltwise_binary_type, binary_reuse_dest, b_type>(icb0, j, j);
-    }
-    cb_pop_front(icb0, blk);
-}
-
-template <
-    EltwiseBinaryType eltwise_binary_type = ELWADD,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    BroadcastType b_type = BroadcastType::NONE>
-void binary_dest_reuse_tiles_init_custom(uint32_t icb0) {
-    UNPACK((llk_unpack_A_init<b_type, true, binary_reuse_dest>(false, false, icb0)));
-    MATH((llk_math_eltwise_binary_init<eltwise_binary_type, NONE, MATH_FIDELITY, binary_reuse_dest>(false, false)));
-}
-template <
-    EltwiseBinaryType eltwise_binary_type = ELWADD,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    BroadcastType b_type = BroadcastType::NONE>
-void binary_dest_reuse_tiles_custom(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
-    UNPACK((llk_unpack_A<BroadcastType::NONE, true, binary_reuse_dest>(in_cb_id, in_tile_index)));
-    MATH((llk_math_eltwise_binary<eltwise_binary_type, NONE, MATH_FIDELITY, binary_reuse_dest, DST_ACCUM_MODE>(
-        in_tile_index, in_tile_index, dst_tile_index)));
-}
 
 void MAIN {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
@@ -115,128 +91,107 @@ void MAIN {
         /*
          * X + Y
          */
-        auto prepare_cb_x = [&]() {
-            reconfig_data_format(cb_in, cb_inb);
-            pack_reconfig_data_format(cb_x);
-#ifdef FUSE_PRE_ADD
-            tile_regs_acquire();
-            add_tiles_init(cb_in, cb_inb);
-            cb_wait_front(cb_in, blk);
-
-            cb_wait_front(cb_inb, blk);
-            cb_reserve_back(cb_x, blk);
-            for (uint32_t j = 0; j < blk; j++) {
-                add_tiles(cb_in, cb_inb, j, j, j);
-            }
-            tile_regs_commit_then_wait();
-            for (uint32_t j = 0; j < blk; j++) {
-                pack_tile(j, cb_x);
-            }
-            cb_push_back(cb_x, blk);
-            tile_regs_release();
-            cb_pop_front(cb_inb, blk);
-            cb_pop_front(cb_in, blk);
-#endif
-            cb_wait_front(cb_x, blk);
-        };
         // E[x]
         // aka ∑(x-E[x])
+        // cb_x in0 + in1 or in0
+        tile_regs_acquire();
+        tile_regs_wait();
 
+        reconfig_data_format(cb_in, cb_scaler);
+        pack_reconfig_data_format(cb_ex);
+        cb_reserve_back(cb_ex, onetile);
+        reduce_init_delta<false>(cb_in, cb_scaler, cb_ex);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            prepare_cb_x();
-            tile_regs_acquire();
-            if (wt > 0) {
-                reconfig_data_format_srca(cb_ex);
-                cb_wait_front(cb_ex, onetile);
-                binary_dest_reuse_tiles_init_custom<ELWADD, EltwiseBinaryReuseDestType::NONE, BroadcastType::NONE>(
-                    cb_ex);
-                binary_dest_reuse_tiles_custom<ELWADD, EltwiseBinaryReuseDestType::NONE, BroadcastType::NONE>(
-                    cb_ex, 0, dst0);
-                cb_pop_front(cb_ex, 1);
-            }
-            reconfig_data_format(cb_x, cb_scaler);
-            pack_reconfig_data_format(cb_ex);
-            reduce_init_delta<false>(cb_x, cb_scaler, cb_ex);
+            cb_wait_front(cb_in, blk);
             for (uint32_t j = 0; j < blk; j++) {
-                reduce_tile(cb_x, cb_scaler, j, scaler0, dst0);
+                reduce_tile(cb_in, cb_scaler, j, scaler0, dst0);
             }
-            tile_regs_commit_then_wait();
-            cb_reserve_back(cb_ex, onetile);
-            pack_tile(1, cb_ex);
-            reduce_revert_delta(cb_ex);
-            cb_push_back(cb_ex, onetile);
-            tile_regs_release();
-            cb_pop_front(cb_x, blk);
+            cb_pop_front(cb_in, blk);
         }
-        // cb_pop_front(cb_ex, 1);
-        // cb_pop_front(cb_x, blk);
+#ifdef FUSE_PRE_ADD
+        reconfig_data_format_srca(cb_in, cb_inb);
 
+        reduce_init_delta<false>(cb_inb, cb_scaler, cb_ex);
+        for (uint32_t wt = 0; wt < Wt; wt += blk) {
+            cb_wait_front(cb_inb, blk);
+            for (uint32_t j = 0; j < blk; j++) {
+                reduce_tile(cb_inb, cb_scaler, j, scaler0, dst0);
+            }
+            cb_pop_front(cb_inb, blk);
+        }
+#endif
+        tile_regs_commit();
+        pack_tile(dst0, cb_ex);
+        reduce_revert_delta(cb_ex);
+        tile_regs_release();
+        cb_push_back(cb_ex, onetile);
+        cb_wait_front(cb_ex, onetile);
+
+        cb_wait_front(cb_ex, onetile);
+        reconfig_data_format(cb_in, cb_ex);
+        pack_reconfig_data_format(cb_ex2);
         // Var Calculation
         // aka ∑(x-E[x])^2
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            prepare_cb_x();
-
             tile_regs_acquire();
+            tile_regs_wait();
 
-            reconfig_data_format(cb_x, cb_ex);
-            pack_reconfig_data_format(cb_xmm);
-
-            cb_wait_front(cb_ex, onetile);
-            sub_bcast_cols_init_short(cb_x, cb_ex);
+            cb_wait_front(cb_in, blk);
+            cb_reserve_back(cb_xmm, blk);
+            sub_bcast_cols_init_short(cb_in, cb_ex);
             // x-E[x]
             for (uint32_t j = 0; j < blk; j++) {
-                sub_tiles_bcast_cols(cb_x, cb_ex, j, 0, j);  // tile *= 1/(sum(exp(x)))
+                sub_tiles_bcast_cols(cb_in, cb_ex, j, 0, j);
             }
-            cb_pop_front(cb_x, blk);
+            cb_pop_front(cb_in, blk);
+
+#ifdef FUSE_PRE_ADD
+            cb_wait_front(cb_inb, blk);
+            binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb);
+            for (uint32_t j = 0; j < blk; j++) {
+                binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb, j, j);
+            }
+            cb_pop_front(cb_inb, blk);
+#endif
             square_tile_init();
             //(x-E[x])^2
             for (uint32_t j = 0; j < blk; j++) {
                 square_tile(j);
             }
-            tile_regs_commit_then_wait();
+            tile_regs_commit();
             for (uint32_t j = 0; j < blk; j++) {
                 pack_tile(j, cb_xmm);
             }
+            cb_push_back(cb_xmm, blk);
             tile_regs_release();
 
-            cb_reserve_back(cb_xmm, blk);
-            cb_push_back(cb_xmm, blk);
-
             tile_regs_acquire();
-            if (wt > 0) {
-                // adds the last loop iterations reduction value to dst0 since dst0 is overwritten between loop
-                // iterations
-                reconfig_data_format(cb_ex2, cb_scaler);
-
-                cb_wait_front(cb_ex2, 1);
-                reduce_init_delta<false>(cb_ex2, cb_scaler, cb_ex2);
-                reduce_tile(cb_ex2, cb_scaler, 0, scaler0, dst0);
-                cb_pop_front(cb_ex2, onetile);
-            }
-
-            reconfig_data_format(cb_xmm, cb_scaler);
-            pack_reconfig_data_format(cb_ex2);
+            tile_regs_wait();
 
             cb_wait_front(cb_xmm, blk);
             reduce_init_delta<false>(cb_xmm, cb_scaler, cb_ex2);
-            // ∑(x-E[x])^2
+            // accumulates squared residual
             for (uint32_t j = 0; j < blk; j++) {
                 reduce_tile(cb_xmm, cb_scaler, j, scaler0, dst0);
             }
             cb_pop_front(cb_xmm, blk);
 
-            tile_regs_commit_then_wait();
-
+            if (wt > 0) {
+                cb_wait_front(cb_ex2, onetile);
+                binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex2);
+                binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex2, 0, dst0);
+                cb_pop_front(cb_ex2, onetile);
+            }
+            tile_regs_commit();
+            cb_reserve_back(cb_ex2, onetile);  // 1
             pack_tile(dst0, cb_ex2);
-            tile_regs_release();
-
-            cb_reserve_back(cb_ex2, onetile);
             cb_push_back(cb_ex2, onetile);
-
-            reduce_revert_delta(cb_ex2);
+            tile_regs_release();
         }
 
         tile_regs_acquire();
+        tile_regs_wait();
+        cb_wait_front(cb_ex2, onetile);
 
         reconfig_data_format(cb_ex2, cb_eps);
         pack_reconfig_data_format(cb_ex2pe);
@@ -250,54 +205,69 @@ void MAIN {
         recip_tile_init();
         recip_tile(dst0);
 
-        tile_regs_commit_then_wait();
+        tile_regs_commit();
 
         pack_tile(dst0, cb_ex2pe);
+        cb_push_back(cb_ex2pe, onetile);
         tile_regs_release();
 
-        cb_reserve_back(cb_ex2pe, onetile);  // 1
-        cb_push_back(cb_ex2pe, onetile);
         cb_pop_front(cb_ex2, onetile);
+        cb_wait_front(cb_ex2pe, onetile);
+
+        // broadcasts the tile since only the column contains the important data
+        tile_regs_acquire();
+        tile_regs_wait();
+        reconfig_data_format_srca(cb_ex2pe);
+        pack_reconfig_data_format(cb_ex2pe);
+        unary_bcast_init<BroadcastType::COL>(cb_ex2pe, cb_ex2pe);
+        unary_bcast<BroadcastType::COL>(cb_ex2pe, 0, dst0);
+        cb_pop_front(cb_ex2pe, onetile);
+        tile_regs_commit();
+        pack_tile(dst0, cb_ex2pe);
+        tile_regs_release();
+        cb_push_back(cb_ex2pe, onetile);
+
         // Final Val Calc
 
         // DPRINT << "WT: " <<Wt << " \n\n" << ENDL();
         cb_wait_front(cb_ex2pe, 1);
-        for (uint32_t wt = 0; wt < Wt; wt++) {
-            // DPRINT << wt << "Before prepare_cb_x \n\n!" << ENDL();
-            prepare_cb_x();
-            // DPRINT << wt << "After prepare_cb_x \n\n!" << ENDL();
+        reconfig_data_format(cb_in, cb_ex);
+        pack_reconfig_data_format(cb_in, cb_out);
+        // PACK(print_full_tile(cb_ex2pe,0));
+        for (uint32_t wt = 0; wt < Wt; wt += blk) {
+            DPRINT << "HERE" << ENDL();
             tile_regs_acquire();
-
-            reconfig_data_format(cb_x, cb_ex);
-            pack_reconfig_data_format(cb_x, cb_out);
-
-            sub_bcast_cols_init_short(cb_x, cb_ex);
+            tile_regs_wait();
+            cb_reserve_back(cb_out, blk);
+            sub_bcast_cols_init_short(cb_in, cb_ex);
             cb_wait_front(cb_ex, 1);
             for (uint32_t j = 0; j < blk; j++) {
                 // populate block with x - mean
-                sub_tiles_bcast_cols(cb_x, cb_ex, j, 0, j);  // tile *= 1/(sum(exp(x)))
+                sub_tiles_bcast_cols(cb_in, cb_ex, j, 0, j);  // tile *= 1/(sum(exp(x)))
             }
-            cb_pop_front(cb_x, blk);
 
-            Processes_blk_from_cb<ELWMUL, EltwiseBinaryReuseDestType::NONE, BroadcastType::COL>(cb_beta, blk);
-
-            constexpr if (do_gamma) {
-                cb_wait_front(cb_gamma, blk);
-                Processes_blk_from_cb<ELWMUL, EltwiseBinaryReuseDestType::NONE, BroadcastType::ROW>(cb_gamma, blk);
-                cb_pop_front(cb_gamma, blk);
+            cb_pop_front(cb_in, blk);
+#ifdef FUSE_PRE_ADD
+            cb_wait_front(cb_inb, blk);
+            binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb);
+            for (uint32_t j = 0; j < blk; j++) {
+                binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb, j, j);
             }
-            if (do_beta) {
-                cb_wait_front(cb_beta, blk);
-                Processes_blk_from_cb<ELWADD, EltwiseBinaryReuseDestType::NONE, BroadcastType::ROW>(cb_beta, blk);
-                cb_pop_front(cb_beta, blk);
+            cb_pop_front(cb_inb, blk);
+#endif
+            binary_dest_reuse_tiles_init<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex2pe);
+            for (uint32_t j = 0; j < blk; j++) {
+                binary_dest_reuse_tiles<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex2pe, j, j);
             }
-            cb_reserve_back(cb_out, blk);
-            tile_regs_commit_then_wait();
+            tile_regs_commit();
             for (uint32_t j = 0; j < blk; j++) {
                 pack_tile(j, cb_out);
             }
             tile_regs_release();
             cb_push_back(cb_out, blk);
+            cb_wait_front(cb_out, blk);
+            UNPACK(print_full_tile(cb_out, 0));
+            DPRINT << "THERE" << ENDL();
             //            DPRINT << wt << "Before cb_out reserve!\n\n\n" << ENDL();
         }
     }  // NCHt loop
