@@ -7,13 +7,16 @@
 #include <memory>
 
 #include <tt-metalium/overloaded.hpp>
+#include "tt-metalium/assert.hpp"
 #include "tt-metalium/mesh_coord.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include "ttnn/distributed/distributed_tensor_config.hpp"
+
 
 using namespace tt::tt_metal;
 
@@ -101,15 +104,9 @@ Tensor aggregate_as_tensor(
             specs.push_back(shard.get_tensor_spec());
 
             auto visitor = tt::stl::overloaded{[&shard, &host_owned_buffers](const auto& buffer) -> OwnedBuffer {
-                using BufferType = std::decay_t<decltype(buffer)>;
-                using ValueType = typename BufferType::value_type;
+                using BorrowedBufferType = std::vector<typename std::decay_t<decltype(buffer)>::value_type>;
 
-                std::vector<ValueType> physical_data(buffer.begin(), buffer.end());
-
-                std::vector<ValueType> logical_data =
-                    tensor_impl::decode_tensor_data(std::move(physical_data), shard.get_tensor_spec());
-
-                return owned_buffer::create(std::move(logical_data));
+                return owned_buffer::create(BorrowedBufferType(buffer.begin(), buffer.end()));
             }};
 
             host_owned_buffers.push_back(std::visit(visitor, buffer));
