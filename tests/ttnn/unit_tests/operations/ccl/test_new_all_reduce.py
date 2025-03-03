@@ -21,6 +21,7 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_i
     round_up,
 )
 from models.perf.benchmarking_utils import BenchmarkProfiler
+from tracy import signpost
 
 
 def check_mesh_tensor_alloc(tensor):
@@ -252,21 +253,25 @@ def run_all_reduce_impl(
                 ttnn.synchronize_device(mesh_device)
             profiler.end("all-reduce-async-trace-warmup")
 
+            signpost("start")
             profiler.start("all-reduce-async-trace")
             ttnn.execute_trace(mesh_device, trace_id, blocking=False)
             ttnn.release_trace(mesh_device, trace_id)
             ttnn.synchronize_device(mesh_device)
             profiler.end("all-reduce-async-trace")
+            signpost("stop")
             time_taken = profiler.get_duration("all-reduce-async-trace") - profiler.get_duration(
                 "all-reduce-async-trace-warmup"
             )
             effective_iter = num_iters - warmup_iters
-            logger.info(f"Time taken: {time_taken} s")
-            logger.info(f"Time per iter: {time_taken / effective_iter} s")
-            logger.info(f"Time per iter: {time_taken / effective_iter * 1e6} us")
+            logger.info(f"Time taken e2e: {time_taken} s")
+            logger.info(f"Time per iter e2e: {time_taken / effective_iter} s")
+            logger.info(f"Time per iter e2e: {time_taken / effective_iter * 1e6} us")
 
         else:
+            signpost("start")
             tt_outs = run_op(num_iters, store_all_results=validate_all)
+            signpost("stop")
 
         ##################################
         ##### Validation
