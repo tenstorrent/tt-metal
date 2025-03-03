@@ -435,7 +435,7 @@ CoreRangeSet CoreRangeSet::subtract(const CoreRangeSet& other) const {
 
     // Early returns for empty sets and non-intersecting sets
     if (other_merged.empty() || this_merged.empty() || !this_merged.intersects(other_merged)) {
-        return this_merged.empty() ? CoreRangeSet() : *this;
+        return this_merged;
     }
 
     std::vector<CoreRange> result_ranges;
