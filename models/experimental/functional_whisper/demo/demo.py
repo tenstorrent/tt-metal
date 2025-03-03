@@ -196,6 +196,7 @@ def run_generate(
             if next_tokens == config.eos_token_id:
                 break
 
+        logger.info(f"Total decode time: {total_decode_time:.3f}s")
         logger.info(f"Average decode throughput: {(i+1) / total_decode_time:.3f} t/s/u")
 
     # conditionally return generator or full response
