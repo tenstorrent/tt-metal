@@ -160,4 +160,3 @@ protected:
 };
 
 class CommandQueueMultiDeviceProgramFixture : public CommandQueueMultiDeviceFixture {};
-class CommandQueueMultiDeviceBufferFixture : public CommandQueueMultiDeviceFixture {};
