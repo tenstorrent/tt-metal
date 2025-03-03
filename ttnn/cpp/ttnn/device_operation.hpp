@@ -180,6 +180,7 @@ inline auto& create_or_get_meshworkload_from_cache(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     uint64_t device_operation_id) {
     if (!program_cache_hit) {
+        ZoneScopedN("Program Cache Miss");
         auto program_factory = device_operation_t::select_program_factory(operation_attributes, tensor_args);
         auto program_factory_index = program_factory.index();
 
@@ -238,6 +239,7 @@ inline auto& create_or_get_meshworkload_from_cache(
             program_factory);
         return mesh_workload;
     } else {
+        ZoneScopedN("Program Cache Hit");
         auto& cached_program_factory = program_cache.get(program_hash);
         auto program_factory_index = cached_program_factory.program_factory_index;
 
@@ -496,6 +498,11 @@ void launch_on_mesh_device(
         device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
     }
 
+    const auto enqueue_mesh_workload = [=](tt::tt_metal::distributed::MeshWorkload& mesh_workload) {
+        ZoneScopedN("EnqueueProgram");
+        tt::tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
+    };
+
     if (is_program_cache_enabled) {
         auto& mesh_workload = create_or_get_meshworkload_from_cache<device_operation_t>(
             program_cache,
@@ -506,8 +513,19 @@ void launch_on_mesh_device(
             tensor_return_value,
             device,
             device_operation_id);
+        enqueue_mesh_workload(mesh_workload);
 
-        tt::tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
+        // Log the first program only
+        TT_FATAL(mesh_workload.get_programs().size() == 1, "Mesh workload must contain exactly one program");
+        const auto& first_program = mesh_workload.get_programs().begin()->second;
+        TracyOpTTNNDevice(
+            device_operation_t{},
+            device_operation_id,
+            device->id(),
+            first_program,
+            operation_attributes,
+            tensor_args,
+            tensor_return_value);
 
     } else {
         auto program_factory = device_operation_t::select_program_factory(operation_attributes, tensor_args);
@@ -528,14 +546,22 @@ void launch_on_mesh_device(
         }
         auto mesh_device = dynamic_cast<tt::tt_metal::distributed::MeshDevice*>(device);
         TT_FATAL(mesh_device != nullptr, "Device is not a MeshDevice");
-        auto& cq = mesh_device->mesh_command_queue();
         auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
         tt::tt_metal::distributed::AddProgramToMeshWorkload(
             mesh_workload,
             std::move(*program),
             tt::tt_metal::distributed::MeshCoordinateRange(
                 {0, 0}, {mesh_device->num_rows() - 1, mesh_device->num_cols() - 1}));
-        tt::tt_metal::distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
+        enqueue_mesh_workload(mesh_workload);
+
+        TracyOpTTNNDevice(
+            device_operation_t{},
+            device_operation_id,
+            device->id(),
+            *program,
+            operation_attributes,
+            tensor_args,
+            tensor_return_value);
     }
 }
 
