@@ -516,12 +516,12 @@ int main() {
                 uint32_t end_cb_index = launch_msg_address->kernel_config.max_local_cb_end_index;
                 setup_local_cb_read_write_interfaces(
                     cb_l1_base, num_cbs_to_early_init, end_cb_index, true, true, false);
-                start_ncrisc_kernel_run(enables);
                 cb_l1_base =
                     (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.remote_cb_offset);
                 end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
                 experimental::setup_remote_cb_interfaces<true>(
                     cb_l1_base, end_cb_index, noc_index, noc_mode, post_atomic_increments, cmd_buf);
+                start_ncrisc_kernel_run(enables);
                 int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
                 void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
                     (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
@@ -535,7 +535,6 @@ int main() {
                     noc_local_state_init(noc_index);
                 }
 #endif
-                start_ncrisc_kernel_run(enables);
                 // Brisc is responsible for issuing any noc cmds needed when initializing remote cbs
                 // So have brisc setup remote cb interfaces even when brisc is not in use
                 if (launch_msg_address->kernel_config.enables) {
@@ -545,6 +544,7 @@ int main() {
                     experimental::setup_remote_cb_interfaces<true>(
                         cb_l1_base, end_cb_index, noc_index, noc_mode, post_atomic_increments, cmd_buf);
                 }
+                start_ncrisc_kernel_run(enables);
                 wait_for_go_message();
             }
             WAYPOINT("D");
