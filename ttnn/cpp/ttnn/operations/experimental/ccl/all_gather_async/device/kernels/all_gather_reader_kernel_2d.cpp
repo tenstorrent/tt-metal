@@ -19,7 +19,7 @@ volatile fabric_client_interface_t* client_interface;
 uint64_t xy_local_addr;
 
 void kernel_main() {
-    constexpr uint32_t src0_is_dram = get_compile_time_arg_val(0);
+    constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(1);
     constexpr uint32_t lower_pages = get_compile_time_arg_val(2);
     constexpr uint32_t higher_pages = get_compile_time_arg_val(3);
@@ -32,8 +32,10 @@ void kernel_main() {
     // DPRINT << "higher_pages: " << (uint32_t)higher_pages << ENDL();
     // DPRINT << "src address: " << (uint32_t)src_addr << ENDL();
     // DPRINT << "num_bytes: " << (uint32_t)num_bytes << ENDL();
+    const DataFormat data_format = get_dataformat(cb_id_in0);
 
-    const InterleavedAddrGenFast<src0_is_dram> s = {.bank_base_address = src_addr, .page_size = num_bytes};
+    const InterleavedAddrGenFast<src0_is_dram> s = {
+        .bank_base_address = src_addr, .page_size = num_bytes, .data_format = data_format};
 
     cb_reserve_back(cb_id_in0, higher_pages * lower_pages);
     uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
