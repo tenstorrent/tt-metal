@@ -6,6 +6,7 @@
 #include <mesh_command_queue.hpp>
 #include <mesh_coord.hpp>
 #include <mesh_trace.hpp>
+#include <tt_metal.hpp>
 
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
@@ -153,6 +154,21 @@ void MeshTrace::populate_mesh_buffer(MeshCommandQueue& mesh_cq, std::shared_ptr<
         mesh_cq.enqueue_write_shard_to_sub_grid(
             *(trace_buffer->mesh_buffer), write_data.data(), device_range, true, write_region);
         write_offset_per_device_range.at(device_range) += mesh_trace_data.data.size() * sizeof(uint32_t);
+    }
+}
+
+void MeshTrace::validate_instance(const std::shared_ptr<MeshTraceBuffer>& trace_buffer) {
+    // Validate on-device buffer vs what we have on host. For MeshBuffer, need to go through relevant devices and check
+    // each one.
+    for (const MeshTraceData& trace_data : trace_buffer->desc->ordered_trace_data) {
+        for (const MeshCoordinate& coord : trace_data.device_range) {
+            std::vector<uint32_t> backdoor_data;
+            tt::tt_metal::detail::ReadFromBuffer(trace_buffer->mesh_buffer->get_device_buffer(coord), backdoor_data);
+            if (backdoor_data != trace_data.data) {
+                log_info(LogMetalTrace, "Trace buffer expected: {}", trace_data.data);
+                log_info(LogMetalTrace, "Trace buffer observed: {}", backdoor_data);
+            }
+        }
     }
 }
 

@@ -79,6 +79,7 @@ public:
     // MeshTraceDescriptor corresponding to this MeshTraceBuffer,
     // it can be binarized to a MeshDevice through a Command Queue.
     static void populate_mesh_buffer(MeshCommandQueue& mesh_cq, std::shared_ptr<MeshTraceBuffer>& trace_buffer);
+    static void validate_instance(const std::shared_ptr<MeshTraceBuffer>& trace_buffer);
 };
 
 }  // namespace tt::tt_metal::distributed
