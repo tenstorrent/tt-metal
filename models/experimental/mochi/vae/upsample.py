@@ -1,5 +1,6 @@
 import ttnn
 from .resblock import TtResBlock
+from .conv1x1 import TtConv1x1
 from ..common import as_replicated_tensor
 from models.common.lightweightmodule import LightweightModule
 
@@ -63,14 +64,15 @@ class TtCausalUpsampleBlock(LightweightModule):
             w = w.reshape(-1, temporal_expansion * spatial_expansion * spatial_expansion * out_channels)
             return w.squeeze()
 
-        proj_weight = state_dict[f"{state_dict_prefix}proj.weight"]
-        proj_bias = state_dict[f"{state_dict_prefix}proj.bias"]
-        # DEBUG: Not swizzling to compare to unswizzled reference
-        proj_weight = proj_weight.transpose(0, 1)
-        proj_weight = swizzle_weight(proj_weight)
-        proj_bias = swizzle_weight(proj_bias)
-        self.proj_weight = as_replicated_tensor(proj_weight, mesh_device)
-        self.proj_bias = as_replicated_tensor(proj_bias.reshape(1, -1), mesh_device)
+        self.proj = TtConv1x1(
+            mesh_device=mesh_device,
+            state_dict=state_dict,
+            state_dict_prefix=f"{state_dict_prefix}proj.",
+            in_channels=in_channels,
+            out_channels=out_channels * temporal_expansion * (spatial_expansion**2),
+            bias=bias,
+            swizzle_weight=swizzle_weight,
+        )
 
     def depth_to_spacetime(self, x_NTHWC):
         texp, sexp = self.temporal_expansion, self.spatial_expansion
@@ -88,20 +90,7 @@ class TtCausalUpsampleBlock(LightweightModule):
         for block in self.blocks:
             x_NTHWC = block(x_NTHWC)
 
-        x_tile_NTHWC = ttnn.to_layout(x_NTHWC, ttnn.TILE_LAYOUT)
-        ttnn.deallocate(x_NTHWC)
-
-        x_tile_NTHWO = ttnn.linear(
-            x_tile_NTHWC,
-            self.proj_weight,
-            bias=self.proj_bias,
-            compute_kernel_config=self.compute_kernel_config,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        ttnn.deallocate(x_tile_NTHWC)
-        x_NTHWO = ttnn.to_layout(x_tile_NTHWO, ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.deallocate(x_tile_NTHWO)
+        x_NTHWO = self.proj(x_NTHWC)
 
         x_NTHWC = self.depth_to_spacetime(x_NTHWO)
         ttnn.deallocate(x_NTHWO)
