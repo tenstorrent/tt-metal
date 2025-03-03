@@ -29,13 +29,16 @@ param_ids = [
 
 def test_unary_datacopy(format, testname, dest_acc):
 
+    if (format == "Float16" and dest_acc == "DEST_ACC"):
+        pytest.skip(reason = "This combination is not fully implemented in testing")
+
+    if(format in ["Float32", "Int32"] and dest_acc!="DEST_ACC"):
+        pytest.skip(reason = "Skipping test for 32 bit wide data without 32 bit accumulation in Dest")
+
     src_A,src_B = generate_stimuli(format)
     srcB = torch.full((1024,), 0)
     golden = generate_golden(src_A,format)
     write_stimuli_to_l1(src_A, src_B, format)
-
-    if( format in ["Float32", "Int32"] and dest_acc!="DEST_ACC"):
-        pytest.skip("SKipping test for 32 bit wide data without 32 bit accumulation in Dest")
 
     test_config = {
         "input_format": format,

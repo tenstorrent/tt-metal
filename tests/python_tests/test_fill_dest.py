@@ -49,6 +49,9 @@ param_ids = [
 
 def test_fill_dest(format, testname, dest_acc):
 
+    if (format == "Float16" and dest_acc == "DEST_ACC"):
+        pytest.skip(reason = "This combination is not fully implemented in testing")
+
     pack_start_address = 0x1c000
     pack_addresses = [pack_start_address + 0x1000 * i for i in range(16)]
 

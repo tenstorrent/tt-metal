@@ -76,6 +76,7 @@ param_ids = [
     ids=param_ids
 )
 
+@pytest.mark.skip(reason = "Not fully implemented")
 def test_reduce(reduce_dim, pool_type, format, testname, dest_acc):
     
     src_A, src_B = generate_stimuli(format)

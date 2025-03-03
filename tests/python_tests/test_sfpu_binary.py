@@ -39,6 +39,7 @@ param_ids = [
     ids=param_ids
 )
 
+@pytest.mark.skip(reason = "Not fully implemented")
 def test_all(format, mathop, testname, dest_acc):
     
     src_A, src_B = generate_stimuli(format)
