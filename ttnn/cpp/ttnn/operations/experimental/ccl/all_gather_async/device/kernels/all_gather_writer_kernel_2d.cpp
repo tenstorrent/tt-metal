@@ -21,7 +21,7 @@ uint64_t xy_local_addr;
 void kernel_main() {
     constexpr uint32_t client_interface_cb = get_compile_time_arg_val(0);
     constexpr uint32_t is_horizontal = get_compile_time_arg_val(1);
-    constexpr uint32_t dst_is_dram = get_compile_time_arg_val(2);
+    constexpr bool dst_is_dram = get_compile_time_arg_val(2) == 1;
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(3);
     constexpr uint32_t num_devices = get_compile_time_arg_val(4);
     constexpr uint32_t this_device_id = get_compile_time_arg_val(5);
@@ -52,8 +52,10 @@ void kernel_main() {
     uint32_t sephamore_noc_encoding = get_arg_val<uint32_t>(rt_args_idx++);
 
     uint32_t num_dirs = (!first_device && !last_device) ? 2 : 1;
+    const DataFormat data_format = get_dataformat(cb_id_in0);
 
-    const InterleavedAddrGenFast<dst_is_dram> s = {.bank_base_address = dst_addr, .page_size = num_bytes};
+    const InterleavedAddrGenFast<dst_is_dram> s = {
+        .bank_base_address = dst_addr, .page_size = num_bytes, .data_format = data_format};
 
     uint32_t packet_size_bytes = num_bytes + PACKET_HEADER_SIZE_BYTES;
     /*
