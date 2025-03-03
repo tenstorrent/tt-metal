@@ -143,8 +143,6 @@ class Program {
 
     const std::vector<std::shared_ptr<CircularBuffer>> &circular_buffers() const;
 
-    const std::size_t num_circular_buffers() const { return circular_buffers().size();};
-
     const std::vector< Semaphore > & semaphores() const;
 
     KernelGroup * kernels_on_core(const CoreCoord &core, uint32_t programmable_core_type_index);
@@ -160,7 +158,6 @@ class Program {
 
     std::vector<std::reference_wrapper<const Semaphore>> semaphores_on_core(const CoreCoord &core, CoreType core_type) const;
 
-    size_t num_semaphores ( const CoreCoord & core, CoreType core_type ) const;
     size_t num_semaphores () const;
     void init_semaphores ( const IDevice & device, const CoreCoord &logical_core, uint32_t programmable_core_type_index) const;
     // XXXXX TODO: this should return a const reference
@@ -176,9 +173,7 @@ class Program {
 
     bool is_finalized() const;
     void set_finalized();
-    bool is_cached() const;
     ProgramBinaryStatus get_program_binary_status(std::size_t device_id) const;
-    void set_cached();
     void set_program_binary_status(std::size_t device_id, ProgramBinaryStatus status);
     void allocate_kernel_bin_buf_on_device(IDevice* device);
     std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;

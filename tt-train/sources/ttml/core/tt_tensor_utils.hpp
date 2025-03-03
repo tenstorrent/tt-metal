@@ -60,7 +60,7 @@ template <class T = float>
     const auto& shape = tensor.get_logical_shape();
     std::vector<size_t> shape_vec(shape.cbegin(), shape.cend());
     // adapt creates view of the vector, but return will copy this data anyway (by creation of xt::array)
-    return xt::adapt(std::move(vec), shape_vec);
+    return xt::adapt(vec, shape_vec);
 }
 
 template <class T = float>

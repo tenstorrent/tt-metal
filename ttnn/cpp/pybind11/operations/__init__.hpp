@@ -11,6 +11,7 @@
 #include "pybind11/operations/copy.hpp"
 #include "pybind11/operations/core.hpp"
 #include "pybind11/operations/creation.hpp"
+#include "pybind11/operations/trace.hpp"
 #include "ttnn/operations/bernoulli/bernoulli_pybind.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_pybind.hpp"
 #include "ttnn/operations/conv/conv_pybind.hpp"
@@ -57,6 +58,10 @@ void py_module(py::module& module) {
     auto m_core = module.def_submodule("core", "core operations");
     core::py_module_types(m_core);
     core::py_module(m_core);
+
+    auto m_trace = module.def_submodule("trace", "trace operations");
+    trace::py_module_types(m_trace);
+    trace::py_module(m_trace);
 
     auto m_examples = module.def_submodule("examples", "examples of operations");
     examples::py_module(m_examples);

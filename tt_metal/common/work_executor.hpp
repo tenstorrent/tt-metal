@@ -15,6 +15,7 @@
 
 #include "env_lib.hpp"
 #include "multi_producer_single_consumer_queue.hpp"
+#include "work_executor_types.hpp"
 #include "tracy/Tracy.hpp"
 
 #if defined(TRACY_ENABLE)
@@ -26,17 +27,6 @@
 #endif
 
 namespace tt {
-
-enum class WorkExecutorMode {
-    SYNCHRONOUS = 0,
-    ASYNCHRONOUS = 1,
-};
-
-enum class WorkerState {
-    RUNNING = 0,
-    TERMINATE = 1,
-    IDLE = 2,
-};
 
 inline void set_device_thread_affinity(std::thread& thread_, int cpu_core_for_worker) {
     // Bind a device worker/reader thread to a CPU core, determined using round-robin.
@@ -143,6 +133,8 @@ public:
         if (use_passthrough()) {
             // Worker is pushing to itself (nested work) or worker thread is not running. Execute work in current
             // thread.
+            // Using a lock to provide the same call serialization guarantee as with worker queue.
+            std::lock_guard guard(passthrough_mutex);
             work_executor();
         } else {
             // Push to worker queue.
@@ -200,6 +192,7 @@ private:
     int managed_device_id;
     std::condition_variable cv;
     std::mutex cv_mutex;
+    std::recursive_mutex passthrough_mutex;
 
     inline void start_worker() {
         this->worker_queue.parent_thread_id = std::this_thread::get_id();

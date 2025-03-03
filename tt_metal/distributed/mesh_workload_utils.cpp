@@ -32,7 +32,7 @@ void write_go_signal(
 
     auto dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
-    auto sub_device_index = sub_device_id.to_index();
+    auto sub_device_index = *sub_device_id;
 
     HugepageDeviceCommand go_signal_cmd_sequence(cmd_region, cmd_sequence_sizeB);
     go_msg_t run_program_go_signal;
@@ -76,71 +76,4 @@ void write_go_signal(
     sysmem_manager.fetch_queue_reserve_back(cq_id);
     sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);
 }
-
-bool is_row_major_intersection(const LogicalDeviceRange& parent, const LogicalDeviceRange& intersection) {
-    return intersection.grid_size().x == parent.grid_size().x;
-}
-bool matching_dimensions(const LogicalDeviceRange& parent, const LogicalDeviceRange& intersection) {
-    auto intersection_grid_size = intersection.grid_size();
-    auto parent_grid_size = parent.grid_size();
-    return intersection_grid_size.x == parent_grid_size.x || intersection_grid_size.y == parent_grid_size.y;
-}
-
-bool matching_vertices(const LogicalDeviceRange& parent, const LogicalDeviceRange& intersection) {
-    return (intersection.start_coord.x == parent.start_coord.x && intersection.start_coord.y == parent.start_coord.y) ||
-           (intersection.end_coord.x == parent.end_coord.x && intersection.end_coord.y == parent.end_coord.y);
-}
-
-bool has_convex_relative_complement(const LogicalDeviceRange& parent, const LogicalDeviceRange& intersection) {
-    return matching_dimensions(parent, intersection) && matching_vertices(parent, intersection);
-}
-
-LogicalDeviceRange convex_relative_complement(
-    const LogicalDeviceRange& parent, const LogicalDeviceRange& intersection) {
-    TT_FATAL(parent.contains(intersection), "Parent must contain intersection");
-    auto intersection_grid_size = intersection.grid_size();
-    auto parent_grid_size = parent.grid_size();
-    TT_FATAL(has_convex_relative_complement(parent, intersection), "Non convex grids not supported");
-
-    if (is_row_major_intersection(parent, intersection)) {
-        if (intersection.start_coord.y == parent.start_coord.y) {
-            return LogicalDeviceRange(
-                {parent.start_coord.x, intersection.end_coord.y + 1}, {parent.end_coord.x, parent.end_coord.y});
-        } else {
-            return LogicalDeviceRange(
-                {parent.start_coord.x, parent.start_coord.y}, {parent.end_coord.x, intersection.start_coord.y - 1});
-        }
-    } else {
-        if (intersection.start_coord.x == parent.start_coord.x) {
-            return LogicalDeviceRange(
-                {intersection.end_coord.x + 1, parent.start_coord.y}, {parent.end_coord.x, parent.end_coord.y});
-        } else {
-            return LogicalDeviceRange(
-                {parent.start_coord.x, parent.start_coord.y}, {intersection.start_coord.x - 1, parent.end_coord.y});
-        }
-    }
-}
-
-LogicalDeviceRangeSet relative_complement(const LogicalDeviceRange& parent, const LogicalDeviceRange& intersection) {
-    TT_FATAL(parent.contains(intersection), "Parent must contain intersection");
-    if (has_convex_relative_complement(parent, intersection)) {
-        return convex_relative_complement(parent, intersection);
-    }
-    std::vector<LogicalDeviceRangeSet> relative_complement = {};
-    std::unordered_set<DeviceCoord> devices_in_intersection = {};
-    for (auto& intersection_device : intersection) {
-        devices_in_intersection.insert(intersection_device);
-    }
-    for (auto& parent_device : parent) {
-        if (devices_in_intersection.find(parent_device) == devices_in_intersection.end()) {
-            relative_complement.push_back(CoreRange(parent_device));
-        }
-    }
-    LogicalDeviceRangeSet merged_complement = relative_complement[0];
-    for (int i = 1; i < relative_complement.size(); i++) {
-        merged_complement = merged_complement.merge(relative_complement[i]);
-    }
-    return merged_complement;
-}
-
 }  // namespace tt::tt_metal::distributed

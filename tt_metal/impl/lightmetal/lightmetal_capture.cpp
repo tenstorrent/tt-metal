@@ -208,7 +208,7 @@ TraceDescriptorByTraceIdOffset to_flatbuffer(
             descriptor.num_traced_programs_needing_go_signal_unicast);
         auto mapping_offset = tt::tt_metal::flatbuffer::CreateSubDeviceDescriptorMapping(
             builder,
-            sub_device_id.to_index(),  // No need for static_cast; directly use uint8_t
+            *sub_device_id,  // No need for static_cast; directly use uint8_t
             descriptor_offset);
         sub_device_descriptor_offsets.push_back(mapping_offset);
     }
@@ -218,7 +218,7 @@ TraceDescriptorByTraceIdOffset to_flatbuffer(
     std::vector<uint8_t> sub_device_ids_converted;
     sub_device_ids_converted.reserve(trace_desc.sub_device_ids.size());
     for (const auto& sub_device_id : trace_desc.sub_device_ids) {
-        sub_device_ids_converted.push_back(sub_device_id.to_index());
+        sub_device_ids_converted.push_back(*sub_device_id);
     }
     auto sub_device_ids_offset = builder.CreateVector(sub_device_ids_converted);
 

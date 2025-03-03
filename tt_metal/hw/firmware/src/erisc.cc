@@ -7,6 +7,7 @@
 #include "firmware_common.h"
 #include "noc_parameters.h"
 #include "risc_attribs.h"
+#include "dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "debug/watcher_common.h"
 

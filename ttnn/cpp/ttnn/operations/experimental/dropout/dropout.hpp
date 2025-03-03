@@ -8,7 +8,8 @@
 namespace ttnn::operations::experimental {
 
 struct DropoutOperation {
-    static Tensor invoke(const Tensor& input_tensor, float prob, float scale, uint32_t seed);
+    static Tensor invoke(
+        const Tensor& input_tensor, float prob, float scale, uint32_t seed, bool use_per_device_seed = true);
 };
 }  // namespace ttnn::operations::experimental
 namespace ttnn::experimental {
