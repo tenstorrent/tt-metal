@@ -26,6 +26,8 @@
 
 #include "tt_cluster.hpp"
 
+#include <unistd.h>  // Warning Linux Only, needed for _SC_NPROCESSORS_ONLN
+
 using namespace tt::tt_metal;
 
 namespace tt {
@@ -194,14 +196,6 @@ void DevicePool::init_profiler_devices() const {
 #endif
 }
 
-void DevicePool::initialize_fabric_setting(detail::FabricSetting fabric_setting) noexcept {
-    if (_inst == nullptr) {
-        static DevicePool device_pool{};
-        _inst = &device_pool;
-    }
-    _inst->fabric_setting = fabric_setting;
-}
-
 void DevicePool::initialize(
     const std::vector<chip_id_t>& device_ids,
     const uint8_t num_hw_cqs,
@@ -230,7 +224,6 @@ void DevicePool::initialize(
     // modifying the state of this instance, for example those responsible for
     // (un)registering worker threads, can only be called in the creation thread
     _inst->device_pool_creation_thread_id = std::this_thread::get_id();
-    _inst->initialized = true;
 
     // Never skip for TG Cluster
     bool skip = not tt::Cluster::instance().is_galaxy_cluster();
@@ -290,7 +283,8 @@ void DevicePool::initialize_device(IDevice* dev) const {
     watcher_attach(dev);
 
     // TODO: add handling of EDM
-    if (this->fabric_setting == detail::FabricSetting::FABRIC) {
+    if (tt::Cluster::instance().get_fabric_config() == FabricConfig::FABRIC_2D) {
+        // Initialize fabric on mmio device
         dev->init_fabric();
     }
 
@@ -391,21 +385,23 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
         }
     }
     // Only can launch Fabric if all devices are active
-    if (this->fabric_setting == detail::FabricSetting::FABRIC) {
+    if (tt::Cluster::instance().get_fabric_config() == FabricConfig::FABRIC_2D) {
         for (int i = 0; i < tt::Cluster::instance().number_of_devices(); i++) {
             if (not _inst->is_device_active(i)) {
                 // Fabric currently requires all devices to be active
-                log_warning(tt::LogMetal, "Fabric is disabled because device {} is not active", i);
-                this->fabric_setting = detail::FabricSetting::DISABLED;
-                break;
+                log_fatal(tt::LogMetal, "Fabric is being used but {} is not active", i);
             }
         }
     }
 
     // TODO: add handling of EDM
-    if (this->fabric_setting == detail::FabricSetting::FABRIC) {
-        // Initialize control plane, which writes routing tables to all ethernet cores
+    if (tt::Cluster::instance().get_fabric_config() == FabricConfig::FABRIC_2D) {
+        // Initialize control plane, does not configure kernels/routing tables
+        // We always need a control plane for mapping of logical devices to physical devices
+        // TODO: add single device support
         _inst->initialize_control_plane();
+        // write routing tables to all ethernet cores
+        this->control_plane->configure_routing_tables();
     }
     this->using_fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
     if (this->using_fast_dispatch) {
@@ -414,15 +410,23 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
 }
 
 void DevicePool::wait_for_fabric_master_router_sync() const {
-    if (this->fabric_setting == detail::FabricSetting::FABRIC) {
+    if (tt::Cluster::instance().get_fabric_config() == FabricConfig::FABRIC_2D) {
         auto fabric_router_sync_sem_addr =
             hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
         std::vector<std::uint32_t> master_router_status{0};
         for (const auto& dev : this->get_all_active_devices()) {
-            auto fabric_master_router_core = *dev->get_active_ethernet_cores().begin();  // TODO: get this from a
-                                                                                         // manager
-            std::uint32_t num_routers = dev->get_active_ethernet_cores().size();
+            if (tt::Cluster::instance().get_fabric_ethernet_channels(dev->id()).empty()) {
+                continue;
+            }
+            tt_fabric::chan_id_t fabric_master_router_chan =
+                *(tt::Cluster::instance().get_fabric_ethernet_channels(dev->id()).begin());
+            CoreCoord virtual_eth_core =
+                tt::Cluster::instance().get_virtual_eth_core_from_channel(dev->id(), fabric_master_router_chan);
+            auto fabric_master_router_core = dev->logical_core_from_ethernet_core(virtual_eth_core);
+
+            auto [mesh_id, chip_id] = this->control_plane->get_mesh_chip_id_from_physical_chip_id(dev->id());
+            auto num_routers = this->control_plane->get_num_active_fabric_routers(mesh_id, chip_id);
             while (master_router_status[0] != num_routers) {
                 tt_metal::detail::ReadFromDeviceL1(
                     dev,
@@ -636,13 +640,16 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
     }
 
     // Terminate fabric routers
-    if (this->fabric_setting == detail::FabricSetting::FABRIC) {
+    if (tt::Cluster::instance().get_fabric_config() == FabricConfig::FABRIC_2D) {
         std::vector<uint32_t> master_router_terminate(1, 0);
         auto fabric_router_sync_sem_addr =
             hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
         for (const auto& dev : this->get_all_active_devices()) {
-            auto fabric_master_router_core = *dev->get_active_ethernet_cores().begin();  // TODO: get this from a
-                                                                                         // manager
+            tt_fabric::chan_id_t fabric_master_router_chan =
+                *(tt::Cluster::instance().get_fabric_ethernet_channels(dev->id()).begin());
+            CoreCoord virtual_eth_core =
+                tt::Cluster::instance().get_virtual_eth_core_from_channel(dev->id(), fabric_master_router_chan);
+            auto fabric_master_router_core = dev->logical_core_from_ethernet_core(virtual_eth_core);
             tt_metal::detail::WriteToDeviceL1(
                 dev, fabric_master_router_core, fabric_router_sync_sem_addr, master_router_terminate, CoreType::ETH);
         }

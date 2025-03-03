@@ -13,8 +13,13 @@
 #include "mesh_device.hpp"
 #include "mesh_workload.hpp"
 #include "mesh_trace.hpp"
+#include "mesh_trace_id.hpp"
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
+
+class ThreadPool;
+
+namespace distributed {
 
 class MeshEvent;
 struct MeshReadEventDescriptor;
@@ -45,16 +50,15 @@ private:
     // Helper functions for read and write entire Sharded-MeshBuffers
     void write_sharded_buffer(const MeshBuffer& buffer, const void* src);
     void read_sharded_buffer(MeshBuffer& buffer, void* dst);
-    void enqueue_record_event_helper(
-        const std::shared_ptr<MeshEvent>& event,
+    MeshEvent enqueue_record_event_helper(
         tt::stl::Span<const SubDeviceId> sub_device_ids,
         bool notify_host,
-        const std::optional<LogicalDeviceRange>& device_range = std::nullopt);
+        const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
     // Trace capture utility functions
     // Captures dispatch commands associated with running a program on a Virtual Mesh subgrid
     // inside the appropriate trace staging vector (corresponding to the specified subgrid)
     void capture_program_trace_on_subgrid(
-        const LogicalDeviceRange& sub_grid,
+        const MeshCoordinateRange& sub_grid,
         ProgramCommandSequence& program_cmd_seq,
         bool stall_first,
         bool stall_before_program);
@@ -63,7 +67,7 @@ private:
     // When running trace, the dispatch commands responsible for forwarding go signals must be
     // captured on these subgrids.
     void capture_go_signal_trace_on_unused_subgrids(
-        std::vector<CoreRangeSet>& active_sub_grids,
+        const MeshCoordinateRange& active_sub_grids,
         const SubDeviceId& sub_device_id,
         uint32_t expected_num_workers_completed,
         bool mcast_go_signals,
@@ -71,7 +75,7 @@ private:
     // Workload dispatch utility functions
     // Write dispatch commands associated with running a program on a Virtual Mesh subgrid
     void write_program_cmds_to_subgrid(
-        const LogicalDeviceRange& sub_grid,
+        const MeshCoordinateRange& sub_grid,
         ProgramCommandSequence& program_cmd_seq,
         bool stall_first,
         bool stall_before_program,
@@ -110,9 +114,15 @@ private:
     CoreCoord dispatch_core_;
     CoreType dispatch_core_type_ = CoreType::WORKER;
     std::queue<std::shared_ptr<MeshReadEventDescriptor>> event_descriptors_;
+    // MeshCommandQueues and the MeshDevice share the thread-pool
+    std::shared_ptr<ThreadPool> thread_pool_;
 
 public:
-    MeshCommandQueue(MeshDevice* mesh_device, uint32_t id);
+    MeshCommandQueue(MeshDevice* mesh_device, uint32_t id, std::shared_ptr<ThreadPool>& thread_pool);
+
+    MeshCommandQueue(const MeshCommandQueue& other) = delete;
+    MeshCommandQueue& operator=(const MeshCommandQueue& other) = delete;
+
     MeshDevice* device() const { return mesh_device_; }
     uint32_t id() const { return id_; }
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) { return config_buffer_mgr_[index]; };
@@ -129,7 +139,7 @@ public:
     void enqueue_write_shard_to_sub_grid(
         const MeshBuffer& buffer,
         const void* host_data,
-        const LogicalDeviceRange& device_range,
+        const MeshCoordinateRange& device_range,
         bool blocking,
         std::optional<BufferRegion> region = std::nullopt);
     void enqueue_write_mesh_buffer(const std::shared_ptr<MeshBuffer>& buffer, const void* host_data, bool blocking);
@@ -145,17 +155,15 @@ public:
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         bool blocking);
 
-    void enqueue_record_event(
-        const std::shared_ptr<MeshEvent>& event,
+    MeshEvent enqueue_record_event(
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},
-        const std::optional<LogicalDeviceRange>& device_range = std::nullopt);
-    void enqueue_record_event_to_host(
-        const std::shared_ptr<MeshEvent>& event,
+        const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
+    MeshEvent enqueue_record_event_to_host(
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},
-        const std::optional<LogicalDeviceRange>& device_range = std::nullopt);
-    void enqueue_wait_for_event(const std::shared_ptr<MeshEvent>& sync_event);
+        const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
+    void enqueue_wait_for_event(const MeshEvent& sync_event);
     void drain_events_from_completion_queue();
-    void verify_reported_events_after_draining(const std::shared_ptr<MeshEvent>& event);
+    void verify_reported_events_after_draining(const MeshEvent& event);
     void finish(tt::stl::Span<const SubDeviceId> sub_device_ids = {});
     void reset_worker_state(
         bool reset_launch_msg_state,
@@ -163,8 +171,9 @@ public:
         const vector_memcpy_aligned<uint32_t>& go_signal_noc_data);
     void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx);
     void record_end();
-    const std::vector<MeshTraceStagingMetadata>& get_mesh_trace_md();
     void enqueue_trace(const MeshTraceId& trace_id, bool blocking);
 };
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace distributed
+
+}  // namespace tt::tt_metal

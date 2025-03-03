@@ -13,6 +13,7 @@ target_sources(
         tt_backend_api_types.cpp
         utils.cpp
         work_split.cpp
+        thread_pool.cpp
 )
 
 target_include_directories(
@@ -20,6 +21,7 @@ target_include_directories(
     PUBLIC
         ${PROJECT_SOURCE_DIR}
         ${PROJECT_SOURCE_DIR}/tt_metal
+        ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 target_link_libraries(
@@ -37,4 +39,5 @@ target_link_libraries(
         Tracy::TracyClient
         TT::Metalium::HostDevCommon
         yaml-cpp::yaml-cpp
+        Boost::asio
 )

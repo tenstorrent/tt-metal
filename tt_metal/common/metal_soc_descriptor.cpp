@@ -60,21 +60,6 @@ size_t metal_SocDescriptor::get_channel_for_dram_view(int dram_view) const {
 
 size_t metal_SocDescriptor::get_num_dram_views() const { return this->dram_view_eth_cores.size(); }
 
-const std::vector<CoreCoord>& metal_SocDescriptor::get_pcie_cores() const { return this->pcie_cores; }
-
-const std::vector<CoreCoord> metal_SocDescriptor::get_dram_cores() const {
-    std::vector<CoreCoord> cores;
-
-    // This is inefficient, but is currently not used in a perf path
-    for (const auto& channel_it : this->dram_cores) {
-        for (const auto& core_it : channel_it) {
-            cores.push_back(core_it);
-        }
-    }
-
-    return cores;
-}
-
 int metal_SocDescriptor::get_dram_channel_from_logical_core(const CoreCoord& logical_coord) const {
     const uint32_t num_dram_views = this->get_num_dram_views();
     TT_FATAL(
@@ -175,8 +160,8 @@ CoordSystem metal_SocDescriptor::get_umd_coord_system() const {
 }
 
 void metal_SocDescriptor::generate_logical_eth_coords_mapping() {
-    for (int i = 0; i < this->get_cores(CoreType::ETH).size(); i++) {
-        this->logical_eth_core_to_chan_map.insert({{0, i}, i});
+    for (const auto& logical_coord : this->get_cores(CoreType::ETH, CoordSystem::LOGICAL)) {
+        this->logical_eth_core_to_chan_map.insert({{logical_coord.x, logical_coord.y}, logical_coord.y});
     }
 }
 
@@ -205,23 +190,6 @@ void metal_SocDescriptor::generate_physical_routing_to_profiler_flat_id() {
 #endif
 }
 
-// TODO: This should be deleted once we switch to virtual coordinates
-void metal_SocDescriptor::update_pcie_cores(const BoardType& board_type) {
-    if (this->arch != tt::ARCH::BLACKHOLE) {
-        return;
-    }
-    switch (board_type) {
-        case P100:
-        case UNKNOWN: {  // Workaround for BHs running FW that does not return board type in the cluster yaml
-            this->pcie_cores = {CoreCoord(11, 0)};
-        } break;
-        case P150A: {
-            this->pcie_cores = {CoreCoord(2, 0)};
-        } break;
-        default: TT_THROW("Need to update PCIe core assignment for new Blackhole type, file issue to abhullar");
-    }
-}
-
 // UMD initializes and owns tt_SocDescriptor
 // For architectures with translation tables enabled, UMD will remove the last x rows from the descriptors in
 // tt_SocDescriptor (workers list and worker_log_to_routing_x/y maps) This creates a virtual coordinate system, where
@@ -235,5 +203,4 @@ metal_SocDescriptor::metal_SocDescriptor(const tt_SocDescriptor& other, const Bo
     this->load_dram_metadata_from_device_descriptor();
     this->generate_logical_eth_coords_mapping();
     this->generate_physical_routing_to_profiler_flat_id();
-    this->update_pcie_cores(board_type);
 }

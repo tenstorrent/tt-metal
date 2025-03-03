@@ -88,31 +88,55 @@ void CaptureReleaseTrace(IDevice* device, uint32_t trace_id) {
     CaptureCommand(tt::tt_metal::flatbuffer::CommandType::ReleaseTraceCommand, cmd.Union());
 }
 
-void CaptureCreateBuffer(const std::shared_ptr<Buffer>& buffer, const InterleavedBufferConfig& config) {
+void CaptureBufferCreate(
+    const std::shared_ptr<Buffer>& buffer,
+    IDevice* device,
+    const std::optional<DeviceAddr> address,
+    DeviceAddr size,
+    DeviceAddr page_size,
+    const BufferType buffer_type,
+    const TensorMemoryLayout buffer_layout,
+    const std::optional<ShardSpecBuffer>& shard_parameters,
+    const std::optional<bool> bottom_up,
+    const std::optional<SubDeviceId> sub_device_id) {
+    assert(device->id() == 0 && "multichip not supported yet");
     auto& ctx = LightMetalCaptureContext::get();
+    auto& fbb = ctx.get_builder();
 
     uint32_t buffer_global_id = ctx.add_to_map(buffer.get());
+
     log_debug(
         tt::LogMetalTrace,
         "{}: size: {} page_size: {} buffer_type: {} buffer_layout: {} buffer_global_id: {}",
         __FUNCTION__,
-        config.size,
-        config.page_size,
-        config.buffer_type,
-        config.buffer_layout,
+        size,
+        page_size,
+        buffer_type,
+        buffer_layout,
         buffer_global_id);
 
-    assert(config.device->id() == 0 && "multichip not supported yet");
-    auto buffer_config_offset = tt::tt_metal::flatbuffer::CreateInterleavedBufferConfig(
-        ctx.get_builder(),
-        config.device->id(),
-        config.size,
-        config.page_size,
-        to_flatbuffer(config.buffer_type),
-        to_flatbuffer(config.buffer_layout));
-    auto cmd =
-        tt::tt_metal::flatbuffer::CreateCreateBufferCommand(ctx.get_builder(), buffer_global_id, buffer_config_offset);
-    CaptureCommand(tt::tt_metal::flatbuffer::CommandType::CreateBufferCommand, cmd.Union());
+    // Convert the optional fields to flatbuffer offsets.
+    // Address is not true optional for API, but Buffer::create() API has 2 flavors, one with address
+    // and one without, so commonize via single capture function and schema and treat it as optional.
+    auto address_offset = address.has_value() ? flatbuffer::CreateUint32Optional(fbb, address.value()) : 0;
+    auto bottom_up_offset = bottom_up.has_value() ? flatbuffer::CreateBoolOptional(fbb, bottom_up.value()) : 0;
+    auto sub_device_id_offset = sub_device_id.has_value() ? flatbuffer::CreateUint8Optional(fbb, **sub_device_id) : 0;
+    auto shard_parameters_offset = to_flatbuffer(shard_parameters, fbb);
+
+    auto cmd = tt::tt_metal::flatbuffer::CreateBufferCreateCommand(
+        fbb,
+        buffer_global_id,
+        device->id(),
+        address_offset,
+        size,
+        page_size,
+        to_flatbuffer(buffer_type),
+        to_flatbuffer(buffer_layout),
+        shard_parameters_offset,
+        bottom_up_offset,
+        sub_device_id_offset);
+
+    CaptureCommand(tt::tt_metal::flatbuffer::CommandType::BufferCreateCommand, cmd.Union());
 }
 
 void CaptureDeallocateBuffer(Buffer& buffer) {
@@ -219,13 +243,13 @@ void CaptureFinish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device
     CaptureCommand(tt::tt_metal::flatbuffer::CommandType::FinishCommand, cmd.Union());
 }
 
-void CaptureCreateProgram(Program& program) {
+void CaptureProgramConstructor(Program& program) {
     auto& ctx = LightMetalCaptureContext::get();
     uint32_t program_global_id = ctx.add_to_map(&program);
     log_debug(tt::LogMetalTrace, "{}: program_global_id: {}", __FUNCTION__, program_global_id);
 
-    auto cmd = tt::tt_metal::flatbuffer::CreateCreateProgramCommand(ctx.get_builder(), program_global_id);
-    CaptureCommand(tt::tt_metal::flatbuffer::CommandType::CreateProgramCommand, cmd.Union());
+    auto cmd = tt::tt_metal::flatbuffer::CreateProgramConstructorCommand(ctx.get_builder(), program_global_id);
+    CaptureCommand(tt::tt_metal::flatbuffer::CommandType::ProgramConstructorCommand, cmd.Union());
 }
 
 void CaptureEnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {

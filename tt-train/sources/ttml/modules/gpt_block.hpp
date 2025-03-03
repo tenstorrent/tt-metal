@@ -21,7 +21,7 @@ class GPTMLP : public autograd::ModuleBase {
 public:
     GPTMLP(uint32_t embedding_size, float dropout_prob);
 
-    autograd::TensorPtr operator()(const autograd::TensorPtr& input);
+    [[nodiscard]] autograd::TensorPtr operator()(const autograd::TensorPtr& input) override;
 };
 
 class GPTBlock : public autograd::ModuleBase {
@@ -34,7 +34,8 @@ public:
     explicit GPTBlock(
         uint32_t embedding_size, uint32_t num_heads, float dropout_prob, bool use_composite_layernorm = false);
 
-    autograd::TensorPtr operator()(const autograd::TensorPtr& input, const autograd::TensorPtr& mask);
+    [[nodiscard]] autograd::TensorPtr operator()(
+        const autograd::TensorPtr& input, const autograd::TensorPtr& mask) override;
 };
 
 }  // namespace ttml::modules
