@@ -297,7 +297,7 @@ struct LowLatencyRoutingFields {
     static constexpr uint32_t FORWARD_ONLY = 0b10;
     static constexpr uint32_t WRITE_AND_FORWARD = 0b11;
     static constexpr uint32_t FWD_ONLY_FIELD = 0xAAAAAAAA;
-    static constexpr uint32_t WR_AND_FWD_FIELD = 0xFFFFFFFF;
+    static constexpr uint32_t WR_ONLY_FIELD = 0x55555555;
     uint32_t value;
 };
 
@@ -324,10 +324,10 @@ struct LowLatencyPacketHeader : public PacketHeaderBase<LowLatencyPacketHeader> 
         // Last line will do 0b01 << 6 = 0b01000000. This means that on the 5th chip, we will write only
         // Together this means the final encoding is 0b01111010
         return
-            (LowLatencyRoutingFields::FWD_ONLY_FIELD & ((1 << (chip_multicast_command_header.start_distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH) - 1)) |
-            (LowLatencyRoutingFields::WR_AND_FWD_FIELD & ((1 << (chip_multicast_command_header.range_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH) - 1) <<
-            ((chip_multicast_command_header.start_distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH)) |
-            (LowLatencyRoutingFields::WRITE_ONLY << (chip_multicast_command_header.start_distance_in_hops + chip_multicast_command_header.range_hops - 2) * LowLatencyRoutingFields::FIELD_WIDTH);
+            (LowLatencyRoutingFields::FWD_ONLY_FIELD & ((1 << (chip_multicast_command_header.start_distance_in_hops + chip_multicast_command_header.range_hops - 2) * LowLatencyRoutingFields::FIELD_WIDTH) - 1)) |
+            // TODO: We can skip the masking of the upper bits for improved performance on the workers, at the cost of readability of the packet header
+            ((LowLatencyRoutingFields::WR_ONLY_FIELD & ((1 << (chip_multicast_command_header.range_hops) * LowLatencyRoutingFields::FIELD_WIDTH) - 1)) <<
+            ((chip_multicast_command_header.start_distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH));
     }
 
     public:
