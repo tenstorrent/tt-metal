@@ -10,10 +10,11 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "test_golden_impls.hpp"
 
+namespace tt::tt_metal {
+
 using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
-using namespace tt::tt_metal;
 
 namespace unit_tests::compute::cumsum {
 
@@ -154,7 +155,7 @@ void run_single_core_cumsum(tt_metal::IDevice* device, const CumsumConfig& test_
 
     auto input_packed = pack_vector<uint32_t, bfloat16>(input);
     auto input_packed_tilized =
-        unit_tests::compute::gold_standard_tilize(input_packed, {test_config.N * test_config.Ht, test_config.Wt});
+        ::unit_tests::compute::gold_standard_tilize(input_packed, {test_config.N * test_config.Ht, test_config.Wt});
 
     tt_metal::detail::WriteToBuffer(src_dram_buffer, input_packed_tilized);
 
@@ -162,7 +163,7 @@ void run_single_core_cumsum(tt_metal::IDevice* device, const CumsumConfig& test_
 
     std::vector<uint32_t> output_packed_tilized;
     tt_metal::detail::ReadFromBuffer(dst_dram_buffer, output_packed_tilized);
-    auto output_packed = unit_tests::compute::gold_standard_untilize(
+    auto output_packed = ::unit_tests::compute::gold_standard_untilize(
         output_packed_tilized, {test_config.N * test_config.Ht, test_config.Wt});
 
     log_info(tt::LogTest, "Running test for N = {}, Wt = {}, Ht = {}", test_config.N, test_config.Wt, test_config.Ht);
@@ -204,3 +205,5 @@ TEST_F(DeviceFixture, TensixComputeCumsumRowwise) {
         }
     }
 }
+
+}  // namespace tt::tt_metal

@@ -31,8 +31,8 @@ struct MorehClipGradNormStep3Operation {
 
     struct ProgramFactory {
         struct shared_variables_t {
-            KernelHandle reader_kernel_id;
-            KernelHandle writer_kernel_id;
+            tt::tt_metal::KernelHandle reader_kernel_id;
+            tt::tt_metal::KernelHandle writer_kernel_id;
             uint32_t num_cores_to_be_used;
             size_t num_cores_y;
         };

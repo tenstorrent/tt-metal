@@ -27,7 +27,8 @@ static MemoryConfig infer_output_memory_config(
 Tensor tensor_reshape(
     const Tensor& input_tensor, const ttnn::Shape& new_logical_shape, const ttnn::Shape& new_padded_shape) {
     ZoneScoped;
-    GraphTracker::instance().track_function_start("Tensor::reshape", input_tensor, new_logical_shape, new_padded_shape);
+    tt::tt_metal::GraphTracker::instance().track_function_start(
+        "Tensor::reshape", input_tensor, new_logical_shape, new_padded_shape);
 
     const auto output_memory_config = infer_output_memory_config(input_tensor.memory_config(), new_padded_shape);
     auto new_spec = ttnn::TensorSpec(
@@ -43,7 +44,7 @@ Tensor tensor_reshape(
         [&input_tensor, &new_spec, &new_logical_shape, &new_padded_shape](auto&& storage) -> Tensor {
             using T = std::decay_t<decltype(storage)>;
             const auto& tensor = input_tensor;
-            if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
+            if constexpr (std::is_same_v<T, tt::tt_metal::MultiDeviceHostStorage>) {
                 auto updated_storage = std::get<T>(tensor.get_storage());
                 for (int i = 0; i < updated_storage.specs.size(); i++) {
                     const auto& prev_spec = updated_storage.specs[i];
@@ -59,8 +60,8 @@ Tensor tensor_reshape(
                 }
                 return Tensor(updated_storage, new_spec);
             }
-            if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
-                MultiDeviceStorage updated_storage = std::get<T>(tensor.get_storage());
+            if constexpr (std::is_same_v<T, tt::tt_metal::MultiDeviceStorage>) {
+                tt::tt_metal::MultiDeviceStorage updated_storage = std::get<T>(tensor.get_storage());
                 std::unordered_map<int, ttnn::TensorSpec> new_specs;
                 for (auto device_id : updated_storage.ordered_device_ids) {
                     const auto& prev_spec = updated_storage.specs.at(device_id);
@@ -77,10 +78,10 @@ Tensor tensor_reshape(
                 updated_storage.specs = new_specs;
                 return Tensor(updated_storage, new_spec);
             }
-            if constexpr (std::is_same_v<T, DeviceStorage>) {
+            if constexpr (std::is_same_v<T, tt::tt_metal::DeviceStorage>) {
                 if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
                     if (tensor.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
-                        DeviceStorage device_storage = std::get<T>(tensor.get_storage());
+                        tt::tt_metal::DeviceStorage device_storage = std::get<T>(tensor.get_storage());
                         auto device_buffer = device_storage.get_buffer();
                         const auto& tensor_spec = tensor.tensor_spec();
                         auto page_size_bytes = tensor_spec.compute_page_size_bytes();
@@ -88,9 +89,9 @@ Tensor tensor_reshape(
                         device_storage.insert_buffer(device_buffer);
                         return Tensor(device_storage, new_spec);
                     } else {
-                        DeviceStorage device_storage = std::get<T>(tensor.get_storage());
+                        tt::tt_metal::DeviceStorage device_storage = std::get<T>(tensor.get_storage());
                         auto device_buffer = device_storage.get_buffer();
-                        ShardSpecBuffer shard_spec_buffer = device_buffer->shard_spec();
+                        tt::tt_metal::ShardSpecBuffer shard_spec_buffer = device_buffer->shard_spec();
 
                         auto shard_spec = shard_spec_buffer.tensor_shard_spec;
                         auto shard_shape = shard_spec.shape;
@@ -137,7 +138,7 @@ Tensor tensor_reshape(
         },
         input_tensor.get_storage());
     output = tt::tt_metal::set_tensor_id(output);
-    GraphTracker::instance().track_function_end(output);
+    tt::tt_metal::GraphTracker::instance().track_function_end(output);
     return output;
 }
 

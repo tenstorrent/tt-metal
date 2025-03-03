@@ -798,12 +798,12 @@ void generate_ccl_cb_to_tensor_slice_sequence_commands(
         slices, ttnn::ccl::cmd::CclCommandCode::STREAM_CB_TO_TENSOR, args_out, dest_args);
 }
 
-KernelHandle generate_multi_command_stream_kernel_ct_args(
+tt::tt_metal::KernelHandle generate_multi_command_stream_kernel_ct_args(
     Program& program,
     std::vector<uint32_t> const& cb_indices,  // TODO: move to RT arg
     std::vector<Tensor const*> const& tensors,
     CoreRangeSet const& worker_core_range,
-    DataMovementConfig datamovement_kernel_config,
+    tt::tt_metal::DataMovementConfig datamovement_kernel_config,
     const size_t num_command_streams,
     std::optional<chip_id_t> my_chip_id) {
     TT_FATAL(
@@ -843,7 +843,7 @@ KernelHandle generate_multi_command_stream_kernel_ct_args(
 
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_CB_index =
-        datamovement_kernel_config.processor == DataMovementProcessor::RISCV_0 ? tt::CB::c_in6 : tt::CB::c_in7;
+        datamovement_kernel_config.processor == tt::tt_metal::DataMovementProcessor::RISCV_0 ? tt::CB::c_in6 : tt::CB::c_in7;
     static constexpr auto num_packet_headers_storable = 8;
     static constexpr auto packet_header_size_bytes = sizeof(tt::fabric::PacketHeader);
     tt::tt_metal::CircularBufferConfig cb_config =
@@ -1058,7 +1058,7 @@ std::vector<uint32_t> generate_edm_connection_rt_args(
 
 void generate_multi_input_command_stream_kernel_rt_args(
     Program& program,
-    KernelHandle kernel_id,
+    tt::tt_metal::KernelHandle kernel_id,
     std::vector<Tensor const*> const& tensors,
     std::vector<size_t> const& page_sizes,
     IDevice* device,
@@ -1194,7 +1194,7 @@ void generate_multi_input_command_stream_kernel_rt_args(
 
 void generate_multi_command_stream_kernel_rt_args(
     Program& program,
-    KernelHandle kernel_id,
+    tt::tt_metal::KernelHandle kernel_id,
     std::vector<uint32_t> const& cb_ids,
     std::vector<const Tensor*> const& tensors,
     IDevice* device,
@@ -1304,7 +1304,7 @@ void generate_multi_command_stream_kernel_rt_args(
 }
 
 ttnn::ccl::cmd::CclHostLowLevelCommandSequence build_ccl_cmd_proc_teardown_commands(
-    tt::tt_metal::Program& program,
+    Program& program,
     IDevice* device,
     IDevice* forward_device,
     size_t line_size,
@@ -1369,7 +1369,7 @@ ttnn::ccl::cmd::CclHostLowLevelCommandSequence build_ccl_cmd_proc_teardown_comma
 
 void build_sync_kernels(
     IDevice* device,
-    tt::tt_metal::Program& program,
+    Program& program,
     ccl::SyncModeSpec const& sync_details,
     bool terminate_fabric,
     ccl::EdmLineFabricOpInterface& fabric_interface) {

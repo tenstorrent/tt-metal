@@ -4,6 +4,7 @@
 
 #include "cpp/ttnn/operations/normalization/layernorm_distributed/device/layernorm_post_all_gather_op.hpp"
 #include <tt-metalium/work_split.hpp>
+#include "tt-metalium/circular_buffer_types.hpp"
 #include "ttnn/operations/math.hpp"
 
 #include <tt-metalium/host_api.hpp>
@@ -15,7 +16,6 @@
 
 using uint32_t = std::uint32_t;
 using namespace tt::constants;
-using namespace tt::tt_metal;
 
 namespace ttnn::operations::normalization {
 
@@ -47,7 +47,7 @@ inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_
 }  // namespace
 
 // computes layernorm(a)*gamma + beta
-operation::ProgramWithCallbacks layernorm_post_allgather_multi_core(
+tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_core(
     const Tensor& a,
     const Tensor& stats,
     const std::optional<const Tensor>& gamma,
@@ -57,6 +57,10 @@ operation::ProgramWithCallbacks layernorm_post_allgather_multi_core(
     float eps,
     ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
+    using tt::tt_metal::CBHandle;
+    using tt::tt_metal::CircularBuffer;
+    using tt::tt_metal::CircularBufferConfig;
+
     const bool is_rmsnorm = norm_type == LayerNormDistributedType::RMSNORM;
     const auto shape = a.get_padded_shape();
     const uint32_t W = shape[-1], H = shape[-2];
@@ -97,7 +101,8 @@ operation::ProgramWithCallbacks layernorm_post_allgather_multi_core(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    uint32_t block_size = fp32_dest_acc_en ? find_max_divisor(Wt, 4) : find_max_divisor(Wt, 8);
+    uint32_t block_size =
+        fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(Wt, 4) : tt::tt_metal::find_max_divisor(Wt, 8);
 
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     tt::DataFormat stats_data_format = tt::tt_metal::datatype_to_dataformat_converter(stats.get_dtype());
@@ -238,7 +243,7 @@ operation::ProgramWithCallbacks layernorm_post_allgather_multi_core(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program program = CreateProgram();
+    Program program = tt::tt_metal::CreateProgram();
 
     std::vector<uint32_t> reader_compile_time_args = {
         // interleaved accessor args
@@ -252,7 +257,7 @@ operation::ProgramWithCallbacks layernorm_post_allgather_multi_core(
 
     if (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) {
         auto gamma_stick_size = gamma.value().get_padded_shape()[-1] * gamma.value().element_size();
-        bool gamma_stick_size_is_power_of_two = is_power_of_two_at_least_32(gamma_stick_size);
+        bool gamma_stick_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(gamma_stick_size);
         TT_FATAL(gamma_stick_size_is_power_of_two, "Only power of 2 gammas are supported");
         reader_compile_time_args.push_back((std::uint32_t)gamma_stick_size_is_power_of_two);
         // if (gamma_stick_size_is_power_of_two) {

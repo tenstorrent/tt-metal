@@ -66,7 +66,7 @@ public:
         }
     }
 
-    std::map<chip_id_t, IDevice*> devices_;
+    std::map<chip_id_t, tt_metal::IDevice*> devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 
@@ -87,9 +87,9 @@ void validation(const std::shared_ptr<tt::tt_metal::Buffer>& worker_buffer_0) {
     TT_FATAL(pass, "validation failed");
 }
 
-std::vector<Program> build(
-    IDevice* device0,
-    IDevice* device1,
+std::vector<tt_metal::Program> build(
+    tt_metal::IDevice* device0,
+    tt_metal::IDevice* device1,
     CoreCoord eth_sender_core,
     CoreCoord eth_receiver_core,
     CoreCoord worker_core,
@@ -97,14 +97,14 @@ std::vector<Program> build(
     std::size_t sample_page_size,
     std::size_t num_buffer_slots,
     uint32_t benchmark_type,
-    KernelHandle& local_kernel,
-    KernelHandle& remote_kernel,
-    std::shared_ptr<Buffer>& worker_buffer_0,
-    std::shared_ptr<Buffer>& worker_buffer_1,
+    tt_metal::KernelHandle& local_kernel,
+    tt_metal::KernelHandle& remote_kernel,
+    std::shared_ptr<tt_metal::Buffer>& worker_buffer_0,
+    std::shared_ptr<tt_metal::Buffer>& worker_buffer_1,
     bool test_latency,
     bool disable_trid) {
-    Program program0;
-    Program program1;
+    tt_metal::Program program0;
+    tt_metal::Program program1;
 
     // worker core coords
     uint32_t worker_noc_x = device1->worker_core_from_logical_core(worker_core).x;
@@ -136,7 +136,8 @@ std::vector<Program> build(
 
     // eth core rt args
     const std::vector<uint32_t>& eth_sender_receiver_rt_args = {
-        tt_metal::hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED),
+        tt_metal::hal.get_dev_addr(
+            tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::UNRESERVED),
         static_cast<uint32_t>(num_samples),
         static_cast<uint32_t>(sample_page_size)};
 
@@ -165,20 +166,20 @@ std::vector<Program> build(
         throw e;
     }
 
-    std::vector<Program> programs;
+    std::vector<tt_metal::Program> programs;
     programs.push_back(std::move(program0));
     programs.push_back(std::move(program1));
     return programs;
 }
 
 void run(
-    IDevice* device0,
-    IDevice* device1,
-    Program& program0,
-    Program& program1,
+    tt_metal::IDevice* device0,
+    tt_metal::IDevice* device1,
+    tt_metal::Program& program0,
+    tt_metal::Program& program1,
     BenchmarkType benchmark_type,
-    std::shared_ptr<Buffer>& worker_buffer_0,
-    std::shared_ptr<Buffer>& worker_buffer_1) {
+    std::shared_ptr<tt_metal::Buffer>& worker_buffer_0,
+    std::shared_ptr<tt_metal::Buffer>& worker_buffer_1) {
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
         std::thread th2 = std::thread([&] { tt_metal::detail::LaunchProgram(device0, program0); });
         std::thread th1 = std::thread([&] { tt_metal::detail::LaunchProgram(device1, program1); });
@@ -271,26 +272,26 @@ int main(int argc, char** argv) {
             num_samples,
             sample_page_size,
             num_buffer_slots);
-        KernelHandle local_kernel;
-        KernelHandle remote_kernel;
+        tt_metal::KernelHandle local_kernel;
+        tt_metal::KernelHandle remote_kernel;
         try {
-            ShardSpecBuffer shard_spec = ShardSpecBuffer(
+            tt_metal::ShardSpecBuffer shard_spec = tt_metal::ShardSpecBuffer(
                 CoreRangeSet(std::set<CoreRange>({CoreRange(worker_core)})),
                 {1, sample_page_size},
-                ShardOrientation::ROW_MAJOR,
+                tt_metal::ShardOrientation::ROW_MAJOR,
                 {1, sample_page_size},
                 {1, sample_page_size});
             auto worker_buffer_0 = CreateBuffer(tt::tt_metal::ShardedBufferConfig{
                 .device = device_0,
                 .size = sample_page_size,
                 .page_size = sample_page_size,
-                .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+                .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
                 .shard_parameters = shard_spec});
             auto worker_buffer_1 = CreateBuffer(tt::tt_metal::ShardedBufferConfig{
                 .device = device_1,
                 .size = sample_page_size,
                 .page_size = sample_page_size,
-                .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+                .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
                 .shard_parameters = shard_spec});
 
             auto programs = build(

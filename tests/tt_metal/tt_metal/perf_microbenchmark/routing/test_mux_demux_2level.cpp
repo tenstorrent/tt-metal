@@ -14,7 +14,6 @@
 using std::vector;
 using namespace tt;
 
-
 int main(int argc, char **argv) {
 
     constexpr uint32_t default_prng_seed = 0x100;
