@@ -32,6 +32,7 @@ permissions:
   pages: write
   id-token: write
   packages: write
+  checks: write
 
 run-name: All post-commit tests${{ (github.event_name == 'workflow_dispatch' && inputs.with-retries) && ' (with retries)' || ''}}
 jobs:
@@ -51,6 +52,14 @@ jobs:
       build-wheel: true
       tracy: true
     secrets: inherit
+
+  smoke-tests:
+    needs: build-artifact
+    uses: ./.github/workflows/zzz_smoke.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
+
   # Slow Dispatch Unit Tests
   sd-unit-tests:
     needs: build-artifact
