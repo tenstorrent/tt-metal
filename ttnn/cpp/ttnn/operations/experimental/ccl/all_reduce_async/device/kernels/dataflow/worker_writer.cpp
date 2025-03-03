@@ -176,14 +176,13 @@ void kernel_main() {
             reduction_semaphore_send_addr,
             reduction_semaphore_recv_noc_addr,
             num_cores,
-            false,  // TODO: Why?
-            false,  // TODO: Why?
+            false,  // linked = false
+            true,   // multicast_path_reserve = true
             0);
     }
 
     // 4. global semaphore reset
-    const uint64_t dest_noc_addr = get_noc_addr(my_x[0], my_y[0], out_ready_sem_bank_addr);
-    noc_inline_dw_write(dest_noc_addr, 0);
+    *reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr) = 0;
 
     if (fabric_connection.is_logically_connected()) {
         fabric_connection.close();
