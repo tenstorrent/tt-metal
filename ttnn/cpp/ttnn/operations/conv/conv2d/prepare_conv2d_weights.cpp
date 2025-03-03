@@ -906,19 +906,6 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
 
         ttnn::Shape bias_target_shape(std::array<uint32_t, 4>{1, 1, 1, out_channels});
         bias_tensor_ = ttnn::reshape(bias_tensor_, bias_target_shape, bias_tensor_.get_padded_shape());
-
-        // TT_FATAL(
-        //     bias_tensor_.get_logical_shape()[3] == out_channels,
-        //     "Bias must have the same length as output channels");
-        // bias_tensor_ = conv_bias_layout_convert(
-        //     bias_tensor_,
-        //     weights_bias_dtype,
-        //     weight_block_h_ntiles,
-        //     weight_block_w_ntiles,
-        //     output_parallel_config,
-        //     device,
-        //     out_channels_padded,
-        //     is_non_tile_mul_width);
     }
 
     return {weight_tensor_, bias_tensor.has_value() ? bias_tensor_ : std::optional<ttnn::Tensor>()};
