@@ -93,6 +93,29 @@ Tensor aggregate_as_tensor(
         }
         auto storage = MultiDeviceHostStorage{config, std::move(host_owned_buffers), specs};
         return Tensor(std::move(storage), reference_shard.get_tensor_spec());
+} else if (storage_type == StorageType::BORROWED) {
+        std::vector<ttnn::TensorSpec> specs;
+        std::vector<OwnedBuffer> host_owned_buffers;
+        for (const auto& shard : tensor_shards) {
+            auto buffer = std::get<BorrowedStorage>(shard.get_storage()).buffer;
+            specs.push_back(shard.get_tensor_spec());
+
+            auto visitor = tt::stl::overloaded{[&shard, &host_owned_buffers](const auto& buffer) -> OwnedBuffer {
+                using BufferType = std::decay_t<decltype(buffer)>;
+                using ValueType = typename BufferType::value_type;
+
+                std::vector<ValueType> physical_data(buffer.begin(), buffer.end());
+
+                std::vector<ValueType> logical_data =
+                    tensor_impl::decode_tensor_data(std::move(physical_data), shard.get_tensor_spec());
+
+                return owned_buffer::create(std::move(logical_data));
+            }};
+
+            host_owned_buffers.push_back(std::visit(visitor, buffer));
+        }
+        auto storage = MultiDeviceHostStorage{config, std::move(host_owned_buffers), specs};
+        return Tensor(std::move(storage), reference_shard.get_tensor_spec());
     } else {
         std::vector<int> ordered_device_ids;
         std::unordered_map<int, ttnn::TensorSpec> specs;
