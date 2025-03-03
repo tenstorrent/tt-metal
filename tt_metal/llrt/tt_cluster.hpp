@@ -338,6 +338,9 @@ private:
     // Reserves all free ethernet cores for fabric routers
     void reserve_ethernet_cores_for_fabric_routers();
 
+    // Releases all reserved ethernet cores for fabric routers
+    void release_ethernet_cores_for_fabric_routers();
+
     FabricConfig fabric_config_ = FabricConfig::DISABLED;
 
     // Tunnels setup in cluster

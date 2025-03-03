@@ -947,6 +947,8 @@ void Cluster::initialize_fabric_config(FabricConfig fabric_config) {
     this->fabric_config_ = fabric_config;
     if (fabric_config != FabricConfig::DISABLED) {
         this->reserve_ethernet_cores_for_fabric_routers();
+    } else {
+        this->release_ethernet_cores_for_fabric_routers();
     }
 }
 
@@ -960,6 +962,18 @@ void Cluster::reserve_ethernet_cores_for_fabric_routers() {
     }
     // Update sockets to reflect fabric routing
     this->ethernet_sockets_.clear();
+}
+
+void Cluster::release_ethernet_cores_for_fabric_routers() {
+    for (const auto& [chip_id, eth_cores] : this->device_eth_routing_info_) {
+        for (const auto& [eth_core, mode] : eth_cores) {
+            if (mode == EthRouterMode::FABRIC_ROUTER) {
+                this->device_eth_routing_info_[chip_id][eth_core] = EthRouterMode::IDLE;
+            }
+        }
+    }
+    // TODO: We should just cache restore
+    this->initialize_ethernet_sockets();
 }
 
 std::set<tt_fabric::chan_id_t> Cluster::get_fabric_ethernet_channels(chip_id_t chip_id) const {
