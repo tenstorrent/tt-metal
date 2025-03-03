@@ -187,7 +187,7 @@ def reset_fabric(fabric_config):
     import ttnn
 
     # If fabric_config is not None, set it to FABRIC_2D
-    if fabric_config is not None:
+    if fabric_config:
         ttnn._ttnn.fabric.initialize_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
@@ -195,7 +195,7 @@ def set_fabric(fabric_config):
     import ttnn
 
     # If fabric_config is not None, set it to FABRIC_2D
-    if fabric_config is not None:
+    if fabric_config:
         ttnn._ttnn.fabric.initialize_fabric_config(fabric_config)
 
 
