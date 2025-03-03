@@ -22,11 +22,13 @@ std::vector<ttnn::TensorSpec> AllReduce::compute_output_specs(const std::vector<
     const auto& input_tensor = input_tensors.at(0);
     auto shape = input_tensor.get_logical_shape();
     TensorSpec spec(
-        shape, TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), output_mem_config));
+        shape,
+        tt::tt_metal::TensorLayout(
+            input_tensor.get_dtype(), tt::tt_metal::PageConfig(input_tensor.get_layout()), output_mem_config));
     return std::vector<ttnn::TensorSpec>(input_tensors.size(), spec);
 }
 
-operation::ProgramWithCallbacks AllReduce::create_program(
+tt::tt_metal::operation::ProgramWithCallbacks AllReduce::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     return ccl::reduce_scatter_detail::reduce_scatter_with_workers(
         input_tensors.at(0),
@@ -140,7 +142,7 @@ static Tensor all_gather_local_reduce(
     std::vector<int32_t> new_shape{1, merged_dim_size, shape[rank - 2], shape[rank - 1]};
     auto reshaped_tensor = ttnn::reshape(input_tensor, new_shape);
 
-    const auto& gathered_tensor = operation::run(
+    const auto& gathered_tensor = tt::tt_metal::operation::run(
         ttnn::ccl::all_gather_detail::create_all_gather_struct(
             reshaped_tensor,
             0,
@@ -176,7 +178,7 @@ static Tensor reduce_scatter_all_gather(
         }
     }
 
-    const auto& reduced_tensor = operation::run(
+    const auto& reduced_tensor = tt::tt_metal::operation::run(
         ttnn::ccl::reduce_scatter_detail::create_reduce_scatter_struct(
             input_tensor,
             binary_op_type,
@@ -189,7 +191,7 @@ static Tensor reduce_scatter_all_gather(
             topology),
         {input_tensor});
 
-    const auto& gathered_tensor = operation::run(
+    const auto& gathered_tensor = tt::tt_metal::operation::run(
         ttnn::ccl::all_gather_detail::create_all_gather_struct(
             reduced_tensor.at(0),
             all_reduce_dim,
@@ -264,8 +266,8 @@ Tensor all_reduce(
     uint32_t num_devices = devices.size();
     TT_FATAL(num_devices > 1, "all_reduce op will only work for num_devices > 1, but has {}", num_devices);
 
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
+    tt::tt_metal::operation::launch_op(
         [binary_op_type,
          num_links,
          num_devices,

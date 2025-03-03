@@ -12,9 +12,8 @@ namespace ttnn::operations::experimental::transformer {
 
 using namespace tt;
 using namespace tt::constants;
-using namespace tt::tt_metal;
 
-operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode(
+tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode(
     const Tensor& input_tensor, Tensor& output, CoreCoord compute_with_storage_grid_size) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -120,7 +119,7 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode(
     auto override_runtime_arguments_callback =
         [reader_kernel_id, writer_kernel_id, num_cores, cb_q_output, cores, element_size, sub_tile_line_bytes](
             const void* operation,
-            Program& program,
+            tt::tt_metal::Program& program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
@@ -150,7 +149,8 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode(
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
-operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode_subcoregrids(
+
+tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode_subcoregrids(
     const Tensor& input_tensor, Tensor& output, CoreCoord compute_with_storage_grid_size) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -268,7 +268,7 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode_subcoregrids(
          face_h,
          tile_w](
             const void* operation,
-            Program& program,
+            tt::tt_metal::Program& program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {

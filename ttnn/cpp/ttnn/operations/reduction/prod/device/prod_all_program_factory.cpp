@@ -12,8 +12,9 @@ using namespace constants;
 namespace operations {
 namespace primary {
 
-operation::ProgramWithCallbacks prod_single_core(const Tensor& a, const Tensor& output) {
-    Program program{};
+tt::tt_metal::operation::ProgramWithCallbacks prod_single_core(
+    const tt::tt_metal::Tensor& a, const tt::tt_metal::Tensor& output) {
+    tt::tt_metal::Program program{};
 
     CoreRange core({0, 0}, {0, 0});
 
@@ -33,11 +34,11 @@ operation::ProgramWithCallbacks prod_single_core(const Tensor& a, const Tensor& 
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     tt_metal::CircularBufferConfig cb_inter_config =
-        tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{tt::CBIndex::c_24, cb_data_format}})
-            .set_page_size(tt::CBIndex::c_24, single_tile_size);
+        tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{tt::CBIndex::c_2, cb_data_format}})
+            .set_page_size(tt::CBIndex::c_2, single_tile_size);
     auto cb_interm = tt_metal::CreateCircularBuffer(program, core, cb_inter_config);
 
-    uint32_t output_cb_index = tt::CBIndex::c_16;
+    uint32_t output_cb_index = tt::CBIndex::c_3;
     uint32_t num_output_tiles = 2;
     tt_metal::CircularBufferConfig cb_output_config =
         tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, cb_data_format}})
@@ -86,9 +87,9 @@ operation::ProgramWithCallbacks prod_single_core(const Tensor& a, const Tensor& 
     SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_buffer->address(), num_tiles, 0});
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
-                                              const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
+                                              const tt::tt_metal::Program& program,
+                                              const std::vector<tt::tt_metal::Buffer*>& input_buffers,
+                                              const std::vector<tt::tt_metal::Buffer*>& output_buffers) {
         auto src_buffer = input_buffers.at(0);
 
         auto dst_buffer = output_buffers.at(0);

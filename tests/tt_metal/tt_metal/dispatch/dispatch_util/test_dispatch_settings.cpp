@@ -11,7 +11,7 @@
 #include <tt-metalium/dispatch_settings.hpp>
 #include "umd/device/tt_core_coordinates.h"
 
-using namespace tt::tt_metal;
+namespace tt::tt_metal {
 
 // Loop through test_func for WORKER, ETH X 1, 2 CQs
 void ForEachCoreTypeXHWCQs(const std::function<void(const CoreType& core_type, const uint32_t num_hw_cqs)>& test_func) {
@@ -160,3 +160,5 @@ TEST_F(CommandQueueSingleCardFixture, TestDispatchSettingsMutations) {
 
     DispatchSettings::initialize(original_settings);
 }
+
+}  // namespace tt::tt_metal

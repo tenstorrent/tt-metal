@@ -16,7 +16,7 @@ ttnn::Tensor ExecuteUpdateCache::invoke(
     const uint32_t batch_offset,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     auto kernel_config_val = init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config);
-    operation::run(
+    tt::tt_metal::operation::run(
         UpdateCache{0, update_index, batch_offset, UpdateCacheOpType::UPDATE, kernel_config_val},
         std::vector<ttnn::Tensor>{cache, input});
     return cache;
@@ -24,7 +24,8 @@ ttnn::Tensor ExecuteUpdateCache::invoke(
 
 ttnn::Tensor ExecuteFillCache::invoke(
     const ttnn::Tensor& cache, const ttnn::Tensor& input, const uint32_t batch_index) {
-    operation::run(UpdateCache{batch_index, 0, 0, UpdateCacheOpType::FILL}, std::vector<ttnn::Tensor>{cache, input});
+    tt::tt_metal::operation::run(
+        UpdateCache{batch_index, 0, 0, UpdateCacheOpType::FILL}, std::vector<ttnn::Tensor>{cache, input});
     return cache;
 }
 

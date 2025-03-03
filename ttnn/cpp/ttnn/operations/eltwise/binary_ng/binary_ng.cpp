@@ -6,7 +6,7 @@
 #include "binary_ng.hpp"
 #include "device/binary_ng_device_operation.hpp"
 
-inline Tensor typecast_to(DataType dtype, const Tensor& input) {
+inline ttnn::Tensor typecast_to(ttnn::DataType dtype, const ttnn::Tensor& input) {
     return input.get_dtype() == dtype ? input : ttnn::typecast(input, dtype);
 }
 

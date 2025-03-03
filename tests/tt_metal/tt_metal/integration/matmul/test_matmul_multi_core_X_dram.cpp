@@ -14,6 +14,8 @@
 #include "tests/tt_metal/test_utils/tilization.hpp"
 #include "matmul_test_utils.hpp"
 
+namespace tt::tt_metal {
+
 using std::vector;
 using namespace tt;
 
@@ -158,7 +160,7 @@ bool matmul_multi_core_single_dram(tt_metal::IDevice* device) {
     int per_core_M = M / num_cores_r;
     int per_core_N = N / num_cores_c;
     uint32_t single_tile_size = 2 * 1024;
-    uint32_t dram_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::DRAM);
+    uint32_t dram_unreserved_base = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::DRAM);
     log_info(LogTest, "M = {}, N = {}, K = {}", M, N, K);
     log_info(LogTest, "Activation = {}x{}", M * 32, K * 32);
     log_info(LogTest, "Weights = {}x{}", K * 32, N * 32);
@@ -180,7 +182,7 @@ bool matmul_multi_core_single_dram(tt_metal::IDevice* device) {
     tt::deprecated::Tensor<bfloat16> tensor = tt::deprecated::initialize_tensor<bfloat16>(
         shape, tt::deprecated::Initialize::RANDOM, 0, 100, std::chrono::system_clock::now().time_since_epoch().count());
     auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32);  // bflaot16 identity
-    auto golden = select_columns(tensor.get_values(), M, K, N);
+    auto golden = tt_metal::select_columns(tensor.get_values(), M, K, N);
 
     MatmulConfig matmul_cfg = {
         .multi_dram = 0,
@@ -205,9 +207,10 @@ bool matmul_multi_core_single_dram(tt_metal::IDevice* device) {
     ////////////////////////////////////////////////////////////////////////////
     log_debug(LogTest, "Slicing input tensors and copying them to dram along with sending runtime args to device");
     for (int i = 0; i < num_cores_r; i++) {
-        std::vector<bfloat16> activation_slice = get_row_slice(tensor.get_values(), num_cores_r, i, M * 32, K * 32);
+        std::vector<bfloat16> activation_slice =
+            tt_metal::get_row_slice(tensor.get_values(), num_cores_r, i, M * 32, K * 32);
         for (int j = 0; j < num_cores_c; j++) {
-            std::vector<bfloat16> weights_slice = get_col_slice(identity, num_cores_c, j, K * 32, N * 32);
+            std::vector<bfloat16> weights_slice = tt_metal::get_col_slice(identity, num_cores_c, j, K * 32, N * 32);
             int core_index = i * num_cores_c + j;
             CoreCoord core = {(std::size_t)j, (std::size_t)i};
 
@@ -245,7 +248,7 @@ bool matmul_multi_core_single_dram(tt_metal::IDevice* device) {
             auto activations_tilized = test_utils::tilize(activation_slice, per_core_M * 32, K * 32);
             auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
             auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
-            auto activations_tile_transposed = transpose_tiles(activations, per_core_M, K, in0_block_w);
+            auto activations_tile_transposed = tt_metal::transpose_tiles(activations, per_core_M, K, in0_block_w);
             pass &= tt_metal::detail::WriteToDeviceDRAMChannel(
                 device, dram_src0_channel_id, dram_buffer_src0_addr, activations_tile_transposed);
 
@@ -292,9 +295,9 @@ bool matmul_multi_core_single_dram(tt_metal::IDevice* device) {
     log_debug(LogTest, "Matmul test done");
     log_debug(LogTest, "Gathering data back from dram and checking against golden");
     for (int i = 0; i < num_cores_r; i++) {
-        auto golden_row = get_row_slice(golden, num_cores_r, i, M * 32, N * 32);
+        auto golden_row = tt_metal::get_row_slice(golden, num_cores_r, i, M * 32, N * 32);
         for (int j = 0; j < num_cores_c; j++) {
-            auto per_core_golden = get_col_slice(golden_row, num_cores_c, j, per_core_M * 32, N * 32);
+            auto per_core_golden = tt_metal::get_col_slice(golden_row, num_cores_c, j, per_core_M * 32, N * 32);
             std::vector<uint32_t> result_vec;
             int core_index = i * num_cores_c + j;
             uint32_t dram_buffer_dst_addr =
@@ -410,7 +413,7 @@ bool assign_runtime_args_to_program(
     return pass;
 }
 
-bool matmul_multi_core_multi_dram(DispatchFixture* fixture, tt_metal::IDevice* device) {
+bool matmul_multi_core_multi_dram(tt_metal::DispatchFixture* fixture, tt_metal::IDevice* device) {
     bool pass = true;
     int num_cores_r = device->compute_with_storage_grid_size().y;
     int num_cores_c = device->compute_with_storage_grid_size().x;
@@ -474,17 +477,20 @@ bool matmul_multi_core_multi_dram(DispatchFixture* fixture, tt_metal::IDevice* d
     auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
     auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
 
-    auto activation_buffer = Buffer::create(device, activations.size() * sizeof(uint32_t), 1024 * 2, BufferType::DRAM);
+    auto activation_buffer =
+        tt_metal::Buffer::create(device, activations.size() * sizeof(uint32_t), 1024 * 2, tt_metal::BufferType::DRAM);
     pass &= move_tiles_to_dram(device, activations, M, K, activation_buffer);
     auto identity_tilized = test_utils::tilize(identity, K * 32, N * 32);
     auto weights_tile_layout = convert_to_tile_layout(identity_tilized);
     auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
 
-    auto weight_buffer = Buffer::create(device, weights.size() * sizeof(uint32_t), 1024 * 2, BufferType::DRAM);
+    auto weight_buffer =
+        tt_metal::Buffer::create(device, weights.size() * sizeof(uint32_t), 1024 * 2, tt_metal::BufferType::DRAM);
     pass &= move_tiles_to_dram(device, weights, K, N, weight_buffer);
     log_debug(LogTest, "Copying inputs to dram complete");
 
-    auto out_buffer = Buffer::create(device, M * N * sizeof(uint32_t) * 32 * 32, 1024 * 2, BufferType::DRAM);
+    auto out_buffer =
+        tt_metal::Buffer::create(device, M * N * sizeof(uint32_t) * 32 * 32, 1024 * 2, tt_metal::BufferType::DRAM);
     uint32_t out_dram_addr = out_buffer->address();
 
     log_debug(LogTest, "Writing kernel runtime args to device");
@@ -516,15 +522,15 @@ bool matmul_multi_core_multi_dram(DispatchFixture* fixture, tt_metal::IDevice* d
 
     vector<uint32_t> result;
     fixture->ReadBuffer(device, out_buffer, result);
-    auto golden = select_columns(tensor.get_values(), M, K, N);
+    auto golden = tt_metal::select_columns(tensor.get_values(), M, K, N);
 
     // Keeping this old code because took me too long to decipher. Matmul
     // owner can refactor at a later time
     auto result_iter = result.begin();
     for (int i = 0; i < M; i++) {
-        auto row = get_row_slice(golden, M, i, M * 32, N * 32);
+        auto row = tt_metal::get_row_slice(golden, M, i, M * 32, N * 32);
         for (int j = 0; j < N; j++) {
-            auto golden_tile = get_col_slice(row, N, j, 32, N * 32);
+            auto golden_tile = tt_metal::get_col_slice(row, N, j, 32, N * 32);
             std::vector<uint32_t> result_vec;
             result_vec.insert(result_vec.end(), result_iter, result_iter + 512);
             result_iter += 512;
@@ -568,3 +574,5 @@ TEST_F(DispatchFixture, TensixMatmulMultiCoreMultiDRAM) {
             this, devices_.at(id)));
     }
 }
+
+}  // namespace tt::tt_metal

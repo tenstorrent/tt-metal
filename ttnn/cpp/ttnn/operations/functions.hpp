@@ -23,24 +23,27 @@ using tt::tt_metal::IDevice;
 using tt::tt_metal::Layout;
 using tt::tt_metal::MemoryConfig;
 using tt::tt_metal::OwnedStorage;
+using tt::tt_metal::PageConfig;
 using tt::tt_metal::StorageType;
 using tt::tt_metal::Tensor;
+using tt::tt_metal::TensorLayout;
+using tt::tt_metal::TensorMemoryLayout;
 
 namespace detail {
 template <typename T>
-owned_buffer::Buffer<T> to_host_buffer(const Tensor& tensor) {
+tt::tt_metal::owned_buffer::Buffer<T> to_host_buffer(const Tensor& tensor) {
     auto cpu_tensor = tensor.cpu();
     auto& storage = cpu_tensor.storage();
-    OwnedBuffer buffer = std::visit(
+    tt::tt_metal::OwnedBuffer buffer = std::visit(
         tt::stl::overloaded{
-            [](const OwnedStorage& storage) { return storage.get_buffer(); },
-            [](const MultiDeviceHostStorage& storage) {
+            [](const tt::tt_metal::OwnedStorage& storage) { return storage.get_buffer(); },
+            [](const tt::tt_metal::MultiDeviceHostStorage& storage) {
                 TT_FATAL(storage.num_buffers() == 1, "Can't get a single buffer from multi device host storage");
                 return storage.get_buffer(0);
             },
-            [](const auto&) -> OwnedBuffer { TT_THROW("Not supported storage type"); }},
+            [](const auto&) -> tt::tt_metal::OwnedBuffer { TT_THROW("Not supported storage type"); }},
         storage);
-    return std::get<owned_buffer::Buffer<T>>(buffer);
+    return std::get<tt::tt_metal::owned_buffer::Buffer<T>>(buffer);
 }
 }  // namespace detail
 
