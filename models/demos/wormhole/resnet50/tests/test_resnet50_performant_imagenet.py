@@ -42,14 +42,16 @@ def test_run_resnet50_trace_2cqs_inference(
     with torch.no_grad():
         resnet50_trace_2cq = ResNet50Trace2CQ()
 
+        profiler.start(f"compile")
         resnet50_trace_2cq.initialize_resnet50_trace_2cqs_inference(
             device,
             batch_size,
             act_dtype,
             weight_dtype,
         )
+        profiler.end(f"compile")
         model_version = "microsoft/resnet-50"
-        iterations = 100
+        iterations = 500
         image_processor = AutoImageProcessor.from_pretrained(model_version)
         input_loc = str(model_location_generator("ImageNet_data"))
         data_loader = get_data_loader(input_loc, batch_size, iterations)
@@ -69,20 +71,16 @@ def test_run_resnet50_trace_2cqs_inference(
                 )
                 if imagenet_label_dict[labels[i]] == predictions[-1]:
                     correct += 1
-            accuracy = correct / (batch_size * iterations)
-            logger.info(f"=============")
-            logger.info(f"Accuracy for {batch_size}x{iterations} inputs: {accuracy}")
         profiler.end(f"run")
-
         resnet50_trace_2cq.release_resnet50_trace_2cqs_inference()
+        accuracy = correct / (batch_size * iterations)
+        logger.info(f"=============")
+        logger.info(f"Accuracy for {batch_size}x{iterations} inputs: {accuracy}")
 
-    first_iter_time = profiler.get(f"compile") + profiler.get(f"cache")
-
+    first_iter_time = profiler.get(f"compile")
     # ensuring inference time fluctuations is not noise
-    print(profiler.get("run"))
     inference_time_avg = profiler.get("run") / (iterations * batch_size)
 
-    # cpu_time = profiler.get(cpu_key)
     compile_time = first_iter_time - 2 * inference_time_avg
     prep_perf_report(
         model_name=f"ttnn_{model_version}_batch_size{batch_size}",

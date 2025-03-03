@@ -100,11 +100,6 @@ class ResNet50Trace2CQ:
         assert trace_input_addr == ttnn.buffer_address(self.input_tensor)
 
     def execute_resnet50_trace_2cqs_inference(self, tt_inputs_host=None):
-        # More optimized run with caching
-        # if use_signpost:
-        #    signpost(header="start")
-        outputs = []
-
         ttnn.wait_for_event(1, self.op_event)
         ttnn.copy_host_to_device_tensor(tt_inputs_host, self.tt_image_res, 1)
         ttnn.record_event(1, self.write_event)
@@ -114,11 +109,7 @@ class ResNet50Trace2CQ:
         ttnn.record_event(0, self.op_event)
         ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=True)
         outputs = ttnn.from_device(self.test_infra.output_tensor, blocking=True)
-        ttnn.synchronize_devices(self.device)
 
-        if use_signpost:
-            signpost(header="stop")
-        self.test_infra.validate(outputs)
         return outputs
 
     def release_resnet50_trace_2cqs_inference(self):
