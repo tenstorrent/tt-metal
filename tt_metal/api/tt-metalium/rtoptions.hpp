@@ -306,7 +306,7 @@ public:
     inline unsigned get_num_hw_cqs() { return num_hw_cqs; }
     inline void set_num_hw_cqs(unsigned num) { num_hw_cqs = num; }
 
-    inline bool get_fd_fabric() { return fb_fabric_en; }
+    inline bool get_fd_fabric() const { return fb_fabric_en; }
 
     inline uint32_t get_watcher_debug_delay() { return watcher_debug_delay; }
     inline void set_watcher_debug_delay(uint32_t delay) { watcher_debug_delay = delay; }
@@ -316,7 +316,7 @@ public:
 
     inline bool get_hw_cache_invalidation_enabled() const { return this->enable_hw_cache_invalidation; }
 
-    tt_metal::DispatchCoreConfig get_dispatch_core_config();
+    tt_metal::DispatchCoreConfig get_dispatch_core_config() const;
 
     inline bool get_skip_deleting_built_cache() { return skip_deleting_built_cache; }
 
