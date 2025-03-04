@@ -284,7 +284,9 @@ add_subdirectory(detail)
 add_subdirectory(distributed)
 add_subdirectory(tt_stl)
 add_subdirectory(fabric)
-add_subdirectory(test)
+if(TT_METAL_BUILD_TESTS)
+    add_subdirectory(test)
+endif()
 
 install(
     TARGETS
