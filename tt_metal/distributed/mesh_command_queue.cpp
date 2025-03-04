@@ -187,6 +187,21 @@ void MeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool b
     }
 }
 
+void MeshCommandQueue::set_go_signal_noc_data_and_dispatch_sems(
+    uint32_t num_dispatch_sems, const vector_memcpy_aligned<uint32_t>& noc_mcast_unicast_data) {
+    // Do this on each device in the mesh
+    for (IDevice* device : mesh_device_->get_devices()) {
+        program_dispatch::set_num_worker_sems_on_dispatch(device, device->sysmem_manager(), id_, num_dispatch_sems);
+        program_dispatch::set_go_signal_noc_data_on_dispatch(
+            device, noc_mcast_unicast_data, device->sysmem_manager(), id_);
+    }
+}
+
+void MeshCommandQueue::terminate() {
+    ZoneScopedN("MeshCommandQueue_terminate");
+    TT_THROW("MeshCommandQueue::terminate() is not implemented yet!");
+}
+
 void MeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
     auto event = this->enqueue_record_event_to_host(sub_device_ids);
     this->drain_events_from_completion_queue();

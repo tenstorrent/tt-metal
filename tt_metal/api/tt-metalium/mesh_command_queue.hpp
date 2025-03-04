@@ -125,8 +125,13 @@ public:
 
     MeshDevice* device() const { return mesh_device_; }
     uint32_t id() const { return id_; }
+    std::optional<MeshTraceId> tid() const { return trace_id_; }
+    void terminate();
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) { return config_buffer_mgr_[index]; };
     void enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking);
+
+    void set_go_signal_noc_data_and_dispatch_sems(
+        uint32_t num_dispatch_sems, const vector_memcpy_aligned<uint32_t>& noc_mcast_unicast_data);
 
     // Specifies host data to be written to or read from a MeshBuffer shard.
     struct ShardDataTransfer {
