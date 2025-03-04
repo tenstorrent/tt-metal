@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -30,7 +30,7 @@ void py_bind_conv3d(py::module& module) {
                const Conv3dConfig& config,
                const std::optional<const MemoryConfig>& memory_config,
                const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
-               const uint8_t& queue_id) {
+               const QueueId& queue_id) {
                 return self(
                     queue_id, input_tensor, weight_tensor, bias_tensor, config, memory_config, compute_kernel_config);
             },

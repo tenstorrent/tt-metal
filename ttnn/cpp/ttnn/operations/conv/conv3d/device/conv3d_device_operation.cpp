@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,8 +19,8 @@ void Conv3dOp::validate(
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
 
-    TT_FATAL(input_tensor_a.shape().size() == 5, "Activation tensor must have 5 dimensions.");
-    TT_FATAL(input_tensor_a.shape()[0] == 1, "Activation tensor must have batch size 1.");
+    TT_FATAL(input_tensor_a.get_logical_shape().size() == 5, "Activation tensor must have 5 dimensions.");
+    TT_FATAL(input_tensor_a.get_logical_shape()[0] == 1, "Activation tensor must have batch size 1.");
     // check row-major
     TT_FATAL(input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Activation tensor must be row-major.");
 
@@ -38,7 +38,7 @@ void Conv3dOp::validate(
         TT_FATAL(!bias_tensor.memory_config().is_sharded(), "Bias tensor must be interleaved.");
         TT_FATAL(bias_tensor.get_layout() == Layout::TILE, "Bias tensor must be tile-major.");
         TT_FATAL(bias_tensor.dtype() == DataType::BFLOAT16, "Bias tensor must be bfloat16.");
-        TT_FATAL(bias_tensor.shape().size() == 2, "Bias tensor must have 2 dimensions.");
+        TT_FATAL(bias_tensor.get_logical_shape().size() == 2, "Bias tensor must have 2 dimensions.");
     }
 
     // Add assertions for strides and groups
@@ -67,13 +67,14 @@ void Conv3dOp::validate(
 
     // Validate weight shape and config arguments
     const auto patch_size =
-        config.kernel_size[0] * config.kernel_size[1] * config.kernel_size[2] * input_tensor_a.shape()[4];
-    TT_FATAL(weight_tensor.shape()[0] == patch_size, "Weight patch size must match input patch size.");
+        config.kernel_size[0] * config.kernel_size[1] * config.kernel_size[2] * input_tensor_a.get_logical_shape()[4];
+    TT_FATAL(weight_tensor.get_logical_shape()[0] == patch_size, "Weight patch size must match input patch size.");
     TT_FATAL(
-        weight_tensor.shape()[1] == config.output_channels, "Weight output channels must match input output channels.");
+        weight_tensor.get_logical_shape()[1] == config.output_channels,
+        "Weight output channels must match input output channels.");
     if (optional_input_tensors.at(0).has_value()) {
         const auto& bias_tensor = optional_input_tensors.at(0).value();
-        TT_FATAL(bias_tensor.shape()[1] == config.output_channels, "Bias must match output channels.");
+        TT_FATAL(bias_tensor.get_logical_shape()[1] == config.output_channels, "Bias must match output channels.");
     }
 
     // Add grid size validation
@@ -87,7 +88,7 @@ void Conv3dOp::validate(
         device_grid.x,
         device_grid.y);
 
-    uint32_t C_in = input_tensor_a.shape()[4];
+    uint32_t C_in = input_tensor_a.get_logical_shape()[4];
     const uint32_t l1_alignment = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::L1);
     if (config.C_in_block > 0) {
         TT_FATAL(
@@ -115,7 +116,7 @@ void Conv3dOp::validate(
 
 std::vector<TensorSpec> Conv3dOp::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    const auto& input_tensor_a_shape = input_tensor_a.shape();
+    const auto& input_tensor_a_shape = input_tensor_a.get_logical_shape();
     uint32_t N = input_tensor_a_shape[0];
     uint32_t T_in = input_tensor_a_shape[1];
     uint32_t H_in = input_tensor_a_shape[2];
@@ -125,7 +126,7 @@ std::vector<TensorSpec> Conv3dOp::compute_output_specs(const std::vector<Tensor>
 
     auto [T_out, H_out, W_out] = detail::compute_output_dims(T_in, H_in, W_in, config.padding, config.kernel_size);
 
-    ttnn::SimpleShape output_shape({N, T_out, H_out, W_out, C_out});
+    ttnn::Shape output_shape({N, T_out, H_out, W_out, C_out});
 
     auto memory_config = input_tensor_a.memory_config();
     auto dtype = input_tensor_a.dtype();

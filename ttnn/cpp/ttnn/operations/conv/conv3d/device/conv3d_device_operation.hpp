@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #pragma once
 
 #include <array>
@@ -5,9 +9,7 @@
 #include <optional>
 #include <vector>
 
-// #include <tt-metalium/operation.hpp>
 #include "ttnn/tensor/tensor.hpp"
-// #include "ttnn/decorators.hpp"
 #include "ttnn/operation.hpp"
 
 namespace ttnn::operations::conv::conv3d {
@@ -27,8 +29,6 @@ inline std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
 }  // namespace detail
 
 struct Conv3dConfig {
-    // This constructor matches the PyBind11 .def(...)
-    // It also provides default values so you can call it with fewer arguments if desired.
     Conv3dConfig(
         DataType dtype_ = DataType::BFLOAT16,
         DataType weights_dtype_ = DataType::BFLOAT16,

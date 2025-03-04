@@ -119,12 +119,7 @@ def setup_conv3d_test(input_shape, out_channels, kernel_size, stride, padding, p
         conv3d_module.weight.data = torch.ones_like(conv3d_module.weight.data)
         conv3d_module.bias.data = torch.ones_like(conv3d_module.bias.data)
 
-    import time
-
-    start = time.perf_counter()
     gt_output = conv3d_module(input_tensor)
-    end = time.perf_counter()
-    logger.info(f"Time taken for torch conv3d: {end - start} seconds")
 
     # Prepare input for TTNN
     tt_input = prepare_input_tensor(input_tensor, C, device)
