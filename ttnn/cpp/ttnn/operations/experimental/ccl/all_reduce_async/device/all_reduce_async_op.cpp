@@ -151,7 +151,7 @@ operation::ProgramWithCallbacks AllReduceAsync::create_program(
     tt::log_debug(
         tt::LogOp, "output_tensor_memory_config.shard_spec->shape: {}", output_tensor_memory_config.shard_spec->shape);
 
-    tt::log_info(tt::LogOp, "Running TG Llama specific all_reduce_async_minimal_multi_core_with_workers");
+    // tt::log_info(tt::LogOp, "Running TG Llama specific all_reduce_async_minimal_multi_core_with_workers");
     return all_reduce_async_minimal_multi_core_with_workers(
         input_tensors[0],
         input_tensors[1],

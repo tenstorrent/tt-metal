@@ -88,6 +88,7 @@ public:
     virtual std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const = 0;
     virtual std::vector<CoreCoord> ethernet_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const = 0;
     virtual std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment() = 0;
+    virtual CoreCoord physical_worker_core_from_logical_core(const CoreCoord& logical_core) const = 0;
 
     virtual CoreCoord virtual_core_from_logical_core(const CoreCoord &logical_coord, const CoreType& core_type) const = 0;
     virtual CoreCoord worker_core_from_logical_core(const CoreCoord &logical_core) const = 0;

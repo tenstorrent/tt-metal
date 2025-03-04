@@ -661,10 +661,6 @@ SenderWorkerAdapterSpec EdmLineFabricOpInterface::uniquely_connect_worker(IDevic
     const auto next_link = link_count_map[device->id()];
     link_count_map[device->id()] = (next_link + 1) %  edm_builders.size();
 
-    if (device->id() == 5) {
-        tt::log_info("next_link: {}", next_link);
-    }
-
     TT_FATAL(edm_builders.size() > 0, "No EDM builders found for device {}", device->id());
     TT_FATAL(next_link < edm_builders.size(), "Next link index {} is out of bounds for device {}", next_link, device->id());
     return edm_builders.at(next_link).build_connection_to_worker_channel();

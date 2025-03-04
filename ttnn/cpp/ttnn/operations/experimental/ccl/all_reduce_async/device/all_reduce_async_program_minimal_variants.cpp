@@ -68,60 +68,209 @@ std::optional<std::vector<CoreCoord>> reorder_ethernet_cores(
     return std::nullopt;
 }
 
+std::vector<CoreCoord> compute_top_row_ethernet_cores(
+    IDevice* device,
+    std::optional<std::vector<CoreCoord>> forward_ethernet_cores,
+    std::optional<std::vector<CoreCoord>> backward_ethernet_cores) {
+    std::vector<CoreCoord> ethernet_cores;
+    if (forward_ethernet_cores.has_value()) {
+        ethernet_cores = forward_ethernet_cores.value();
+    } else if (backward_ethernet_cores.has_value()) {
+        ethernet_cores = backward_ethernet_cores.value();
+    }
+
+    std::vector<CoreCoord> ethernet_cores_virtual;
+    for (auto core : ethernet_cores) {
+        auto core_virtual = device->virtual_core_from_logical_core(core, CoreType::ETH);
+        ethernet_cores_virtual.push_back(core_virtual);
+    }
+
+    for (auto& eth_core : ethernet_cores_virtual) {
+        eth_core.y = 16;
+    }
+    return ethernet_cores_virtual;
+}
+
 std::pair<CoreRangeSet, std::vector<CoreCoord>> get_optimal_worker_core_placement(
     IDevice* device,
-    LineTopology line_topology,
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface>& local_fabric_handle,
-    uint32_t num_links) {
+    std::vector<CoreCoord> ethernet_cores_virtual,
+    std::optional<CoreRangeSet> reserved_cores,
+    uint32_t num_links,
+    const std::optional<SubDeviceId>& sub_device_id) {
     std::vector<CoreCoord> sender_worker_cores;
-    for (uint32_t link = 0; link < num_links; link++) {
-        std::optional<ttnn::ccl::SenderWorkerAdapterSpec> forward_fabric_connection =
-            line_topology.is_first_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD)
-                ? std::nullopt
-                : std::optional<ttnn::ccl::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
-                      device, ttnn::ccl::EdmLineFabricOpInterface::FORWARD));
+    std::vector<CoreCoord> sender_worker_cores_physical;
 
-        std::optional<ttnn::ccl::SenderWorkerAdapterSpec> backward_fabric_connection =
-            line_topology.is_last_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD)
-                ? std::nullopt
-                : std::optional<ttnn::ccl::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
-                      device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
+    auto available_cores_corerangeset = device->worker_cores(
+        HalProgrammableCoreType::TENSIX,
+        sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
+    auto available_cores = corerange_to_cores(available_cores_corerangeset, std::nullopt, true);
+    std::vector<CoreCoord> available_cores_physical;
+    for (auto available_core : available_cores) {
+        auto available_core_physical = device->physical_worker_core_from_logical_core(available_core);
+        available_cores_physical.push_back(available_core_physical);
+    }
 
-        if (forward_fabric_connection.has_value()) {
-            if (forward_fabric_connection->edm_noc_x == 18) {
-                sender_worker_cores.push_back(CoreCoord(0, 3));
-            } else if (forward_fabric_connection->edm_noc_x == 19) {
-                sender_worker_cores.push_back(CoreCoord(1, 3));
-            } else if (forward_fabric_connection->edm_noc_x == 24) {
-                sender_worker_cores.push_back(CoreCoord(5, 3));
-            } else if (forward_fabric_connection->edm_noc_x == 25) {
-                sender_worker_cores.push_back(CoreCoord(6, 3));
-            }
-        } else if (backward_fabric_connection.has_value()) {
-            if (backward_fabric_connection->edm_noc_x == 18) {
-                sender_worker_cores.push_back(CoreCoord(0, 3));
-            } else if (backward_fabric_connection->edm_noc_x == 19) {
-                sender_worker_cores.push_back(CoreCoord(1, 3));
-            } else if (backward_fabric_connection->edm_noc_x == 24) {
-                sender_worker_cores.push_back(CoreCoord(5, 3));
-            } else if (backward_fabric_connection->edm_noc_x == 25) {
-                sender_worker_cores.push_back(CoreCoord(6, 3));
-            } else {
-                TT_THROW(
-                    "Not valid core {} {}",
-                    backward_fabric_connection->edm_noc_x,
-                    backward_fabric_connection->edm_noc_y);
+    // if (device->id() == 4)
+    // tt::log_info("available_cores_physical: {}", available_cores_physical);
+
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    CoreCoord right_col_compute_core_physical =
+        device->physical_worker_core_from_logical_core(CoreCoord(num_cores_x - 1, 0));
+    // Get all logical cores in the worker grid
+    std::vector<CoreCoord> compute_cores_logical;
+    for (int i = 0; i < num_cores_x; ++i) {
+        for (int j = 0; j < num_cores_y; ++j) {
+            compute_cores_logical.push_back(CoreCoord(i, j));
+        }
+    }
+
+    // get reserved core placement
+    std::vector<CoreCoord> reserved_cores_physical;
+    if (reserved_cores.has_value()) {
+        auto reserved_cores_vector = corerange_to_cores(reserved_cores.value(), std::nullopt, true);
+        for (auto reserved_core : reserved_cores_vector) {
+            auto reserved_core_physical = device->physical_worker_core_from_logical_core(reserved_core);
+            reserved_cores_physical.push_back(reserved_core_physical);
+        }
+    }
+
+    // if (device->id() == 4)
+    // tt::log_info("reserved_cores_physical: {}", reserved_cores_physical);
+
+    // get FD core placement
+    std::vector<CoreCoord> occupied_cores_in_column_physical;
+    auto full_grid_size = device->grid_size();
+    uint32_t full_grid_size_x = full_grid_size.x;
+    uint32_t full_grid_size_y = full_grid_size.y;
+    for (uint32_t grid_y = 0; grid_y < full_grid_size_y; ++grid_y) {
+        for (uint32_t grid_x = 0; grid_x < full_grid_size_x; ++grid_x) {
+            auto core_physical = CoreCoord(grid_x, grid_y);
+            if (core_physical.x > right_col_compute_core_physical.x) {
+                occupied_cores_in_column_physical.push_back(core_physical);
             }
         }
     }
 
-    std::set<CoreRange> all_cores_set;
-    for (int i = 0; i < sender_worker_cores.size(); ++i) {
-        all_cores_set.insert(CoreRange(sender_worker_cores[i]));
-    }
-    CoreRangeSet sender_worker_core_range = CoreRangeSet(all_cores_set);
+    for (uint32_t link = 0; link < num_links; link++) {
+        auto core_virtual = ethernet_cores_virtual[link];
+        CoreCoord eth_core_physical;
+        eth_core_physical.x = core_virtual.x >= 22 ? (core_virtual.x - 16) : (core_virtual.x - 17);
+        eth_core_physical.y = (core_virtual.y - 16) * 6;
 
-    return {sender_worker_core_range, sender_worker_cores};
+        // shift down the worker core
+        auto worker_core_physical = CoreCoord(eth_core_physical.x, eth_core_physical.y + 1);
+
+        // check the reserved cores
+        uint32_t start_core_y = worker_core_physical.y;
+        uint32_t end_core_y = num_cores_y;
+        for (uint32_t core_y = start_core_y; core_y < end_core_y; ++core_y) {
+            auto it = std::find(reserved_cores_physical.begin(), reserved_cores_physical.end(), worker_core_physical);
+
+            auto it_subdevice =
+                std::find(available_cores_physical.begin(), available_cores_physical.end(), worker_core_physical);
+
+            worker_core_physical.y = core_y;
+
+            // if (device->id() == 4)
+            // tt::log_info("worker_core_physical: {}", worker_core_physical);
+
+            if (it == reserved_cores_physical.end() && it_subdevice != available_cores_physical.end()) {  // not find
+                break;
+            }
+        }
+        auto it_subdevice =
+            std::find(available_cores_physical.begin(), available_cores_physical.end(), worker_core_physical);
+        auto it = std::find(reserved_cores_physical.begin(), reserved_cores_physical.end(), worker_core_physical);
+        TT_FATAL(
+            it == reserved_cores_physical.end() && it_subdevice != available_cores_physical.end(),
+            "iter 1 worker core cannot find a coord to be placed");
+
+        sender_worker_cores_physical.push_back(worker_core_physical);
+    }
+
+    // check the occupied the columns by FD
+    auto it = std::find(
+        occupied_cores_in_column_physical.begin(),
+        occupied_cores_in_column_physical.end(),
+        sender_worker_cores_physical[num_links - 1]);
+    if (it != occupied_cores_in_column_physical.end()) {  // find, shift core left by 1
+        sender_worker_cores_physical[num_links - 1].x -= 1;
+        // shift down the worker core
+        auto worker_core_physical = sender_worker_cores_physical[num_links - 1];
+        // check the reserved cores
+        uint32_t start_core_y = worker_core_physical.y;
+        uint32_t end_core_y = num_cores_y;
+        for (uint32_t core_y = start_core_y; core_y < end_core_y; ++core_y) {
+            auto it_subdevice =
+                std::find(available_cores_physical.begin(), available_cores_physical.end(), worker_core_physical);
+            auto it = std::find(reserved_cores_physical.begin(), reserved_cores_physical.end(), worker_core_physical);
+            auto it2 = std::find(
+                sender_worker_cores_physical.begin(), sender_worker_cores_physical.end(), worker_core_physical);
+
+            worker_core_physical.y = core_y;
+            if (it == reserved_cores_physical.end() && it2 == sender_worker_cores_physical.end() &&
+                it_subdevice != available_cores_physical.end()) {  // not find
+                break;
+            }
+        }
+        auto it_subdevice =
+            std::find(available_cores_physical.begin(), available_cores_physical.end(), worker_core_physical);
+        auto it = std::find(reserved_cores_physical.begin(), reserved_cores_physical.end(), worker_core_physical);
+        auto it2 =
+            std::find(sender_worker_cores_physical.begin(), sender_worker_cores_physical.end(), worker_core_physical);
+        TT_FATAL(
+            it == reserved_cores_physical.end() && it2 == sender_worker_cores_physical.end() &&
+                it_subdevice != available_cores_physical.end(),
+            "iter 2 worker core cannot find a coord to be placed");
+
+        sender_worker_cores_physical[num_links - 1] = worker_core_physical;
+    }
+
+    // Convert to physical worker coordinates to logical.
+    for (int i = 0; i < sender_worker_cores_physical.size(); ++i) {
+        for (int j = 0; j < compute_cores_logical.size(); ++j) {
+            auto core = device->physical_worker_core_from_logical_core(compute_cores_logical[j]);
+            if (sender_worker_cores_physical[i] == core) {
+                sender_worker_cores.push_back(compute_cores_logical[j]);
+            }
+        }
+    }
+
+    if (device->id() == 35) {
+        tt::log_info("dev {} sender_worker_cores: {}", device->id(), sender_worker_cores);
+    }
+
+    // sender_worker_cores.clear();
+    // sender_worker_cores.push_back(CoreCoord(7,2));
+    // sender_worker_cores.push_back(CoreCoord(7,3));
+    // sender_worker_cores.push_back(CoreCoord(7,4));
+    // sender_worker_cores.push_back(CoreCoord(7,5));
+    //
+
+    // if (device->id() == 4) {
+    //     sender_worker_cores.push_back(CoreCoord(0,5));
+    //     sender_worker_cores.push_back(CoreCoord(1,5));
+    //     sender_worker_cores.push_back(CoreCoord(6,5));
+    //     sender_worker_cores.push_back(CoreCoord(7,5));
+    // } else {
+    //     sender_worker_cores.push_back(CoreCoord(0,3));
+    //     sender_worker_cores.push_back(CoreCoord(1,3));
+    //     sender_worker_cores.push_back(CoreCoord(6,3));
+    //     sender_worker_cores.push_back(CoreCoord(7,3));
+    // }
+
+    // if (device->id() == 4)
+    // tt::log_info("sender_worker_cores: {}", sender_worker_cores);
+
+    std::set<CoreRange> sender_worker_cores_set;
+    for (int i = 0; i < sender_worker_cores.size(); ++i) {
+        sender_worker_cores_set.insert(CoreRange(sender_worker_cores[i]));
+    }
+    CoreRangeSet sender_worker_corerangeset = CoreRangeSet(sender_worker_cores_set);
+
+    return {sender_worker_corerangeset, sender_worker_cores};
 }
 
 operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers(
@@ -158,6 +307,15 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
     std::optional<std::vector<CoreCoord>> backward_ethernet_cores =
         reorder_ethernet_cores(device, backward_device, num_links);
 
+    // std::optional<ttnn::ccl::EdmLineFabricOpInterface> local_fabric_handle =
+    //     ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
+    //         device,
+    //         forward_device.value_or(nullptr),
+    //         backward_device.value_or(nullptr),
+    //         &program,
+    //         enable_persistent_fabric_mode,
+    //         num_links,
+    //         std::array{forward_ethernet_cores, backward_ethernet_cores});
     std::optional<ttnn::ccl::EdmLineFabricOpInterface> local_fabric_handle =
         ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
             device,
@@ -165,8 +323,7 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
             backward_device.value_or(nullptr),
             &program,
             enable_persistent_fabric_mode,
-            num_links,
-            std::array{forward_ethernet_cores, backward_ethernet_cores});
+            num_links);
 
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors = {input_tensor};
@@ -192,54 +349,20 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
     // Get worker cores, assuming 1 worker per link
     std::optional<CoreRangeSet> reserved_cores = output_tensor_cores;
     uint32_t num_workers_per_link = 1;
-    // const auto [sender_worker_core_range, sender_worker_cores] = choose_worker_cores(
-    //     num_links, num_workers_per_link, enable_persistent_fabric_mode, device, sub_device_id, reserved_cores);
 
-    std::vector<CoreCoord> edm_coords;
-    edm_coords.push_back(CoreCoord(19, 17));
-    edm_coords.push_back(CoreCoord(24, 17));
-    edm_coords.push_back(CoreCoord(18, 17));
-    edm_coords.push_back(CoreCoord(25, 17));
-    edm_coords.push_back(CoreCoord(19, 16));
-    edm_coords.push_back(CoreCoord(24, 16));
-    edm_coords.push_back(CoreCoord(18, 16));
-    edm_coords.push_back(CoreCoord(25, 16));
+    TT_FATAL(
+        backward_ethernet_cores.has_value() || forward_ethernet_cores.has_value(),
+        "at least one dir need to have eth cores");
+    TT_FATAL(reserved_cores.has_value(), "reserved core no value");
 
-    auto [sender_worker_core_range, sender_worker_cores] =
-        get_optimal_worker_core_placement(device, line_topology, local_fabric_handle, num_links);
+    std::vector<CoreCoord> ethernet_cores_virtual =
+        compute_top_row_ethernet_cores(device, forward_ethernet_cores, backward_ethernet_cores);
+    // tt::log_info("dev {} ethernet_cores: {}", device->id(), ethernet_cores_virtual);
+    // auto [sender_worker_core_range, sender_worker_cores] =
+    //     get_optimal_worker_core_placement(device, ethernet_cores_virtual, reserved_cores, num_links, sub_device_id);
 
-    // std::vector<CoreCoord> sender_worker_cores;
-    // sender_worker_cores.push_back(CoreCoord(0, 3));
-    // sender_worker_cores.push_back(CoreCoord(1, 3));
-    // sender_worker_cores.push_back(CoreCoord(5, 3));
-    // sender_worker_cores.push_back(CoreCoord(6, 3));
-
-    // std::set<CoreRange> all_cores_set;
-    // for (int i = 0; i < sender_worker_cores.size(); ++i) {
-    //     all_cores_set.insert(CoreRange(sender_worker_cores[i]));
-    // }
-    // CoreRangeSet sender_worker_core_range = CoreRangeSet(all_cores_set);
-
-    // for (uint32_t link = 0; link < num_links; link++) {
-    //     std::optional<ttnn::ccl::SenderWorkerAdapterSpec> forward_fabric_connection =
-    //         line_topology.is_first_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD)
-    //             ? std::nullopt
-    //             : std::optional<ttnn::ccl::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
-    //                     device, ttnn::ccl::EdmLineFabricOpInterface::FORWARD));
-
-    //     std::optional<ttnn::ccl::SenderWorkerAdapterSpec> backward_fabric_connection =
-    //         line_topology.is_last_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD)
-    //             ? std::nullopt
-    //             : std::optional<ttnn::ccl::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
-    //                   device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
-
-    //     // if (!forward_fabric_connection.has_value()){
-    //     //     TT_THROW("no forward connect");
-    //     // }
-    //     if (!backward_fabric_connection.has_value()){
-    //         TT_THROW("no backward connect");
-    //     }
-    // }
+    const auto [sender_worker_core_range, sender_worker_cores] = choose_worker_cores(
+        num_links, num_workers_per_link, enable_persistent_fabric_mode, device, sub_device_id, reserved_cores);
 
     tt::log_debug(tt::LogOp, "input_tensor_num_pages: {}", input_tensor_num_pages);
     tt::log_debug(tt::LogOp, "input_tensor_cores: {}", input_tensor_cores);
@@ -402,26 +525,25 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
 
     // KERNEL CREATION
     // Reader
-    auto reader_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
-    reader_kernel_config.compile_args = {
+    std::vector<uint32_t> reader_compile_args = {
         ring_index,                 // my_chip_id
         src0_cb_index,              // cb0_id
         op_config.get_page_size(),  // tensor0_page_size
     };
     log_trace(tt::LogOp, "Reader Compile Args:");
-    for (const auto& arg : reader_kernel_config.compile_args) {
-        log_trace(tt::LogOp, "\t{}", arg);
-    }
     auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device/kernels/dataflow/"
         "worker_reader.cpp",
         sender_worker_core_range,
-        reader_kernel_config);
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .compile_args = reader_compile_args});
 
     // Writer
     auto writer_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
-    writer_kernel_config.compile_args = {
+    std::vector<uint32_t> writer_compile_args = {
         ring_index,                       // my_chip_id
         reserved_packet_header_CB_index,  // reserved_packet_header_cb_id
         num_packet_headers_storable,      // num_packet_headers_storable
@@ -432,15 +554,17 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
         num_targets_backward,             // num_targets_backward_direction
     };
     log_trace(tt::LogOp, "Writer Compile Args:");
-    for (const auto& arg : writer_kernel_config.compile_args) {
-        log_trace(tt::LogOp, "\t{}", arg);
-    }
+    // writer_kernel_config.DataMovementConfig.processor = NOC::RISCV_0;
+    // writer_kernel_config.DataMovementConfig.noc = NOC::RISCV_0_default;
     auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device/kernels/dataflow/"
         "worker_writer.cpp",
         sender_worker_core_range,
-        writer_kernel_config);
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = writer_compile_args});
 
     // Kernel Runtime Args
     for (uint32_t link = 0; link < num_links; link++) {
@@ -479,7 +603,7 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
                 : std::optional<ttnn::ccl::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
                       device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
 
-        if (device->id() == 5) {
+        if (device->id() == 4) {
             tt::log_info("core: {}", core);
             if (forward_fabric_connection.has_value()) {
                 tt::log_info(
