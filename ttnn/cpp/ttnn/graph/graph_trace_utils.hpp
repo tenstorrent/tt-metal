@@ -24,6 +24,8 @@ std::pair<uint32_t, uint32_t> count_intermediate_and_output_tensors(const nlohma
 
 std::vector<std::string> extract_calltrace(const nlohmann::json& trace);
 
+std::vector<std::vector<std::string>> extract_arguments(const nlohmann::json& trace);
+
 std::unordered_set<uint32_t> extract_output_tensors(const nlohmann::json& trace);
 
 struct TensorInfo {

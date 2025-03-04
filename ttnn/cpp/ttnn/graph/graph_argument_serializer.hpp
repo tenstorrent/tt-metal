@@ -11,29 +11,36 @@
 #include <unordered_map>
 
 namespace ttnn::graph {
-std::string graph_demangle(const char* name);
+std::string graph_demangle(const std::string_view& name);
 
-struct GraphArgumentSerializer {
+class GraphArgumentSerializer {
+public:
     using ConvertionFunction = std::function<std::string(const std::any&)>;
+    std::vector<std::string> to_list(const std::span<std::any>& span);
 
-    static std::unordered_map<std::type_index, ConvertionFunction>& registry();
+    static GraphArgumentSerializer* instance();
+
+private:
+    GraphArgumentSerializer();
+    std::unordered_map<std::type_index, ConvertionFunction>& registry();
 
     template <typename T, std::size_t N>
-    static void register_small_vector();
+    void register_small_vector();
 
     // In case you don't care about all the variations of the type
     // such as const T, const T&, T, T&, etc
     template <typename T>
-    static void register_special_type();
+    void register_special_type();
 
     template <typename T>
-    static void register_type();
+    void register_type();
 
     template <typename OptionalT>
-    static void register_optional_type();
+    void register_optional_type();
 
-    static std::vector<std::string> to_list(const std::span<std::any>& span);
+    void initialize();
 
-    static void initialize();
+private:
+    std::unordered_map<std::type_index, GraphArgumentSerializer::ConvertionFunction> map;
 };
 }  // namespace ttnn::graph
