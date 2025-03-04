@@ -51,7 +51,7 @@ struct ExecuteAllReduceAsync {
         const std::optional<ttnn::MemoryConfig>& memory_config,
         ttnn::ccl::Topology topology,
         const std::optional<size_t> num_preferred_links,
-        std::optional<SubDeviceId> worker_subdevice_id_opt);
+        std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt);
 };
 
 }  // namespace ccl

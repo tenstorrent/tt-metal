@@ -34,7 +34,7 @@ struct AllReduceAsync {
     const MemoryConfig output_mem_config;
     const ccl::Topology topology;
     const GlobalSemaphore semaphore;
-    std::optional<SubDeviceId> sub_device_id;
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     bool enable_persistent_fabric_mode;
 
     AllReduceAsync(
@@ -46,7 +46,7 @@ struct AllReduceAsync {
         MemoryConfig output_mem_config,
         ccl::Topology topology,
         GlobalSemaphore semaphore,
-        std::optional<SubDeviceId>& sub_device_id,
+        std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
         bool enable_persistent_fabric_mode) :
         forward_device(forward_device),
         backward_device(backward_device),
@@ -76,9 +76,9 @@ struct AllReduceAsync {
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
-    operation::ProgramWithCallbacks create_program(
+    tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
-    const operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
+    const tt::tt_metal::operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
 };
 
 namespace ccl {
@@ -90,14 +90,14 @@ AllReduceAsync create_all_reduce_async_struct(
     const std::vector<IDevice*>& devices,
     const ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphores,
-    std::optional<SubDeviceId> sub_device_id,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     bool enable_persistent_fabric_mode);
 
 uint32_t find_scatter_dim(const ttnn::Shape& input_tensor_padded_shape, size_t num_workers);
 }  // namespace all_reduce_async_detail
 }  // namespace ccl
 
-operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers(
+tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers(
     const Tensor& input_tensor,
     const Tensor& all_gather_output_tensor,
     std::optional<IDevice*> forward_device,
@@ -108,7 +108,7 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
     const uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
-    const std::optional<SubDeviceId>& sub_device_id,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode);
 
 namespace operations {
@@ -124,7 +124,7 @@ Tensor all_reduce_async(
     const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<size_t> num_preferred_links = std::nullopt,
-    std::optional<SubDeviceId> sub_device_id = std::nullopt,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
     bool enable_persistent_fabric_mode = false);
 
 }  // namespace ccl
