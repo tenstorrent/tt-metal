@@ -496,25 +496,95 @@ def test_conv_features_multi_device(
 
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-@pytest.mark.parametrize("stride", [1])
 @pytest.mark.parametrize(
-    "output_channels, input_channels, input_height, input_width, filter_height, filter_width, pad_h, pad_w, act_block_w_div",
+    "input_channels, output_channels, input_height, input_width, slice_height, slice_size, weights_dtype, activations_dtype, kernel, stride, padding, dilation, input_channels_alignment, act_block_h_override,  math_fidelity, fp32_accum, packer_l1_acc",
     (
-        (64, 32, 128, 128, 3, 3, 1, 1, 1),
-        (64, 32, 1024, 1024, 3, 3, 1, 1, 1),
+        # (10, 64, 4096,  512, True,    2, ttnn.bfloat8_b, ttnn.bfloat8_b, (4, 4), (2, 2), (1, 1), (1, 1), 16, 32*64, ttnn.MathFidelity.LoFi, True, False),
+        (
+            64,
+            64,
+            2048,
+            256,
+            True,
+            32,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            (4, 4),
+            (2, 2),
+            (1, 1),
+            (1, 1),
+            32,
+            32 * 16,
+            ttnn.MathFidelity.LoFi,
+            True,
+            False,
+        ),
+        (
+            64,
+            64,
+            1024,
+            128,
+            True,
+            32,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            (4, 4),
+            (2, 2),
+            (1, 1),
+            (1, 1),
+            32,
+            0,
+            ttnn.MathFidelity.LoFi,
+            True,
+            False,
+        ),
+        (
+            64,
+            64,
+            512,
+            64,
+            True,
+            128,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            (4, 4),
+            (2, 2),
+            (1, 1),
+            (1, 1),
+            32,
+            0,
+            ttnn.MathFidelity.LoFi,
+            True,
+            False,
+        ),
+        # ( 4, 32, 1024, 1024, True,    2, ttnn.bfloat8_b, ttnn.bfloat8_b, (5, 5), (1, 1), (0, 0), (1, 1), 16, 32*6,  ttnn.MathFidelity.LoFi, True, False),
+        # (32, 48, 1020, 1020,   False,   8, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (0, 0), (2, 2), 32, 32*4, ttnn.MathFidelity.LoFi, True, False), #Concat Error
+        # (48, 56, 1016, 1016,   False,   16, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (0, 0), (4, 4), 32, 32*4,  ttnn.MathFidelity.LoFi, True, False), #Concat Error
+        (
+            56,
+            64,
+            1008,
+            1008,
+            False,
+            4,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            (3, 3),
+            (1, 1),
+            (0, 0),
+            (8, 8),
+            32,
+            0,
+            ttnn.MathFidelity.LoFi,
+            True,
+            False,
+        ),  # pcc if act_block_h_override, 6 slices ...
+        # (64, 128, 992,  992,   False,   8, ttnn.bfloat8_b, ttnn.bfloat8_b, (2, 2), (1, 1), (0, 0), (1, 1), 32, 32*4,  ttnn.MathFidelity.LoFi, True, False), #Concat Error.
     ),
 )
 @pytest.mark.parametrize(
     "has_bias",
     [True],
-)
-@pytest.mark.parametrize(
-    "weights_dtype",
-    [ttnn.bfloat16],
-)
-@pytest.mark.parametrize(
-    "activations_dtype",
-    [ttnn.bfloat16],
 )
 def test_conv_dram(
     device,
@@ -523,15 +593,20 @@ def test_conv_dram(
     input_channels,
     input_height,
     input_width,
-    filter_height,
-    filter_width,
-    pad_h,
-    pad_w,
-    act_block_w_div,
-    stride,
+    slice_size,
     has_bias,
     weights_dtype,
     activations_dtype,
+    slice_height,
+    kernel,
+    stride,
+    padding,
+    dilation,
+    input_channels_alignment,
+    act_block_h_override,
+    math_fidelity,
+    fp32_accum,
+    packer_l1_acc,
 ):
     if is_grayskull():
         if input_channels >= 2048:
@@ -539,8 +614,10 @@ def test_conv_dram(
         if input_channels >= 768 and input_height >= 10:
             pytest.skip("Skipping on grayskull due to insufficient L1")
 
-    stride_h = stride
-    stride_w = stride
+    filter_height = kernel[0]
+    filter_width = kernel[1]
+    stride_h = stride[0]
+    stride_w = stride[1]
     batch_size = 2
     deallocate_activation = False
     debug = False
@@ -569,9 +646,10 @@ def test_conv_dram(
         torch_input_tensor_nchw,
         torch_weight_tensor,
         bias=torch_bias_tensor,
-        stride=(stride_h, stride_w),
-        padding=(pad_h, pad_w),
-        groups=groups,
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+        groups=1,
     )
     output_shape_nhwc = [
         ref.shape[0],
@@ -587,13 +665,21 @@ def test_conv_dram(
 
     tt_input_tensor = ttnn.from_torch(torch_input_tensor, device=device, dtype=ttnn.bfloat16)
     conv_slice_config = ttnn.ConvSliceConfig(
-        slice_output_height=False,
-        output_slice_size=64,
+        slice_output_height=slice_height,
+        output_slice_size=slice_size,
     )
     conv_config = ttnn.Conv2dConfig(
         dtype=activations_dtype,
         weights_dtype=weights_dtype,
-        act_block_h_override=64,
+        act_block_h_override=act_block_h_override,
+        input_channels_alignment=input_channels_alignment,
+    )
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=math_fidelity,
+        fp32_dest_acc_en=fp32_accum,
+        packer_l1_acc=packer_l1_acc,
     )
 
     [tt_output_tensor_on_device, [out_height, out_width]] = ttnn.conv2d(
@@ -604,15 +690,17 @@ def test_conv_dram(
         device=device,
         bias_tensor=tt_bias_tensor,
         kernel_size=(filter_height, filter_width),
-        stride=(stride_h, stride_w),
-        padding=(pad_h, pad_w),
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
         batch_size=batch_size,
         input_height=input_height,
         input_width=input_width,
         conv_config=conv_config,
+        compute_config=compute_config,
         conv_op_cache=reader_patterns_cache,
         debug=debug,
-        groups=groups,
+        groups=1,
         slice_config=conv_slice_config,
         return_output_dim=True,
     )
