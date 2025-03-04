@@ -5,10 +5,31 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
+inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+    DPRINT << "======" << ENDL();
+    for (uint16_t r = 0; r < 32; ++r) {
+        DPRINT << (uint)r << " : "
+               << TileSlice(
+                      cb_id,
+                      tile_id,
+                      SliceRange{
+                          .h0 = (uint8_t)r,
+                          .h1 = (uint8_t)(r + 1),
+                          .hs = (uint8_t)1,
+                          .w0 = (uint8_t)0,
+                          .w1 = (uint8_t)32,
+                          .ws = (uint8_t)1},
+                      true,
+                      untilize)
+               << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
+}
+
 void kernel_main() {
     constexpr bool src_is_dram = (bool)get_compile_time_arg_val(0);
     constexpr uint32_t page_size = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(2);
+    constexpr uint32_t cb_id_in = get_compile_time_arg_val(2);
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t start_tile = get_arg_val<uint32_t>(1);
@@ -16,17 +37,12 @@ void kernel_main() {
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes = get_tile_size(cb_id_in0);
-    const DataFormat data_format = get_dataformat(cb_id_in0);
+    const uint32_t tile_bytes = get_tile_size(cb_id_in);
+    const DataFormat data_format = get_dataformat(cb_id_in);
 
-    const InterleavedAddrGenFast<src_is_dram> s = {
-        .bank_base_address = src_addr, .page_size = tile_bytes, .data_format = data_format};
+    uint64_t input_noc_addr = get_noc_addr(get_read_ptr(cb_id_in));
 
     for (uint32_t tile = start_tile; tile < end_tile; ++tile) {
-        cb_reserve_back(cb_id_in0, onetile);
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-        noc_async_read_tile(tile, s, l1_write_addr);
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in0, onetile);
+        print_full_tile(cb_id_in, tile, true);
     }
 }
