@@ -58,32 +58,28 @@ class TtYOLOv4:
         x20, x13, x6 = self.neck([d5, d4, d3])
         x4, x5, x6 = self.head([x20, x13, x6])
 
-        orig = 0
-        if orig:
-            return x4, x5, x6
-        else:
-            x4_boxes_confs = self.boxes_confs_0(self.device, x4)
-            x5_boxes_confs = self.boxes_confs_1(self.device, x5)
-            x6_boxes_confs = self.boxes_confs_2(self.device, x6)
+        x4_boxes_confs = self.boxes_confs_0(self.device, x4)
+        x5_boxes_confs = self.boxes_confs_1(self.device, x5)
+        x6_boxes_confs = self.boxes_confs_2(self.device, x6)
 
-            confs_1 = ttnn.to_layout(x4_boxes_confs[1], ttnn.ROW_MAJOR_LAYOUT)
-            confs_2 = ttnn.to_layout(x5_boxes_confs[1], ttnn.ROW_MAJOR_LAYOUT)
-            confs_3 = ttnn.to_layout(x6_boxes_confs[1], ttnn.ROW_MAJOR_LAYOUT)
-            confs = ttnn.concat([confs_1, confs_2, confs_3], dim=1)
+        confs_1 = ttnn.to_layout(x4_boxes_confs[1], ttnn.ROW_MAJOR_LAYOUT)
+        confs_2 = ttnn.to_layout(x5_boxes_confs[1], ttnn.ROW_MAJOR_LAYOUT)
+        confs_3 = ttnn.to_layout(x6_boxes_confs[1], ttnn.ROW_MAJOR_LAYOUT)
+        confs = ttnn.concat([confs_1, confs_2, confs_3], dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-            boxes_1 = ttnn.to_layout(x4_boxes_confs[0], ttnn.ROW_MAJOR_LAYOUT)
-            boxes_2 = ttnn.to_layout(x5_boxes_confs[0], ttnn.ROW_MAJOR_LAYOUT)
-            boxes_3 = ttnn.to_layout(x6_boxes_confs[0], ttnn.ROW_MAJOR_LAYOUT)
-            boxes_1 = ttnn.reshape(boxes_1, (1, 4, 1, 4800))
-            boxes_2 = ttnn.reshape(boxes_2, (1, 4, 1, 1200))
-            boxes_3 = ttnn.pad(boxes_3, ((0, 0), (0, 0), (0, 0), (0, 28)), 0)
-            boxes_3 = ttnn.reshape(boxes_3, (1, 4, 1, 384))
-            boxes_1 = ttnn.permute(boxes_1, (0, 2, 3, 1))
-            boxes_2 = ttnn.permute(boxes_2, (0, 2, 3, 1))
-            boxes_3 = ttnn.permute(boxes_3, (0, 2, 3, 1))
-            boxes = ttnn.concat([boxes_1, boxes_2, boxes_3], dim=2)
+        boxes_1 = ttnn.to_layout(x4_boxes_confs[0], ttnn.ROW_MAJOR_LAYOUT)
+        boxes_2 = ttnn.to_layout(x5_boxes_confs[0], ttnn.ROW_MAJOR_LAYOUT)
+        boxes_3 = ttnn.to_layout(x6_boxes_confs[0], ttnn.ROW_MAJOR_LAYOUT)
+        boxes_1 = ttnn.reshape(boxes_1, (1, 4, 1, 4800))
+        boxes_2 = ttnn.reshape(boxes_2, (1, 4, 1, 1200))
+        boxes_3 = ttnn.pad(boxes_3, ((0, 0), (0, 0), (0, 0), (0, 28)), 0)
+        boxes_3 = ttnn.reshape(boxes_3, (1, 4, 1, 384))
+        boxes_1 = ttnn.permute(boxes_1, (0, 2, 3, 1))
+        boxes_2 = ttnn.permute(boxes_2, (0, 2, 3, 1))
+        boxes_3 = ttnn.permute(boxes_3, (0, 2, 3, 1))
+        boxes = ttnn.concat([boxes_1, boxes_2, boxes_3], dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-            return boxes, confs
+        return boxes, confs
 
     def __str__(self) -> str:
         this_str = ""
