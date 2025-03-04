@@ -243,9 +243,11 @@ def test_batch_norm_fp32(
 @pytest.mark.parametrize(
     "input_shapes",
     [
-        *(torch.Size([n, c, 32, 32]) for n, c in product([3, 4], [3, 4])),
-        *(torch.Size([n, c, 23, 23]) for n, c in product([3, 4], [3, 4])),
-        *(torch.Size([n, c, 64, 120]) for n, c in product([2, 3], [3, 4])),
+        *(torch.Size([n, c, 32, 32]) for n, c in product([1, 2, 3, 4, 5], [1, 2, 3, 4, 5, 6, 7, 8])),
+        *(torch.Size([n, c, 23, 23]) for n, c in product([1, 2, 3, 4, 5], [1, 2, 3, 4, 5, 6, 7, 8])),
+        *(torch.Size([n, c, 64, 120]) for n, c in product([1, 2, 3, 4, 5], [1, 2, 3, 4, 5, 6, 7, 8])),
+        *(torch.Size([n, c, 1024, 1024]) for n, c in product([1, 2, 3, 4, 5], [1, 2, 3, 4, 5, 6, 7, 8])),
+        torch.Size([3, 6, 4096, 4096]),
     ],
 )
 @pytest.mark.parametrize(
