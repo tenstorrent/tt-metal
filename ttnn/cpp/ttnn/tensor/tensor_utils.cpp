@@ -160,7 +160,12 @@ void insert_buffer_and_shape_for_device(
                 s.insert_buffer(std::get<OwnedStorage>(shard.tensor_attributes->storage).get_buffer());
             } else if constexpr (std::is_same_v<T, DeviceStorage>) {
                 TT_FATAL(shard.storage_type() == StorageType::DEVICE, "Shard must be a device tensor");
-                s.insert_buffer(std::get<DeviceStorage>(shard.tensor_attributes->storage).get_buffer());
+                auto& shard_storage = std::get<DeviceStorage>(shard.tensor_attributes->storage);
+                if (shard_storage.mesh_buffer) {
+                    s.mesh_buffer = shard_storage.mesh_buffer;
+                } else {
+                    s.insert_buffer(shard_storage.buffer);
+                }
             } else {
                 TT_THROW("Unsupported storage in insert_buffer_and_shape_for_device");
             }

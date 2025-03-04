@@ -177,13 +177,12 @@ std::shared_ptr<distributed::MeshBuffer> allocate_mesh_buffer_on_device(
     distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec);
 
 template <typename T>
-void read_data_from_device_buffer(
-    CommandQueue& cq, std::shared_ptr<Buffer> device_buffer, void* host_buffer_data, bool blocking) {
+void read_data_from_device_buffer(CommandQueue& cq, Buffer& device_buffer, void* host_buffer_data, bool blocking) {
     EnqueueReadBuffer(cq, device_buffer, host_buffer_data, blocking);
 }
 
 template <typename T>
-void read_data_from_device_buffer(std::shared_ptr<Buffer> device_buffer, std::vector<T>& host_buffer) {
+void read_data_from_device_buffer(Buffer& device_buffer, std::vector<T>& host_buffer) {
     ::tt::tt_metal::detail::ReadFromBuffer(device_buffer, host_buffer);
 }
 

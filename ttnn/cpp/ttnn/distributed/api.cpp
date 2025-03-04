@@ -157,27 +157,6 @@ DistributedTensorConfig get_distributed_tensor_config_from_tensor(const Tensor& 
     TT_THROW("Tensor is not a multi-device tensor");
 }
 
-Tensor get_device_tensor(const Tensor& multi_device_tensor, const int device_id) {
-    if (std::holds_alternative<tt::tt_metal::DeviceStorage>(multi_device_tensor.get_storage())) {
-        const auto& device_storage = std::get<tt::tt_metal::DeviceStorage>(multi_device_tensor.get_storage());
-
-        auto* mesh_device = multi_device_tensor.mesh_device();
-        TT_FATAL(mesh_device != nullptr, "Tensor is not a mesh tensor");
-        auto mesh_buffer = device_storage.get_mesh_buffer();
-        auto mesh_coordinate = mesh_device->get_view().find_device(device_id);
-
-        auto device_buffer = mesh_buffer->get_device_buffer(mesh_coordinate);
-        auto tensor_spec = multi_device_tensor.get_tensor_spec();
-        return Tensor{DeviceStorage{device_buffer}, tensor_spec};
-    }
-
-    TT_THROW("User is trying to access a device tensor that is not on device.");
-}
-
-Tensor get_device_tensor(const Tensor& multi_device_tensor, const IDevice* device) {
-    return get_device_tensor(multi_device_tensor, device->id());
-}
-
 bool is_host_mesh_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::MULTI_DEVICE_HOST; }
 
 bool is_multi_device_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::MULTI_DEVICE_HOST; }

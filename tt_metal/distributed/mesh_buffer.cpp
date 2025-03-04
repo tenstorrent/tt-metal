@@ -163,8 +163,8 @@ MeshDevice* MeshBuffer::device() const {
     return device.get();
 }
 
-const std::shared_ptr<Buffer>& MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const {
-    return buffers_.at(device_coord);
+Buffer* MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const {
+    return buffers_.at(device_coord).get();
 }
 
 DeviceAddr MeshBuffer::size() const {

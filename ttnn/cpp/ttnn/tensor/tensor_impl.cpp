@@ -512,7 +512,7 @@ std::string to_string<bfloat4_b>(
 template <typename T>
 Tensor to_host_helper(const Tensor& tensor, bool blocking = true, ttnn::QueueId cq_id = ttnn::DefaultQueueId) {
     TT_ASSERT(tensor.is_allocated(), "Buffer must be allocated on device!");
-    auto device_buffer = tensor.device_buffer();
+    auto device_buffer = tensor.buffer();
     auto device = tensor.device();
     TT_ASSERT(device != nullptr && "Need device to be set copy data from device to host!");
     uint32_t size_in_bytes = device_buffer->size();
@@ -520,9 +520,9 @@ Tensor to_host_helper(const Tensor& tensor, bool blocking = true, ttnn::QueueId 
     const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
         data_vec.resize(size_in_bytes / sizeof(T));
-        read_data_from_device_buffer<T>(device->command_queue(*cq_id), device_buffer, data_vec.data(), blocking);
+        read_data_from_device_buffer<T>(device->command_queue(*cq_id), *device_buffer, data_vec.data(), blocking);
     } else {
-        read_data_from_device_buffer<T>(device_buffer, data_vec);
+        read_data_from_device_buffer<T>(*device_buffer, data_vec);
     }
     auto output_buffer = owned_buffer::create<T>(std::move(data_vec));
     return Tensor(OwnedStorage{output_buffer}, tensor.get_tensor_spec());
@@ -748,13 +748,6 @@ DeviceStorage shard_to_mesh_buffer(
     distributed::MeshDevice* mesh_device,
     const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
     const TensorSpec& tensor_spec) {
-    std::vector<int> ordered_device_ids;
-    std::unordered_map<int, std::shared_ptr<Buffer>> buffers;
-    std::unordered_map<int, TensorSpec> specs;
-    ordered_device_ids.reserve(storage.buffers.size());
-    buffers.reserve(storage.buffers.size());
-    specs.reserve(storage.buffers.size());
-
     const auto& mesh_shape = mesh_device->shape();
     TT_FATAL(
         storage.buffers.size() <= mesh_device->num_devices(),
@@ -774,9 +767,6 @@ DeviceStorage shard_to_mesh_buffer(
         const auto& shard_host_buffer = storage.buffers[i];
 
         const auto& shard_buffer = mesh_buffer->get_device_buffer(*shard_coord);
-        ordered_device_ids.push_back(shard_buffer->device()->id());
-        buffers.insert({shard_buffer->device()->id(), shard_buffer});
-        specs.insert({shard_buffer->device()->id(), shard_tensor_spec});
 
         auto data_to_write = host_buffer::get_as<T>(shard_host_buffer);
         const auto expected_packed_buffer_size_bytes = shard_tensor_spec.compute_packed_buffer_size_bytes();

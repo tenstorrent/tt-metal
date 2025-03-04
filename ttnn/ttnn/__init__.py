@@ -95,7 +95,6 @@ def manage_config(name, value):
 
 
 from ttnn._ttnn.multi_device import (
-    get_device_tensor,
     get_device_tensors,
     aggregate_as_tensor,
     get_t3k_physical_device_ids_ring,
@@ -226,6 +225,7 @@ from ttnn.core import (
     get_memory_config,
     light_metal_begin_capture,
     light_metal_end_capture,
+    LightMetalReplay,
     create_sharded_memory_config,
     create_sharded_memory_config_,
     dump_memory_config,

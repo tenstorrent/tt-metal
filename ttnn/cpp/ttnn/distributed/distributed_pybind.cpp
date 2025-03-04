@@ -391,42 +391,6 @@ void py_module(py::module& module) {
         py::arg("dispatch_core_config"));
 
     module.def("close_mesh_device", &close_mesh_device, py::arg("mesh_device"), py::kw_only());
-    module.def(
-        "get_device_tensor",
-        py::overload_cast<const Tensor&, int>(&ttnn::distributed::get_device_tensor),
-        py::arg("tensor"),
-        py::arg("device_id"),
-        py::kw_only(),
-        R"doc(
-       Get the tensor shard corresponding to the device_id.
-
-
-       Args:
-           tensor (Tensor): The tensor to get the shard from.
-           device_id (int): The device id to get the shard for.
-
-
-       Returns:
-           Tensor: The shard of the tensor corresponding to the device_id.
-   )doc");
-    module.def(
-        "get_device_tensor",
-        py::overload_cast<const Tensor&, const IDevice*>(&ttnn::distributed::get_device_tensor),
-        py::arg("tensor"),
-        py::arg("device"),
-        py::kw_only(),
-        R"doc(
-       Get the tensor shard corresponding to the device.
-
-
-       Args:
-           tensor (Tensor): The tensor to get the shard from.
-           device (Device): The device to get the shard for.
-
-
-       Returns:
-           Tensor: The shard of the tensor corresponding to the device.
-   )doc");
     module.def("get_device_tensors", &get_device_tensors, py::arg("tensor"), py::kw_only());
     module.def(
         "aggregate_as_tensor",

@@ -284,7 +284,7 @@ void Tensor::populate_buffers_and_metadata(const Tensor& other) {
                 if (storage.mesh_buffer != nullptr) {
                     std::get<DeviceStorage>(this->tensor_attributes->storage).mesh_buffer = storage.mesh_buffer;
                 } else {
-                    std::get<DeviceStorage>(this->tensor_attributes->storage).insert_buffer(storage.get_buffer());
+                    std::get<DeviceStorage>(this->tensor_attributes->storage).insert_buffer(storage.buffer);
                 }
             } else if constexpr (std::is_same_v<
                                      StorageType,
@@ -763,9 +763,9 @@ void memcpy(
     }
 
     if (!region.has_value()) {
-        EnqueueReadBuffer(queue, src.device_buffer(), dst, blocking);
+        EnqueueReadBuffer(queue, *src.buffer(), dst, blocking);
     } else {
-        EnqueueReadSubBuffer(queue, src.device_buffer(), dst, region.value(), blocking);
+        EnqueueReadSubBuffer(queue, *src.buffer(), dst, region.value(), blocking);
     }
 }
 
@@ -810,9 +810,9 @@ void memcpy(CommandQueue& queue, Tensor& dst, const void* src, const std::option
     }
 
     if (!region.has_value()) {
-        EnqueueWriteBuffer(queue, dst.device_buffer(), src, false);
+        EnqueueWriteBuffer(queue, *dst.buffer(), src, false);
     } else {
-        EnqueueWriteSubBuffer(queue, dst.device_buffer(), src, region.value(), false);
+        EnqueueWriteSubBuffer(queue, *dst.buffer(), src, region.value(), false);
     }
 }
 
