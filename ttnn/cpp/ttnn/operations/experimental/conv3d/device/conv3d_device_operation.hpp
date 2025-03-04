@@ -96,22 +96,22 @@ struct Conv3dConfig {
         "compute_with_storage_grid_size");
 
     const auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(this->dtype),
-            std::cref(this->weights_dtype),
-            std::cref(this->output_layout),
-            std::cref(this->T_out_block),
-            std::cref(this->W_out_block),
-            std::cref(this->H_out_block),
-            std::cref(this->C_out_block),
-            std::cref(this->C_in_block),
-            std::cref(this->output_channels),
-            std::cref(this->kernel_size),
-            std::cref(this->stride),
-            std::cref(this->padding),
-            std::cref(this->padding_mode),
-            std::cref(this->groups),
-            std::cref(this->compute_with_storage_grid_size));
+        return std::forward_as_tuple(
+            this->dtype,
+            this->weights_dtype,
+            this->output_layout,
+            this->T_out_block,
+            this->W_out_block,
+            this->H_out_block,
+            this->C_out_block,
+            this->C_in_block,
+            this->output_channels,
+            this->kernel_size,
+            this->stride,
+            this->padding,
+            this->padding_mode,
+            this->groups,
+            this->compute_with_storage_grid_size);
     }
 };
 
