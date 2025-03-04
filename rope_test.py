@@ -69,34 +69,58 @@ class TtLlamaRotary(torch.nn.Module):
 
         return rotary_output_q, rotary_output_k
 
-    def forward(self, xq, xk, cos, sin):
-        # if self.fuse_qk:
-        #     xq, xk = self.apply_fused_rotary(xq, xk, cos, sin)
-        # else:
+    def forward(self, xq, cos, sin):
         xq = self.apply_rotary(xq, cos, sin)
-        xk = self.apply_rotary(xk, cos, sin)
-        return xq, xk
+        return xq
 
 
-def jay_test(device):
+def dump_xtensor(name, x):
+    try:
+        l = x.tolist()
+    except Exception:
+        l = x.item()  # For scalar tensors
+
+    def recursive_format(x):
+        if isinstance(x, list):
+            return "{" + ", ".join(recursive_format(item) for item in x) + "}"
+        else:
+            return f"{float(x):.5f}F"
+
+    tensor_str = recursive_format(l)
+    return f"xt::xarray<float> {name} = {tensor_str};"
+
+
+def rope_test(device):
     batch = 1
+    n_heads = 2
     seq_len = 5
-    n_heads = 1
     head_dim = 32
     torch.manual_seed(42)
-    xq = ttnn.from_torch(torch.randn(2, 5, 32))
-    xk = ttnn.from_torch(torch.randn(2, 5, 32))
+
+    def on_l1(x):
+        return ttnn.from_torch(
+            x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+
+    xq = ttnn.from_torch(
+        torch.ones(batch, n_heads, seq_len, head_dim),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
     cos, sin = compute_gather_cos_sin(
         dhead=head_dim,
         end=seq_len,
         position_ids=torch.arange(0, seq_len),
     )
-    import ipdb
-
-    ipdb.set_trace()
+    # print(dump_xtensor("cos", cos))
+    # print(dump_xtensor("sin", sin))
     tt_model = TtLlamaRotary(device, head_dim, ttnn.bfloat16)
-    tt_out = tt_model(xq, xk, ttnn.from_torch(cos), ttnn.from_torch(sin))
-    print(tt_out)
+    # trans_mat = get_rot_transformation_mat(dhead=ttnn.TILE_SIZE)
+    # print(dump_xtensor("expected_trans_mat", trans_mat))
+    tt_out = tt_model(xq, on_l1(cos), on_l1(sin))
+    print(dump_xtensor("expected_out", tt_out.cpu().to_torch()))
 
 
-jay_test(ttnn.open_device(device_id=0))
+rope_test(ttnn.open_device(device_id=0))
