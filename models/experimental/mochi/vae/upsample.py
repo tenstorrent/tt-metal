@@ -102,8 +102,8 @@ class TtCausalUpsampleBlock(LightweightModule):
                     x_tensors[i] = ttnn.slice(
                         x_tensors[i], [0, texp - 1, 0, 0, 0], [B, T * texp, H * sexp, W * sexp, self.out_channels]
                     )
-                    x = ttnn.aggregate_as_tensor(x_tensors)
                     # TODO: This messes up the shape of the tensor...
+
             x = ttnn.aggregate_as_tensor(x_tensors)
             return x
 
