@@ -267,7 +267,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 #############################################################
 
-FROM dev AS release
+FROM base AS release
 
 RUN mkdir -p /etc && \
     echo "[global]\nextra-index-url = https://download.pytorch.org/whl/cpu" > /etc/pip.conf
