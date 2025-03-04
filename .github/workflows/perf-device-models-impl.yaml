@@ -37,6 +37,7 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ matrix.test-info.arch }}
         LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -113,6 +114,13 @@ jobs:
         with:
           name: device-perf-report-csv-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}
           path: /work/${{ steps.check-device-perf-report.outputs.device_perf_report_filename }}
+
+      - uses: ./.github/actions/upload-artifact-with-job-uuid
+        if: ${{ !cancelled() }}
+        with:
+          path: |
+            /work/generated/test_reports/
+          prefix: "test_reports_"
 
       - name: Cleanup
         if: always()

@@ -66,7 +66,12 @@ jobs:
           name: Metalium ${{ matrix.platform }} smoke tests
           path: /work/test-reports/*.xml
           reporter: jest-junit
-
+      - uses: ./.github/actions/upload-artifact-with-job-uuid
+        if: ${{ !cancelled() }}
+        with:
+          path: |
+            /work/test-reports/
+          prefix: "test_reports_"
       # Arbitrary limit that's higher than we would like, but the JIT build seems inconsistent.
       # Keep it here as a guardrail to keep Smoke tests fast.  We can adjust as needed.
       - name: Check for slow tests

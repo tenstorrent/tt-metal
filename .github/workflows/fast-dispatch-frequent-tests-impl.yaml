@@ -20,6 +20,7 @@ jobs:
             arch: wormhole_b0
             runs-on: ["cloud-virtual-machine", "N300", "in-service"]
             run-args: |
+              mkdir -p generated/test_reports
               ./build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_wormhole_b0 --benchmark_out_format=json --benchmark_out=bench.json
               ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_pgm_dispatch_perf_ci.py bench.json
             timeout: 10
@@ -40,6 +41,7 @@ jobs:
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=${{ matrix.test-group.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
           run_args: ${{ matrix.test-group.run-args }}
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
@@ -52,6 +54,12 @@ jobs:
           path: |
             generated/test_reports/
           prefix: "test_reports_"
+      - name: Generate gtest annotations on failure
+        uses: ./.github/actions/generate-gtest-failure-message
+        if: ${{ failure() }}
+        with:
+          path: |
+            generated/test_reports/
       - uses: ./.github/actions/upload-artifact-with-job-uuid
         if: ${{ !cancelled() }}
         with:

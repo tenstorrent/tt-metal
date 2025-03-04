@@ -33,6 +33,8 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
         ARCH_NAME: ${{ matrix.test-group.arch }}
+        GITHUB_ACTIONS: true
+        GTEST_OUTPUT: xml:/work/generated/test_reports/
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -70,7 +72,20 @@ jobs:
           pwd
           echo $PYTHONPATH
           ls -al
+          mkdir -p /work/generated/test_reports
           ${{ matrix.test-group.cmd }}
+      - uses: ./.github/actions/upload-artifact-with-job-uuid
+        if: ${{ !cancelled() }}
+        with:
+          path: |
+            /work/generated/test_reports/
+          prefix: "test_reports_"
+      - name: Generate gtest annotations on failure
+        uses: ./.github/actions/generate-gtest-failure-message
+        if: ${{ failure() }}
+        with:
+          path: |
+            generated/test_reports/
       - name: Cleanup
         if: always()
         run: |
