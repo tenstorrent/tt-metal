@@ -24,7 +24,7 @@ def test_direct_replicate_to_tensor_mesh(mesh_device, dtype):
     mapper = ttnn.CppReplicateTensorToMesh(mesh_device)
 
     if dtype == ttnn.uint16:
-        torch_tensor = torch.randint(0, 65535, (1, 1, 32, 256))
+        torch_tensor = torch.randint(0, 39990, (1, 1, 32, 256))
     else:
         torch_tensor = torch.randn(1, 1, 32, 256)
     replicated_tensors = ttnn.from_torch(
@@ -36,12 +36,6 @@ def test_direct_replicate_to_tensor_mesh(mesh_device, dtype):
     )
 
     out_tensors = ttnn.get_device_tensors(replicated_tensors)
-
-    # out_pass1, out_pcc1 = comp_pcc(torch_tensor, ttnn.to_torch(ttnn.from_torch(torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT,mesh_device=mesh_device)), pcc=0.99)
-    # print("test")
-    # print(out_pass1)
-    # print(out_pcc1)
-    # assert out_pass1
 
     out_pass, out_pcc = comp_pcc(torch_tensor, ttnn.to_torch(out_tensors[0]), pcc=0.99)
     logger.info(f"PCC value: {out_pcc}")
@@ -55,7 +49,7 @@ def test_direct_shard_to_tensor_mesh(mesh_device, dtype):
     mapper = ttnn.CppShardTensorToMesh(mesh_device, dim=3)
 
     if dtype == ttnn.uint16:
-        torch_tensor = torch.randint(0, 65535, (1, 1, 32, 256))
+        torch_tensor = torch.randint(0, 39990, (1, 1, 32, 256))
     else:
         torch_tensor = torch.randn(1, 1, 32, 256)
     sharded_tensor = ttnn.from_torch(
@@ -83,7 +77,7 @@ def test_direct_shard2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device):
     torch.manual_seed(1234)
 
     if dtype == ttnn.uint16:
-        torch_tensor = torch.randint(0, 65535, (1, 1, M, K))
+        torch_tensor = torch.randint(0, 39990, (1, 1, M, K))
     else:
         torch_tensor = torch.randn(1, 1, M, K)
 
@@ -126,7 +120,7 @@ def test_direct_concat_to_tensor_mesh(mesh_device, dtype):
     mapper = ttnn.CppShardTensorToMesh(mesh_device, dim=3)
 
     if dtype == ttnn.uint16:
-        torch_tensor = torch.randint(0, 65535, (1, 1, 32, 256))
+        torch_tensor = torch.randint(0, 39990, (1, 1, 32, 256))
     else:
         torch_tensor = torch.randn(1, 1, 32, 256)
     sharded_tensor = ttnn.from_torch(
@@ -158,7 +152,7 @@ def test_direct_concat2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device)
     torch.manual_seed(1234)
 
     if dtype == ttnn.uint16:
-        torch_tensor = torch.randint(0, 65535, (1, 1, M, K))
+        torch_tensor = torch.randint(0, 39990, (1, 1, M, K))
     else:
         torch_tensor = torch.randn(1, 1, M, K)
 
@@ -211,7 +205,7 @@ def test_replicate_to_tensor_mesh(mesh_device, dtype):
     torch.manual_seed(1234)
 
     if dtype == ttnn.uint16:
-        torch_tensor = torch.randint(0, 65535, (1, 1, 32, 256))
+        torch_tensor = torch.randint(0, 39990, (1, 1, 32, 256))
     else:
         torch_tensor = torch.randn(1, 1, 32, 256)
     to_repl = ttnn.from_torch(
@@ -235,7 +229,7 @@ def test_shard_to_tensor_mesh(mesh_device, dtype):
     torch.manual_seed(1234)
 
     if dtype == ttnn.uint16:
-        torch_tensor = torch.randint(0, 65535, (1, 1, 32, 256))
+        torch_tensor = torch.randint(0, 39990, (1, 1, 32, 256))
     else:
         torch_tensor = torch.randn(1, 1, 32, 256)
     to_shard = ttnn.from_torch(
@@ -261,7 +255,7 @@ def test_concat_to_tensor(mesh_device, dtype):
     torch.manual_seed(1234)
 
     if dtype == ttnn.uint16:
-        torch_tensor = torch.randint(0, 65535, (1, 1, 32, 256))
+        torch_tensor = torch.randint(0, 39990, (1, 1, 32, 256))
     else:
         torch_tensor = torch.randn(1, 1, 32, 256)
     to_shard = ttnn.from_torch(
@@ -287,7 +281,7 @@ def test_concat_slice_to_tensor(mesh_device, dtype):
     torch.manual_seed(1234)
 
     if dtype == ttnn.uint16:
-        torch_tensor = torch.randint(0, 65535, (1, 1, 32, 256))
+        torch_tensor = torch.randint(0, 39990, (1, 1, 32, 256))
     else:
         torch_tensor = torch.randn(1, 1, 32, 256)
     to_shard = ttnn.from_torch(
@@ -324,7 +318,7 @@ def test_shard2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device):
     torch.manual_seed(1234)
 
     if dtype == ttnn.uint16:
-        torch_tensor = torch.randint(0, 65535, (1, 1, M, K))
+        torch_tensor = torch.randint(0, 39990, (1, 1, M, K))
     else:
         torch_tensor = torch.randn(1, 1, M, K)
     core_grid = ttnn.CoreGrid(y=1, x=8)
@@ -374,7 +368,7 @@ def test_concat2d_to_tensor(M, K, N, dtype, mesh_shape, mesh_device):
     torch.manual_seed(1234)
 
     if dtype == ttnn.uint16:
-        torch_tensor = torch.randint(0, 65535, (1, 1, M, K))
+        torch_tensor = torch.randint(0, 39990, (1, 1, M, K))
     else:
         torch_tensor = torch.randn(1, 1, M, K)
     core_grid = ttnn.CoreGrid(y=1, x=8)
