@@ -59,7 +59,7 @@ tt_metal/impl/device/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal
 tt_metal/**/requirements*.txt @tenstorrent/metalium-developers-infra
 
 # fabric
-tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT
+tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho
 
 # metal - dispatch
 tt_metal/impl/dispatch/kernels/packet_* @ubcheema @aliuTT
