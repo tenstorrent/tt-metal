@@ -511,10 +511,10 @@ TEST_F(RoPETest, BackwardTest) {
            -0.00002F, 0.00005F, -0.00002F, 0.00000F, 0.00000F,  0.00000F, 0.00000F,  0.00000F}}}};
 
     auto device = &ttml::autograd::ctx().get_device();
-    auto rope_params = RotaryEmbedding::build_params(
+    auto rope_params = ops::build_rope_params(
         /*sequence_length=*/5,
         /*head_dim=*/32);
-    auto rope_mod = RotaryEmbedding(rope_params);
+    auto rope_mod = modules::RotaryEmbedding(rope_params);
 
     auto xq_autograd_tensor = autograd::create_tensor(core::from_xtensor(xq, device));
 

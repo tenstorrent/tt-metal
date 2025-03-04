@@ -25,4 +25,6 @@ struct RotaryEmbeddingParams {
 
 autograd::TensorPtr rope(const autograd::TensorPtr& input, const RotaryEmbeddingParams& rope_params);
 
+RotaryEmbeddingParams build_rope_params(uint32_t sequence_length, uint32_t head_dim, float theta = 10000.0F);
+
 }  // namespace ttml::ops
