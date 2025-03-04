@@ -1547,19 +1547,45 @@ def test_binary_sharded_scalar(scalar, a_shape, shard_type, shard_size, core_ran
     torch.testing.assert_close(out_tt_interleaved, out_pt)
 
 
-@pytest.mark.parametrize("scalar", [-0.25, -16.5, 0.0, 0.05, 1.7, 19.0])
+@pytest.mark.parametrize("scalar", [-0.25])
 @pytest.mark.parametrize(
     "a_shape, shard_type, shard_size, core_range",
     (
+        # only support HEIGHT
         [
             torch.Size([1, 4 * 32]),
             ttnn.ShardStrategy.WIDTH,
             [32, 32],
             ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 1)), ttnn.CoreRange((0, 2), (0, 3))}),
         ],
+        [
+            torch.Size([1, 4 * 32]),
+            ttnn.ShardStrategy.BLOCK,
+            [32, 32],
+            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 1)), ttnn.CoreRange((0, 2), (0, 3))}),
+        ],
+        # cannot broadcast on h
+        [
+            torch.Size([32, 4 * 32]),
+            ttnn.ShardStrategy.HEIGHT,
+            [32, 4 * 32],
+            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 0))}),
+        ],
+        [
+            torch.Size([1, 32]),
+            ttnn.ShardStrategy.HEIGHT,
+            [1, 32],
+            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 0))}),
+        ],
+        [
+            torch.Size([1, 31]),
+            ttnn.ShardStrategy.HEIGHT,
+            [1, 31],
+            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 0))}),
+        ],
     ),
 )
-def test_binary_sharded_scalar_row_major(scalar, a_shape, shard_type, shard_size, core_range, device):
+def test_binary_sharded_scalar_invalid_row_major(scalar, a_shape, shard_type, shard_size, core_range, device):
     torch.manual_seed(0)
     a_sharded_config = ttnn.create_sharded_memory_config(
         shard_size,
