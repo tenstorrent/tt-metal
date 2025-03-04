@@ -26,7 +26,7 @@ class TtGroupNorm(LightweightModule):
         # NOTE: fallback to host until ttnn.group_norm is functional
         self.norm = torch.nn.GroupNorm(num_groups, channels, eps=eps, affine=affine)
         partial_state_dict = {
-            k[len(state_dict_prefix) :]: v.clone() for k, v in state_dict.items() if k.startswith(state_dict_prefix)
+            k[len(state_dict_prefix) :]: v for k, v in state_dict.items() if k.startswith(state_dict_prefix)
         }
         self.norm.load_state_dict(partial_state_dict, strict=True)
 

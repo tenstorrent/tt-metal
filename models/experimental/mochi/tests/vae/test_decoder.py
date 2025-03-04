@@ -130,7 +130,7 @@ def test_decoder(mesh_device, config, divide_T, use_program_cache, reset_seeds, 
         dtype=ttnn.DataType.BFLOAT16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
     )
 
     logger.info(f"Input shape: {torch_input.shape}")
@@ -138,7 +138,7 @@ def test_decoder(mesh_device, config, divide_T, use_program_cache, reset_seeds, 
     tt_output = tt_model.forward(tt_input)
 
     # Convert TT output to torch tensor (from NTHWC to NCTHW)
-    tt_output_torch = to_torch_tensor(tt_output, mesh_device)
+    tt_output_torch = to_torch_tensor(tt_output, mesh_device, dim=1)
     tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)  # [N, C, T, H, W]
     logger.info(f"TT output shape: {tt_output_torch.shape}")
 
