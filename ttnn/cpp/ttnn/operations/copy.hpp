@@ -66,9 +66,6 @@ struct Typecast {
                 queue_id, input, output_dtype, memory_config_arg, optional_output_tensor);
         }
         DataType input_dtype = input.get_dtype();
-        if (input_dtype == output_dtype) {
-            return input;
-        }
         return detail::copy_impl(
             queue_id,
             input,
@@ -103,9 +100,6 @@ struct Typecast {
             TT_FATAL(
                 tt_output_dtype == optional_output_tensor.value().get_dtype(),
                 "If both output dtype and output tensor provided dtype should match");
-        }
-        if (tt_input_dtype == tt_output_dtype) {
-            return input_tensor;
         }
         return detail::copy_impl(
             queue_id,

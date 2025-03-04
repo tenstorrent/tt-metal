@@ -9,6 +9,10 @@
 #include "ttnn/operations/copy.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
+inline ttnn::Tensor typecast_to(ttnn::DataType dtype, const ttnn::Tensor& input) {
+    return input.get_dtype() == dtype ? input : ttnn::typecast(input, dtype);
+}
+
 inline bool needs_typecast_to_bfloat16(const ttnn::DataType input) {
     return (input == ttnn::DataType::BFLOAT8_B || input == ttnn::DataType::BFLOAT4_B);
 }

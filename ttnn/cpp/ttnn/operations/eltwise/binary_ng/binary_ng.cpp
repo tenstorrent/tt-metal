@@ -77,8 +77,8 @@ Tensor BinaryNg<binary_op_type>::invoke(
 
         return result;
     } else {
-        Tensor input_a = ttnn::typecast(input_tensor_a, DataType::BFLOAT16);
-        Tensor input_b = ttnn::typecast(input_tensor_a, DataType::BFLOAT16);
+        Tensor input_a = typecast_to(DataType::BFLOAT16, input_tensor_a);
+        Tensor input_b = typecast_to(DataType::BFLOAT16, input_tensor_b);
         const auto output_tensor = output_preallocated and typecast_out
                                        ? ttnn::typecast(*optional_output_tensor, DataType::BFLOAT16)
                                        : optional_output_tensor;
@@ -157,7 +157,7 @@ Tensor BinaryNg<binary_op_type>::invoke(
         }
         return result;
     } else {
-        Tensor input_a = ttnn::typecast(input_tensor_a, DataType::BFLOAT16);
+        Tensor input_a = typecast_to(DataType::BFLOAT16, input_tensor_a);
         const auto output_tensor = output_preallocated and typecast_out
                                        ? ttnn::typecast(*optional_output_tensor, DataType::BFLOAT16)
                                        : optional_output_tensor;

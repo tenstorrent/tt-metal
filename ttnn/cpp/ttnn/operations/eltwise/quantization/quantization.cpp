@@ -19,7 +19,7 @@ Tensor QuantOp::invoke(
     std::optional<Tensor> optional_output_tensor) {
     const ttnn::DataType a_dtype = input_tensor.get_dtype();
     const bool typecast_a = needs_typecast_to_bfloat16(a_dtype);
-    Tensor input_a = typecast_a ? ttnn::typecast(input_tensor, DataType::BFLOAT16) : input_tensor;
+    Tensor input_a = typecast_a ? typecast_to(DataType::BFLOAT16, input_tensor) : input_tensor;
 
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations{};
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations{};
@@ -54,7 +54,7 @@ Tensor RequantOp::invoke(
     std::optional<Tensor> optional_output_tensor) {
     const ttnn::DataType a_dtype = input_tensor.get_dtype();
     const bool typecast_a = needs_typecast_to_bfloat16(a_dtype);
-    Tensor input_a = typecast_a ? ttnn::typecast(input_tensor, DataType::BFLOAT16) : input_tensor;
+    Tensor input_a = typecast_a ? typecast_to(DataType::BFLOAT16, input_tensor) : input_tensor;
 
     // Expansion of q' = [(q - z_in) * s_in] / s_out + z_out
     const float scale = in_scale / out_scale;
@@ -90,7 +90,7 @@ Tensor DequantOp::invoke(
     std::optional<Tensor> optional_output_tensor) {
     const ttnn::DataType a_dtype = input_tensor.get_dtype();
     const bool typecast_a = needs_typecast_to_bfloat16(a_dtype);
-    Tensor input_a = typecast_a ? ttnn::typecast(input_tensor, DataType::BFLOAT16) : input_tensor;
+    Tensor input_a = typecast_a ? typecast_to(DataType::BFLOAT16, input_tensor) : input_tensor;
 
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations{};
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations{};
