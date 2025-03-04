@@ -22,7 +22,7 @@ AllReduceAsync create_all_reduce_async_struct(
     const std::vector<IDevice*>& devices,
     const ttnn::ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphores,
-    std::optional<SubDeviceId>& sub_device_id,
+    std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode) {
     uint32_t num_devices = devices.size();
 
@@ -104,21 +104,21 @@ void AllReduceAsync::validate(const std::vector<Tensor>& input_tensors) const {
         input_tensor.memory_config().memory_layout);
 }
 
-static void validate_output_tensor_allocation(const std::vector<Tensor>& output_tensors) {
-    for (const auto& output_tensor : output_tensors) {
-        const auto& buffers = output_tensor.buffers();
-        const auto first_address = buffers.front()->address();
-        TT_FATAL(
-            std::all_of(
-                buffers.begin(),
-                buffers.end(),
-                [&first_address](const auto& buffer) {
-                    return buffer != nullptr && buffer->address() == first_address;
-                }),
-            "Output buffers for all_reduce async must be lock-step allocated but some of the tensors were allocated at "
-            "different addresses across devices.");
-    }
-}
+// static void validate_output_tensor_allocation(const std::vector<Tensor>& output_tensors) {
+//     for (const auto& output_tensor : output_tensors) {
+//         const auto& buffers = output_tensor.buffers();
+//         const auto first_address = buffers.front()->address();
+//         TT_FATAL(
+//             std::all_of(
+//                 buffers.begin(),
+//                 buffers.end(),
+//                 [&first_address](const auto& buffer) {
+//                     return buffer != nullptr && buffer->address() == first_address;
+//                 }),
+//             "Output buffers for all_reduce async must be lock-step allocated but some of the tensors were allocated
+//             at " "different addresses across devices.");
+//     }
+// }
 
 std::vector<ttnn::TensorSpec> AllReduceAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
@@ -128,7 +128,7 @@ std::vector<ttnn::TensorSpec> AllReduceAsync::compute_output_specs(const std::ve
         TensorLayout(input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config))};
 }
 
-operation::ProgramWithCallbacks AllReduceAsync::create_program(
+tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     tt::log_debug(tt::LogOp, "DEBUG: create_program is called");
 
@@ -167,13 +167,14 @@ operation::ProgramWithCallbacks AllReduceAsync::create_program(
         this->enable_persistent_fabric_mode);
 }
 
-const operation::Hash AllReduceAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
+const tt::tt_metal::operation::Hash AllReduceAsync::compute_program_hash(
+    const std::vector<Tensor>& input_tensors) const {
     auto input_shape = input_tensors[0].get_padded_shape();
     auto input_memory_layout = input_tensors[0].get_layout();
     auto input_dtype = input_tensors[0].get_dtype();
     auto input_memory_config = input_tensors[0].memory_config();
 
-    return operation::hash_operation<AllReduceAsync>(
+    return tt::tt_metal::operation::hash_operation<AllReduceAsync>(
         this->num_links,
         this->ring_size,
         this->ring_index,
@@ -199,7 +200,7 @@ Tensor all_reduce_async(
     const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
-    std::optional<SubDeviceId> subdevice_id,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool enable_persistent_fabric_mode) {
     TT_FATAL(
         topology == ttnn::ccl::Topology::Linear,
@@ -208,12 +209,12 @@ Tensor all_reduce_async(
     auto devices = input_tensor.get_workers();
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
+    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
     CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     std::vector<GlobalSemaphore> semaphores = multi_device_global_semaphore.global_semaphores;
 
-    operation::launch_op(
+    tt::tt_metal::operation::launch_op(
         [num_preferred_links,
          memory_config,
          mesh_view,
@@ -238,7 +239,7 @@ Tensor all_reduce_async(
             const auto& input_tensor = input_tensors.at(0);
             const auto& all_gather_output_tensor = input_tensors.at(1);
 
-            return operation::run(
+            return tt::tt_metal::operation::run(
                 ttnn::ccl::all_reduce_detail::create_all_reduce_async_struct(
                     input_device_tensor,
                     num_preferred_links.has_value() ? num_preferred_links.value() : 1,
