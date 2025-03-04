@@ -252,7 +252,7 @@ public:
         auto storage_type = this->storage_type();
         if (storage_type == tt::tt_metal::StorageType::DEVICE) {
             auto storage = std::get<DeviceStorage>(this->get_storage());
-            return std::vector<Buffer*>{storage.get_buffer().get()};
+            return std::vector<Buffer*>{storage.get_buffer()};
         } else {
             TT_THROW("Cannot get buffers from a tensor with non-device storage.");
         }
@@ -263,9 +263,8 @@ public:
             storage_type == tt::tt_metal::StorageType::DEVICE,
             "ttnn::Tensor::buffer(): Expected Tensor with DeviceStorage, got {}",
             storage_type);
-        return std::get<DeviceStorage>(this->get_storage()).get_buffer().get();
+        return std::get<DeviceStorage>(this->get_storage()).get_buffer();
     }
-    std::shared_ptr<Buffer> device_buffer() const { return std::get<DeviceStorage>(this->get_storage()).get_buffer(); }
 
     distributed::MeshDevice* mesh_device() const {
         if (this->mesh_device_.has_value()) {

@@ -11,7 +11,7 @@ DeviceStorage::DeviceStorage(std::shared_ptr<Buffer> buffer_) { buffer = std::mo
 
 MemoryConfig DeviceStorage::memory_config() const {
     if (this->mesh_buffer.get() != nullptr) {
-        const auto& buffer = this->mesh_buffer->get_device_buffer(tt::tt_metal::distributed::MeshCoordinate(0, 0));
+        auto buffer = this->mesh_buffer->get_device_buffer(tt::tt_metal::distributed::MeshCoordinate(0, 0));
         std::optional<ShardSpec> shard_spec = std::nullopt;
 
         if (is_sharded(buffer->buffer_layout())) {
@@ -35,10 +35,10 @@ DeviceStorage::DeviceStorage(std::shared_ptr<distributed::MeshBuffer> mesh_buffe
 
 void DeviceStorage::insert_buffer(const std::shared_ptr<Buffer>& buffer_) { this->buffer = buffer_; }
 
-const std::shared_ptr<Buffer>& DeviceStorage::get_buffer() const {
+Buffer* DeviceStorage::get_buffer() const {
     if (this->mesh_buffer.get() == nullptr) {
         TT_FATAL(this->buffer != nullptr, "Buffer is not allocated");
-        return this->buffer;
+        return this->buffer.get();
     }
     return this->mesh_buffer->get_device_buffer(tt::tt_metal::distributed::MeshCoordinate(0, 0));
 }

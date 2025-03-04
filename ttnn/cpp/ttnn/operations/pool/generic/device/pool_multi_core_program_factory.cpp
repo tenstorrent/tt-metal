@@ -42,7 +42,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     // This should allocate a DRAM buffer on the device
     IDevice* device = input.device();
     tt::tt_metal::Buffer* src_dram_buffer = input.buffer();
-    auto reader_indices_buffer = reader_indices.device_buffer();
+    auto reader_indices_buffer = reader_indices.mesh_buffer();
     tt::tt_metal::Buffer* dst_dram_buffer = output.buffer();
 
     const auto input_shape = input.get_padded_shape();
@@ -152,7 +152,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         CircularBufferConfig(
             in_reader_indices_cb_npages * in_reader_indices_cb_pagesize, {{in_reader_indices_cb_id, indices_df}})
             .set_page_size(in_reader_indices_cb_id, in_reader_indices_cb_pagesize)
-            .set_globally_allocated_address(*reader_indices_buffer);
+            .set_globally_allocated_address(*reader_indices_buffer->get_device_buffer());
     auto in_reader_indices_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, in_reader_indices_cb_config);
 
     uint32_t in_cb_sz = 0;

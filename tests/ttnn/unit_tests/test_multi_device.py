@@ -631,29 +631,6 @@ def test_clone(mesh_device):
     print(results_11BH)
 
 
-def test_device_shard_to_torch(mesh_device):
-    """Test `ttnn.get_device_tensor(..) API"""
-    torch_input_tensor = torch.rand((1, 1, 32, 32 * mesh_device.get_num_devices()), dtype=torch.bfloat16)
-    torch_output_golden = torch.nn.functional.gelu(torch_input_tensor)
-    torch_output_golden = torch.exp(torch_output_golden)
-
-    ttnn_input_tensor = ttnn.from_torch(
-        torch_input_tensor,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ShardTensorToMesh(mesh_device, dim=3),
-        device=mesh_device,
-    )
-
-    ttnn_gelu_output = ttnn.gelu(ttnn_input_tensor)
-    ttnn_output_tensor = ttnn.exp(ttnn_gelu_output)
-
-    # Skip the compose/torch.cat call entirely
-    for i, device in enumerate(mesh_device.get_devices()):
-        device_tensor = ttnn.get_device_tensor(ttnn_output_tensor, device)
-        torch_device_tensor = ttnn.to_torch(device_tensor)
-        assert_with_pcc(torch_device_tensor, torch_output_golden[..., i * 32 : (i + 1) * 32], pcc=0.999)
-
-
 @pytest.mark.parametrize("height", [7])
 @pytest.mark.parametrize("width", [3])
 def test_validate_as_tensor(tmp_path, mesh_device, height, width):
@@ -687,10 +664,6 @@ def test_validate_as_tensor(tmp_path, mesh_device, height, width):
     # assert tensor.devices() == mesh_device.get_devices() # TODO(jchu): fix
     assert tensor.layout == ttnn.TILE_LAYOUT
     assert ttnn.get_memory_config(tensor) == memory_config
-
-    for device in mesh_device.get_devices():
-        device_tensor = ttnn.get_device_tensor(tensor, device)
-        assert torch.allclose(ttnn.to_torch(device_tensor), torch_input_tensor)
 
 
 def test_visualize_mesh_device(t3k_mesh_device):

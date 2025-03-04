@@ -46,7 +46,7 @@ struct Pool2D {
             tt::tt_metal::CBHandle cb_out;
             uint32_t ncores;
             uint32_t ncores_w;
-            std::shared_ptr<Buffer> reader_indices_buffer;
+            std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> reader_indices_buffer;
         };
 
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;

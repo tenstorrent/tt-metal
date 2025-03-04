@@ -244,12 +244,12 @@ operation::ProgramWithCallbacks upsample_multi_core(
     auto config_tensor_device = config_tensor.to_device(device, memory_config);
 
     tt::DataFormat config_df = tt::DataFormat::RawUInt16;
-    auto config_buffer = config_tensor_device.device_buffer();
+    auto config_buffer = config_tensor_device.mesh_buffer();
     auto config_buffer_page_size = config_buffer->page_size();
     uint32_t config_cb_id = CBIndex::c_6;
     auto config_cb_config = CircularBufferConfig(config_buffer_page_size, {{config_cb_id, config_df}})
                                 .set_page_size(config_cb_id, config_buffer->page_size())
-                                .set_globally_allocated_address(*config_buffer);
+                                .set_globally_allocated_address(*config_buffer->get_device_buffer());
     CBHandle config_cb = CreateCircularBuffer(program, all_cores, config_cb_config);
 
     // Kernels

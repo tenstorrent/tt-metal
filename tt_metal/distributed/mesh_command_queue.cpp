@@ -199,10 +199,7 @@ void MeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
 }
 
 void MeshCommandQueue::write_shard_to_device(
-    std::shared_ptr<Buffer>& shard_view,
-    const void* src,
-    const BufferRegion& region,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    Buffer* shard_view, const void* src, const BufferRegion& region, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     auto device = shard_view->device();
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
     buffer_dispatch::write_to_device_buffer(
@@ -210,10 +207,7 @@ void MeshCommandQueue::write_shard_to_device(
 }
 
 void MeshCommandQueue::read_shard_from_device(
-    std::shared_ptr<Buffer>& shard_view,
-    void* dst,
-    const BufferRegion& region,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    Buffer* shard_view, void* dst, const BufferRegion& region, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     this->drain_events_from_completion_queue();
     auto device = shard_view->device();
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());

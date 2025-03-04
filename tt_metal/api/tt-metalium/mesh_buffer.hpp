@@ -27,7 +27,7 @@ struct DeviceLocalBufferConfig {
     std::optional<ShardSpecBuffer> shard_parameters;
 
     // The direction in which memory for this buffer is allocated.
-    bool bottom_up = false;
+    std::optional<bool> bottom_up;
 };
 
 // Specifies MeshBuffer that is replicated across the virtual mesh.
@@ -98,7 +98,7 @@ public:
     const ShardedBufferConfig& global_shard_spec() const;
     const DeviceLocalBufferConfig& device_local_config() const { return device_local_config_; }
 
-    const std::shared_ptr<Buffer>& get_device_buffer(const MeshCoordinate& device_coord) const;
+    Buffer* get_device_buffer(const MeshCoordinate& device_coord = MeshCoordinate(0, 0)) const;
     uint32_t datum_size_bytes() const;
     Shape2D physical_shard_shape() const;
     std::pair<bool, bool> replicated_dims() const;
