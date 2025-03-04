@@ -336,8 +336,9 @@ typedef struct fvc_inbound_push_state {
                 // outbound router table.
                 // direction can be one of 0, 1, 2, 3. Respective 64-bit entry is direction * 8
                 uint32_t my_direction_offset = my_direction * sizeof(uint64_t);
-                uint64_t router_addr = ((uint64_t)eth_chan_to_noc_xy[noc_index][forwarding_channel] << 32) |
-                                       (FABRIC_ROUTER_REQ_QUEUE_START + my_direction_offset);
+                uint64_t router_addr = get_noc_addr_helper(
+                    eth_chan_to_noc_xy[noc_index][forwarding_channel],
+                    FABRIC_ROUTER_REQ_QUEUE_START + my_direction_offset);
                 // Split 64-bit wirte data to two 4-byte write.
                 // Write lower 4 Bytes of 8 Byte entry.
                 noc_inline_dw_write(router_addr, (uint32_t)update_router_space);
@@ -347,9 +348,10 @@ typedef struct fvc_inbound_push_state {
         } else {
             uint32_t router_direction = get_next_hop_router_direction(mesh_id, device_id);
             uint32_t router_addr_h = get_next_hop_router_noc_xy(mesh_id, device_id);
-            uint64_t router_addr = ((uint64_t)router_addr_h << 32) | FABRIC_ROUTER_REQ_QUEUE_START;
-            router_push_addr =
-                (STREAM_REG_ADDR(6 + router_direction, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
+            uint64_t router_addr = get_noc_addr_helper(router_addr_h, FABRIC_ROUTER_REQ_QUEUE_START);
+            router_push_addr = (STREAM_REG_ADDR(
+                STREAM_ID_NOC_WORDS_RECEIVED + router_direction,
+                STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
             router_addr += router_direction * sizeof(uint64_t);
             // stream register to receive router buffer space available updates.
             noc_inline_dw_write(router_addr, (uint32_t)update_router_space);
@@ -570,9 +572,8 @@ typedef struct fvc_inbound_push_state {
         uint32_t words_before_wrap = min(next_router_words_before_wrap, words_before_buffer_wrap(fvc_out_rdptr));
         uint32_t words_to_send = min(words_remaining, words_before_wrap);
 
-        uint64_t buffer_wr_addr =
-            ((uint64_t)dest_addr << 32) |
-            (remote_buffer_start + (remote_wrptr[remote_wrptr_direction] * PACKET_WORD_SIZE_BYTES));
+        uint64_t buffer_wr_addr = get_noc_addr_helper(
+            dest_addr, remote_buffer_start + (remote_wrptr[remote_wrptr_direction] * PACKET_WORD_SIZE_BYTES));
         noc_async_write_one_packet(
             get_local_buffer_read_addr(), buffer_wr_addr, words_to_send * PACKET_WORD_SIZE_BYTES, noc_index);
 
@@ -584,24 +585,23 @@ typedef struct fvc_inbound_push_state {
             next_router_words_before_wrap = remote_buffer_size - remote_wrptr[remote_wrptr_direction];
             words_before_wrap = min(next_router_words_before_wrap, words_before_buffer_wrap(fvc_out_rdptr));
             words_to_send = min(words_remaining, words_before_wrap);
-            buffer_wr_addr = ((uint64_t)dest_addr << 32) |
-                             (remote_buffer_start + (remote_wrptr[remote_wrptr_direction] * PACKET_WORD_SIZE_BYTES));
+            buffer_wr_addr = get_noc_addr_helper(
+                dest_addr, remote_buffer_start + (remote_wrptr[remote_wrptr_direction] * PACKET_WORD_SIZE_BYTES));
             noc_async_write_one_packet(
                 get_local_buffer_read_addr(), buffer_wr_addr, words_to_send * PACKET_WORD_SIZE_BYTES, noc_index);
             advance_remote_wrptr(words_to_send);
             advance_out_rdptr<fvc_mode>(words_to_send);
             words_remaining -= words_to_send;
             if (words_remaining) {
-                buffer_wr_addr =
-                    ((uint64_t)dest_addr << 32) |
-                    (remote_buffer_start + (remote_wrptr[remote_wrptr_direction] * PACKET_WORD_SIZE_BYTES));
+                buffer_wr_addr = get_noc_addr_helper(
+                    dest_addr, remote_buffer_start + (remote_wrptr[remote_wrptr_direction] * PACKET_WORD_SIZE_BYTES));
                 noc_async_write_one_packet(
                     get_local_buffer_read_addr(), buffer_wr_addr, words_remaining * PACKET_WORD_SIZE_BYTES, noc_index);
                 advance_remote_wrptr(words_remaining);
                 advance_out_rdptr<fvc_mode>(words_remaining);
             }
         }
-        uint64_t push_addr = ((uint64_t)dest_addr << 32) | router_push_addr;
+        uint64_t push_addr = get_noc_addr_helper(dest_addr, router_push_addr);
         noc_inline_dw_write(push_addr, packet_words_remaining << REMOTE_DEST_BUF_WORDS_FREE_INC);
 
         *update_router_space = (-packet_words_remaining) << REMOTE_DEST_BUF_WORDS_FREE_INC;
@@ -617,15 +617,18 @@ typedef struct fvc_inbound_push_state {
         uint32_t words_before_wrap = min(words_remaining, words_before_buffer_wrap(fvc_out_rdptr));
 
         uint32_t addr_l = packet_word_1[1];
-        uint64_t noc_addr = ((uint64_t)packet_word_1[2] << 32);
+        uint32_t addr_h = packet_word_1[2];
         noc_async_write_one_packet(
-            get_local_buffer_read_addr(), noc_addr | addr_l, words_before_wrap * PACKET_WORD_SIZE_BYTES);
+            get_local_buffer_read_addr(),
+            get_noc_addr_helper(addr_h, addr_l),
+            words_before_wrap * PACKET_WORD_SIZE_BYTES);
 
         if (words_before_wrap != words_remaining) {
             // Inbound buffer wrap. issue the remaining write from start of inbound buffer.
             addr_l += words_before_wrap * PACKET_WORD_SIZE_BYTES;
             uint32_t words_after_wrap = words_remaining - words_before_wrap;
-            noc_async_write_one_packet(buffer_start, noc_addr | addr_l, words_after_wrap * PACKET_WORD_SIZE_BYTES);
+            noc_async_write_one_packet(
+                buffer_start, get_noc_addr_helper(addr_h, addr_l), words_after_wrap * PACKET_WORD_SIZE_BYTES);
             fvc_out_rdptr = words_after_wrap;
             words_inbound -= words_remaining;
         } else {
@@ -650,7 +653,7 @@ typedef struct fvc_inbound_push_state {
                     volatile async_wr_atomic_params* params =
                         (volatile async_wr_atomic_params*)((uint32_t)packet_word_2 +
                                                            offsetof(packet_header_t, packet_parameters) - 32);
-                    uint64_t noc_addr = ((uint64_t)params->noc_xy << 32) | params->l1_offset;
+                    uint64_t noc_addr = get_noc_addr_helper(params->noc_xy, params->l1_offset);
                     noc_fast_atomic_increment(
                         noc_index, NCRISC_AT_CMD_BUF, noc_addr, NOC_UNICAST_WRITE_VC, params->increment, 31, false);
                 }
@@ -658,7 +661,7 @@ typedef struct fvc_inbound_push_state {
                 volatile atomic_params* params =
                     (volatile atomic_params*)((uint32_t)packet_word_2 + offsetof(packet_header_t, packet_parameters) -
                                               32);
-                uint64_t noc_addr = ((uint64_t)packet_word_1[2] << 32) | packet_word_1[1];
+                uint64_t noc_addr = get_noc_addr_helper(packet_word_1[2], packet_word_1[1]);
                 noc_fast_atomic_increment(
                     noc_index,
                     NCRISC_AT_CMD_BUF,
@@ -1232,10 +1235,11 @@ typedef struct fvc_inbound_pull_state {
             packet_words_remaining -= words_available;
             advance_out_rdptr<fvc_mode>(words_available);
             // issue noc write to noc target of pull request.
-            uint64_t dest_addr = socket_mode == false
-                                     ? ((uint64_t)get_next_hop_router_noc_xy() << 32) | FABRIC_ROUTER_REQ_QUEUE_START
-                                     : ((uint64_t)current_packet_header.session.target_offset_h << 32) |
-                                           current_packet_header.session.target_offset_l;
+            uint64_t dest_addr =
+                socket_mode == false
+                    ? get_noc_addr_helper(get_next_hop_router_noc_xy(), FABRIC_ROUTER_REQ_QUEUE_START)
+                    : get_noc_addr_helper(
+                          current_packet_header.session.target_offset_h, current_packet_header.session.target_offset_l);
             hop_dest = tt_fabric_send_pull_request(dest_addr, local_pull_request);
             if (current_packet_header.routing.flags == INLINE_FORWARD) {
                 curr_packet_valid = false;
@@ -1361,11 +1365,11 @@ typedef struct fvc_inbound_pull_state {
                 packet_words_remaining -= words_available;
                 // issue noc write to noc target of pull request.
                 // figure out next hop for mcast forwarding
-                uint64_t dest_addr = ((uint64_t)mcast_router_noc_xy << 32) | FABRIC_ROUTER_REQ_QUEUE_START;
+                uint64_t dest_addr = get_noc_addr_helper(mcast_router_noc_xy, FABRIC_ROUTER_REQ_QUEUE_START);
                 hop_dest = tt_fabric_send_pull_request(dest_addr, local_pull_request);
 
-                packet_dest = ((uint64_t)current_packet_header.session.target_offset_h << 32) |
-                              current_packet_header.session.target_offset_l;
+                packet_dest = get_noc_addr_helper(
+                    current_packet_header.session.target_offset_h, current_packet_header.session.target_offset_l);
 
                 advance_out_rdptr(PACKET_HEADER_SIZE_WORDS);
                 words_available -= PACKET_HEADER_SIZE_WORDS;
@@ -1431,10 +1435,9 @@ typedef struct fvc_inbound_pull_state {
                 } else if (curr_words_read == local_pull_request->pull_request.words_written) {
                     // for fused command issue the atomic inc before invalidating the current packet
                     if (current_packet_header.session.command & ATOMIC_INC) {
-                        uint64_t noc_addr =
-                            ((uint64_t)current_packet_header.packet_parameters.async_wr_atomic_parameters.noc_xy
-                             << 32) |
-                            current_packet_header.packet_parameters.async_wr_atomic_parameters.l1_offset;
+                        uint64_t noc_addr = get_noc_addr_helper(
+                            current_packet_header.packet_parameters.async_wr_atomic_parameters.noc_xy,
+                            current_packet_header.packet_parameters.async_wr_atomic_parameters.l1_offset);
                         noc_fast_atomic_increment(
                             noc_index,
                             NCRISC_AT_CMD_BUF,
@@ -1461,8 +1464,9 @@ typedef struct fvc_inbound_pull_state {
             if (current_packet_header.routing.flags == FORWARD) {
                 if (current_packet_header.session.command & ASYNC_WR) {
                     if (packet_in_progress == 0) {
-                        packet_dest = ((uint64_t)current_packet_header.session.target_offset_h << 32) |
-                                      current_packet_header.session.target_offset_l;
+                        packet_dest = get_noc_addr_helper(
+                            current_packet_header.session.target_offset_h,
+                            current_packet_header.session.target_offset_l);
                         packet_words_remaining -= PACKET_HEADER_SIZE_WORDS;
                         advance_out_rdptr(PACKET_HEADER_SIZE_WORDS);
                         words_cleared = PACKET_HEADER_SIZE_WORDS;
@@ -1482,10 +1486,9 @@ typedef struct fvc_inbound_pull_state {
                         } else {
                             // for fused command issue the atomic inc before invalidating the current packet
                             if (current_packet_header.session.command & ATOMIC_INC) {
-                                uint64_t noc_addr =
-                                    ((uint64_t)current_packet_header.packet_parameters.async_wr_atomic_parameters.noc_xy
-                                     << 32) |
-                                    current_packet_header.packet_parameters.async_wr_atomic_parameters.l1_offset;
+                                uint64_t noc_addr = get_noc_addr_helper(
+                                    current_packet_header.packet_parameters.async_wr_atomic_parameters.noc_xy,
+                                    current_packet_header.packet_parameters.async_wr_atomic_parameters.l1_offset);
                                 noc_fast_atomic_increment(
                                     noc_index,
                                     NCRISC_AT_CMD_BUF,
@@ -1506,8 +1509,8 @@ typedef struct fvc_inbound_pull_state {
                 if (current_packet_header.session.command == SOCKET_CLOSE) {
                     words_processed = pull_data_from_fvc_buffer<fvc_mode, true>();
                 } else {
-                    uint64_t noc_addr = ((uint64_t)current_packet_header.session.target_offset_h << 32) |
-                                        current_packet_header.session.target_offset_l;
+                    uint64_t noc_addr = get_noc_addr_helper(
+                        current_packet_header.session.target_offset_h, current_packet_header.session.target_offset_l);
                     noc_fast_atomic_increment(
                         noc_index,
                         NCRISC_AT_CMD_BUF,
@@ -1817,8 +1820,8 @@ typedef struct fvcc_inbound_state {
                     forward_message(gk_fvcc_buf_addr);
                 } else if (current_packet_header->session.command == ASYNC_WR_RESP) {
                     // Write response. Decrement transaction count for respective transaction id.
-                    uint64_t noc_addr = ((uint64_t)current_packet_header->session.target_offset_h << 32) |
-                                        current_packet_header->session.target_offset_l;
+                    uint64_t noc_addr = get_noc_addr_helper(
+                        current_packet_header->session.target_offset_h, current_packet_header->session.target_offset_l);
                     noc_fast_atomic_increment(
                         noc_index, NCRISC_AT_CMD_BUF, noc_addr, NOC_UNICAST_WRITE_VC, -1, 31, false);
                 }

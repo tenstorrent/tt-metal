@@ -179,7 +179,7 @@ inline void fabric_client_router_reserve(
     uint16_t dst_dev_id) {
     uint32_t direction = get_next_hop_router_direction(client_interface, routing_plane, dst_mesh_id, dst_dev_id);
     uint32_t router_addr_h = get_next_hop_router_noc_xy(client_interface, routing_plane, dst_mesh_id, dst_dev_id);
-    uint64_t router_addr = ((uint64_t)router_addr_h << 32) | FABRIC_ROUTER_REQ_QUEUE_START;
+    uint64_t router_addr = get_noc_addr_helper(router_addr_h, FABRIC_ROUTER_REQ_QUEUE_START);
     router_addr += direction * sizeof(uint64_t);
     // stream register to receive router buffer space available updates.
     uint64_t xy_local_addr = get_noc_addr(0);
@@ -205,7 +205,7 @@ inline void fabric_client_router_reserve(
 inline void fabric_async_write_push_data(
     volatile tt_l1_ptr fabric_push_client_interface_t* client_interface, uint32_t src_addr, uint32_t size) {
     uint32_t total_words_to_send = (size + PACKET_WORD_SIZE_BYTES - 1) >> 4;
-    uint64_t push_addr = ((uint64_t)client_interface->router_addr_h << 32) | (client_interface->router_push_addr);
+    uint64_t push_addr = get_noc_addr_helper(client_interface->router_addr_h, client_interface->router_push_addr);
 
     while (total_words_to_send > 0) {
         uint32_t router_buf_space = *(volatile uint32_t*)client_interface->router_space;
@@ -213,9 +213,9 @@ inline void fabric_async_write_push_data(
         uint32_t words_to_send = min(total_words_to_send, words_before_wrap);
         words_to_send = min(router_buf_space, words_to_send);
         if (words_to_send) {
-            uint64_t buffer_wr_addr =
-                ((uint64_t)client_interface->router_addr_h << 32) |
-                (client_interface->buffer_start + (client_interface->wr_ptr * PACKET_WORD_SIZE_BYTES));
+            uint64_t buffer_wr_addr = get_noc_addr_helper(
+                client_interface->router_addr_h,
+                (client_interface->buffer_start + (client_interface->wr_ptr * PACKET_WORD_SIZE_BYTES)));
             noc_async_write_one_packet(src_addr, buffer_wr_addr, words_to_send * PACKET_WORD_SIZE_BYTES, noc_index);
             noc_inline_dw_write(push_addr, words_to_send << REMOTE_DEST_BUF_WORDS_FREE_INC);
             client_interface->wr_ptr += words_to_send;
