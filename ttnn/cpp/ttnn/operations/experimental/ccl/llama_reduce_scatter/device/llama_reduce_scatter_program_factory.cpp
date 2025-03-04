@@ -27,9 +27,20 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     auto& padded_output_shape = output_tensor.get_padded_shape();
     const auto& tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
     const auto& face_shape = input_tensor.get_tensor_spec().tile().get_face_shape();
+    TT_FATAL(input_tensor.shard_spec().has_value(), "Shard spec is not present");
+    auto shard_spec = input_tensor.shard_spec().value();
 
     auto src_buffer = input_tensor.buffer();
     auto dst_buffer = output_tensor.buffer();
+
+    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+
+    uint32_t shard_height = shard_spec.shape[0];
+    uint32_t shard_width = shard_spec.shape[1];
+    std::cout << "shard_height: " << shard_height << " shard_width: " << shard_width << std::endl;
+    uint32_t tiles_per_core_width = shard_width / tile_shape[1];
+    std::cout << "tiles_per_core_width: " << tiles_per_core_width << std::endl;
 
     tt::tt_metal::Program program{};
     uint32_t element_size = input_tensor.element_size();
@@ -42,15 +53,12 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     uint32_t output_cb_index = src_cb_index;
 
     uint32_t num_input_pages_to_read = 2;
-    uint32_t num_tiles = 10;
 
-    // auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
-    CoreCoord compute_with_storage_grid_size = {1u, 1u};
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles);
+    auto all_cores = shard_spec.grid;
+    uint32_t ncores = shard_spec.num_cores();
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
-    uint32_t input_page_size = input_tensor.get_dtype() != DataType::BFLOAT8_B ? tile_shape[0] * tile_shape[1] : 1088;
+    uint32_t input_page_size = tile_size(cb_data_format);
 
     tt::tt_metal::CircularBufferConfig cb_src_config =
         tt::tt_metal::CircularBufferConfig(num_input_pages_to_read * input_page_size, {{src_cb_index, cb_data_format}})
@@ -65,10 +73,8 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     auto cb_src = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src_config);
     auto cb_dst = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_dst_config);
 
-    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram, input_page_size, src_cb_index};
+    std::vector<uint32_t> reader_compile_time_args = {
+        input_page_size, src_cb_index, dst_cb_index, 0, tiles_per_core_width, device->id()};
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -79,7 +85,8 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
 
     std::vector<uint32_t> compute_kernel_args = {};
 
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)dst_is_dram, input_page_size, src_cb_index};
+    std::vector<uint32_t> writer_compile_time_args = {
+        input_page_size, src_cb_index, 0, tiles_per_core_width, device->id()};
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -88,34 +95,15 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    std::vector<uint32_t> reader_runtime_args = {src_buffer->address(), 0, 0};
-    std::vector<uint32_t> compute_runtime_args = {0, 0};
-    std::vector<uint32_t> writer_runtime_args = {dst_buffer->address(), 0, 0};
+    std::vector<uint32_t> reader_runtime_args = {src_buffer->address(), dst_buffer->address()};
+    std::vector<uint32_t> writer_runtime_args = {dst_buffer->address()};
 
     auto cores = corerange_to_cores(all_cores, std::nullopt);
     uint32_t start_block = 0;
-    uint32_t num_blocks_per_core = 0;
+    uint32_t num_blocks_per_core = tiles_per_core_width;
     for (const auto& core : cores) {
-        if (core_group_1.contains(core)) {
-            num_blocks_per_core = num_blocks_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            num_blocks_per_core = num_blocks_per_core_group_2;
-        } else {
-            // no-op
-            num_blocks_per_core = 0;
-        }
-
-        uint32_t end_block = start_block + num_blocks_per_core;
-        reader_runtime_args[1] = start_block;
-        reader_runtime_args[2] = end_block;
-
-        writer_runtime_args[1] = start_block;
-        writer_runtime_args[2] = end_block;
-
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
-
-        start_block = end_block;
     }
 
     return {
