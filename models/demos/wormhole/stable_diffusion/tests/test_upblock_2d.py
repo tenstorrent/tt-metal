@@ -36,7 +36,15 @@ from models.demos.wormhole.stable_diffusion.tests.parameterizations import DOWN_
 )
 @pytest.mark.parametrize("temb", [[1, 1, 2, 1280]])
 def test_upblock_512x512(
-    reset_seeds, device, res_hidden_states_tuple, hidden_states, shard_layout, shard_end_core, shard_shape, temb
+    reset_seeds,
+    device,
+    res_hidden_states_tuple,
+    hidden_states,
+    shard_layout,
+    shard_end_core,
+    shard_shape,
+    temb,
+    use_program_cache,
 ):
     # os.environ["SLOW_MATMULS"] = "1"
 
