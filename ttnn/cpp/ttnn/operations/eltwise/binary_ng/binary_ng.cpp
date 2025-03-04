@@ -4,7 +4,16 @@
 
 #include "binary_ng.hpp"
 #include "device/binary_ng_device_operation.hpp"
+#include "ttnn/operations/copy.hpp"
 #include "ttnn/operations/core/core.hpp"
+
+ttnn::Tensor typecast_to(ttnn::DataType dtype, const ttnn::Tensor& input) {
+    return input.get_dtype() == dtype ? input : ttnn::typecast(input, dtype);
+}
+
+bool needs_typecast_to_bfloat16(const ttnn::DataType input) {
+    return (input == ttnn::DataType::BFLOAT8_B || input == ttnn::DataType::BFLOAT4_B);
+}
 
 namespace ttnn::operations::binary_ng {
 
