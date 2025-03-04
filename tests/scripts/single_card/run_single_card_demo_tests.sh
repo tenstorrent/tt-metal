@@ -61,6 +61,9 @@ run_common_func_tests() {
   #RoBERTa
   pytest --disable-warnings models/demos/roberta/demo/demo.py --timeout 600; fail+=$?
 
+  # Whisper conditional generation
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/whisper/demo/demo.py --input-path="models/demos/whisper/demo/dataset/conditional_generation" -k "conditional_generation"; fail+=$?
+
   return $fail
 }
 

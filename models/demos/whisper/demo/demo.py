@@ -424,7 +424,9 @@ def test_demo_for_audio_classification(
 )
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
-def test_demo_for_audio_classification_dataset(ttnn_model, device, use_program_cache, enable_async_mode):
+def test_demo_for_audio_classification_dataset(ttnn_model, device, use_program_cache, enable_async_mode, is_ci_env):
+    if is_ci_env:
+        pytest.skip("Skipping test in CI since it provides redundant testing")
     return run_demo_functional_whisper_for_audio_classification_dataset(ttnn_model, device)
 
 
@@ -450,5 +452,7 @@ def test_demo_for_conditional_generation(
 )
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
-def test_demo_for_conditional_generation_dataset(ttnn_model, device, use_program_cache, enable_async_mode):
+def test_demo_for_conditional_generation_dataset(ttnn_model, device, use_program_cache, enable_async_mode, is_ci_env):
+    if is_ci_env:
+        pytest.skip("Skipping test in CI since it provides redundant testing")
     return run_demo_functional_whisper_for_conditional_generation_dataset(ttnn_model, device)
