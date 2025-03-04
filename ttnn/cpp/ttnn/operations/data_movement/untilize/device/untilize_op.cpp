@@ -120,6 +120,14 @@ operation::ProgramWithCallbacks Untilize::create_program(
         return detail::untilize_single_core(
             input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
     }
+    if (this->sub_core_grids.has_value()) {
+        return detail::untilize_multi_core_parallelize_column_subgrid(
+            input_tensor_a,
+            output_tensor,
+            this->use_pack_untilize,
+            this->fp32_dest_acc_en,
+            this->sub_core_grids.value());
+    }
     if (!this->enough_space_height) {
         return detail::untilize_multi_core_block(
             input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
