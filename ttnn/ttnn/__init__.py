@@ -230,6 +230,7 @@ from ttnn.core import (
     get_memory_config,
     light_metal_begin_capture,
     light_metal_end_capture,
+    LightMetalReplay,
     create_sharded_memory_config,
     create_sharded_memory_config_,
     dump_memory_config,

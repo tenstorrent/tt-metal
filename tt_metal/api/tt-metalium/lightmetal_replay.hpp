@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 #include <optional>
-#include <lightmetal_binary.hpp>
+#include <tt-metalium/lightmetal_binary.hpp>
 
 #include <tt-metalium/device.hpp>
 
@@ -54,12 +54,12 @@ inline namespace v0 {
 class LightMetalReplay {
 public:
     // Constructor that initializes the class with a binary blob and transfers ownership of the blob.
-    explicit LightMetalReplay(LightMetalBinary&& binary);
+    explicit LightMetalReplay(LightMetalBinary&& binary, IDevice* device = nullptr);
 
-    // Execute the stored LightMetal binary by looping over all commands, and execting them.
+    // Run the stored LightMetal binary by looping over all commands, and executing them.
     // Returns true if passed.  Currently has no side-effects/artifacts returned to user,
     // may change in the future.
-    bool execute_binary();
+    bool run();
 
 private:
     // Executor functions for all traced host API calls (commands)
