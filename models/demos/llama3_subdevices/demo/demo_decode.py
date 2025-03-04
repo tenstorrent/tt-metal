@@ -408,7 +408,7 @@ def run_llama3_demo(
         iteration_time_start = time()
 
         # Execute trace
-        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
 
         # Update current pos and mat idxs on host and send to device
         # TODO This is required for now since we cannot ttnn.plus_one(rot_mat_idxs) while it being uint32.

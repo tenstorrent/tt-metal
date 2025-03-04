@@ -135,7 +135,7 @@ class TtLlamaMLP(LightweightModule):
             self.w1,
             compute_kernel_config=self.args.compute_kernel_config_lofi
             if self.four_bit_mlp
-            else self.args.compute_kernel_config_hifi2_fp16,
+            else self.args.compute_kernel_config_hifi2,
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
             dtype=ttnn.bfloat8_b if TG else ttnn.bfloat16,
             program_config=pc_1,
@@ -148,7 +148,7 @@ class TtLlamaMLP(LightweightModule):
             self.w3,
             compute_kernel_config=self.args.compute_kernel_config_lofi
             if self.four_bit_mlp
-            else self.args.compute_kernel_config_hifi2_fp16,
+            else self.args.compute_kernel_config_hifi2,
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
             dtype=ttnn.bfloat8_b if TG else ttnn.bfloat16,
             program_config=pc_3,
@@ -231,7 +231,7 @@ class TtLlamaMLP(LightweightModule):
             w1_out_reduced,
             w3_out_reduced,
             input_tensor_a_activation=ttnn.UnaryOpType.SILU,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
             memory_config=w1_out_reduced.memory_config(),
         )
 
@@ -243,7 +243,7 @@ class TtLlamaMLP(LightweightModule):
         w2_out = ttnn.linear(
             w2_in,
             self.w2,
-            compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
+            compute_kernel_config=self.args.compute_kernel_config_hifi2,
             dtype=ttnn.bfloat8_b,
             program_config=pc_2,
             memory_config=(self.model_config["FF2_OUT_RING_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG)
@@ -256,7 +256,7 @@ class TtLlamaMLP(LightweightModule):
         ttnn.deallocate(w2_in)
 
         w2_out_reduced = self.tt_ccl.line_all_reduce(
-            w2_out, cluster_axis=0, num_links=4, memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"]
+            w2_out, cluster_axis=0, num_links=3, memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"]
         )
         # print("reduced", w2_out_reduced)
 
