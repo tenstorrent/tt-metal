@@ -142,6 +142,21 @@ private:
 
 }  // namespace
 
+std::vector<Tensor> TensorToMesh::map(const Tensor& tensor) const {
+    // This function should never be called directly, it's just to satisfy the linker
+    TT_THROW("Pure virtual function 'map' called - please use or define concrete implementations instead.");
+}
+
+tt::tt_metal::DistributedTensorConfig TensorToMesh::config() const {
+    // This function should never be called directly, it's just to satisfy the linker
+    TT_THROW("Pure virtual function 'config' called - please use or define concrete implementations instead.");
+}
+
+Tensor MeshToTensor::compose(const std::vector<Tensor>& tensors) const {
+    // This function should never be called directly, it's just to satisfy the linker
+    TT_THROW("Pure virtual function 'compose' called  - please use or define concrete implementations instead.");
+}
+
 std::unique_ptr<TensorToMesh> replicate_tensor_to_mesh_mapper(MeshDevice& mesh_device) {
     return std::make_unique<ReplicateTensorToMesh>(mesh_device.num_devices());
 }
