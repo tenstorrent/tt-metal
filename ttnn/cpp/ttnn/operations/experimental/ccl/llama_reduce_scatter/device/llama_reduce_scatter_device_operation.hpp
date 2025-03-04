@@ -35,6 +35,7 @@ struct LlamaReduceScatterDeviceOperation {
             tt::tt_metal::KernelHandle unary_reader_kernel_id;
             tt::tt_metal::KernelHandle unary_writer_kernel_id;
             tt::tt_metal::KernelHandle compute_kernel_id;
+            std::vector<uint32_t> cb_ids;
             CoreRangeSet core_range;
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
