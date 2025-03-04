@@ -9,6 +9,9 @@ on:
       runner-label:
         required: true
         type: string
+      docker-image:
+        required: true
+        type: string
       timeout:
         required: false
         type: number
@@ -34,6 +37,9 @@ on:
           - N150
           - N300
           - BH
+      docker-image:
+        required: true
+        type: string
       timeout:
         required: false
         type: number
