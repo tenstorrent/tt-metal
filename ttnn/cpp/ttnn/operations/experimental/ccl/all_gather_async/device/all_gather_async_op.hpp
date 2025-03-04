@@ -29,6 +29,7 @@ enum class AllGatherAsyncVersion {
     GENERIC = 0,
     MINIMAL_INTERLEAVED_32 = 1,
     LLAMA_POST_BINARY_MATMUL = 2,
+    MINIMAL_SHARDED_32 = 3,
 };
 
 struct AllGatherAsync {
@@ -129,6 +130,19 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_w
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode);
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32_any(
+    const Tensor& input_tensor,
+    std::optional<IDevice*> forward_device,
+    std::optional<IDevice*> backward_device,
+    Tensor& output_tensor,
+    const uint32_t dim,
+    const uint32_t num_links,
+    const uint32_t ring_size,
+    const uint32_t ring_index,
+    ccl::Topology topology,
+    const GlobalSemaphore& semaphore,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    bool enable_persistent_fabric_mode);
+tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_sharded_dim3_1_1_32_any(
     const Tensor& input_tensor,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
