@@ -13,8 +13,7 @@
 #include "ttnn/decorators.hpp"
 #include "device/conv3d_device_operation.hpp"
 
-namespace ttnn::operations::conv {
-namespace conv3d {
+namespace ttnn::operations::experimental::conv3d {
 
 struct ExecuteConv3d {
     static ttnn::Tensor invoke(
@@ -35,11 +34,11 @@ struct ExecuteConv3d {
         std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };
 
-}  // namespace conv3d
+}  // namespace ttnn::operations::experimental::conv3d
 
-}  // namespace ttnn::operations::conv
-namespace ttnn {
-constexpr auto conv3d =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::conv3d", ttnn::operations::conv::conv3d::ExecuteConv3d>();
+namespace ttnn::experimental {
+constexpr auto conv3d = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::conv3d",
+    ttnn::operations::experimental::conv3d::ExecuteConv3d>();
 
 }

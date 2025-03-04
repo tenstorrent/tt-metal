@@ -11,8 +11,7 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::conv {
-namespace conv3d {
+namespace ttnn::operations::experimental::conv3d {
 
 void Conv3dOp::validate(
     const std::vector<Tensor>& input_tensors,
@@ -155,5 +154,4 @@ operation::ProgramWithCallbacks Conv3dOp::create_program(
     return detail::conv3d_factory(act_tensor, weight_tensor, bias_tensor, config, output_tensor, compute_kernel_config);
 }
 
-}  // namespace conv3d
-}  // namespace ttnn::operations::conv
+}  // namespace ttnn::operations::experimental::conv3d

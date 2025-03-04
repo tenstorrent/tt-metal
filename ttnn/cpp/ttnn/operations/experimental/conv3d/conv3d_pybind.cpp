@@ -11,19 +11,17 @@
 
 namespace py = pybind11;
 
-namespace ttnn {
-namespace operations::conv {
-namespace conv3d {
+namespace ttnn::operations::experimental::conv3d::detail {
 
-void py_bind_conv3d(py::module& module) {
+void py_bind_conv3d(pybind11::module& module) {
     bind_registered_operation(
         module,
-        ttnn::conv3d,
+        ttnn::experimental::conv3d,
         R"doc(
         Conv 3D
         )doc",
         ttnn::pybind_overload_t{
-            [](const decltype(ttnn::conv3d)& self,
+            [](const decltype(ttnn::experimental::conv3d)& self,
                const ttnn::Tensor& input_tensor,
                const ttnn::Tensor& weight_tensor,
                const std::optional<ttnn::Tensor>& bias_tensor,
@@ -97,6 +95,4 @@ void py_bind_conv3d(py::module& module) {
     py_conv3d_config.def("__repr__", [](const Conv3dConfig& config) { return fmt::format("{}", config); });
 }
 
-}  // namespace conv3d
-}  // namespace operations::conv
-}  // namespace ttnn
+}  // namespace ttnn::operations::experimental::conv3d::detail

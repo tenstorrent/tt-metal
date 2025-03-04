@@ -11,8 +11,9 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::conv::conv3d {
+namespace ttnn::operations::experimental::conv3d {
 
 namespace detail {
 inline std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
@@ -135,4 +136,4 @@ struct Conv3dOp {
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
 };
 
-}  // namespace ttnn::operations::conv::conv3d
+}  // namespace ttnn::operations::experimental::conv3d

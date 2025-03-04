@@ -9,12 +9,12 @@
 #include <tt-metalium/constants.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/run_operation.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::conv {
-namespace conv3d {
+namespace ttnn::operations::experimental::conv3d {
 
 ttnn::Tensor ExecuteConv3d::invoke(
     QueueId queue_id,
@@ -54,5 +54,4 @@ ttnn::Tensor ExecuteConv3d::invoke(
         DefaultQueueId, input_tensor, weight_tensor, bias_tensor, config, memory_config, compute_kernel_config);
 }
 
-}  // namespace conv3d
-}  // namespace ttnn::operations::conv
+}  // namespace ttnn::operations::experimental::conv3d

@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include <algorithm>
 #include "dataflow_api.h"
 
 inline int32_t clampIndex(int32_t idx, int32_t lower_bound, int32_t upper_bound) {
@@ -77,7 +76,6 @@ void kernel_main() {
     constexpr bool is_dram = true;
     const InterleavedAddrGen<is_dram> in_reader = {.bank_base_address = in_addr, .page_size = in_row_size_bytes};
 
-    constexpr uint32_t BF16_BYTES = 2;
     constexpr uint32_t num_patches = T_block_size * H_block_size * W_block_size;
     constexpr uint32_t H_in_W_in = H_in * W_in;
 

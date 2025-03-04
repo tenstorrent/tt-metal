@@ -6,12 +6,8 @@
 
 #include <pybind11/pybind11.h>
 
-namespace ttnn {
-namespace operations::conv {
-namespace conv3d {
+namespace ttnn::operations::experimental::conv3d::detail {
 
 void py_bind_conv3d(pybind11::module& module);
 
-}  // namespace conv3d
-}  // namespace operations::conv
-}  // namespace ttnn
+}  // namespace ttnn::operations::experimental::conv3d::detail

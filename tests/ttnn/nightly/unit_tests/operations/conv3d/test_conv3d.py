@@ -105,7 +105,7 @@ def test_conv3d_sweep_blocks(
             compute_with_storage_grid_size=grid_size,
         )
 
-        tt_output = ttnn.conv3d(
+        tt_output = ttnn.experimental.conv3d(
             input_tensor=tt_input,
             weight_tensor=tt_weight,
             bias_tensor=tt_bias,
@@ -207,7 +207,7 @@ def test_conv3d_mochi_shapes(
         compute_with_storage_grid_size=grid_size,
     )
 
-    tt_output = ttnn.conv3d(
+    tt_output = ttnn.experimental.conv3d(
         input_tensor=tt_input,
         weight_tensor=tt_weight,
         bias_tensor=tt_bias,

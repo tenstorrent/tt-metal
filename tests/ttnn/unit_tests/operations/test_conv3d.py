@@ -149,7 +149,7 @@ def run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padd
         out_channels, kernel_size, stride, padding, padding_mode, compute_with_storage_grid_size=grid_size
     )
 
-    tt_output = ttnn.conv3d(
+    tt_output = ttnn.experimental.conv3d(
         input_tensor=tt_input,
         weight_tensor=tt_weight,
         bias_tensor=tt_bias,

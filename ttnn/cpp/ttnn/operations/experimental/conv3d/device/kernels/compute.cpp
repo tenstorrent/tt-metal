@@ -13,18 +13,18 @@
 
 // Slightly modified from compute_common.hpp
 void matmul_blocks(
-    const uint32_t& in0_cb,
-    const uint32_t& in1_cb,
-    const uint32_t& out_cb,
-    const uint32_t& M,
-    const uint32_t& N,
-    const uint32_t& K,
-    const uint32_t& in0_num_subblocks,
-    const uint32_t& in1_num_subblocks,
-    const uint32_t& in0_block_w,
-    const uint32_t& subblock_h,
-    const uint32_t& subblock_w,
-    const bool& transpose) {
+    const uint32_t in0_cb,
+    const uint32_t in1_cb,
+    const uint32_t out_cb,
+    const uint32_t M,
+    const uint32_t N,
+    const uint32_t K,
+    const uint32_t in0_num_subblocks,
+    const uint32_t in1_num_subblocks,
+    const uint32_t in0_block_w,
+    const uint32_t subblock_h,
+    const uint32_t subblock_w,
+    const bool transpose) {
     // precondition: in0_cb has M*K produced
     // preconditino: in1_cb has K*N produced
     // postcondition: in0_cb is full, in1_cb is empty
@@ -190,14 +190,8 @@ void MAIN {
 
             // 3D blocking loops over assigned ranges:
             for (uint32_t t_block = t_out_start; t_block < t_out_end; t_block += T_block_size) {
-                const uint32_t t_block_end = std::min(t_block + T_block_size, t_out_end);
-
                 for (uint32_t h_block = h_out_start; h_block < h_out_end; h_block += H_block_size) {
-                    const uint32_t h_block_end = std::min(h_block + H_block_size, h_out_end);
-
                     for (uint32_t w_block = w_out_start; w_block < w_out_end; w_block += W_block_size) {
-                        const uint32_t w_block_end = std::min(w_block + W_block_size, w_out_end);
-
                         // Tilize row-major patches
                         uint32_t patch_rows_left = num_patches;
                         tilize_init_short(cb_vol2col_rm, matmul_K_t, cb_vol2col_tiled);
