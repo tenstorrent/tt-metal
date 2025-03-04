@@ -80,7 +80,7 @@ Tensor tensor_reshape(
                 return Tensor(updated_storage, new_spec);
             }
             */
-            if constexpr (std::is_same_v<T, DeviceStorage>) {
+            if constexpr (std::is_same_v<T, tt::tt_metal::DeviceStorage>) {
                 if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
                     if (tensor.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
                         tt::tt_metal::DeviceStorage device_storage = std::get<T>(tensor.get_storage());
