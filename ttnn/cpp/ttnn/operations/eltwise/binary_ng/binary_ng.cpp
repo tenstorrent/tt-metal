@@ -1,16 +1,17 @@
-
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary_ng.hpp"
 #include "device/binary_ng_device_operation.hpp"
+#include "ttnn/operations/copy.hpp"
+#include "ttnn/operations/core/core.hpp"
 
-inline ttnn::Tensor typecast_to(ttnn::DataType dtype, const ttnn::Tensor& input) {
+ttnn::Tensor typecast_to(ttnn::DataType dtype, const ttnn::Tensor& input) {
     return input.get_dtype() == dtype ? input : ttnn::typecast(input, dtype);
 }
 
-inline bool needs_typecast_to_bfloat16(const ttnn::DataType input) {
+bool needs_typecast_to_bfloat16(const ttnn::DataType input) {
     return (input == ttnn::DataType::BFLOAT8_B || input == ttnn::DataType::BFLOAT4_B);
 }
 
@@ -109,28 +110,6 @@ Tensor BinaryNg<binary_op_type>::invoke(
 
 template <BinaryOpType binary_op_type>
 Tensor BinaryNg<binary_op_type>::invoke(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    const std::optional<const DataType>& output_dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> optional_output_tensor,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations) {
-    return invoke(
-        DefaultQueueId,
-        input_tensor_a,
-        input_tensor_b,
-        output_dtype,
-        memory_config,
-        optional_output_tensor,
-        lhs_activations,
-        rhs_activations,
-        post_activations);
-}
-
-template <BinaryOpType binary_op_type>
-Tensor BinaryNg<binary_op_type>::invoke(
     QueueId queue_id,
     const Tensor& input_tensor_a,
     float scalar,
@@ -209,28 +188,6 @@ Tensor BinaryNg<binary_op_type>::invoke(
 }
 
 template <BinaryOpType binary_op_type>
-Tensor BinaryNg<binary_op_type>::invoke(
-    const Tensor& input_tensor_a,
-    float scalar,
-    const std::optional<const DataType>& output_dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> optional_output_tensor,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations) {
-    return invoke(
-        DefaultQueueId,
-        input_tensor_a,
-        scalar,
-        output_dtype,
-        memory_config,
-        optional_output_tensor,
-        lhs_activations,
-        rhs_activations,
-        post_activations);
-}
-
-template <BinaryOpType binary_op_type>
 Tensor InplaceBinaryNg<binary_op_type>::invoke(
     QueueId queue_id,
     const Tensor& input_tensor_a,
@@ -252,25 +209,6 @@ Tensor InplaceBinaryNg<binary_op_type>::invoke(
 
 template <BinaryOpType binary_op_type>
 Tensor InplaceBinaryNg<binary_op_type>::invoke(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations) {
-    return BinaryNg<binary_op_type>::invoke(
-        DefaultQueueId,
-        input_tensor_a,
-        input_tensor_b,
-        input_tensor_a.get_dtype(),
-        input_tensor_a.memory_config(),
-        input_tensor_a,
-        lhs_activations,
-        rhs_activations,
-        post_activations);
-}
-
-template <BinaryOpType binary_op_type>
-Tensor InplaceBinaryNg<binary_op_type>::invoke(
     QueueId queue_id,
     const Tensor& input_tensor_a,
     const float scalar,
@@ -279,25 +217,6 @@ Tensor InplaceBinaryNg<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations) {
     return BinaryNg<binary_op_type>::invoke(
         queue_id,
-        input_tensor_a,
-        scalar,
-        input_tensor_a.get_dtype(),
-        input_tensor_a.memory_config(),
-        input_tensor_a,
-        lhs_activations,
-        rhs_activations,
-        post_activations);
-}
-
-template <BinaryOpType binary_op_type>
-Tensor InplaceBinaryNg<binary_op_type>::invoke(
-    const Tensor& input_tensor_a,
-    const float scalar,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations) {
-    return BinaryNg<binary_op_type>::invoke(
-        DefaultQueueId,
         input_tensor_a,
         scalar,
         input_tensor_a.get_dtype(),
@@ -338,16 +257,6 @@ Tensor BinaryNgBitwise<binary_op_type>::invoke(
 
 template <BinaryOpType binary_op_type>
 Tensor BinaryNgBitwise<binary_op_type>::invoke(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> optional_output_tensor) {
-    return BinaryNgBitwise<binary_op_type>::invoke(
-        DefaultQueueId, input_tensor_a, input_tensor_b, memory_config, optional_output_tensor);
-}
-
-template <BinaryOpType binary_op_type>
-Tensor BinaryNgBitwise<binary_op_type>::invoke(
     QueueId queue_id,
     const Tensor& input_tensor_a,
     float scalar,
@@ -371,16 +280,6 @@ Tensor BinaryNgBitwise<binary_op_type>::invoke(
         lhs_activations,
         rhs_activations,
         post_activations);
-}
-
-template <BinaryOpType binary_op_type>
-Tensor BinaryNgBitwise<binary_op_type>::invoke(
-    const Tensor& input_tensor_a,
-    float scalar,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> optional_output_tensor) {
-    return BinaryNgBitwise<binary_op_type>::invoke(
-        DefaultQueueId, input_tensor_a, scalar, memory_config, optional_output_tensor);
 }
 
 template struct BinaryNg<BinaryOpType::ADD>;

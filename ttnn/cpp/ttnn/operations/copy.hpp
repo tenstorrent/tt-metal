@@ -6,7 +6,6 @@
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/common/queue_id.hpp"
-#include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
 #include "cpp/ttnn/operations/experimental/copy/typecast/typecast.hpp"
@@ -75,14 +74,6 @@ struct Typecast {
                 {static_cast<float>(input_dtype), static_cast<float>(output_dtype)})},
             memory_config_arg,
             optional_output_tensor);
-    }
-
-    static Tensor invoke(
-        const Tensor& input,
-        const DataType& output_dtype,
-        const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        return invoke(DefaultQueueId, input, output_dtype, memory_config_arg, optional_output_tensor);
     }
 
     // eltwise_typecast implementation in tt_eager :
