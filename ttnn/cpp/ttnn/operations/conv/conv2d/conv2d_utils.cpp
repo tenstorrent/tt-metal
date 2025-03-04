@@ -94,7 +94,7 @@ ParallelConfig determine_parallel_config(
     bool is_out_tiled,
     uint32_t act_block_h_override) {
     uint32_t effective_tile_height = is_out_tiled ? tt::constants::TILE_HEIGHT : 1;
-    uint32_t effective_tile_width = is_out_tiled ? tt::constants::TILE_WIDTH : 1;
+    uint32_t effective_tile_width = tt::constants::TILE_WIDTH;
     uint32_t out_nhw_ntiles =
         tt::round_up(batch_size * output_height * output_width, tt::constants::TILE_HEIGHT) / effective_tile_height;
     uint32_t input_channles_ntiles = tt::div_up(input_channels, effective_tile_width);
