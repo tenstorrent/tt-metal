@@ -4,8 +4,7 @@
 
 #pragma once
 
-#include <pybind11/pybind11.h>
-
+#include "pybind11/pybind_fwd.hpp"
 namespace ttnn::operations::reduction::detail {
 void bind_reduction_topk_operation(pybind11::module& module);
 }  // namespace ttnn::operations::reduction::detail

@@ -2,13 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "topk_pybind.hpp"
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
-
-#include "cpp/pybind11/decorators.hpp"
-
 #include "ttnn/operations/reduction/topk/topk.hpp"
+#include "pybind11/decorators.hpp"
 
 namespace ttnn::operations::reduction::detail {
 namespace py = pybind11;
