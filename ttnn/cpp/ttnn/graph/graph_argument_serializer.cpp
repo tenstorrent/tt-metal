@@ -50,8 +50,8 @@ std::string graph_demangle(const std::string_view& name) {
 
 GraphArgumentSerializer::GraphArgumentSerializer() { initialize(); }
 
-GraphArgumentSerializer* GraphArgumentSerializer::instance() {
-    static GraphArgumentSerializer* new_instance = new GraphArgumentSerializer();
+GraphArgumentSerializer& GraphArgumentSerializer::instance() {
+    static GraphArgumentSerializer new_instance;
     return new_instance;
 }
 
