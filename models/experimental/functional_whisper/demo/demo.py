@@ -300,34 +300,6 @@ def run_demo_functional_whisper_for_audio_classification_inference(input_path, t
         logger.info(predicted_label)
 
 
-def run_demo_functional_whisper_for_conditional_generation_inference(input_path, ttnn_model, device, num_inputs):
-    torch.manual_seed(0)
-
-    # instantiate model inference pipeline
-    model_pipeline = create_functional_whisper_for_conditional_generation_inference_pipeline(ttnn_model, device)
-
-    # load data
-    input_data = load_input_paths(input_path)
-
-    if len(input_data) < num_inputs:
-        assert False, "num_inputs exceeds number of audio files available in folder"
-    output_list = {}
-
-    for i in range(num_inputs):
-        input_file_path = input_data[i]
-        samplerate, data = wavfile.read(input_file_path)
-
-        # perform model inference
-        ttnn_output = model_pipeline(data, samplerate, stream=False)
-
-        logger.info("Model Output")
-        logger.info(ttnn_output)
-        output_list[i] = ttnn_output
-    for i in range(len(output_list)):
-        logger.info(f"output for input {i+1}")
-        logger.info(output_list[i])
-
-
 def run_demo_functional_whisper_for_audio_classification_dataset(ttnn_model, device):
     torch.manual_seed(1234)
 
@@ -380,6 +352,34 @@ def run_demo_functional_whisper_for_audio_classification_dataset(ttnn_model, dev
     logger.info(predicted_label)
 
 
+def run_demo_functional_whisper_for_conditional_generation_inference(input_path, ttnn_model, device, num_inputs):
+    torch.manual_seed(0)
+
+    # instantiate model inference pipeline
+    model_pipeline = create_functional_whisper_for_conditional_generation_inference_pipeline(ttnn_model, device)
+
+    # load data
+    input_data = load_input_paths(input_path)
+
+    if len(input_data) < num_inputs:
+        assert False, "num_inputs exceeds number of audio files available in folder"
+    output_list = {}
+
+    for i in range(num_inputs):
+        input_file_path = input_data[i]
+        samplerate, data = wavfile.read(input_file_path)
+
+        # perform model inference
+        ttnn_output = model_pipeline(data, samplerate, stream=False)
+
+        logger.info("Model Output")
+        logger.info(ttnn_output)
+        output_list[i] = ttnn_output
+    for i in range(len(output_list)):
+        logger.info(f"output for input {i+1}")
+        logger.info(output_list[i])
+
+
 def run_demo_functional_whisper_for_conditional_generation_dataset(ttnn_model, device):
     torch.manual_seed(0)
 
@@ -418,6 +418,16 @@ def test_demo_for_audio_classification(
     "ttnn_model",
     (ttnn_optimized_functional_whisper,),
 )
+@pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
+def test_demo_for_audio_classification_dataset(ttnn_model, device, use_program_cache, enable_async_mode):
+    return run_demo_functional_whisper_for_audio_classification_dataset(ttnn_model, device)
+
+
+@pytest.mark.parametrize(
+    "ttnn_model",
+    (ttnn_optimized_functional_whisper,),
+)
 @pytest.mark.parametrize(
     "num_inputs",
     ((2),),
@@ -428,16 +438,6 @@ def test_demo_for_conditional_generation(
     input_path, ttnn_model, device, num_inputs, use_program_cache, enable_async_mode
 ):
     return run_demo_functional_whisper_for_conditional_generation_inference(input_path, ttnn_model, device, num_inputs)
-
-
-@pytest.mark.parametrize(
-    "ttnn_model",
-    (ttnn_optimized_functional_whisper,),
-)
-@pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
-def test_demo_for_audio_classification_dataset(ttnn_model, device, use_program_cache, enable_async_mode):
-    return run_demo_functional_whisper_for_audio_classification_dataset(ttnn_model, device)
 
 
 @pytest.mark.parametrize(
