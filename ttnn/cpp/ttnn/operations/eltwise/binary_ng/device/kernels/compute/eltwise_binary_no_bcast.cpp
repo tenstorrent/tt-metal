@@ -9,10 +9,13 @@
 
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils.hpp"
+#include "debug/dprint.h"
 
 namespace NAMESPACE {
 void MAIN {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
+
+    DPRINT << "Test string COMPUTE" << ENDL();
 
     constexpr auto cb_pre_lhs = tt::CBIndex::c_0;
     constexpr auto cb_pre_rhs = tt::CBIndex::c_1;
