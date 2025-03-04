@@ -19,20 +19,27 @@ autograd::TensorPtr rope(const autograd::TensorPtr& input, const RotaryEmbedding
             std::to_string(input->get_value().logical_shape().rank()));
     }
 
+    // ensure everything in sight is interleaved over L1
+    // FIXME: can the params just always be in L1?
+    auto to_l1 = [](const auto& t) { return ttnn::to_memory_config(t, ttnn::L1_MEMORY_CONFIG); };
+    auto to_dram = [](const auto& t) { return ttnn::to_memory_config(t, ttnn::DRAM_MEMORY_CONFIG); };
+
+    auto l1_input = ttnn::to_memory_config(input->get_value(), ttnn::L1_MEMORY_CONFIG);
+
     // FIXME: mostly use defaults for now, try tweaking.
     auto out_tensor = ttnn::experimental::rotary_embedding_llama(
-        input->get_value(), params.cos_cache, params.sin_cache, params.trans_mat);
-    auto out = autograd::create_tensor(out_tensor);
+        l1_input, to_l1(params.cos_cache), to_l1(params.sin_cache), to_l1(params.trans_mat));
+    auto out = autograd::create_tensor(to_dram(out_tensor));
 
     // In the backward pass we rotate by -θ, so we need negated cos and sin
     // caches. Note: we can just reuse trans_mat here since the data movement
     // should be the same on the backward pass (we use the same trick to speed
     // up the matmul, and the matrix used is specified by the cos/sin caches.)
-    autograd::GradFunction grad_fn = [input, params, out]() {
+    autograd::GradFunction grad_fn = [to_l1, to_dram, input, params, out]() {
         auto dL_dout = out->get_grad();
         auto dL_dinput = ttnn::experimental::rotary_embedding_llama(
-            dL_dout, params.neg_cos_cache, params.neg_sin_cache, params.trans_mat);
-        input->add_grad(dL_dinput);
+            to_l1(dL_dout), to_l1(params.neg_cos_cache), to_l1(params.neg_sin_cache), to_l1(params.trans_mat));
+        input->add_grad(to_dram(dL_dinput));
     };
 
     auto links = autograd::get_links(input);
