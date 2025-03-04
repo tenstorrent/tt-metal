@@ -76,11 +76,11 @@ tt::tt_metal::Tensor sum_ttnn(const tt::tt_metal::Tensor& t, int dim, bool keep_
     return ttnn::sum(t, dim, keep_dim, std::nullopt, core::ComputeKernelConfig::precise());
 }
 
-tt::tt_metal::Tensor to_l1(const tt::tt_metal::Tensor& t) {
+tt::tt_metal::Tensor to_l1_interleaved(const tt::tt_metal::Tensor& t) {
     return ttnn::to_memory_config(t, ttnn::L1_MEMORY_CONFIG);
 }
 
-tt::tt_metal::Tensor to_dram(const tt::tt_metal::Tensor& t) {
+tt::tt_metal::Tensor to_dram_interleaved(const tt::tt_metal::Tensor& t) {
     return ttnn::to_memory_config(t, ttnn::DRAM_MEMORY_CONFIG);
 }
 

@@ -14,6 +14,7 @@
 #include "core/ttnn_all_includes.hpp"
 #include "core/xtensor_utils.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
+#include "xtensor/xtensor_forward.hpp"
 
 namespace ttml::ops {
 
@@ -70,16 +71,19 @@ void validate_rope_input_and_params(const autograd::TensorPtr& input, const Rota
 
 // trans_mat, sin_cache, cos_cache all precomputed and stored somewhere in the module hierarchy
 autograd::TensorPtr rope(const autograd::TensorPtr& input, const RotaryEmbeddingParams& params) {
-    using namespace ttml::ttnn_fixed;
+    namespace f = ttml::ttnn_fixed;
     validate_rope_input_and_params(input, params);
 
     // we need to ensure everything in sight is interleaved over L1 before
-    // calling ttnn rope, whence the calls to ttnn_fixed::to_l1.
+    // calling ttnn rope, whence the calls to ttnn_fixed::f::to_l1_interleaved.
 
     // FIXME: mostly use defaults for now, try tweaking.
     auto out_tensor = ttnn::experimental::rotary_embedding_llama(
-        to_l1(input->get_value()), to_l1(params.cos_cache), to_l1(params.sin_cache), to_l1(params.trans_mat));
-    auto out = autograd::create_tensor(to_dram(out_tensor));
+        f::to_l1_interleaved(input->get_value()),
+        f::to_l1_interleaved(params.cos_cache),
+        f::to_l1_interleaved(params.sin_cache),
+        f::to_l1_interleaved(params.trans_mat));
+    auto out = autograd::create_tensor(f::to_dram_interleaved(out_tensor));
 
     // In the backward pass we rotate by -θ, so we need negated cos and sin
     // caches. Note: we can just reuse trans_mat here since the data movement
@@ -88,8 +92,11 @@ autograd::TensorPtr rope(const autograd::TensorPtr& input, const RotaryEmbedding
     autograd::GradFunction grad_fn = [input, params, out]() {
         auto dL_dout = out->get_grad();
         auto dL_dinput = ttnn::experimental::rotary_embedding_llama(
-            to_l1(dL_dout), to_l1(params.neg_cos_cache), to_l1(params.neg_sin_cache), to_l1(params.trans_mat));
-        input->add_grad(to_dram(dL_dinput));
+            f::to_l1_interleaved(dL_dout),
+            f::to_l1_interleaved(params.neg_cos_cache),
+            f::to_l1_interleaved(params.neg_sin_cache),
+            f::to_l1_interleaved(params.trans_mat));
+        input->add_grad(f::to_dram_interleaved(dL_dinput));
     };
 
     auto links = autograd::get_links(input);
@@ -101,13 +108,9 @@ autograd::TensorPtr rope(const autograd::TensorPtr& input, const RotaryEmbedding
 std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(uint32_t head_dim, uint32_t sequence_length, float theta = 10000.0F) {
     int d = head_dim;
     // compute freqs: 1.0 / (theta ** (2 * (i-1) / head_dim)) for i in [1, head_dim/2]
-    std::vector<float> expt_data;
-    expt_data.reserve(d);
-    for (uint32_t i = 1; i <= d / 2; i++) {
-        expt_data.push_back(static_cast<float>(i - 1));
-        expt_data.push_back(static_cast<float>(i - 1));
-    }
-    xt::xarray<float> expt_xt = xt::adapt(expt_data);
+    xt::xarray<uint32_t> expt_data = xt::arange(0, d) / 2;
+    xt::xarray<float> expt_xt = xt::cast<float>(expt_data);
+
     expt_xt *= 2.0F / static_cast<float>(head_dim);
     xt::xarray<float> theta_pow = xt::pow(theta, expt_xt);
 
