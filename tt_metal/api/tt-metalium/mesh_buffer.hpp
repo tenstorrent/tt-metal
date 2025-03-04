@@ -27,7 +27,7 @@ struct DeviceLocalBufferConfig {
     std::optional<ShardSpecBuffer> shard_parameters;
 
     // The direction in which memory for this buffer is allocated.
-    bool bottom_up = false;
+    std::optional<bool> bottom_up;
 };
 
 // Specifies MeshBuffer that is replicated across the virtual mesh.
