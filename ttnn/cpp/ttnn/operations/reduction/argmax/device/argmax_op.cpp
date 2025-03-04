@@ -79,7 +79,7 @@ operation::ProgramWithCallbacks ArgMax::create_program(
     const auto& output_tensor = output_tensors.at(0);
     const auto normalized_dim = dim.has_value() ? *dim + input_tensor.get_padded_shape().rank() * (*dim < 0) : dim;
     if (use_multicore) {
-        return detail::argmax_multi_core(input_tensor, output_tensor, normalized_dim);
+        return detail::argmax_multi_core(input_tensor, output_tensor, normalized_dim, sub_core_grids);
     }
     return detail::argmax_single_core(input_tensor, output_tensor, normalized_dim);
 }
