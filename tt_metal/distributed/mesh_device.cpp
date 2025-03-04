@@ -22,6 +22,7 @@
 #include <sub_device_manager.hpp>
 #include <sub_device_types.hpp>
 #include "tt_metal/common/thread_pool.hpp"
+#include "tt_metal/api/tt-metalium/device_pool.hpp"
 
 #include <hal.hpp>
 #include <mesh_coord.hpp>
@@ -83,7 +84,11 @@ MeshDevice::ScopedDevices::ScopedDevices(
 
 MeshDevice::ScopedDevices::~ScopedDevices() {
     if (!opened_devices_.empty()) {
-        tt::tt_metal::detail::CloseDevices(opened_devices_);
+        std::vector<IDevice*> devices_to_close;
+        for (auto& [id, device] : opened_devices_) {
+            devices_to_close.push_back(device);
+        }
+        tt::DevicePool::instance().close_devices(devices_to_close, /*skip_synchronize=*/true);
     }
 }
 

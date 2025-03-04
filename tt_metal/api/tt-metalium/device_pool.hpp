@@ -51,7 +51,7 @@ public:
     tt_metal::IDevice* get_active_device(chip_id_t device_id) const;
     std::vector<tt_metal::IDevice*> get_all_active_devices() const;
     bool close_device(chip_id_t device_id);
-    void close_devices(const std::vector<tt_metal::IDevice*>& devices);
+    void close_devices(const std::vector<tt_metal::IDevice*>& devices, bool skip_synchronize = false);
     bool is_device_active(chip_id_t id) const;
     void register_worker_thread_for_device(tt_metal::IDevice* device, std::thread::id worker_thread_id);
     void unregister_worker_thread_for_device(tt_metal::IDevice* device);
