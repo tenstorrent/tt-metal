@@ -947,6 +947,13 @@ void Device::init_fabric() {
     // Note: the l1_barrier below is needed to be sure writes to cores that
     // don't get the GO mailbox (eg, storage cores) have all landed
     tt::Cluster::instance().l1_barrier(this->id());
+    const routing_info_t routing_info_enabled = {
+        .routing_enabled = 1,
+        .src_sent_valid_cmd = 0,
+        .dst_acked_valid_cmd = 0,
+    };
+    uint32_t routing_info_addr = tt::tt_metal::hal.get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::APP_ROUTING_INFO);
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = fabric_program_->logical_cores();
     for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();
          programmable_core_type_index++) {
@@ -960,6 +967,12 @@ void Device::init_fabric() {
             auto physical_core = this->virtual_core_from_logical_core(logical_core, core_type);
             tt::llrt::write_launch_msg_to_core(
                 this->id(), physical_core, msg, go_msg, this->get_dev_addr(physical_core, HalL1MemAddrType::LAUNCH));
+            if (core_type == CoreType::ETH) {
+                tt_cxy_pair virtual_eth_core(this->id(), physical_core);
+                // Enable internal ethernet routing
+                tt::Cluster::instance().write_core(
+                    (void*)&routing_info_enabled, sizeof(routing_info_t), virtual_eth_core, routing_info_addr, false);
+            }
         }
     }
 }
