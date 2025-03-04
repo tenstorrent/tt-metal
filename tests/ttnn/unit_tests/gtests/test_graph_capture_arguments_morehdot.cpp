@@ -27,23 +27,6 @@ TEST_P(TestGraphCaptureArgumentsMorehDot, MorehDot) {
         tt_input1, tt_input2, std::nullopt, DataType::BFLOAT16, std::nullopt, std::nullopt);
     auto trace = ttnn::graph::GraphProcessor::end_graph_capture();
     auto operations = ttnn::graph::extract_arguments(trace);
-    /*
-        int i =0;
-        for(auto operation : operations)
-        {
-            std::cout << "operation: " <<  i << std::endl;
-
-            int j = 0;
-            for (auto argument : operation)
-            {
-                std::cout << "argument[" <<  j  << "]" << std::endl;
-                std::cout << argument << std::endl;
-                j++;
-            }
-
-            i++;
-        }
-    */
 
     EXPECT_EQ(operations[0].size(), 6);
     EXPECT_EQ(
