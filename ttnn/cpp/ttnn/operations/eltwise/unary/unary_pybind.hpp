@@ -1823,7 +1823,7 @@ void py_module(py::module& module) {
         ttnn::round,
         "decimals", "no. of decimal places to round off to",
         R"doc(Round the input tensor to `decimals` decimal places.)doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc",
+        R"doc(BFLOAT16)doc",
         R"doc(Not supported on Grayskull.)doc");
     detail::bind_unary_composite_int(
         module,

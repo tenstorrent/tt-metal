@@ -15,13 +15,27 @@ namespace ckernel::sfpu {
 inline vInt float_to_int31(vFloat v) {
     vInt q = float_to_int16(v * 0x1p-15f, 0);
     vInt r = float_to_int16(v - int32_to_float(q, 0) * 0x1p15f, 0);
-    return (q << 15) + r;
+    v_if(r < 0) {
+        r = setsgn(r, 0);
+        q = (q << 15) - r;
+    }
+    v_else { q = (q << 15) + r; }
+    v_endif return q;
 }
 
 inline vFloat round_even(vFloat v) {
-    v_if(sfpi::abs(v) < 0x1p30f) { v = int32_to_float(float_to_int31(v), 0); }
+    vFloat result;
+    v_if(sfpi::abs(v) < 0x1p30f) {
+        result = int32_to_float(float_to_int31(v), 0);
+        v_if(sfpi::abs(v - result) == 0.5F) {
+            vInt res = float_to_int16(result);
+            res = res & 0x7FFE;
+            result = int32_to_float(res);
+        }
+        v_endif;
+    }
     v_endif;
-    return v;
+    return result;
 }
 
 template <bool APPROXIMATE, int ITERATIONS = 8>
@@ -53,14 +67,8 @@ void calculate_round(const int decimals) {
 
     for (int _ = 0; _ < ITERATIONS; ++_) {
         vFloat v = dst_reg[0];
-        vFloat result = inverse * round_even(v * coeff);
-        v_if(coeff == 1.0F && sfpi::abs(v - result) == 0.5F) {
-            vInt res = float_to_int16(result);
-            res = res & 0x7FFE;
-            result = int32_to_float(res);
-            result = setsgn(result, v);
-        }
-        v_endif;
+        vFloat result = inverse * round_even(sfpi::abs(v) * coeff);
+        result = setsgn(result, v);
         dst_reg[0] = result;
         ++dst_reg;
     }
