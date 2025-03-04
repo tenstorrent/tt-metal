@@ -19,11 +19,7 @@ void py_bind_fabric_api(pybind11::module& module) {
         .value("FABRIC_2D", tt::FabricConfig::FABRIC_2D)
         .value("CUSTOM", tt::FabricConfig::CUSTOM);  // DISABLED = 0, FABRIC_1D = 1, FABRIC_2D = 2, CUSTOM = 4
 
-    module.def(
-        "initialize_fabric_config",
-        &tt::tt_metal::detail::InitializeFabricConfig,
-        py::arg("config") = tt::FabricConfig::DISABLED,
-        py::kw_only());
+    module.def("initialize_fabric_config", &tt::tt_metal::detail::InitializeFabricConfig, py::arg("config"));
 }
 
 }  // namespace ttnn::fabric

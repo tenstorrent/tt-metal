@@ -190,7 +190,7 @@ def reset_fabric(fabric_config):
     import ttnn
 
     if fabric_config:
-        ttnn._ttnn.fabric.initialize_fabric_config(ttnn.FabricConfig.DISABLED)
+        ttnn.initialize_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
 # Set fabric config to passed in value
@@ -201,7 +201,7 @@ def set_fabric(fabric_config):
 
     # If fabric_config is not None, set it to fabric_config
     if fabric_config:
-        ttnn._ttnn.fabric.initialize_fabric_config(fabric_config)
+        ttnn.initialize_fabric_config(fabric_config)
 
 
 @pytest.fixture(scope="function")
