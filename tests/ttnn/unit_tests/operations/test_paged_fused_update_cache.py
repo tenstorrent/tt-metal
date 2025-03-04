@@ -85,14 +85,14 @@ def run_test_paged_fused_update_cache_decode(
         grid_end_coord = ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1)
         available_core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(grid_start_coord, grid_end_coord)})
     else:
-        grid_start_coord = sub_core_grids.ranges()[0].start_coord
+        grid_start_coord = sub_core_grids.ranges()[0].start
         available_core_grid = sub_core_grids
 
     shard_grid1 = ttnn.num_cores_to_corerangeset_in_subcoregrids(
         grid_start_coord, num_cores_per_cache, available_core_grid, True
     )
     available_core_grid = available_core_grid.subtract(shard_grid1)
-    grid_start_coord = available_core_grid.ranges()[0].start_coord
+    grid_start_coord = available_core_grid.ranges()[0].start
 
     shard_grid2 = ttnn.num_cores_to_corerangeset_in_subcoregrids(
         grid_start_coord, num_cores_per_cache, available_core_grid, True

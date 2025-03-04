@@ -32,12 +32,9 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_nlp_create_qkv_hea
 )
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_nlp_concat_heads_decode import run_test_concat_head
 from tests.ttnn.unit_tests.operations.test_paged_fused_update_cache import run_test_paged_fused_update_cache_decode
-
-
-@pytest.fixture()
-def set_dispatch_col(device_params):
-    device_params["dispatch_core_axis"] = ttnn.DispatchCoreAxis.COL
-    return device_params
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_rotary_embedding_llama import (
+    run_test_rotary_embedding_llama,
+)
 
 
 @skip_for_grayskull()
@@ -300,7 +297,7 @@ def test_llama_tg_NLPConcatHeadsDecodeDeviceOperation(
 @pytest.mark.parametrize("cache_idx", [127])
 @pytest.mark.parametrize("cache_dtype", [ttnn.bfloat8_b])
 @pytest.mark.parametrize("pcc", [0.9995])
-def test_llama_tg_ops_PagedUpdateCacheDeviceOperation(
+def test_llama_tg_PagedUpdateCacheDeviceOperation(
     mesh_device,
     paged_update,
     cache_idx,
@@ -331,15 +328,41 @@ def test_llama_tg_ops_PagedUpdateCacheDeviceOperation(
     )
 
 
+@skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize("batch, seq_len", ((8, 1),))
+@pytest.mark.parametrize(
+    "n_heads, n_kv_heads, head_dim",
+    ((8, 1, 128),),
+)
+@pytest.mark.parametrize("datatype", (ttnn.bfloat16,))
+@pytest.mark.parametrize("pcc", (0.9997,))
+def test_llama_tg_RotaryEmbeddingLlamaFusedQK(
+    batch,
+    seq_len,
+    n_heads,
+    n_kv_heads,
+    head_dim,
+    datatype,
+    pcc,
+    mesh_device,
+):
+    device = mesh_device.get_devices()[0]
+    run_test_rotary_embedding_llama(
+        device, batch, seq_len, pcc, n_heads, n_kv_heads, head_dim, 1, datatype, fuse_qk=True
+    )
+
+
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     ("op_name", "expected_kernel_duration_us"),
     [
-        # ("LayerNorm", 13),
-        # ("ScaledDotProductAttentionDecode", 20),
-        # ("NLPCreateHeadsDecodeDeviceOperation", 8.64),
-        # ("NLPConcatHeadsDecodeDeviceOperation", 5.7),
-        ("PagedUpdateCacheDeviceOperation", 7.5),
+        ("LayerNorm", 13),
+        ("ScaledDotProductAttentionDecode", 20),
+        ("NLPCreateHeadsDecodeDeviceOperation", 8.64),
+        ("NLPConcatHeadsDecodeDeviceOperation", 5.7),
+        ("PagedUpdateCacheDeviceOperation", 5),
+        ("RotaryEmbeddingLlamaFusedQK", 4.8),
     ],
 )
 def test_llama_tg_ops_perf_device(op_name, expected_kernel_duration_us):
