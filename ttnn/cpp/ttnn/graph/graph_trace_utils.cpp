@@ -154,6 +154,22 @@ std::vector<std::string> extract_calltrace(const nlohmann::json& trace) {
     return op_calls;
 }
 
+std::vector<std::vector<std::string>> extract_arguments(const nlohmann::json& trace) {
+    std::vector<std::vector<std::string>> arguments;
+    size_t i = 0;
+
+    while (i < trace.size()) {
+        const auto& v = trace[i];
+        i++;
+
+        if (v[kArguments].size() > 0) {
+            arguments.push_back(v[kArguments]);
+        }
+    }
+
+    return arguments;
+}
+
 std::unordered_set<uint32_t> extract_output_tensors(const nlohmann::json& trace) {
     // Lambda to find the last 'function_end' node
     auto find_function_end_node = [](const auto& trace) -> const nlohmann::json& {

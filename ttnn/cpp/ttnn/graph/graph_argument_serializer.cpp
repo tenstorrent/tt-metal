@@ -39,17 +39,23 @@ std::ostream& operator<<(std::ostream& os, const std::optional<T>& optional_valu
     return os;
 }
 
-std::string graph_demangle(const char* name) {
+std::string graph_demangle(const std::string_view& name) {
     int status = -4;
-    char* res = abi::__cxa_demangle(name, NULL, NULL, &status);
-    const char* const demangled_name = (status == 0) ? res : name;
+    char* res = abi::__cxa_demangle(name.data(), NULL, NULL, &status);
+    const char* const demangled_name = (status == 0) ? res : name.data();
     std::string ret_val(demangled_name);
     free(res);
     return ret_val;
 }
 
+GraphArgumentSerializer::GraphArgumentSerializer() { initialize(); }
+
+GraphArgumentSerializer* GraphArgumentSerializer::instance() {
+    static GraphArgumentSerializer* new_instance = new GraphArgumentSerializer();
+    return new_instance;
+}
+
 std::unordered_map<std::type_index, GraphArgumentSerializer::ConvertionFunction>& GraphArgumentSerializer::registry() {
-    static std::unordered_map<std::type_index, GraphArgumentSerializer::ConvertionFunction> map;
     return map;
 }
 

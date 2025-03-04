@@ -19,7 +19,6 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& data_ty
         case DataType::UINT16: return os << "UINT16";
         case DataType::INT32: return os << "INT32";
         case DataType::INVALID: return os << "Invalid";
-        default: return os << "Unknown data type";
     }
 }
 
