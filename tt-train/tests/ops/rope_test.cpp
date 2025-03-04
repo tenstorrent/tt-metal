@@ -400,7 +400,7 @@ TEST_F(RoPETest, GeneratedParamsOk) {
     EXPECT_TRUE(xt::allclose(expected_trans_mat, core::to_xtensor(rope_params.trans_mat)));
 }
 
-TEST_F(RoPETest, MatchesMetaImpl) {
+TEST_F(RoPETest, ForwardTest) {
     // Head dim must be a multiple of TILE_WIDTH
     // Head dim must be <= 256
 
