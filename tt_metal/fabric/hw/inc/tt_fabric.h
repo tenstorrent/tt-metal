@@ -307,7 +307,7 @@ typedef struct fvc_inbound_push_state {
                 STREAM_ID_NOC_WORDS_RECEIVED + my_direction, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
             remote_buffer_start = FABRIC_ROUTER_DATA_BUF_START + my_direction * FABRIC_ROUTER_OUTBOUND_BUF_SIZE;
 
-            for (uint32_t i = 0; i < eth_chan_directions::COUNT; i++) {
+            for (uint32_t i = eth_chan_directions::EAST; i < eth_chan_directions::COUNT; i++) {
                 if (i == my_direction) {
                     // skip self
                     continue;
