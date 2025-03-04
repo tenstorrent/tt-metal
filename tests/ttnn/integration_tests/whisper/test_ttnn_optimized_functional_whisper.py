@@ -4,8 +4,8 @@
 
 from loguru import logger
 import pytest
-from models.experimental.functional_whisper.tt import ttnn_optimized_functional_whisper
-from models.experimental.functional_whisper.tt.ttnn_optimized_functional_whisper import (
+from models.demos.whisper.tt import ttnn_optimized_functional_whisper
+from models.demos.whisper.tt.ttnn_optimized_functional_whisper import (
     init_kv_cache,
     WHISPER_L1_SMALL_SIZE,
 )
