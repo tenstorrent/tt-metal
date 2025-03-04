@@ -18,6 +18,7 @@ from transformers import (
 )
 from tqdm import tqdm
 import time
+import jiwer
 
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
@@ -192,7 +193,7 @@ def run_generate(
 
             ttnn_transcription = processor.batch_decode(next_tokens.unsqueeze(dim=1), skip_special_tokens=True)[0]
             if print_each_iter:
-                logger.info(ttnn_transcription)
+                logger.info(processor.batch_decode(torch.stack(output_ids, dim=1), skip_special_tokens=True)[0])
             yield ttnn_transcription
 
             if next_tokens == config.eos_token_id:
@@ -383,11 +384,22 @@ def run_demo_functional_whisper_for_conditional_generation_dataset(ttnn_model, d
     ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
 
     # perform model inference
-    for ds_idx in [0, 4]:  # Test two sample inputs
-        data = ds[ds_idx]["audio"]["array"]
+    total_wer = 0
+    total_cer = 0
+    for ds_input in tqdm(ds, desc="Processing dataset inputs"):
+        data = ds_input["audio"]["array"]
         sampling_rate = 16000
         ttnn_output = model_pipeline(data, sampling_rate, stream=False)
         logger.info(f"Model output: {ttnn_output}")
+
+        # Compute word and character error rates
+        reference = ds_input["text"].lower()
+        predicted = ttnn_output.lower()
+        total_wer += jiwer.wer(reference, predicted)
+        total_cer += jiwer.cer(reference, predicted)
+
+    logger.info(f"Average Word Error Rate: {total_wer / len(ds):.4f}")
+    logger.info(f"Average Character Error Rate: {total_cer / len(ds):.4f}")
 
 
 @pytest.mark.parametrize(
