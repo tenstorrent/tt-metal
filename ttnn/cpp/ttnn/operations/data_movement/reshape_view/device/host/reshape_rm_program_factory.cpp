@@ -22,21 +22,23 @@
 #include "ttnn/types.hpp"
 #include "ttnn/decorators.hpp"
 
-#define MASK_64      0xFFFFFFFFFFFFFFC0
-#define OFFSET_64    0x000000000000003F
-#define MASK_16      0xFFFFFFFFFFFFFFF0
-#define OFFSET_16    0x000000000000000F
+#include "reshape_program_factory.hpp"
 
-namespace ttnn::operations::data_movement::rm_reshape{
+#define MASK_64 0xFFFFFFFFFFFFFFC0
+#define OFFSET_64 0x000000000000003F
+#define MASK_16 0xFFFFFFFFFFFFFFF0
+#define OFFSET_16 0x000000000000000F
+
+namespace ttnn::operations::data_movement::reshape {
 
 tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(
     const Tensor& input, const Tensor& output) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
-    //get datum size
+    // get datum size
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     const uint32_t data_size = input.element_size();
-    tt::tt_metal::IDevice*device = input.device();
-    //Multi device pre-computation
+    tt::tt_metal::IDevice* device = input.device();
+    // Multi device pre-computation
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
@@ -50,12 +52,12 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(
     tt::log_debug("data size: {}", data_size);
     uint32_t source_page_size_bytes = input_log_shape[-1] * data_size;
     uint32_t dest_page_size_bytes = output_log_shape[-1] * data_size;
-    uint32_t source_read_size_bytes = ((source_page_size_bytes-1) & MASK_64) + 128;
+    uint32_t source_read_size_bytes = ((source_page_size_bytes - 1) & MASK_64) + 128;
     uint32_t read_start_page = 0;
     uint32_t write_start_page = 0;
     uint32_t write_start_offset = 0;
-    tt::tt_metal::Buffer *src_buffer = input.buffer();
-    tt::tt_metal::Buffer *dst_buffer = output.buffer();
+    tt::tt_metal::Buffer* src_buffer = input.buffer();
+    tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
     // Find how many input pages each core is responsible for so that we always start at the begining of a read and
     // write page Since the logical volumes match, we are guaranteed that the very last page is aligned
@@ -222,4 +224,4 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer(const Tensor& 
     return rm_reshape_preparer_single_risk(input, output);
 }
 
-}; // namespace ttnn::operations::data_movement::rm_reshape
+};  // namespace ttnn::operations::data_movement::reshape

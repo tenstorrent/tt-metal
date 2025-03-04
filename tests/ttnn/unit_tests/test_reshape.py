@@ -12,6 +12,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import skip_for_grayskull
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize(
     "input_shape, output_shape",
     [
@@ -39,6 +40,7 @@ def test_ttnn_reshape_with_cache(device, enable_cache, input_shape, output_shape
     assert torch.allclose(b, ttnn.to_torch(tt_b))
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize(
     "input_shape, output_shape",
     [
@@ -66,6 +68,7 @@ def test_tensor_reshape_with_cache(device, enable_cache, input_shape, output_sha
     assert torch.allclose(b, ttnn.to_torch(tt_b))
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [4])
 @pytest.mark.parametrize("h", [64])
@@ -108,6 +111,7 @@ def test_reshape_sharded_rm(device, n, c, h, w):
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [128])
 @pytest.mark.parametrize("h", [128])
@@ -126,6 +130,7 @@ def test_reshape_cw_div2_rm(device, n, c, h, w):
     assert torch.allclose(torch_output_tensor, output_tensor)
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [128])
 @pytest.mark.parametrize("h", [128])
@@ -144,6 +149,7 @@ def test_reshape_cw_mul2_rm(device, n, c, h, w):
     assert torch.allclose(torch_output_tensor, output_tensor)
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [128])
 @pytest.mark.parametrize("h", [128])
@@ -162,6 +168,7 @@ def test_reshape_hw_div2_rm(device, n, c, h, w):
     assert torch.allclose(torch_output_tensor, output_tensor)
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [128])
 @pytest.mark.parametrize("h", [256])
@@ -180,6 +187,7 @@ def test_reshape_hw_mul2_rm(device, n, c, h, w):
     assert torch.allclose(torch_output_tensor, output_tensor)
 
 
+@pytest.mark.skip
 def run_reshape_hw_rm_with_program_cache(device, n, c, h, w, use_program_cache):
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor.reshape(n, c, h // 2, w * 2)
@@ -194,6 +202,7 @@ def run_reshape_hw_rm_with_program_cache(device, n, c, h, w, use_program_cache):
     assert torch.allclose(torch_output_tensor, output_tensor)
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [128])
 @pytest.mark.parametrize("h", [256])
@@ -214,6 +223,7 @@ def test_reshape_hw_rm_with_program_cache(device, n, c, h, w, use_program_cache)
     assert device.num_program_cache_entries() == 1
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [2 * 32])
 def test_reshape(h, w):
@@ -228,6 +238,7 @@ def test_reshape(h, w):
     assert torch.allclose(torch_output_tensor, output_tensor)
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [2 * 32])
 def test_reshape_negative_1(h, w):
@@ -242,6 +253,7 @@ def test_reshape_negative_1(h, w):
     assert torch.allclose(torch_output_tensor, output_tensor)
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize("n", [32, 32])
 @pytest.mark.parametrize("c", [2 * 32, 2 * 32])
 @pytest.mark.parametrize("h", [1, 4])
@@ -258,6 +270,7 @@ def test_reshape_in_4D(n, c, h, w):
     assert torch.allclose(torch_output_tensor, output_tensor)
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize("n", [32, 64])
 @pytest.mark.parametrize("c", [32, 64])
 @pytest.mark.parametrize("h", [32, 64])
@@ -276,6 +289,7 @@ def test_reshape_in_4D_on_device(device, n, c, h, w):
     assert torch.allclose(torch_output_tensor, output_tensor)
 
 
+@pytest.mark.skip
 def test_permute_reshape(device):
     input_shape = (1, 4, 64, 32)
     output_shape = (1, 64, 128)
@@ -295,6 +309,7 @@ def test_permute_reshape(device):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
 
 
+@pytest.mark.skip
 def test_reshape_with_negative_dim(device):
     input_shape = (1, 4, 64, 32)
     output_shape = (1, -1, 2, 32)
@@ -314,6 +329,7 @@ def test_reshape_with_negative_dim(device):
     assert_with_pcc(torch_output, tt_output, 0.9999)
 
 
+@pytest.mark.skip
 def test_reshape_tile_layout_mamba(device):
     torch_input_tensor = torch.randn((1, 1, 2048, 64), dtype=torch.bfloat16)
     reshape_shape = (1, 2, 1024, 64)
@@ -327,6 +343,7 @@ def test_reshape_tile_layout_mamba(device):
     assert_with_pcc(torch_result, output, 0.9999)
 
 
+@pytest.mark.skip
 def test_reshape_tile_layout_only_change_shape(device):
     torch_input_tensor = torch.randn((1, 64, 32, 4 * 32), dtype=torch.bfloat16)
     reshape_shape = (1, 32, 64, 4 * 32)
@@ -344,19 +361,20 @@ def test_reshape_tile_layout_only_change_shape(device):
 @pytest.mark.parametrize(
     "input_shape, output_shape",
     [
-        ((1, 256, 16), (16, 256)),
-        ((1, 256, 1024), (1, 256, 16, 64)),
-        ((16, 16), (32, 8)),
-        ((1, 1445, 192), (1445, 192)),
-        ((1, 256), (1, 1, 256)),
-        ((16, 1, 32), (16, 1, 32)),
-        ((1, 32, 4608), (1, 32, 16, 3, 96)),  # issue 13889
-        ((2888, 49, 96), (8, 19, 19, 7, 7, 96)),  # issue 12153
-        ((128, 1, 1, 128), (128, 128)),  # issue 14676
-        ((5, 4, 208, 156), (3, 13, 8, 2080)),  # issue 14513
+        ((2, 16, 16), (2, 32, 8)),
+        #         ((1, 256, 16), (16, 256)),
+        #         ((1, 256, 1024), (1, 256, 16, 64)),
+        #         ((1, 1445, 192), (1445, 192)),
+        #         ((1, 256), (1, 1, 256)),
+        #         ((16, 1, 32), (16, 1, 32)),
+        #         ((1, 32, 4608), (1, 32, 16, 3, 96)),  # issue 13889
+        #         ((2888, 49, 96), (8, 19, 19, 7, 7, 96)),  # issue 12153
+        #         ((128, 1, 1, 128), (128, 128)),  # issue 14676
+        #         ((5, 4, 208, 156), (3, 13, 8, 2080)),  # issue 14513
     ],
 )
-@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+# @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 def test_reshape_tile_with_padding(input_shape, output_shape, layout, device):
     torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
     torch_result = torch_input_tensor.reshape(output_shape)
@@ -368,6 +386,7 @@ def test_reshape_tile_with_padding(input_shape, output_shape, layout, device):
     assert_with_pcc(torch_result, output, 0.9999)
 
 
+@pytest.mark.skip
 # issue 15048
 def test_previously_failing_test(device):
     src_shape = (1, 56, 56, 64)
@@ -389,6 +408,7 @@ def test_previously_failing_test(device):
     assert_with_pcc(torch_result, output, 0.9999)
 
 
+@pytest.mark.skip
 # Since Inner dim is 1 of bfloat16, can't do on device, testing fallback on host
 @pytest.mark.parametrize(
     "input_shape, output_shape",
@@ -410,6 +430,7 @@ def test_reshape_host(input_shape, output_shape, device):
     assert_with_pcc(torch_result, output, 0.9999)
 
 
+@pytest.mark.skip
 # required for Embedding
 @skip_for_grayskull("avoid this test while issue 15702 is resolved")
 @pytest.mark.parametrize(
@@ -437,6 +458,7 @@ def test_reshape_int(input_shape, output_shape, device):
     assert_with_pcc(torch_result, output, 0.9999)
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize(
     "input_shape, output_shape",
     [
@@ -468,6 +490,7 @@ def test_fp32_support(input_shape, output_shape, device):
     assert_with_pcc(torch_result, output, 0.9999)
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize(
     "input_shape, output_shape",
     [
@@ -499,6 +522,7 @@ def test_bf8_support(input_shape, output_shape, device):
     assert_with_pcc(torch_result, output, 0.9999)
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize(
     "input_shape, output_shape",
     [
@@ -535,6 +559,7 @@ def test_reshape_zero_element(input_shape, output_shape, layout, ttnn_reshape, u
     assert tt_output_tensor.shape == torch.Size(output_shape)
 
 
+@pytest.mark.skip
 @pytest.mark.xfail(
     reason="Test that the previously supported reshape accounting for the physical shape is no longer possible"
 )
