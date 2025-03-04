@@ -118,7 +118,6 @@ def run_generate(
     logger.info(f"Time to encoder states: {(time.time() - start_encode)*1000:.3f}ms")
 
     # Run decoder
-    logger.info("Starting decode inference")
 
     def _run_generate():
         # Input ids
@@ -177,6 +176,9 @@ def run_generate(
             next_tokens = torch.argmax(next_tokens_scores, dim=-1)
             output_ids.append(next_tokens)
 
+            if i == 0:
+                first_token_time = time.time()
+
             # Update input_ids and current_decode_pos
             if not kv_cache:
                 if (i + 1) % 32 == 0:
@@ -196,7 +198,11 @@ def run_generate(
             if next_tokens == config.eos_token_id:
                 break
 
+        ttft = first_token_time - start_encode
+        total_generate_time = time.time() - start_encode
+        logger.info(f"Time to first token: {(ttft*1000):.3f}ms")
         logger.info(f"Total decode time: {total_decode_time:.3f}s")
+        logger.info(f"Total generate time: {total_generate_time:.3f}s")
         logger.info(f"Average decode throughput: {(i+1) / total_decode_time:.3f} t/s/u")
 
     # conditionally return generator or full response
