@@ -11,7 +11,10 @@ void PlusOne::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
 
-    TT_FATAL(input_tensor_a.get_dtype() == tt::tt_metal::DataType::INT32, "Only INT32 is supported for inputs!");
+    TT_FATAL(
+        input_tensor_a.get_dtype() == tt::tt_metal::DataType::INT32 ||
+            input_tensor_a.get_dtype() == tt::tt_metal::DataType::UINT32,
+        "Only INT32 and UINT32 is supported for inputs!");
     TT_FATAL(
         input_tensor_a.get_layout() == tt::tt_metal::Layout::ROW_MAJOR,
         "Only ROW_MAJOR layout is supported for inputs!");
@@ -32,7 +35,7 @@ std::vector<Tensor> PlusOne::create_output_tensors(
 tt::tt_metal::operation::ProgramWithCallbacks PlusOne::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return detail::plusone_single_core(input_tensor);
+    return detail::plusone_single_core(input_tensor, sub_core_grids);
 }
 
 }  // namespace ttnn::operations::experimental
