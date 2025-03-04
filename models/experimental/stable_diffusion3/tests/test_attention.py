@@ -68,8 +68,10 @@ def test_attention(
     torch_model: Attention = parent_torch_model.transformer_blocks[block_index].attn
     torch_model.eval()
 
-    parameters = TtAttentionParameters.from_torch(torch_model.state_dict(), device=mesh_device, dtype=ttnn_dtype)
-    tt_model = TtAttention(parameters, num_heads=torch_model.num_heads)
+    parameters = TtAttentionParameters.from_torch(
+        torch_model.state_dict(), num_heads=torch_model.num_heads, device=mesh_device, dtype=ttnn_dtype
+    )
+    tt_model = TtAttention(parameters, num_heads=torch_model.num_heads, device=mesh_device)
 
     torch.manual_seed(0)
     spatial = torch.randn((batch_size, spatial_sequence_length, embedding_dim), dtype=torch_dtype)
@@ -77,8 +79,25 @@ def test_attention(
         torch.randn((batch_size, prompt_sequence_length, embedding_dim), dtype=torch_dtype) if joint_attention else None
     )
 
-    tt_spatial = from_torch(spatial, dtype=ttnn_dtype, mesh_device=mesh_device)
-    tt_prompt = from_torch(prompt, dtype=ttnn_dtype, mesh_device=mesh_device) if joint_attention else None
+    TILE_SIZE = 32
+    spatial_extra = spatial_sequence_length % TILE_SIZE
+    if spatial_extra > 0:
+        spatial_padding = TILE_SIZE - spatial_extra
+    else:
+        spatial_padding = 0
+    spatial_padded_4D = torch.nn.functional.pad(
+        spatial.unsqueeze(0), pad=(0, 0, 0, spatial_padding), mode="constant", value=0
+    )
+    tt_spatial = from_torch(spatial_padded_4D, dtype=ttnn_dtype, mesh_device=mesh_device)
+    prompt_extra = prompt_sequence_length % TILE_SIZE
+    if prompt_extra > 0:
+        prompt_padding = TILE_SIZE - prompt_extra
+    else:
+        prompt_padding = 0
+    prompt_padded_4D = torch.nn.functional.pad(
+        prompt.unsqueeze(0), pad=(0, 0, 0, prompt_padding), mode="constant", value=0
+    )
+    tt_prompt = from_torch(prompt_padded_4D, dtype=ttnn_dtype, mesh_device=mesh_device) if joint_attention else None
 
     with torch.no_grad():
         spatial_output, prompt_output = torch_model(spatial=spatial, prompt=prompt)
@@ -89,9 +108,11 @@ def test_attention(
     # ttnn.copy_host_to_device_tensor(tt_spatial_host, tt_spatial)
     # if joint_attention:
     #     ttnn.copy_host_to_device_tensor(tt_prompt_host, tt_prompt)
-    tt_spatial_output, tt_prompt_output = tt_model(spatial=tt_spatial, prompt=tt_prompt)
+    tt_spatial_output_padded, tt_prompt_output_padded = tt_model(spatial=tt_spatial, prompt=tt_prompt)
+    tt_spatial_output = tt_spatial_output_padded[:, :, 0:spatial_sequence_length, :]
+    tt_prompt_output = tt_prompt_output_padded[:, :, 0:prompt_sequence_length, :]
 
-    assert_quality(spatial_output, tt_spatial_output, pcc=0.990, shard_dim=0)
+    assert_quality(spatial_output, tt_spatial_output, pcc=0.990, shard_dim=-1)
 
     if joint_attention:
-        assert_quality(prompt_output, tt_prompt_output, pcc=0.990, shard_dim=0)
+        assert_quality(prompt_output, tt_prompt_output, pcc=0.990, shard_dim=-1)

@@ -34,6 +34,7 @@ class TtAttentionParameters:
         cls,
         state: dict[str, torch.Tensor],
         *,
+        num_heads: int,
         dtype: ttnn.DataType | None = None,
         device: ttnn.Device,
     ) -> TtAttentionParameters:
@@ -41,16 +42,20 @@ class TtAttentionParameters:
         prompt_qkv_proj = _merge_qkv_proj(
             substate(state, "add_q_proj"), substate(state, "add_k_proj"), substate(state, "add_v_proj")
         )
-
+        n_local_heads = num_heads // device.get_num_devices()
         return cls(
             spatial=TtAttentionPartParameters(
-                qkv_proj=TtLinearParameters.from_torch(spatial_qkv_proj, dtype=dtype, device=device),
+                qkv_proj=TtLinearParameters.from_torch_col_parallel(
+                    state=spatial_qkv_proj, n_local_heads=n_local_heads, dtype=dtype, device=device
+                ),
                 norm_q=TtRmsNormParameters.from_torch(substate(state, "norm_q"), dtype=dtype, device=device),
                 norm_k=TtRmsNormParameters.from_torch(substate(state, "norm_k"), dtype=dtype, device=device),
                 out_proj=TtLinearParameters.from_torch(substate(state, "to_out.0"), dtype=dtype, device=device),
             ),
             prompt=TtAttentionPartParameters(
-                qkv_proj=TtLinearParameters.from_torch(prompt_qkv_proj, dtype=dtype, device=device),
+                qkv_proj=TtLinearParameters.from_torch_col_parallel(
+                    state=prompt_qkv_proj, n_local_heads=n_local_heads, dtype=dtype, device=device
+                ),
                 norm_q=TtRmsNormParameters.from_torch(substate(state, "norm_added_q"), dtype=dtype, device=device),
                 norm_k=TtRmsNormParameters.from_torch(substate(state, "norm_added_k"), dtype=dtype, device=device),
                 out_proj=TtLinearParameters.from_torch(substate(state, "to_add_out"), dtype=dtype, device=device)
@@ -63,11 +68,12 @@ class TtAttentionParameters:
 
 
 class TtAttentionPart:
-    def __init__(self, parameters: TtAttentionPartParameters) -> None:
+    def __init__(self, parameters: TtAttentionPartParameters, device) -> None:
         super().__init__()
 
         eps = 1e-6
 
+        self.device = device
         self._qkv_proj = TtLinear(parameters.qkv_proj)
         self._out_proj = TtLinear(parameters.out_proj) if parameters.out_proj is not None else None
         self._norm_q = TtRmsNorm(parameters.norm_q, eps=eps)
@@ -76,7 +82,7 @@ class TtAttentionPart:
     def qkv(self, x: ttnn.Tensor, *, num_heads: int, deallocate: bool) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         tracy.signpost("enter TtAttentionPart")
 
-        _batch_size, sequence_length, _embedding_dim = x.shape
+        _, _batch_size, sequence_length, _embedding_dim = x.shape
 
         # Input sharding
         if sequence_length > 1024:
@@ -116,7 +122,8 @@ class TtAttentionPart:
         #        qkv = ttnn.reallocate(qkv)
         #        qkv = to_memory_config(qkv, ttnn.DRAM_MEMORY_CONFIG, deallocate=True)
 
-        q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(qkv, num_heads=num_heads, transpose_key=False)
+        num_local_heads = num_heads // self.device.get_num_devices()
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(qkv, num_heads=num_local_heads, transpose_k_heads=False)
         ttnn.deallocate(qkv)
 
         q = self._norm_q(q, deallocate=True)
@@ -171,13 +178,16 @@ class TtAttentionPart:
 
 
 class TtAttention:
-    def __init__(self, parameters: TtAttentionParameters, *, num_heads: int) -> None:
+    def __init__(self, parameters: TtAttentionParameters, *, num_heads: int, device) -> None:
         super().__init__()
 
+        self.device = device
         self._num_heads = num_heads
 
-        self._spatial_attn = TtAttentionPart(parameters.spatial)
-        self._prompt_attn = TtAttentionPart(parameters.prompt) if parameters.prompt is not None else None
+        self._spatial_attn = TtAttentionPart(parameters.spatial, device=self.device)
+        self._prompt_attn = (
+            TtAttentionPart(parameters.prompt, device=self.device) if parameters.prompt is not None else None
+        )
 
     def __call__(
         self,
@@ -254,14 +264,24 @@ class TtAttention:
         # spatial = ttnn.to_memory_config(spatial, memory_config=ttnn.L1_MEMORY_CONFIG)
         # prompt = ttnn.to_memory_config(prompt, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        spatial = ttnn.transformer.concatenate_heads(
+        spatial = ttnn.experimental.nlp_concat_heads(
             spatial,
             # memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
         )
-        prompt = ttnn.transformer.concatenate_heads(
+        prompt = ttnn.experimental.nlp_concat_heads(
             prompt,
             # memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
         )
+
+        if self.device.get_num_devices() > 1:
+            spatial = ttnn.all_gather(
+                spatial,
+                dim=-1,
+            )
+            prompt = ttnn.all_gather(
+                prompt,
+                dim=-1,
+            )
 
         spatial = self._spatial_attn.out_proj(spatial)
         prompt = self._prompt_attn.out_proj(prompt)
