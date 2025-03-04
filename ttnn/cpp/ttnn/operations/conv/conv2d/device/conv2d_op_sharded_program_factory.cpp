@@ -423,7 +423,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     uint32_t out_subblock_h_ntiles = block_config.out_subblock_h_ntiles;
     uint32_t out_subblock_w_ntiles = block_config.out_subblock_w_ntiles;
 
-    auto conv_reader_indices_buffer = conv_reader_indices.value().device_buffer();
+    auto conv_reader_indices_storage = conv_reader_indices.value().device_storage();
 
     // out_subblock_h_ntiles = 8;
 
@@ -1217,7 +1217,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         CircularBufferConfig cb_for_reader_indices_config =
             CircularBufferConfig(out_block_h_datums * 2, {{cb_for_reader_indices, tt::DataFormat::Float16_b}})
                 .set_page_size(cb_for_reader_indices, out_block_h_datums * 2);
-        cb_for_reader_indices_config.set_globally_allocated_address(*conv_reader_indices_buffer);
+        cb_for_reader_indices_config.set_globally_allocated_address(*conv_reader_indices_storage.get_buffer());
         auto cb_for_reader_indices_id =
             tt_metal::CreateCircularBuffer(program, all_cores, cb_for_reader_indices_config);
 
@@ -1679,7 +1679,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     auto mcast_sender_cores_vec = grid_to_cores(mcast_sender_cores.start_coord, mcast_sender_cores.end_coord, true);
     auto mcast_receiver_cores_vec = corerange_to_cores(mcast_receiver_cores, std::nullopt, true);
-    // Capture conv_reader_indices_buffer to cache this with the program
+    // Capture conv_reader_indices_storage to cache this with the program
     auto override_runtime_arguments_callback =
         [reader_kernel_id = reader_id,
          mcast_sender_cores = mcast_sender_cores_vec,
@@ -1692,7 +1692,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
          num_cores_x = num_cores_x,
          num_cores_y = num_cores_y,
          has_bias = has_bias,
-         conv_reader_indices_buffer = conv_reader_indices_buffer](
+         conv_reader_indices_storage = conv_reader_indices_storage](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,

@@ -88,7 +88,6 @@ Tensor tensor_reshape(
                         const auto& tensor_spec = tensor.tensor_spec();
                         auto page_size_bytes = tensor_spec.compute_page_size_bytes();
                         device_buffer->set_page_size(page_size_bytes);
-                        device_storage.insert_buffer(device_buffer);
                         return Tensor(device_storage, new_spec);
                     } else {
                         tt::tt_metal::DeviceStorage device_storage = std::get<T>(tensor.get_storage());
@@ -115,7 +114,6 @@ Tensor tensor_reshape(
                         shard_spec_buffer.set_shard_spec(shard_spec);
 
                         device_buffer->set_shard_spec(shard_spec_buffer);
-                        device_storage.insert_buffer(device_buffer);
 
                         MemoryConfig mem_config = input_tensor.memory_config();
                         mem_config.shard_spec = shard_spec;

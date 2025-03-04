@@ -22,7 +22,7 @@ bool can_deallocate(const Tensor& input_tensor) {
                 if (storage.mesh_buffer) {
                     return storage.mesh_buffer.use_count() == 1;
                 }
-                return storage.get_buffer().use_count() == 1;
+                return storage.buffer.use_count() == 1;
             } else {
                 return false;
             }

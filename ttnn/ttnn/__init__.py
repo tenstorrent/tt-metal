@@ -95,7 +95,6 @@ def manage_config(name, value):
 
 
 from ttnn._ttnn.multi_device import (
-    get_device_tensor,
     get_device_tensors,
     aggregate_as_tensor,
     get_t3k_physical_device_ids_ring,

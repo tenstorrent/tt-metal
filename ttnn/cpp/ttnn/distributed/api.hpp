@@ -38,10 +38,6 @@ std::vector<tt::tt_metal::IDevice*> get_mapped_devices(const Tensor& tensor, Mes
 // Get the distributed tensor config from a tensor.
 tt::tt_metal::DistributedTensorConfig get_distributed_tensor_config_from_tensor(const Tensor& tensor);
 
-// Given a multi-device tensor and a device, returns the tensor on the given device.
-Tensor get_device_tensor(const Tensor& multi_device_tensor, const tt::tt_metal::IDevice* device);
-Tensor get_device_tensor(const Tensor& multi_device_tensor, const int device_id);
-
 // Returns true has MultiDeviceHost/MultiDevice Storage
 bool is_host_mesh_tensor(const Tensor& tensor);
 bool is_multi_device_tensor(const Tensor& tensor);
