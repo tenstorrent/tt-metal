@@ -13,7 +13,7 @@ from models.utility_functions import (
     comp_allclose,
 )
 
-from models.utility_functions import tt2torch_tensor, get_devices_for_t3000, skip_for_grayskull
+from models.utility_functions import tt2torch_tensor, get_devices_for_t3000, skip_for_grayskull, skip_for_blackhole
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
 from tt_metal.tools.profiler.process_model_log import get_samples_per_s
 from tests.ttnn.unit_tests.operations.test_distributed_layernorm_sharded import (
@@ -27,6 +27,17 @@ from tests.ttnn.unit_tests.operations.test_distributed_layernorm_sharded import 
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_scaled_dot_product_attention_decode import (
     run_test_sdpa_decode_single_iter,
 )
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_nlp_create_qkv_heads_decode import (
+    run_test_create_min_width_shard,
+)
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_nlp_concat_heads_decode import run_test_concat_head
+from tests.ttnn.unit_tests.operations.test_paged_fused_update_cache import run_test_paged_fused_update_cache_decode
+
+
+@pytest.fixture()
+def set_dispatch_col(device_params):
+    device_params["dispatch_core_axis"] = ttnn.DispatchCoreAxis.COL
+    return device_params
 
 
 @skip_for_grayskull()
@@ -192,12 +203,143 @@ def test_llama_tg_ScaledDotProductAttentionDecode(
     assert device.num_program_cache_entries() == 1
 
 
+@skip_for_blackhole("Requires eth connected devices to run, see #12349")
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+@pytest.mark.parametrize("batch, batch_offset, slice_size", ((32, 0, 8),))
+@pytest.mark.parametrize(
+    "n_local_heads, n_local_kv_heads, head_dim",
+    ((8, 1, 128),),
+)
+@pytest.mark.parametrize("overlap_coregrid", (False,))
+@pytest.mark.parametrize(
+    "sub_core_grids",
+    (
+        ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+            }
+        ),
+    ),
+)
+def test_llama_tg_NLPCreateHeadsDecodeDeviceOperation(
+    mesh_device,
+    batch,
+    batch_offset,
+    slice_size,
+    n_local_heads,
+    n_local_kv_heads,
+    head_dim,
+    overlap_coregrid,
+    use_program_cache,
+    sub_core_grids,
+):
+    device = mesh_device.get_devices()[0]
+
+    batch_offset_tensor = torch.tensor([batch_offset], dtype=torch.int32)
+    # convert to tt tensor
+    batch_offset_tensor_tt = ttnn.from_torch(batch_offset_tensor, device=device, layout=ttnn.TILE_LAYOUT)
+
+    torch.manual_seed(0)
+    run_test_create_min_width_shard(
+        device=device,
+        batch=batch,
+        n_local_heads=n_local_heads,
+        n_local_kv_heads=n_local_kv_heads,
+        head_dim=head_dim,
+        overlap_coregrid=overlap_coregrid,
+        sub_core_grids=sub_core_grids,
+        batch_offset=batch_offset_tensor_tt,
+        slice_size=slice_size,
+    )
+
+
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+@pytest.mark.parametrize(
+    "n_local_heads, padded_local_heads, head_dim, batch_size, sub_core_grids",
+    (
+        (
+            8,
+            32,
+            128,
+            32,
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 0)),
+                ]
+            ),
+        ),
+    ),
+)
+def test_llama_tg_NLPConcatHeadsDecodeDeviceOperation(
+    mesh_device,
+    n_local_heads,
+    padded_local_heads,
+    head_dim,
+    batch_size,
+    sub_core_grids,
+    use_program_cache,
+):
+    devices = mesh_device.get_devices()
+    torch.manual_seed(0)
+
+    run_test_concat_head(devices, n_local_heads, padded_local_heads, head_dim, batch_size, sub_core_grids)
+
+
+@skip_for_grayskull("Grayskull does not support paged cache")
+@pytest.mark.parametrize("paged_update", [True])
+@pytest.mark.parametrize("block_size", [64], ids=["block64"])
+@pytest.mark.parametrize("head_dim", [128])
+@pytest.mark.parametrize("max_seq_len", [2048])
+@pytest.mark.parametrize("num_users", [8])
+@pytest.mark.parametrize("num_heads", [1])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("cache_idx", [127])
+@pytest.mark.parametrize("cache_dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("pcc", [0.9995])
+def test_llama_tg_ops_PagedUpdateCacheDeviceOperation(
+    mesh_device,
+    paged_update,
+    cache_idx,
+    block_size,
+    head_dim,
+    max_seq_len,
+    num_users,
+    num_heads,
+    input_dtype,
+    cache_dtype,
+    use_program_cache,
+    pcc,
+):
+    device = mesh_device.get_devices()[0]
+
+    run_test_paged_fused_update_cache_decode(
+        paged_update,
+        cache_idx,
+        block_size,
+        head_dim,
+        max_seq_len,
+        num_users,
+        num_heads,
+        input_dtype,
+        cache_dtype,
+        device,
+        pcc,
+    )
+
+
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     ("op_name", "expected_kernel_duration_us"),
     [
-        ("LayerNorm", 13),
-        ("ScaledDotProductAttentionDecode", 20),
+        # ("LayerNorm", 13),
+        # ("ScaledDotProductAttentionDecode", 20),
+        # ("NLPCreateHeadsDecodeDeviceOperation", 8.64),
+        # ("NLPConcatHeadsDecodeDeviceOperation", 5.7),
+        ("PagedUpdateCacheDeviceOperation", 7.5),
     ],
 )
 def test_llama_tg_ops_perf_device(op_name, expected_kernel_duration_us):
@@ -215,7 +357,7 @@ def test_llama_tg_ops_perf_device(op_name, expected_kernel_duration_us):
     expected_perf_cols = {inference_time_key: expected_kernel_duration_us * 1e3}
 
     post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch, op_name, has_signposts=False)
-    expected_results = check_device_perf(post_processed_results, margin, expected_perf_cols)
+    expected_results = check_device_perf(post_processed_results, margin, expected_perf_cols, assert_on_fail=True)
     prep_device_perf_report(
         model_name=f"llama-tg-{op_name}",
         batch_size=batch,

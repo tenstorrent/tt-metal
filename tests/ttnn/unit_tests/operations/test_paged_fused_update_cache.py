@@ -22,6 +22,7 @@ def run_test_paged_fused_update_cache_decode(
     cache_dtype,
     device,
     pcc,
+    sub_core_grids=None,
 ):
     max_num_blocks_per_seq = max_seq_len // block_size
     assert max_num_blocks_per_seq * block_size == max_seq_len
@@ -77,19 +78,25 @@ def run_test_paged_fused_update_cache_decode(
     assert (
         num_users % 8 == 0 or num_users == 1
     ), "num_users must be a multiple of 8 or less than 8 for fused_qk rotary embedding"
-    if num_users == 1:
-        shard_grid1_start_coord = ttnn.CoreCoord(0, 0)
-        shard_grid1_end_coord = ttnn.CoreCoord(0, 0)
-        shard_grid2_start_coord = ttnn.CoreCoord(1, 0)
-        shard_grid2_end_coord = ttnn.CoreCoord(1, 0)
-    else:
-        shard_grid1_start_coord = ttnn.CoreCoord(0, 0)
-        shard_grid1_end_coord = ttnn.CoreCoord((num_users - 1) % 8, (num_users // 8) - 1)
-        shard_grid2_start_coord = ttnn.CoreCoord(0, (num_users // 8))
-        shard_grid2_end_coord = ttnn.CoreCoord((num_users - 1) % 8, (num_users // 4) - 1)
 
-    shard_grid1 = ttnn.CoreRangeSet({ttnn.CoreRange(shard_grid1_start_coord, shard_grid1_end_coord)})
-    shard_grid2 = ttnn.CoreRangeSet({ttnn.CoreRange(shard_grid2_start_coord, shard_grid2_end_coord)})
+    if sub_core_grids is None:
+        compute_grid_size = device.compute_with_storage_grid_size()
+        grid_start_coord = ttnn.CoreCoord(0, 0)
+        grid_end_coord = ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1)
+        available_core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(grid_start_coord, grid_end_coord)})
+    else:
+        grid_start_coord = sub_core_grids.ranges()[0].start_coord
+        available_core_grid = sub_core_grids
+
+    shard_grid1 = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+        grid_start_coord, num_cores_per_cache, available_core_grid, True
+    )
+    available_core_grid = available_core_grid.subtract(shard_grid1)
+    grid_start_coord = available_core_grid.ranges()[0].start_coord
+
+    shard_grid2 = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+        grid_start_coord, num_cores_per_cache, available_core_grid, True
+    )
     input_shard_spec1 = ttnn.ShardSpec(
         shard_grid1,
         [
