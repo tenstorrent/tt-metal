@@ -23,3 +23,4 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch}}
       runner-label: ${{ matrix.test-group.runner-label}}
+      docker-image: ${{ needs.build-artifact-profiler.outputs.ci-build-docker-image }}
