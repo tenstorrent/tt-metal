@@ -889,7 +889,7 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id
                             async_safe_tensor.get_storage());
                         EnqueueWriteBuffer(
                             worker->command_queue(*cq_id),
-                            device_storage.get_buffer(),
+                            *device_storage.get_buffer(),
                             host_data,
                             /*blocking=*/false);
                     },

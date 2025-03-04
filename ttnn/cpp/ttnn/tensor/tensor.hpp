@@ -265,6 +265,7 @@ public:
             storage_type);
         return std::get<DeviceStorage>(this->get_storage()).get_buffer();
     }
+    const DeviceStorage& device_storage() const { return std::get<DeviceStorage>(this->get_storage()); }
 
     distributed::MeshDevice* mesh_device() const {
         if (this->mesh_device_.has_value()) {

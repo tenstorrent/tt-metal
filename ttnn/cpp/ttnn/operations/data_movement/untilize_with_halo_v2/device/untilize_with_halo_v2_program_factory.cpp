@@ -144,26 +144,29 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     TT_ASSERT(local_config.get_dtype() == DataType::UINT16);
     TT_ASSERT(remote_config.get_dtype() == DataType::UINT16);
 
-    auto padding_config_buffer = padding_config.mesh_buffer();
+    auto padding_config_storage = padding_config.device_storage();
     const uint32_t num_cores = all_cores.num_cores();
+    auto padding_config_buffer = padding_config_storage.get_buffer();
     auto padding_config_cb_config =
         CircularBufferConfig(padding_config_buffer->size() / num_cores, {{padding_config_cb_id, kernel_config_df}})
             .set_page_size(padding_config_cb_id, padding_config_buffer->page_size())
-            .set_globally_allocated_address(*padding_config_buffer->get_device_buffer());
+            .set_globally_allocated_address(*padding_config_buffer);
     CBHandle padding_config_cb = CreateCircularBuffer(program, all_cores, padding_config_cb_config);
 
-    auto local_config_buffer = local_config.mesh_buffer();
+    auto local_config_storage = local_config.device_storage();
+    auto local_config_buffer = local_config_storage.get_buffer();
     auto local_config_cb_config =
         CircularBufferConfig(local_config_buffer->size() / num_cores, {{local_config_cb_id, kernel_config_df}})
             .set_page_size(local_config_cb_id, local_config_buffer->page_size())
-            .set_globally_allocated_address(*local_config_buffer->get_device_buffer());
+            .set_globally_allocated_address(*local_config_buffer);
     CBHandle local_config_cb = CreateCircularBuffer(program, all_cores, local_config_cb_config);
 
-    auto remote_config_buffer = remote_config.mesh_buffer();
+    auto remote_config_storage = remote_config.device_storage();
+    auto remote_config_buffer = remote_config_storage.get_buffer();
     auto remote_config_cb_config =
         CircularBufferConfig(remote_config_buffer->size() / num_cores, {{remote_config_cb_id, kernel_config_df}})
             .set_page_size(remote_config_cb_id, remote_config_buffer->page_size())
-            .set_globally_allocated_address(*remote_config_buffer->get_device_buffer());
+            .set_globally_allocated_address(*remote_config_buffer);
     CBHandle remote_config_cb = CreateCircularBuffer(program, all_cores, remote_config_cb_config);
 
     bool const is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
@@ -217,19 +220,19 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
             .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_ct_args});
 
     if (!capture_buffers) {
-        padding_config_buffer = nullptr;
-        local_config_buffer = nullptr;
-        remote_config_buffer = nullptr;
+        padding_config_storage = {};
+        local_config_storage = {};
+        remote_config_storage = {};
     }
-    // Capture padding_config_buffer, local_config_buffer, remote_config_buffer to cache this with the program
+    // Capture padding_config_storage, local_config_storage, remote_config_storage to cache this with the program
     auto override_runtime_arguments_callback = [src_cb,
                                                 out_cb,
                                                 padding_config_cb,
                                                 local_config_cb,
                                                 remote_config_cb,
-                                                padding_config_buffer,
-                                                local_config_buffer,
-                                                remote_config_buffer](
+                                                padding_config_storage,
+                                                local_config_storage,
+                                                remote_config_storage](
                                                    const void* operation,
                                                    Program& program,
                                                    const std::vector<Tensor>& input_tensors,

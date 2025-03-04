@@ -737,12 +737,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         act_block_num_tiles_split,
         act_tile_size);
 
-    auto conv_reader_indices_buffer = conv_reader_indices.value().mesh_buffer();
+    auto conv_reader_indices_storage = conv_reader_indices.value().device_storage();
 
     CircularBufferConfig cb_for_reader_indices_config =
         CircularBufferConfig(out_block_h_datums * 2, {{cb_for_reader_indices, tt::DataFormat::Float16_b}})
             .set_page_size(cb_for_reader_indices, out_block_h_datums * 2);
-    cb_for_reader_indices_config.set_globally_allocated_address(*conv_reader_indices_buffer->get_device_buffer());
+    cb_for_reader_indices_config.set_globally_allocated_address(*conv_reader_indices_storage.get_buffer());
     auto cb_for_reader_indices_id = tt_metal::CreateCircularBuffer(program, all_cores, cb_for_reader_indices_config);
 
     if (has_bias) {
@@ -874,8 +874,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
              (uint32_t)(core_index < output_num_cores)});
     }
 
-    // Capture conv_reader_indices_buffer to cache this with the program
-    auto empty_callback = [conv_reader_indices_buffer](
+    // Capture conv_reader_indices_storage to cache this with the program
+    auto empty_callback = [conv_reader_indices_storage](
                               const void* operation,
                               tt::tt_metal::Program& program,
                               const std::vector<Tensor>& input_tensors,
