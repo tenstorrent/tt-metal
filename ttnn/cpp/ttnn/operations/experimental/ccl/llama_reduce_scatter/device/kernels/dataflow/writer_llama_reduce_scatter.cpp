@@ -27,13 +27,14 @@ inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize 
 }
 
 void kernel_main() {
-    constexpr bool dst_is_dram = (bool)get_compile_time_arg_val(0);
-    constexpr uint32_t page_size = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(2);
+    constexpr uint32_t page_size = get_compile_time_arg_val(0);
+    constexpr uint32_t cb_id_out = get_compile_time_arg_val(1);
+    constexpr uint32_t start_tile = get_compile_time_arg_val(2);
+    constexpr uint32_t end_tile = get_compile_time_arg_val(3);
+    constexpr uint32_t device_id = get_compile_time_arg_val(4);
+    // constexpr uint32_t num_devices = 2;
 
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t start_tile = get_arg_val<uint32_t>(1);
-    const uint32_t end_tile = get_arg_val<uint32_t>(2);
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
@@ -41,8 +42,9 @@ void kernel_main() {
     const DataFormat data_format = get_dataformat(cb_id_out);
 
     uint64_t output_noc_addr = get_noc_addr(get_write_ptr(cb_id_out));
-
+    DPRINT << "start_tile: " << start_tile << " end_tile: " << end_tile << " device_id: " << device_id << ENDL();
     for (uint32_t tile = start_tile; tile < end_tile; ++tile) {
-        // print_full_tile(cb_id_out, tile, true);
+        cb_wait_front(cb_id_out, tile);
+        print_full_tile(cb_id_out, tile, true);
     }
 }

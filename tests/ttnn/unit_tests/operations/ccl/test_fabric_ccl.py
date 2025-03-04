@@ -19,8 +19,9 @@ def test_fabric_sanity(mesh_device):
 @skip_for_blackhole()
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}], indirect=True)
 def test_fabric_reduce_scatter(n300_mesh_device):
+    torch.manual_seed(2005)
     dim = 3
-    input = torch.rand((1, 1, 32, 64), dtype=torch.bfloat16)
+    input = torch.rand((1, 1, 32, 128), dtype=torch.bfloat16)
     sharded_mem_config = ttnn.create_sharded_memory_config(
         (32, 32),
         core_grid=ttnn.CoreRangeSet(
@@ -32,11 +33,14 @@ def test_fabric_reduce_scatter(n300_mesh_device):
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
+    print(sharded_mem_config)
     tt_input = ttnn.from_torch(
         input,
         mesh_mapper=ttnn.ShardTensorToMesh(n300_mesh_device, dim),
         device=n300_mesh_device,
         layout=ttnn.TILE_LAYOUT,
+        memory_config=sharded_mem_config,
+        dtype=ttnn.bfloat8_b,
     )
     print(tt_input)
     output = ttnn.experimental.llama_reduce_scatter(tt_input, dim, memory_config=sharded_mem_config)
