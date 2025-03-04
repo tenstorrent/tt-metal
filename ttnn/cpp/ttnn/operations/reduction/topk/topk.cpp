@@ -127,7 +127,7 @@ std::vector<Tensor> ExecuteTopK::invoke(
     Tensor padded_tensor = ttnn::fill_implicit_tile_padding(
         transformed_tensor, largest ? std::numeric_limits<float>::min() : std::numeric_limits<float>::max());
 
-    auto output_tensor_vec = operation::run(
+    auto output_tensor_vec = tt::tt_metal::operation::run(
         TopK{adjusted_k, -1, largest, sorted, input_memory_config},
         {padded_tensor},
         {},
@@ -151,8 +151,8 @@ std::vector<Tensor> ExecuteTopK::create_async_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
     const auto& input_tensor = input_tensors.at(0);
     return {
-        Tensor(operation::get_workers_for_op_output({input_tensor})),
-        Tensor(operation::get_workers_for_op_output({input_tensor}))};
+        Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor})),
+        Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
 }
 
 }  // namespace ttnn::operations::reduction
