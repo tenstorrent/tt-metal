@@ -70,13 +70,13 @@ ttnn::Tensor gen_trans_mat(int head_dim) {
 }
 
 ops::RotaryEmbeddingParams RotaryEmbedding::build_params(uint32_t sequence_length, uint32_t head_dim, float theta) {
-    if (head_dim % 32 != 0) {
+    if (head_dim % 32U != 0U) {
         throw std::invalid_argument("RoPE head_dim must be divisible by 32");
     }
-    if (head_dim > 256) {
+    if (head_dim > 256U) {
         throw std::invalid_argument("RoPE head_dim must be less than or equal to 256");
     }
-    if (head_dim <= 0) {
+    if (head_dim <= 0U) {
         throw std::invalid_argument("RoPE head_dim must be greater than 0");
     }
     auto [sin_freqs, cos_freqs] = gen_freqs(head_dim, sequence_length, theta);
