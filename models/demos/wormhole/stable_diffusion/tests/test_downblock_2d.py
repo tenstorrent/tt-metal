@@ -31,7 +31,9 @@ from models.demos.wormhole.stable_diffusion.tests.parameterizations import DOWN_
     "hidden_states, shard_layout, shard_end_core, shard_shape", (DOWN_MID_UP_BLOCKS_HIDDEN_STATES_INFO,)
 )
 @pytest.mark.parametrize("temb", [[1, 1, 2, 1280]])
-def test_downblock_512x512(reset_seeds, device, hidden_states, shard_layout, shard_end_core, shard_shape, temb):
+def test_downblock_512x512(
+    reset_seeds, device, hidden_states, shard_layout, shard_end_core, shard_shape, temb, use_program_cache
+):
     # Initialize PyTorch component
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
     unet = pipe.unet
