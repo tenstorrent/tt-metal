@@ -856,6 +856,13 @@ StorageType Tensor::storage_type() const {
         this->get_storage());
 }
 
+bool Tensor::is_host_tensor() const {
+    auto type = storage_type();
+    return type == StorageType::BORROWED || type == StorageType::OWNED || type == StorageType::MULTI_DEVICE_HOST;
+}
+
+bool Tensor::is_device_tensor() const { return !is_host_tensor(); }
+
 const ttnn::Shape Tensor::strides() const {
     return ttnn::Shape(tt::tt_metal::compute_strides(this->get_padded_shape()));
 }
