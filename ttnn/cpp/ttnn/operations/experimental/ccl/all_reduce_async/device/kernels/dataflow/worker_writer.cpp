@@ -45,6 +45,7 @@ void kernel_main() {
     uint32_t num_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
     uint32_t first_core_tile_start_offset = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_cores = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t num_cores_mcast = get_arg_val<uint32_t>(arg_idx++);
     bool wait_output_semaphore = get_arg_val<uint32_t>(arg_idx++);
     bool reset_global_semaphore = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
@@ -108,7 +109,7 @@ void kernel_main() {
         size_t l1_read_addr = get_read_ptr(cb0_id);
 
         uint64_t noc0_dest_noc_addr =
-            get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], tensor_address0 + writer_chip_offset, 0 /*noc_id*/);
+            get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], tensor_address0 + writer_chip_offset);
 
         // Offset the writer chip offset
         // noc0_dest_noc_addr +=  writer_chip_offset;
@@ -136,7 +137,7 @@ void kernel_main() {
     // 2. mcast output ready semaphore
     auto* pkt_hdr = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
     uint64_t out_ready_sem_noc_addr_in_pkt =
-        safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr, 0);
+        safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
     pkt_hdr->to_noc_unicast_atomic_inc(tt::fabric::NocUnicastAtomicIncCommandHeader{
         out_ready_sem_noc_addr_in_pkt,
         static_cast<uint16_t>(1),  // increment 1
@@ -177,18 +178,13 @@ void kernel_main() {
         reduction_semaphore_send_addr);
 
     noc_semaphore_set_multicast(
-        reduction_semaphore_send_addr,
-        reduction_semaphore_recv_noc_addr,
-        num_cores,
-        false,  // TODO: Why?
-        false,  // TODO: Why?
-        0);
+        reduction_semaphore_send_addr, reduction_semaphore_recv_noc_addr, num_cores_mcast, false, true);
 
     // DPRINT << "wait done for output semphore \n";
 
     // 4. global semaphore reset
     if (reset_global_semaphore) {
-        const uint64_t dest_noc_addr = get_noc_addr(my_x[0], my_y[0], out_ready_sem_bank_addr);
+        const uint64_t dest_noc_addr = get_noc_addr(out_ready_sem_bank_addr);
         noc_inline_dw_write(dest_noc_addr, 0);
     }
 

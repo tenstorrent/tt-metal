@@ -238,9 +238,9 @@ std::pair<CoreRangeSet, std::vector<CoreCoord>> get_optimal_worker_core_placemen
         }
     }
 
-    if (device->id() == 35) {
-        tt::log_info("dev {} sender_worker_cores: {}", device->id(), sender_worker_cores);
-    }
+    // if (device->id() == 35) {
+    //     tt::log_info("dev {} sender_worker_cores: {}", device->id(), sender_worker_cores);
+    // }
 
     // sender_worker_cores.clear();
     // sender_worker_cores.push_back(CoreCoord(7,2));
@@ -355,8 +355,8 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
         "at least one dir need to have eth cores");
     TT_FATAL(reserved_cores.has_value(), "reserved core no value");
 
-    std::vector<CoreCoord> ethernet_cores_virtual =
-        compute_top_row_ethernet_cores(device, forward_ethernet_cores, backward_ethernet_cores);
+    // std::vector<CoreCoord> ethernet_cores_virtual =
+    //     compute_top_row_ethernet_cores(device, forward_ethernet_cores, backward_ethernet_cores);
     // tt::log_info("dev {} ethernet_cores: {}", device->id(), ethernet_cores_virtual);
     // auto [sender_worker_core_range, sender_worker_cores] =
     //     get_optimal_worker_core_placement(device, ethernet_cores_virtual, reserved_cores, num_links, sub_device_id);
@@ -524,6 +524,8 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
     tt::tt_metal::SetRuntimeArgs(program, reduction_kernel_id, output_tensor_cores, reduction_kernel_rt_args);
 
     // KERNEL CREATION
+    tt::tt_metal::NOC reader_noc = NOC::NOC_1;
+    tt::tt_metal::NOC writer_noc = NOC::NOC_0;
     // Reader
     std::vector<uint32_t> reader_compile_args = {
         ring_index,                 // my_chip_id
@@ -537,9 +539,7 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
         "worker_reader.cpp",
         sender_worker_core_range,
         DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
-            .compile_args = reader_compile_args});
+            .processor = DataMovementProcessor::RISCV_1, .noc = reader_noc, .compile_args = reader_compile_args});
 
     // Writer
     auto writer_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
@@ -562,9 +562,7 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
         "worker_writer.cpp",
         sender_worker_core_range,
         DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = writer_compile_args});
+            .processor = DataMovementProcessor::RISCV_0, .noc = writer_noc, .compile_args = writer_compile_args});
 
     // Kernel Runtime Args
     for (uint32_t link = 0; link < num_links; link++) {
@@ -590,6 +588,10 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
             auto this_core = device->worker_core_from_logical_core(output_cores_vec[i]);
             output_tensor_cores_x.push_back(this_core.x);
             output_tensor_cores_y.push_back(this_core.y);
+
+            // if (device->id() == 4) {
+            //     tt::log_info("this_core: {}", this_core);
+            // }
         }
 
         std::optional<ttnn::ccl::SenderWorkerAdapterSpec> forward_fabric_connection =
@@ -648,10 +650,22 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_reader_kernel_id, {core}, reader_rt_args);
 
         // Set writer runtime args
-        auto mcast_start_core =
-            device->worker_core_from_logical_core(output_corerangeset_per_link[link].bounding_box().start_coord);
-        auto mcast_end_core =
-            device->worker_core_from_logical_core(output_corerangeset_per_link[link].bounding_box().end_coord);
+        auto output_tensor_bbox = output_corerangeset_per_link[link].bounding_box();
+        auto mcast_start_core = device->worker_core_from_logical_core(output_tensor_bbox.start_coord);
+        auto mcast_end_core = device->worker_core_from_logical_core(output_tensor_bbox.end_coord);
+        auto num_cores_mcast = (output_tensor_bbox.end_coord.x - output_tensor_bbox.start_coord.x + 1) *
+                               (output_tensor_bbox.end_coord.y - output_tensor_bbox.start_coord.y + 1);
+        // remove self from num_cores_mcast since we are not mcasting to self
+        if (output_tensor_bbox.contains(core)) {
+            num_cores_mcast -= 1;
+        }
+        if (writer_noc == NOC::NOC_1) {
+            std::swap(mcast_start_core, mcast_end_core);
+        }
+
+        if (device->id() == 4) {
+            tt::log_info("mcast_start_core: {} mcast_end_core {}", mcast_start_core, mcast_end_core);
+        }
 
         bool wait_output_semaphore = true;   // (link == 0) && !enable_async_output_tensor;
         bool reset_global_semaphore = true;  // (link == 0) && !enable_async_output_tensor;
@@ -663,6 +677,7 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
             worker_num_tiles_to_read,             // num_tiles_to_read
             output_first_core_tile_start_offset,  // first_core_tile_start_offset
             output_tensor_cores_x.size(),         // num_cores
+            num_cores_mcast,                      // num_cores_mcast
             wait_output_semaphore,                // wait_output_semaphore
             reset_global_semaphore,               // reset_global_semaphore
             drain_sync_core.x,                    // out_ready_sem_noc0_x
