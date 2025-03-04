@@ -58,10 +58,16 @@ def test_head(device, reset_seeds, model_location_generator):
     torch_input_tensor = [torch_input_tensor1, torch_input_tensor2, torch_input_tensor3]
 
     torch_model = Head()
-    ds_state_dict = {k: v for k, v in ttnn_model.torch_model.items() if (k.startswith("head."))}
+
+    torch_dict = torch.load(weights_pth)
+    ds_state_dict = {k: v for k, v in torch_dict.items() if (k.startswith("neek."))}
     new_state_dict = dict(zip(torch_model.state_dict().keys(), ds_state_dict.values()))
     torch_model.load_state_dict(new_state_dict)
     torch_model.eval()
+
+    ref1, ref2, ref3 = torch_model(torch_input_tensor[0], torch_input_tensor[1], torch_input_tensor[2])
+
+    parameters = create_head_model_parameters(torch_model, torch_input_tensor, device)
 
     result_ttnn = ttnn_model(ttnn_input_tensor)
     start_time = time.time()
@@ -72,7 +78,6 @@ def test_head(device, reset_seeds, model_location_generator):
     result_1 = ttnn.to_torch(result_ttnn[0])
     result_2 = ttnn.to_torch(result_ttnn[1])
     result_3 = ttnn.to_torch(result_ttnn[2])
-    ref1, ref2, ref3 = torch_model(torch_input_tensor[0], torch_input_tensor[1], torch_input_tensor[2])
 
     num_channels = ref1.shape[1]  # 255
     num_channels_padded = num_channels + 1
