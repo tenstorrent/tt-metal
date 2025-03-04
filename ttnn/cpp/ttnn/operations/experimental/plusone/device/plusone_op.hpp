@@ -13,7 +13,6 @@
 namespace ttnn::operations::experimental {
 
 struct PlusOne {
-    const std::optional<CoreRangeSet> sub_core_grids;
     void validate_with_output_tensors(
         const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
