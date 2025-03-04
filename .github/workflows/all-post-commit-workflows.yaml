@@ -64,6 +64,7 @@ jobs:
         ]
     uses: ./.github/workflows/build-and-unit-tests.yaml
     with:
+      os: ubuntu-22.04
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
   # Fast Dispatch Unit Tests
@@ -110,6 +111,7 @@ jobs:
         ]
     uses: ./.github/workflows/ttnn-post-commit.yaml
     with:
+      os: ubuntu-22.04
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
   # FD Model Tests
@@ -125,6 +127,7 @@ jobs:
         ]
     uses: ./.github/workflows/models-post-commit.yaml
     with:
+      os: ubuntu-22.04
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
   # FD C++ Unit Tests
@@ -140,6 +143,7 @@ jobs:
         ]
     uses: ./.github/workflows/cpp-post-commit.yaml
     with:
+      os: ubuntu-22.04
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
   code-analysis:
