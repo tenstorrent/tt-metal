@@ -101,7 +101,6 @@ void memory::process_spans(
 }
 
 void memory::update_spans(std::function<void(uint64_t& addr)>& callback) {
-    uint32_t offset = 0;
     for (auto& span : link_spans_) {
         callback(span.addr);
     }
