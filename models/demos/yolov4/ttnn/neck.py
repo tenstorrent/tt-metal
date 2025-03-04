@@ -9,108 +9,108 @@ from tt_lib.fallback_ops import fallback_ops
 
 
 class TtNeck:
-    def __init__(self, device, parameters) -> None:
-        self.parameters = parameters
+    def __init__(self, device, parameters, conv_args) -> None:
+        self.conv_args = conv_args
         self.conv1 = Conv(
             device,
-            parameters.conv_args.c1,
+            conv_args.c1,
             parameters.c1,
         )
         self.conv2 = Conv(
             device,
-            parameters.conv_args.c2,
+            conv_args.c2,
             parameters.c2,
         )
         self.conv3 = Conv(
             device,
-            parameters.conv_args.c3,
+            conv_args.c3,
             parameters.c3,
         )
         self.conv4 = Conv(
             device,
-            parameters.conv_args.c4,
+            conv_args.c4,
             parameters.c4,
         )
         self.conv5 = Conv(
             device,
-            parameters.conv_args.c5,
+            conv_args.c5,
             parameters.c5,
         )
         self.conv6 = Conv(
             device,
-            parameters.conv_args.c6,
+            conv_args.c6,
             parameters.c6,
         )
         self.conv7 = Conv(
             device,
-            parameters.conv_args.c7,
+            conv_args.c7,
             parameters.c7,
         )
         self.conv7_2 = Conv(
             device,
-            parameters.conv_args.c7_2,
+            conv_args.c7_2,
             parameters.c7_2,
         )
         self.conv7_3 = Conv(
             device,
-            parameters.conv_args.c7_3,
+            conv_args.c7_3,
             parameters.c7_3,
         )
         self.conv8 = Conv(
             device,
-            parameters.conv_args.c8,
+            conv_args.c8,
             parameters.c8,
         )
         self.conv7_4 = Conv(
             device,
-            parameters.conv_args.c7_4,
+            conv_args.c7_4,
             parameters.c7_4,
         )
         self.conv8_2 = Conv(
             device,
-            parameters.conv_args.c8_2,
+            conv_args.c8_2,
             parameters.c8_2,
         )
         self.conv7_5 = Conv(
             device,
-            parameters.conv_args.c7_5,
+            conv_args.c7_5,
             parameters.c7_5,
         )
 
         self.conv9 = Conv(
             device,
-            parameters.conv_args.c9,
+            conv_args.c9,
             parameters.c9,
         )
         self.conv9_2 = Conv(
             device,
-            parameters.conv_args.c9_2,
+            conv_args.c9_2,
             parameters.c9_2,
         )
         self.conv9_3 = Conv(
             device,
-            parameters.conv_args.c9_3,
+            conv_args.c9_3,
             parameters.c9_3,
         )
         self.conv10 = Conv(
             device,
-            parameters.conv_args.c10,
+            conv_args.c10,
             parameters.c10,
         )
 
         self.conv9_4 = Conv(
             device,
-            parameters.conv_args.c9_4,
+            conv_args.c9_4,
             parameters.c9_4,
         )
         self.conv10_2 = Conv(
             device,
-            parameters.conv_args.c10_2,
+            conv_args.c10_2,
             parameters.c10_2,
         )
         self.conv9_5 = Conv(
             device,
-            parameters.conv_args.c9_5,
+            conv_args.c9_5,
             parameters.c9_5,
         )
 
@@ -126,36 +126,36 @@ class TtNeck:
 
         pool_1 = ttnn.max_pool2d(
             input_tensor=output_tensor,
-            batch_size=self.parameters.conv_args.p1.batch_size,
-            input_h=self.parameters.conv_args.p1.input_height,
-            input_w=self.parameters.conv_args.p1.input_width,
+            batch_size=self.conv_args.p1.batch_size,
+            input_h=self.conv_args.p1.input_height,
+            input_w=self.conv_args.p1.input_width,
             channels=output_tensor.shape[3],
-            kernel_size=[self.parameters.conv_args.p1.kernel_size, self.parameters.conv_args.p1.kernel_size],
-            stride=[self.parameters.conv_args.p1.stride, self.parameters.conv_args.p1.stride],
-            padding=[self.parameters.conv_args.p1.padding, self.parameters.conv_args.p1.padding],
-            dilation=[self.parameters.conv_args.p1.dilation, self.parameters.conv_args.p1.dilation],
+            kernel_size=[self.conv_args.p1.kernel_size, self.conv_args.p1.kernel_size],
+            stride=[self.conv_args.p1.stride, self.conv_args.p1.stride],
+            padding=[self.conv_args.p1.padding, self.conv_args.p1.padding],
+            dilation=[self.conv_args.p1.dilation, self.conv_args.p1.dilation],
         )
         pool_2 = ttnn.max_pool2d(
             input_tensor=output_tensor,
-            batch_size=self.parameters.conv_args.p2.batch_size,
-            input_h=self.parameters.conv_args.p2.input_height,
-            input_w=self.parameters.conv_args.p2.input_width,
+            batch_size=self.conv_args.p2.batch_size,
+            input_h=self.conv_args.p2.input_height,
+            input_w=self.conv_args.p2.input_width,
             channels=output_tensor.shape[3],
-            kernel_size=[self.parameters.conv_args.p2.kernel_size, self.parameters.conv_args.p2.kernel_size],
-            stride=[self.parameters.conv_args.p2.stride, self.parameters.conv_args.p2.stride],
-            padding=[self.parameters.conv_args.p2.padding, self.parameters.conv_args.p2.padding],
-            dilation=[self.parameters.conv_args.p2.dilation, self.parameters.conv_args.p2.dilation],
+            kernel_size=[self.conv_args.p2.kernel_size, self.conv_args.p2.kernel_size],
+            stride=[self.conv_args.p2.stride, self.conv_args.p2.stride],
+            padding=[self.conv_args.p2.padding, self.conv_args.p2.padding],
+            dilation=[self.conv_args.p2.dilation, self.conv_args.p2.dilation],
         )
         pool_3 = ttnn.max_pool2d(
             input_tensor=output_tensor,
-            batch_size=self.parameters.conv_args.p3.batch_size,
-            input_h=self.parameters.conv_args.p3.input_height,
-            input_w=self.parameters.conv_args.p3.input_width,
+            batch_size=self.conv_args.p3.batch_size,
+            input_h=self.conv_args.p3.input_height,
+            input_w=self.conv_args.p3.input_width,
             channels=output_tensor.shape[3],
-            kernel_size=[self.parameters.conv_args.p3.kernel_size, self.parameters.conv_args.p3.kernel_size],
-            stride=[self.parameters.conv_args.p3.stride, self.parameters.conv_args.p3.stride],
-            padding=[self.parameters.conv_args.p3.padding, self.parameters.conv_args.p3.padding],
-            dilation=[self.parameters.conv_args.p3.dilation, self.parameters.conv_args.p3.dilation],
+            kernel_size=[self.conv_args.p3.kernel_size, self.conv_args.p3.kernel_size],
+            stride=[self.conv_args.p3.stride, self.conv_args.p3.stride],
+            padding=[self.conv_args.p3.padding, self.conv_args.p3.padding],
+            dilation=[self.conv_args.p3.dilation, self.conv_args.p3.dilation],
         )
 
         pool_1 = ttnn.sharded_to_interleaved(pool_1, ttnn.L1_MEMORY_CONFIG)
@@ -199,12 +199,11 @@ class TtNeck:
             output_tensor,
             (
                 1,
-                self.parameters.conv_args.c7.input_height,
-                self.parameters.conv_args.c7.input_width,
-                self.parameters.conv_args.c7.out_channels,
+                self.conv_args.c7.input_height,
+                self.conv_args.c7.input_width,
+                self.conv_args.c7.out_channels,
             ),
         )
-        print(output_tensor.shape)
         shard_grid = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(
@@ -232,7 +231,6 @@ class TtNeck:
                 output_tensor_upsample_1.shape[3],
             ),
         )
-        print(output_tensor_upsample_1.shape)
         output_tensor_upsample_1 = ttnn.to_layout(output_tensor_upsample_1, layout=ttnn.TILE_LAYOUT)
 
         outDowSample5 = input_tensor[1]
@@ -291,12 +289,11 @@ class TtNeck:
             output_tensor,
             (
                 1,
-                self.parameters.conv_args.c9.input_height,
-                self.parameters.conv_args.c9.input_width,
-                self.parameters.conv_args.c9.out_channels,
+                self.conv_args.c9.input_height,
+                self.conv_args.c9.input_width,
+                self.conv_args.c9.out_channels,
             ),
         )
-        print(output_tensor.shape)
         shard_grid = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(
@@ -324,7 +321,6 @@ class TtNeck:
                 output_tensor_upsample_2.shape[3],
             ),
         )
-        print(output_tensor_upsample_2.shape)
         output_tensor_upsample_2 = ttnn.to_layout(output_tensor_upsample_2, ttnn.TILE_LAYOUT)
 
         outDowSample3 = input_tensor[2]

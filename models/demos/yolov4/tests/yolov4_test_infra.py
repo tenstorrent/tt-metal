@@ -12,6 +12,7 @@ import ttnn
 from models.demos.yolov4.reference.yolov4 import Yolov4
 from models.demos.yolov4.ttnn.yolov4 import TtYOLOv4
 from models.demos.yolov4.demo.demo import YoloLayer, get_region_boxes, gen_yolov4_boxes_confs
+from models.demos.yolov4.ttnn.model_preprocessing import create_yolov4_model_parameters
 
 
 from models.utility_functions import (
@@ -40,9 +41,9 @@ def load_yolov4_weight(model_location_generator=None):
     return model
 
 
-def load_yolov4_model(ttnn_model):
+def load_yolov4_model(torch_dict):
     torch_model = Yolov4()
-    new_state_dict = dict(zip(torch_model.state_dict().keys(), ttnn_model.torch_model.values()))
+    new_state_dict = dict(zip(torch_model.state_dict().keys(), torch_dict.values()))
     torch_model.load_state_dict(new_state_dict)
     torch_model.eval()
     return torch_model
@@ -66,13 +67,18 @@ class Yolov4TestInfra:
         self.act_dtype = act_dtype
         self.weight_dtype = weight_dtype
         self.model_location_generator = model_location_generator
-        self.ttnn_yolov4_model = TtYOLOv4(load_yolov4_weight(self.model_location_generator), device)
 
-        torch_model = load_yolov4_model(self.ttnn_yolov4_model)
+        torch_dict = load_yolov4_weight(self.model_location_generator)
+        torch_model = load_yolov4_model(torch_dict)
+
         input_shape = (1, 320, 320, 3)
         torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
         self.input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
         self.torch_input_tensor = torch_input_tensor.permute(0, 3, 1, 2)
+
+        parameters = create_yolov4_model_parameters(torch_model, self.torch_input_tensor, device)
+        self.ttnn_yolov4_model = TtYOLOv4(parameters, device)
+
         self.torch_output_tensor = torch_model(self.torch_input_tensor)
         ref1, ref2, ref3 = gen_yolov4_boxes_confs(self.torch_output_tensor)
         self.ref_boxes, self.ref_confs = get_region_boxes([ref1, ref2, ref3])
