@@ -31,7 +31,6 @@ def get_expected_times(model_name):
 
 @skip_for_grayskull()
 @pytest.mark.models_performance_bare_metal
-@pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("model_name", ["openai/whisper-base", "distil-whisper/distil-large-v3"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("decoder_sequence_size", [1])
