@@ -7,8 +7,6 @@
 #include "ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_pybind.hpp"
 #include "ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul.hpp"
 
-using namespace tt::tt_metal;
-
 namespace ttnn::operations::experimental::matmul::detail {
 
 void bind_group_attn_matmul(pybind11::module& module) {
@@ -43,7 +41,7 @@ void bind_group_attn_matmul(pybind11::module& module) {
             pybind11::arg().noconvert(),
             pybind11::kw_only(),
             pybind11::arg("compute_with_storage_grid_size").noconvert(),
-            pybind11::arg("memory_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            pybind11::arg("memory_config").noconvert() = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
             pybind11::arg("dtype").noconvert() = std::nullopt,
             pybind11::arg("compute_kernel_config").noconvert() = std::nullopt,
             pybind11::arg("optional_output_tensor").noconvert() = std::nullopt,

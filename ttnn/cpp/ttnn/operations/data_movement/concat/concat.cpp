@@ -35,6 +35,7 @@ inline void concat_db_print(bool condition, const std::string& msg) {
 namespace ttnn {
 namespace operations {
 namespace data_movement {
+
 using OwnedConcatArgs = std::tuple<std::vector<ttnn::Tensor>, int, unsigned int>;
 
 using MassagedConcat = MassagedOperation<ttnn::Tensor, const std::vector<ttnn::Tensor>&, int, unsigned int>;
@@ -45,11 +46,8 @@ using MassagedConcatParams = MassagedOperationParams<ttnn::Tensor, const std::ve
 MassagedConcat build_unsqueeze_concat(int input_rank, const MemoryConfig& output_memory_config) {
     return MassagedConcat(MassagedConcatParams{
         .predicate = [input_rank](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> bool {
-            bool inputs_are_device_tensors =
-                std::all_of(tensors.begin(), tensors.end(), [](const ttnn::Tensor& tensor) {
-                    return tensor.storage_type() != ttnn::StorageType::BORROWED &&
-                           tensor.storage_type() != ttnn::StorageType::OWNED;
-                });
+            bool inputs_are_device_tensors = std::all_of(
+                tensors.begin(), tensors.end(), [](const ttnn::Tensor& tensor) { return tensor.is_device_tensor(); });
             bool res = input_rank < 4 && inputs_are_device_tensors;  // pad only rejects rank != 4 for device tensors
             concat_db_print(res, "unsqueeze to 4D required");
             return res;
@@ -126,7 +124,7 @@ MassagedConcat build_untilize_rm_retilize_concat(
                     // FIXME: change this to a legit slice call once
                     // padding-oblivious entry point is uplifted to the slice
                     // op.
-                    untilized_tensor = operation::run(
+                    untilized_tensor = tt::tt_metal::operation::run(
                         SliceDeviceOperation{
                             ttnn::Shape(begins), ttnn::Shape(ends), ttnn::Shape(steps), output_memory_config},
                         {untilized_tensor},

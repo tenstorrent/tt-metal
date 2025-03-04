@@ -249,7 +249,10 @@ void py_module(py::module& module) {
            MeshDevice* device,
            const std::optional<ttnn::MemoryConfig>& mem_config) {
             return tt::tt_metal::allocate_tensor_on_mesh(
-                TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), mem_config.value_or(MemoryConfig{}))),
+                TensorSpec(
+                    shape,
+                    tt::tt_metal::TensorLayout(
+                        dtype, tt::tt_metal::PageConfig(layout), mem_config.value_or(MemoryConfig{}))),
                 device);
         },
         py::arg("shape"),

@@ -1291,7 +1291,7 @@ Matmul create_matmul_struct(
 
     if (is_optional_output_tensor) {
         const auto& optional_output_tensor = optional_output_tensors.at(0);
-        if (output_mem_config == operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
+        if (output_mem_config == tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
             output_mem_config = optional_output_tensor->memory_config();
         } else {
             TT_FATAL(
@@ -2229,7 +2229,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
         get_program_config(input_tensor_a, input_tensor_b, bias_single_tile_size, this);
 
     return std::visit(
-        [&](const auto& program_config) -> operation::ProgramWithCallbacks {
+        [&](const auto& program_config) -> tt::tt_metal::operation::ProgramWithCallbacks {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseProgramConfig>) {
                 TT_FATAL(!bias.has_value(), "Bias is not supported for MatmulMultiCoreReuseProgramConfig!");

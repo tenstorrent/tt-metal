@@ -4,9 +4,39 @@
 
 #include "ttnn_ops.hpp"
 
+#include <core/ttnn_all_includes.hpp>
+
 #include "autograd/auto_context.hpp"
+#include "core/compute_kernel_config.hpp"
+#include "core/tt_tensor_utils.hpp"
 
 namespace ttml::ttnn_fixed::distributed {
+
+tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor) {
+    auto* current_device = &ttml::autograd::ctx().get_device();
+    auto num_devices = current_device->num_devices();
+    if (num_devices == 1U) {
+        throw std::logic_error("All reduce should not be called for a single device case");
+    }
+
+    auto shape = tensor.get_logical_shape();
+    if (shape.rank() != 4U) {
+        throw std::logic_error("All reduce supports only 4D tensors");
+    }
+
+    auto reshaped_tensor = ttnn::reshape(tensor, core::create_shape({1, shape[0] * shape[1], shape[2], shape[3]}));
+    auto gathered_tensor = ttnn::all_gather(reshaped_tensor, 0);
+
+    auto reduced_tensor = ttnn::moreh_sum(
+        gathered_tensor,
+        0,
+        /* keep_dim */ true,
+        /* output */ std::nullopt,
+        /* memory_config */ std::nullopt,
+        core::ComputeKernelConfig::precise());
+    reduced_tensor = ttnn::reshape(reduced_tensor, shape);
+    return reduced_tensor;
+}
 
 tt::tt_metal::Tensor scatter(const tt::tt_metal::Tensor& tensor, int dim) {
     auto* current_device = &ttml::autograd::ctx().get_device();

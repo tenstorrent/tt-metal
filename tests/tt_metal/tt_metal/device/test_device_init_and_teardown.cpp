@@ -11,6 +11,8 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/device_pool.hpp>
 
+namespace tt::tt_metal {
+
 using std::vector;
 using namespace tt;
 using namespace tt::test_utils;
@@ -26,7 +28,7 @@ void launch_program(tt_metal::IDevice* device, tt_metal::Program& program) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
         tt_metal::detail::LaunchProgram(device, program);
     } else {
-        CommandQueue& cq = device->command_queue();
+        tt::tt_metal::CommandQueue& cq = device->command_queue();
         EnqueueProgram(cq, program, false);
         Finish(cq);
     }
@@ -44,15 +46,17 @@ bool load_all_blank_kernels(tt_metal::IDevice* device) {
         program,
         "tt_metal/kernels/dataflow/blank.cpp",
         all_cores,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = tt::tt_metal::NOC::RISCV_1_default});
 
     CreateKernel(
         program,
         "tt_metal/kernels/dataflow/blank.cpp",
         all_cores,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});
 
-    CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", all_cores, ComputeConfig{});
+    CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", all_cores, tt::tt_metal::ComputeConfig{});
 
     unit_tests_common::basic::test_device_init::launch_program(device, program);
     return pass;
@@ -101,3 +105,5 @@ TEST_P(DeviceParamFixture, TensixDeviceLoadBlankKernels) {
         ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
     }
 }
+
+}  // namespace tt::tt_metal

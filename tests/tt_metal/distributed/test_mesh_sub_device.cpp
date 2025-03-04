@@ -12,6 +12,7 @@
 namespace tt::tt_metal::distributed::test {
 namespace {
 
+namespace tt::tt_metal {
 using MeshSubDeviceTestSuite = GenericMeshDeviceFixture;
 
 TEST_F(MeshSubDeviceTestSuite, SyncWorkloadsOnSubDevice) {
@@ -51,7 +52,7 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
     uint32_t num_tiles = 32;
     DeviceLocalBufferConfig per_device_buffer_config{
         .page_size = single_tile_size * num_tiles,
-        .buffer_type = tt_metal::BufferType::DRAM,
+        .buffer_type = BufferType::DRAM,
         .buffer_layout = TensorMemoryLayout::INTERLEAVED,
         .bottom_up = true};
 
@@ -120,7 +121,7 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
         EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), input_buf, src_vec, true);
 
         for (auto device : mesh_device_->get_devices()) {
-            tt::llrt::write_hex_vec_to_core(
+            llrt::write_hex_vec_to_core(
                 device->id(), syncer_core_phys, std::vector<uint32_t>{1}, global_sem.address());
         }
         mesh_device_->reset_sub_device_stall_group();
@@ -188,6 +189,7 @@ TEST_F(MeshSubDeviceTestSuite, SubDeviceSwitching) {
         mesh_device_->reset_sub_device_stall_group();
     }
     Finish(mesh_device_->mesh_command_queue());
+}
 }
 }  // namespace
 }  // namespace tt::tt_metal::distributed::test

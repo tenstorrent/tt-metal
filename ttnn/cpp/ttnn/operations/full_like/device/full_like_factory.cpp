@@ -14,7 +14,6 @@
 namespace ttnn::operations::full_like {
 
 using namespace tt;
-using namespace tt::tt_metal;
 using namespace tt::constants;
 using namespace tt::tt_metal::detail;
 
@@ -72,8 +71,8 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
 
     constexpr CBIndex cb_fill_value_id = CBIndex::c_24;
 
-    CircularBufferConfig cb_value_config = CircularBufferConfig(single_tile_size, {{cb_fill_value_id, data_format}})
-                                               .set_page_size(cb_fill_value_id, single_tile_size);
+    auto cb_value_config = tt::tt_metal::CircularBufferConfig(single_tile_size, {{cb_fill_value_id, data_format}})
+                               .set_page_size(cb_fill_value_id, single_tile_size);
     auto cb_fill_value = CreateCircularBuffer(program, all_cores, cb_value_config);
     std::map<string, string> writer_defines;
 
@@ -101,7 +100,7 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
         program,
         "ttnn/cpp/ttnn/operations/full/device/kernels/writer_full.cpp",
         all_cores,
-        WriterDataMovementConfig(writer_compile_time_args, writer_defines));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
 
     uint32_t tiles_offset = 0;
     for (uint32_t i = 0; i < num_cores; i++) {

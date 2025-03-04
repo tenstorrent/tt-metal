@@ -15,11 +15,12 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <tt-metalium/device.hpp>
 
+namespace tt::tt_metal {
+
 using std::map;
 using std::vector;
 using namespace tt;
 using namespace tt::test_utils;
-using namespace tt::tt_metal;
 
 namespace unit_tests::sfpu_util {
 
@@ -356,3 +357,5 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(20, "sigmoid"),
         std::make_tuple(20, "log"),
         std::make_tuple(20, "tanh")));
+
+}  // namespace tt::tt_metal

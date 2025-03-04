@@ -24,7 +24,7 @@ ttnn::Tensor NLPConcatHeadsDecodeOperation::invoke(
             on_subcoregrids = true;
         }
     }
-    return operation::run(
+    return tt::tt_metal::operation::run(
                NLPConcatHeadsDecodeDeviceOperation{num_heads, on_subcoregrids},
                {input_tensor},
                {},

@@ -17,6 +17,8 @@
 #include "llrt.hpp"
 #include <tt-metalium/tt_align.hpp>
 
+using namespace tt::tt_metal;  // test only
+
 extern bool debug_g;
 extern bool use_coherent_data_g;
 extern uint32_t dispatch_buffer_page_size_g;
@@ -564,7 +566,8 @@ void configure_kernel_variant(
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = my_noc_index,
             .compile_args = compile_args,
-            .defines = defines});
+            .defines = defines,
+            .opt_level = KernelBuildOptLevel::Os});
 }
 
 // Specific to this test. This test doesn't use Buffers, and for Storage cores in L1 that have 2 banks, they are

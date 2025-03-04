@@ -29,6 +29,7 @@
 #include "debug/waypoint.h"
 #include "debug/dprint.h"
 #include "debug/stack_usage.h"
+
 // clang-format on
 
 uint8_t noc_index;
@@ -269,17 +270,6 @@ void device_setup() {
     // core.ex_sem_init(semaphore::CFG_STATE_BUSY, MAX_CONFIG_STATES, 0, instrn_buf[0]);
 }
 
-void init_sync_registers() {
-    volatile tt_reg_ptr uint* tiles_received_ptr;
-    volatile tt_reg_ptr uint* tiles_acked_ptr;
-    for (uint32_t operand = 0; operand < NUM_CIRCULAR_BUFFERS; operand++) {
-        tiles_received_ptr = get_cb_tiles_received_ptr(operand);
-        tiles_received_ptr[0] = 0;
-        tiles_acked_ptr = get_cb_tiles_acked_ptr(operand);
-        tiles_acked_ptr[0] = 0;
-    }
-}
-
 inline void init_ncrisc_iram() {
 #if NCRISC_FIRMWARE_IN_IRAM
     uint16_t fw_size16 = mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.ncrisc_kernel_size16;
@@ -326,6 +316,11 @@ inline void set_ncrisc_kernel_resume_deassert_address() {
 }
 
 inline void run_triscs(dispatch_core_processor_masks enables) {
+    // Wait for init_sync_registers to complete. Should always be done by the time we get here.
+    while (mailboxes->slave_sync.trisc0 != RUN_SYNC_MSG_DONE) {
+        invalidate_l1_cache();
+    }
+
     if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE) {
         mailboxes->slave_sync.trisc0 = RUN_SYNC_MSG_GO;
         mailboxes->slave_sync.trisc1 = RUN_SYNC_MSG_GO;
@@ -371,6 +366,8 @@ inline void wait_ncrisc_trisc() {
     WAYPOINT("NTD");
 }
 
+inline void trigger_sync_register_init() { mailboxes->slave_sync.trisc0 = RUN_SYNC_MSG_INIT_SYNC_REGISTERS; }
+
 int main() {
     configure_l1_data_cache();
     DIRTY_STACK_MEMORY();
@@ -405,6 +402,7 @@ int main() {
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     noc_local_state_init(noc_index);
     uint8_t prev_noc_mode = DM_DEDICATED_NOC;
+    trigger_sync_register_init();
 
 
 #if defined(ARCH_BLACKHOLE)
@@ -416,7 +414,6 @@ int main() {
 #endif
 
     while (1) {
-        init_sync_registers();
         reset_ncrisc_with_iram();
 
         WAYPOINT("GW");
@@ -493,15 +490,18 @@ int main() {
             noc_mode = launch_msg_address->kernel_config.brisc_noc_mode;
 
             // re-initialize the NoCs
+            uint8_t cmd_buf;
             if (noc_mode == DM_DEDICATED_NOC) {
                 if (prev_noc_mode != noc_mode) {
                     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
                 }
+                cmd_buf = BRISC_AT_CMD_BUF;
             } else {
                 if (prev_noc_mode != noc_mode) {
                     dynamic_noc_init();
                 }
                 dynamic_noc_local_state_init();
+                cmd_buf = DYNAMIC_NOC_BRISC_AT_CMD_BUF;
             }
             prev_noc_mode = noc_mode;
 
@@ -516,11 +516,11 @@ int main() {
                 uint32_t end_cb_index = launch_msg_address->kernel_config.max_local_cb_end_index;
                 setup_local_cb_read_write_interfaces(
                     cb_l1_base, num_cbs_to_early_init, end_cb_index, true, true, false);
-
                 cb_l1_base =
                     (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.remote_cb_offset);
                 end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
-                experimental::setup_remote_cb_interfaces<true>(cb_l1_base, end_cb_index);
+                experimental::setup_remote_cb_interfaces<true>(
+                    cb_l1_base, end_cb_index, noc_index, noc_mode, post_atomic_increments, cmd_buf);
                 start_ncrisc_kernel_run(enables);
                 int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
                 void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
@@ -541,7 +541,8 @@ int main() {
                     cb_l1_base =
                         (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.remote_cb_offset);
                     uint32_t end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
-                    experimental::setup_remote_cb_interfaces<true>(cb_l1_base, end_cb_index);
+                    experimental::setup_remote_cb_interfaces<true>(
+                        cb_l1_base, end_cb_index, noc_index, noc_mode, post_atomic_increments, cmd_buf);
                 }
                 start_ncrisc_kernel_run(enables);
                 wait_for_go_message();
@@ -550,10 +551,22 @@ int main() {
 
             wait_ncrisc_trisc();
 
-            if (noc_mode == DM_DYNAMIC_NOC) {
-                // barrier to make sure all writes are finished
-                while (!ncrisc_dynamic_noc_nonposted_writes_flushed<proc_type>(noc_index));
-                while (!ncrisc_dynamic_noc_nonposted_writes_flushed<proc_type>(1 - noc_index));
+            trigger_sync_register_init();
+
+            if constexpr (WATCHER_ASSERT_ENABLED) {
+                if (noc_mode == DM_DYNAMIC_NOC) {
+                    WAYPOINT("NKFW");
+                    // Assert that no noc transactions are outstanding, to ensure that all reads and writes have landed
+                    // and the NOC interface is in a known idle state for the next kernel.
+                    for (int noc = 0; noc < NUM_NOCS; noc++) {
+                        ASSERT(ncrisc_dynamic_noc_reads_flushed(noc));
+                        ASSERT(ncrisc_dynamic_noc_nonposted_writes_sent(noc));
+                        ASSERT(ncrisc_dynamic_noc_nonposted_writes_flushed(noc));
+                        ASSERT(ncrisc_dynamic_noc_nonposted_atomics_flushed(noc));
+                        ASSERT(ncrisc_dynamic_noc_posted_writes_sent(noc));
+                    }
+                    WAYPOINT("NKFD");
+                }
             }
 
 #if defined(PROFILE_KERNEL)

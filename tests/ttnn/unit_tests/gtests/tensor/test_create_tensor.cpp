@@ -21,7 +21,7 @@ namespace {
 void run_create_tensor_test(const std::shared_ptr<ttnn::MeshDevice> device, const ttnn::Shape& input_shape) {
     MemoryConfig mem_cfg = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-        .buffer_type = BufferType::DRAM,
+        .buffer_type = tt::tt_metal::BufferType::DRAM,
         .shard_spec = std::nullopt};
 
     const ttnn::QueueId io_cq = ttnn::DefaultQueueId;

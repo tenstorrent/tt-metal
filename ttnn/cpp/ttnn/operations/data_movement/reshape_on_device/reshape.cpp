@@ -29,18 +29,7 @@ static Tensor manual_insertion(
         "Required shape volume ({}) must match old shape volume ({})",
         logical_shape.volume(),
         input_tensor.get_logical_volume());
-    auto cpu_tensor = input_tensor.cpu();
-    auto& storage = cpu_tensor.storage();
-    OwnedBuffer buffer = std::visit(
-        tt::stl::overloaded{
-            [](const OwnedStorage& storage) { return storage.get_buffer(); },
-            [](const MultiDeviceHostStorage& storage) {
-                TT_FATAL(storage.num_buffers() == 1, "Can't get a single buffer from multi device host storage");
-                return storage.get_buffer(0);
-            },
-            [](const auto&) -> OwnedBuffer { TT_THROW("Not supported storage type"); }},
-        storage);
-    auto owned_buffer = std::get<owned_buffer::Buffer<uint16_t>>(buffer);
+    auto owned_buffer = ttnn::detail::to_host_buffer<uint16_t>(input_tensor);
     auto output =
         Tensor(
             OwnedStorage{owned_buffer},
@@ -91,7 +80,7 @@ ttnn::Tensor ReshapeOperation::invoke(
             output_mem_config);
     }
     std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
-    return operation::run(
+    return tt::tt_metal::operation::run(
                ReshapeDeviceOperation{logical_output_shape, padded_output_shape, output_mem_config}, {input_tensor})
         .at(0);
 }

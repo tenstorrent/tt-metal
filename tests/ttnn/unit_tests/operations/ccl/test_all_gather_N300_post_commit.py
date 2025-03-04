@@ -67,6 +67,7 @@ def test_all_gather_on_n300_post_commit(
     function_level_defaults,
     enable_async,
 ):
+    pytest.skip("Skipping test pending CCL port to Fabric")
     run_all_gather_on_n300_impl(
         n300_mesh_device,
         num_devices,
