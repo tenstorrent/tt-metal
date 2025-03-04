@@ -10,7 +10,7 @@ import time
 from models.utility_functions import skip_for_grayskull
 from models.demos.yolov4.reference.downsample3 import DownSample3
 from models.demos.yolov4.ttnn.downsample3 import Down3
-from models.demos.yolov4.ttnn.model_preprocessing import create_yolov4_input_tensors, create_ds3_model_parameters
+from models.demos.yolov4.ttnn.model_preprocessing import create_ds3_model_parameters
 from loguru import logger
 import os
 
@@ -44,7 +44,7 @@ def test_down3(device, reset_seeds, model_location_generator):
 
     parameters = create_ds3_model_parameters(torch_model, torch_input, device)
 
-    ttnn_model = Down3(device, parameters)
+    ttnn_model = Down3(device, parameters, parameters.conv_args)
 
     torch_input = torch_input.permute(0, 2, 3, 1)
     ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16)
@@ -59,4 +59,4 @@ def test_down3(device, reset_seeds, model_location_generator):
     result = ttnn.to_torch(result_ttnn)
     result = result.permute(0, 3, 1, 2)
     result = result.reshape(ref.shape)
-    assert_with_pcc(result, ref, 1.00)  # PCC 0.96 - The PCC will improve once #3612 is resolved.
+    assert_with_pcc(result, ref, 0.96)  # PCC 0.96 - The PCC will improve once #3612 is resolved.

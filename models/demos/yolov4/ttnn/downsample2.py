@@ -8,52 +8,52 @@ from models.demos.yolov4.ttnn.common import Conv
 
 
 class Down2:
-    def __init__(self, device, parameters) -> None:
+    def __init__(self, device, parameters, conv_args) -> None:
         self.conv1 = Conv(
             device,
-            parameters.conv_args.c1,
+            conv_args.c1,
             parameters.c1,
         )
         self.conv2 = Conv(
             device,
-            parameters.conv_args.c2,
+            conv_args.c2,
             parameters.c2,
         )
         self.conv3 = Conv(
             device,
-            parameters.conv_args.c3,
+            conv_args.c3,
             parameters.c3,
         )
         self.conv4 = Conv(
             device,
-            parameters.conv_args.c4,
+            conv_args.c4,
             parameters.c4,
         )
 
         self.res1_conv1 = Conv(
             device,
-            parameters.conv_args.res["0"],
+            conv_args.res["0"],
             parameters.res["0"]["0"],
         )
         self.res1_conv2 = Conv(
             device,
-            parameters.conv_args.res["3"],
+            conv_args.res["3"],
             parameters.res["0"]["3"],
         )
         self.res2_conv1 = Conv(
             device,
-            parameters.conv_args.res[0],
+            conv_args.res[0],
             parameters.res["1"]["0"],
         )
         self.res2_conv2 = Conv(
             device,
-            parameters.conv_args.res[3],
+            conv_args.res[3],
             parameters.res["1"]["3"],
         )
 
         self.conv5 = Conv(
             device,
-            parameters.conv_args.c5,
+            conv_args.c5,
             parameters.c5,
         )
 
