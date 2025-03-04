@@ -189,3 +189,31 @@ def test_requantize_4d(device, x0, x1, x2, x3):
     output_tensor = ttnn.to_torch(dequantized_tensor)
 
     assert_with_pcc(torch_input_tensor, output_tensor)
+
+
+@pytest.mark.parametrize("dim", [1, 2, 3, 4])
+def test_quantization_program_cache(device, use_program_cache, dim):
+    torch.manual_seed(0)
+
+    num_program_cache_entries_list = []
+
+    for i in range(3):
+        # Each iteration gets completely different input tensors, quant ranges, etc.
+        torch_input_tensor = torch.rand([30 + i] * dim, dtype=torch.float32)
+
+        scale, zero_point = calculate_scale_zero_point(torch_input_tensor, -120 + i, 121 - i)
+        scale_new, zero_point_new = calculate_scale_zero_point(torch_input_tensor, -50 - i, 42 + i)
+
+        input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        quantized_tensor = ttnn.quantize(input_tensor, scale, zero_point)
+        requantized_tensor = ttnn.requantize(quantized_tensor, scale, zero_point, scale_new, zero_point_new)
+        dequantized_tensor = ttnn.dequantize(requantized_tensor, scale_new, zero_point_new)
+        output_tensor = ttnn.to_torch(dequantized_tensor)
+
+        assert_with_pcc(torch_input_tensor, output_tensor)
+
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
+
+    assert num_program_cache_entries_list[0] > 0
+    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
+    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[2]
