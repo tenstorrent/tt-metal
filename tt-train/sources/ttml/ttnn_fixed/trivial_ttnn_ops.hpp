@@ -20,4 +20,10 @@ tt::tt_metal::Tensor mean_ttnn(const tt::tt_metal::Tensor& t, int dim, bool keep
 
 tt::tt_metal::Tensor sum_moreh(const tt::tt_metal::Tensor& t, int dim, bool keep_dim);
 tt::tt_metal::Tensor sum_ttnn(const tt::tt_metal::Tensor& t, int dim, bool keep_dim);
+
+// Creates a new tensor with the same data as the input tensor, but interleaved over L1.
+tt::tt_metal::Tensor to_l1(const tt::tt_metal::Tensor& t);
+// Creates a new tensor with the same data as the input tensor, but interleaved over DRAM.
+tt::tt_metal::Tensor to_dram(const tt::tt_metal::Tensor& t);
+
 }  // namespace ttml::ttnn_fixed

@@ -13,52 +13,68 @@
 #include "core/tt_tensor_utils.hpp"
 #include "core/ttnn_all_includes.hpp"
 #include "core/xtensor_utils.hpp"
+#include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 namespace ttml::ops {
 
-void RotaryEmbeddingParams::validate(const autograd::TensorPtr& input) const {
+void validate_rope_input_and_params(const autograd::TensorPtr& input, const RotaryEmbeddingParams& params) {
     if (input->get_rank() != 4) {
         throw std::runtime_error(
-            "rope only supports rank-4 input tensors, but got rank " + std::to_string(input->get_rank()));
+            fmt::format("RoPE only supports rank-4 input tensors, but got rank {}.", input->get_rank()));
     }
     auto input_shape = input->get_shape();
 
     auto input_seq_len = input_shape[-2];
     auto input_head_dim = input_shape[-1];
 
-    if (input_head_dim != head_dim) {
-        throw std::runtime_error("RoPE input tensor's head dimension must match the head dimension in the params");
+    if (input_head_dim != params.head_dim) {
+        throw std::runtime_error(fmt::format(
+            "RoPE input tensor's head dimension ({}) must match the head dimension in the params ({})",
+            input_head_dim,
+            params.head_dim));
     }
 
-    if (input_seq_len != sequence_length) {
-        throw std::runtime_error("RoPE input tensor's sequence length must match the sequence length in the params");
+    if (input_seq_len != params.sequence_length) {
+        throw std::runtime_error(fmt::format(
+            "RoPE input tensor's sequence length ({}) must match the sequence length in the params ({})",
+            input_seq_len,
+            params.sequence_length));
     }
 
-    auto trans_mat_shape = trans_mat.get_logical_shape();
+    auto trans_mat_shape = params.trans_mat.get_logical_shape();
     auto trig_param_shapes = std::array{
-        cos_cache.get_logical_shape(),
-        sin_cache.get_logical_shape(),
-        neg_cos_cache.get_logical_shape(),
-        neg_sin_cache.get_logical_shape()};
+        params.cos_cache.get_logical_shape(),
+        params.sin_cache.get_logical_shape(),
+        params.neg_cos_cache.get_logical_shape(),
+        params.neg_sin_cache.get_logical_shape()};
 
-    if (!std::ranges::all_of(
-            trig_param_shapes, [=](auto shape) { return shape == ttnn::Shape{1, 1, input_seq_len, input_head_dim}; })) {
-        throw std::runtime_error(
-            "All trigonometric rotary embedding parameters must have shape [1, 1, seq_len, head_dim]");
+    auto expected_trig_shape = ttnn::Shape{1, 1, input_seq_len, input_head_dim};
+    if (!std::ranges::all_of(trig_param_shapes, [=](auto shape) { return shape == expected_trig_shape; })) {
+        throw std::runtime_error(fmt::format(
+            "All trigonometric rotary embedding parameters must have shape [1, 1, {}, {}], but got shapes: "
+            "cos_cache: {}, sin_cache: {}, neg_cos_cache: {}, neg_sin_cache: {}",
+            input_seq_len,
+            input_head_dim,
+            params.cos_cache.get_logical_shape(),
+            params.sin_cache.get_logical_shape(),
+            params.neg_cos_cache.get_logical_shape(),
+            params.neg_sin_cache.get_logical_shape()));
     }
 
-    if (trans_mat_shape != ttnn::Shape{1, 1, 32, 32}) {
-        throw std::runtime_error("RoPE trans mat must be of shape {1, 1, 32, 32}");
+    auto expected_trans_mat_shape = ttnn::Shape{1, 1, 32, 32};
+    if (trans_mat_shape != expected_trans_mat_shape) {
+        throw std::runtime_error(fmt::format(
+            "RoPE trans_mat must be of shape {}, but has shape {}", expected_trans_mat_shape, trans_mat_shape));
     }
 }
 
 // trans_mat, sin_cache, cos_cache all precomputed and stored somewhere in the module hierarchy
 autograd::TensorPtr rope(const autograd::TensorPtr& input, const RotaryEmbeddingParams& params) {
-    params.validate(input);
+    using namespace ttml::ttnn_fixed;
+    validate_rope_input_and_params(input, params);
 
-    // ensure everything in sight is interleaved over L1 before calling ttnn rope.
-    auto to_l1 = [](const auto& t) { return ttnn::to_memory_config(t, ttnn::L1_MEMORY_CONFIG); };
-    auto to_dram = [](const auto& t) { return ttnn::to_memory_config(t, ttnn::DRAM_MEMORY_CONFIG); };
+    // we need to ensure everything in sight is interleaved over L1 before
+    // calling ttnn rope, whence the calls to ttnn_fixed::to_l1.
 
     // FIXME: mostly use defaults for now, try tweaking.
     auto out_tensor = ttnn::experimental::rotary_embedding_llama(
@@ -69,7 +85,7 @@ autograd::TensorPtr rope(const autograd::TensorPtr& input, const RotaryEmbedding
     // caches. Note: we can just reuse trans_mat here since the data movement
     // should be the same on the backward pass (we use the same trick to speed
     // up the matmul, and the matrix used is specified by the cos/sin caches.)
-    autograd::GradFunction grad_fn = [to_l1, to_dram, input, params, out]() {
+    autograd::GradFunction grad_fn = [input, params, out]() {
         auto dL_dout = out->get_grad();
         auto dL_dinput = ttnn::experimental::rotary_embedding_llama(
             to_l1(dL_dout), to_l1(params.neg_cos_cache), to_l1(params.neg_sin_cache), to_l1(params.trans_mat));
