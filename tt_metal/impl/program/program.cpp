@@ -1138,10 +1138,10 @@ void detail::Program_::populate_dispatch_data(IDevice* device) {
                 lengths.resize(lengths.size() + num_spans);
                 riscvs.resize(riscvs.size() + num_spans);
 
-                kernel_bin.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t dst, uint32_t len) {
-
+                kernel_bin.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr,
+                                             uint64_t dst,
+                                             uint32_t len) {
                     // Set dst for eth kernels until they move to ring buffer
-                    dst = hal.iram_relocate_dev_addr(dst, core_type);
                     dst_base_addrs[transfer_info_index] = dst;
                     page_offsets[transfer_info_index] =
                         binaries_data.size() * sizeof(uint32_t) / HostMemDeviceCommand::PROGRAM_PAGE_SIZE;

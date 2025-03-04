@@ -70,14 +70,11 @@ void Hal::initialize_wh() {
         return addr;
     };
 
-    this->iram_relocate_func_ = [](uint64_t addr, HalProgrammableCoreType type) {
-        if (std::getenv("TT_METAL_ENABLE_ERISC_IRAM")) {
-            if (type == HalProgrammableCoreType::ACTIVE_ETH &&
-                addr == static_cast<uint32_t>(eth_iram_mem::address_map::ERISC_IRAM_BASE)) {
-                // IRAM enabled program starts from ERISC_IRAM_BASE. This relocation is for where to put the program.
-                // At first the program is placed on ERISC_IRAM_BASE, then erisc.cc copies to local IRAM.
-                return (uint64_t)eth_l1_mem::address_map::KERNEL_BASE;
-            }
+    this->iram_relocate_func_ = [](uint64_t addr) {
+        if (addr == static_cast<uint32_t>(eth_iram_mem::address_map::ERISC_IRAM_BASE)) {
+            // IRAM enabled program starts from ERISC_IRAM_BASE. This relocation is for where to put the program.
+            // At first the program is placed on ERISC_IRAM_BASE, then erisc.cc copies to local IRAM.
+            return (uint64_t)eth_l1_mem::address_map::KERNEL_BASE;
         }
         return addr;
     };
