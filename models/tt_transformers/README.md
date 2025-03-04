@@ -24,7 +24,7 @@ Max Prefill Chunk Sizes (text models):
 | Llama3.1-70B | Not supported | Not supported | 32k tokens     | 128k tokens |
 | DeepSeek-R1-Distill-Llama3.3-70B | Not supported | Not supported | 32k tokens     | 128k tokens |
 
-- These max chunk sizes are specific to max context length 128k and are configured via `MAX_PREFILL_CHUNK_SIZES_DIV1024` in [model_config.py](https://github.com/tenstorrent/tt-metal/blob/main/models/tt_transformers/tt/model_config.py). If the max context length is set to a smaller value using the `max_seq_len` flag (see [Run the demo](#run-the-demo)), these chunk sizes can possibly be increased due to using a smaller KV cache.
+- These max chunk sizes are specific to max context length 128k and are configured via `MAX_PREFILL_CHUNK_SIZES_DIV1024` in [model_config.py](tt/model_config.py). If the max context length is set to a smaller value using the `max_seq_len` flag (see [Run the demo](#run-the-demo)), these chunk sizes can possibly be increased due to using a smaller KV cache.
 
 **Max Context Lengths (Llama3.2-11B multimodal)**: Llama3.2-11B multimodal is currently only supported on N300 and LoudBox / QuietBox. On N300, a max prefill context length of 8k is supported, while LoudBox / QuietBox supports a max context length of 128k.
 
