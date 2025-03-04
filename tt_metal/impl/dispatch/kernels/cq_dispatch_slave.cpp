@@ -123,11 +123,12 @@ void dispatch_s_noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t noc_id,
         src_addr,
         addr,
         4,
-        NOC_UNICAST_WRITE_VC false,  // mcast
-        false,                       // linked
-        1,                           // num_dests
-        true,                        // multicast_path_reserve
-        false                        // posted
+        NOC_UNICAST_WRITE_VC,
+        false,  // mcast
+        false,  // linked
+        1,      // num_dests
+        true,   // multicast_path_reserve
+        false   // posted
     );
 #else
     noc_fast_write_dw_inline<noc_mode>(
