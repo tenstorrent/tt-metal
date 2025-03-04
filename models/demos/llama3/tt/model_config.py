@@ -219,6 +219,8 @@ class TtModelArgs:
             assert (
                 max_prefill_chunk_size_div1024 is not None
             ), f"Unsupported model {self.model_name} on device {self.device_name}"
+        else:
+            max_prefill_chunk_size_div1024 = int(max_prefill_chunk_size_div1024)
         self.max_prefill_chunk_size = max_prefill_chunk_size_div1024 * 1024
 
         if callable(optimizations):
