@@ -34,7 +34,7 @@ jobs:
         LOGURU_LEVEL: INFO
         ARCH_NAME: ${{ matrix.test-group.arch }}
         GITHUB_ACTIONS: true
-        GTEST_OUTPUT: xml:generated/test_reports/
+        GTEST_OUTPUT: xml:/work/generated/test_reports/
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -72,7 +72,7 @@ jobs:
           pwd
           echo $PYTHONPATH
           ls -al
-          mkdir -p generated/test_reports
+          mkdir -p /work/generated/test_reports
           ${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/upload-artifact-with-job-uuid
         if: ${{ !cancelled() }}
