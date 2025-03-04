@@ -13,6 +13,8 @@ from loguru import logger
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.demos.yolov4.ttnn.yolov4 import TtYOLOv4
+from models.demos.yolov4.reference.yolov4 import Yolov4
+from models.demos.yolov4.ttnn.model_preprocessing import create_yolov4_model_parameters
 from models.utility_functions import (
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
@@ -26,11 +28,11 @@ from models.utility_functions import (
 
 
 def get_expected_compile_time_sec():
-    return 75
+    return 70
 
 
 def get_expected_inference_time_sec():
-    return 0.37
+    return 0.46
 
 
 @pytest.mark.models_performance_bare_metal
@@ -60,10 +62,19 @@ def test_yolov4(
         weights_pth = "tests/ttnn/integration_tests/yolov4/yolov4.pth"
     else:
         weights_pth = str(model_path / "yolov4.pth")
-    ttnn_model = TtYOLOv4(weights_pth, device)
 
+    torch_model = Yolov4()
+    torch_dict = torch.load(weights_pth)
+    new_state_dict = dict(zip(torch_model.state_dict().keys(), torch_dict.values()))
+    torch_model.load_state_dict(new_state_dict)
+    torch_model.eval()
     torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
+    torch_input = torch_input_tensor.permute(0, 3, 1, 2).float()
+    parameters = create_yolov4_model_parameters(torch_model, torch_input, device)
+
     ttnn_input = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
+
+    ttnn_model = TtYOLOv4(parameters, device)
 
     logger.info(f"Compiling model with warmup run")
     profiler.start(f"inference_and_compile_time")
@@ -125,7 +136,8 @@ def test_perf_device_bare_metal_yolov4(batch_size, model_name):
     num_iterations = 1
     margin = 0.03
 
-    expected_perf = 77
+    expected_perf = 91.8
+
     command = f"pytest tests/ttnn/integration_tests/yolov4/test_ttnn_yolov4.py"
 
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
