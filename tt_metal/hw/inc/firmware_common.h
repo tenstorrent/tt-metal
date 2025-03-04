@@ -98,6 +98,8 @@ FORCE_INLINE uint64_t calculate_dispatch_addr(volatile go_msg_t* go_message_in) 
 }
 
 FORCE_INLINE void notify_dispatch_core_done(uint64_t dispatch_addr, uint8_t noc_index) {
+    // Workaround for BH inline writes does not apply here because this writes to a stream register.
+    // See comment in `noc_get_interim_inline_value_addr` for more details.
     noc_fast_write_dw_inline<DM_DEDICATED_NOC>(
         noc_index,
         NCRISC_AT_CMD_BUF,

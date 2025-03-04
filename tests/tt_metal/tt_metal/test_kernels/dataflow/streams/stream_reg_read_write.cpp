@@ -18,7 +18,7 @@ void kernel_main() {
     // Write to stream register at `reg_addr` on core [target_noc_x, target_noc_y]
     uint32_t reg_addr = STREAM_REG_ADDR(stream_id, stream_reg);
     uint64_t dest_addr = NOC_XY_ADDR(target_noc_x, target_noc_y, reg_addr);
-    noc_inline_dw_write(dest_addr, value_to_write);
+    noc_inline_dw_write<true>(dest_addr, value_to_write);
     noc_async_write_barrier();
 
     // Read back value that was written, store in L1 of this core for host to validate
