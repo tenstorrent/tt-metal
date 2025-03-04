@@ -6,6 +6,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc.hpp"
@@ -14,6 +15,24 @@
 
 namespace ttnn {
 namespace operations::reduction {
+
+// input_shape has original shape while output_shape has reduction applied and last 2 dims padded.
+// Need to get slice parameters based on the minimum of the two shapes.
+std::tuple<ttnn::SmallVector<int>, ttnn::SmallVector<int>, ttnn::SmallVector<int>> get_slice_parameters(
+    Shape input_shape, Shape output_shape) {
+    ttnn::SmallVector<int> start{}, end{}, step{};
+    TT_FATAL(
+        input_shape.size() == output_shape.size(),
+        "Input shape size {} and output shape size {} need to be equal.",
+        input_shape.size(),
+        output_shape.size());
+    for (int i = 0; i < input_shape.size(); i++) {
+        start.push_back(0);
+        end.push_back(std::min(input_shape[i], output_shape[i]));
+        step.push_back(1);
+    }
+    return {start, end, step};
+}
 
 std::pair<ttnn::SmallVector<int>, ttnn::SmallVector<int>> split_height_width_dims(
     const ttnn::SmallVector<int>& dim, const Tensor& input_tensor_arg) {
@@ -280,6 +299,26 @@ bool call_fast_nc(DataType dtype) {
     return dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B;
 }
 
+Tensor non_height_width_reduce(
+    const ttnn::Tensor& input_tensor,
+    ttnn::SmallVector<int> dims,
+    const std::optional<MemoryConfig>& memory_config_arg,
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
+    auto input_shape = input_tensor.get_logical_shape();
+    ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(ttnn::init_device_compute_kernel_config(
+        input_tensor.device()->arch(),
+        std::nullopt,
+        MathFidelity::HiFi4,
+        /*default_approx_mode=*/false,
+        /*default_fp32_acc=*/true));
+    Tensor output_tensor = ttnn::experimental::reduction::fast_reduce_nc(
+        input_tensor, dims, /*output=*/std::nullopt, memory_config, config);
+    auto [start, end, step] = get_slice_parameters(input_shape, output_tensor.get_logical_shape());
+    output_tensor = ttnn::slice(output_tensor, start, end, step);
+    return output_tensor;
+}
+
 template <ReduceType reduce_type>
 Tensor Reduce<reduce_type>::invoke(
     const Tensor& input_tensor_arg,
@@ -300,12 +339,16 @@ Tensor Reduce<reduce_type>::invoke(
         height_width_dims = dims.second;
 
         if (non_height_width_dims.size() > 0) {
-            auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());
-            input_tensor = ttnn::experimental::reduction::fast_reduce_nc(
-                input_tensor, non_height_width_dims, std::nullopt, memory_config, compute_kernel_config);
+            input_tensor =
+                non_height_width_reduce(input_tensor, non_height_width_dims, memory_config_arg, compute_kernel_config);
+
             if (height_width_dims.size() == 0) {
                 return adjust_shape(
-                    input_tensor, input_tensor.get_logical_shape(), keepdim, height_width_dims, non_height_width_dims);
+                    input_tensor,
+                    input_tensor_arg.get_logical_shape(),
+                    keepdim,
+                    height_width_dims,
+                    non_height_width_dims);
             }
             dim = height_width_dims;
         }
