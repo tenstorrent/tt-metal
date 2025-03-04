@@ -363,7 +363,6 @@ def run_demo_functional_whisper_for_conditional_generation_inference(input_path,
 
     if len(input_data) < num_inputs:
         assert False, "num_inputs exceeds number of audio files available in folder"
-    output_list = {}
 
     for i in range(num_inputs):
         input_file_path = input_data[i]
@@ -371,13 +370,7 @@ def run_demo_functional_whisper_for_conditional_generation_inference(input_path,
 
         # perform model inference
         ttnn_output = model_pipeline(data, samplerate, stream=False)
-
-        logger.info("Model Output")
-        logger.info(ttnn_output)
-        output_list[i] = ttnn_output
-    for i in range(len(output_list)):
-        logger.info(f"output for input {i+1}")
-        logger.info(output_list[i])
+        logger.info(f"Model Output (Input {i+1}): {ttnn_output}")
 
 
 def run_demo_functional_whisper_for_conditional_generation_dataset(ttnn_model, device):
@@ -394,8 +387,7 @@ def run_demo_functional_whisper_for_conditional_generation_dataset(ttnn_model, d
         data = ds[ds_idx]["audio"]["array"]
         sampling_rate = 16000
         ttnn_output = model_pipeline(data, sampling_rate, stream=False)
-        logger.info("Model output:")
-        logger.info(ttnn_output)
+        logger.info(f"Model output: {ttnn_output}")
 
 
 @pytest.mark.parametrize(
