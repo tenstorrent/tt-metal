@@ -10,6 +10,7 @@ from models.utility_functions import skip_for_grayskull
 import pytest
 import time
 from models.demos.yolov4.ttnn.head import TtHead
+from models.demos.yolov4.ttnn.model_preprocessing import create_head_model_parameters
 from loguru import logger
 import os
 
@@ -29,8 +30,6 @@ def test_head(device, reset_seeds, model_location_generator):
         weights_pth = "tests/ttnn/integration_tests/yolov4/yolov4.pth"
     else:
         weights_pth = str(model_path / "yolov4.pth")
-
-    ttnn_model = TtHead(device, weights_pth)
 
     torch_input_tensor1 = torch.randn(1, 40, 40, 128, dtype=torch.bfloat16)
     torch_input_tensor2 = torch.randn(1, 10, 10, 512, dtype=torch.bfloat16)
@@ -60,7 +59,7 @@ def test_head(device, reset_seeds, model_location_generator):
     torch_model = Head()
 
     torch_dict = torch.load(weights_pth)
-    ds_state_dict = {k: v for k, v in torch_dict.items() if (k.startswith("neek."))}
+    ds_state_dict = {k: v for k, v in torch_dict.items() if (k.startswith("head."))}
     new_state_dict = dict(zip(torch_model.state_dict().keys(), ds_state_dict.values()))
     torch_model.load_state_dict(new_state_dict)
     torch_model.eval()
@@ -68,6 +67,8 @@ def test_head(device, reset_seeds, model_location_generator):
     ref1, ref2, ref3 = torch_model(torch_input_tensor[0], torch_input_tensor[1], torch_input_tensor[2])
 
     parameters = create_head_model_parameters(torch_model, torch_input_tensor, device)
+
+    ttnn_model = TtHead(device, parameters, parameters.conv_args)
 
     result_ttnn = ttnn_model(ttnn_input_tensor)
     start_time = time.time()

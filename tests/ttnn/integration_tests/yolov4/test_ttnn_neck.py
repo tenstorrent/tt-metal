@@ -6,7 +6,7 @@ import torch
 import ttnn
 from models.demos.yolov4.ttnn.neck import TtNeck
 from models.demos.yolov4.reference.neck import Neck
-from models.demos.yolov4.ttnn.model_preprocessing import create_yolov4_input_tensors, create_neck_model_parameters
+from models.demos.yolov4.ttnn.model_preprocessing import create_neck_model_parameters
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 import pytest
@@ -67,7 +67,7 @@ def test_neck(device, reset_seeds, model_location_generator):
 
     parameters = create_neck_model_parameters(torch_model, torch_input_tensor, device)
 
-    ttnn_model = TtNeck(device, parameters)
+    ttnn_model = TtNeck(device, parameters, parameters.conv_args)
 
     result_ttnn = ttnn_model(ttnn_input_tensor)
 

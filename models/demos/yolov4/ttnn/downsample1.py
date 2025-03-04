@@ -10,46 +10,46 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without
 
 
 class Down1:
-    def __init__(self, device, parameters) -> None:
+    def __init__(self, device, parameters, conv_args) -> None:
         self.conv1 = Conv(
             device,
-            parameters.conv_args.c1,
+            conv_args.c1,
             parameters.c1,
         )
 
         self.conv2 = Conv(
             device,
-            parameters.conv_args.c2,
+            conv_args.c2,
             parameters.c2,
         )
         self.conv3 = Conv(
             device,
-            parameters.conv_args.c3,
+            conv_args.c3,
             parameters.c3,
         )
         self.conv4 = Conv(
             device,
-            parameters.conv_args.c4,
+            conv_args.c4,
             parameters.c4,
         )
         self.conv5 = Conv(
             device,
-            parameters.conv_args.c5,
+            conv_args.c5,
             parameters.c5,
         )
         self.conv6 = Conv(
             device,
-            parameters.conv_args.c6,
+            conv_args.c6,
             parameters.c6,
         )
         self.conv7 = Conv(
             device,
-            parameters.conv_args.c7,
+            conv_args.c7,
             parameters.c7,
         )
         self.conv8 = Conv(
             device,
-            parameters.conv_args.c8,
+            conv_args.c8,
             parameters.c8,
         )
         self.convs = [self.conv1, self.conv2, self.conv3, self.conv4, self.conv5, self.conv6, self.conv7, self.conv8]
