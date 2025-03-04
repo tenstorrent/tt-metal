@@ -192,7 +192,8 @@ std::vector<ll_api::memory const*> const& Kernel::binaries(uint32_t build_key) c
 }
 
 std::string DataMovementKernel::config_hash() const {
-    return fmt::format("{}", magic_enum::enum_name(this->config_.noc));
+    return fmt::format(
+        "{}_{}", magic_enum::enum_name(this->config_.noc), magic_enum::enum_name(this->config_.noc_mode));
 }
 
 // Add "eth_" to the hash to differentiate between erisc and brisc.
