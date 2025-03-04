@@ -14,7 +14,9 @@ namespace ttml::ops {
 // trans_mat, sin_cache, cos_cache all precomputed and stored somewhere in the module hierarchy
 autograd::TensorPtr rope(const autograd::TensorPtr& input, const RotaryEmbeddingParams& params) {
     if (input->get_value().logical_shape().rank() != 4) {
-        throw std::runtime_error("rope only supports rank-4 input tensors.");
+        throw std::runtime_error(
+            "rope only supports rank-4 input tensors, but got rank " +
+            std::to_string(input->get_value().logical_shape().rank()));
     }
 
     // FIXME: mostly use defaults for now, try tweaking.
