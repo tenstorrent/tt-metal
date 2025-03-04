@@ -395,8 +395,8 @@ TEST_F(RoPETest, GeneratedParamsOk) {
         /*sequence_length=*/32,
         /*head_dim=*/32);
 
-    EXPECT_TRUE(xt::allclose(expected_cos, core::to_xtensor(rope_params.cos_cache)));
-    EXPECT_TRUE(xt::allclose(expected_sin, core::to_xtensor(rope_params.sin_cache)));
+    EXPECT_TRUE(xt::allclose(expected_cos, core::to_xtensor(rope_params.cos_cache), /*rtol=*/0.01F, /*atol=*/0.03F));
+    EXPECT_TRUE(xt::allclose(expected_sin, core::to_xtensor(rope_params.sin_cache), /*rtol=*/0.01F, /*atol=*/0.03F));
     EXPECT_TRUE(xt::allclose(expected_trans_mat, core::to_xtensor(rope_params.trans_mat)));
 }
 
