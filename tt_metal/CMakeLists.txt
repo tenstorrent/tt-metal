@@ -46,7 +46,7 @@ target_link_libraries(
 
 # TODO(afuller): this should be self-describing modules.
 #   For now just cherry-pick all the files I discovered empirally by trying to run a test.
-if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
+if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23 AND FALSE)
     target_sources(
         tt_metal
         PUBLIC
