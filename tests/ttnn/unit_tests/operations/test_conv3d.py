@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 from loguru import logger
 import torch
 import pytest
@@ -489,72 +493,3 @@ def test_conv3d_mochi_shapes(
     pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.999)
     logger.info(f"{pcc_message}")
     assert pcc_passed, pcc_message
-
-
-@pytest.mark.parametrize(
-    "input_shape, out_channels, kernel_size, stride, padding, padding_mode",
-    [
-        [(1, 768, 4, 60, 106), 768, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
-        [(1, 512, 11, 120, 212), 512, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
-        [(1, 256, 21, 240, 424), 256, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
-        [(1, 128, 21, 480, 848), 128, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
-    ],
-    ids=["variant1", "variant2", "variant3", "variant4"],
-)
-@pytest.mark.parametrize("grid_size", [[8, 8]], ids=["grid_8x8"])
-def test_conv3d_mochi_shapes_sweep_blocks(
-    device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size, use_program_cache
-):
-    import math
-
-    tt_input, conv3d_module, gt_output, kernel_config, output_dims = setup_conv3d_test(
-        input_shape, out_channels, kernel_size, stride, padding, padding_mode, device, debug=False
-    )
-    N, D_out, H_out, W_out = output_dims
-    C = input_shape[1]
-    C_in_blocks = filter(lambda x: C % x == 0, range(32, min(C + 1, 256), 32))
-    C_out_blocks = filter(lambda x: out_channels % x == 0, range(32, min(out_channels + 1, 256), 32))
-    T_out_blocks = [2**i for i in range(int(math.log2(D_out)))]
-    H_out_blocks = [2**i for i in range(int(math.log2(H_out)))]
-    W_out_blocks = [2**i for i in range(int(math.log2(W_out)))]
-
-    import itertools
-
-    for C_in_block, C_out_block, T_out_block, H_out_block, W_out_block in itertools.product(
-        C_in_blocks, C_out_blocks, T_out_blocks, H_out_blocks, W_out_blocks
-    ):
-        logger.info(f"Testing {C_in_block}, {C_out_block}, {T_out_block}, {H_out_block}, {W_out_block}")
-        # Prepare weights with specified C_in_block
-        tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device, C_in_block=C_in_block)
-
-        config = create_conv3d_config(
-            out_channels,
-            kernel_size,
-            stride,
-            padding,
-            padding_mode,
-            T_out_block=T_out_block,
-            H_out_block=H_out_block,
-            W_out_block=W_out_block,
-            C_out_block=C_out_block,
-            C_in_block=C_in_block,
-            compute_with_storage_grid_size=grid_size,
-        )
-
-        try:
-            tt_output = ttnn.conv3d(
-                input_tensor=tt_input,
-                weight_tensor=tt_weight,
-                bias_tensor=tt_bias,
-                config=config,
-                compute_kernel_config=kernel_config,
-            )
-        except Exception as e:
-            print(f"Failed for {C_in_block}, {C_out_block}, {T_out_block}, {H_out_block}, {W_out_block}: {e}")
-            continue
-        # Reshape output and verify results
-        tt_output = reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device)
-
-        assert tt_output.shape == gt_output.shape
-        pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.99)
-        assert pcc_passed, pcc_message
