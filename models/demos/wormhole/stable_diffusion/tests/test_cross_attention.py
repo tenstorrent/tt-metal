@@ -42,6 +42,7 @@ def test_cross_attention_512x512(
     block,
     block_index,
     attention_index,
+    use_program_cache,
 ):
     torch.manual_seed(0)
     device.enable_program_cache()

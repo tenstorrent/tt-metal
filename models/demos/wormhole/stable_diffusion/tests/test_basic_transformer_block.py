@@ -39,6 +39,7 @@ def test_basic_transformer_block_512x512(
     block,
     block_index,
     attention_index,
+    use_program_cache,
 ):
     torch.manual_seed(0)
 
