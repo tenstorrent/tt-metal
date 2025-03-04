@@ -610,7 +610,7 @@ Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking) {
 
     mesh_cq.enqueue_read_shards(shard_data_transfers, mesh_buffer, /*blocking=*/true);
 
-    MultiDeviceHostStorage host_storage(storage.strategy, std::move(buffers), std::move(specs));
+    MultiDeviceHostStorage host_storage(storage.distribution_shape, std::move(buffers), std::move(specs));
     return Tensor(std::move(host_storage), tensor.get_tensor_spec());
 }
 
@@ -812,7 +812,7 @@ MultiDeviceStorage shard_to_mesh_buffer(
     mesh_device->mesh_command_queue().enqueue_write_shards(mesh_buffer, shard_data_transfers, /*blocking=*/false);
 
     return MultiDeviceStorage(
-        storage.strategy, std::move(ordered_device_ids), std::move(buffers), std::move(specs), mesh_buffer);
+        storage.distribution_shape, std::move(ordered_device_ids), std::move(buffers), std::move(specs), mesh_buffer);
 }
 
 template <typename T>
@@ -1135,7 +1135,7 @@ Tensor to_layout(const Tensor& tensor, Layout target_layout) {
                             prev_spec.logical_shape(),
                             prev_spec.padded_shape())));
                 }
-                return MultiDeviceHostStorage{storage.strategy, output_buffers, output_specs};
+                return MultiDeviceHostStorage{storage.distribution_shape, output_buffers, output_specs};
             },
             [](const auto& s) -> RetType { TT_THROW("Unsupported storage type {}", tt::stl::get_type_name(s)); }},
         tensor.get_storage());

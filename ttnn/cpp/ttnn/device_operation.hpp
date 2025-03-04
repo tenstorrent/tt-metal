@@ -368,7 +368,7 @@ typename device_operation_t::tensor_args_t get_shard_tensor_args(std::size_t ind
 }
 
 static Tensor make_tensor_return_value_from_shards(auto& old_storage, std::vector<Tensor>& output_shards) {
-    return distributed::create_multi_device_tensor(output_shards, StorageType::MULTI_DEVICE, old_storage.strategy);
+    return distributed::create_multi_device_tensor(output_shards, StorageType::MULTI_DEVICE, old_storage.distribution_shape);
 }
 
 static std::vector<Tensor> make_tensor_return_value_from_shards(auto& old_storage,  std::vector<std::vector<Tensor>>& output_shards) {

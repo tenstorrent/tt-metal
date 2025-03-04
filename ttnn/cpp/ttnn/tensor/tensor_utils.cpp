@@ -72,8 +72,9 @@ Tensor transform(const Tensor& tensor, std::function<Tensor(const Tensor&)> tran
     std::transform(input_tensors.begin(), input_tensors.end(), output_tensors.begin(), [&](const auto& device_tensor) {
         return transform_func(device_tensor);
     });
+
     return ttnn::distributed::create_multi_device_tensor(
-        output_tensors, tensor.storage_type(), ttnn::distributed::get_distributed_tensor_config_from_tensor(tensor));
+        output_tensors, tensor.storage_type(), ttnn::distributed::get_distribution_shape_from_tensor(tensor));
 }
 
 void apply(const Tensor& tensor, const std::function<void(const Tensor&)>& callable) {

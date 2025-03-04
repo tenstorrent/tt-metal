@@ -19,7 +19,6 @@ std::vector<std::shared_ptr<Buffer>> MultiDeviceStorage::get_buffers() const {
 
 MultiDeviceStorage::MultiDeviceStorage(
     const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer_, const TensorSpec& tensor_spec) :
-    strategy(ReplicateTensor{}),
     mesh_buffer(mesh_buffer_)  //
 {
     // TODO: #17215 - In the long term, this code won't exist: no interactions will be made with individual Buffers, and

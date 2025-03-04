@@ -28,7 +28,8 @@ std::vector<ttnn::Tensor> get_device_tensors(const ttnn::Tensor& tensor);
 
 // Given a list of per-device shards, returns multi-device tensor.
 Tensor aggregate_as_tensor(
-    const std::vector<Tensor>& tensor_shards, const tt::tt_metal::DistributedTensorConfig& config);
+    const std::vector<Tensor>& tensor_shards,
+    const std::optional<distributed::MeshShape>& distribution_shape = std::nullopt);
 
 std::vector<int> get_t3k_physical_device_ids_ring();
 
@@ -36,7 +37,7 @@ std::vector<int> get_t3k_physical_device_ids_ring();
 std::vector<tt::tt_metal::IDevice*> get_mapped_devices(const Tensor& tensor, MeshDevice& mesh_device);
 
 // Get the distributed tensor config from a tensor.
-tt::tt_metal::DistributedTensorConfig get_distributed_tensor_config_from_tensor(const Tensor& tensor);
+std::optional<distributed::MeshShape> get_distribution_shape_from_tensor(const Tensor& tensor);
 
 // Given a multi-device tensor and a device, returns the tensor on the given device.
 Tensor get_device_tensor(const Tensor& multi_device_tensor, const tt::tt_metal::IDevice* device);
@@ -56,6 +57,6 @@ std::vector<Tensor> get_tensors_from_multi_device_storage(const Tensor& multi_de
 Tensor create_multi_device_tensor(
     const std::vector<Tensor>& tensors,
     tt::tt_metal::StorageType storage_type,
-    const tt::tt_metal::DistributedTensorConfig& strategy);
+    const std::optional<distributed::MeshShape>& distribution_shape);
 
 }  // namespace ttnn::distributed

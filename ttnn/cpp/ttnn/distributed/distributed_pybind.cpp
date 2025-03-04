@@ -412,7 +412,7 @@ void py_module(py::module& module) {
     module.def("get_device_tensors", &get_device_tensors, py::arg("tensor"), py::kw_only());
     module.def(
         "aggregate_as_tensor",
-        [](const std::vector<Tensor>& tensors) -> Tensor { return aggregate_as_tensor(tensors, AllGatherTensor{}); },
+        [](const std::vector<Tensor>& tensors) -> Tensor { return aggregate_as_tensor(tensors); },
         py::arg("tensors"),
         py::kw_only());
     module.def("get_t3k_physical_device_ids_ring", &get_t3k_physical_device_ids_ring);

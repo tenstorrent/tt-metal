@@ -242,7 +242,12 @@ MultiDeviceHostStorage load_multi_device_host_storage(
         }
     }
 
-    return {strategy, buffers, specs};
+    std::optional<distributed::MeshShape> distribution_shape = std::nullopt;
+    if (auto* shard2d = std::get_if<ShardTensor2D>(&strategy)) {
+        distribution_shape = distributed::MeshShape(shard2d->shard_mesh.y, shard2d->shard_mesh.x);
+    }
+
+    return {distribution_shape, buffers, specs};
 }
 
 OwnedStorage load_owned_storage(FILE* input_file, DataType data_type) {
