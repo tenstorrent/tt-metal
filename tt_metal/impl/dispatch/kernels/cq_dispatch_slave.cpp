@@ -106,6 +106,30 @@ FORCE_INLINE
 void dispatch_s_noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t noc_id, uint8_t be = 0xF) {
     WAYPOINT("NWIW");
     DEBUG_SANITIZE_NOC_ADDR(noc_id, addr, 4);
+#ifdef ARCH_BLACKHOLE
+    // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
+    // time. If one port on the receipient has no back-pressure then the transaction will hang because there is no
+    // mechanism to allow one memory port to move ahead of another. To workaround this hang, we emulate inline writes on
+    // Blackhole by writing the value to be written to local L1 first and then issue a noc async write.
+    // noc_async_writes_flushed(); // flush to make sure random l1 is safe to use..
+    // noc_async_read_barrier(); // make sure reading out of src_addr is okay .. if src addr is l1 barrier then we
+    // shouldn't need this
+    constexpr uint32_t src_addr = (uint32_t)MEM_L1_INLINE_BASE;
+    volatile tt_l1_ptr uint32_t* interim_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_addr);
+    *interim_addr_ptr = val;
+    ncrisc_noc_fast_write_any_len<noc_mode>(
+        noc_id,
+        DISPATCH_S_WR_REG_CMD_BUF,
+        src_addr,
+        addr,
+        4,
+        NOC_UNICAST_WRITE_VC false,  // mcast
+        false,                       // linked
+        1,                           // num_dests
+        true,                        // multicast_path_reserve
+        false                        // posted
+    );
+#else
     noc_fast_write_dw_inline<noc_mode>(
         noc_id,
         DISPATCH_S_WR_REG_CMD_BUF,
@@ -116,6 +140,7 @@ void dispatch_s_noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t noc_id,
         false,  // mcast
         false   // posted
     );
+#endif
     WAYPOINT("NWID");
 }
 
