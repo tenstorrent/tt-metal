@@ -454,14 +454,11 @@ TEST_F(RoPETest, ForwardTest) {
         /*head_dim=*/32);
     auto rope_mod = RotaryEmbedding(rope_params);
 
-    auto xq_autograd_tensor = autograd::create_tensor();
-    auto xq_tt_tensor = ttnn::to_memory_config(core::from_xtensor(xq, device), ttnn::L1_MEMORY_CONFIG);
-    xq_autograd_tensor->set_value(xq_tt_tensor);
+    auto xq_autograd_tensor = autograd::create_tensor(core::from_xtensor(xq, device));
 
     auto actual_xq_out = rope_mod(xq_autograd_tensor);
 
-    auto actual_xq_out_xt =
-        core::to_xtensor(ttnn::to_memory_config(actual_xq_out->get_value(), ttnn::DRAM_MEMORY_CONFIG));
+    auto actual_xq_out_xt = core::to_xtensor(actual_xq_out->get_value());
 
     // Check that outputs match the expected values
     EXPECT_TRUE(xt::allclose(actual_xq_out_xt, expected_xq_out, 2e-1, 2e-1));
