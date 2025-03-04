@@ -333,6 +333,16 @@ void add_activation_defines(
 
 bool OpConfig::is_sfpu_op() const { return std::holds_alternative<SfpuBinaryOp>(binary_op); }
 
+uint32_t pack_scalar_runtime_arg(const float scalar, const DataType dtype, const bool is_quant_op) {
+    if (dtype == DataType::FLOAT32) {
+        return std::bit_cast<uint32_t>(scalar);
+    } else if ((dtype != DataType::INT32) || is_quant_op) {
+        return pack_two_bfloat16_into_uint32({scalar, scalar});
+    } else {
+        return std::bit_cast<uint32_t>(static_cast<int32_t>(scalar));
+    }
+}
+
 template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<FpuBinaryOp>);
 template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<SfpuBinaryOp>);
 

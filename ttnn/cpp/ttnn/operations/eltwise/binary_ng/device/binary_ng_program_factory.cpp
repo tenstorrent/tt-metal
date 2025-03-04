@@ -293,11 +293,11 @@ void set_or_update_runtime_arguments(
             cWt};
         handle_args(program, reader_kernel_id, core, reader_runtime_args);
 
-        const bool is_quant_op = (operation_attributes.binary_op_type == BinaryOpType::QUANT) or
-                                 (operation_attributes.binary_op_type == BinaryOpType::REQUANT) or
+        const bool is_quant_op = (operation_attributes.binary_op_type == BinaryOpType::QUANT) ||
+                                 (operation_attributes.binary_op_type == BinaryOpType::REQUANT) ||
                                  (operation_attributes.binary_op_type == BinaryOpType::DEQUANT);
         TT_FATAL(
-            is_quant_op == ((operation_attributes.post_activations.size() == 1) and
+            is_quant_op == ((operation_attributes.post_activations.size() == 1) &&
                             (operation_attributes.post_activations[0].op_type ==
                              ttnn::operations::unary::UnaryOpType::ZERO_POINT)),
             "Quantization op needs to exactly one zero-point value as a post activation");
@@ -330,16 +330,7 @@ void set_or_update_runtime_arguments(
             handle_args(program, compute_kernel_id, core, compute_runtime_args);
         } else {
             const auto scalar = *operation_attributes.scalar;
-            // TODO: extract this to a seperate function?
-            const auto packed_scalar = [=](const DataType dtype) {
-                if (dtype == DataType::FLOAT32) {
-                    return std::bit_cast<uint32_t>(scalar);
-                } else if (dtype != DataType::INT32 or is_quant_op) {
-                    return pack_two_bfloat16_into_uint32({scalar, scalar});
-                } else {
-                    return std::bit_cast<uint32_t>(static_cast<int32_t>(scalar));
-                }
-            }(a.get_dtype());
+            const auto packed_scalar = pack_scalar_runtime_arg(scalar, a.get_dtype(), is_quant_op);
             std::array writer_runtime_args = {
                 packed_scalar,
                 c.buffer()->address(),
