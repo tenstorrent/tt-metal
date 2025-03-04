@@ -112,12 +112,29 @@ public:
     // elements have to match `spec`; block float formats such as BFLOAT8_B and BFLOAT4_B require `T` equal `float`.
     //
     // The data in the buffer is copied into a tensor with an owned storage.
-    //
-    // TODO: add support for returning a tensor with borrowed storage based off the buffer.
-    // TODO: handle tilization and padding in face of sharding.
     template <typename T>
     static Tensor from_span(
         tt::stl::Span<const T> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt);
+
+    // Creates a `Tensor` with storage "borrowed" from the buffer of elements of type `T`.
+    //
+    // The primary use case for this API is to interop with Python, where `on_creation_callback` and
+    // `on_destruction_callback` are specified to be called when the tensor storage is created and destroyed (when
+    // making copies of Tensor object):
+    //
+    // py::object py_tensor = ...;
+    // auto on_creation_callback = [t = py_tensor] { t.inc_ref(); };
+    // auto on_destruction_callback = [t = py_tensor] { t.dec_ref(); };
+    //
+    // When working in C++, prefer creating owned tensors, and retaining a reference to the internal buffer, if
+    // necessary.
+    template <typename T>
+    static Tensor from_borrowed_data(
+        tt::stl::Span<T> buffer,
+        const ttnn::Shape& shape,
+        const std::function<void()>& on_creation_callback,
+        const std::function<void()>& on_destruction_callback,
+        const std::optional<Tile>& tile = std::nullopt);
 
     // Same as `from_span`, but operates on a vector instead.
     template <typename T>
@@ -126,8 +143,8 @@ public:
         return from_span(tt::stl::Span<const T>(buffer), spec, device);
     }
 
-    // Same as `from_vector`, but takes in an rvalue. No copies will be made, if the target layout is row-major, and no
-    // type conversion is needed.
+    // Same as `from_vector`, but takes in an rvalue. No copies will be made, if the target layout is row-major,
+    // physical shape matches logical shape, and no type conversion is needed.
     template <typename T>
     static Tensor from_vector(
         std::vector<T>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt);
@@ -137,8 +154,6 @@ public:
     // the `Tensor`; block float formats such as BFLOAT8_B and BFLOAT4_B require `T` equal `float`.
     //
     // If the tensor resides on a device, it will be brough back to host.
-    //
-    // TODO: handle tilization and padding in face of sharding.
     template <typename T>
     std::vector<T> to_vector() const;
 
@@ -212,6 +227,8 @@ public:
     //                                      Extra Helper Functions
     // ======================================================================================
     StorageType storage_type() const;
+    bool is_host_tensor() const;
+    bool is_device_tensor() const;
     const ttnn::Shape strides() const;
     uint32_t volume() const;
 

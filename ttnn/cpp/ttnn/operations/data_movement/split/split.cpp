@@ -27,8 +27,7 @@ std::vector<Tensor> split_dim_n_chunks_rm(
     const auto& input_shape = input_tensor.get_logical_shape();
     auto input_rank = input_shape.size();
 
-    const bool on_host =
-        input_tensor.storage_type() == StorageType::OWNED || input_tensor.storage_type() == StorageType::BORROWED;
+    const bool on_host = input_tensor.is_host_tensor();
     std::optional<IDevice*> device = on_host ? std::nullopt : std::make_optional(input_tensor.device());
 
     Tensor preprocessed = ttnn::unsqueeze_to_4D(input_tensor);  // ensure we're 4D before slicing
@@ -92,7 +91,7 @@ std::vector<Tensor> impl_split_last_dim_two_chunks_tiled(const Tensor& input_ten
     auto padded_input_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_shape);
     ttnn::operations::experimental::auto_format::FormatParams input_format_params = {
         .pad_shape = padded_input_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
-    return operation::run_with_autoformat(
+    return tt::tt_metal::operation::run_with_autoformat(
         SplitDeviceOperation{2, 3, mem_config}, {input_tensor}, {input_format_params}, {Layout::TILE, Layout::TILE});
 }
 

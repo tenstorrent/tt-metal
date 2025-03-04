@@ -19,9 +19,6 @@
 #include "buffer.hpp"
 #include "umd/device/tt_core_coordinates.h"
 
-// FIXME: Don't do this in header files
-using namespace tt::tt_metal;
-
 namespace tt::tt_metal {
 
 enum class CommandQueueDeviceAddrType : uint8_t {

@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "tt-metalium/circular_buffer.hpp"
+#include "tt-metalium/circular_buffer_types.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -41,6 +43,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     bool enable_act_double_buffer,
     bool enable_split_reader,
     bool enable_subblock_padding) {
+    using tt::tt_metal::CBHandle;
+    using tt::tt_metal::CircularBuffer;
+    using tt::tt_metal::CircularBufferConfig;
+
     const uint32_t act_cb = CBIndex::c_0;
     const uint32_t weight_cb = CBIndex::c_1;
     const uint32_t bias_cb = CBIndex::c_2;
@@ -57,7 +63,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     bool pass = true;
     enable_split_reader = false;
     tt_metal::IDevice* device = a.device();
-    TT_FATAL(a.get_layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
+    TT_FATAL(a.get_layout() == tt::tt_metal::Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     TT_FATAL(a.memory_config().is_sharded(), "Conv activation must be sharded.");
     TT_FATAL(output_channels <= b.get_padded_shape()[3], "Invalid weight shape. Incorrect weight tensor.");
     uint32_t act_block_h_ntiles = block_config.act_block_h_ntiles;
@@ -139,7 +145,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         act_block_h_ntiles);
 
     // Tensor b has weights and it should be tiled layout after converting conv weights into weight matrix
-    TT_FATAL(b.get_layout() == Layout::TILE, "Conv weights should be in tiled layout");
+    TT_FATAL(b.get_layout() == tt::tt_metal::Layout::TILE, "Conv weights should be in tiled layout");
     TT_FATAL(b.get_padded_shape()[0] == 1, "Conv weight matrix shape is invalid");
     TT_FATAL(b.get_padded_shape()[1] == 1, "Conv weight matrix shape is invalid");
     uint32_t weight_matrix_height = b.get_padded_shape()[2];
@@ -254,13 +260,13 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
 
     // Device compatibility checks
     TT_FATAL(
-        a.storage_type() == StorageType::DEVICE && b.storage_type() == StorageType::DEVICE,
+        a.storage_type() == tt::tt_metal::StorageType::DEVICE && b.storage_type() == tt::tt_metal::StorageType::DEVICE,
         "Operands to large matmul need to be on device!");
     TT_FATAL(a.device() == b.device(), "Operands to conv need to be on the same device!");
     TT_FATAL(
         a.buffer() != nullptr && b.buffer() != nullptr, "Operands to conv need to be allocated in buffers on device!");
     if (has_bias) {
-        TT_FATAL(bias.value().storage_type() == StorageType::DEVICE, "Bias should be on device");
+        TT_FATAL(bias.value().storage_type() == tt::tt_metal::StorageType::DEVICE, "Bias should be on device");
         TT_FATAL(bias.value().device() == a.device(), "Bias should be on the same device as act tensor");
     }
 
@@ -437,7 +443,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         bias_buffer = bias.value().buffer();
         bias_dram_addr = bias_buffer->address();
         bias_ntiles = weight_block_w_ntiles;
-        bias_in_dram = bias_buffer->buffer_type() == BufferType::DRAM;
+        bias_in_dram = bias_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     }
 
     uint32_t num_weight_slices_width = weight_matrix_width_ntiles / p_config.per_core_out_matrix_width_ntile;
@@ -800,18 +806,18 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         program,
         activation_kernel_path,
         all_cores,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::RISCV_0_default,
             .compile_args = activation_kernel_compile_args});
 
     auto weights_kernel_id = CreateKernel(
         program,
         weights_kernel_path,
         all_cores,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt::tt_metal::NOC::RISCV_1_default,
             .compile_args = weights_kernel_compile_args,
             .defines = writer_defines});
 
@@ -819,7 +825,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         program,
         compute_kernel_path,
         all_cores,
-        ComputeConfig{
+        tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .compile_args = compute_kernel_args,
@@ -871,7 +877,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     // Capture conv_reader_indices_buffer to cache this with the program
     auto empty_callback = [conv_reader_indices_buffer](
                               const void* operation,
-                              Program& program,
+                              tt::tt_metal::Program& program,
                               const std::vector<Tensor>& input_tensors,
                               const std::vector<std::optional<const Tensor>>& optional_input_tensors,
                               const std::vector<Tensor>& output_tensors) {};

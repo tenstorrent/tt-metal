@@ -32,7 +32,7 @@ int main(int argc, char* argv[]) {
     std::string binary_filename = argv[1];
 
     // Read the Light Metal Binary file into blob, transfer ownership and execute it.
-    LightMetalBinary binary = LightMetalBinary::load_from_file(binary_filename);
+    auto binary = tt::tt_metal::LightMetalBinary::load_from_file(binary_filename);
     tt::tt_metal::LightMetalReplay lm_replay(std::move(binary));
 
     if (!lm_replay.execute_binary()) {

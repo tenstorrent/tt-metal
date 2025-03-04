@@ -12,9 +12,9 @@
 #define UNUSED_SEM_ID 0
 
 typedef struct {
-    NOC non_dispatch_noc;  // For communicating with workers/DRAM/host
-    NOC upstream_noc;      // For communicating with upstream dispatch modules
-    NOC downstream_noc;    // For communicating with downstream dispatch modules
+    tt::tt_metal::NOC non_dispatch_noc;  // For communicating with workers/DRAM/host
+    tt::tt_metal::NOC upstream_noc;      // For communicating with upstream dispatch modules
+    tt::tt_metal::NOC downstream_noc;    // For communicating with downstream dispatch modules
 } noc_selection_t;
 
 static std::vector<string> dispatch_kernel_file_names = {

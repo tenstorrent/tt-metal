@@ -110,7 +110,7 @@ ParallelConfig determine_parallel_config(
     if (shard_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         uint32_t num_cores_nhw = find_closest_largest_divisor_with_num_padding_and_mult(
             out_nhw_ntiles, max_num_cores, act_block_h_override_ntiles);
-        grid = num_cores_to_corerangeset(num_cores_nhw, compute_grid_size, true);
+        grid = tt::tt_metal::num_cores_to_corerangeset(num_cores_nhw, compute_grid_size, true);
     } else if (shard_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         uint32_t start_divisor =
             block_shard_orientation == ShardOrientation::COL_MAJOR ? compute_grid_size.x : compute_grid_size.y;
@@ -131,7 +131,7 @@ ParallelConfig determine_parallel_config(
         uint32_t num_cores_c = enable_channels_padding
                                    ? find_closest_largest_divisor_with_num_padding(input_channles_ntiles, max_num_cores)
                                    : find_closest_largest_divisor(input_channles_ntiles, max_num_cores);
-        grid = num_cores_to_corerangeset(num_cores_c, compute_grid_size, true);
+        grid = tt::tt_metal::num_cores_to_corerangeset(num_cores_c, compute_grid_size, true);
     } else {
         TT_THROW("Conv2d supports Height, Block or Width Sharded Layouts but got {}", shard_layout);
     }
@@ -154,7 +154,7 @@ ParallelConfig determine_output_parallel_config(
     if (input_parallel_config.shard_scheme == ttnn::TensorMemoryLayout::WIDTH_SHARDED && !is_mm_conv) {
         uint32_t max_num_cores = compute_grid_size.x * compute_grid_size.y;
         output_parallel_config = {
-            .grid = num_cores_to_corerangeset(
+            .grid = tt::tt_metal::num_cores_to_corerangeset(
                 find_closest_largest_divisor_with_num_padding(
                     tt::div_up(out_channels, tt::constants::TILE_WIDTH), max_num_cores),
                 compute_grid_size,
@@ -238,7 +238,7 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(
     uint32_t nhw_shard = nhw_padded / num_cores_nhw;
     TT_ASSERT(channels % num_cores_channels == 0, "Channels: {}, num core channels: {}", channels, num_cores_channels);
     uint32_t channel_shard = channels / num_cores_channels;
-    auto shard_spec = ShardSpec{parallel_config.grid, {nhw_shard, channel_shard}, shard_orientation};
+    auto shard_spec = tt::tt_metal::ShardSpec{parallel_config.grid, {nhw_shard, channel_shard}, shard_orientation};
     log_debug("Calculated Shard Spec = {}", shard_spec);
     return MemoryConfig{shard_scheme, BufferType::L1, shard_spec};
 }
@@ -597,7 +597,7 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
                 if (!input_tensor.is_sharded()) {
                     // In case we need to run Interleaved2Sharded switch fron physical sharding
                     // to logical sharding, in order to get smaller allocation size of sharded buffer.
-                    input_tensor_sharded_memory_config_to_layout.shard_spec = ShardSpec(
+                    input_tensor_sharded_memory_config_to_layout.shard_spec = tt::tt_metal::ShardSpec(
                         input_tensor_sharded_memory_config.shard_spec.value().grid,
                         input_tensor_sharded_memory_config.shard_spec.value().shape,
                         input_tensor_sharded_memory_config.shard_spec.value().shape,
@@ -913,7 +913,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     uint32_t output_tile_size = tt::tile_size(datatype_to_dataformat_converter(conv_config.dtype));
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(hal.get_arch(), compute_kernel_config);
+        get_compute_kernel_config_args(tt::tt_metal::hal.get_arch(), compute_kernel_config);
 
     uint32_t act_block_w_ntiles = block_config.act_block_w_ntiles;
     uint32_t act_block_h_ntiles = block_config.act_block_h_ntiles;
@@ -1102,8 +1102,9 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
             } else if (conv_config.dtype == DataType::FLOAT32) {
                 per_core_out_width_aligned *= 4;
             }
-            output_size = round_up(per_core_out_width_aligned, hal.get_alignment(HalMemType::L1)) *
-                          pconfig.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT;
+            output_size =
+                round_up(per_core_out_width_aligned, tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::L1)) *
+                pconfig.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT;
         } else {
             output_size = per_core_out_matrix_height_ntiles * per_core_out_matrix_width_ntiles * output_tile_size;
         }

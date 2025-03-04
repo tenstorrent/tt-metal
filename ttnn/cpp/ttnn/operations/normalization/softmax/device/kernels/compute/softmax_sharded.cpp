@@ -70,19 +70,19 @@ void MAIN {
     constexpr uint32_t subblock_w = get_compile_time_arg_val(2);
     constexpr uint32_t num_subblocks_w = get_compile_time_arg_val(3);
 
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_24);
+    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_6);
 
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_bcast_scaler = tt::CBIndex::c_1;
     constexpr auto cb_fused_scale = tt::CBIndex::c_2;
     constexpr auto cb_fused_attn = tt::CBIndex::c_3;
-    constexpr auto cb_exps = tt::CBIndex::c_24;
-    constexpr auto cb_recipsumexps = tt::CBIndex::c_25;
-    constexpr auto cb_scale_mask = tt::CBIndex::c_26;
-    constexpr auto cb_out0 = tt::CBIndex::c_16;
+    constexpr auto cb_exps = tt::CBIndex::c_6;
+    constexpr auto cb_recipsumexps = tt::CBIndex::c_7;
+    constexpr auto cb_scale_mask = tt::CBIndex::c_8;
+    constexpr auto cb_out0 = tt::CBIndex::c_11;
 #ifdef NUMERIC_STABLE
-    constexpr auto cb_max = tt::CBIndex::c_27;
-    constexpr auto cb_x = tt::CBIndex::c_28;
+    constexpr auto cb_max = tt::CBIndex::c_9;
+    constexpr auto cb_x = tt::CBIndex::c_10;
 #else
     constexpr auto cb_x = cb_exps;
 #endif

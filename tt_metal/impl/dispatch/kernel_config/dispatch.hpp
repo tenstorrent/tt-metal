@@ -65,8 +65,9 @@ public:
         bool h_variant,
         bool d_variant) :
         FDKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection) {
+        auto& core_manager = tt::tt_metal::dispatch_core_manager::instance();  // Not thread safe
         TT_FATAL(
-            noc_selection.downstream_noc == dispatch_downstream_noc,
+            noc_selection.downstream_noc == tt::tt_metal::dispatch_downstream_noc,
             "Invalid downstream NOC specified for Dispatcher kernel");
         TT_FATAL(
             noc_selection.upstream_noc != noc_selection.downstream_noc,
@@ -75,13 +76,12 @@ public:
         static_config_.is_d_variant = d_variant;
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
         if (h_variant && d_variant) {
-            this->logical_core_ = dispatch_core_manager::instance().dispatcher_core(device_id, channel, cq_id);
+            this->logical_core_ = core_manager.dispatcher_core(device_id, channel, cq_id);
         } else if (h_variant) {
             channel = tt::Cluster::instance().get_assigned_channel_for_device(servicing_device_id);
-            this->logical_core_ =
-                dispatch_core_manager::instance().dispatcher_core(servicing_device_id, channel, cq_id);
+            this->logical_core_ = core_manager.dispatcher_core(servicing_device_id, channel, cq_id);
         } else if (d_variant) {
-            this->logical_core_ = dispatch_core_manager::instance().dispatcher_d_core(device_id, channel, cq_id);
+            this->logical_core_ = core_manager.dispatcher_d_core(device_id, channel, cq_id);
         }
     }
     void CreateKernel() override;

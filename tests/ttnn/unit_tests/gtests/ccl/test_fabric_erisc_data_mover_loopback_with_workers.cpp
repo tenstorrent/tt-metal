@@ -881,7 +881,7 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
         from_remote_multi_device_global_semaphore,
         to_remote_multi_device_global_semaphore,
         ttnn::operations::reduction::ReduceType::Sum,
-        operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         ttnn::ccl::Topology::Linear,
         num_links,
         subdevice_managers->worker_subdevice_id.at(devices[0]->id()),
