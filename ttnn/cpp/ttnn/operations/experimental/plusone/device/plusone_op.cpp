@@ -5,8 +5,6 @@
 #include "plusone_op.hpp"
 #include "plusone_program_factory.hpp"
 
-using namespace tt::tt_metal;
-
 namespace ttnn::operations::experimental {
 
 void PlusOne::validate_with_output_tensors(
@@ -31,7 +29,7 @@ std::vector<Tensor> PlusOne::create_output_tensors(
     return {input_tensors.at(0)};
 }
 
-operation::ProgramWithCallbacks PlusOne::create_program(
+tt::tt_metal::operation::ProgramWithCallbacks PlusOne::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     return detail::plusone_single_core(input_tensor, sub_core_grids);

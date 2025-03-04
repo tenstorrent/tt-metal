@@ -21,7 +21,7 @@ ttnn::Tensor ArgMaxOperation::invoke(
     const bool use_muticore,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
-    return operation::run(
+    return tt::tt_metal::operation::run(
                ArgMax{
                    tt::tt_metal::DataType::UINT32,
                    dim,

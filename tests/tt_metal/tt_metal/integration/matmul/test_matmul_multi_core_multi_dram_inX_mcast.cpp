@@ -14,6 +14,8 @@
 #include "tests/tt_metal/test_utils/tilization.hpp"
 #include "matmul_test_utils.hpp"
 
+namespace tt::tt_metal {
+
 using std::vector;
 using namespace tt;
 
@@ -305,7 +307,7 @@ bool matmul_multi_core_multi_dram_inX_mcast(tt_metal::IDevice* device, int in1_o
     int per_core_M = M / num_cores_r;
     int per_core_N = N / num_cores_c;
     uint32_t single_tile_size = 2 * 1024;
-    uint32_t in0_dram_addr = device->allocator()->get_base_allocator_addr(HalMemType::DRAM);
+    uint32_t in0_dram_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::DRAM);
     uint32_t in1_dram_addr = 400 * 1024 * 1024;
     uint32_t out_dram_addr = 800 * 1024 * 1024;
 
@@ -330,7 +332,7 @@ bool matmul_multi_core_multi_dram_inX_mcast(tt_metal::IDevice* device, int in1_o
     tt::deprecated::Tensor<bfloat16> tensor = tt::deprecated::initialize_tensor<bfloat16>(
         shape, tt::deprecated::Initialize::RANDOM, 0, 100, std::chrono::system_clock::now().time_since_epoch().count());
     auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32);  // bfloat16 identity
-    auto golden = select_columns(tensor.get_values(), M, K, N);
+    auto golden = tt_metal::select_columns(tensor.get_values(), M, K, N);
 
     auto
         [program,
@@ -403,9 +405,9 @@ bool matmul_multi_core_multi_dram_inX_mcast(tt_metal::IDevice* device, int in1_o
     log_debug(LogTest, "Gathering data back from dram and checking against golden");
 
     for (int i = 0; i < M; i++) {
-        auto row = get_row_slice(golden, M, i, M * 32, N * 32);
+        auto row = tt_metal::get_row_slice(golden, M, i, M * 32, N * 32);
         for (int j = 0; j < N; j++) {
-            auto golden_tile = get_col_slice(row, N, j, 32, N * 32);
+            auto golden_tile = tt_metal::get_col_slice(row, N, j, 32, N * 32);
             int tile_id = i * N + j;
             int dram_bank = tile_id % device->num_dram_channels();
             uint32_t dram_address = ((tile_id / device->num_dram_channels()) * single_tile_size) + out_dram_addr;
@@ -445,3 +447,5 @@ TEST_F(DispatchFixture, TensixMatmulMultiCoreMultiDRAMIn1MCast) {
                         matmul_multi_core_multi_dram_inX_mcast(devices_.at(id), 1));
     }
 }
+
+}  // namespace tt::tt_metal

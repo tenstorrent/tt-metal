@@ -19,8 +19,9 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
 
+namespace tt::tt_metal {
+
 using std::vector;
-using namespace tt::tt_metal;
 
 struct BufferStressTestConfig {
     // Used for normal write/read tests
@@ -230,7 +231,7 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(IDevice* device, CommandQueue
             if (cq_write) {
                 EnqueueWriteBuffer(cq, *bufa, src.data(), false);
             } else {
-                ::detail::WriteToBuffer(*bufa, src);
+                detail::WriteToBuffer(*bufa, src);
                 if (config.buftype == BufferType::DRAM) {
                     tt::Cluster::instance().dram_barrier(device->id());
                 } else {
@@ -248,7 +249,7 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(IDevice* device, CommandQueue
             if (cq_read) {
                 EnqueueReadBuffer(cq, *bufa, result.data(), true);
             } else {
-                ::detail::ReadFromBuffer(*bufa, result);
+                detail::ReadFromBuffer(*bufa, result);
             }
 
             EXPECT_EQ(src, result);
@@ -352,7 +353,7 @@ void stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                 if (cq_write) {
                     EnqueueWriteBuffer(cq, *buf, src2.data(), false);
                 } else {
-                    ::detail::WriteToBuffer(*buf, src);
+                    detail::WriteToBuffer(*buf, src);
                     if (buftype == BufferType::DRAM) {
                         tt::Cluster::instance().dram_barrier(device->id());
                     } else {
@@ -369,7 +370,7 @@ void stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                 if (cq_read) {
                     EnqueueReadBuffer(cq, *buf, res.data(), true);
                 } else {
-                    ::detail::ReadFromBuffer(*buf, res);
+                    detail::ReadFromBuffer(*buf, res);
                 }
                 EXPECT_EQ(src, res);
             }
@@ -518,7 +519,8 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestPageLargerThanAndUnalignedToTran
     }
 }
 
-TEST_F(CommandQueueSingleCardBufferFixture, TestSinglePageLargerThanMaxPrefetchCommandSize) {
+TEST_F(CommandQueueSingleCardBufferFixture, TestPageLargerThanMaxPrefetchCommandSize) {
+    constexpr uint32_t num_round_robins = 1;
     for (IDevice* device : devices_) {
         CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
         const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
@@ -528,75 +530,14 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestSinglePageLargerThanMaxPrefetchC
     }
 }
 
-TEST_F(CommandQueueSingleCardBufferFixture, TestMultiplePagesLargerThanMaxPrefetchCommandSize) {
-    for (IDevice* device : devices_) {
-        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
-        const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
-        TestBufferConfig config = {
-            .num_pages = 1024, .page_size = max_prefetch_command_size + 2048, .buftype = BufferType::DRAM};
-        local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
-    }
-}
-
-TEST_F(CommandQueueSingleCardBufferFixture, TestMultiplePagesLargerThanMaxPrefetchCommandSizeSubBuffer) {
-    for (IDevice* device : devices_) {
-        tt::log_info("Running On Device {}", device->id());
-        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
-
-        const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
-        const uint32_t page_size = max_prefetch_command_size + 2048;
-        const uint32_t buffer_size = 40 * page_size;
-        const uint32_t region_size = 5 * page_size;
-        const uint32_t region_offset = 30 * page_size;
-
-        const BufferRegion region(region_offset, region_size);
-        auto buffer = Buffer::create(device, buffer_size, page_size, BufferType::DRAM);
-        auto src = local_test_functions::generate_arange_vector(region.size);
-        EnqueueWriteSubBuffer(device->command_queue(), *buffer, src, region, false);
-        vector<uint32_t> result;
-        EnqueueReadSubBuffer(device->command_queue(), *buffer, result, region, true);
-        EXPECT_EQ(src, result);
-    }
-}
-
-TEST_F(CommandQueueSingleCardBufferFixture, TestSingleUnalignedPageLargerThanMaxPrefetchCommandSize) {
+TEST_F(CommandQueueSingleCardBufferFixture, TestUnalignedPageLargerThanMaxPrefetchCommandSize) {
+    constexpr uint32_t num_round_robins = 1;
     for (IDevice* device : devices_) {
         CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
         const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
         uint32_t unaligned_page_size = max_prefetch_command_size + 4;
         TestBufferConfig config = {.num_pages = 1, .page_size = unaligned_page_size, .buftype = BufferType::DRAM};
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
-    }
-}
-
-TEST_F(CommandQueueSingleCardBufferFixture, TestMultipleUnalignedPagesLargerThanMaxPrefetchCommandSize) {
-    for (IDevice* device : devices_) {
-        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
-        const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
-        TestBufferConfig config = {
-            .num_pages = 1024, .page_size = max_prefetch_command_size + 4, .buftype = BufferType::DRAM};
-        local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
-    }
-}
-
-TEST_F(CommandQueueSingleCardBufferFixture, TestMultipleUnalignedPagesLargerThanMaxPrefetchCommandSizeSubBuffer) {
-    for (IDevice* device : devices_) {
-        tt::log_info("Running On Device {}", device->id());
-        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
-
-        const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
-        const uint32_t page_size = max_prefetch_command_size + 4;
-        const uint32_t buffer_size = 40 * page_size;
-        const uint32_t region_size = 5 * page_size;
-        const uint32_t region_offset = 30 * page_size;
-
-        const BufferRegion region(region_offset, region_size);
-        auto buffer = Buffer::create(device, buffer_size, page_size, BufferType::DRAM);
-        auto src = local_test_functions::generate_arange_vector(region.size);
-        EnqueueWriteSubBuffer(device->command_queue(), *buffer, src, region, false);
-        vector<uint32_t> result;
-        EnqueueReadSubBuffer(device->command_queue(), *buffer, result, region, true);
-        EXPECT_EQ(src, result);
     }
 }
 
@@ -614,6 +555,16 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestNon32BAlignedPageSizeForDram2) {
 
     for (IDevice* device : devices_) {
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
+    }
+}
+
+TEST_F(CommandQueueSingleCardBufferFixture, TestPageSizeTooLarge) {
+    // Should throw a host error due to the page size not fitting in the consumer CB
+    TestBufferConfig config = {.num_pages = 1024, .page_size = 250880 * 2, .buftype = BufferType::DRAM};
+
+    for (IDevice* device : devices_) {
+        EXPECT_ANY_THROW((local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
+            device, device->command_queue(), config)));
     }
 }
 
@@ -1031,6 +982,20 @@ TEST_F(MultiCommandQueueSingleDeviceBufferFixture, TestNon32BAlignedPageSizeForD
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(this->device_, cqs, config));
 }
 
+TEST_F(MultiCommandQueueSingleDeviceBufferFixture, TestPageSizeTooLarge) {
+    if (this->arch_ == tt::ARCH::WORMHOLE_B0) {
+        GTEST_SKIP();  // This test hanging on wormhole b0
+    }
+    // Should throw a host error due to the page size not fitting in the consumer CB
+    TestBufferConfig config = {.num_pages = 1024, .page_size = 250880 * 2, .buftype = BufferType::DRAM};
+
+    CommandQueue& a = this->device_->command_queue(0);
+    CommandQueue& b = this->device_->command_queue(1);
+    vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
+    EXPECT_ANY_THROW(
+        local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(this->device_, cqs, config));
+}
+
 TEST_F(MultiCommandQueueSingleDeviceBufferFixture, TestIssueMultipleReadWriteCommandsForOneBuffer) {
     uint32_t page_size = 2048;
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device_->id());
@@ -1044,21 +1009,6 @@ TEST_F(MultiCommandQueueSingleDeviceBufferFixture, TestIssueMultipleReadWriteCom
     vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
     EXPECT_TRUE(
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(this->device_, cqs, config));
-}
-
-TEST_F(CommandQueueMultiDeviceBufferFixture, TestMultipleUnalignedPagesLargerThanMaxPrefetchCommandSize) {
-    for (IDevice* device : devices_) {
-        tt::log_info("Running On Device {}", device->id());
-        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
-        const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
-        TestBufferConfig config = {
-            .num_pages = 50, .page_size = max_prefetch_command_size + 4, .buftype = BufferType::DRAM};
-
-        CommandQueue& a = device->command_queue(0);
-        vector<std::reference_wrapper<CommandQueue>> cqs = {a};
-        EXPECT_TRUE(
-            local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(device, cqs, config));
-    }
 }
 
 }  // end namespace dram_tests
@@ -1160,36 +1110,6 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestMultipleNonOverlappingWritesShar
         EnqueueReadBuffer(device->command_queue(), *buffer, result, true);
 
         EXPECT_EQ(expected, result);
-    }
-}
-
-TEST_F(CommandQueueSingleCardBufferFixture, TestMultiplePagesLargerThanMaxPrefetchCommandSizeForL1) {
-    for (IDevice* device : devices_) {
-        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
-        const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
-        TestBufferConfig config = {
-            .num_pages = 30, .page_size = max_prefetch_command_size + 2048, .buftype = BufferType::L1};
-        local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
-    }
-}
-
-TEST_F(CommandQueueSingleCardBufferFixture, TestSingleUnalignedPageLargerThanMaxPrefetchCommandSizeForL1) {
-    for (IDevice* device : devices_) {
-        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
-        const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
-        TestBufferConfig config = {
-            .num_pages = 1, .page_size = max_prefetch_command_size + 4, .buftype = BufferType::L1};
-        local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
-    }
-}
-
-TEST_F(CommandQueueSingleCardBufferFixture, TestMultipleUnalignedPagesLargerThanMaxPrefetchCommandSizeForL1) {
-    for (IDevice* device : devices_) {
-        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
-        const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
-        TestBufferConfig config = {
-            .num_pages = 30, .page_size = max_prefetch_command_size + 4, .buftype = BufferType::L1};
-        local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
     }
 }
 
@@ -1788,3 +1708,5 @@ TEST_F(CommandQueueSingleCardBufferFixture, StressWrapTest) {
 }
 
 }  // end namespace stress_tests
+
+}  // namespace tt::tt_metal

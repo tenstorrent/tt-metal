@@ -17,18 +17,18 @@
 #include "ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads.hpp"
 #include "ttnn/operations/experimental/transformer/concatenate_heads/concatenate_heads.hpp"
 
-using Parameters = std::map<std::string, Tensor>;
+using Parameters = std::map<std::string, ttnn::Tensor>;
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
-MemoryConfig l1_memory_config = tt::tt_metal::MemoryConfig{
+ttnn::MemoryConfig l1_memory_config = ttnn::MemoryConfig{
     .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED, .buffer_type = tt::tt_metal::BufferType::L1};
-MemoryConfig dram_memory_config = tt::tt_metal::MemoryConfig{
+ttnn::MemoryConfig dram_memory_config = ttnn::MemoryConfig{
     .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED, .buffer_type = tt::tt_metal::BufferType::DRAM};
 
-Tensor encoder(
-    Tensor&& hidden_states,
-    const Tensor& attention_mask,
+ttnn::Tensor encoder(
+    ttnn::Tensor&& hidden_states,
+    const ttnn::Tensor& attention_mask,
     const Parameters& parameters,
     std::size_t encoder_index,
     const std::uint32_t head_size) {
@@ -192,7 +192,7 @@ Tensor encoder(
     return feedforward_layernorm_output;
 }
 
-Tensor qa_head(Tensor&& hidden_states, const Parameters& parameters) {
+ttnn::Tensor qa_head(ttnn::Tensor&& hidden_states, const Parameters& parameters) {
     auto output = ttnn::operations::matmul::matmul(
         hidden_states, parameters.at("qa_head_weight"), /*bias=*/std::nullopt, ttnn::operations::matmul::Matmul{});
     hidden_states.deallocate();

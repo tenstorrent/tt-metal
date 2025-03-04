@@ -8,8 +8,6 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 
-using namespace tt::tt_metal;
-
 namespace ttnn::operations::experimental::transformer {
 
 ttnn::Tensor RotaryEmbeddingOperation::invoke(
@@ -68,7 +66,7 @@ ttnn::Tensor RotaryEmbeddingOperation::invoke(
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
 
-    tt::tt_metal::MemoryConfig default_memory_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
+    tt::tt_metal::MemoryConfig default_memory_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
     if (input_tensor.storage_type() == StorageType::DEVICE) {
         default_memory_config = input_tensor.memory_config();
     }
@@ -88,8 +86,9 @@ ttnn::Tensor RotaryEmbeddingOperation::invoke(
     ttnn::operations::experimental::auto_format::FormatParams sin_format_params = {
         .pad_shape = sin_pad_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
 
-    return operation::run_with_autoformat(
-               RotaryEmbedding{seq_len, token_index, memory_config.value_or(default_memory_config), kernel_config_val},
+    return tt::tt_metal::operation::run_with_autoformat(
+               tt::tt_metal::RotaryEmbedding{
+                   seq_len, token_index, memory_config.value_or(default_memory_config), kernel_config_val},
                {input_tensor, cos_cache, sin_cache},
                {input_format_params, cos_format_params, sin_format_params},
                {Layout::TILE})

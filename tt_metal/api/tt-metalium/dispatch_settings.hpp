@@ -105,7 +105,7 @@ public:
 
     static constexpr uint32_t MAX_NUM_HW_CQS = 2;
 
-    static constexpr uint32_t DISPATCH_MESSAGE_ENTRIES = 16;
+    static constexpr uint32_t DISPATCH_MESSAGE_ENTRIES = 8;
 
     static constexpr uint32_t DISPATCH_MESSAGES_MAX_OFFSET =
         std::numeric_limits<decltype(go_msg_t::dispatch_message_offset)>::max();
@@ -134,10 +134,9 @@ public:
 
     static constexpr uint32_t EVENT_PADDED_SIZE = 16;
 
-    // When page size of buffer to write/read exceeds the max prefetch command size, the PCIe-aligned page size is
-    // broken down into equal sized partial pages. BASE_PARTIAL_PAGE_SIZE is incremented until the partial page size
-    // is PCIE-aligned. If the resulting partial page size doesn't evenly divide the full page size, the last partial
-    // page size is padded appropriately.
+    // When page size of buffer to write/read exceeds MAX_PREFETCH_COMMAND_SIZE, the PCIe aligned page size is broken
+    // down into equal sized partial pages BASE_PARTIAL_PAGE_SIZE denotes the initial partial page size to use, it is
+    // incremented by PCIe alignment until page size can be evenly split
     static constexpr uint32_t BASE_PARTIAL_PAGE_SIZE = 4096;
 
     static_assert(

@@ -19,7 +19,7 @@ struct PlusOne {
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(
         const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
-    operation::ProgramWithCallbacks create_program(
+    tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
 };
 

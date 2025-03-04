@@ -46,7 +46,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NLPCreateHeadsDecodeOperati
     } else {
         optional_outputs = {};
     }
-    auto out = operation::run(
+    auto out = tt::tt_metal::operation::run(
         NLPCreateHeadsDecodeDeviceOperation{
             num_heads,
             num_kv_heads_val,
