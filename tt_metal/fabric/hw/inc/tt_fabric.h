@@ -267,18 +267,10 @@ typedef struct fvc_inbound_push_state {
             STREAM_REG_ADDR(STREAM_ID_ETH_WORDS_RECEIVED, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX));
         words_received_local_update = reinterpret_cast<uint32_t*>(
             STREAM_REG_ADDR(STREAM_ID_ETH_WORDS_RECEIVED, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
-        update_sender_buffer_space[0] = (STREAM_REG_ADDR(
-            STREAM_ID_ETH_SENDER_BUFFER_SPACE + eth_chan_directions::EAST,
-            STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
-        update_sender_buffer_space[1] = (STREAM_REG_ADDR(
-            STREAM_ID_ETH_SENDER_BUFFER_SPACE + eth_chan_directions::WEST,
-            STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
-        update_sender_buffer_space[2] = (STREAM_REG_ADDR(
-            STREAM_ID_ETH_SENDER_BUFFER_SPACE + eth_chan_directions::NORTH,
-            STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
-        update_sender_buffer_space[3] = (STREAM_REG_ADDR(
-            STREAM_ID_ETH_SENDER_BUFFER_SPACE + eth_chan_directions::SOUTH,
-            STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
+        for (uint32_t i = eth_chan_directions::EAST; i < eth_chan_directions::COUNT; i++) {
+            update_sender_buffer_space[i] = (STREAM_REG_ADDR(
+                STREAM_ID_ETH_SENDER_BUFFER_SPACE + i, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
+        }
 
         update_receiver_buffer_space = (STREAM_REG_ADDR(
             STREAM_ID_ETH_RECEIVER_BUFFER_SPACE, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
