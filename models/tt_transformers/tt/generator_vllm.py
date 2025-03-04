@@ -99,7 +99,7 @@ def input_processor_for_mllama(ctx: InputContext, inputs: Union[DecoderOnlyInput
     return inputs
 
 
-def input_processor_for_text(ctx: InputContext, inputs: Union[DecoderOnlyInputs, EncoderDecoderInputs]):
+def input_processor_for_llama_text(ctx: InputContext, inputs: Union[DecoderOnlyInputs, EncoderDecoderInputs]):
     hf_model_name = ctx.model_config.hf_config._name_or_path
     if ("3.1-8B" in hf_model_name or "3.2-11B" in hf_model_name) and os.environ.get("MESH_DEVICE") == "N150":
         prompt_len = len(inputs.get("prompt_token_ids"))
@@ -171,8 +171,8 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
         )
 
 
-@INPUT_REGISTRY.register_input_processor(input_processor_for_text)
-class ForCausalLM(Generator):
+@INPUT_REGISTRY.register_input_processor(input_processor_for_llama_text)
+class LlamaForCausalLM(Generator):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
