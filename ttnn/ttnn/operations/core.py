@@ -342,7 +342,6 @@ def to_torch(
             if tensor.shape[0] != 1:
                 raise RuntimeError("ttnn: Unable to squeeze to desired rank!")
             tensor = tensor.squeeze(0)
-
     torch_tensor = TorchTensor(tensor)
 
     if dtype is not None:
