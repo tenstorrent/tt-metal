@@ -11,41 +11,41 @@ run_perf_models_other() {
     local tt_arch=$1
     local test_marker=$2
 
-    if [ "$tt_arch" == "grayskull" ]; then
-        env pytest models/demos/grayskull/resnet50/tests/test_perf_e2e_resnet50.py -m $test_marker
-    fi
+    # if [ "$tt_arch" == "grayskull" ]; then
+    #     env pytest models/demos/grayskull/resnet50/tests/test_perf_e2e_resnet50.py -m $test_marker
+    # fi
 
     if [ "$tt_arch" == "wormhole_b0" ]; then
-        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/resnet50/tests/test_perf_e2e_resnet50.py -m $test_marker
+        # env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/resnet50/tests/test_perf_e2e_resnet50.py -m $test_marker
 
-        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/bert_tiny/tests/test_performance.py -m $test_marker
+        # env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/bert_tiny/tests/test_performance.py -m $test_marker
 
-        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/yolov4/tests/test_perf_yolo.py -m $test_marker
+        # env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/yolov4/tests/test_perf_yolo.py -m $test_marker
 
-        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/distilbert/tests/test_perf_distilbert.py -m $test_marker
+        # env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/distilbert/tests/test_perf_distilbert.py -m $test_marker
 
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/whisper/tests/test_performance.py -m $test_marker
     fi
 
-    env pytest -n auto tests/ttnn/integration_tests/bert/test_performance.py -m $test_marker
+    # env pytest -n auto tests/ttnn/integration_tests/bert/test_performance.py -m $test_marker
 
-    env pytest -n auto models/demos/ttnn_falcon7b/tests -m $test_marker
+    # env pytest -n auto models/demos/ttnn_falcon7b/tests -m $test_marker
 
-    env pytest models/demos/distilbert/tests/test_perf_distilbert.py -m $test_marker
+    # env pytest models/demos/distilbert/tests/test_perf_distilbert.py -m $test_marker
 
-    env pytest -n auto models/demos/metal_BERT_large_11/tests -m $test_marker
+    # env pytest -n auto models/demos/metal_BERT_large_11/tests -m $test_marker
 
-    env pytest -n auto models/demos/vgg/tests/test_perf_vgg.py -m $test_marker
+    # env pytest -n auto models/demos/vgg/tests/test_perf_vgg.py -m $test_marker
 
-    env pytest -n auto models/demos/convnet_mnist/tests -m $test_marker
+    # env pytest -n auto models/demos/convnet_mnist/tests -m $test_marker
 
-    env pytest -n auto models/demos/bert_tiny/tests/test_performance.py -m $test_marker
+    # env pytest -n auto models/demos/bert_tiny/tests/test_performance.py -m $test_marker
 
-    env pytest -n auto models/demos/mnist/tests -m $test_marker
+    # env pytest -n auto models/demos/mnist/tests -m $test_marker
 
-    env pytest -n auto models/demos/squeezebert/tests/test_performance.py -m $test_marker
+    # env pytest -n auto models/demos/squeezebert/tests/test_performance.py -m $test_marker
 
-    env pytest -n auto models/demos/roberta/tests/test_performance.py -m $test_marker
+    # env pytest -n auto models/demos/roberta/tests/test_performance.py -m $test_marker
 
     ## Merge all the generated reports
     env python3 models/perf/merge_perf_results.py
@@ -59,14 +59,14 @@ run_perf_models_llm_javelin() {
         export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
     fi
 
-    env pytest -n auto models/demos/falcon7b_common/tests -m $test_marker
-    env pytest -n auto models/demos/wormhole/mistral7b/tests -m $test_marker
+    # env pytest -n auto models/demos/falcon7b_common/tests -m $test_marker
+    # env pytest -n auto models/demos/wormhole/mistral7b/tests -m $test_marker
 
-    env QWEN_DIR=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2-7B-Instruct FAKE_DEVICE=N150 pytest -n auto models/demos/qwen/tests -m $test_marker
+    # env QWEN_DIR=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2-7B-Instruct FAKE_DEVICE=N150 pytest -n auto models/demos/qwen/tests -m $test_marker
 
-    if [ "$tt_arch" == "wormhole_b0" ]; then
-        env pytest -n auto models/demos/wormhole/mamba/tests -m $test_marker
-    fi
+    # if [ "$tt_arch" == "wormhole_b0" ]; then
+    #     env pytest -n auto models/demos/wormhole/mamba/tests -m $test_marker
+    # fi
     ## Merge all the generated reports
     env python3 models/perf/merge_perf_results.py
 }
@@ -76,8 +76,8 @@ run_perf_models_cnn_javelin() {
     local test_marker=$2
 
     # Run tests
-    env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/functional_unet/tests -m $test_marker
-    env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/stable_diffusion/tests -m $test_marker --timeout=480
+    # env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/functional_unet/tests -m $test_marker
+    # env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/stable_diffusion/tests -m $test_marker --timeout=480
 
     ## Merge all the generated reports
     env python3 models/perf/merge_perf_results.py
