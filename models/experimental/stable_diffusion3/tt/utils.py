@@ -92,9 +92,9 @@ def assert_quality(
     shard_dim=None,
 ) -> None:
     if isinstance(a, ttnn.Tensor):
-        a = to_torch(a, mesh_device=a.device(), dtype=a.get_dtype(), shard_dim=shard_dim)[0]
+        a = to_torch(a, mesh_device=a.device(), dtype=a.get_dtype(), shard_dim=shard_dim)
     if isinstance(b, ttnn.Tensor):
-        b = to_torch(b, mesh_device=b.device(), dtype=b.get_dtype(), shard_dim=shard_dim)[0]
+        b = to_torch(b, mesh_device=b.device(), dtype=b.get_dtype(), shard_dim=shard_dim)
 
     a = a.to(torch.float32)
     b = b.to(torch.float32)
