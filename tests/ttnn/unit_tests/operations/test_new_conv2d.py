@@ -73,6 +73,7 @@ def run_conv(
     output_mesh_composer=None,
     enable_split_reader=False,
     activation="",
+    enable_act_double_buffer=False,
 ):
     if isinstance(device, ttnn.MeshDevice):
         assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when using device mesh"
@@ -2851,4 +2852,35 @@ def test_block_sharding_relu_act_block_h(
         config_override=config_override,
         shard_layout=shard_layout,
         activation=activation,
+    )
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_conv3(
+    device,
+    torch_tensor_map,
+):
+    config_override = {}
+    config_override["act_block_h"] = 11 * 32
+    run_conv(
+        device,
+        torch_tensor_map,
+        ttnn.MathFidelity.LoFi,
+        ttnn.bfloat8_b,
+        ttnn.bfloat8_b,
+        1,
+        32,
+        32,
+        1056,
+        160,
+        3,
+        3,
+        1,
+        1,
+        1,
+        1,
+        config_override=config_override,
+        shard_layout=HS,
+        enable_split_reader=True,
+        enable_act_double_buffer=True,
+        use_shallow_conv_variant=True
     )
