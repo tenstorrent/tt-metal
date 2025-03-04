@@ -103,14 +103,14 @@ On N150, N300 and LoudBox / QuietBox you should also set:
 export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
 ```
 
-Description of the environment variables:
+Description of these environment variables:
 - `HF_MODEL` is the HuggingFace org/name of the model you want to run or the path to the downloaded Huggingface weights.
 - `LLAMA_DIR` sets the path for Meta-provided Llama3 model weights if you are not using HuggingFace.
 - `WH_ARCH_YAML` sets the dispatch over ethernet cores. This is optional for N150 and required for N300 and LoudBox / QuietBox, enabling a full core grid utilization (8x8), allowing for maximum performance of LLama3 models. Do not set this for TG.
+- `TT_CACHE_PATH` is optional. It sets the path for ttnn's weight cache files. See below for more details.
+- `MESH_DEVICE` is optional. It allows you to use fewer devices than are available. See below for more details.
 
-On the first execution of each model, TTNN will create weight cache files for that model, to speed up future runs.
-
-These cache files only need to be created once for each model and device.These files are stored in one of three places:
+On the first execution of each model, TTNN will create weight cache files for that model, to speed up future runs. These cache files only need to be created once for each model and device. These files are stored in one of three places:
 
 1. `TT_CACHE_PATH` if you have set it.
 2. `HF_MODEL/device_name` if a path to downloaded weights was specified using `HF_MODEL`.
@@ -123,6 +123,10 @@ The device name used is:
 - `N300` for N300
 - `T3K` for LoudBox / QuietBox
 - `TG` for Galaxy
+
+By default tensor parallelism is used to run the model over all available chips. You can instead run on a smaller mesh either for testing or for performance reasons (for very small models the communication overhead of tensor parallelism may be larger than the performance gained). To use a smaller mesh, set `MESH_DEVICE` to one of the supported devices: `N150`, `N300`, `T3K` or `TG`.
+
+Example: `export MESH_DEVICE=N150`, will enable running one a single chip of a multi-chip system.
 
 ### 3. Run the demo
 
@@ -148,10 +152,6 @@ If you want to provide your own demo configuration, please take a look at the py
 - `optimization (ModelOptimizations)`: Optimization level to use for the model [`performance`, `accuracy`]
 
 Please note that using `argmax` with `batch_size > 1` or using `top-p` sampling with any batch size, these ops will be run on host. This is because those ops are not yet fully supported on device. A decrease in performance is expected when these configurations are enabled.
-
-By default tensor parallelism is used to run the model over all available chips. You can instead run on a smaller mesh either for testing or for performance reasons (for very small models the communication overhead of tensor parallelism may be larger than the performance gained). To use a smaller mesh, set `MESH_DEVICE` to one of the supported devices: `N150`, `N300`, `T3K` or `TG`.
-
-Example: `export MESH_DEVICE=N150`, will enable running one a single of a multi-chip system.
 
 ```
 # Examples of how to run the demo:
