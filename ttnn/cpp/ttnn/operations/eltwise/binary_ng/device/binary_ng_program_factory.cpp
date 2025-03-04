@@ -109,6 +109,7 @@ uint32_t get_shards_per_width(const ShardSpec& shard_spec, TensorMemoryLayout me
 class ShardShapeGenerator {
     CoreCoord end_core;
     bool row_major;
+    TensorMemoryLayout memory_layout;
     std::array<uint32_t, 2> shard_shape;
     std::array<uint32_t, 2> last_shard_shape;
 
@@ -116,8 +117,10 @@ public:
     ShardShapeGenerator() = default;
 
     ShardShapeGenerator(const ShardSpec& shard_spec, const Tensor& tensor) :
-        end_core(shard_spec.grid.ranges().begin()->end_coord),
-        row_major(shard_spec.orientation == ShardOrientation::ROW_MAJOR) {
+        // core ranges are sorted, so the last one is indeed the last core
+        end_core(shard_spec.grid.ranges().rbegin()->end_coord),
+        row_major(shard_spec.orientation == ShardOrientation::ROW_MAJOR),
+        memory_layout(tensor.memory_config().memory_layout) {
         auto tile_height = tensor.tensor_spec().tile().get_height();
         auto tile_width = tensor.tensor_spec().tile().get_width();
 
@@ -132,19 +135,26 @@ public:
             shard_shape[1] - (tt::round_up(Wt, shard_shape[1]) - Wt),
         };
     }
-
     std::array<uint32_t, 2> operator()(CoreCoord core) const {
         const unsigned majorDim = row_major ? 1 : 0;
         const unsigned minorDim = row_major ? 0 : 1;
 
         auto current_shape = shard_shape;
-        if (core.x == end_core.x) {
-            current_shape[majorDim] = last_shard_shape[majorDim];
+        // for uneven shard, HEIGHT, WIDTH, and BLOCK handling order should be all different in kernel
+        // only HEIGHT sharding works naturally
+        // for eltwise, it should be insignificant to process the padded tile although it is a waste
+        if (core == end_core) {
+            if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+                current_shape[majorDim] = last_shard_shape[majorDim];
+                current_shape[minorDim] = last_shard_shape[minorDim];
+            } else {
+                TT_FATAL(
+                    current_shape[majorDim] == last_shard_shape[majorDim] and
+                        current_shape[minorDim] == last_shard_shape[minorDim],
+                    "no un-even shard size support memory layout {}",
+                    memory_layout);
+            }
         }
-        if (core.y == end_core.y) {
-            current_shape[minorDim] = last_shard_shape[minorDim];
-        }
-
         return current_shape;
     }
 };
@@ -171,8 +181,7 @@ void set_or_update_runtime_arguments(
     const bool has_sharding = shard_specs.has_value();
     auto grid = has_sharding ? shard_specs->a_shard_spec.grid : CoreRangeSet{};
 
-    bool row_major =
-        has_sharding ? shard_specs->a_shard_spec.orientation == ShardOrientation::ROW_MAJOR ? true : false : true;
+    const auto row_major = has_sharding ? shard_specs->a_shard_spec.orientation == ShardOrientation::ROW_MAJOR : true;
 
     // zero_start_grid is a flag to indicate that we are using a single rectangular grid that starts at (0, 0)
     // as well as having the sharded tensors (if any) start at (0, 0)
