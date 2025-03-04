@@ -1555,26 +1555,19 @@ def test_binary_sharded_scalar(scalar, a_shape, shard_type, shard_size, core_ran
         [
             torch.Size([1, 4 * 32]),
             ttnn.ShardStrategy.WIDTH,
-            [32, 32],
-            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 1)), ttnn.CoreRange((0, 2), (0, 3))}),
+            [1, 4 * 32],
+            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 0))}),
         ],
         [
             torch.Size([1, 4 * 32]),
             ttnn.ShardStrategy.BLOCK,
-            [32, 32],
-            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 1)), ttnn.CoreRange((0, 2), (0, 3))}),
+            [1, 32],
+            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (3, 0))}),
         ],
-        # cannot broadcast on h
         [
             torch.Size([32, 4 * 32]),
             ttnn.ShardStrategy.HEIGHT,
             [32, 4 * 32],
-            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 0))}),
-        ],
-        [
-            torch.Size([1, 32]),
-            ttnn.ShardStrategy.HEIGHT,
-            [1, 32],
             ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 0))}),
         ],
         [
@@ -1762,11 +1755,7 @@ def test_binary_sharded_invalid_spec(
 
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
-    (
-        [torch.int32, ttnn.int32],
-        # currently float32 fails
-        # [torch.float32, ttnn.float32],
-    ),
+    ([torch.bfloat16, ttnn.bfloat16],),
 )
 @pytest.mark.parametrize(
     "a_shape, b_shape, shard_type, shard_size, core_range",
@@ -1900,3 +1889,70 @@ def test_binary_sharded_row_major_layout(a_shape, b_shape, shard_type, shard_siz
     out_tt_sharded = ttnn.experimental.add(a_tt, b_tt, memory_config=a_sharded_config)
     out_tt_sharded = ttnn.to_torch(out_tt_sharded)
     torch.testing.assert_close(out_tt_sharded, out_pt)
+
+
+@pytest.mark.parametrize(
+    "dtype_pt, dtype_tt",
+    (
+        [torch.int32, ttnn.int32],
+        # currently float32 fails
+        # [torch.float32, ttnn.float32],
+    ),
+)
+@pytest.mark.parametrize(
+    "a_shape, b_shape, shard_type, shard_size, core_range",
+    (
+        [
+            torch.Size([64, 64]),
+            torch.Size([64, 64]),
+            ttnn.ShardStrategy.HEIGHT,
+            [32, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 1))}),
+        ],
+        [
+            torch.Size([64, 32]),
+            torch.Size([64, 32]),
+            ttnn.ShardStrategy.HEIGHT,
+            [32, 32],
+            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 1))}),
+        ],
+    ),
+)
+def test_binary_sharded_invalid_row_major_dtype(
+    a_shape, b_shape, shard_type, shard_size, core_range, dtype_pt, dtype_tt, device
+):
+    torch.manual_seed(0)
+    a_sharded_config = ttnn.create_sharded_memory_config(
+        shard_size,
+        core_grid=core_range,
+        strategy=shard_type,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    b_sharded_config = ttnn.create_sharded_memory_config(
+        shard_size,
+        core_grid=core_range,
+        strategy=shard_type,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
+    b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
+    a_tt = ttnn.from_torch(
+        a_pt,
+        dtype=dtype_tt,
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=a_sharded_config,
+    )
+
+    b_tt = ttnn.from_torch(
+        b_pt,
+        dtype=dtype_tt,
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=b_sharded_config,
+    )
+    with pytest.raises(RuntimeError):
+        _ = ttnn.experimental.add(a_tt, b_tt, memory_config=a_sharded_config)
