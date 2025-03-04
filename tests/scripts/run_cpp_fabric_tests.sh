@@ -16,13 +16,29 @@ export TT_METAL_CLEAR_L1=1
 
 cd $TT_METAL_HOME
 
+# Run with SD and FD
+run_command_sd_fd() {
+    local cmd="$@"
+    echo "Running with SLOW_DISPATCH_MODE=1: $cmd"
+    TT_METAL_SLOW_DISPATCH_MODE=1 $cmd
+    echo "Running without SLOW_DISPATCH_MODE: $cmd"
+    $cmd
+    echo "-----------------------------------------"
+}
+
+# Run with SD
+run_command_sd() {
+    local cmd="$@"
+    echo "Running with SLOW_DISPATCH_MODE=1: $cmd"
+    TT_METAL_SLOW_DISPATCH_MODE=1 $cmd
+}
+
 #############################################
 # FABRIC UNIT TESTS                         #
 #############################################
 echo "Running fabric unit tests now...";
 
-TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricFixture.*"
-./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricFixture.*"
+run_command_sd_fd ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricFixture.*"
 
 #############################################
 # FABRIC SANITY TESTS                       #
@@ -32,18 +48,18 @@ echo "Running fabric sanity tests now...";
 TEST_FOLDER="./build/test/tt_metal/perf_microbenchmark/routing"
 
 # Async Write
-TT_METAL_SLOW_DISPATCH_MODE=1 ${TEST_FOLDER}/test_tt_fabric_sanity_${ARCH_NAME} --fabric_command 1 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16
-TT_METAL_SLOW_DISPATCH_MODE=1 ${TEST_FOLDER}/test_tt_fabric_sanity_${ARCH_NAME} --fabric_command 1 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 8 --num_dest_endpoints 8 --num_links 16 --benchmark
-TT_METAL_SLOW_DISPATCH_MODE=1 ${TEST_FOLDER}/test_tt_fabric_sanity_${ARCH_NAME} --fabric_command 1 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --metal_fabric_init_level 1
-TT_METAL_SLOW_DISPATCH_MODE=1 ${TEST_FOLDER}/test_tt_fabric_sanity_${ARCH_NAME} --fabric_command 1 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 8 --num_dest_endpoints 8 --num_links 16 --benchmark --metal_fabric_init_level 1
+run_command_sd ${TEST_FOLDER}/test_tt_fabric_sanity_${ARCH_NAME} --fabric_command 1 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16
+run_command_sd ${TEST_FOLDER}/test_tt_fabric_sanity_${ARCH_NAME} --fabric_command 1 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 8 --num_dest_endpoints 8 --num_links 16 --benchmark
+run_command_sd ${TEST_FOLDER}/test_tt_fabric_sanity_${ARCH_NAME} --fabric_command 1 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --metal_fabric_init_level 1
+run_command_sd ${TEST_FOLDER}/test_tt_fabric_sanity_${ARCH_NAME} --fabric_command 1 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 8 --num_dest_endpoints 8 --num_links 16 --benchmark --metal_fabric_init_level 1
 # Async Write Mcast
-TT_METAL_SLOW_DISPATCH_MODE=1 ${TEST_FOLDER}/test_tt_fabric_sanity_${ARCH_NAME} --fabric_command 1 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --e_depth 1
-TT_METAL_SLOW_DISPATCH_MODE=1 ${TEST_FOLDER}/test_tt_fabric_sanity_${ARCH_NAME} --fabric_command 1 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --w_depth 1
-TT_METAL_SLOW_DISPATCH_MODE=1 ${TEST_FOLDER}/test_tt_fabric_sanity_${ARCH_NAME} --fabric_command 1 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --e_depth 1 --metal_fabric_init_level 1
+run_command_sd ${TEST_FOLDER}/test_tt_fabric_sanity_${ARCH_NAME} --fabric_command 1 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --e_depth 1
+run_command_sd ${TEST_FOLDER}/test_tt_fabric_sanity_${ARCH_NAME} --fabric_command 1 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --w_depth 1
+run_command_sd ${TEST_FOLDER}/test_tt_fabric_sanity_${ARCH_NAME} --fabric_command 1 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --e_depth 1 --metal_fabric_init_level 1
 # TODO: Enable benchmark functionality for mcast
 # Atomic Inc
-TT_METAL_SLOW_DISPATCH_MODE=1 ${TEST_FOLDER}/test_tt_fabric_sanity_${ARCH_NAME} --fabric_command 64 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16
-TT_METAL_SLOW_DISPATCH_MODE=1 ${TEST_FOLDER}/test_tt_fabric_sanity_${ARCH_NAME} --fabric_command 64 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --metal_fabric_init_level 1
+run_command_sd ${TEST_FOLDER}/test_tt_fabric_sanity_${ARCH_NAME} --fabric_command 64 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16
+run_command_sd ${TEST_FOLDER}/test_tt_fabric_sanity_${ARCH_NAME} --fabric_command 64 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --metal_fabric_init_level 1
 # Async Write Atomic Inc
-TT_METAL_SLOW_DISPATCH_MODE=1 ${TEST_FOLDER}/test_tt_fabric_sanity_${ARCH_NAME} --fabric_command 65 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16
-TT_METAL_SLOW_DISPATCH_MODE=1 ${TEST_FOLDER}/test_tt_fabric_sanity_${ARCH_NAME} --fabric_command 65 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --metal_fabric_init_level 1
+run_command_sd ${TEST_FOLDER}/test_tt_fabric_sanity_${ARCH_NAME} --fabric_command 65 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16
+run_command_sd ${TEST_FOLDER}/test_tt_fabric_sanity_${ARCH_NAME} --fabric_command 65 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --metal_fabric_init_level 1
