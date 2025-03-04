@@ -25,20 +25,15 @@ from models.demos.yolov4.ttnn.genboxes import TtGenBoxes
 
 
 class TtYOLOv4:
-    def __init__(self, path, device) -> None:
-        if type(path) is str:
-            self.torch_model = torch.load(path)
-        else:
-            self.torch_model = path
-        self.torch_keys = self.torch_model.keys()
-        self.down1 = Down1(device, self)
-        self.down2 = Down2(device, self)
-        self.down3 = Down3(device, self)
-        self.down4 = Down4(device, self)
-        self.down5 = Down5(device, self)
+    def __init__(self, parameters, device) -> None:
+        self.down1 = Down1(device, parameters.downsample1, parameters.conv_args.downsample1)
+        self.down2 = Down2(device, parameters.downsample2, parameters.conv_args.downsample2)
+        self.down3 = Down3(device, parameters.downsample3, parameters.conv_args.downsample3)
+        self.down4 = Down4(device, parameters.downsample4, parameters.conv_args.downsample4)
+        self.down5 = Down5(device, parameters.downsample5, parameters.conv_args.downsample5)
 
-        self.neck = TtNeck(device, self)
-        self.head = TtHead(device, self)
+        self.neck = TtNeck(device, parameters.neck, parameters.conv_args.neck)
+        self.head = TtHead(device, parameters.head, parameters.conv_args.head)
 
         self.boxes_confs_0 = TtGenBoxes(device)
         self.boxes_confs_1 = TtGenBoxes(device)
