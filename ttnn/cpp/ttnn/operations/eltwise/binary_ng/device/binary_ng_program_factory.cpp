@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <sys/types.h>
 #include "binary_ng_utils.hpp"
+#include <cstdint>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
@@ -13,6 +15,22 @@ namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 using namespace ttnn::operations::binary_ng;
+
+uint32_t extract_nD_dims(const Tensor& x, const int out_rank) {
+    const auto& shape = x.get_logical_shape();
+    // tt::log_info(tt::LogOp, "********  shape : {} ", shape) ;
+    // tt::log_info(tt::LogOp, "********  out_rank : {} ", out_rank) ;
+    uint32_t nD_dim = 1;
+    if (out_rank >= 5) {
+        for (int i = -5; i >= -out_rank; --i) {
+            auto dim = shape[i];
+            // tt::log_info(tt::LogOp, "******** dim {} shape[i] : {} ", i, shape[i]) ;
+            nD_dim *= dim;
+        }
+    }
+    // tt::log_info(tt::LogOp, "********  nD_dim : {} ", nD_dim) ;
+    return nD_dim;
+}
 
 std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_shape_dims(const Tensor& x) {
     const auto& shape = x.padded_shape();
@@ -171,6 +189,17 @@ void set_or_update_runtime_arguments(
     F handle_args) {
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
+    const auto out_rank = c.logical_shape().rank();
+    auto aND = extract_nD_dims(a, out_rank);
+    auto bND = b.has_value() ? extract_nD_dims(c, out_rank) : 1;
+    auto cND = extract_nD_dims(c, out_rank);
+    tt::log_info(tt::LogOp, "********  cND : {} ", cND);
+    TT_FATAL(
+        (aND == bND && aND == cND),
+        "Collapsed Outer dims of inputs and outputs do not match cND {}, aND: {}, bND: {}",
+        cND,
+        aND,
+        bND);
 
     const auto [aN, aC, aHt, aWt] = get_shape_dims(a);
     const auto [bN, bC, bHt, bWt] = b.has_value() ? get_shape_dims(*b) : std::tuple{1u, 1u, 1u, 1u};
@@ -217,6 +246,7 @@ void set_or_update_runtime_arguments(
     const uint32_t tile_width = c.tensor_spec().tile().get_width();
     const uint32_t tile_hw = tile_height * tile_width;
     const uint32_t c_num_tiles = c.volume() / tile_hw;
+    tt::log_info(tt::LogOp, "********  c_num_tiles : {} ", c_num_tiles);
     uint32_t c_shard_height, c_shard_width, num_shards_per_width;
 
     ShardShapeGenerator a_shard_shape_generator;
@@ -268,8 +298,8 @@ void set_or_update_runtime_arguments(
         } else if (core_group_2.contains(core)) {
             c_num_tiles = num_tiles_per_core_group_2;
         } else {
-            handle_args(program, reader_kernel_id, core, std::array<uint32_t, 11>{0});
-            handle_args(program, writer_kernel_id, core, std::array<uint32_t, 12>{0});
+            handle_args(program, reader_kernel_id, core, std::array<uint32_t, 13>{0});
+            handle_args(program, writer_kernel_id, core, std::array<uint32_t, 14>{0});
             handle_args(program, compute_kernel_id, core, std::array<uint32_t, 3>{0});
             continue;
         }
@@ -294,12 +324,14 @@ void set_or_update_runtime_arguments(
             a_num_tiles,
             c_num_tiles,
             c_current_shard_width,
+            aHt * aWt * aC * aN * (aND > 1),
             aHt * aWt * aC * (aN > 1),
             aHt * aWt * (aC > 1),
             cN,
             cC,
             cHt,
-            cWt};
+            cWt,
+            cND};
         handle_args(program, reader_kernel_id, core, reader_runtime_args);
 
         const bool is_quant_op = (operation_attributes.binary_op_type == BinaryOpType::QUANT) ||
@@ -325,12 +357,14 @@ void set_or_update_runtime_arguments(
                 b_num_tiles,
                 c_num_tiles,
                 c_current_shard_width,
+                bHt * bWt * bC * bN * (bND > 1),
                 bHt * bWt * bC * (bN > 1),
                 bHt * bWt * (bC > 1),
                 cN,
                 cC,
                 cHt,
-                cWt};
+                cWt,
+                cND};
             handle_args(program, writer_kernel_id, core, writer_runtime_args);
 
             auto [freq, counter] =
@@ -350,6 +384,8 @@ void set_or_update_runtime_arguments(
                 cC,
                 cHt,
                 cWt,
+                cND,
+                0u,
                 0u,
                 0u,
                 0u};

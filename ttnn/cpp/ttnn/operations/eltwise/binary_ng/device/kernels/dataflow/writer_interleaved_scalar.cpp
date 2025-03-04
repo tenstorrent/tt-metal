@@ -18,6 +18,7 @@ void kernel_main() {
     const uint32_t C = get_arg_val<uint32_t>(6);
     const uint32_t Ht = get_arg_val<uint32_t>(7);
     const uint32_t Wt = get_arg_val<uint32_t>(8);
+    const uint32_t cND = get_arg_val<uint32_t>(9);
     const uint32_t HtWt = Ht * Wt;
 
     constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;

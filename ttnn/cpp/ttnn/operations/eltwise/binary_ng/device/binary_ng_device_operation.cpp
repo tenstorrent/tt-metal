@@ -174,11 +174,11 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
         return valid;
     };
 
-    TT_FATAL(nd_support(input_tensor_a.get_logical_shape()), "Tensor a does not support 5D or more");
+    // TT_FATAL(nd_support(input_tensor_a.get_logical_shape()), "Tensor a does not support 5D or more");
 
-    if (input_tensor_b.has_value()) {
-        TT_FATAL(nd_support(input_tensor_b->get_logical_shape()), "Tensor b does not support 5D or more");
-    }
+    // if (input_tensor_b.has_value()) {
+    //     TT_FATAL(nd_support(input_tensor_b->get_logical_shape()), "Tensor b does not support 5D or more");
+    // }
 
     TT_FATAL(
         input_tensor_b.has_value() != attributes.scalar.has_value(), "Either the tensor b or scalar should be set");
@@ -284,8 +284,8 @@ void BinaryNgDeviceOperation::validate_on_program_cache_hit(
 
         if (i <= -5) {
             TT_FATAL(
-                a_dim == 1 && b_dim == 1,
-                "Broadcasting rule violation for 5D {}, dim a: {}, dim b: {}",
+                a_dim == b_dim,
+                "Broadcast not supported yet for rank 5 and above {}, dim a: {}, dim b: {}",
                 i,
                 a_dim,
                 b_dim);
