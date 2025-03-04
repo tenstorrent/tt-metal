@@ -18,7 +18,7 @@ public:
     using ConvertionFunction = std::function<std::string(const std::any&)>;
     std::vector<std::string> to_list(const std::span<std::any>& span);
 
-    static GraphArgumentSerializer* instance();
+    static GraphArgumentSerializer& instance();
 
 private:
     GraphArgumentSerializer();

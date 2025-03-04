@@ -88,9 +88,6 @@ GraphProcessor::GraphProcessor(RunMode mode) : run_mode(mode) {
     end_function_any_map[typeid(std::reference_wrapper<Tensor>)] = [ptr = this](const std::any& val) mutable {
         ptr->end_function_process_tensor(val);
     };
-
-    // Add all the elements in the map to handle different datatypes
-    TT_ASSERT(GraphArgumentSerializer::instance());
 }
 
 void GraphProcessor::track_allocate(const tt::tt_metal::Buffer* buffer) {
@@ -192,7 +189,7 @@ void GraphProcessor::track_function_start(std::string_view function_name, std::s
     };
 
     std::vector<std::string> serialized_arguments;
-    serialized_arguments = GraphArgumentSerializer::instance()->to_list(input_parameters);
+    serialized_arguments = GraphArgumentSerializer::instance().to_list(input_parameters);
 
     auto counter = graph.size();
     {
