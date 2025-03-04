@@ -21,15 +21,6 @@ autograd::TensorPtr RotaryEmbedding::operator()(const autograd::TensorPtr& input
     return ttml::ops::rope(input, m_rope_params);
 }
 
-ttnn::Tensor from_xtensor_to_l1(const xt::xarray<float>& x) {
-    auto device = &autograd::ctx().get_device();
-    if (x.dimension() != 4) {
-        throw std::invalid_argument("x must have 4 dimensions");
-    }
-    auto x_tt_tensor = core::from_xtensor(x, device);
-    return ttnn::to_memory_config(x_tt_tensor, ttnn::L1_MEMORY_CONFIG);
-}
-
 ttnn::Tensor gen_freqs(uint32_t head_dim, uint32_t sequence_length, float theta = 10000.0F) {
     int d = head_dim;
     // compute freqs: 1.0 / (theta ** (2 * (i-1) / head_dim)) for i in [1, head_dim/2]
@@ -56,7 +47,8 @@ ttnn::Tensor gen_freqs(uint32_t head_dim, uint32_t sequence_length, float theta 
     // take the scaled freqs mod 2π to satisfy ttnn inputs constraints for sin/cos
     scaled_freqs = xt::fmod(scaled_freqs, 2.0F * 3.14159265358979323846F);
 
-    return from_xtensor_to_l1(scaled_freqs.reshape({1, 1, sequence_length, head_dim}));
+    auto device = &autograd::ctx().get_device();
+    return core::from_xtensor(scaled_freqs.reshape({1, 1, sequence_length, head_dim}), device);
 }
 
 ttnn::Tensor gen_trans_mat(int head_dim) {
@@ -67,7 +59,9 @@ ttnn::Tensor gen_trans_mat(int head_dim) {
     for (int j = 1; j < head_dim; j += 2) {
         trans_mat(0, 0, j, j - 1) = -1.0F;
     }
-    return from_xtensor_to_l1(trans_mat);
+
+    auto device = &autograd::ctx().get_device();
+    return core::from_xtensor(trans_mat, device);
 }
 
 ops::RotaryEmbeddingParams RotaryEmbedding::build_params(uint32_t sequence_length, uint32_t head_dim, float theta) {
