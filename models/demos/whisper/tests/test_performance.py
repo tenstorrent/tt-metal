@@ -24,8 +24,8 @@ def get_expected_times(model_name):
     Returns expected compile time and inference time.
     """
     return {
-        "openai/whisper-base": (14.0, 0.039),
-        "distil-whisper/distil-large-v3": (11.0, 0.24),
+        "openai/whisper-base": (13.3, 0.040),
+        "distil-whisper/distil-large-v3": (11.1, 0.244),
     }[model_name]
 
 
