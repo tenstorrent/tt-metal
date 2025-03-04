@@ -68,7 +68,7 @@ void Hal::initialize_bh() {
         return addr;
     };
 
-    this->iram_relocate_func_ = [](uint64_t addr) { return addr; };
+    this->erisc_iram_relocate_func_ = [](uint64_t addr) { return addr; };
 
     this->valid_reg_addr_func_ = [](uint32_t addr) {
         return (

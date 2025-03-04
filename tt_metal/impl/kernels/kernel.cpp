@@ -449,9 +449,9 @@ void EthernetKernel::read_binaries(IDevice* device) {
         // However it need to be placed L1 kernel base address for FW to copy it to IRAM then kick off
         // The kernel can run with IRAM base address once it started.
         const_cast<ll_api::memory&>(binary_mem)
-            .set_text_addr(tt::tt_metal::hal.iram_relocate_dev_addr((uint64_t)binary_mem.get_text_addr()));
+            .set_text_addr(tt::tt_metal::hal.erisc_iram_relocate_dev_addr((uint64_t)binary_mem.get_text_addr()));
         std::function<void(uint64_t& addr)> update_callback = [](uint64_t& addr) {
-            addr = tt::tt_metal::hal.iram_relocate_dev_addr(addr);
+            addr = tt::tt_metal::hal.erisc_iram_relocate_dev_addr(addr);
         };
         const_cast<ll_api::memory&>(binary_mem).update_spans(update_callback);
     }
