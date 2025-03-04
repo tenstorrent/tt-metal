@@ -2,7 +2,7 @@ import os
 import re
 
 # List of operations
-ops = ["rsub", "rdiv", "silu", "softplus", "fill"]
+ops = ["fmod", "ceil", "remainder", "typecast", "floor"]
 
 
 # Function to modify the file
@@ -30,8 +30,8 @@ for op in ops:
     file_path = f"tests/sweep_framework/sweeps/eltwise/unary/{op}/{op}_survey.py"  # Assuming file structure
 
     # Modify the file if it exists
-    if os.path.exists(file_path):
-        modify_file(file_path)
+    # if os.path.exists(file_path):
+    #     modify_file(file_path)
 
     # Run the commands
     command1 = f"python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name {module_name} --elastic cloud --clean"
