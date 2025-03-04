@@ -151,7 +151,6 @@ public:
         const bool block_on_device,
         const bool block_on_worker_thread) override;
     void release_trace(const uint32_t tid) override;
-    std::shared_ptr<TraceBuffer> get_trace(uint32_t tid) override;
     uint32_t get_trace_buffers_size() const override;
     void set_trace_buffers_size(uint32_t size) override;
 

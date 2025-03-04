@@ -16,11 +16,8 @@
 #include <data_types.hpp>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
-#include <trace.hpp>
-#include <trace_buffer.hpp>
 #include <span.hpp>
 #include <tt_align.hpp>
-#include "trace/trace_buffer_pool.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 
 #include "tt_cluster.hpp"
@@ -38,8 +35,7 @@ SubDeviceManager::SubDeviceManager(
     id_(next_sub_device_manager_id_++),
     sub_devices_(sub_devices.begin(), sub_devices.end()),
     local_l1_size_(tt::align(local_l1_size, hal.get_alignment(HalMemType::L1))),
-    device_(device),
-    trace_buffer_pool_(std::make_unique<TraceBufferPool<uint32_t, TraceBuffer>>()) {
+    device_(device) {
     TT_ASSERT(device != nullptr, "Device must not be null");
     this->validate_sub_devices();
     this->populate_sub_device_ids();
@@ -53,8 +49,7 @@ SubDeviceManager::SubDeviceManager(
     id_(next_sub_device_manager_id_++),
     device_(device),
     sub_devices_(sub_devices.begin(), sub_devices.end()),
-    local_l1_size_(0),
-    trace_buffer_pool_(std::make_unique<TraceBufferPool<uint32_t, TraceBuffer>>()) {
+    local_l1_size_(0) {
     TT_ASSERT(device != nullptr, "Device must not be null");
 
     this->populate_sub_device_ids();
@@ -124,8 +119,6 @@ std::unique_ptr<Allocator>& SubDeviceManager::sub_device_allocator(SubDeviceId s
     auto sub_device_index = this->get_sub_device_index(sub_device_id);
     return sub_device_allocators_[sub_device_index];
 }
-
-TraceBufferPool<uint32_t, TraceBuffer>* SubDeviceManager::trace_buffer_pool() { return trace_buffer_pool_.get(); }
 
 bool SubDeviceManager::has_allocations() const {
     for (const auto& allocator : sub_device_allocators_) {

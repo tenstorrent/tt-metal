@@ -26,6 +26,9 @@
 
 namespace tt::tt_metal {
 
+template <typename TraceId, typename TraceBufferType>
+class TraceBufferPool;
+
 inline namespace v0 {
 
 // A physical PCIexpress Tenstorrent device
@@ -132,7 +135,6 @@ public:
         const bool block_on_device,
         const bool block_on_worker_thread) override;
     void release_trace(const uint32_t tid) override;
-    std::shared_ptr<TraceBuffer> get_trace(uint32_t tid) override;
     uint32_t get_trace_buffers_size() const override { return trace_buffers_size_; }
     void set_trace_buffers_size(uint32_t size) override { trace_buffers_size_ = size; }
 
@@ -271,6 +273,8 @@ private:
     std::vector<uint16_t> l1_bank_to_noc_xy_;
 
     program_cache::detail::ProgramCache program_cache_;
+
+    std::unique_ptr<TraceBufferPool<uint32_t, TraceBuffer>> trace_buffer_pool_;
 
     uint32_t trace_buffers_size_ = 0;
     bool uninitialized_error_fired_ =

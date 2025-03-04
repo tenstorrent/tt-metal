@@ -597,26 +597,45 @@ void MeshDevice::release_trace(const uint32_t tid) {
 void MeshDevice::release_mesh_trace(const MeshTraceId& trace_id) { trace_buffer_pool_->erase(trace_id); }
 
 void MeshDevice::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
-    auto mesh_trace_buffer = trace_buffer_pool_->emplace(trace_id, MeshTrace::create_empty_mesh_trace_buffer());
+    auto mesh_trace_buffer = trace_buffer_pool_->emplace(
+        trace_id,
+        sub_device_manager_tracker_->get_active_sub_device_manager()->id(),
+        MeshTrace::create_empty_mesh_trace_buffer());
     mesh_command_queues_[cq_id]->record_begin(trace_id, mesh_trace_buffer->desc);
 }
 
 void MeshDevice::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
-    auto trace_buffer = trace_buffer_pool_->get(trace_id);
+    auto trace = trace_buffer_pool_->get_trace(trace_id);
+    TT_FATAL(trace.has_value(), "Expected trace {} to exist on device, when ending trace", trace_id);
+    TT_FATAL(
+        trace->sub_device_manager_id == sub_device_manager_tracker_->get_active_sub_device_manager()->id(),
+        "Trace {} must be captured fully on the same sub-device manager. Currently active manager {}, capture "
+        "began on {}",
+        trace_id,
+        sub_device_manager_tracker_->get_active_sub_device_manager()->id(),
+        trace->sub_device_manager_id);
     mesh_command_queues_[cq_id]->record_end();
-    MeshTrace::populate_mesh_buffer(*(mesh_command_queues_[cq_id]), trace_buffer);
+    MeshTrace::populate_mesh_buffer(*(mesh_command_queues_[cq_id]), trace->trace_buffer);
 }
 
 void MeshDevice::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking) {
-    auto trace_buffer = trace_buffer_pool_->get(trace_id);
-    TT_FATAL(trace_buffer != nullptr, "Trace instance {} must exist on device", trace_id);
-    mesh_command_queues_[cq_id]->enqueue_trace(trace_buffer, blocking);
+    auto trace = trace_buffer_pool_->get_trace(trace_id);
+    TT_FATAL(
+        trace.has_value(),
+        "Trace {} must exist on device. Expected trace to be previously captured on device, or loaded "
+        "explicitly.",
+        trace_id);
+    TT_FATAL(
+        trace->sub_device_manager_id == sub_device_manager_tracker_->get_active_sub_device_manager()->id(),
+        "Trace {} was captured on a different sub-device manager {} than the active sub-device manager {}, and cannot "
+        "be replayed. Load sub-device manager {} on device before replaying trace.",
+        trace_id,
+        trace->sub_device_manager_id,
+        sub_device_manager_tracker_->get_active_sub_device_manager()->id(),
+        trace->sub_device_manager_id);
+    mesh_command_queues_[cq_id]->enqueue_trace(trace->trace_buffer, blocking);
 }
 
-std::shared_ptr<TraceBuffer> MeshDevice::get_trace(uint32_t tid) {
-    TT_THROW("get_trace() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->get_trace(tid);
-}
 uint32_t MeshDevice::get_trace_buffers_size() const { return trace_buffers_size_; }
 void MeshDevice::set_trace_buffers_size(uint32_t size) { trace_buffers_size_ = size; }
 

@@ -58,7 +58,8 @@ Device::Device(
     id_(device_id),
     worker_thread_core_(worker_thread_core),
     completion_queue_reader_core_(completion_queue_reader_core),
-    work_executor_(std::make_unique<WorkExecutor>(worker_thread_core, device_id)) {
+    work_executor_(std::make_unique<WorkExecutor>(worker_thread_core, device_id)),
+    trace_buffer_pool_(std::make_unique<TraceBufferPool<uint32_t, TraceBuffer>>()) {
     ZoneScoped;
     update_dispatch_cores_for_multi_cq_eth_dispatch();
     this->initialize(num_hw_cqs, l1_small_size, trace_region_size, l1_bank_remap, minimal);
@@ -1344,15 +1345,10 @@ void Device::begin_trace(const uint8_t cq_id, const uint32_t tid) {
                 tid);
             this->mark_allocations_safe();
             // Create an empty trace buffer here. This will get initialized in end_trace
-            auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
-            TT_FATAL(
-                active_sub_device_manager->trace_buffer_pool()->get(tid) == nullptr,
-                "Trace already exists for tid {} on device {}'s active sub-device manager {}",
+            auto trace_buffer = trace_buffer_pool_->emplace(
                 tid,
-                this->id_,
-                active_sub_device_manager->id());
-            auto trace_buffer =
-                active_sub_device_manager->trace_buffer_pool()->emplace(tid, Trace::create_empty_trace_buffer());
+                sub_device_manager_tracker_->get_active_sub_device_manager()->id(),
+                Trace::create_empty_trace_buffer());
             this->command_queues_[cq_id]->record_begin(tid, trace_buffer->desc);
         },
         false /* blocking */);
@@ -1368,23 +1364,25 @@ void Device::end_trace(const uint8_t cq_id, const uint32_t tid) {
                 "CQ {} is not being used for tracing tid {}",
                 (uint32_t)cq_id,
                 tid);
-            auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
-            auto trace_buffer = active_sub_device_manager->trace_buffer_pool()->get(tid);
+            auto trace = trace_buffer_pool_->get_trace(tid);
+            TT_FATAL(trace.has_value(), "Expected trace {} to exist on device, when ending trace", tid);
             TT_FATAL(
-                trace_buffer != nullptr,
-                "Trace instance {} must exist on device {}'s active sub-device manager {}",
+                trace->sub_device_manager_id == sub_device_manager_tracker_->get_active_sub_device_manager()->id(),
+                "Trace {} must be captured fully on the same sub-device manager. Currently active manager {}, capture "
+                "began on {}",
                 tid,
-                this->id_,
-                active_sub_device_manager->id());
+                sub_device_manager_tracker_->get_active_sub_device_manager()->id(),
+                trace->sub_device_manager_id);
+
             this->command_queues_[cq_id]->record_end();
 
             // Capture Trace if light metal trace capturing is enabled.
             auto& lm_capture_ctx = LightMetalCaptureContext::get();
             if (lm_capture_ctx.is_tracing()) {
-                lm_capture_ctx.capture_trace_descriptor(*trace_buffer->desc, tid);
+                lm_capture_ctx.capture_trace_descriptor(*trace->trace_buffer->desc, tid);
             }
 
-            Trace::initialize_buffer(this->command_queue(cq_id), trace_buffer);
+            Trace::initialize_buffer(this->command_queue(cq_id), trace->trace_buffer);
             this->mark_allocations_unsafe();
         },
         false /* blocking */);
@@ -1394,16 +1392,18 @@ void Device::end_trace(const uint8_t cq_id, const uint32_t tid) {
 void Device::load_trace(const uint8_t cq_id, const uint32_t trace_id, const TraceDescriptor& trace_desc) {
     this->mark_allocations_safe();
 
-    auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
-    auto* trace_buffer_pool = active_sub_device_manager->trace_buffer_pool();
+    auto trace = trace_buffer_pool_->get_trace(trace_id);
     TT_FATAL(
-        trace_buffer_pool->get(trace_id) == nullptr,
-        "Trace already exists for trace_id {} on device {}'s active sub-device manager {}",
+        !trace.has_value(),
+        "Trace {} already exists for device {}'s, captured for sub-device manager {}",
         trace_id,
-        this->id_,
-        active_sub_device_manager->id());
+        id_,
+        trace->sub_device_manager_id);
 
-    auto trace_buffer = trace_buffer_pool->emplace(trace_id, Trace::create_empty_trace_buffer());
+    auto trace_buffer = trace_buffer_pool_->emplace(
+        trace_id,
+        sub_device_manager_tracker_->get_active_sub_device_manager()->id(),
+        Trace::create_empty_trace_buffer());
 
     *trace_buffer->desc = trace_desc;
     Trace::initialize_buffer(this->command_queue(cq_id), trace_buffer);
@@ -1417,15 +1417,21 @@ void Device::replay_trace(
         [this, cq_id, tid, block_on_device]() mutable {
             ZoneScoped;
             TracyTTMetalReplayTrace(this->id(), tid);
-            auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
-            const auto trace_buffer = active_sub_device_manager->trace_buffer_pool()->get(tid);
+            auto trace = trace_buffer_pool_->get_trace(tid);
             TT_FATAL(
-                trace_buffer != nullptr,
-                "Trace instance {} must exist on device {}'s active sub-device manager {}",
+                trace.has_value(),
+                "Trace {} must exist on device. Expected trace to be previously captured on device, or loaded "
+                "explicitly.",
+                tid);
+            TT_FATAL(
+                trace->sub_device_manager_id == sub_device_manager_tracker_->get_active_sub_device_manager()->id(),
+                "Trace {} was captured on a different sub-device manager {} than the active sub-device manager {}, and "
+                "cannot be replayed. Load sub-device manager {} on device before replaying trace.",
                 tid,
-                this->id_,
-                active_sub_device_manager->id());
-            command_queue(cq_id).enqueue_trace(trace_buffer, block_on_device);
+                trace->sub_device_manager_id,
+                sub_device_manager_tracker_->get_active_sub_device_manager()->id(),
+                trace->sub_device_manager_id);
+            command_queue(cq_id).enqueue_trace(trace->trace_buffer, block_on_device);
         },
         block_on_worker_thread);
 }
@@ -1436,8 +1442,7 @@ void Device::release_trace(const uint32_t tid) {
             ZoneScoped;
             TracyTTMetalReleaseTrace(this->id(), tid);
 
-            auto* trace_buffer_pool = sub_device_manager_tracker_->get_active_sub_device_manager()->trace_buffer_pool();
-            trace_buffer_pool->erase(tid);
+            trace_buffer_pool_->erase(tid);
 
             // Only enable allocations once all captured traces are released
             if (this->trace_buffers_size_ == 0) {
@@ -1445,10 +1450,6 @@ void Device::release_trace(const uint32_t tid) {
             }
         },
         false /* blocking */);
-}
-
-std::shared_ptr<TraceBuffer> Device::get_trace(uint32_t tid) {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->trace_buffer_pool()->get(tid);
 }
 
 void Device::enable_program_cache() {
