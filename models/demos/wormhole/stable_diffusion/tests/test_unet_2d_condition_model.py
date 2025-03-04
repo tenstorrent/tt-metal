@@ -73,7 +73,7 @@ def unsqueeze_all_params_to_4d(params):
 def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_height, input_width):
     device.enable_program_cache()
 
-    os.environ["SLOW_MATMULS"] = "1"
+    # os.environ["SLOW_MATMULS"] = "1"
 
     # setup envvar if testing on N300
     wh_arch_yaml_org = None
