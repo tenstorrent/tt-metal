@@ -101,7 +101,7 @@ void kernel_main() {
                         uint32_t tile_id = gamma_tile_start_id + w;
                         uint64_t gamma_noc_addr = get_noc_addr(tile_id, gamma);
                         noc_async_read(gamma_noc_addr, l1_write_addr_gamma, 32 * 2);
-                        gamma_noc_addr = get_noc_addr(l1_write_addr + 32);
+                        gamma_noc_addr = get_noc_addr(l1_write_addr_gamma + 32);
                         noc_async_read_barrier();
                         noc_async_read(gamma_noc_addr, l1_write_addr_gamma + 512, 32);
                         l1_write_addr_gamma += gamma_tile_bytes;
@@ -126,7 +126,7 @@ void kernel_main() {
                         uint32_t tile_id = beta_tile_start_id + w;
                         uint64_t beta_noc_addr = get_noc_addr(tile_id, beta);
                         noc_async_read(beta_noc_addr, l1_write_addr_beta, 32 * 2);
-                        gamma_noc_addr = get_noc_addr(l1_write_addr + 32);
+                        beta_noc_addr = get_noc_addr(l1_write_addr_beta + 32);
                         noc_async_read_barrier();
                         noc_async_read(beta_noc_addr, l1_write_addr_beta + 512, 32);
                         l1_write_addr_beta += beta_tile_bytes;
