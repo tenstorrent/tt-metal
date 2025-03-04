@@ -24,25 +24,6 @@ namespace core {
 
 namespace detail {
 
-// Issue #8617: Limitations on tensor width for multicore device tilize
-inline bool use_multicore_device_tilize(
-    const Tensor& input, const std::optional<tt::tt_metal::DataType>& output_dtype) {
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
-    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
-
-    uint32_t output_single_tile_size =
-        output_dtype.has_value()
-            ? tt::tt_metal::detail::TileSize(tt::tt_metal::datatype_to_dataformat_converter(output_dtype.value()))
-            : input_single_tile_size;
-
-    uint32_t num_tiles_in_row = input.get_logical_shape()[-1] / tt::constants::TILE_WIDTH;
-    uint32_t max_l1_size =
-        input.device()->l1_size_per_core() / 2 - input.device()->allocator()->get_base_allocator_addr(HalMemType::L1);
-    uint32_t max_tiles = max_l1_size / (input_single_tile_size + output_single_tile_size);  // 2 CBs
-
-    return num_tiles_in_row <= max_tiles;
-}
-
 bool requires_padding_change(const ttnn::Tensor& tensor, ttnn::Layout layout) {
     auto tile = tensor.get_tensor_spec().tile();
     if (layout == Layout::ROW_MAJOR) {
@@ -52,7 +33,8 @@ bool requires_padding_change(const ttnn::Tensor& tensor, ttnn::Layout layout) {
     // It's okay for conversion to tile layout to preserve arbitrary padding as long as it satisfies the alignment
     TensorSpec padded_spec(
         tensor.get_padded_shape(),
-        TensorLayout(tensor.get_dtype(), PageConfig(layout, std::move(tile)), tensor.memory_config()));
+        tt::tt_metal::TensorLayout(
+            tensor.get_dtype(), tt::tt_metal::PageConfig(layout, std::move(tile)), tensor.memory_config()));
     return tensor.get_padded_shape() != padded_spec.padded_shape();
 }
 
@@ -98,7 +80,8 @@ Tensor to_layout_impl(
 
     TensorSpec tile_spec(
         tensor_arg.get_logical_shape(),
-        TensorLayout(tensor_arg.dtype(), PageConfig(Layout::TILE, tile), output_memory_config));
+        tt::tt_metal::TensorLayout(
+            tensor_arg.dtype(), tt::tt_metal::PageConfig(Layout::TILE, tile), output_memory_config));
     auto padded_output_shape = tile_spec.padded_shape();
     auto original_rank = tensor_arg.get_logical_shape().rank();
     auto original_shape = tensor_arg.get_logical_shape();
@@ -114,7 +97,7 @@ Tensor to_layout_impl(
 
     if (ttnn::is_tensor_on_device_or_multidevice(tensor_arg)) {
         bool use_multicore_untilize = true;
-        bool use_multicore_tilize = use_multicore_device_tilize(tensor, dtype);
+        bool use_multicore_tilize = true;
 
         if (not requires_padding_change(tensor, layout)) {
             if (layout == ttnn::ROW_MAJOR_LAYOUT) {

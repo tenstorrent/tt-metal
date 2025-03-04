@@ -33,7 +33,7 @@ Tensor aggregate_as_tensor(
 std::vector<int> get_t3k_physical_device_ids_ring();
 
 // Maps a tensor to the set of devices in the device-mesh that the shards will be distributed across.
-std::vector<IDevice*> get_mapped_devices(const Tensor& tensor, MeshDevice& mesh_device);
+std::vector<tt::tt_metal::IDevice*> get_mapped_devices(const Tensor& tensor, MeshDevice& mesh_device);
 
 // Get the distributed tensor config from a tensor.
 tt::tt_metal::DistributedTensorConfig get_distributed_tensor_config_from_tensor(const Tensor& tensor);

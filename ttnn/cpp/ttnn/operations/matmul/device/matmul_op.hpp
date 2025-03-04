@@ -179,7 +179,7 @@ struct Matmul {
     const bool transpose_a = false;
     const bool transpose_b = false;
     const std::optional<const tt::tt_metal::Tile> output_tile;
-    const std::optional<const DeviceGlobalCircularBuffer> global_cb;
+    const std::optional<const tt::tt_metal::DeviceGlobalCircularBuffer> global_cb;
 
     void validate(
         const std::vector<Tensor>& input_tensors,

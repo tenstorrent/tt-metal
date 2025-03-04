@@ -10,8 +10,8 @@
 #define DEFINE_PROGRAM_FACTORY(FactoryName)                                                 \
     struct FactoryName {                                                                    \
         struct shared_variables_t {                                                         \
-            KernelHandle reader_kernels_id;                                                 \
-            KernelHandle writer_kernels_id;                                                 \
+            tt::tt_metal::KernelHandle reader_kernels_id;                                   \
+            tt::tt_metal::KernelHandle writer_kernels_id;                                   \
             std::size_t num_cores_to_be_used;                                               \
             std::size_t num_cores_y;                                                        \
         };                                                                                  \

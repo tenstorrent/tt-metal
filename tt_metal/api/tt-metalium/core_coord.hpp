@@ -175,6 +175,8 @@ public:
     // code that uses this CoreRangeSet.
     CoreRangeSet merge_ranges() const;
 
+    // Subtract the common CoreRanges between this CoreRangeSet.
+    // A - (A n B)
     CoreRangeSet subtract(const CoreRangeSet& other) const;
 
 private:

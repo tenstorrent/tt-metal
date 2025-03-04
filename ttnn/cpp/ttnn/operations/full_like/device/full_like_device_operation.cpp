@@ -46,8 +46,10 @@ FullLikeOperation::spec_return_value_t FullLikeOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return TensorSpec(
         tensor_args.input.get_logical_shape(),
-        TensorLayout(
-            operation_attributes.dtype, PageConfig(operation_attributes.layout), operation_attributes.memory_config));
+        tt::tt_metal::TensorLayout(
+            operation_attributes.dtype,
+            tt::tt_metal::PageConfig(operation_attributes.layout),
+            operation_attributes.memory_config));
 }
 
 FullLikeOperation::tensor_return_value_t FullLikeOperation::create_output_tensors(

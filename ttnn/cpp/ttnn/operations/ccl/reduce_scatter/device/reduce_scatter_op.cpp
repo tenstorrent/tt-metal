@@ -70,11 +70,13 @@ std::vector<ttnn::TensorSpec> ReduceScatter::compute_output_specs(const std::vec
         this->ring_size);
     shape[this->scatter_dim] /= this->ring_size;
     TensorSpec spec(
-        shape, TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), output_mem_config));
+        shape,
+        tt::tt_metal::TensorLayout(
+            input_tensor.get_dtype(), tt::tt_metal::PageConfig(input_tensor.get_layout()), output_mem_config));
     return std::vector<ttnn::TensorSpec>(input_tensors.size(), spec);
 }
 
-operation::ProgramWithCallbacks ReduceScatter::create_program(
+tt::tt_metal::operation::ProgramWithCallbacks ReduceScatter::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     return ccl::reduce_scatter_detail::reduce_scatter_with_workers(
         input_tensors.at(0),
@@ -141,8 +143,8 @@ Tensor reduce_scatter(
         rank - 1,
         dim);
 
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
+    tt::tt_metal::operation::launch_op(
         [binary_op_type,
          scatter_dim,
          num_links,
@@ -156,7 +158,7 @@ Tensor reduce_scatter(
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_tensor = input_tensors.at(0);
 
-            return operation::run(
+            return tt::tt_metal::operation::run(
                 ttnn::ccl::reduce_scatter_detail::create_reduce_scatter_struct(
                     input_tensor,
                     binary_op_type,
@@ -205,9 +207,9 @@ Tensor reduce_scatter(
         rank - 1,
         dim);
 
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
+    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
 
-    operation::launch_op(
+    tt::tt_metal::operation::launch_op(
         [scatter_dim,
          binary_op_type,
          num_links,
@@ -249,7 +251,7 @@ Tensor reduce_scatter(
                                         ? std::nullopt
                                         : get_chip_id(device_index + num_devices - 1);
 
-            return operation::run(
+            return tt::tt_metal::operation::run(
                 ttnn::ReduceScatter{
                     binary_op_type,
                     scatter_dim,

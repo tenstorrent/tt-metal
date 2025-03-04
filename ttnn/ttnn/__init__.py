@@ -99,10 +99,14 @@ from ttnn._ttnn.multi_device import (
     get_device_tensors,
     aggregate_as_tensor,
     get_t3k_physical_device_ids_ring,
-    DefaultMeshCommandQueueId,
 )
 
-from ttnn._ttnn.events import create_event, record_event, wait_for_event
+from ttnn._ttnn.events import (
+    MeshEvent,
+    create_event,
+    record_event,
+    wait_for_event,
+)
 
 from ttnn._ttnn.operations.trace import (
     MeshTraceId,
@@ -170,6 +174,8 @@ from ttnn.types import (
     GrayskullComputeKernelConfig,
     MeshShape,
     MeshCoordinate,
+    MeshCoordinateRange,
+    QueueId,
     UnaryWithParam,
     UnaryOpType,
     BinaryOpType,

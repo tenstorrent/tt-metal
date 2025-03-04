@@ -430,38 +430,30 @@ void CoreRangeSet::validate_no_overlap() {
 }
 
 CoreRangeSet CoreRangeSet::subtract(const CoreRangeSet& other) const {
-    if (other.empty()) {
-        return *this;
-    }
-    if (this->empty()) {
-        return CoreRangeSet();
-    }
+    const CoreRangeSet& this_merged = this->merge_ranges();
+    const CoreRangeSet& other_merged = other.merge_ranges();
 
-    if (!this->intersects(other)) {
-        return *this;
+    // Early returns for empty sets and non-intersecting sets
+    if (other_merged.empty() || this_merged.empty() || !this_merged.intersects(other_merged)) {
+        return this_merged;
     }
 
     std::vector<CoreRange> result_ranges;
 
-    for (const auto& current_range : this->ranges_) {
+    for (const auto& current_range : this_merged.ranges_) {
         std::vector<CoreRange> current_remaining = {current_range};
 
-        for (const auto& subtract_range : other.ranges_) {
+        for (const auto& subtract_range : other_merged.ranges_) {
             std::vector<CoreRange> new_remaining;
 
             for (const auto& remaining : current_remaining) {
-                if (!remaining.intersects(subtract_range)) {
-                    new_remaining.push_back(remaining);
-                    continue;
-                }
-
                 auto intersection_opt = remaining.intersection(subtract_range);
                 if (!intersection_opt.has_value()) {
                     new_remaining.push_back(remaining);
                     continue;
                 }
 
-                CoreRange intersection = intersection_opt.value();
+                const CoreRange& intersection = intersection_opt.value();
 
                 if (remaining.start_coord.x < intersection.start_coord.x) {
                     CoreRange left{

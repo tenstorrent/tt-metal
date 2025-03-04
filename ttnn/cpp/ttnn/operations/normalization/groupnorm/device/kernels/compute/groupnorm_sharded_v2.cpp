@@ -68,24 +68,24 @@ void MAIN {
 
     // input cbs
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t cb_in = tt::CBIndex::c_29;
+    constexpr uint32_t cb_in = tt::CBIndex::c_1;
     constexpr uint32_t cb_scaler = tt::CBIndex::c_2;
     constexpr uint32_t cb_scaler_global = tt::CBIndex::c_4;
     constexpr uint32_t cb_eps = tt::CBIndex::c_3;
     constexpr uint32_t cb_gamma = tt::CBIndex::c_5;
     constexpr uint32_t cb_beta = tt::CBIndex::c_6;
-    constexpr uint32_t cb_input_mask = tt::CBIndex::c_28;
+    constexpr uint32_t cb_input_mask = tt::CBIndex::c_7;
 
     // interm cbs
-    constexpr uint32_t cb_repack = tt::CBIndex::c_26;
-    constexpr uint32_t cb_repack_out = tt::CBIndex::c_31;
-    constexpr uint32_t cb_x = tt::CBIndex::c_24;
-    constexpr uint32_t cb_xmm = tt::CBIndex::c_25;
+    constexpr uint32_t cb_repack = tt::CBIndex::c_11;
+    constexpr uint32_t cb_repack_out = tt::CBIndex::c_12;
+    constexpr uint32_t cb_x = tt::CBIndex::c_13;
+    constexpr uint32_t cb_xmm = tt::CBIndex::c_14;
     constexpr uint32_t cb_ex_partial = tt::CBIndex::c_8;
     constexpr uint32_t cb_ex = tt::CBIndex::c_9;
     constexpr uint32_t cb_ex_external = tt::CBIndex::c_10;
     constexpr uint32_t cb_ex_global = num_cores_per_mcast_group == 1 ? cb_ex_partial : tt::CBIndex::c_15;
-    constexpr uint32_t cb_ex2pe = tt::CBIndex::c_27;
+    constexpr uint32_t cb_ex2pe = tt::CBIndex::c_17;
 
     // interm cbs reuse
     constexpr uint32_t cb_fusion = cb_xmm;

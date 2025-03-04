@@ -16,8 +16,6 @@
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-using namespace tt::tt_metal;
-
 namespace ttnn::operations::experimental::auto_format {
 
 Tensor AutoFormat::move_tensor_to_device(const Tensor& input, IDevice* device, const MemoryConfig& mem_config) {
@@ -69,7 +67,7 @@ Tensor AutoFormat::format_input_tensor(
         return AutoFormat::move_tensor_to_device(input, device);
     }
 
-    MemoryConfig mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
+    MemoryConfig mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
     if (target_mem_config.has_value()) {
         mem_config = target_mem_config.value();
     } else if (input.storage_type() == StorageType::DEVICE) {
@@ -157,7 +155,7 @@ Tensor AutoFormat::format_output_tensor(
     if (!unpad_output && !convert_layout) {
         return output;
     }
-    MemoryConfig mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
+    MemoryConfig mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
     if (target_mem_config.has_value()) {
         mem_config = target_mem_config.value();
     } else if (output.storage_type() == StorageType::DEVICE) {

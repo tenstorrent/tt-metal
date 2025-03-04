@@ -17,6 +17,7 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
                 src/brisc.cc
                 src/brisck.cc
                 src/erisc.cc
+                src/erisc-crt0.cc
                 src/erisck.cc
                 src/idle_erisc.cc
                 src/idle_erisck.cc

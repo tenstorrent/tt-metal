@@ -14,6 +14,8 @@
 
 #include "tt_cluster.hpp"
 
+#include "work_executor.hpp"
+
 // Because we are a Friend of Program, accessing Program::get_program_transfer_info() and Program::get_kernels_buffer()
 // MUST REMOVE
 #include <program_impl.hpp>
@@ -295,7 +297,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     }
 #endif
     auto sub_device_id = sub_device_ids[0];
-    auto sub_device_index = sub_device_id.to_index();
+    auto sub_device_index = *sub_device_id;
 
     // Snapshot of expected workers from previous programs, used for dispatch_wait cmd generation.
     uint32_t expected_workers_completed = this->manager.get_bypass_mode()
@@ -323,8 +325,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         }
     }
 
-    auto& worker_launch_message_buffer_state =
-        this->manager.get_worker_launch_message_buffer_state()[sub_device_id.to_index()];
+    auto& worker_launch_message_buffer_state = this->manager.get_worker_launch_message_buffer_state()[*sub_device_id];
     auto command = EnqueueProgramCommand(
         this->id_,
         this->device_,
@@ -381,7 +382,7 @@ void HWCommandQueue::enqueue_record_event(
     event->cq_id = this->id_;
     event->event_id = this->manager.get_next_event(this->id_);
     event->device = this->device_;
-    event->ready = true;  // what does this mean???
+    event->ready = true;
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
     event_dispatch::issue_record_event_commands(
@@ -558,7 +559,7 @@ void HWCommandQueue::record_end() {
     // separately
     this->trace_ctx->sub_device_ids.reserve(this->trace_ctx->descriptors.size());
     for (const auto& [id, _] : this->trace_ctx->descriptors) {
-        auto index = id.to_index();
+        auto index = *id;
         this->trace_ctx->sub_device_ids.push_back(id);
     }
     this->tid_ = std::nullopt;

@@ -90,12 +90,12 @@ def test_device_perf_wh_bare_metal(
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len, model_config_str, samples",
     (
-        ("prefill", 1, 128, 0, "BFLOAT16-DRAM", 2060),
-        ("prefill", 1, 1024, 0, "BFLOAT16-DRAM", 2890),
-        ("prefill", 1, 2048, 0, "BFLOAT16-DRAM", 2680),
-        ("decode", 32, 1, 128, "BFLOAT16-L1_SHARDED", 625),
-        ("decode", 32, 1, 1024, "BFLOAT16-L1_SHARDED", 568),
-        ("decode", 32, 1, 2047, "BFLOAT16-L1_SHARDED", 550),
+        ("prefill", 1, 128, 0, "BFLOAT16-DRAM", 2068),
+        ("prefill", 1, 1024, 0, "BFLOAT16-DRAM", 2895),
+        ("prefill", 1, 2048, 0, "BFLOAT16-DRAM", 2684),
+        ("decode", 32, 1, 128, "BFLOAT16-L1_SHARDED", 629),
+        ("decode", 32, 1, 1024, "BFLOAT16-L1_SHARDED", 572),
+        ("decode", 32, 1, 2047, "BFLOAT16-L1_SHARDED", 553),
     ),
 )
 @skip_for_grayskull()

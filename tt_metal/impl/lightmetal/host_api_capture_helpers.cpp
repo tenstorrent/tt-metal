@@ -120,8 +120,7 @@ void CaptureBufferCreate(
     // and one without, so commonize via single capture function and schema and treat it as optional.
     auto address_offset = address.has_value() ? flatbuffer::CreateUint32Optional(fbb, address.value()) : 0;
     auto bottom_up_offset = bottom_up.has_value() ? flatbuffer::CreateBoolOptional(fbb, bottom_up.value()) : 0;
-    auto sub_device_id_offset =
-        sub_device_id.has_value() ? flatbuffer::CreateUint8Optional(fbb, sub_device_id.value().id) : 0;
+    auto sub_device_id_offset = sub_device_id.has_value() ? flatbuffer::CreateUint8Optional(fbb, **sub_device_id) : 0;
     auto shard_parameters_offset = to_flatbuffer(shard_parameters, fbb);
 
     auto cmd = tt::tt_metal::flatbuffer::CreateBufferCreateCommand(
