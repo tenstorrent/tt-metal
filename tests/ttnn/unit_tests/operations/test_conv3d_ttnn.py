@@ -3,9 +3,11 @@ import torch
 import pytest
 import ttnn
 import torch.nn as nn
-from models.experimental.mochi.common import compute_metrics
+from tests.ttnn.utils_for_testing import check_with_pcc
 
-from models.experimental.mochi.tests.vae.test_vol2col import _out_size, torch_vol2col
+
+def _out_size(in_size, pad, k):
+    return in_size + 2 * pad - (k - 1)
 
 
 def prepare_input_tensor(input_tensor, C, device, ALIGNMENT=16):
@@ -167,14 +169,9 @@ def run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padd
     print(f"tt output shape = {tt_output.shape}")
     assert tt_output.shape == gt_output.shape
 
-    pcc, mse, mae = compute_metrics(gt_output, tt_output)
-    logger.info(f"Compare conv3d torch vs ttnn: PCC = {pcc}, MSE = {mse}, MAE = {mae}")
-    min_pcc = 0.999
-    if not pcc > min_pcc:
-        import pdb
-
-        pdb.set_trace()
-    assert pcc > min_pcc, f"PCC = {pcc}, MSE = {mse}, MAE = {mae}"
+    pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.999)
+    logger.info(f"Compare conv3d torch vs ttnn: {pcc_message}")
+    assert pcc_passed, pcc_message
 
 
 def run_conv3d_sweep_blocks_test(
@@ -234,14 +231,9 @@ def run_conv3d_sweep_blocks_test(
                         tt_output = reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device)
 
                         assert tt_output.shape == gt_output.shape
-                        pcc, mse, mae = compute_metrics(gt_output, tt_output)
-                        min_pcc = 0.999
-                        if not pcc > min_pcc:
-                            import pdb
-
-                            pdb.set_trace()
-                        assert pcc > min_pcc, (
-                            f"PCC = {pcc}, MSE = {mse}, MAE = {mae} on "
+                        pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.999)
+                        assert pcc_passed, (
+                            f"{pcc_message} on "
                             f"C_out_block={C_out_block}, T_out_block={T_out_block}, "
                             f"W_out_block={W_out_block}, H_out_block={H_out_block}, "
                             f"C_in_block={C_in_block}"
@@ -344,9 +336,13 @@ def test_conv3d_sweep_blocks(
         tt_output = reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device)
 
         assert tt_output.shape == gt_output.shape
-        pcc, mse, mae = compute_metrics(gt_output, tt_output)
-        min_pcc = 0.99
-        assert pcc > min_pcc, f"PCC={pcc}, MSE={mse}, MAE={mae}"
+        pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.99)
+        assert pcc_passed, (
+            f"{pcc_message} on "
+            f"C_out_block={C_out_block}, T_out_block={T_out_block}, "
+            f"W_out_block={W_out_block}, H_out_block={H_out_block}, "
+            f"C_in_block={C_in_block}"
+        )
 
 
 @pytest.mark.parametrize(
@@ -495,10 +491,9 @@ def test_conv3d_mochi_shapes(
     tt_output = reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device)
 
     assert tt_output.shape == gt_output.shape
-    pcc, mse, mae = compute_metrics(gt_output, tt_output)
-    logger.info(f"PCC={pcc}, MSE={mse}, MAE={mae}")
-    min_pcc = 0.999
-    assert pcc > min_pcc, f"PCC={pcc}, MSE={mse}, MAE={mae}"
+    pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.999)
+    logger.info(f"{pcc_message}")
+    assert pcc_passed, pcc_message
 
 
 @pytest.mark.parametrize(
@@ -566,6 +561,5 @@ def test_conv3d_mochi_shapes_sweep_blocks(
         tt_output = reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device)
 
         assert tt_output.shape == gt_output.shape
-        pcc, mse, mae = compute_metrics(gt_output, tt_output)
-        min_pcc = 0.99
-        assert pcc > min_pcc, f"PCC={pcc}, MSE={mse}, MAE={mae}"
+        pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.99)
+        assert pcc_passed, pcc_message
