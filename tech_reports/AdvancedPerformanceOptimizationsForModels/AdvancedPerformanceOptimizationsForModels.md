@@ -170,7 +170,7 @@ In order to use multiple command queues, we need to be familiar with the followi
   This is a parameter to the device creation api, and sets how many command queues to create the device with. The default is one, and the max is two. In pytest, we can pass this using the `device_params` fixture:
 
   `@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 800768, "num_command_queues": 2}], indirect=True)`
-* `ttnn.record_event(device, cq_id = 0)`
+* `event = ttnn.record_event(device, cq_id = 0)`
 
   This will record the event on the device after all current commands on the specified command queue are finished. This event will be visible to all command queue
 * `ttnn.wait_for_event(cq_id = 0, event = event)`
@@ -255,6 +255,8 @@ This way CQ1 will always have started/finished writing the next input and allows
 # `write_event` signals when input write is completed. This is used to signal that the input tensor can be read/consumed
 
 # `last_op_event` signals when the last operation is completed. This is the producer of the otuput tensor so once this is completed, we can issue the next read
+
+# `read_event` signals when output read is completed. This is used to signal that the output tensor can be overwritten
 
 # Allocate our persistent input tensor
 input_dram_tensor = ttnn.allocate_tensor_on_device(input_shape, input_dtype, input_layout, device, input_sharded_dram_mem_config)
