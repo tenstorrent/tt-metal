@@ -211,7 +211,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libtbb-dev \
     libcapstone-dev \
     libgtest-dev \
-    uuid-runtime \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 ENV CCACHE_TEMPDIR=/tmp/ccache
@@ -236,6 +235,11 @@ RUN python3 -m pip config set global.extra-index-url https://download.pytorch.or
     python3 -m pip install setuptools wheel && \
     python3 -m pip install -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
     python3 -m pip install -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt
+
+# Install test-infra specific apt requirements
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    uuid-runtime \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 #############################################################
 
