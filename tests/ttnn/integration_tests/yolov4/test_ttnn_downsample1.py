@@ -7,7 +7,7 @@ import torch
 from models.utility_functions import skip_for_grayskull
 from models.demos.yolov4.reference.downsample1 import DownSample1
 from models.demos.yolov4.ttnn.downsample1 import Down1
-from models.demos.yolov4.ttnn.model_preprocessing import create_yolov4_input_tensors, create_yolov4_model_parameters
+from models.demos.yolov4.ttnn.model_preprocessing import create_yolov4_input_tensors, create_ds1_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
 import pytest
 import time
@@ -42,7 +42,7 @@ def test_down1(device, reset_seeds, model_location_generator):
     torch_model.eval()
     ref = torch_model(torch_input)
 
-    parameters = create_yolov4_model_parameters(torch_model, torch_input, device)
+    parameters = create_ds1_model_parameters(torch_model, torch_input, device)
 
     ttnn_model = Down1(device, parameters)
 
@@ -55,8 +55,8 @@ def test_down1(device, reset_seeds, model_location_generator):
     for x in range(100):
         result_ttnn = ttnn_model(ttnn_input)
     logger.info(f"Time taken: {time.time() - start_time}")
-    result = ttnn.to_torch(result_ttnn)
 
+    result = ttnn.to_torch(result_ttnn)
     result = result.permute(0, 3, 1, 2)
     result = result.reshape(ref.shape)
     assert_with_pcc(result, ref, 1.00)
