@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,21 +20,21 @@ namespace ckernel {
  */
 ALWI void round_tile_init() { MATH((llk_math_eltwise_unary_sfpu_round_init<APPROX>())); }
 
+// clang-format off
 /**
- * Performs round operation on each row of a tile.
+ * Performs element-wise computation of the round operation on each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
  * acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
  *
- * | Argument        | Description                                                                | Type     | Valid
- * Range                                           | Required |
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to modify the sign bit of     | uint32_t | Must be
- * less than the size of the DST register buffer | True     | | decimals        | The number of decimal places to round
- * to.                                  | int32_t  |                                                       | True     |
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | decimals        | The number of decimal places to round to.                                  | uint32_t |                                                       | True     |
  */
+// clang-format on
 ALWI void round_tile(uint32_t idst, int32_t decimals) {
     MATH((llk_math_eltwise_unary_sfpu_round<APPROX>(idst, decimals)));
 }
