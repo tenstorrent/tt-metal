@@ -23,7 +23,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_reduce_scatter_TG_nightly import 
 from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
     run_all_reduce_impl,
 )
-from models.perf.benchmarking_utils import BenchmarkProfiler
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf_detailed
 
 
@@ -236,6 +236,10 @@ def test_ag_tg_llama_perf(
     warmup_iters,
     perf_target_us,
 ):
+    profiler = BenchmarkProfiler()
+    benchmark_data = BenchmarkData()
+    step_name = f"all_gather_{ag_type}"
+
     subdir = "llama_ccl_perf"
     command = (
         f"pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py::test_all_gather_tg_llama -k {ag_type}"
@@ -244,12 +248,32 @@ def test_ag_tg_llama_perf(
     op_name = "AllGatherAsync"
     warmup_iters = warmup_iters * 32  # 5 iterations per device
 
+    profiler.start("run")
+    profiler.start(step_name)
     results = run_device_perf_detailed(command, subdir, cols, op_name, has_signposts=True, warmup_iters=warmup_iters)
+    profiler.end(step_name)
+    profiler.end("run")
 
-    perf_measured_us = results[cols[0]]["AVG"] / 1000
-    logger.info(f"Measured performance: {perf_measured_us:.3f} us vs. target: {perf_target_us} us")
+    # Get the measured performance
+    measured_min_us = results[cols[0]]["MIN"] / 1000
+    measured_max_us = results[cols[0]]["MAX"] / 1000
+    measured_avg_us = results[cols[0]]["AVG"] / 1000
+    measured_std_us = results[cols[0]]["STD"] / 1000
 
-    assert perf_measured_us < perf_target_us, f"Performance target not met: {perf_measured_us} us > {perf_target_us} us"
+    logger.info(f"Measured performance: {measured_avg_us:.3f} us vs. target: {perf_target_us} us")
+
+    # Save the measurement
+    benchmark_data.add_measurement(profiler, 0, step_name, f"all_gather-{ag_type}-min-us", measured_min_us)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"all_gather-{ag_type}-max-us", measured_max_us)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"all_gather-{ag_type}-avg-us", measured_avg_us)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"all_gather-{ag_type}-std-us", measured_std_us)
+    benchmark_data.save_partial_run_json(
+        profiler,
+        run_type=f"all_gather",
+        ml_model_name="llama70b-tg-ccl",
+    )
+
+    assert measured_avg_us < perf_target_us, f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
@@ -340,6 +364,10 @@ def test_ar_tg_llama_perf(
     warmup_iters,
     perf_target_us,
 ):
+    profiler = BenchmarkProfiler()
+    benchmark_data = BenchmarkData()
+    step_name = f"all_reduce_{ar_type}"
+
     subdir = "llama_ccl_perf"
     command = (
         f"pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py::test_all_reduce_tg_llama -k {ar_type}"
@@ -348,9 +376,29 @@ def test_ar_tg_llama_perf(
     op_name = "AllReduceAsync"
     warmup_iters = warmup_iters * 32  # 5 iterations per device
 
+    profiler.start("run")
+    profiler.start(step_name)
     results = run_device_perf_detailed(command, subdir, cols, op_name, has_signposts=True, warmup_iters=warmup_iters)
+    profiler.end(step_name)
+    profiler.end("run")
 
-    perf_measured_us = results[cols[0]]["AVG"] / 1000
-    logger.info(f"Measured performance: {perf_measured_us:.3f} us vs. target: {perf_target_us} us")
+    # Get the measured performance
+    measured_min_us = results[cols[0]]["MIN"] / 1000
+    measured_max_us = results[cols[0]]["MAX"] / 1000
+    measured_avg_us = results[cols[0]]["AVG"] / 1000
+    measured_std_us = results[cols[0]]["STD"] / 1000
 
-    assert perf_measured_us < perf_target_us, f"Performance target not met: {perf_measured_us} us > {perf_target_us} us"
+    logger.info(f"Measured performance: {measured_avg_us:.3f} us vs. target: {perf_target_us} us")
+
+    # Save the measurement
+    benchmark_data.add_measurement(profiler, 0, step_name, f"all_reduce-{ar_type}-min-us", measured_min_us)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"all_reduce-{ar_type}-max-us", measured_max_us)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"all_reduce-{ar_type}-avg-us", measured_avg_us)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"all_reduce-{ar_type}-std-us", measured_std_us)
+    benchmark_data.save_partial_run_json(
+        profiler,
+        run_type=f"all_reduce",
+        ml_model_name="llama70b-tg-ccl",
+    )
+
+    assert measured_avg_us < perf_target_us, f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
