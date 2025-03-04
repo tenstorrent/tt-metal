@@ -13,8 +13,6 @@ The current version is known to support the following Llama3 models:
 - QwQ-32B
 - DeepSeek R1 Distill Llama 3.3 70B (T3000 and TG-only)
 
-**Max Context Lengths (text models)**: All of the compatible model/device combinations support a max prefill context-length of 128k, with the exception of Llama3.1-8B and Llama3.2-11B on N150 which have a max of 64k (due to a lack of memory). To support these large max context-lengths, chunked prefill is performed with different max chunk sizes as shown in the table below.
-
 Qwen-7B requires N300
 Qwen-72B requires T3K
 
