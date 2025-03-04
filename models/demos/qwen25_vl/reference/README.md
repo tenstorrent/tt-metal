@@ -20,7 +20,7 @@ The conversion process follows these steps:
 2. **Recording**: Running `record.py` to generate test data from model execution
 3. **State Dict Conversion**: Using `convert.py` to transform flat state dicts to nested dictionaries
 4. **Functional Reimplementation**: Creating clean functional implementations in `functional.py`
-5. **Testing**: Using `test.py` to validate functional implementations against recorded data
+5. **Testing**: Using `test_functional.py` to validate functional implementations against recorded data
 
 ## Instrumentation (instrument.py)
 
@@ -160,12 +160,12 @@ vision_weights = torch.load(weights_path, weights_only=False)
 block_weights = vision_weights['blocks']['0']
 ```
 
-## Testing (test.py)
+## Testing (test_functional.py)
 
-`test.py` validates the functional implementations against the recorded data:
+`test_functional.py` validates the functional implementations against the recorded data:
 
 ```python
-python test.py
+pytest test_functional.py
 ```
 
 For each module:
@@ -185,7 +185,7 @@ To convert and test a new module:
 2. Run `record.py` to generate test data
 3. Run `convert.py` to create the nested weights structure
 4. Implement the functional version in `functional.py`
-5. Add a test case in `test.py`
+5. Add a test case in `test_functional.py`
 6. Run the test to validate the implementation
 
 ## Vision Transformer Specifics
