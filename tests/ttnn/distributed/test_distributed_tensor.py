@@ -23,7 +23,10 @@ def test_direct_replicate_to_tensor_mesh(mesh_device, dtype):
 
     mapper = ttnn.CppReplicateTensorToMesh(mesh_device)
 
-    torch_tensor = torch.randn(1, 1, 32, 256)
+    if dtype == ttnn.uint16:
+        torch_tensor = torch.randint(0, 65535, (1, 1, 32, 256))
+    else:
+        torch_tensor = torch.randn(1, 1, 32, 256)
     replicated_tensors = ttnn.from_torch(
         torch_tensor,
         dtype=dtype,
@@ -33,6 +36,12 @@ def test_direct_replicate_to_tensor_mesh(mesh_device, dtype):
     )
 
     out_tensors = ttnn.get_device_tensors(replicated_tensors)
+
+    # out_pass1, out_pcc1 = comp_pcc(torch_tensor, ttnn.to_torch(ttnn.from_torch(torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT,mesh_device=mesh_device)), pcc=0.99)
+    # print("test")
+    # print(out_pass1)
+    # print(out_pcc1)
+    # assert out_pass1
 
     out_pass, out_pcc = comp_pcc(torch_tensor, ttnn.to_torch(out_tensors[0]), pcc=0.99)
     logger.info(f"PCC value: {out_pcc}")
@@ -45,7 +54,10 @@ def test_direct_shard_to_tensor_mesh(mesh_device, dtype):
 
     mapper = ttnn.CppShardTensorToMesh(mesh_device, dim=3)
 
-    torch_tensor = torch.randn(1, 1, 32, 256)
+    if dtype == ttnn.uint16:
+        torch_tensor = torch.randint(0, 65535, (1, 1, 32, 256))
+    else:
+        torch_tensor = torch.randn(1, 1, 32, 256)
     sharded_tensor = ttnn.from_torch(
         torch_tensor,
         dtype=dtype,
@@ -70,7 +82,11 @@ def test_direct_shard_to_tensor_mesh(mesh_device, dtype):
 def test_direct_shard2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device):
     torch.manual_seed(1234)
 
-    torch_tensor = torch.randn(1, 1, M, K)
+    if dtype == ttnn.uint16:
+        torch_tensor = torch.randint(0, 65535, (1, 1, M, K))
+    else:
+        torch_tensor = torch.randn(1, 1, M, K)
+
     core_grid = ttnn.CoreGrid(y=1, x=8)
 
     # If K < N it's FF1-like test case, else FF2-like test case
@@ -109,7 +125,10 @@ def test_direct_concat_to_tensor_mesh(mesh_device, dtype):
 
     mapper = ttnn.CppShardTensorToMesh(mesh_device, dim=3)
 
-    torch_tensor = torch.randn(1, 1, 32, 256)
+    if dtype == ttnn.uint16:
+        torch_tensor = torch.randint(0, 65535, (1, 1, 32, 256))
+    else:
+        torch_tensor = torch.randn(1, 1, 32, 256)
     sharded_tensor = ttnn.from_torch(
         torch_tensor,
         dtype=dtype,
@@ -118,15 +137,12 @@ def test_direct_concat_to_tensor_mesh(mesh_device, dtype):
         device=mesh_device,
     )
 
-    composer = ttnn.CppConcatMeshToTensor(mesh_device, dim=3)
+    composer = ttnn.CppConcatMeshToTensor(dim=3)
 
     concat_tensor = ttnn.to_torch(sharded_tensor, mesh_composer=composer)
 
     out_pass, out_pcc = comp_pcc(torch_tensor, concat_tensor, pcc=0.99)
     logger.info(f"PCC value: {out_pcc}")
-    print("attempt")
-    print(torch_tensor)
-    print(concat_tensor)
     assert out_pass
 
 
@@ -141,7 +157,11 @@ def test_direct_concat_to_tensor_mesh(mesh_device, dtype):
 def test_direct_concat2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device):
     torch.manual_seed(1234)
 
-    torch_tensor = torch.randn(1, 1, M, K)
+    if dtype == ttnn.uint16:
+        torch_tensor = torch.randint(0, 65535, (1, 1, M, K))
+    else:
+        torch_tensor = torch.randn(1, 1, M, K)
+
     core_grid = ttnn.CoreGrid(y=1, x=8)
 
     # If K < N it's FF1-like test case, else FF2-like test case
@@ -170,7 +190,7 @@ def test_direct_concat2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device)
         device=mesh_device,
     )
 
-    composer = ttnn.CppConcat2dMeshToTensor(mesh_device, mesh_shape, dim=concat_dim)
+    composer = ttnn.CppConcat2dMeshToTensor(mesh_device, dims=concat_dim)
 
     concat_tensor = ttnn.to_torch(sharded_tensor, mesh_composer=composer)
 
@@ -190,7 +210,10 @@ def test_direct_concat2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device)
 def test_replicate_to_tensor_mesh(mesh_device, dtype):
     torch.manual_seed(1234)
 
-    torch_tensor = torch.randn(1, 1, 32, 256)
+    if dtype == ttnn.uint16:
+        torch_tensor = torch.randint(0, 65535, (1, 1, 32, 256))
+    else:
+        torch_tensor = torch.randn(1, 1, 32, 256)
     to_repl = ttnn.from_torch(
         torch_tensor,
         dtype=dtype,
@@ -211,7 +234,10 @@ def test_replicate_to_tensor_mesh(mesh_device, dtype):
 def test_shard_to_tensor_mesh(mesh_device, dtype):
     torch.manual_seed(1234)
 
-    torch_tensor = torch.randn(1, 1, 32, 256)
+    if dtype == ttnn.uint16:
+        torch_tensor = torch.randint(0, 65535, (1, 1, 32, 256))
+    else:
+        torch_tensor = torch.randn(1, 1, 32, 256)
     to_shard = ttnn.from_torch(
         torch_tensor,
         dtype=dtype,
@@ -234,7 +260,10 @@ def test_shard_to_tensor_mesh(mesh_device, dtype):
 def test_concat_to_tensor(mesh_device, dtype):
     torch.manual_seed(1234)
 
-    torch_tensor = torch.randn(1, 1, 32, 256)
+    if dtype == ttnn.uint16:
+        torch_tensor = torch.randint(0, 65535, (1, 1, 32, 256))
+    else:
+        torch_tensor = torch.randn(1, 1, 32, 256)
     to_shard = ttnn.from_torch(
         torch_tensor,
         dtype=dtype,
@@ -257,7 +286,10 @@ def test_concat_to_tensor(mesh_device, dtype):
 def test_concat_slice_to_tensor(mesh_device, dtype):
     torch.manual_seed(1234)
 
-    torch_tensor = torch.randn(1, 1, 32, 256)
+    if dtype == ttnn.uint16:
+        torch_tensor = torch.randint(0, 65535, (1, 1, 32, 256))
+    else:
+        torch_tensor = torch.randn(1, 1, 32, 256)
     to_shard = ttnn.from_torch(
         torch_tensor,
         dtype=dtype,
@@ -291,7 +323,10 @@ def test_concat_slice_to_tensor(mesh_device, dtype):
 def test_shard2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device):
     torch.manual_seed(1234)
 
-    torch_tensor = torch.randn(1, 1, M, K)
+    if dtype == ttnn.uint16:
+        torch_tensor = torch.randint(0, 65535, (1, 1, M, K))
+    else:
+        torch_tensor = torch.randn(1, 1, M, K)
     core_grid = ttnn.CoreGrid(y=1, x=8)
 
     # If K < N it's FF1-like test case, else FF2-like test case
@@ -338,7 +373,10 @@ def test_shard2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device):
 def test_concat2d_to_tensor(M, K, N, dtype, mesh_shape, mesh_device):
     torch.manual_seed(1234)
 
-    torch_tensor = torch.randn(1, 1, M, K)
+    if dtype == ttnn.uint16:
+        torch_tensor = torch.randint(0, 65535, (1, 1, M, K))
+    else:
+        torch_tensor = torch.randn(1, 1, M, K)
     core_grid = ttnn.CoreGrid(y=1, x=8)
 
     # If K < N it's FF1-like test case, else FF2-like test case
@@ -370,6 +408,6 @@ def test_concat2d_to_tensor(M, K, N, dtype, mesh_shape, mesh_device):
 
     out_tensor = ttnn.aggregate_tensor(ttnn.distribute_tensor(to_shard, mapper, mesh_device), composer)
 
-    out_pass, out_pcc = comp_pcc(torch_tensor, tnn.to_torch(out_tensor), pcc=0.99)
+    out_pass, out_pcc = comp_pcc(torch_tensor, ttnn.to_torch(out_tensor), pcc=0.99)
     logger.info(f"PCC value: {out_pcc}")
     assert out_pass
