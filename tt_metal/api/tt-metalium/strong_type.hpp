@@ -4,8 +4,9 @@
 
 #pragma once
 
-#include <utility>
 #include <ostream>
+#include <tuple>
+#include <utility>
 
 namespace tt::stl {
 
@@ -55,7 +56,9 @@ namespace tt::stl {
 template <typename T, typename Tag>
 class StrongType {
 public:
-    explicit StrongType(T v) : value_(std::move(v)) {}
+    using value_type = T;
+
+    constexpr explicit StrongType(T v) : value_(std::move(v)) {}
 
     StrongType(const StrongType&) = default;
     StrongType(StrongType&&) = default;
@@ -65,6 +68,9 @@ public:
     const T& operator*() const { return value_; }
 
     auto operator<=>(const StrongType&) const = default;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("value");
+    auto attribute_values() const { return std::forward_as_tuple(value_); }
 
 private:
     T value_;

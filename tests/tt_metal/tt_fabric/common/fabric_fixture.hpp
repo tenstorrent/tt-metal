@@ -34,16 +34,16 @@ class ControlPlaneFixture : public ::testing::Test {
 class FabricFixture : public ::testing::Test {
 protected:
     tt::ARCH arch_;
-    std::map<chip_id_t, IDevice*> devices_map_;
-    std::vector<IDevice*> devices_;
+    std::map<chip_id_t, tt::tt_metal::IDevice*> devices_map_;
+    std::vector<tt::tt_metal::IDevice*> devices_;
     bool slow_dispatch_;
 
     void SetUp() override {
         slow_dispatch_ = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (!slow_dispatch_) {
-            tt::log_info(
-                tt::LogTest, "Fabric test suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
-            GTEST_SKIP();
+        if (slow_dispatch_) {
+            tt::log_info(tt::LogTest, "Running fabric api tests with slow dispatch");
+        } else {
+            tt::log_info(tt::LogTest, "Running fabric api tests with fast dispatch");
         }
         // Set up all available devices
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
@@ -52,10 +52,28 @@ protected:
         for (unsigned int id = 0; id < num_devices; id++) {
             ids.push_back(id);
         }
-        tt::tt_metal::detail::InitializeFabricSetting(tt::tt_metal::detail::FabricSetting::FABRIC);
+        tt::tt_metal::detail::InitializeFabricConfig(tt::FabricConfig::FABRIC_2D);
         devices_map_ = tt::tt_metal::detail::CreateDevices(ids);
         for (auto& [id, device] : devices_map_) {
             devices_.push_back(device);
+        }
+    }
+    void RunProgramNonblocking(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program) {
+        if (this->slow_dispatch_) {
+            tt::tt_metal::detail::LaunchProgram(device, program, false);
+        } else {
+            tt::tt_metal::CommandQueue& cq = device->command_queue();
+            tt::tt_metal::EnqueueProgram(cq, program, false);
+        }
+    }
+    void WaitForSingleProgramDone(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program) {
+        if (this->slow_dispatch_) {
+            // Wait for the program to finish
+            tt::tt_metal::detail::WaitProgramDone(device, program);
+        } else {
+            // Wait for all programs on cq to finish
+            tt::tt_metal::CommandQueue& cq = device->command_queue();
+            tt::tt_metal::Finish(cq);
         }
     }
 

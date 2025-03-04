@@ -6,8 +6,6 @@
 
 #include "device/rotary_embedding_llama_device_operation.hpp"
 
-using namespace tt::tt_metal;
-
 namespace ttnn::operations::experimental::transformer {
 
 Tensor RotaryEmbeddingLlamaOperation::invoke(
@@ -19,8 +17,8 @@ Tensor RotaryEmbeddingLlamaOperation::invoke(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     std::vector<Tensor> output_tensors = {
-        Tensor(operation::get_workers_for_op_output({input_tensor, cos_cache, sin_cache, trans_mat}))};
-    operation::launch_op(
+        Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor, cos_cache, sin_cache, trans_mat}))};
+    tt::tt_metal::operation::launch_op(
         [is_decode_mode, memory_config, compute_kernel_config](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -33,13 +31,14 @@ Tensor RotaryEmbeddingLlamaOperation::invoke(
             auto kernel_config_val =
                 init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
 
-            tt::tt_metal::MemoryConfig default_memory_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
+            tt::tt_metal::MemoryConfig default_memory_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
             if (input_tensor.storage_type() == StorageType::DEVICE) {
                 default_memory_config = input_tensor.memory_config();
             }
 
-            return operation::run(
-                RotaryEmbeddingLlama{is_decode_mode, memory_config.value_or(default_memory_config), kernel_config_val},
+            return tt::tt_metal::operation::run(
+                tt::tt_metal::RotaryEmbeddingLlama{
+                    is_decode_mode, memory_config.value_or(default_memory_config), kernel_config_val},
                 input_tensors);
         },
         {input_tensor, cos_cache, sin_cache, trans_mat},

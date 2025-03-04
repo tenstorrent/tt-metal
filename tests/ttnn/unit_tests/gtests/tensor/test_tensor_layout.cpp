@@ -15,7 +15,6 @@
 #include "common_tensor_test_utils.hpp"
 
 using namespace ttnn;
-using namespace tt::tt_metal;
 
 namespace {
 const MemoryConfig DefaultMemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt};
@@ -27,9 +26,9 @@ struct Inputs {
 };
 
 struct Expected {
-    Shape2D physical_size;
-    Alignment alignment;
-    Strides strides;
+    tt::tt_metal::Shape2D physical_size;
+    tt::tt_metal::Alignment alignment;
+    tt::tt_metal::Strides strides;
     bool tensor_creation_works = true;
 };
 
@@ -63,55 +62,64 @@ INSTANTIATE_TEST_SUITE_P(
             Inputs{.shape = ttnn::Shape{5, 4, 3, 2}, .data_type = DataType::BFLOAT16, .layout = Layout::TILE},
             Expected{
                 .physical_size = {5 * 4 * 32, 32},
-                .alignment = Alignment({32, 32}),
-                .strides = Strides({32 * 3 * 4, 32 * 3, 32, 1})}},
+                .alignment = tt::tt_metal::Alignment({32, 32}),
+                .strides = tt::tt_metal::Strides({32 * 3 * 4, 32 * 3, 32, 1})}},
 
         // Row Major, bfloat16, requires padding to 2
         TensorLayoutTestParams{
             Inputs{.shape = ttnn::Shape{6, 5, 4, 3}, .data_type = DataType::BFLOAT16, .layout = Layout::ROW_MAJOR},
             Expected{
                 .physical_size = {6 * 5 * 4, 3},
-                .alignment = Alignment({1}),
-                .strides = Strides({5 * 4 * 3, 4 * 3, 3, 1})}},
+                .alignment = tt::tt_metal::Alignment({1}),
+                .strides = tt::tt_metal::Strides({5 * 4 * 3, 4 * 3, 3, 1})}},
 
         // Row Major, uint32
         TensorLayoutTestParams{
             Inputs{.shape = ttnn::Shape{6, 5, 4, 3}, .data_type = DataType::UINT32, .layout = Layout::ROW_MAJOR},
             Expected{
                 .physical_size = {6 * 5 * 4, 3},
-                .alignment = Alignment({1}),
-                .strides = Strides({5 * 4 * 3, 4 * 3, 3, 1})}},
+                .alignment = tt::tt_metal::Alignment({1}),
+                .strides = tt::tt_metal::Strides({5 * 4 * 3, 4 * 3, 3, 1})}},
 
         // Row Major, bfloat16, requires padding to 2, aligned
         TensorLayoutTestParams{
             Inputs{.shape = ttnn::Shape{6, 5, 4, 8}, .data_type = DataType::BFLOAT16, .layout = Layout::ROW_MAJOR},
             Expected{
                 .physical_size = {6 * 5 * 4, 8},
-                .alignment = Alignment({1}),
-                .strides = Strides({5 * 4 * 8, 4 * 8, 8, 1})}},
+                .alignment = tt::tt_metal::Alignment({1}),
+                .strides = tt::tt_metal::Strides({5 * 4 * 8, 4 * 8, 8, 1})}},
 
         // Tile, 1 element
         TensorLayoutTestParams{
             Inputs{.shape = ttnn::Shape{1, 1, 1, 1}, .data_type = DataType::BFLOAT16, .layout = Layout::TILE},
-            Expected{.physical_size = {32, 32}, .alignment = Alignment({32, 32}), .strides = Strides({32, 32, 32, 1})}},
+            Expected{
+                .physical_size = {32, 32},
+                .alignment = tt::tt_metal::Alignment({32, 32}),
+                .strides = tt::tt_metal::Strides({32, 32, 32, 1})}},
 
         // Row Major, 1 element
         TensorLayoutTestParams{
             Inputs{.shape = ttnn::Shape{1, 1, 1, 1}, .data_type = DataType::BFLOAT16, .layout = Layout::ROW_MAJOR},
-            Expected{.physical_size = {1, 1}, .alignment = Alignment({1}), .strides = Strides({1, 1, 1, 1})}},
+            Expected{
+                .physical_size = {1, 1},
+                .alignment = tt::tt_metal::Alignment({1}),
+                .strides = tt::tt_metal::Strides({1, 1, 1, 1})}},
 
         // Row Major, uint32_t 1 element
         TensorLayoutTestParams{
             Inputs{.shape = ttnn::Shape{1, 1, 1, 1}, .data_type = DataType::UINT32, .layout = Layout::ROW_MAJOR},
-            Expected{.physical_size = {1, 1}, .alignment = Alignment({1}), .strides = Strides({1, 1, 1, 1})}},
+            Expected{
+                .physical_size = {1, 1},
+                .alignment = tt::tt_metal::Alignment({1}),
+                .strides = tt::tt_metal::Strides({1, 1, 1, 1})}},
 
         // Rank 0, RM, in bfloat16 needs additional padding to 4 bytes
         TensorLayoutTestParams{
             Inputs{.shape = ttnn::Shape{}, .data_type = DataType::BFLOAT16, .layout = Layout::ROW_MAJOR},
             Expected{
                 .physical_size = {1, 1},
-                .alignment = Alignment({1}),
-                .strides = Strides({}),
+                .alignment = tt::tt_metal::Alignment({1}),
+                .strides = tt::tt_metal::Strides({}),
                 .tensor_creation_works = false}},
 
         // Rank 0, RM, in uint32_t needs no additional padding
@@ -119,8 +127,8 @@ INSTANTIATE_TEST_SUITE_P(
             Inputs{.shape = ttnn::Shape{}, .data_type = DataType::UINT32, .layout = Layout::ROW_MAJOR},
             Expected{
                 .physical_size = {1, 1},
-                .alignment = Alignment({1}),
-                .strides = Strides({}),
+                .alignment = tt::tt_metal::Alignment({1}),
+                .strides = tt::tt_metal::Strides({}),
                 .tensor_creation_works = false}},
 
         // Rank 0, Tile
@@ -128,8 +136,8 @@ INSTANTIATE_TEST_SUITE_P(
             Inputs{.shape = ttnn::Shape{}, .data_type = DataType::BFLOAT16, .layout = Layout::TILE},
             Expected{
                 .physical_size = {32, 32},
-                .alignment = Alignment({32, 32}),
-                .strides = Strides({}),
+                .alignment = tt::tt_metal::Alignment({32, 32}),
+                .strides = tt::tt_metal::Strides({}),
                 .tensor_creation_works = false}},
 
         // Rank 1, RM, bfloat16
@@ -137,8 +145,8 @@ INSTANTIATE_TEST_SUITE_P(
             Inputs{.shape = ttnn::Shape{1}, .data_type = DataType::BFLOAT16, .layout = Layout::ROW_MAJOR},
             Expected{
                 .physical_size = {1, 1},
-                .alignment = Alignment({1}),
-                .strides = Strides({1}),
+                .alignment = tt::tt_metal::Alignment({1}),
+                .strides = tt::tt_metal::Strides({1}),
                 .tensor_creation_works = false}},
 
         // Rank 1, RM, uint32
@@ -146,14 +154,17 @@ INSTANTIATE_TEST_SUITE_P(
             Inputs{.shape = ttnn::Shape{1}, .data_type = DataType::UINT32, .layout = Layout::ROW_MAJOR},
             Expected{
                 .physical_size = {1, 1},
-                .alignment = Alignment({1}),
-                .strides = Strides({1}),
+                .alignment = tt::tt_metal::Alignment({1}),
+                .strides = tt::tt_metal::Strides({1}),
                 .tensor_creation_works = false}},
 
         // Rank 1, Tile
         TensorLayoutTestParams{
             Inputs{.shape = ttnn::Shape{1}, .data_type = DataType::BFLOAT16, .layout = Layout::TILE},
-            Expected{.physical_size = {32, 32}, .alignment = Alignment({32, 32}), .strides = Strides({1})}}));
+            Expected{
+                .physical_size = {32, 32},
+                .alignment = tt::tt_metal::Alignment({32, 32}),
+                .strides = tt::tt_metal::Strides({1})}}));
 
 struct LegacyPaddingRoundtripTestParams {
     Shape shape;

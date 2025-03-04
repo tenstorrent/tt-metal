@@ -9,8 +9,8 @@
 namespace ttnn::operations::experimental::dropout {
 
 struct operation_attributes_t {
-    const DataType output_dtype = DataType::INVALID;
-    const MemoryConfig output_memory_config;
+    const tt::tt_metal::DataType output_dtype = tt::tt_metal::DataType::INVALID;
+    const tt::tt_metal::MemoryConfig output_memory_config;
     uint32_t seed = 0;
     const float prob = 0.0f;
     const float scale = 1.0f;

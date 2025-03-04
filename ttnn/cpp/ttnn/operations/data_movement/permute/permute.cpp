@@ -19,11 +19,6 @@
 namespace ttnn::operations::data_movement {
 namespace detail {
 
-inline bool is_on_device(const Tensor& t) {
-    return ttnn::has_storage_type_of(t, ttnn::StorageType::DEVICE) or
-           ttnn::has_storage_type_of(t, ttnn::StorageType::MULTI_DEVICE);
-}
-
 ttnn::Tensor permute_impl(
     const ttnn::Tensor& a,
     const ttnn::SmallVector<uint32_t>& dims,
@@ -107,13 +102,13 @@ ttnn::Tensor permute_launch(
     const ttnn::SmallVector<uint32_t>& dims,
     const MemoryConfig& output_mem_config,
     const std::optional<float>& pad_value) {
-    std::vector<ttnn::Tensor> output_tensors = {ttnn::Tensor(operation::get_workers_for_op_output({a}))};
-    operation::launch_with_autoformat(
+    std::vector<ttnn::Tensor> output_tensors = {ttnn::Tensor(tt::tt_metal::operation::get_workers_for_op_output({a}))};
+    tt::tt_metal::operation::launch_with_autoformat(
         [dims, output_mem_config, pad_value](
             const std::vector<ttnn::Tensor>& input_tensors,
             const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
             const std::vector<std::optional<ttnn::Tensor>>& optional_output_tensors) mutable
-        -> std::vector<ttnn::Tensor> {
+            -> std::vector<ttnn::Tensor> {
             auto& a = input_tensors.at(0);
             return {permute_impl(a, dims, output_mem_config, pad_value)};
         },
@@ -185,7 +180,7 @@ ttnn::Tensor ExecutePermute::invoke(
     TT_FATAL(
         input_rank == dims.size(),
         "The number of dimensions in the tensor input does not match the length of the desired ordering");
-    TT_FATAL(detail::is_on_device(input_tensor), "Tensor must already be on device");
+    TT_FATAL(is_tensor_on_device_or_multidevice(input_tensor), "Tensor must already be on device");
 
     SmallVector<uint32_t> normalized_dims(dims.size());
     std::transform(dims.begin(), dims.end(), normalized_dims.begin(), [input_tensor](std::int64_t idx) {

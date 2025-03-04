@@ -101,7 +101,24 @@ from ttnn._ttnn.multi_device import (
     get_t3k_physical_device_ids_ring,
 )
 
-from ttnn._ttnn.events import create_event, record_event, wait_for_event
+from ttnn._ttnn.events import (
+    MeshEvent,
+    create_event,
+    record_event,
+    wait_for_event,
+)
+
+from ttnn._ttnn.operations.trace import (
+    MeshTraceId,
+    begin_trace_capture,
+    end_trace_capture,
+    execute_trace,
+    release_trace,
+    begin_mesh_trace_capture,
+    end_mesh_trace_capture,
+    execute_mesh_trace,
+    release_mesh_trace,
+)
 
 from ttnn._ttnn.global_circular_buffer import (
     create_global_circular_buffer,
@@ -157,6 +174,8 @@ from ttnn.types import (
     GrayskullComputeKernelConfig,
     MeshShape,
     MeshCoordinate,
+    MeshCoordinateRange,
+    QueueId,
     UnaryWithParam,
     UnaryOpType,
     BinaryOpType,
@@ -209,6 +228,9 @@ from ttnn.core import (
     has_tile_padding,
     is_sharded,
     get_memory_config,
+    light_metal_begin_capture,
+    light_metal_end_capture,
+    LightMetalReplay,
     create_sharded_memory_config,
     create_sharded_memory_config_,
     dump_memory_config,
@@ -220,13 +242,6 @@ from ttnn.core import (
 
 import ttnn.reflection
 import ttnn.database
-
-
-begin_trace_capture = ttnn._ttnn.operations.core.begin_trace_capture
-end_trace_capture = ttnn._ttnn.operations.core.end_trace_capture
-execute_trace = ttnn._ttnn.operations.core.execute_trace
-release_trace = ttnn._ttnn.operations.core.release_trace
-
 
 from ttnn.decorators import (
     attach_golden_function,

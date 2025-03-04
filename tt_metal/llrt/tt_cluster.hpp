@@ -7,24 +7,20 @@
 #include <cstdint>
 #include <functional>
 
-#include "metal_soc_descriptor.h"
-#include "tt_backend_api_types.hpp"
+#include <tt-metalium/metal_soc_descriptor.h>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/fabric_host_interface.h>
 #include "umd/device/device_api_metal.h"
 #include "umd/device/tt_cluster_descriptor.h"
 #include "umd/device/tt_xy_pair.h"
 
-#include "dev_msgs.h"
+#include <tt-metalium/dev_msgs.h>
 
-#include "hal.hpp"
+#include <tt-metalium/hal.hpp>
 
 static constexpr std::uint32_t SW_VERSION = 0x00020000;
 
 using tt_target_dram = std::tuple<int, int, int>;
-
-enum EthRouterMode : uint32_t {
-    IDLE = 0,
-    BI_DIR_TUNNELING = 1,
-};
 
 namespace tt {
 
@@ -45,6 +41,14 @@ enum class ClusterType : std::uint8_t {
     TG = 4,      // Will be deprecated
 };
 
+enum class EthRouterMode : uint32_t {
+    IDLE = 0,
+    BI_DIR_TUNNELING = 1,
+    FABRIC_ROUTER = 2,
+};
+
+enum class FabricConfig { DISABLED = 0, FABRIC_1D = 1, FABRIC_2D = 2, CUSTOM = 4 };
+
 class Cluster {
 public:
     Cluster& operator=(const Cluster&) = delete;
@@ -52,7 +56,7 @@ public:
     Cluster(const Cluster&) = delete;
     Cluster(Cluster&& other) noexcept = delete;
 
-    static const Cluster& instance();
+    static Cluster& instance();
 
     // For TG Galaxy systems, mmio chips are gateway chips that are only used for dispatc, so user_devices are meant for
     // user facing host apis
@@ -182,6 +186,9 @@ public:
     // Returns set of logical inactive ethernet coordinates on chip
     std::unordered_set<CoreCoord> get_inactive_ethernet_cores(chip_id_t chip_id) const;
 
+    // Returns whether `logical_core` has an eth link to a core on a connected chip
+    bool is_ethernet_link_up(chip_id_t chip_id, const CoreCoord& logical_core) const;
+
     // Returns connected ethernet core on the other chip
     std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(std::tuple<chip_id_t, CoreCoord> eth_core) const;
 
@@ -251,6 +258,8 @@ public:
         return this->tunnels_from_mmio_device.at(mmio_chip_id);
     }
 
+    void initialize_fabric_config(FabricConfig fabric_config);
+
     // Returns whether we are running on Galaxy.
     bool is_galaxy_cluster() const;
 
@@ -258,6 +267,11 @@ public:
     BoardType get_board_type(chip_id_t chip_id) const;
 
     ClusterType get_cluster_type() const;
+
+    FabricConfig get_fabric_config() const;
+
+    // Get all fabric ethernet cores
+    std::set<tt_fabric::chan_id_t> get_fabric_ethernet_channels(chip_id_t chip_id) const;
 
     bool is_worker_core(const CoreCoord& core, chip_id_t chip_id) const;
     bool is_ethernet_core(const CoreCoord& core, chip_id_t chip_id) const;
@@ -302,7 +316,7 @@ private:
     // Need to hold reference to cluster descriptor to detect total number of devices available in cluster
     // UMD static APIs `detect_available_device_ids` and `detect_number_of_chips` only returns number of MMIO mapped
     // devices
-    std::unique_ptr<tt_ClusterDescriptor> cluster_desc_;
+    tt_ClusterDescriptor* cluster_desc_ = nullptr;
     // There is an entry for every device that can be targeted (MMIO and remote)
     std::unordered_map<chip_id_t, metal_SocDescriptor> sdesc_per_chip_;
 
@@ -319,6 +333,11 @@ private:
     // Flag to tell whether we are on a TG type of system.
     // If any device has to board type of GALAXY, we are on a TG cluster.
     ClusterType cluster_type_ = ClusterType::INVALID;
+
+    // Reserves all free ethernet cores for fabric routers
+    void reserve_ethernet_cores_for_fabric_routers();
+
+    FabricConfig fabric_config_ = FabricConfig::DISABLED;
 
     // Tunnels setup in cluster
     std::map<chip_id_t, std::vector<std::vector<chip_id_t>>> tunnels_from_mmio_device = {};

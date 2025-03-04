@@ -22,6 +22,7 @@ from datetime import datetime
 from loguru import logger
 
 from tests.scripts.common import run_process_and_get_result
+from tests.scripts.common import get_updated_device_params
 
 
 @pytest.fixture(scope="function")
@@ -91,30 +92,6 @@ def get_tt_cache_path():
             return default_path
 
     return get_tt_cache_path_
-
-
-def get_dispatch_core_type():
-    import ttnn
-
-    # TODO: 11059 move dispatch_core_type to device_params when all tests are updated to not use WH_ARCH_YAML env flag
-    dispatch_core_type = ttnn.device.DispatchCoreType.WORKER
-    if ("WH_ARCH_YAML" in os.environ) and os.environ["WH_ARCH_YAML"] == "wormhole_b0_80_arch_eth_dispatch.yaml":
-        dispatch_core_type = ttnn.device.DispatchCoreType.ETH
-    return dispatch_core_type
-
-
-def get_updated_device_params(device_params):
-    import ttnn
-
-    dispatch_core_type = get_dispatch_core_type()
-    new_device_params = device_params.copy()
-    dispatch_core_axis = new_device_params.pop(
-        "dispatch_core_axis",
-        ttnn.DispatchCoreAxis.COL if ttnn.get_arch_name() == "blackhole" else ttnn.DispatchCoreAxis.ROW,
-    )
-    dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis)
-    new_device_params["dispatch_core_config"] = dispatch_core_config
-    return new_device_params
 
 
 @pytest.fixture(scope="function")
@@ -342,13 +319,13 @@ def get_devices(request):
     elif "pcie_devices" in request.fixturenames:
         devices = request.getfixturevalue("pcie_devices")
     elif "mesh_device" in request.fixturenames:
-        devices = request.getfixturevalue("mesh_device").get_devices()
+        devices = [request.getfixturevalue("mesh_device")]
     elif "n300_mesh_device" in request.fixturenames:
-        devices = request.getfixturevalue("n300_mesh_device").get_devices()
+        devices = [request.getfixturevalue("n300_mesh_device")]
     elif "t3k_mesh_device" in request.fixturenames:
-        devices = request.getfixturevalue("t3k_mesh_device").get_devices()
+        devices = [request.getfixturevalue("t3k_mesh_device")]
     elif "pcie_mesh_device" in request.fixturenames:
-        devices = request.getfixturevalue("pcie_mesh_device").get_devices()
+        devices = [request.getfixturevalue("pcie_mesh_device")]
     else:
         devices = []
     return devices
@@ -677,3 +654,20 @@ def record_test_timestamp(record_property):
     yield
     end_timestamp = datetime.strftime(datetime.now(), "%Y-%m-%dT%H:%M:%S%z")
     record_property("end_timestamp", end_timestamp)
+
+
+def pytest_configure(config):
+    xmlpath = config.option.xmlpath
+    # https://github.com/tenstorrent/tt-metal/pull/18372
+    # Only override the xmlpath if it's set, and we're in a CI env (GHA)
+    # Problem: t3k unit tests run pytest multiple times overwriting the junit xml file each time, so the generated xml artifact only contains test case info from the last running testsuite.
+    # Fix: when running in CI env, override config.option.xmlpath to rename the xml filepath to include timestamp, so that serial pytest invocations running in scripts do not clobber the junit xml test report
+    if xmlpath and os.getenv("CI") == "true":
+        # Get the dir and filename for the generated xml
+        directory, filename = os.path.split(xmlpath)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Append timestamp to the end of the xml filename
+        # This avoids clobbering the xml file when pytest is invoked multiple times during a test script
+        new_filename = f"{os.path.splitext(filename)[0]}_{timestamp}{os.path.splitext(filename)[1]}"
+        new_xmlpath = os.path.join(directory, new_filename)
+        config.option.xmlpath = new_xmlpath

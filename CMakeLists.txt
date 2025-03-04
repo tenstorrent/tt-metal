@@ -270,19 +270,9 @@ endif()
 # For top level install: cmake --build build --target install  or  make/ninja install -C build
 ############################################################################################################################
 # Install for build artifacts that will upload build/lib
-
 install(
     TARGETS
         tt_metal
-    ARCHIVE
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    LIBRARY
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        COMPONENT tar
-)
-install(
-    TARGETS
-        ttnn
     ARCHIVE
         DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY
@@ -294,10 +284,31 @@ if(WITH_PYTHON_BINDINGS)
     install(
         TARGETS
             ttnn
+        ARCHIVE
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        LIBRARY
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            COMPONENT tar
+    )
+
+    install(
+        TARGETS
+            ttnn
             DESTINATION
             ${PROJECT_SOURCE_DIR}/ttnn/ttnn
             COMPONENT
             tt_pybinds
+    )
+else()
+    #when we don't build python bindings, we generate a dynamic library ttnncpp
+    install(
+        TARGETS
+            ttnncpp
+        ARCHIVE
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        LIBRARY
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            COMPONENT tar
     )
 endif()
 

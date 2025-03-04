@@ -44,6 +44,8 @@ std::unordered_set<int> get_harvested_rows(chip_id_t device_id) {
 }
 }  // namespace unit_tests::basic::soc_desc
 
+namespace tt::tt_metal {
+
 // This test ensures that no logical core maps to a harvested row
 TEST(SOC, TensixValidateLogicalToPhysicalCoreCoordHostMapping) {
     size_t num_devices = tt_metal::GetNumAvailableDevices();
@@ -69,3 +71,5 @@ TEST(SOC, TensixValidateLogicalToPhysicalCoreCoordHostMapping) {
         tt_metal::CloseDevice(device);
     }
 }
+
+}  // namespace tt::tt_metal

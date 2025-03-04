@@ -13,8 +13,13 @@
 #include "mesh_device.hpp"
 #include "mesh_workload.hpp"
 #include "mesh_trace.hpp"
+#include "mesh_trace_id.hpp"
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
+
+class ThreadPool;
+
+namespace distributed {
 
 class MeshEvent;
 struct MeshReadEventDescriptor;
@@ -45,8 +50,7 @@ private:
     // Helper functions for read and write entire Sharded-MeshBuffers
     void write_sharded_buffer(const MeshBuffer& buffer, const void* src);
     void read_sharded_buffer(MeshBuffer& buffer, void* dst);
-    void enqueue_record_event_helper(
-        const std::shared_ptr<MeshEvent>& event,
+    MeshEvent enqueue_record_event_helper(
         tt::stl::Span<const SubDeviceId> sub_device_ids,
         bool notify_host,
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
@@ -110,9 +114,15 @@ private:
     CoreCoord dispatch_core_;
     CoreType dispatch_core_type_ = CoreType::WORKER;
     std::queue<std::shared_ptr<MeshReadEventDescriptor>> event_descriptors_;
+    // MeshCommandQueues and the MeshDevice share the thread-pool
+    std::shared_ptr<ThreadPool> thread_pool_;
 
 public:
-    MeshCommandQueue(MeshDevice* mesh_device, uint32_t id);
+    MeshCommandQueue(MeshDevice* mesh_device, uint32_t id, std::shared_ptr<ThreadPool>& thread_pool);
+
+    MeshCommandQueue(const MeshCommandQueue& other) = delete;
+    MeshCommandQueue& operator=(const MeshCommandQueue& other) = delete;
+
     MeshDevice* device() const { return mesh_device_; }
     uint32_t id() const { return id_; }
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) { return config_buffer_mgr_[index]; };
@@ -145,17 +155,15 @@ public:
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         bool blocking);
 
-    void enqueue_record_event(
-        const std::shared_ptr<MeshEvent>& event,
+    MeshEvent enqueue_record_event(
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
-    void enqueue_record_event_to_host(
-        const std::shared_ptr<MeshEvent>& event,
+    MeshEvent enqueue_record_event_to_host(
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
-    void enqueue_wait_for_event(const std::shared_ptr<MeshEvent>& sync_event);
+    void enqueue_wait_for_event(const MeshEvent& sync_event);
     void drain_events_from_completion_queue();
-    void verify_reported_events_after_draining(const std::shared_ptr<MeshEvent>& event);
+    void verify_reported_events_after_draining(const MeshEvent& event);
     void finish(tt::stl::Span<const SubDeviceId> sub_device_ids = {});
     void reset_worker_state(
         bool reset_launch_msg_state,
@@ -166,4 +174,6 @@ public:
     void enqueue_trace(const MeshTraceId& trace_id, bool blocking);
 };
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace distributed
+
+}  // namespace tt::tt_metal

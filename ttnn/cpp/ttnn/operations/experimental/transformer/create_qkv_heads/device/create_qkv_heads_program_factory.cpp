@@ -12,7 +12,7 @@ using namespace tt;
 
 namespace ttnn::operations::experimental::transformer {
 
-static inline operation::ProgramWithCallbacks create_heads_combined_qkv_sharded(
+static inline tt::tt_metal::operation::ProgramWithCallbacks create_heads_combined_qkv_sharded(
     const Tensor& input_tensor,
     const std::vector<uint32_t>&& heads_per_group,
     const uint32_t head_dim,
@@ -105,7 +105,7 @@ static inline operation::ProgramWithCallbacks create_heads_combined_qkv_sharded(
         num_tiles_per_group.push_back(heads * head_dim / TILE_WIDTH);
     }
 
-    Program program = CreateProgram();
+    Program program = tt::tt_metal::CreateProgram();
     std::vector<uint32_t> reader_compile_time_args = {
 
         (std::uint32_t)heads_per_group[0],  // q heads in group
@@ -159,30 +159,30 @@ static inline operation::ProgramWithCallbacks create_heads_combined_qkv_sharded(
     uint32_t v_size = block_ht * num_tiles_per_group[2] * single_tile_size * groups_per_block;
 
     // qkv tensor
-    auto c_in0_config = CircularBufferConfig(input_size, {{CBIndex::c_0, data_format}})
+    auto c_in0_config = tt::tt_metal::CircularBufferConfig(input_size, {{CBIndex::c_0, data_format}})
                             .set_page_size(CBIndex::c_0, single_tile_size)
                             .set_globally_allocated_address(*input_tensor.buffer());
     auto cb_in0_id = CreateCircularBuffer(program, all_cores, c_in0_config);
 
     // q sharded
-    auto c_out0_config = CircularBufferConfig(q_size, {{CBIndex::c_16, data_format}})
+    auto c_out0_config = tt::tt_metal::CircularBufferConfig(q_size, {{CBIndex::c_16, data_format}})
                              .set_page_size(CBIndex::c_16, single_tile_size)
                              .set_globally_allocated_address(*output[0].buffer());
     auto cb_out0_id = CreateCircularBuffer(program, all_cores, c_out0_config);
     // k sharded
-    auto c_out1_config = CircularBufferConfig(k_size, {{CBIndex::c_17, data_format}})
+    auto c_out1_config = tt::tt_metal::CircularBufferConfig(k_size, {{CBIndex::c_17, data_format}})
                              .set_page_size(CBIndex::c_17, single_tile_size)
                              .set_globally_allocated_address(*output[1].buffer());
     auto cb_out1_id = CreateCircularBuffer(program, all_cores, c_out1_config);
     // v sharded
-    auto c_out2_config = CircularBufferConfig(v_size, {{CBIndex::c_18, data_format}})
+    auto c_out2_config = tt::tt_metal::CircularBufferConfig(v_size, {{CBIndex::c_18, data_format}})
                              .set_page_size(CBIndex::c_18, single_tile_size)
                              .set_globally_allocated_address(*output[2].buffer());
     auto cb_out2_id = CreateCircularBuffer(program, all_cores, c_out2_config);
 
     if (transpose_k) {
-        auto c_im0_config =
-            CircularBufferConfig(k_size, {{CBIndex::c_24, data_format}}).set_page_size(CBIndex::c_24, single_tile_size);
+        auto c_im0_config = tt::tt_metal::CircularBufferConfig(k_size, {{CBIndex::c_24, data_format}})
+                                .set_page_size(CBIndex::c_24, single_tile_size);
         auto cb_im0_id = CreateCircularBuffer(program, all_cores, c_im0_config);
     }
 
@@ -235,7 +235,7 @@ static inline operation::ProgramWithCallbacks create_heads_combined_qkv_sharded(
  *
  * Combined batch/sequence sharding is possible too...that may best be left as an extension
  */
-operation::ProgramWithCallbacks multi_core_create_qkv_heads_sharded(
+tt::tt_metal::operation::ProgramWithCallbacks multi_core_create_qkv_heads_sharded(
     const Tensor& input_tensor_qkv,
     const uint32_t num_q_heads,
     const uint32_t num_kv_heads,

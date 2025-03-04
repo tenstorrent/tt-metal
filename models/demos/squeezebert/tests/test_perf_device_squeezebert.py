@@ -18,7 +18,7 @@ def test_perf_device_bare_metal(batch_size, test):
     subdir = "ttnn_squeezebert"
     num_iterations = 1
     margin = 0.03
-    expected_perf = 102.7 if is_grayskull() else 298.7
+    expected_perf = 102.7 if is_grayskull() else 299.7
 
     command = f"pytest tests/ttnn/integration_tests/squeezebert/test_ttnn_squeezebert.py::test_squeezebert_for_question_answering"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]

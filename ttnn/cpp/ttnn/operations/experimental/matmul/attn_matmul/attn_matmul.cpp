@@ -24,7 +24,7 @@ ttnn::Tensor AttnMatmulOperation::invoke(
                     ? input_tensor_a.device()->arch()
                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config);
-    return operation::run(
+    return tt::tt_metal::operation::run(
                AttnMatmulDeviceOperation{
                    std::nullopt,
                    std::nullopt,
@@ -79,7 +79,7 @@ ttnn::Tensor AttnMatmulFromCacheOperation::invoke(
                     ? input_tensor_a.device()->arch()
                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config);
-    return operation::run(
+    return tt::tt_metal::operation::run(
                AttnMatmulDeviceOperation{
                    num_tokens_rounded_up_to_32,
                    transpose_hw,
