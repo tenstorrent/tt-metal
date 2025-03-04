@@ -25,8 +25,10 @@ void RotaryEmbeddingLlama::validate(const std::vector<Tensor>& input_tensors) co
         TT_FATAL(input.buffer() != nullptr, "Operands to rotary embedding need to be allocated in buffers on device!");
         TT_FATAL(input.device() == ref_device, "Operands to rotary embedding need to be on same device!");
         TT_FATAL((input.get_layout() == Layout::TILE), "Inputs to rotary embedding must be tilized");
+        // we require L1 interleaved inputs when using prefill mode
         TT_FATAL(
-            input.memory_config() == ttnn::L1_MEMORY_CONFIG, "Inputs to rotary embedding must be interleaved over L1.");
+            !this->is_decode_mode || input.memory_config() == ttnn::L1_MEMORY_CONFIG,
+            "Inputs to rotary embedding must be interleaved over L1 when using prefill mode.");
     }
 
     uint32_t head_dim = input_tensor.get_logical_shape()[-1];

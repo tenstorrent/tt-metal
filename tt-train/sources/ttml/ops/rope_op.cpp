@@ -30,12 +30,12 @@ void RotaryEmbeddingParams::validate(const autograd::TensorPtr& input) const {
         throw std::runtime_error("RoPE input tensor's sequence length must match the sequence length in the params");
     }
 
-    auto trans_mat_shape = trans_mat.logical_shape();
+    auto trans_mat_shape = trans_mat.get_logical_shape();
     auto trig_param_shapes = std::array{
-        cos_cache.logical_shape(),
-        sin_cache.logical_shape(),
-        neg_cos_cache.logical_shape(),
-        neg_sin_cache.logical_shape()};
+        cos_cache.get_logical_shape(),
+        sin_cache.get_logical_shape(),
+        neg_cos_cache.get_logical_shape(),
+        neg_sin_cache.get_logical_shape()};
 
     if (!std::ranges::all_of(
             trig_param_shapes, [=](auto shape) { return shape == ttnn::Shape{1, 1, input_seq_len, input_head_dim}; })) {

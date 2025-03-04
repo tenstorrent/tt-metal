@@ -21,7 +21,7 @@ autograd::TensorPtr RotaryEmbedding::operator()(const autograd::TensorPtr& input
     return ttml::ops::rope(input, m_rope_params);
 }
 
-ttnn::Tensor gen_freqs(uint32_t head_dim, uint32_t sequence_length, float theta = 10000.0F) {
+std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(uint32_t head_dim, uint32_t sequence_length, float theta = 10000.0F) {
     int d = head_dim;
     // compute freqs: 1.0 / (theta ** (2 * (i-1) / head_dim)) for i in [1, head_dim/2]
     std::vector<float> expt_data;
@@ -45,10 +45,15 @@ ttnn::Tensor gen_freqs(uint32_t head_dim, uint32_t sequence_length, float theta 
     xt::xarray<float> scaled_freqs = scales * freqs;
 
     // take the scaled freqs mod 2π to satisfy ttnn inputs constraints for sin/cos
-    scaled_freqs = xt::fmod(scaled_freqs, 2.0F * 3.14159265358979323846F);
+    float pi = std::acos(-1.0F);
+    scaled_freqs = xt::fmod(scaled_freqs, 2.0F * pi);
+    scaled_freqs = scaled_freqs.reshape({1, 1, sequence_length, head_dim});
 
-    auto device = &autograd::ctx().get_device();
-    return core::from_xtensor(scaled_freqs.reshape({1, 1, sequence_length, head_dim}), device);
+    xt::xarray<float> sin_freqs = xt::sin(scaled_freqs);
+    xt::xarray<float> cos_freqs = xt::cos(scaled_freqs);
+
+    auto* device = &autograd::ctx().get_device();
+    return {core::from_xtensor(sin_freqs, device), core::from_xtensor(cos_freqs, device)};
 }
 
 ttnn::Tensor gen_trans_mat(int head_dim) {
@@ -74,9 +79,7 @@ ops::RotaryEmbeddingParams RotaryEmbedding::build_params(uint32_t sequence_lengt
     if (head_dim <= 0) {
         throw std::invalid_argument("RoPE head_dim must be greater than 0");
     }
-    ttnn::Tensor freqs = gen_freqs(head_dim, sequence_length, theta);
-    auto sin_freqs = ttnn::sin(freqs);
-    auto cos_freqs = ttnn::cos(freqs);
+    auto [sin_freqs, cos_freqs] = gen_freqs(head_dim, sequence_length, theta);
     auto trans_mat = gen_trans_mat(head_dim);
 
     return {
