@@ -69,7 +69,7 @@ while [[ "$found" = "false" ]]; do
    fi
    git submodule update --recursive
    build_rc=0
-   ./build_metal.sh --build-tests > /dev/null || build_rc=$?
+   ./build_metal.sh --build-tests || build_rc=$?
    echo "::endgroup::"
 
    if [[ $build_rc -ne 0 ]]; then
