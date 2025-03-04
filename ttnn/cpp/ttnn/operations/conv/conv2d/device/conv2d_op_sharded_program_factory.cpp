@@ -20,13 +20,12 @@ namespace conv2d {
 
 using namespace tt;
 
-// In order to make circular buffer indicies sequential, we use static class to keep track of the next available index
-// for each circular buffer. Circular buffer indices should be assigned before their creation.
+// In order to make circular buffer indicies sequential, we use variable to keep track of the next available index.
+// Circular buffer indices should be assigned right before their creation.
 struct CBIndices {
-    // Invalid value for cb id is 32, number larger than the maximum number of circular buffers.
-    // Not assigning next_cb_index++ value before creating cb will throw exception in circular_buffer_types.cpp which
-    // can be used as a reminder.
-    uint32_t next_cb_index = 32;
+    // Invalid value for cb id is 32, number greater than the maximum number of index circular buffer can have.
+    // Not assigning get_next_cb_index() value before creating cb will throw exception in circular_buffer_types.cpp
+    // which can be used as a reminder.
     uint32_t weight_cb = 32;
     uint32_t tilize_mode_tilized_act_cb = 32;
     uint32_t act_cb = 32;
@@ -40,6 +39,11 @@ struct CBIndices {
     uint32_t untilize_mode_reblock_cb = 32;
     uint32_t out0_cb = 32;
     uint32_t temp_sum_cb = 32;
+
+    uint32_t get_next_cb_index() { return next_cb_index++; }
+
+private:
+    uint32_t next_cb_index = CBIndex::c_0;
 };
 
 tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
@@ -111,7 +115,7 @@ std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle> create_CBs_for_sharde
         // 2D-sys-conv already has uint16_t indicies, TODO: do the same for 1D-sys-conv
         TT_FATAL(
             shard_shape[0] <= (1 << 16), "Shard height must be less than 2^16, read pattern indicies are uint16_t");
-        cb_indices.sharded_act_cb = cb_indices.next_cb_index++;
+        cb_indices.sharded_act_cb = cb_indices.get_next_cb_index();
         CircularBufferConfig cb_sharded_act_config =
             CircularBufferConfig(
                 shard_shape[0] * shard_shape[1] * num_bytes_for_df, {{cb_indices.sharded_act_cb, act_df}})
@@ -127,7 +131,7 @@ std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle> create_CBs_for_sharde
             // output df
 
             // num_cb0_tiles is double buffered
-            cb_indices.act_cb = cb_indices.next_cb_index++;
+            cb_indices.act_cb = cb_indices.get_next_cb_index();
             CircularBufferConfig cb_act_config =
                 CircularBufferConfig(num_cb0_tiles * tilized_act_tile_size, {{cb_indices.act_cb, tilized_act_df}})
                     .set_page_size(cb_indices.act_cb, tilized_act_tile_size);
@@ -136,7 +140,7 @@ std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle> create_CBs_for_sharde
                 LogOp, "Act CB: {}, npages: {}, pagesize: {}", cb_indices.act_cb, num_cb0_tiles, tilized_act_tile_size);
 
             // num_cb0_tilized_tiles is single buffered
-            cb_indices.act_cb_row_major_bfloat16 = cb_indices.next_cb_index++;
+            cb_indices.act_cb_row_major_bfloat16 = cb_indices.get_next_cb_index();
             CircularBufferConfig cb_act_row_major_bfloat16_config =
                 CircularBufferConfig(
                     num_cb0_tilized_tiles * act_tile_size, {{cb_indices.act_cb_row_major_bfloat16, act_df}})
@@ -156,7 +160,7 @@ std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle> create_CBs_for_sharde
             // Extra cb for second reader if we split act reads across two RISCs
             // In this case, the regular reader only does first half of reads along output block h
             if (split_reader) {
-                cb_indices.act_cb_second_reader = cb_indices.next_cb_index++;
+                cb_indices.act_cb_second_reader = cb_indices.get_next_cb_index();
                 CircularBufferConfig cb_act_config =
                     CircularBufferConfig(
                         num_cb0_second_reader_tiles * act_tile_size, {{cb_indices.act_cb_second_reader, act_df}})
@@ -169,7 +173,7 @@ std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle> create_CBs_for_sharde
                     num_cb0_second_reader_tiles,
                     act_tile_size);
             }
-            cb_indices.act_cb = cb_indices.next_cb_index++;
+            cb_indices.act_cb = cb_indices.get_next_cb_index();
             CircularBufferConfig cb_act_config =
                 CircularBufferConfig(num_cb0_tiles * act_tile_size, {{cb_indices.act_cb, act_df}})
                     .set_page_size(cb_indices.act_cb, act_tile_size);
@@ -201,7 +205,7 @@ std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle> create_CBs_for_sharde
 
     CBHandle cb_output = 0;
     if (untilize_out) {
-        cb_indices.matmul_partials_cb = cb_indices.next_cb_index++;
+        cb_indices.matmul_partials_cb = cb_indices.get_next_cb_index();
         auto output_shard_shape = output.shard_spec().value().shape;
         CircularBufferConfig cb_matmul_partials_config =
             CircularBufferConfig(
@@ -221,7 +225,7 @@ std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle> create_CBs_for_sharde
         auto shard_shape = output.shard_spec().value().shape;
         uint32_t aligned_output_stick_nbytes = out_tile_size;
         uint32_t aligned_output_num_pages = num_writer_output_tiles;
-        cb_indices.out0_cb = cb_indices.next_cb_index++;
+        cb_indices.out0_cb = cb_indices.get_next_cb_index();
         CircularBufferConfig cb_output_config =
             CircularBufferConfig(aligned_output_num_pages * aligned_output_stick_nbytes, {{cb_indices.out0_cb, out_df}})
                 .set_page_size(cb_indices.out0_cb, aligned_output_stick_nbytes);
@@ -231,8 +235,8 @@ std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle> create_CBs_for_sharde
         // Share buffer if same data format
         if (interm0_df == out_df) {
             CoreRangeSet cores(std::set<CoreRange>({core}));
-            cb_indices.out0_cb = cb_indices.next_cb_index++;
-            cb_indices.matmul_partials_cb = cb_indices.next_cb_index++;
+            cb_indices.out0_cb = cb_indices.get_next_cb_index();
+            cb_indices.matmul_partials_cb = cb_indices.get_next_cb_index();
             std::map<uint8_t, tt::DataFormat> cb_output_data_format_spec = {
                 {cb_indices.out0_cb, out_df}, {cb_indices.matmul_partials_cb, out_df}};
 
@@ -253,7 +257,7 @@ std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle> create_CBs_for_sharde
             cb_output = tt_metal::CreateCircularBuffer(program, cores, cb_matmul_partials_config);
         } else {
             // Separate buffer if not same data format
-            cb_indices.matmul_partials_cb = cb_indices.next_cb_index++;
+            cb_indices.matmul_partials_cb = cb_indices.get_next_cb_index();
             CircularBufferConfig cb_matmul_partials_config =
                 CircularBufferConfig(
                     num_output_tiles * interm0_single_tile_size, {{cb_indices.matmul_partials_cb, interm0_df}})
@@ -266,7 +270,7 @@ std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle> create_CBs_for_sharde
                 num_output_tiles,
                 interm0_single_tile_size);
 
-            cb_indices.out0_cb = cb_indices.next_cb_index++;
+            cb_indices.out0_cb = cb_indices.get_next_cb_index();
             CircularBufferConfig cb_output_config =
                 CircularBufferConfig(num_output_tiles * out_tile_size, {{cb_indices.out0_cb, out_df}})
                     .set_page_size(cb_indices.out0_cb, out_tile_size);
@@ -281,7 +285,7 @@ std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle> create_CBs_for_sharde
         uint32_t bias_tile_size = tt_metal::detail::TileSize(bias_df);
         // bias input
         uint32_t bias_pagesize = bias_tile_size;
-        cb_indices.bias_cb = cb_indices.next_cb_index++;
+        cb_indices.bias_cb = cb_indices.get_next_cb_index();
         CircularBufferConfig cb_bias_config =
             CircularBufferConfig(bias_ntiles * bias_pagesize, {{cb_indices.bias_cb, bias_df}})
                 .set_page_size(cb_indices.bias_cb, bias_pagesize);
@@ -338,7 +342,7 @@ std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle> create_CBs_for_depthw
         // 2D-sys-conv already has uint16_t indicies, TODO: do the same for 1D-sys-conv
         TT_FATAL(
             shard_shape[0] <= (1 << 16), "Shard height must be less than 2^16, read pattern indicies are uint16_t");
-        cb_indices.sharded_act_cb = cb_indices.next_cb_index++;
+        cb_indices.sharded_act_cb = cb_indices.get_next_cb_index();
         CircularBufferConfig cb_sharded_act_config =
             CircularBufferConfig(
                 shard_shape[0] * shard_shape[1] * num_bytes_for_df, {{cb_indices.sharded_act_cb, act_df}})
@@ -349,7 +353,7 @@ std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle> create_CBs_for_depthw
 
         // For 1D convs, locally create act matrix in act_cb, which is always ROW_MAJOR BFLOAT16
         // Then, tilize input in compute
-        cb_indices.act_cb = cb_indices.next_cb_index++;
+        cb_indices.act_cb = cb_indices.get_next_cb_index();
         CircularBufferConfig cb_act_config =
             CircularBufferConfig(num_cb0_tiles * act_tile_size, {{cb_indices.act_cb, act_df}})
                 .set_page_size(cb_indices.act_cb, act_tile_size);
@@ -384,7 +388,7 @@ std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle> create_CBs_for_depthw
     CoreRangeSet cores(std::set<CoreRange>({core}));
 
     // breakdown above as separate CBs
-    cb_indices.matmul_partials_cb = cb_indices.next_cb_index++;
+    cb_indices.matmul_partials_cb = cb_indices.get_next_cb_index();
     CircularBufferConfig cb_matmul_partials_config =
         CircularBufferConfig(1 * out_tile_size, {{cb_indices.matmul_partials_cb, out_df}})
             .set_page_size(cb_indices.matmul_partials_cb, out_tile_size);
@@ -392,14 +396,14 @@ std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle> create_CBs_for_depthw
     log_debug(
         LogOp, "Matmul Partials CB: {}, npages: {}, pagesize: {}", cb_indices.matmul_partials_cb, 1, out_tile_size);
 
-    cb_indices.temp_sum_cb = cb_indices.next_cb_index++;
+    cb_indices.temp_sum_cb = cb_indices.get_next_cb_index();
     CircularBufferConfig cb_temp_sum_config =
         CircularBufferConfig(1 * out_tile_size, {{cb_indices.temp_sum_cb, out_df}})
             .set_page_size(cb_indices.temp_sum_cb, out_tile_size);
     auto cb_temp_sum = tt_metal::CreateCircularBuffer(program, core, cb_temp_sum_config);
     log_debug(LogOp, "Temp Sum CB: {}, npages: {}, pagesize: {}", cb_indices.temp_sum_cb, 1, out_tile_size);
 
-    cb_indices.out0_cb = cb_indices.next_cb_index++;
+    cb_indices.out0_cb = cb_indices.get_next_cb_index();
     std::map<uint8_t, tt::DataFormat> cb_output_data_format_spec = {{cb_indices.out0_cb, out_df}};
     CircularBufferConfig cb_output_config =
         CircularBufferConfig(num_output_tiles * out_tile_size, cb_output_data_format_spec)
@@ -444,8 +448,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     using tt::tt_metal::CircularBufferConfig;
     CBIndices cb_indices = CBIndices();
     // Non-optional circular buffer indicies
-    cb_indices.weight_cb = cb_indices.next_cb_index++;
-    cb_indices.tilize_mode_tilized_act_cb = cb_indices.next_cb_index++;
+    cb_indices.weight_cb = cb_indices.get_next_cb_index();
+    cb_indices.tilize_mode_tilized_act_cb = cb_indices.get_next_cb_index();
 
     bool pass = true;
     tt_metal::IDevice* device = a.device();
@@ -1251,7 +1255,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         }
         // Local L1 to store array for reader indices
         // All convs use packed uint16 indices, so each entry can be 2B (not 4)
-        cb_indices.cb_for_reader_indices = cb_indices.next_cb_index++;
+        cb_indices.cb_for_reader_indices = cb_indices.get_next_cb_index();
         CircularBufferConfig cb_for_reader_indices_config =
             CircularBufferConfig(
                 out_block_h_datums * 2, {{cb_indices.cb_for_reader_indices, tt::DataFormat::Float16_b}})
@@ -1261,7 +1265,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             tt_metal::CreateCircularBuffer(program, all_cores, cb_for_reader_indices_config);
 
         // Local L1 to store temp vars
-        cb_indices.cb_for_l1_array = cb_indices.next_cb_index++;
+        cb_indices.cb_for_l1_array = cb_indices.get_next_cb_index();
         CircularBufferConfig cb_for_l1_array_config =
             CircularBufferConfig(l1_scratchpad_CB_size, {{cb_indices.cb_for_l1_array, tt::DataFormat::Float16_b}})
                 .set_page_size(cb_indices.cb_for_l1_array, l1_scratchpad_CB_size);

@@ -599,97 +599,118 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
 
     // Local L1 to store temp vars
     // Used for act_mcast_sender_semaphore_valid_addr_ptr
+    cb_indices.cb_for_l1_array = cb_indices.get_next_cb_index();
     CircularBufferConfig cb_for_l1_array_config =
-        CircularBufferConfig(l1_scratchpad_CB_size, {{cb_for_l1_array, tt::DataFormat::Float16_b}})
-            .set_page_size(cb_for_l1_array, l1_scratchpad_CB_size);
+        CircularBufferConfig(l1_scratchpad_CB_size, {{cb_indices.cb_for_l1_array, tt::DataFormat::Float16_b}})
+            .set_page_size(cb_indices.cb_for_l1_array, l1_scratchpad_CB_size);
     tt_metal::CreateCircularBuffer(program, all_cores, cb_for_l1_array_config);
-    log_debug(LogOp, "CB for L1 Array CB: {}, npages: {}, pagesize: {}", cb_for_l1_array, 1, 32 * 2);
+    log_debug(LogOp, "CB for L1 Array CB: {}, npages: {}, pagesize: {}", cb_indices.cb_for_l1_array, 1, 32 * 2);
 
+    cb_indices.sharded_act_cb = cb_indices.get_next_cb_index();
     CircularBufferConfig cb_sharded_act_config =
-        CircularBufferConfig(shard_shape[0] * shard_shape[1] * datum_size(act_df), {{sharded_act_cb, act_df}})
-            .set_page_size(sharded_act_cb, shard_shape[1] * datum_size(act_df));
+        CircularBufferConfig(
+            shard_shape[0] * shard_shape[1] * datum_size(act_df), {{cb_indices.sharded_act_cb, act_df}})
+            .set_page_size(cb_indices.sharded_act_cb, shard_shape[1] * datum_size(act_df));
     cb_sharded_act_config.set_globally_allocated_address(*a.buffer());
 
     tt_metal::CreateCircularBuffer(program, all_cores, cb_sharded_act_config);
 
+    cb_indices.act_cb = cb_indices.get_next_cb_index();
     CircularBufferConfig cb_act_config =
-        CircularBufferConfig(act_block_num_tiles_split * tilized_act_tile_size, {{act_cb, tilized_act_df}})
-            .set_page_size(act_cb, tilized_act_tile_size);
+        CircularBufferConfig(act_block_num_tiles_split * tilized_act_tile_size, {{cb_indices.act_cb, tilized_act_df}})
+            .set_page_size(cb_indices.act_cb, tilized_act_tile_size);
     auto cb_act = tt_metal::CreateCircularBuffer(program, all_cores, cb_act_config);
-    log_debug(LogOp, "Act CB: {}, npages: {}, pagesize: {}", act_cb, act_block_num_tiles_split, tilized_act_tile_size);
+    log_debug(
+        LogOp,
+        "Act CB: {}, npages: {}, pagesize: {}",
+        cb_indices.act_cb,
+        act_block_num_tiles_split,
+        tilized_act_tile_size);
 
     // Used for placing tilized activations
+    cb_indices.tilize_mode_tilized_act_cb = cb_indices.get_next_cb_index();
     CircularBufferConfig cb_src0_tilized_config =
         CircularBufferConfig(
-            act_block_num_tiles * tilized_act_tile_size, {{tilize_mode_tilized_act_cb, tilized_act_df}})
-            .set_page_size(tilize_mode_tilized_act_cb, tilized_act_tile_size);
+            act_block_num_tiles * tilized_act_tile_size, {{cb_indices.tilize_mode_tilized_act_cb, tilized_act_df}})
+            .set_page_size(cb_indices.tilize_mode_tilized_act_cb, tilized_act_tile_size);
     auto cb_src0_tilized = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_tilized_config);
     log_debug(
         LogOp,
         "Tilized Act CB: {}, npages: {}, pagesize: {}",
-        tilize_mode_tilized_act_cb,
+        cb_indices.tilize_mode_tilized_act_cb,
         act_block_num_tiles,
         tilized_act_tile_size);
 
+    cb_indices.weight_cb = cb_indices.get_next_cb_index();
     CircularBufferConfig cb_weight_config =
-        CircularBufferConfig(weight_block_num_tiles * weight_tile_size, {{weight_cb, weight_df}})
-            .set_page_size(weight_cb, weight_tile_size);
+        CircularBufferConfig(weight_block_num_tiles * weight_tile_size, {{cb_indices.weight_cb, weight_df}})
+            .set_page_size(cb_indices.weight_cb, weight_tile_size);
     auto cb_weight = tt_metal::CreateCircularBuffer(program, all_cores, cb_weight_config);
-    log_debug(LogOp, "Weight CB: {}, npages: {}, pagesize: {}, ", weight_cb, weight_block_num_tiles, weight_tile_size);
+    log_debug(
+        LogOp,
+        "Weight CB: {}, npages: {}, pagesize: {}, ",
+        cb_indices.weight_cb,
+        weight_block_num_tiles,
+        weight_tile_size);
 
+    cb_indices.act_cb_row_major_bfloat16 = cb_indices.get_next_cb_index();
     CircularBufferConfig cb_act_row_major_bfloat16_config =
-        CircularBufferConfig(act_block_num_tiles_split * act_tile_size, {{act_cb_row_major_bfloat16, act_df}})
-            .set_page_size(act_cb_row_major_bfloat16, act_tile_size);
+        CircularBufferConfig(
+            act_block_num_tiles_split * act_tile_size, {{cb_indices.act_cb_row_major_bfloat16, act_df}})
+            .set_page_size(cb_indices.act_cb_row_major_bfloat16, act_tile_size);
     auto cb_act_row_major_bfloat16 =
         tt_metal::CreateCircularBuffer(program, all_cores, cb_act_row_major_bfloat16_config);
     log_debug(
         LogOp,
         "Act Row Major CB: {}, npages: {}, pagesize: {}",
-        act_cb_row_major_bfloat16,
+        cb_indices.act_cb_row_major_bfloat16,
         act_block_num_tiles_split,
         act_tile_size);
 
     auto conv_reader_indices_buffer = conv_reader_indices.value().device_buffer();
 
+    cb_indices.cb_for_reader_indices = cb_indices.get_next_cb_index();
     CircularBufferConfig cb_for_reader_indices_config =
-        CircularBufferConfig(out_block_h_datums * 2, {{cb_for_reader_indices, tt::DataFormat::Float16_b}})
-            .set_page_size(cb_for_reader_indices, out_block_h_datums * 2);
+        CircularBufferConfig(out_block_h_datums * 2, {{cb_indices.cb_for_reader_indices, tt::DataFormat::Float16_b}})
+            .set_page_size(cb_indices.cb_for_reader_indices, out_block_h_datums * 2);
     cb_for_reader_indices_config.set_globally_allocated_address(*conv_reader_indices_buffer);
     auto cb_for_reader_indices_id = tt_metal::CreateCircularBuffer(program, all_cores, cb_for_reader_indices_config);
 
     if (has_bias) {
-        bias_cb = next_cb_index++;
         uint32_t bias_tile_size = tt_metal::detail::TileSize(bias_df);
         // bias input
         uint32_t bias_pagesize = bias_tile_size;
-        CircularBufferConfig cb_bias_config = CircularBufferConfig(bias_ntiles * bias_pagesize, {{bias_cb, bias_df}})
-                                                  .set_page_size(bias_cb, bias_pagesize);
+        cb_indices.bias_cb = cb_indices.get_next_cb_index();
+        CircularBufferConfig cb_bias_config =
+            CircularBufferConfig(bias_ntiles * bias_pagesize, {{cb_indices.bias_cb, bias_df}})
+                .set_page_size(cb_indices.bias_cb, bias_pagesize);
         auto cb_bias = tt_metal::CreateCircularBuffer(program, all_cores, cb_bias_config);
 
-        log_debug(LogOp, "Bias CB: {}, npages: {}, pagesize: {}", bias_cb, bias_ntiles, bias_pagesize);
+        log_debug(LogOp, "Bias CB: {}, npages: {}, pagesize: {}", cb_indices.bias_cb, bias_ntiles, bias_pagesize);
     }
 
     uint32_t out_tile_size = tt_metal::detail::TileSize(out_df);
     uint32_t interm0_single_tile_size = tt_metal::detail::TileSize(interm0_df);
 
+    cb_indices.matmul_partials_cb = cb_indices.get_next_cb_index();
     // Share buffer if same data format
     CBHandle cb_output = 0;
     if (interm0_df == out_df) {
-        out0_cb = next_cb_index++;
+        cb_indices.out0_cb = cb_indices.get_next_cb_index();
         // CoreRangeSet cores(std::set<CoreRange>({core}));
         std::map<uint8_t, tt::DataFormat> cb_output_data_format_spec = {
-            {out0_cb, out_df}, {matmul_partials_cb, out_df}};
+            {cb_indices.out0_cb, out_df}, {cb_indices.matmul_partials_cb, out_df}};
         CircularBufferConfig cb_matmul_partials_config =
             CircularBufferConfig(num_output_tiles * out_tile_size, cb_output_data_format_spec)
-                .set_page_size(out0_cb, out_tile_size)
-                .set_page_size(matmul_partials_cb, out_tile_size);
+                .set_page_size(cb_indices.out0_cb, out_tile_size)
+                .set_page_size(cb_indices.matmul_partials_cb, out_tile_size);
         if (output.is_sharded()) {
             cb_matmul_partials_config = cb_matmul_partials_config.set_globally_allocated_address(*output.buffer());
         } else {
             log_debug(
                 LogOp,
                 "Matmul Partials CB: {}, npages: {}, pagesize: {}",
-                matmul_partials_cb,
+                cb_indices.matmul_partials_cb,
                 num_output_tiles,
                 out_tile_size);
         }
@@ -697,19 +718,20 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     } else {
         // Separate buffer if not same data format
         CircularBufferConfig cb_matmul_partials_config =
-            CircularBufferConfig(num_output_tiles * interm0_single_tile_size, {{matmul_partials_cb, interm0_df}})
-                .set_page_size(matmul_partials_cb, interm0_single_tile_size);
+            CircularBufferConfig(
+                num_output_tiles * interm0_single_tile_size, {{cb_indices.matmul_partials_cb, interm0_df}})
+                .set_page_size(cb_indices.matmul_partials_cb, interm0_single_tile_size);
         auto cb_matmul_partials = tt_metal::CreateCircularBuffer(program, all_cores, cb_matmul_partials_config);
         log_debug(
             LogOp,
             "Matmul Partials CB: {}, npages: {}, pagesize: {}",
-            matmul_partials_cb,
+            cb_indices.matmul_partials_cb,
             num_output_tiles,
             interm0_single_tile_size);
-        out0_cb = next_cb_index++;
+        cb_indices.out0_cb = cb_indices.get_next_cb_index();
         CircularBufferConfig cb_output_config =
-            CircularBufferConfig(num_output_tiles * out_tile_size, {{out0_cb, out_df}})
-                .set_page_size(out0_cb, out_tile_size);
+            CircularBufferConfig(num_output_tiles * out_tile_size, {{cb_indices.out0_cb, out_df}})
+                .set_page_size(cb_indices.out0_cb, out_tile_size);
         if (output.is_sharded()) {
             cb_output_config = cb_output_config.set_globally_allocated_address(*output.buffer());
         }
@@ -739,15 +761,15 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         untilize_out,  // untilize_out
 
         bias_ntiles,
-        bias_cb,
+        cb_indices.bias_cb,
 
-        act_cb,
-        weight_cb,
-        act_cb_row_major_bfloat16,
-        act_cb_second_reader,
-        matmul_partials_cb,
-        tilize_mode_tilized_act_cb,
-        out0_cb,
+        cb_indices.act_cb,
+        cb_indices.weight_cb,
+        cb_indices.act_cb_row_major_bfloat16,
+        cb_indices.act_cb_second_reader,
+        cb_indices.matmul_partials_cb,
+        cb_indices.tilize_mode_tilized_act_cb,
+        cb_indices.out0_cb,
         0,
         input_num_cores,  // in0_nblocks_w_tilize. Repeat tilize after all cores have done one round of MCAST.
 
@@ -776,16 +798,16 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         (uint32_t)act_mcast_end.y,
         (uint32_t)act_block_num_tiles * tt_metal::detail::TileSize(tilized_act_df),
         (uint32_t)output_num_cores,
-        (uint32_t)act_cb,
-        (uint32_t)weight_cb,
-        (uint32_t)sharded_act_cb,
-        (uint32_t)cb_for_reader_indices,
-        (uint32_t)cb_for_l1_array,
-        (uint32_t)act_cb_row_major_bfloat16,
-        (uint32_t)tilize_mode_tilized_act_cb};
+        (uint32_t)cb_indices.act_cb,
+        (uint32_t)cb_indices.weight_cb,
+        (uint32_t)cb_indices.sharded_act_cb,
+        (uint32_t)cb_indices.cb_for_reader_indices,
+        (uint32_t)cb_indices.cb_for_l1_array,
+        (uint32_t)cb_indices.act_cb_row_major_bfloat16,
+        (uint32_t)cb_indices.tilize_mode_tilized_act_cb};
 
     weights_kernel_compile_args = {
-        weight_cb,                                                      // cb_id_weight
+        cb_indices.weight_cb,                                           // cb_id_weight
         act_block_w_ntiles / (filter_h * filter_w),                     // core_in_channels_ntiles
         filter_h * filter_w,                                            // window_size_hw
         weight_block_w_ntiles,                                          // weight_block_width_ntiles
@@ -798,7 +820,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         input_num_cores,            // other_core_weight_height_blocks
         per_core_num_blocks_act_w,  // this_core_weight_height_blocks
         num_blocks_act_h_per_core,
-        bias_cb,
+        cb_indices.bias_cb,
         bias_in_dram};
 
     auto act_kernel_id = CreateKernel(
