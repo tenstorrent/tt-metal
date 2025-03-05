@@ -18,7 +18,8 @@
 // The size of the buffer is 32 4 byte values, and for trisc kernels we are using lower half of it.
 // Number of valid elements to dump is 16 for trisc kernels
 // MAKE SURE TO DOUBLE CHECK THIS VALUE WHEN REBASING
-volatile uint32_t* dbg_dump_trisc = (volatile uint32_t*)0x001e4;
+// FIXME MT: double check this
+// volatile uint32_t* dbg_dump_trisc = (volatile uint32_t*)0x001e4;
 
 using namespace ckernel;
 
@@ -82,16 +83,16 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
     std::uint16_t tiles_received;
 
     if (operand == 0) {
-        *(dbg_dump_trisc + 3) = 0x00baba01;
+        // FIXME MT:*(dbg_dump_trisc + 3) = 0x00baba01;
     } else {
-        *(dbg_dump_trisc + 4) = 0x00baba01;
+        // FIXME MT:*(dbg_dump_trisc + 4) = 0x00baba01;
     }
-    *(dbg_dump_trisc + 5) = (uint32_t)get_local_cb_interface(input).fifo_rd_ptr;
-    *(dbg_dump_trisc + 6) = (uint32_t)get_local_cb_interface(input).fifo_size;
-    *(dbg_dump_trisc + 7) = (uint32_t)get_local_cb_interface(input).fifo_limit;
-    *(dbg_dump_trisc + 8) = (uint32_t)get_local_cb_interface(input).tiles_acked;
-    *(dbg_dump_trisc + 9) = (uint32_t)get_local_cb_interface(input).fifo_page_size;
-    *(dbg_dump_trisc + 10) = (uint32_t)tiles_received_ptr;
+    // FIXME MT:*(dbg_dump_trisc + 5) = (uint32_t)get_local_cb_interface(input).fifo_rd_ptr;
+    // FIXME MT:*(dbg_dump_trisc + 6) = (uint32_t)get_local_cb_interface(input).fifo_size;
+    // FIXME MT:*(dbg_dump_trisc + 7) = (uint32_t)get_local_cb_interface(input).fifo_limit;
+    // FIXME MT:*(dbg_dump_trisc + 8) = (uint32_t)get_local_cb_interface(input).tiles_acked;
+    // FIXME MT:*(dbg_dump_trisc + 9) = (uint32_t)get_local_cb_interface(input).fifo_page_size;
+    // FIXME MT:*(dbg_dump_trisc + 10) = (uint32_t)tiles_received_ptr;
 
     uint16_t num_tiles_recv;
     do {
@@ -100,21 +101,21 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
     } while (num_tiles_recv < num_tiles_u);
 
     if (operand == 0) {
-        *(dbg_dump_trisc + 3) = 0x08baba01;
+        // FIXME MT:*(dbg_dump_trisc + 3) = 0x08baba01;
     } else {
-        *(dbg_dump_trisc + 4) = 0x08baba01;
+        // FIXME MT:*(dbg_dump_trisc + 4) = 0x08baba01;
     }
 
     apply_mm_stagger(operand);
 
-    if (operand == 0) {
-        uint block_id = *(dbg_dump_trisc + 1);
-        if (block_id == 0) {
-            uint iter_id = *(dbg_dump_trisc + 2);
-            *(dbg_dump_trisc + 2) = iter_id + 1;
-        }
-        *(dbg_dump_trisc + 1) = block_id + 1;
-    }
+    // FIXME MT:if (operand == 0) {
+    // FIXME MT:    uint block_id = *(dbg_dump_trisc + 1);
+    // FIXME MT:    if (block_id == 0) {
+    // FIXME MT:        uint iter_id = *(dbg_dump_trisc + 2);
+    // FIXME MT:        *(dbg_dump_trisc + 2) = iter_id + 1;
+    // FIXME MT:    }
+    // FIXME MT:    *(dbg_dump_trisc + 1) = block_id + 1;
+    // FIXME MT:}
 }
 
 // Pop N tiles from the incoming stream

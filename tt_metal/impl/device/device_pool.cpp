@@ -324,7 +324,8 @@ void DevicePool::initialize_active_devices() const {
         }
         log_info(tt::LogMetal, "Fabric Initialized with config {}", fabric_config);
     }
-    dev->allocate_dram_debug_buffer();
+    // FIXME MT: Temp remove this feature
+    // dev->allocate_dram_debug_buffer();
 
     // Activate FD kernels
     // Remaining steps are for setting up FD

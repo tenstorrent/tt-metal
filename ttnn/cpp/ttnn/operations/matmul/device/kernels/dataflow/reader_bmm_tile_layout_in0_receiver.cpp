@@ -16,7 +16,7 @@
 // On ncrisc, we use upper 16 elements of the array so, the address is 0x001e4 + 16*4 = 0x00224
 // There is 16 values available to use on ncrisc
 // MAKE SURE TO DOUBLE CHECK THIS VALUE WHEN REBASING
-volatile uint32_t* dbg_dump_ncrisc = (volatile uint32_t*)0x00224;
+// FIXME MT: volatile uint32_t* dbg_dump_ncrisc = (volatile uint32_t*)0x00224;
 
 void kernel_main() {
     // in0 mcast args
@@ -57,15 +57,16 @@ void kernel_main() {
                         noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, INVALID);
 
                         // Atomic increment source core counter
-                        *(dbg_dump_ncrisc + 3) =
-                            (uint32_t)((in0_mcast_sender_noc_x & 0xffff) | ((in0_mcast_sender_noc_y & 0xffff) << 16));
-                        *(dbg_dump_ncrisc + 4) = (uint32_t)(in0_mcast_sender_semaphore_noc_addr & 0xFFFFFFFF);
-                        *(dbg_dump_ncrisc + 5) = (uint32_t)(in0_mcast_sender_semaphore_noc_addr >> 32);
-                        *(dbg_dump_ncrisc + 6) = (uint32_t)in0_mcast_receiver_semaphore_addr_ptr;
-                        *(dbg_dump_ncrisc + 7) = block;
-                        *(dbg_dump_ncrisc + 8) = 0x0Cbaba01;
+                        // FIXME MT: *(dbg_dump_ncrisc + 3) =
+                        // (uint32_t)((in0_mcast_sender_noc_x & 0xffff) | ((in0_mcast_sender_noc_y & 0xffff) << 16));
+                        // FIXME MT: *(dbg_dump_ncrisc + 4) = (uint32_t)(in0_mcast_sender_semaphore_noc_addr &
+                        // 0xFFFFFFFF);
+                        // FIXME MT: *(dbg_dump_ncrisc + 5) = (uint32_t)(in0_mcast_sender_semaphore_noc_addr >> 32);
+                        // FIXME MT: *(dbg_dump_ncrisc + 6) = (uint32_t)in0_mcast_receiver_semaphore_addr_ptr;
+                        // FIXME MT: *(dbg_dump_ncrisc + 7) = block;
+                        // FIXME MT: *(dbg_dump_ncrisc + 8) = 0x0Cbaba01;
                         noc_semaphore_inc(in0_mcast_sender_semaphore_noc_addr, 1);
-                        *(dbg_dump_ncrisc + 8) = 0x0Cbaba02;
+                        // FIXME MT: *(dbg_dump_ncrisc + 8) = 0x0Cbaba02;
 
                         // wait on in0 semaphore value to become VALID (set by mcast sender after it multicasts data)
                         noc_semaphore_wait(in0_mcast_receiver_semaphore_addr_ptr, VALID);

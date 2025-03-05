@@ -1199,24 +1199,26 @@ void Device::init_fabric() {
     log_info(tt::LogMetal, "Fabric initialized on Device {}", this->id_);
 }
 
-// Controlled by env var TT_METAL_ARC_DEBUG_BUFFER_SIZE=<size_bytes>
-// Allocates a buffer for debugging purposes
-void Device::allocate_dram_debug_buffer() {
-    uint32_t arc_debug_buffer_size = llrt::RunTimeOptions::get_instance().get_arc_debug_buffer_size();
-    if (arc_debug_buffer_size) {
-        tt::tt_metal::InterleavedBufferConfig dram_config{
-            .device = this,
-            .size = arc_debug_buffer_size,
-            .page_size =  arc_debug_buffer_size,
-            .buffer_type = tt::tt_metal::BufferType::DRAM
-            };
+// FIXME MT: Temp remove this feature
+// // Controlled by env var TT_METAL_ARC_DEBUG_BUFFER_SIZE=<size_bytes>
+// // Allocates a buffer for debugging purposes
+// void Device::allocate_dram_debug_buffer() {
+//     uint32_t arc_debug_buffer_size = llrt::RunTimeOptions::get_instance().get_arc_debug_buffer_size();
+//     if (arc_debug_buffer_size) {
+//         tt::tt_metal::InterleavedBufferConfig dram_config{
+//             .device = this,
+//             .size = arc_debug_buffer_size,
+//             .page_size =  arc_debug_buffer_size,
+//             .buffer_type = tt::tt_metal::BufferType::DRAM
+//             };
 
-        dram_debug_buffer_ = tt_metal::CreateBuffer(dram_config);
-        log_info(tt::LogMetal, "ARC_DEBUG_BUFFER allocated at address: {} of size: {}", dram_debug_buffer_->address(), dram_debug_buffer_->size());
-    } else {
-        log_debug(tt::LogMetal, "Did not allocate allocate_dram_debug_buffer");
-    }
-}
+//         dram_debug_buffer_ = tt_metal::CreateBuffer(dram_config);
+//         log_info(tt::LogMetal, "ARC_DEBUG_BUFFER allocated at address: {} of size: {}",
+//         dram_debug_buffer_->address(), dram_debug_buffer_->size());
+//     } else {
+//         log_debug(tt::LogMetal, "Did not allocate allocate_dram_debug_buffer");
+//     }
+// }
 
 bool Device::initialize(
     const uint8_t num_hw_cqs,

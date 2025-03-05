@@ -150,7 +150,8 @@ public:
     void init_command_queue_host() override;
     void init_command_queue_device() override;
 
-    void allocate_dram_debug_buffer() override;
+    // FIXME MT: Temp remove feature
+    // void allocate_dram_debug_buffer() override;
     void init_fabric() override;
     void set_ethernet_core_count_on_dispatcher(uint32_t num_ethernet_cores);
     uint32_t get_ethernet_core_count_on_dispatcher() const;
