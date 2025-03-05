@@ -6,6 +6,10 @@ import pytest
 
 from models.utility_functions import run_for_wormhole_b0
 from models.demos.ttnn_resnet.tests.perf_e2e_resnet50 import run_perf_resnet
+from models.demos.wormhole.resnet50.tests.test_resnet50_performant_imagenet import (
+    test_run_resnet50_trace_2cqs_inference,
+)
+import ttnn
 
 
 @run_for_wormhole_b0()
@@ -120,5 +124,36 @@ def test_perf_trace_2cqs(
         hf_cat_image_sample_input,
         device,
         "resnet50_trace_2cqs",
+        model_location_generator,
+    )
+
+
+@run_for_wormhole_b0()
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 24576, "trace_region_size": 1605632, "num_command_queues": 2}], indirect=True
+)
+@pytest.mark.parametrize(
+    "batch_size, act_dtype, weight_dtype",
+    ((16, ttnn.bfloat8_b, ttnn.bfloat8_b),),
+)
+@pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
+def test_perf_trace_2cqs_with_imagenet(
+    device,
+    use_program_cache,
+    batch_size,
+    imagenet_label_dict,
+    act_dtype,
+    weight_dtype,
+    enable_async_mode,
+    model_location_generator,
+):
+    test_run_resnet50_trace_2cqs_inference(
+        device,
+        use_program_cache,
+        batch_size,
+        imagenet_label_dict,
+        act_dtype,
+        weight_dtype,
+        enable_async_mode,
         model_location_generator,
     )
