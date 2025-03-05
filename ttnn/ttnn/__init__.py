@@ -104,8 +104,6 @@ from ttnn._ttnn.events import (
     MeshEvent,
     record_event,
     wait_for_event,
-    record_mesh_event,
-    wait_for_mesh_event,
 )
 
 from ttnn._ttnn.operations.trace import (
