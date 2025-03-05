@@ -69,21 +69,22 @@ void validate_rope_input_and_params(const autograd::TensorPtr& input, const Rota
     }
 }
 
-// trans_mat, sin_cache, cos_cache all precomputed and stored somewhere in the module hierarchy
+// trans_mat, sin_cache, cos_cache are all precomputed and stored somewhere in
+// the module hierarchy and passed to the operation.
 autograd::TensorPtr rope(const autograd::TensorPtr& input, const RotaryEmbeddingParams& params) {
-    namespace f = ttml::ttnn_fixed;
     validate_rope_input_and_params(input, params);
 
     // we need to ensure everything in sight is interleaved over L1 before
-    // calling ttnn rope, whence the calls to ttnn_fixed::f::to_l1_interleaved.
+    // calling ttnn rope and then move the result back for storing it in the
+    // grad graph, whence the calls to ttnn_fixed::to_l1_interleaved and
+    // ttnn_fixed::to_dram_interleaved.
+    auto input_l1 = ttnn_fixed::to_l1_interleaved(input->get_value());
+    auto cos_cache_l1 = ttnn_fixed::to_l1_interleaved(params.cos_cache);
+    auto sin_cache_l1 = ttnn_fixed::to_l1_interleaved(params.sin_cache);
+    auto trans_mat_l1 = ttnn_fixed::to_l1_interleaved(params.trans_mat);
 
-    // FIXME: mostly use defaults for now, try tweaking.
-    auto out_tensor = ttnn::experimental::rotary_embedding_llama(
-        f::to_l1_interleaved(input->get_value()),
-        f::to_l1_interleaved(params.cos_cache),
-        f::to_l1_interleaved(params.sin_cache),
-        f::to_l1_interleaved(params.trans_mat));
-    auto out = autograd::create_tensor(f::to_dram_interleaved(out_tensor));
+    auto out_tensor = ttnn::experimental::rotary_embedding_llama(input_l1, cos_cache_l1, sin_cache_l1, trans_mat_l1);
+    auto out = autograd::create_tensor(ttnn_fixed::to_dram_interleaved(out_tensor));
 
     // In the backward pass we rotate by -θ, so we need negated cos and sin
     // caches. Note: we can just reuse trans_mat here since the data movement
@@ -91,12 +92,15 @@ autograd::TensorPtr rope(const autograd::TensorPtr& input, const RotaryEmbedding
     // up the matmul, and the matrix used is specified by the cos/sin caches.)
     autograd::GradFunction grad_fn = [input, params, out]() {
         auto dL_dout = out->get_grad();
-        auto dL_dinput = ttnn::experimental::rotary_embedding_llama(
-            f::to_l1_interleaved(dL_dout),
-            f::to_l1_interleaved(params.neg_cos_cache),
-            f::to_l1_interleaved(params.neg_sin_cache),
-            f::to_l1_interleaved(params.trans_mat));
-        input->add_grad(f::to_dram_interleaved(dL_dinput));
+
+        auto dL_dout_l1 = ttnn_fixed::to_l1_interleaved(dL_dout);
+        auto neg_cos_cache_l1 = ttnn_fixed::to_l1_interleaved(params.neg_cos_cache);
+        auto neg_sin_cache_l1 = ttnn_fixed::to_l1_interleaved(params.neg_sin_cache);
+        auto trans_mat_l1 = ttnn_fixed::to_l1_interleaved(params.trans_mat);
+
+        auto dL_dinput =
+            ttnn::experimental::rotary_embedding_llama(dL_dout_l1, neg_cos_cache_l1, neg_sin_cache_l1, trans_mat_l1);
+        input->add_grad(ttnn_fixed::to_dram_interleaved(dL_dinput));
     };
 
     auto links = autograd::get_links(input);
@@ -116,12 +120,10 @@ std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(uint32_t head_dim, uint32_t sequ
 
     auto freqs = xt::ones_like(theta_pow) / theta_pow;
 
-    // Create sequence position tensor [0, 1, 2, ..., sequence_length-1] * head_dim
     xt::xarray<float> seq_pos = xt::arange<float>(sequence_length);
     xt::xarray<float> seq_pos_repeated_to_head = xt::repeat(seq_pos, head_dim, seq_pos.dimension() - 1);
     xt::xarray<float> scales = seq_pos_repeated_to_head.reshape({sequence_length, static_cast<uint32_t>(head_dim)});
 
-    // scale the freqs by the sequence position
     xt::xarray<float> scaled_freqs = scales * freqs;
 
     // take the scaled freqs mod 2π to satisfy ttnn inputs constraints for sin/cos
