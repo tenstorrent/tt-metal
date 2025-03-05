@@ -51,7 +51,7 @@ void validate_rope_input_and_params(const autograd::TensorPtr& input, const Rota
 
     auto expected_trig_shape = ttnn::Shape{1U, 1U, input_seq_len, input_head_dim};
     if (!std::ranges::all_of(
-            trig_param_shapes, [expected_trig_shape](auto shape) { return shape == expected_trig_shape; })) {
+            trig_param_shapes, [&expected_trig_shape](auto shape) { return shape == expected_trig_shape; })) {
         throw std::runtime_error(fmt::format(
             "All trigonometric rotary embedding parameters must have shape [1, 1, {}, {}], but got shapes: "
             "cos_cache: {}, sin_cache: {}, neg_cos_cache: {}, neg_sin_cache: {}",
