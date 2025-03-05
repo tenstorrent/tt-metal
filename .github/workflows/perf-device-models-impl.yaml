@@ -112,7 +112,6 @@ jobs:
         timeout-minutes: 5
         if: ${{ !cancelled() && steps.check-device-perf-report.conclusion == 'success' }}
         uses: actions/upload-artifact@v4
-        timeout-minutes: 10
         with:
           name: device-perf-report-csv-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}
           path: /work/${{ steps.check-device-perf-report.outputs.device_perf_report_filename }}
