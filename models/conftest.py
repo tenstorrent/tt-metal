@@ -6,6 +6,12 @@ import pytest
 from PIL import Image
 import torchvision.transforms as transforms
 import ast
+import gc
+
+
+@pytest.fixture(autouse=True)
+def ensure_gc():
+    gc.collect()
 
 
 @pytest.fixture
