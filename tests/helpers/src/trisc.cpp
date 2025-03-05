@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <cstdint>
 
 #include "ckernel.h"
@@ -16,19 +17,15 @@
 int main()
 {
 #ifdef LLK_TRISC_UNPACK
-    volatile std::uint32_t* mailbox = (volatile std::uint32_t*)(0x19FFC);
+    volatile std::uint32_t* mailbox = reinterpret_cast<volatile std::uint32_t*>(0x19FFC);
 #elif defined(LLK_TRISC_MATH)
-    volatile std::uint32_t* mailbox = (volatile std::uint32_t*)(0x19FF8);
+    volatile std::uint32_t* mailbox = reinterpret_cast<volatile std::uint32_t*>(0x19FF8);
 #elif defined(LLK_TRISC_PACK)
-    volatile std::uint32_t* mailbox = (volatile std::uint32_t*)(0x19FF4);
+    volatile std::uint32_t* mailbox = reinterpret_cast<volatile std::uint32_t*>(0x19FF4);
 #endif
-
     *mailbox = 0x2; // write value different than 1 to mailbox to indicate kernel is running
 
-    for (int i = 0; i < 64; i++)
-    {
-        ckernel::regfile[i] = 0;
-    }
+    std::fill(ckernel::regfile, ckernel::regfile + 64, 0);
 
     ckernel::reset_cfg_state_id();
     ckernel::reset_dest_offset_id();
@@ -38,7 +35,11 @@ int main()
 
     *mailbox = ckernel::KERNEL_COMPLETE; // 0x1
 
-    for (;;)
+    // Use a volatile variable to prevent the compiler from optimizing away the loop
+    volatile bool run = true;
+
+    // Infinite loop
+    while (run)
     {
     }
 }

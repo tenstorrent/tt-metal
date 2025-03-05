@@ -57,7 +57,7 @@ if [[ "$REUSE" == false ]]; then
 
     echo "Installing required packages..."
     pip install .
-    pip install pytest pytest-cov
+    pip install pytest pytest-cov pytest-repeat pytest-timeout
 
     # Detect architecture for chip
     echo "Running tt-smi -ls to detect architecture..."

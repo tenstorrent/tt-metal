@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import torch
 import numpy as np
 import subprocess
@@ -41,12 +42,11 @@ def run_shell_command(command: str):
         command, shell=True, text=True, capture_output=False, stdout=subprocess.DEVNULL
     )
     if result.returncode != 0:
-        raise RuntimeError(f"Command failed: {command}\n{result.stderr}")
+        raise RuntimeError(f"Build failed: {command}\n{result.stderr}")
     return result
 
 
 def calculate_read_words_count(format, sfpu=False):
-
     if format not in format_sizes:
         raise ValueError(f"Unsupported format: {format}")
 
@@ -64,14 +64,8 @@ def reverse_endian_chunk(input_list, chunk_size=4):
 
 
 def format_kernel_list(kernels, as_hex=False):
-    formatted_str = ""
-    for i in kernels:
-        # Use hex formatting if the flag is set, otherwise use decimal
-        if as_hex:
-            formatted_str += str(hex(i)) + ","
-        else:
-            formatted_str += str(i) + ","
-    return formatted_str[:-1]  # Remove the trailing comma
+    formatter = hex if as_hex else str
+    return ",".join(formatter(i) for i in kernels)
 
 
 def compare_pcc(golden, calculated, pcc=0.99):
@@ -127,3 +121,10 @@ def compare_pcc(golden, calculated, pcc=0.99):
         return True, 1.0
 
     return cal_pcc >= pcc, cal_pcc
+
+
+def get_chip_architecture():
+    chip_architecture = os.getenv("CHIP_ARCH")
+    if chip_architecture is None:
+        raise ValueError("CHIP_ARCH environment variable is not set")
+    return chip_architecture

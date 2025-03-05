@@ -32,7 +32,7 @@ def run_elf_files(testname, core_loc="0,0", run_brisc=True):
     # and now cores are run in revese order PACK, MATH, UNOPACK
     # Once that issue is reolved with tt-exalens code will be returned to normal for loop
 
-    for i in range(2, -1, -1):
+    for i in reversed(range(3)):
         run_elf(f"{ELF_LOCATION}{testname}_trisc{i}.elf", core_loc, risc_id=i + 1)
 
 
