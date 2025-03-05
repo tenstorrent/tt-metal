@@ -104,8 +104,6 @@ from ttnn._ttnn.events import (
     MeshEvent,
     record_event,
     wait_for_event,
-    record_mesh_event,
-    wait_for_mesh_event,
 )
 
 from ttnn._ttnn.operations.trace import (
@@ -190,7 +188,6 @@ from ttnn.device import (
     disable_and_clear_program_cache,
     manage_device,
     synchronize_device,
-    synchronize_mesh_device,
     dump_device_memory_state,
     get_memory_view,
     GetPCIeDeviceID,

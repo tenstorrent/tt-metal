@@ -619,23 +619,8 @@ void device_module(py::module& m_device) {
         py::arg("device"),
         py::arg("cq_id") = std::nullopt,
         py::arg("sub_device_ids") = std::vector<SubDeviceId>());
-    // TODO: #18572 - Replace the implementation of this overload with the TT-distributed implementation.
     m_device.def(
         "synchronize_device",
-        [](MeshDevice* device, std::optional<QueueId> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
-            for (auto& d : device->get_devices()) {
-                d->push_work([d, cq_id, &sub_device_ids]() mutable {
-                    Synchronize(d, cq_id.has_value() ? std::make_optional(**cq_id) : std::nullopt, sub_device_ids);
-                });
-                d->synchronize();
-            }
-        },
-        synchronize_device_doc.data(),
-        py::arg("device"),
-        py::arg("cq_id") = std::nullopt,
-        py::arg("sub_device_ids") = std::vector<SubDeviceId>());
-    m_device.def(
-        "synchronize_mesh_device",
         [](MeshDevice* device, std::optional<QueueId> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
             tt::tt_metal::distributed::Synchronize(
                 device, cq_id.has_value() ? std::make_optional(**cq_id) : std::nullopt, sub_device_ids);
