@@ -6,10 +6,6 @@
 from .distributed import (
     MeshDevice,
     DispatchCoreType,
-    TensorToMesh,
-    ShardTensorToMesh,
-    ShardTensor2dMesh,
-    ReplicateTensorToMesh,
     MeshToTensor,
     ConcatMeshToTensor,
     ConcatMesh2dToTensor,
@@ -28,5 +24,4 @@ from .distributed import (
     ConcatMeshToTensor,
     synchronize_devices,
     visualize_mesh_device,
-    distribute,
 )
