@@ -329,12 +329,15 @@ def run_all_reduce_impl(
         ([1, 1, 32, 1280], 1, 3, 24, 40),  # QKV all reduce
         ([1, 1, 32, 3584], 1, 3, 24, 24),  # FF1 all reduce
         ([1, 1, 32, 2048], 0, 3, 24, 16),  # FF2/DO all reduce
+        ([1, 1, 32, 16 * 1024], 1, 3, 32, 32),  # LM Head all reduce
         ([1, 1, 32, 1280], 1, 2, 24, 40),  # QKV all reduce
         ([1, 1, 32, 3584], 1, 2, 24, 24),  # FF1 all reduce
         ([1, 1, 32, 2048], 0, 2, 24, 16),  # FF2/DO all reduce
+        ([1, 1, 32, 16 * 1024], 1, 2, 32, 32),  # LM Head all reduce
         ([1, 1, 32, 1280], 1, 1, 24, 40),  # QKV all reduce
         ([1, 1, 32, 3584], 1, 1, 24, 24),  # FF1 all reduce
         ([1, 1, 32, 2048], 0, 1, 24, 16),  # FF2/DO all reduce
+        ([1, 1, 32, 16 * 1024], 1, 1, 32, 32),  # LM Head all reduce
     ],
 )
 @pytest.mark.parametrize(
