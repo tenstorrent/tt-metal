@@ -192,6 +192,13 @@ class TtModelArgs:
                 )
             self._set_model_params(self.LOCAL_LLAMA_PARAMS[local_params])
 
+        self.TG = self.num_devices == 32
+        self.num_device_groups = self.num_devices // self.n_kv_heads
+        self.num_devices_per_group = self.n_kv_heads if self.TG else self.num_devices
+        self.batch_size_per_device_group = (
+            max(self.max_batch_size // self.num_device_groups, 1) if self.TG else self.max_batch_size
+        )
+
         # Set the max number of tokens for each prefill chunk based on the model and device
         max_prefill_chunk_size_div1024 = os.getenv("MAX_PREFILL_CHUNK_SIZE")
         if max_prefill_chunk_size_div1024 is None:
