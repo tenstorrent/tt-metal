@@ -225,9 +225,9 @@ def test_all_gather_tg_llama(
 @pytest.mark.parametrize(
     "ag_type, warmup_iters, perf_target_us",
     [
-        ("sdpa", 5, 11),
-        ("binary_mult", 5, 12),
-        ("layernorm", 5, 8),
+        ("sdpa", 10, 11),
+        ("binary_mult", 10, 12),
+        ("layernorm", 10, 8),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -353,9 +353,9 @@ def test_all_reduce_tg_llama(
 @pytest.mark.parametrize(
     "ar_type, warmup_iters, perf_target_us",
     [
-        ("ff2", 5, 29),
-        ("qkv", 5, 25),
-        ("ff1", 5, 30),
+        ("ff2", 10, 29),
+        ("qkv", 10, 25),
+        ("ff1", 10, 30),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
