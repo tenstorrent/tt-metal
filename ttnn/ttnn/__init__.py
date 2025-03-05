@@ -102,7 +102,6 @@ from ttnn._ttnn.multi_device import (
 
 from ttnn._ttnn.events import (
     MeshEvent,
-    create_event,
     record_event,
     wait_for_event,
 )

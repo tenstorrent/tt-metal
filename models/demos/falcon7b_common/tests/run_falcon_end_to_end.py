@@ -4,6 +4,7 @@
 
 from enum import Enum
 import torch
+import ttnn
 from loguru import logger
 import numpy as np
 from sklearn.metrics import top_k_accuracy_score
@@ -18,7 +19,6 @@ from models.demos.falcon7b_common.tests.test_utils import (
     get_rand_falcon_inputs,
     concat_device_out_layer_present,
     load_hf_model,
-    synchronize_devices,
     get_num_devices,
     dump_device_profiler,
 )
@@ -235,7 +235,7 @@ def run_test_FalconCausalLM_end_to_end(
                 layer_past_len=kv_cache_len,
                 use_cache=use_cache,
             )
-        synchronize_devices(mesh_device)
+        ttnn.synchronize_device(mesh_device)
         profiler.end("first_model_run_with_compile", force_enable=e2e_perf)
 
         # Dump device profiler data before second run to avoid exceeding profiler memory limits when using tracy
@@ -319,7 +319,7 @@ def run_test_FalconCausalLM_end_to_end(
             use_cache=use_cache,
             device_perf_run=device_perf,
         )
-    synchronize_devices(mesh_device)
+    ttnn.synchronize_device(mesh_device)
     profiler.end(f"model_run_for_inference")
 
     if llm_mode == "prefill":

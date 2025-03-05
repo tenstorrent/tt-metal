@@ -14,6 +14,7 @@
 #include <tt-metalium/memory_reporter.hpp>
 #include <tt-metalium/device_impl.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/hal_exp.hpp>
 #include <tt-metalium/trace.hpp>
@@ -341,12 +342,8 @@ void device_module(py::module& m_device) {
            size_t l1_small_size,
            size_t trace_region_size,
            const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
-            std::map<int, std::shared_ptr<MeshDevice>> result;
-            for (int device_id : device_ids) {
-                result[device_id] = MeshDevice::create_single_device(
-                    device_id, l1_small_size, trace_region_size, num_command_queues, dispatch_core_config);
-            }
-            return result;
+            return MeshDevice::create_single_devices(
+                device_ids, l1_small_size, trace_region_size, num_command_queues, dispatch_core_config);
         },
         R"doc(
         Creates an instance of TT device.
@@ -604,12 +601,7 @@ void device_module(py::module& m_device) {
         +------------------+----------------------------------+-----------------------+-------------+----------+
     )doc");
 
-    m_device.def(
-        "synchronize_device",
-        [](MeshDevice* device, const QueueId cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
-            device->synchronize();
-        },
-        R"doc(
+    constexpr std::string_view synchronize_device_doc = R"doc(
                 Synchronize the device with host by waiting for all operations to complete.
                 If cq_id is provided then only the operations associated with that cq_id are waited for,
                 otherwise operations for all command queues are waited on.
@@ -629,9 +621,31 @@ void device_module(py::module& m_device) {
                     >>> device = ttnn.open_device(device_id=device_id)
                     >>> # Assume some operations are queued on the device
                     >>> ttnn.synchronize_device(device)
-            )doc",
+            )doc";
+    m_device.def(
+        "synchronize_device",
+        [](IDevice* device, std::optional<QueueId> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
+            // Send finish command to issue queue through worker thread
+            // Worker thread will stall until the device is flushed.
+            device->push_work([device, cq_id, &sub_device_ids]() mutable {
+                Synchronize(device, cq_id.has_value() ? std::make_optional(**cq_id) : std::nullopt, sub_device_ids);
+            });
+            // Main thread stalls until worker is complete (full device and worker queue flush).
+            device->synchronize();
+        },
+        synchronize_device_doc.data(),
         py::arg("device"),
-        py::arg("cq_id") = DefaultQueueId,
+        py::arg("cq_id") = std::nullopt,
+        py::arg("sub_device_ids") = std::vector<SubDeviceId>());
+    m_device.def(
+        "synchronize_device",
+        [](MeshDevice* device, std::optional<QueueId> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
+            tt::tt_metal::distributed::Synchronize(
+                device, cq_id.has_value() ? std::make_optional(**cq_id) : std::nullopt, sub_device_ids);
+        },
+        synchronize_device_doc.data(),
+        py::arg("device"),
+        py::arg("cq_id") = std::nullopt,
         py::arg("sub_device_ids") = std::vector<SubDeviceId>());
     m_device.def("DumpDeviceProfiler", [](MeshDevice* device) { DumpDeviceProfiler(device); }, py::arg("device"), R"doc(
         Dump device side profiling data.
