@@ -119,7 +119,7 @@ class Yolov4Trace2CQ:
         self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
         ttnn.record_event(0, self.op_event)
         ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)
-        ttnn.synchronize_devices(self.device)
+        ttnn.synchronize_device(self.device)
 
         ttnn_output_tensor = self.test_infra.output_tensor
 

@@ -73,7 +73,7 @@ def run_model(device, tt_inputs, test_infra, num_warmup_iterations, num_measurem
         _ = ttnn.from_device(test_infra.run(), blocking=True)
         ttnn.dump_device_profiler(device)
 
-    ttnn.synchronize_devices(device)
+    ttnn.synchronize_device(device)
     if use_signpost:
         signpost(header="start")
     outputs = []
@@ -81,7 +81,7 @@ def run_model(device, tt_inputs, test_infra, num_warmup_iterations, num_measurem
     for iter in range(0, num_measurement_iterations):
         test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
         outputs.append(ttnn.from_device(test_infra.run(), blocking=False))
-    ttnn.synchronize_devices(device)
+    ttnn.synchronize_device(device)
     profiler.end(f"run")
     if use_signpost:
         signpost(header="stop")
@@ -128,7 +128,7 @@ def run_2cq_model(device, tt_inputs, test_infra, num_warmup_iterations, num_meas
         _ = ttnn.from_device(test_infra.run(), blocking=True)
         ttnn.dump_device_profiler(device)
 
-    ttnn.synchronize_devices(device)
+    ttnn.synchronize_device(device)
     if use_signpost:
         signpost(header="start")
     outputs = []
@@ -141,7 +141,7 @@ def run_2cq_model(device, tt_inputs, test_infra, num_warmup_iterations, num_meas
         test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
         ttnn.record_event(0, op_event)
         outputs.append(ttnn.from_device(test_infra.run(), blocking=False))
-    ttnn.synchronize_devices(device)
+    ttnn.synchronize_device(device)
     profiler.end(f"run")
     if use_signpost:
         signpost(header="stop")
@@ -182,7 +182,7 @@ def run_trace_model(device, tt_inputs, test_infra, num_warmup_iterations, num_me
         _ = ttnn.from_device(tt_output_res, blocking=True)
         ttnn.dump_device_profiler(device)
 
-    ttnn.synchronize_devices(device)
+    ttnn.synchronize_device(device)
     if use_signpost:
         signpost(header="start")
     outputs = []
@@ -191,7 +191,7 @@ def run_trace_model(device, tt_inputs, test_infra, num_warmup_iterations, num_me
         ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
         outputs.append(ttnn.from_device(tt_output_res, blocking=False))
-    ttnn.synchronize_devices(device)
+    ttnn.synchronize_device(device)
     profiler.end(f"run")
     if use_signpost:
         signpost(header="stop")
@@ -262,7 +262,7 @@ def run_trace_2cq_model(device, tt_inputs, test_infra, num_warmup_iterations, nu
         ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
         ttnn.dump_device_profiler(device)
 
-    ttnn.synchronize_devices(device)
+    ttnn.synchronize_device(device)
     if use_signpost:
         signpost(header="start")
     outputs = []
@@ -277,7 +277,7 @@ def run_trace_2cq_model(device, tt_inputs, test_infra, num_warmup_iterations, nu
         ttnn.record_event(0, op_event)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
         outputs.append(tt_output_res.cpu(blocking=False))
-    ttnn.synchronize_devices(device)
+    ttnn.synchronize_device(device)
     profiler.end(f"run")
     if use_signpost:
         signpost(header="stop")
@@ -333,7 +333,7 @@ def run_perf_resnet(
         final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
         model_location_generator=model_location_generator,
     )
-    ttnn.synchronize_devices(device)
+    ttnn.synchronize_device(device)
 
     num_warmup_iterations = 5
     num_measurement_iterations = 15

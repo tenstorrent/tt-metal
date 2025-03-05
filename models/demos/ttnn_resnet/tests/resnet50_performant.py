@@ -182,7 +182,7 @@ def run_resnet50_2cqs_inference(
         ttnn.record_event(0, op_event)
         outputs.append(ttnn.from_device(test_infra.run(), blocking=False))
 
-    ttnn.synchronize_devices(device)
+    ttnn.synchronize_device(device)
 
     if use_signpost:
         signpost(header="stop")
@@ -266,7 +266,7 @@ def run_resnet50_trace_2cqs_inference(
         ttnn.record_event(0, op_event)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
         outputs.append(ttnn.from_device(test_infra.output_tensor, blocking=False))
-    ttnn.synchronize_devices(device)
+    ttnn.synchronize_device(device)
 
     if use_signpost:
         signpost(header="stop")

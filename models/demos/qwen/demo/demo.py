@@ -378,8 +378,7 @@ def run_qwen_demo(
             pt_out.append(ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[0, 0, 0, :])
             ttnn.deallocate(tt_out)
         # Synchronize devices to ensure the profile captures the correct timing of all devices
-        for i in range(model_args.num_devices):
-            ttnn.synchronize_device(mesh_device.get_devices()[i])
+        ttnn.synchronize_device(mesh_device)
         profiler.end(f"inference_prefill", iteration=batch_idx)
         logger.info(f"Prefill finished")
 
