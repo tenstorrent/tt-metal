@@ -8,23 +8,20 @@ import ttnn
 from models.experimental.functional_vovnet.tt.common import Conv
 
 
-class TtSeparableConvNormAct(nn.Module):
+class TtSeparableConvNormAct:
     def __init__(
         self,
         stride: int = 1,
         padding: int = 1,
         base_address=None,
         device=None,
-        # torch_model=None,
         parameters=None,
         split_conv=False,
     ):
-        super(TtSeparableConvNormAct, self).__init__()
         self.device = device
 
         self.conv_dw = Conv(
             device=device,
-            # model=torch_model,
             path=base_address,
             conv_params=[stride, stride, padding, padding],
             split_conv=split_conv,
@@ -35,7 +32,6 @@ class TtSeparableConvNormAct(nn.Module):
 
         self.conv_pw = Conv(
             device=device,
-            # model=torch_model,
             path=base_address,
             conv_params=[1, 1, 0, 0],
             fused_op=True,
