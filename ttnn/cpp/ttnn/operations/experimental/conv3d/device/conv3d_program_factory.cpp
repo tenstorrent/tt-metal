@@ -386,8 +386,10 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
     std::vector<std::vector<uint32_t>> worker_core_physical_xs(total_output_parallel);
     std::vector<std::vector<uint32_t>> worker_core_physical_ys(total_output_parallel);
 
+    auto cores = corerange_to_cores(core_grid, num_cores, true);
+
     for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
-        CoreCoord core = {core_id % grid_size.x, core_id / grid_size.x};
+        CoreCoord core = cores.at(core_id);
 
         // First, determine which output block and which C_in range this core handles
         uint32_t output_idx = core_id % total_output_parallel;
@@ -530,7 +532,7 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
         if (!group.empty()) {
             std::string cores_str;
             for (uint32_t core_id : group) {
-                CoreCoord core = {core_id % grid_size.x, core_id / grid_size.x};
+                CoreCoord core = cores.at(core_id);
                 if (!cores_str.empty()) {
                     cores_str += ", ";
                 }
@@ -552,7 +554,7 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
 
     // Second loop: Set runtime args with reducer and worker information
     for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
-        CoreCoord core = {core_id % grid_size.x, core_id / grid_size.x};
+        CoreCoord core = cores.at(core_id);
         uint32_t output_idx = core_id % total_output_parallel;
         uint32_t reduction_group_id = output_idx;
 
@@ -610,7 +612,7 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
     }
 
     auto override_runtime_arguments_callback =
-        [num_cores, grid_size, reader_kernels_id, writer_kernels_id](
+        [num_cores, cores, grid_size, reader_kernels_id, writer_kernels_id](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -626,7 +628,7 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
                 optional_input_tensors.at(0).has_value() ? optional_input_tensors.at(0).value().buffer()->address() : 0;
 
             for (uint32_t i = 0; i < num_cores; ++i) {
-                CoreCoord core = {i % grid_size.x, i / grid_size.x};
+                CoreCoord core = cores.at(i);
                 auto& reader_args = reader_args_by_core[core.x][core.y];
                 auto& writer_args = writer_args_by_core[core.x][core.y];
                 reader_args[0] = input_addr;
