@@ -36,11 +36,6 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: workaround
-        run: |
-          # The test-reporting action needs this set, and we can't seem to opt out of it.
-          git config --global --add safe.directory /__w/tt-metal/tt-metal
-
       - uses: actions/download-artifact@v4
         with:
           name: ${{ inputs.package-artifact-name || 'packages artifact unresolved!' }}
@@ -60,6 +55,12 @@ jobs:
         run: |
           /usr/libexec/tt-metalium/validation/tt-metalium-validation-smoke
 
+      - name: workaround
+        run: |
+          # The test-reporting action needs this set, and we can't seem to opt out of it.
+          # git config --global --add safe.directory /__w/tt-metal/tt-metal
+          git init
+
       - name: Test Report
         uses: phoenix-actions/test-reporting@f957cd93fc2d848d556fa0d03c57bc79127b6b5e # v15
         if: ${{ !cancelled() }}
@@ -67,12 +68,14 @@ jobs:
           name: Metalium ${{ matrix.platform }} smoke tests
           path: /work/test-reports/*.xml
           reporter: jest-junit
+
       - uses: ./.github/actions/upload-artifact-with-job-uuid
         if: ${{ !cancelled() }}
         with:
           path: |
             /work/test-reports/
           prefix: "test_reports_"
+
       # Arbitrary limit that's higher than we would like, but the JIT build seems inconsistent.
       # Keep it here as a guardrail to keep Smoke tests fast.  We can adjust as needed.
       - name: Check for slow tests
