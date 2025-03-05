@@ -7,9 +7,7 @@ import math
 from loguru import logger
 
 import ttnn
-from tt_lib.utils import _nearest_y
-
-from models.utility_functions import skip_for_blackhole
+from models.utility_functions import skip_for_blackhole, _nearest_y
 import torch
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 
@@ -19,9 +17,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, stride_h, stride_w, num_cores, grid_size, height_sharded",
     (
-        # (10, 64, 64, 16, 16, 2, 2, 20, (10,2), False),
-        # (10, 64, 64, 16, 16, 1, 1, 20, (10,2), False),
-        # (8, 64, 64, 56, 56, 1, 1, 98, (12,9), True),
+        (10, 64, 64, 16, 16, 2, 2, 20, (10, 2), False),
+        (10, 64, 64, 16, 16, 1, 1, 20, (10, 2), False),
+        (8, 64, 64, 56, 56, 1, 1, 98, (12, 9), True),
         (8, 256, 256, 56, 56, 2, 2, 98, (12, 9), True),
         (8, 512, 512, 28, 28, 2, 2, 80, (10, 8), False),
         (8, 1024, 1024, 14, 14, 2, 2, 56, (7, 8), False),
@@ -70,10 +68,7 @@ def test_run_downsample(
     # Convert NCHW to NHWC shape
     A_pyt_nhwc = torch.permute(A_pyt, (0, 2, 3, 1))
     A_pyt_nhwc = A_pyt_nhwc.reshape(1, 1, batch_size * input_height * input_width, input_channels)
-    # for i in range(2):
-    #    for j in range(32):
-    #        logger.info(f"A_pyt_nhwc_2d[{i}][{j}]={A_pyt_nhwc[0][0][i][j]}")
-    # logger.info("A_pyt_nhwc_2d[32][0]=", A_pyt_nhwc[0][0][32][0])
+
     a_activation_shape_nhwc = [batch_size, input_height, input_width, input_channels]
     A_cl_host = ttnn.Tensor(A_pyt_nhwc, dtype).reshape(1, 1, batch_size * input_height * input_width, input_channels)
     num_cores_height_slices = num_cores if height_sharded else grid_size[0]
@@ -136,15 +131,6 @@ def test_run_downsample(
     out_debug = out
     out_debug = out_debug.to_torch().float()
 
-    # DEBUG
-    # for i in range(16):
-    #     for j in range(input_2d_width):
-    #         logger.debug(f"out_golden_2d_nhwc[{i}][{j}]={out_golden_2d_nhwc[0][0][i][j]}")
-
-    # for i in range(16):
-    #     for j in range(input_2d_width):
-    #         logger.debug(f"out_result_2d_nhwc[{i}][{j}]={out_debug[0][0][i][j]}")
-
     num_errors = 0
     core_idx = 0
     start_i = core_idx * output_shard_height
@@ -166,8 +152,6 @@ def test_run_downsample(
                     )
                     logger.debug(f"    result={calculated}, golden={golden}")
                 num_errors += 1
-                # if (num_errors >= 10):
-                #     assert False
     logger.debug(f"Num errors: {num_errors}")
 
     out = out.reshape(batch_size, output_height, output_width, input_channels)
@@ -177,9 +161,6 @@ def test_run_downsample(
     out_result = out.to_torch().float()
     out_result = torch.transpose(out_result, 2, 3)
     out_result = torch.transpose(out_result, 1, 2)
-
-    # logger.debug (f'OUTPUT: {out_result}')
-    # logger.debug (f'GOLDEN: {out_golden}')
 
     if dtype == ttnn.bfloat8_b:
         assert_with_pcc(out_golden, out_result)
