@@ -108,7 +108,7 @@ def test_direct_shard2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device):
         device=mesh_device,
     )
 
-    out_pass, out_pcc = comp_pcc(ttnn.to_torch(torch_tensor, sharded_tensor), pcc=0.99)
+    out_pass, out_pcc = comp_pcc(torch_tensor, ttnn.to_torch(sharded_tensor), pcc=0.99)
     logger.info(f"PCC value: {out_pcc}")
     assert out_pass
 
