@@ -68,10 +68,7 @@ def test_conv2d(
     parameters = TtConv2dParameters.from_torch(
         torch_model.state_dict(),
         dtype=dtype,
-        in_channels=in_channels,
         out_channels=out_channels,
-        kernel_size=kernel_size,
-        stride=stride,
         device=mesh_device,
     )
     tt_model = TtConv2d(parameters, mesh_device)
@@ -79,10 +76,10 @@ def test_conv2d(
     torch_input_tensor = torch.ones((batch_size, in_channels, height, width))
 
     tt_input_tensor = ttnn.from_torch(
-        torch_input_tensor,  # .permute([0, 2, 3, 1]),  # BCYX -> BYXC
+        torch_input_tensor.permute([0, 2, 3, 1]),  # BCYX -> BYXC
         device=mesh_device,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         dtype=dtype,
     )
 
