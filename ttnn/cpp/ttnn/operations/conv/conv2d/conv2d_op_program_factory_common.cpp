@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "conv2d_op_program_factory_common.hpp"
 
 namespace ttnn::operations::conv {
