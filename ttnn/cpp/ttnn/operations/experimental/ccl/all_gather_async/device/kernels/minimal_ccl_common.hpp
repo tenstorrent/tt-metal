@@ -6,7 +6,7 @@
 #include <tt-metalium/buffer_constants.hpp>
 #include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
-#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
+#include <tt-metalium/fabric_edm_packet_header.hpp>
 #include <cstdint>
 #include <utility>
 
