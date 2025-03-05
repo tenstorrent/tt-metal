@@ -624,9 +624,7 @@ def as_tensor(
             ttnn._ttnn.tensor.dump_tensor(cache_file_name, tensor, distributed_config)
             return tensor
 
-        if isinstance(mesh_mapper, ttnn.ReplicateTensorToMesh):
-            storage_type = f"_multi_device" if mesh_mapper else ""
-        elif mesh_mapper:
+        if mesh_mapper:
             storage_type = f"_multi_device_{device.get_num_devices()}"
         else:
             storage_type = ""
