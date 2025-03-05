@@ -355,7 +355,7 @@ inline uint32_t Hal::get_alignment(HalMemType memory_type) const {
 
 inline uint32_t Hal::get_common_alignment_with_pcie(HalMemType memory_type) const {
     uint32_t index = utils::underlying_type<HalMemType>(memory_type);
-    TT_ASSERT(index < this->mem_alignments_.size());
+    TT_ASSERT(index < this->mem_alignments_with_pcie_.size());
     return this->mem_alignments_with_pcie_[index];
 }
 

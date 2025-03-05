@@ -465,13 +465,13 @@ DeviceAddr CalculateAddressDeviceInterleavedContiguous(
     }
 
     if (buffer_dispatch::are_pages_larger_than_max_prefetch_cmd_size(buffer)) {
-        const buffer_dispatch::PartialPageSpec& partial_page_spec =
-            buffer_dispatch::calculate_partial_page_spec(buffer);
-        const uint32_t full_padded_page_size =
-            partial_page_spec.partial_page_size * partial_page_spec.num_partial_pages_per_full_page;
-        const DeviceAddr full_page_address_offset =
-            (num_round_robins > 0) ? (full_padded_page_size - buffer.aligned_page_size()) * num_round_robins : 0;
-        addr += full_page_address_offset;
+        // const buffer_dispatch::PartialPageSpec& partial_page_spec =
+        //     buffer_dispatch::calculate_partial_page_spec(buffer);
+        // const uint32_t full_padded_page_size =
+        //     partial_page_spec.partial_page_size * partial_page_spec.num_partial_pages_per_full_page;
+        // const DeviceAddr full_page_address_offset =
+        //     (num_round_robins > 0) ? (full_padded_page_size - buffer.aligned_page_size()) * num_round_robins : 0;
+        // addr += (buffer.aligned_page_size() * num_round_robins);
     }
     return addr;
 }
