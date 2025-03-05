@@ -13,6 +13,8 @@ import ttnn
 from .conv2d import TtConv2d, TtConv2dParameters
 from .substate import substate
 
+from .utils import from_torch
+
 if TYPE_CHECKING:
     import torch
 
@@ -28,10 +30,15 @@ class TtPatchEmbedParameters:
         state: dict[str, torch.Tensor],
         *,
         device: ttnn.Device,
+        out_channels: int,
     ) -> TtPatchEmbedParameters:
         return cls(
-            proj=TtConv2dParameters.from_torch(substate(state, "proj"), dtype=ttnn.bfloat16),
-            pos_embed=ttnn.from_torch(state["pos_embed"], dtype=ttnn.bfloat16, device=device),
+            proj=TtConv2dParameters.from_torch(
+                substate(state, "proj"), dtype=ttnn.bfloat16, out_channels=out_channels, device=device
+            ),
+            pos_embed=from_torch(
+                state["pos_embed"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_device=device, shard_dim=None
+            ),
         )
 
     @property
@@ -40,32 +47,26 @@ class TtPatchEmbedParameters:
 
     @property
     def patch_size(self) -> int:
-        return list(self.proj.weight.shape)[-1]
+        return list(self.proj.weight.shape)[-2]
 
 
 class TtPatchEmbed:
-    def __init__(self, parameters: TtPatchEmbedParameters) -> None:
+    def __init__(self, parameters: TtPatchEmbedParameters, mesh_device) -> None:
         super().__init__()
 
         self._pos_embed_max_size = parameters.pos_embed_max_size
-        self._proj = TtConv2d(parameters.proj, stride=(parameters.patch_size, parameters.patch_size))
+        self._proj = TtConv2d(parameters.proj, device=mesh_device)
         self._pos_embed = parameters.pos_embed
+        self._out_height = parameters.patch_size
+        self._out_width = parameters.patch_size
 
     def __call__(self, latent: ttnn.Tensor) -> ttnn.Tensor:
-        latent, [batch_size, out_height, out_width, c] = self._proj.call_without_reshape(
-            latent,
-            conv_config=ttnn.Conv2dConfig(
-                shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED  # https://github.com/tenstorrent/tt-metal/issues/17787
-            ),
-        )
+        batch_size = latent.shape[0]
+        c = latent.shape[3]
 
-        assert list(latent.shape) == list(latent.padded_shape)
-        assert (out_height * out_width) % 32 == 0
-        latent = latent.reshape([batch_size, out_height * out_width, c])
-
-        pos_embed = self._cropped_pos_embed(out_height, out_width)
-        pos_embed = ttnn.to_layout(pos_embed, ttnn.TILE_LAYOUT)
-
+        latent = self._proj(latent)
+        latent = ttnn.squeeze(latent, 0)
+        pos_embed = self._cropped_pos_embed(self._out_height, self._out_width)
         return latent + pos_embed
 
     def _cropped_pos_embed(self, height: int, width: int) -> ttnn.Tensor:

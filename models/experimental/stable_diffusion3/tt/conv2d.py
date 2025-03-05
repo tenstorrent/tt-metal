@@ -19,10 +19,8 @@ import torch
 class TtConv2dParameters:
     weight: ttnn.Tensor
     bias: ttnn.Tensor | None
-    in_channels: int
     out_channels: int
-    kernel_size: tuple[int, int]
-    stride: tuple[int, int]
+    kernel_size: int
 
     @classmethod
     def from_torch(
@@ -30,10 +28,7 @@ class TtConv2dParameters:
         state: dict[str, torch.Tensor],
         *,
         dtype: ttnn.DataType | None = None,
-        in_channels: int,
         out_channels: int,
-        kernel_size: int,
-        stride: int,
         device,
     ) -> TtConv2dParameters:
         weight = state["weight"].flatten(1, 3)
@@ -64,24 +59,18 @@ class TtConv2dParameters:
                 if "bias" in state
                 else None
             ),
-            in_channels=in_channels,
             out_channels=out_channels,
-            kernel_size=kernel_size,
-            stride=stride,
+            kernel_size=state["weight"].shape[-1],
         )
 
 
 class TtConv2d:
     def __init__(self, parameters: TtConv2dParameters, device) -> None:
-        self._stride = parameters.stride
-
-        self._in_channels = parameters.in_channels
-        self._out_channels = parameters.out_channels
         self._kernel_size = parameters.kernel_size
 
         self._weight = parameters.weight
         self._bias = parameters.bias
-        self._unfold = torch.nn.Unfold(kernel_size=self._kernel_size, stride=self._stride)
+        self._unfold = torch.nn.Unfold(kernel_size=(self._kernel_size,) * 2, stride=(self._kernel_size,) * 2)
         self._device = device
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -94,7 +83,9 @@ class TtConv2d:
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         host_x = ttnn.from_device(x)
-        torch_tensor = ttnn.to_torch(host_x, mesh_composer=ttnn.ConcatMeshToTensor(self._device, dim=0))
+        torch_tensor = ttnn.to_torch(host_x, mesh_composer=ttnn.ConcatMeshToTensor(self._device, dim=0)).permute(
+            [0, 3, 1, 2]
+        )
         unfolded_x = ttnn.as_tensor(
             self._unfold(torch_tensor[0 : x.shape[0], ...]),
             dtype=ttnn.bfloat16,
