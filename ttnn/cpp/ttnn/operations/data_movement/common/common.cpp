@@ -12,21 +12,28 @@ namespace ttnn {
 namespace operations {
 namespace data_movement {
 
-ttnn::Shape squeeze_shape_to_4D(ttnn::Shape shape) {
-    if (shape.rank() <= 4) {
+template <uint32_t N>
+ttnn::Shape squeeze_shape_to_ND(ttnn::Shape shape) {
+    if (shape.rank() <= N) {
         return shape;
     }
-    std::array<uint32_t, 4> shape_4d;
-    shape_4d[0] = 1;
-    int extra_rank = shape.rank() - 4;
+    std::array<uint32_t, N> shape_Nd;
+    shape_Nd[0] = 1;
+    int extra_rank = shape.rank() - N;
     for (int i = extra_rank; i >= 0; i--) {
-        shape_4d[0] *= shape[i];
+        shape_Nd[0] *= shape[i];
     }
-    shape_4d[1] = shape[1 + extra_rank];
-    shape_4d[2] = shape[2 + extra_rank];
-    shape_4d[3] = shape[3 + extra_rank];
-    return ttnn::Shape(shape_4d);
+
+    for (auto i = 1; i < N - 1; i++) {
+        shape_Nd[i] = shape[i + extra_rank];
+    }
+
+    return ttnn::Shape(shape_Nd);
 }
+
+ttnn::Shape squeeze_shape_to_4D(ttnn::Shape shape) { return squeeze_shape_to_ND<4>(shape); }
+
+ttnn::Shape squeeze_shape_to_3D(ttnn::Shape shape) { return squeeze_shape_to_ND<3>(shape); }
 
 ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor) {
     auto shape = tensor.get_logical_shape();
@@ -112,6 +119,23 @@ ttnn::Tensor pad_to_tile_vol(
     return tensor;
 }
 uint32_t wrap_index(int index, int size) { return index < 0 ? size + index : index; }
+
+ttnn::Shape compute_padded_shape(
+    const ttnn::Shape& logical_shape, const uint32_t tile_height, const uint32_t tile_width) {
+    const uint32_t one_rank_offset = logical_shape.rank() == 1;
+    ttnn::SmallVector<uint32_t> output_shape_vec(logical_shape.rank() + one_rank_offset);
+
+    if (one_rank_offset) {
+        output_shape_vec[0] = tile_height;
+    }
+
+    std::copy(logical_shape.cbegin(), logical_shape.cend(), output_shape_vec.begin() + one_rank_offset);
+    std::for_each(output_shape_vec.rbegin(), output_shape_vec.rbegin() + 2, [](auto& x) {
+        x = tt::round_up(x, tt::constants::TILE_HEIGHT);
+    });
+
+    return ttnn::Shape(output_shape_vec);
+}
 
 std::array<uint32_t, 2> compute_block_sharded_shard_shape(const std::array<uint32_t, 2>& squeezed_tensor_hw,
                                                           const tt::tt_metal::Layout& layout,
