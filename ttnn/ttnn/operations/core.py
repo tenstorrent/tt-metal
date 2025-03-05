@@ -311,7 +311,7 @@ def to_torch(
         if isinstance(mesh_composer, ttnn.MeshToTensor):
             return mesh_composer.compose(tensor)
         else:
-            return mesh_composer.compose(ttnn.get_device_tensors(tensor)).to_torch()
+            return ttnn.aggregate_tensor(tensor, mesh_composer).to_torch()
 
     if tensor.storage_type() == ttnn.DEVICE_STORAGE_TYPE:
         raise RuntimeError("ttnn.Tensor cannot be on device when converting to torch.Tensor!")
