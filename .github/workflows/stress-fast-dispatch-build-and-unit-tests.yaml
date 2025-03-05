@@ -52,6 +52,7 @@ jobs:
       - name: Upload watcher log
         if: always()
         uses: actions/upload-artifact@v4
+        timeout-minutes: 10
         with:
           name: watcher-log-${{ matrix.runner-info.arch }}-${{ matrix.runner-info.machine-type }}-${{ matrix.runner-info.name }}
           path: generated/watcher/watcher.log
