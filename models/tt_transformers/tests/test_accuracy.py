@@ -102,7 +102,7 @@ def get_accuracy_thresholds(base_model_name: str, device_name: str, optimization
     "use_reference_file",
     [
         pytest.param(True, id="reference_file"),
-        # pytest.param(False, id="reference_text"),
+        pytest.param(False, id="reference_text"),
     ],
 )
 def test_tt_model_acc(
