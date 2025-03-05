@@ -31,9 +31,9 @@ inline std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
 
 struct Conv3dConfig {
     Conv3dConfig(
-        DataType dtype_ = DataType::BFLOAT16,
-        DataType weights_dtype_ = DataType::BFLOAT16,
-        Layout output_layout_ = Layout::ROW_MAJOR,
+        tt::tt_metal::DataType dtype_ = tt::tt_metal::DataType::BFLOAT16,
+        tt::tt_metal::DataType weights_dtype_ = tt::tt_metal::DataType::BFLOAT16,
+        tt::tt_metal::Layout output_layout_ = tt::tt_metal::Layout::ROW_MAJOR,
         uint32_t T_out_block_ = 1,
         uint32_t W_out_block_ = 1,
         uint32_t H_out_block_ = 1,
@@ -62,9 +62,9 @@ struct Conv3dConfig {
         groups(groups_),
         compute_with_storage_grid_size(compute_with_storage_grid_size_) {}
 
-    DataType dtype;
-    DataType weights_dtype;
-    Layout output_layout;
+    tt::tt_metal::DataType dtype;
+    tt::tt_metal::DataType weights_dtype;
+    tt::tt_metal::Layout output_layout;
     uint32_t T_out_block;
     uint32_t W_out_block;
     uint32_t H_out_block;
@@ -117,7 +117,7 @@ struct Conv3dConfig {
 
 struct Conv3dOp {
     Conv3dConfig config;
-    MemoryConfig output_mem_config;
+    tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 
     void validate(
@@ -130,10 +130,6 @@ struct Conv3dOp {
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors) const;
-
-    tt::tt_metal::operation::Hash compute_program_hash(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
 };
 
 }  // namespace ttnn::operations::experimental::conv3d

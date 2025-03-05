@@ -11,14 +11,14 @@
 
 namespace ttnn::operations::experimental::conv3d::detail {
 
-operation::ProgramWithCallbacks conv3d_factory(
+tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
     const std::optional<const Tensor>& bias_tensor,
     const Conv3dConfig& config,
     const Tensor& output_tensor,
     const DeviceComputeKernelConfig& compute_kernel_config) {
-    Program program = CreateProgram();
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     auto grid_size = config.compute_with_storage_grid_size;
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
@@ -120,21 +120,21 @@ operation::ProgramWithCallbacks conv3d_factory(
     uint32_t cb_worker_ack_back_id = tt::CBIndex::c_7;
 
     // Create circular buffers for vol2col, weights, bias and matmul intermediates
-    auto [_, cb_vol2col_rm_handle] =
+    auto [_id0, cb_vol2col_rm_handle] =
         tt::tt_metal::create_cb(cb_vol2col_rm_id, program, core_grid, patch_size_bytes, num_patches, data_format);
 
-    auto [__, cb_vol2col_tiled_handle] = tt::tt_metal::create_cb(
+    auto [_id1, cb_vol2col_tiled_handle] = tt::tt_metal::create_cb(
         cb_vol2col_tiled_id, program, core_grid, tile_size, matmul_M_t * matmul_K_t, data_format);
 
-    auto [___, cb_weight_tiled_handle] = tt::tt_metal::create_cb(
+    auto [_id2, cb_weight_tiled_handle] = tt::tt_metal::create_cb(
         cb_weight_tiled_id, program, core_grid, tile_size, matmul_K_t * matmul_N_t, data_format);
 
-    auto [_____, cb_matmul_interm_tiled_handle] = tt::tt_metal::create_cb(
+    auto [_id3, cb_matmul_interm_tiled_handle] = tt::tt_metal::create_cb(
         cb_matmul_interm_tiled_id, program, core_grid, tile_size, matmul_M_t * matmul_N_t, data_format);
 
     // NOTE: Most kernels create RM CB with tile_size pages and num_tile number of pages.
     // Using stick pages led to PCC issues.
-    auto [______, cb_matmul_result_rm_handle] = tt::tt_metal::create_cb(
+    auto [_id4, cb_matmul_result_rm_handle] = tt::tt_metal::create_cb(
         cb_matmul_result_rm_id,
         program,
         core_grid,
@@ -144,15 +144,15 @@ operation::ProgramWithCallbacks conv3d_factory(
 
     if (C_in_num_blocks > 1) {
         // Implies reduction step
-        auto [____, cb_reduction_tiled_handle] = tt::tt_metal::create_cb(
+        auto [_id5, cb_reduction_tiled_handle] = tt::tt_metal::create_cb(
             cb_reduction_tiled_id, program, core_grid, tile_size, matmul_M_t * matmul_N_t, data_format);
 
-        auto [_____, cb_worker_ack_back_handle] =
+        auto [_id6, cb_worker_ack_back_handle] =
             tt::tt_metal::create_cb(cb_worker_ack_back_id, program, core_grid, tile_size, 1, data_format);
     }
 
     if (use_bias) {
-        auto [____, cb_bias_tiled_handle] =
+        auto [_id7, cb_bias_tiled_handle] =
             tt::tt_metal::create_cb(cb_bias_tiled_id, program, core_grid, tile_size, matmul_N_t, data_format);
     }
 
@@ -212,7 +212,7 @@ operation::ProgramWithCallbacks conv3d_factory(
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     // Matmul parameters
-    IDevice* device = input_tensor.device();
+    auto device = input_tensor.device();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
