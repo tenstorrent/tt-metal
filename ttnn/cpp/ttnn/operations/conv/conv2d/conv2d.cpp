@@ -94,6 +94,7 @@ Result conv2d(
             memory_config_);
     }
 }
+
 template <typename T>
 Result conv2d_DRAM(
     const ttnn::Tensor& input_tensor,
@@ -124,13 +125,40 @@ Result conv2d_DRAM(
     } else {
         input_tensor_on_device = input_tensor;
     }
+    DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
+    const auto compute_grid_size = device->compute_with_storage_grid_size();
+
     ttnn::Tensor weight_tensor_on_device;
     std::optional<ttnn::Tensor> bias_tensor_on_device;
     TT_FATAL(input_tensor_on_device.memory_config().is_dram(), "Conv DRAM expects the input tensor to be in DRAM.");
 
     Tensor dram_output_tensor;
     bool first_run = true;
+    bool auto_shard = false;
+    const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups, conv_config);
+
     if (dram_slice_config.slice_output_height) {
+        if (!conv_config.shard_layout.has_value()) {
+            conv_config = determine_conv_config_for_auto_shard(
+                conv_config,
+                mm_conv,
+                batch_size,
+                in_channels,
+                out_channels,
+                output_height,
+                output_width,
+                weight_tensor.get_logical_shape()[3],
+                input_height,
+                input_width,
+                compute_grid_size,
+                input_tensor.layout(),
+                std::make_optional(input_tensor.memory_config()),
+                kernel_size,
+                groups,
+                bias_tensor.has_value(),
+                compute_config);
+            auto_shard = true;
+        }
         for (int batch_index = 0; batch_index < batch_size; batch_index++) {
             for (uint32_t output_slice_height_start = 0; output_slice_height_start < output_height;
                  output_slice_height_start += dram_slice_config.output_slice_size) {
@@ -154,23 +182,31 @@ Result conv2d_DRAM(
                 if (input_slice_height_start >= input_slice_height_end) {
                     continue;
                 }
-                    auto sliced_input_tensor = ttnn::slice(
-                        input_tensor,
-                        std::array<uint32_t, 4>{batch_index, input_slice_height_start, 0, 0},  // Start
-                        std::array<uint32_t, 4>{batch_index + 1, input_slice_height_end, input_width, in_channels},
-                        std::array<uint32_t, 4>{1, 1, 1, 1}  // Step
-                    );
-                    log_debug(tt::LogOp, "Sliced input tensor shape: {}", sliced_input_tensor.get_logical_shape());
-                    if (pad_top > 0 || pad_bottom > 0) {
-                        auto pad_top_tensor = ttnn::pad(
-                            DefaultQueueId,
-                            sliced_input_tensor,
-                            std::vector<std::pair<uint32_t, uint32_t>>{{0, 0}, {pad_top, pad_bottom}, {0, 0}, {0, 0}},
-                            0,
-                            true,
-                            std::nullopt);
-                        sliced_input_tensor = pad_top_tensor;
-                    }
+                auto sliced_input_tensor = ttnn::slice(
+                    input_tensor,
+                    std::array<uint32_t, 4>{batch_index, input_slice_height_start, 0, 0},  // Start
+                    std::array<uint32_t, 4>{batch_index + 1, input_slice_height_end, input_width, in_channels},
+                    std::array<uint32_t, 4>{
+                        1,
+                        1,
+                        1,
+                        1,
+                    },  // Step,
+                    MemoryConfig{
+                        .memory_layout = TensorMemoryLayout::INTERLEAVED,
+                        .buffer_type = BufferType::DRAM,
+                    });
+                log_debug(tt::LogOp, "Sliced input tensor shape: {}", sliced_input_tensor.get_logical_shape());
+                if (pad_top > 0 || pad_bottom > 0) {
+                    auto pad_top_tensor = ttnn::pad(
+                        DefaultQueueId,
+                        sliced_input_tensor,
+                        std::vector<std::pair<uint32_t, uint32_t>>{{0, 0}, {pad_top, pad_bottom}, {0, 0}, {0, 0}},
+                        0,
+                        true,
+                        std::nullopt);
+                    sliced_input_tensor = pad_top_tensor;
+                }
                     log_debug(
                         tt::LogOp, "Padded sliced input tensor shape: {}", sliced_input_tensor.get_logical_shape());
                     auto conv_config_l1 = conv_config;
