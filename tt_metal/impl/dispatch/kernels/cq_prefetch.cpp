@@ -10,7 +10,11 @@
 //  - syncs w/ dispatcher via 2 semaphores, page_ready, page_done
 
 #include <cq_commands.hpp>
+#include "dataflow_api.h"
+#include "dataflow_api_addrgen.h"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
 #include "debug/dprint.h"
 #include "noc/noc_parameters.h"  // PCIE_ALIGNMENT
 
@@ -46,7 +50,7 @@ constexpr uint32_t cmddat_q_size = get_compile_time_arg_val(12);
 // unused for prefetch_h
 constexpr uint32_t scratch_db_base = get_compile_time_arg_val(13);
 constexpr uint32_t scratch_db_size = get_compile_time_arg_val(14);
-constexpr uint32_t downstream_sync_sem_id = get_compile_time_arg_val(15);
+constexpr uint32_t my_downstream_sync_sem_id = get_compile_time_arg_val(15);
 
 // prefetch_d specific
 constexpr uint32_t cmddat_q_pages = get_compile_time_arg_val(16);
@@ -61,8 +65,17 @@ constexpr uint32_t my_dispatch_s_cb_sem_id = get_compile_time_arg_val(22);
 constexpr uint32_t downstream_dispatch_s_cb_sem_id = get_compile_time_arg_val(23);
 constexpr uint32_t dispatch_s_buffer_size = get_compile_time_arg_val(24);
 constexpr uint32_t dispatch_s_cb_log_page_size = get_compile_time_arg_val(25);
-constexpr uint32_t is_d_variant = get_compile_time_arg_val(26);
-constexpr uint32_t is_h_variant = get_compile_time_arg_val(27);
+
+// used for fd on fabric
+constexpr uint32_t downstream_mesh_id = get_compile_time_arg_val(26);
+constexpr uint32_t downstream_chip_id = get_compile_time_arg_val(27);
+constexpr uint32_t upstream_mesh_id = get_compile_time_arg_val(28);
+constexpr uint32_t upstream_chip_id = get_compile_time_arg_val(29);
+constexpr uint32_t fabric_router_noc_xy = get_compile_time_arg_val(30);
+constexpr uint32_t client_interface_addr = get_compile_time_arg_val(31);
+
+constexpr uint32_t is_d_variant = get_compile_time_arg_val(32);
+constexpr uint32_t is_h_variant = get_compile_time_arg_val(33);
 
 constexpr uint32_t prefetch_q_end = prefetch_q_base + prefetch_q_size;
 constexpr uint32_t cmddat_q_end = cmddat_q_base + cmddat_q_size;
@@ -156,10 +169,96 @@ static uint32_t downstream_data_ptr_s = dispatch_s_buffer_base;
 static uint32_t block_next_start_addr[cmddat_q_blocks];
 static uint32_t rd_block_idx = 0;
 static uint32_t upstream_total_acquired_page_count = 0;
+static auto client_interface =
+    reinterpret_cast<volatile tt_l1_ptr fabric_pull_client_interface_t*>(client_interface_addr);
+
+#ifdef FABRIC_STAGE_BUFFER
+constexpr uint32_t fabric_stage_buffer_addr = FABRIC_STAGE_BUFFER;
+#else
+constexpr uint32_t fabric_stage_buffer_addr = 0;
+#endif
+
 // Feature to stall the prefetcher, mainly for ExecBuf impl which reuses CmdDataQ
 static enum StallState { STALL_NEXT = 2, STALLED = 1, NOT_STALLED = 0 } stall_state = NOT_STALLED;
 
 static_assert((downstream_cb_base & (downstream_cb_page_size - 1)) == 0);
+
+constexpr bool use_fabric_path() { return fabric_router_noc_xy != 0xdeadbeef; }
+
+// Increment the remote semaphore to indicate pages are available for processing in their buffer
+// Destination address can be on a remote chip specified by dst_mesh_id and dst_chip_id if
+// the fabric path is being used. Otherwise, those parameters are ignored.
+template <uint8_t noc_idx, uint32_t noc_xy, uint32_t sem_id, uint32_t dst_mesh_id, uint32_t dst_chip_id>
+FORCE_INLINE void prefetch_h_release_pages(uint32_t n) {
+    if constexpr (use_fabric_path()) {
+        fabric_atomic_inc(
+            client_interface,
+            fabric_router_noc_xy,
+            fabric_stage_buffer_addr,
+            dst_mesh_id,
+            dst_chip_id,
+            get_noc_addr_helper(noc_xy, get_semaphore<fd_core_type>(sem_id)),
+            n,
+            31);
+        fabric_wait_for_pull_request_flushed(client_interface);
+    } else {
+        cb_release_pages<noc_idx, noc_xy, sem_id>(n);
+    }
+}
+
+// Write to the downstream prefetch_d, potentially taking the fabric route.
+// If the fabric is enabled, then the destination address can be on a remote chip specified by dst_mesh_id and
+// dst_chip_id. Otherwise, those parameters are ignored.
+template <uint32_t dst_mesh_id, uint32_t dst_chip_id>
+FORCE_INLINE void prefetch_h_async_write(uint32_t src_addr, uint64_t dst_noc_addr, uint32_t size) {
+    if constexpr (use_fabric_path()) {
+        // Prototype
+        // Minimal changes to buffer structure by writing data out of a staging buffer, which makes extra space for
+        // the fabric header
+        auto stage_buf_dptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            fabric_stage_buffer_addr + tt::tt_fabric::PACKET_HEADER_SIZE_BYTES);
+        uint32_t stage_buffer_data_size = 4 * 1024;  // Max chunk size
+
+        // Stage buffer contains the 48 byte header at the beginning, and then 4K of data
+        // We need to process data in chunks of the stage buffer
+        uint32_t remaining_size = size;
+        uint32_t src_offset = 0;
+        uint32_t dst_offset = 0;
+        while (remaining_size > 0) {
+            // Determine the size of the current chunk
+            uint32_t chunk_size = (remaining_size < stage_buffer_data_size) ? remaining_size : stage_buffer_data_size;
+
+            // 1. Copy data to stage buffer
+            auto src_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_addr + src_offset);
+            // copy_l1(src_ptr, stage_buf_dptr, chunk_size);
+            noc_async_write(
+                src_addr + src_offset, fabric_stage_buffer_addr + tt::tt_fabric::PACKET_HEADER_SIZE_BYTES, chunk_size);
+            noc_async_write_barrier();
+
+            // 2. Copy data from stage buffer to remote
+            // We need to calculate the actual size including header for the fabric_async_write call
+            uint32_t transfer_size = chunk_size + tt::tt_fabric::PACKET_HEADER_SIZE_BYTES;
+            fabric_async_write(
+                client_interface,
+                fabric_router_noc_xy,
+                fabric_stage_buffer_addr,
+                dst_mesh_id,
+                dst_chip_id,
+                dst_noc_addr + dst_offset,
+                transfer_size);
+
+            // 3. Stall to ensure data has been sent and stage buffer can be reused
+            fabric_wait_for_pull_request_flushed(client_interface);
+
+            // Update offsets and remaining size
+            src_offset += chunk_size;
+            dst_offset += chunk_size;
+            remaining_size -= chunk_size;
+        }
+    } else {
+        noc_async_write(src_addr, dst_noc_addr, size);
+    }
+}
 
 template <bool cmddat_wrap_enable, bool exec_buf>
 bool process_cmd(
@@ -922,7 +1021,7 @@ uint32_t process_stall(uint32_t cmd_ptr) {
 
     WAYPOINT("PSW");
     volatile tt_l1_ptr uint32_t* sem_addr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(downstream_sync_sem_id));
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_downstream_sync_sem_id));
     uint32_t heartbeat = 0;
     do {
         invalidate_l1_cache();
@@ -1178,7 +1277,7 @@ bool process_cmd(
 
         case CQ_PREFETCH_CMD_RELAY_PAGED_PACKED:
             // DPRINT << "relay paged packed" << ENDL();
-            if (exec_buf) {
+            if constexpr (exec_buf) {
                 stride =
                     process_exec_buf_relay_paged_packed_cmd(cmd_ptr, downstream_data_ptr, l1_cache, exec_buf_state);
             } else {
@@ -1209,7 +1308,7 @@ bool process_cmd(
 
         case CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH:
             // DPRINT << "inline no flush" << ENDL();
-            if (exec_buf) {
+            if constexpr (exec_buf) {
                 stride = process_exec_buf_relay_inline_noflush_cmd(cmd_ptr, downstream_data_ptr, exec_buf_state);
             } else {
                 stride = process_relay_inline_noflush_cmd<cmddat_wrap_enable>(cmd_ptr, downstream_data_ptr);
@@ -1219,7 +1318,7 @@ bool process_cmd(
         case CQ_PREFETCH_CMD_EXEC_BUF:
             // DPRINT << "exec buf: " << cmd_ptr << ENDL();
             ASSERT(!exec_buf);
-            if (is_h_variant) {
+            if constexpr (is_h_variant) {
                 ASSERT(stall_state == STALLED);  // ExecBuf must be preceded by a prefetcher stall
             }
             stride = process_exec_buf_cmd(cmd_ptr, downstream_data_ptr, l1_cache, exec_buf_state);
@@ -1229,9 +1328,11 @@ bool process_cmd(
         case CQ_PREFETCH_CMD_EXEC_BUF_END:
             // DPRINT << "exec buf end: " << cmd_ptr << ENDL();
             ASSERT(exec_buf);
-            stride = process_exec_buf_relay_inline_cmd<DispatchRelayInlineState>(
-                cmd_ptr, downstream_data_ptr, exec_buf_state);
-            done = true;
+            if constexpr (exec_buf) {
+                stride = process_exec_buf_relay_inline_cmd<DispatchRelayInlineState>(
+                    cmd_ptr, downstream_data_ptr, exec_buf_state);
+                done = true;
+            }
             break;
 
         case CQ_PREFETCH_CMD_STALL:
@@ -1242,7 +1343,7 @@ bool process_cmd(
         case CQ_PREFETCH_CMD_DEBUG:
             // DPRINT << "debug" << ENDL();
             //  Splitting debug cmds not implemented for exec_bufs (yet)
-            if (exec_buf) {
+            if constexpr (!exec_buf) {
                 ASSERT(0);
             }
             stride = process_debug_cmd(cmd_ptr);
@@ -1269,6 +1370,8 @@ bool process_cmd(
     return done;
 }
 
+// Relay data to downstream Prefetch D, potentially taking a fabric route.
+// This function is only valid for H variants.
 static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool is_exec_buf) {
     uint32_t length = fence - data_ptr;
 
@@ -1286,6 +1389,7 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool
         // swipe all the downstream page credits from ourselves...
         // prefetch_h stalls sending commands to prefetch_d until notified by dispatch_d that the exec_buf is done
         // exec_buf completing on dispatch_h will free the pages and allow sending again
+        // NOTE: This semaphore is local
         volatile tt_l1_ptr uint32_t* sem_addr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_downstream_cb_sem_id));
         noc_semaphore_inc(get_noc_addr_helper(my_noc_xy, (uint32_t)sem_addr), -downstream_cb_pages);
@@ -1296,23 +1400,31 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool
 
     uint32_t downstream_pages_left = (downstream_cb_end - downstream_data_ptr) >> downstream_cb_log_page_size;
     if (downstream_pages_left >= npages) {
-        noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), length);
+        prefetch_h_async_write<downstream_mesh_id, downstream_chip_id>(
+            data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), length);
         downstream_data_ptr += npages * downstream_cb_page_size;
     } else {
         uint32_t tail_pages = npages - downstream_pages_left;
         uint32_t available = downstream_pages_left * downstream_cb_page_size;
         if (available > 0) {
-            noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), available);
+            prefetch_h_async_write<downstream_mesh_id, downstream_chip_id>(
+                data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), available);
             data_ptr += available;
             length -= available;
         }
 
-        noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_base), length);
+        prefetch_h_async_write<downstream_mesh_id, downstream_chip_id>(
+            data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_base), length);
         downstream_data_ptr = downstream_cb_base + tail_pages * downstream_cb_page_size;
     }
 
     noc_async_writes_flushed();
-    cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
+    prefetch_h_release_pages<
+        my_noc_index,
+        downstream_noc_xy,
+        downstream_cb_sem_id,
+        downstream_mesh_id,
+        downstream_chip_id>(npages);
 
     return fence;
 }
@@ -1463,6 +1575,9 @@ void kernel_main_hd() {
 
 void kernel_main() {
     DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": start" << ENDL();
+    if constexpr (use_fabric_path()) {
+        tt::tt_fabric::fabric_endpoint_init(client_interface, 0 /*Unused*/);
+    }
 
     if (is_h_variant and is_d_variant) {
         kernel_main_hd();
@@ -1479,6 +1594,4 @@ void kernel_main() {
     cb_wait_all_pages<my_downstream_cb_sem_id>(downstream_cb_pages);
 
     noc_async_full_barrier();
-
-    DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": out" << ENDL();
 }

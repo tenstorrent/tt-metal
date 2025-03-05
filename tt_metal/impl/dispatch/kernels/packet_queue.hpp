@@ -16,7 +16,9 @@
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "debug/dprint.h"
 
-#define ENABLE_DPRINTS true
+#define ENABLE_DPRINTS false
+
+namespace tt::packet_queue {
 
 constexpr ProgrammableCoreType fd_core_type = static_cast<ProgrammableCoreType>(FD_CORE_TYPE);
 
@@ -1099,3 +1101,5 @@ bool wait_all_input_output_ready(packet_input_queue_state_t* input_queue_array, 
     }
     return true;
 }
+
+} // namespace tt::packet_queue

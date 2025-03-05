@@ -7,6 +7,7 @@
 #include <magic_enum/magic_enum.hpp>
 #include <mutex>
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/fabric_host_interface.h>
 #include <unordered_map>
 
 #include "cq_commands.hpp"
@@ -17,6 +18,7 @@
 #include "dispatch_settings.hpp"
 #include "helpers.hpp"
 #include "buffer.hpp"
+#include "rtoptions.hpp"
 #include "umd/device/tt_core_coordinates.h"
 
 namespace tt::tt_metal {
@@ -33,7 +35,10 @@ enum class CommandQueueDeviceAddrType : uint8_t {
     COMPLETION_Q1_LAST_EVENT = 5,
     DISPATCH_S_SYNC_SEM = 6,
     DISPATCH_MESSAGE = 7,
-    UNRESERVED = 8
+    // Enable for FD on Fabric
+    FABRIC_INTERFACE = 8,
+    FABRIC_STAGE_BUFFER = 9,
+    UNRESERVED,
 };
 
 enum class CommandQueueHostAddrType : uint8_t {
@@ -159,6 +164,7 @@ private:
             "Number of dispatch message entries exceeds max representable offset");
 
         uint8_t num_dev_cq_addrs = magic_enum::enum_count<CommandQueueDeviceAddrType>();
+        const bool fabric_enabled = llrt::RunTimeOptions::get_instance().get_fd_fabric();
         std::vector<uint32_t> device_cq_addr_sizes_(num_dev_cq_addrs, 0);
         for (auto dev_addr_idx = 0; dev_addr_idx < num_dev_cq_addrs; dev_addr_idx++) {
             CommandQueueDeviceAddrType dev_addr_type =
@@ -171,6 +177,12 @@ private:
                 device_cq_addr_sizes_[dev_addr_idx] = settings.dispatch_s_sync_sem_;
             } else if (dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_MESSAGE) {
                 device_cq_addr_sizes_[dev_addr_idx] = settings.dispatch_message_;
+            } else if (dev_addr_type == CommandQueueDeviceAddrType::FABRIC_INTERFACE) {
+                device_cq_addr_sizes_[dev_addr_idx] =
+                    tt_fabric::CLIENT_INTERFACE_SIZE;  // fabric_enabled ? tt_fabric::CLIENT_INTERFACE_SIZE : 0;
+            } else if (dev_addr_type == CommandQueueDeviceAddrType::FABRIC_STAGE_BUFFER) {
+                // Fabric prototyping.
+                device_cq_addr_sizes_[dev_addr_idx] = 4 * 1024 + 48;  // fabric_enabled ? 4*1024*2 : 0;
             } else {
                 device_cq_addr_sizes_[dev_addr_idx] = settings.other_ptrs_size;
             }
@@ -184,6 +196,10 @@ private:
             CommandQueueDeviceAddrType dev_addr_type = magic_enum::enum_value<CommandQueueDeviceAddrType>(dev_addr_idx);
             if (dev_addr_type == CommandQueueDeviceAddrType::UNRESERVED) {
                 device_cq_addrs_[dev_addr_idx] = align(device_cq_addrs_[dev_addr_idx], pcie_alignment);
+            } else if (
+                dev_addr_type == CommandQueueDeviceAddrType::FABRIC_INTERFACE ||
+                dev_addr_type == CommandQueueDeviceAddrType::FABRIC_STAGE_BUFFER) {
+                device_cq_addrs_[dev_addr_idx] = align(device_cq_addrs_[dev_addr_idx], l1_alignment);
             }
         }
 
