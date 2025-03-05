@@ -1027,7 +1027,8 @@ class ModelArgs:
             self.multiple_of = params["multiple_of"]
             self.hidden_dim = calculate_hidden_dim(self.dim, self.ffn_dim_multiplier, self.multiple_of)
 
-        if "_name_or_path" in params:
+        if params.get("_name_or_path", None):
+            print(f"Changing model name from {self.model_name} to {os.path.basename(params['_name_or_path'])}")
             self.model_name = os.path.basename(params["_name_or_path"])
 
         if self.base_model_name == "Qwen2.5-7B" and self.num_devices not in [0, 2, 4]:
@@ -1144,7 +1145,11 @@ class ModelArgs:
 
     def _set_hf_params(self, checkpoint_dir):
         if self.from_hf_url:
-            from transformers import AutoConfig
+            # Special case Qwen2.5-VL models until they are fully integrated into a HF release
+            if "Qwen/Qwen2.5-VL" in self.model_name:
+                from transformers.models.qwen2_5_vl.configuration_qwen2_5_vl import Qwen2_5_VLConfig as AutoConfig
+            else:
+                from transformers import AutoConfig
 
             config = AutoConfig.from_pretrained(self.model_name).to_dict()
         else:
@@ -1214,7 +1219,15 @@ class ModelArgs:
         else:
             assert self.checkpoint_type == CheckpointType.HuggingFace
             if self.from_hf_url:
-                from transformers import AutoModelForCausalLM
+                # Special case Qwen2.5-VL models until they are fully integrated into a HF release
+                if "Qwen/Qwen2.5-VL" in self.model_name:
+                    from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
+                        Qwen2_5_VLForConditionalGeneration as AutoModelForCausalLM,
+                    )
+
+                    print("Loading Qwen2.5-VL model: ", AutoModelForCausalLM)
+                else:
+                    from transformers import AutoModelForCausalLM
 
                 model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
                 state_dict = model.state_dict()
@@ -1591,7 +1604,14 @@ class ModelArgs:
                 model.load_state_dict(self.load_state_dict())
             return model
         else:
-            from transformers import AutoConfig, AutoModelForCausalLM
+            # Special case Qwen2.5-VL models until they are fully integrated into a HF release
+            if "Qwen/Qwen2.5-VL" in self.model_name:
+                from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
+                    Qwen2_5_VLForConditionalGeneration as AutoModelForCausalLM,
+                )
+                from transformers.models.qwen2_5_vl.configuration_qwen2_5_vl import Qwen2_5_VLConfig as AutoConfig
+            else:
+                from transformers import AutoConfig, AutoModelForCausalLM
 
             # HF is much faster at loading from a checkpoint than generating from config
             # so use that by preference unless we don't have a checkpoint
