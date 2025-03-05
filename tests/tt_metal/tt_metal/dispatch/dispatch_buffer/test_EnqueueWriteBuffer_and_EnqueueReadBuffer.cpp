@@ -9,7 +9,6 @@
 #include "buffer_constants.hpp"
 #include "command_queue_fixture.hpp"
 #include "core_coord.hpp"
-#include "hal.hpp"
 #include "math.hpp"
 #include "shape2d.hpp"
 #include "multi_command_queue_fixture.hpp"
@@ -213,9 +212,6 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(IDevice* device, CommandQueue
         get_absolute_cq_offset(channel, 0, cq_size) + cq_start,
         mmio_device_id,
         channel);
-
-    std::cout << "HAL L1 Size: " << HAL_MEM_L1_SIZE << std::endl;
-    std::cout << "HAL L1 Base: " << HAL_MEM_L1_BASE << std::endl;
 
     for (const bool cq_write : {true, false}) {
         for (const bool cq_read : {true, false}) {
