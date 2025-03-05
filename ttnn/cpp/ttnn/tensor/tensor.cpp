@@ -239,7 +239,7 @@ void Tensor::deallocate_impl(bool force, bool deallocation_through_destructor) {
                                 if constexpr (std::is_same_v<type, DeviceStorage>) {
                                     if (s.mesh_buffer != nullptr and (force or s.mesh_buffer.use_count() == 1)) {
                                         s.mesh_buffer->deallocate();
-                                    } else if (force or s.buffer.use_count() == 1) {
+                                    } else if (s.buffer and (force or s.buffer.use_count() == 1)) {
                                         DeallocateBuffer(*(s.buffer));
                                     }
                                     // Safe to reset this buf object since this is the last reference (in
@@ -809,23 +809,7 @@ void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& r
 
 Tensor allocate_tensor_on_devices(const TensorSpec& tensor_spec, const std::vector<IDevice*>& devices) {
     // Top level wrapper to asynchronously create a device tensor (single- or multi-device).
-    Tensor device_tensor = Tensor(devices);
-
-    const auto& workers_in_use = device_tensor.get_workers();
-    uint32_t num_workers = workers_in_use.size();
-
-    for (int worker_index = 0; worker_index < num_workers; ++worker_index) {
-        auto& worker = devices[worker_index];
-        worker->push_work([worker, device_tensor, tensor_spec, worker_index]() mutable {
-            auto local_tensor = create_device_tensor(tensor_spec, worker);
-            insert_buffer_and_shape_for_device(worker, local_tensor, device_tensor, worker_index);
-
-            if (worker_index == 0) {
-                device_tensor.set_tensor_spec(tensor_spec);
-            }
-        });
-    }
-    return device_tensor;
+    return create_device_tensor(tensor_spec, devices[0]);
 }
 
 Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device) {

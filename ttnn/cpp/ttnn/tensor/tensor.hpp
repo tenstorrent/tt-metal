@@ -265,6 +265,12 @@ public:
             storage_type);
         return std::get<DeviceStorage>(this->get_storage()).get_buffer();
     }
+    // Direct accessor to MeshBuffer. Should become main buffer accessor API after
+    // migration to TT-Mesh is complete.
+    distributed::MeshBuffer* mesh_buffer() const {
+        return std::get<DeviceStorage>(this->get_storage()).get_mesh_buffer();
+    }
+
     const DeviceStorage& device_storage() const { return std::get<DeviceStorage>(this->get_storage()); }
 
     distributed::MeshDevice* mesh_device() const {
