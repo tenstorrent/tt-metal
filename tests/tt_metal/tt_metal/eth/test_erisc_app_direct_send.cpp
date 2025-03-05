@@ -521,12 +521,15 @@ TEST_F(DeviceFixture, ActiveEthKernelsDirectSendAllConnectedChips) {
             }
             for (const auto& sender_core : sender_device->get_active_ethernet_cores(true)) {
                 if (not tt::Cluster::instance().is_ethernet_link_up(sender_device->id(), sender_core)) {
+                    std::cout << "link down" << std::endl;
                     continue;
                 }
                 auto [device_id, receiver_core] = sender_device->get_connected_ethernet_core(sender_core);
                 if (receiver_device->id() != device_id) {
                     continue;
                 }
+                std::cout << "running on active" << std::endl;
+
                 ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
                     static_cast<DispatchFixture*>(this),
                     sender_device,

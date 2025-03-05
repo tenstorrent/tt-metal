@@ -294,6 +294,29 @@ def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device
     del mesh_device
 
 
+@pytest.fixture(scope="function")
+def dual_p150_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device_params):
+    import ttnn
+
+    if ttnn.get_num_devices() < 2:
+        pytest.skip()
+
+    updated_device_params = get_updated_device_params(device_params)
+    mesh_device = ttnn.open_mesh_device(
+        mesh_shape=ttnn.MeshShape(1, 2),
+        **updated_device_params,
+    )
+
+    logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
+    yield mesh_device
+
+    for device in mesh_device.get_devices():
+        ttnn.DumpDeviceProfiler(device)
+
+    ttnn.close_mesh_device(mesh_device)
+    del mesh_device
+
+
 @pytest.fixture()
 def clear_compile_cache():
     yield
@@ -326,6 +349,8 @@ def get_devices(request):
         devices = [request.getfixturevalue("t3k_mesh_device")]
     elif "pcie_mesh_device" in request.fixturenames:
         devices = [request.getfixturevalue("pcie_mesh_device")]
+    elif "dual_p150_mesh_device" in request.fixturenames:
+        devices = [request.getfixturevalue("dual_p150_mesh_device")]
     else:
         devices = []
     return devices
@@ -374,6 +399,7 @@ ALL_ARCHS = set(
     [
         "grayskull",
         "wormhole_b0",
+        "blackhole",
     ]
 )
 
@@ -385,7 +411,7 @@ def pytest_addoption(parser):
         "--tt-arch",
         choices=[*ALL_ARCHS],
         default=ttnn.get_arch_name(),
-        help="Target arch, ex. grayskull, wormhole_b0",
+        help="Target arch, ex. grayskull, wormhole_b0, blackhole",
     )
     parser.addoption(
         "--pipeline-type",
@@ -488,6 +514,11 @@ def pytest_generate_tests(metafunc):
         "silicon_arch_wormhole_b0": set(
             [
                 "wormhole_b0",
+            ]
+        ),
+        "silicon_arch_blackhole": set(
+            [
+                "blackhole",
             ]
         ),
     }

@@ -286,6 +286,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthKernelsNocReadNoSend) {
 
     for (const auto& device : devices_) {
         for (const auto& eth_core : device->get_active_ethernet_cores(true)) {
+            std::cout << "on core " << eth_core.str() << std::endl;
             ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
                 static_cast<DispatchFixture*>(this), device, WORD_SIZE, src_eth_l1_byte_address, eth_core));
             ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
