@@ -64,10 +64,12 @@ def test_llama_multimodal_demo_chat(
         logger.info(f"Creating TT model on {len(mesh_device.get_devices())} devices")
         mesh_device.enable_program_cache()
         mesh_device.enable_async(True)
-        model_args, model = create_multimodal_model(mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len)
+        model_args, model, _ = create_multimodal_model(
+            mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len
+        )
         tokenizer = Tokenizer(model_path=tokenizer_path)
         formatter = ChatFormat(tokenizer)
-        generator = LlamaGenerator(model, model_args, mesh_device, tokenizer=tokenizer, formatter=formatter)
+        generator = LlamaGenerator([model], [model_args], mesh_device, tokenizer=tokenizer, formatter=formatter)
 
     # image understanding
     dialogs = []
