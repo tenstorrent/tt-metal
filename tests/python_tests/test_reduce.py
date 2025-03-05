@@ -5,8 +5,9 @@ import pytest
 import torch
 from helpers import *
 
+
 def generate_golden(operand1, reduce_dim, pool_type, data_format):
-    
+
     result = torch.zeros(1024, dtype=format_dict[data_format]).view(32, 32)
 
     f0 = operand1[:256].view(16, 16)
@@ -53,15 +54,16 @@ def generate_golden(operand1, reduce_dim, pool_type, data_format):
         pytest.skip("To be implemented")
 
     print(result)
-    
+
     return result.view(1024)
 
+
 param_combinations = [
-    (reduce_dim,pool_type, format, dest_acc, testname)
-    for reduce_dim in ["reduce_col","reduce_row","reduce_scalar"]
-    for pool_type in ["max","avg","sum"]
-    for format in ["Float16_b","Float16"]
-    for dest_acc in [""]#, "DEST_ACC"]
+    (reduce_dim, pool_type, format, dest_acc, testname)
+    for reduce_dim in ["reduce_col", "reduce_row", "reduce_scalar"]
+    for pool_type in ["max", "avg", "sum"]
+    for format in ["Float16_b", "Float16"]
+    for dest_acc in [""]  # , "DEST_ACC"]
     for testname in ["reduce_test"]
 ]
 
@@ -70,15 +72,15 @@ param_ids = [
     for comb in param_combinations
 ]
 
+
 @pytest.mark.parametrize(
     "reduce_dim, pool_type, format, dest_acc, testname",
     param_combinations,
-    ids=param_ids
+    ids=param_ids,
 )
-
-@pytest.mark.skip(reason = "Not fully implemented")
+@pytest.mark.skip(reason="Not fully implemented")
 def test_reduce(reduce_dim, pool_type, format, testname, dest_acc):
-    
+
     src_A, src_B = generate_stimuli(format)
     # src_A = torch.cat([
     #     torch.full((256,), 1, dtype=format_dict[format]),
@@ -87,14 +89,14 @@ def test_reduce(reduce_dim, pool_type, format, testname, dest_acc):
     #     torch.full((256,), 4, dtype=format_dict[format])
     # ])
 
-    if pool_type in ["max", "sum"]: # result in srcA should be divided by 1
-        src_B = torch.full((1024,), 1) 
-    else:    
+    if pool_type in ["max", "sum"]:  # result in srcA should be divided by 1
+        src_B = torch.full((1024,), 1)
+    else:
         # reduce average divides by length of elements in array we reduce
-        if(reduce_dim in ["reduce_col", "reduce_row"]):
-            src_B = torch.full((1024,), 1/32)
+        if reduce_dim in ["reduce_col", "reduce_row"]:
+            src_B = torch.full((1024,), 1 / 32)
         else:
-            src_B = torch.full((1024,), torch.sqrt(torch.tensor(1/1024)))
+            src_B = torch.full((1024,), torch.sqrt(torch.tensor(1 / 1024)))
 
     golden_tensor = generate_golden(src_A, reduce_dim, pool_type, format)
     write_stimuli_to_l1(src_A, src_B, format)
@@ -106,7 +108,7 @@ def test_reduce(reduce_dim, pool_type, format, testname, dest_acc):
         "dest_acc": dest_acc,
         "reduce_dim": reduce_dim,
         "pool_type": pool_type,
-        "mathop" : "reduce"
+        "mathop": "reduce",
     }
 
     make_cmd = generate_make_command(test_config)
@@ -121,11 +123,18 @@ def test_reduce(reduce_dim, pool_type, format, testname, dest_acc):
     assert len(res_from_L1) == len(golden_tensor)
     assert_tensix_operations_finished()
 
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[format] if format in ["Float16", "Float16_b"] else torch.bfloat16)
+    res_tensor = torch.tensor(
+        res_from_L1,
+        dtype=(
+            format_dict[format]
+            if format in ["Float16", "Float16_b"]
+            else torch.bfloat16
+        ),
+    )
     res_tensor = untilize(res_tensor, format)
 
     print("RES IN L1")
-    print(res_tensor.view(32, 32))  
+    print(res_tensor.view(32, 32))
 
     if format == "Float16_b" or format == "Float16":
         atol = 0.1
@@ -135,7 +144,9 @@ def test_reduce(reduce_dim, pool_type, format, testname, dest_acc):
         rtol = 0.2
 
     for i in range(len(golden_tensor)):
-        assert torch.isclose(golden_tensor[i], res_tensor[i], rtol=rtol, atol=atol), f"Failed at index {i} with values {golden_tensor[i]} and {res_from_L1[i]}"
+        assert torch.isclose(
+            golden_tensor[i], res_tensor[i], rtol=rtol, atol=atol
+        ), f"Failed at index {i} with values {golden_tensor[i]} and {res_from_L1[i]}"
 
     _, pcc = compare_pcc(golden_tensor, res_tensor, pcc=0.99)
     assert pcc > 0.98

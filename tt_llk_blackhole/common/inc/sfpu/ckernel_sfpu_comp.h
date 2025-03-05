@@ -4,10 +4,9 @@
 
 #pragma once
 
-#include "ckernel_defs.h"
 #include "ckernel.h"
+#include "ckernel_defs.h"
 #include "ckernel_sfpu_is_fp16_zero.h"
-
 #include "sfpi.h"
 
 using namespace sfpi;
@@ -20,7 +19,8 @@ namespace sfpu
 sfpi_inline void _calculate_comp_init_flag_(bool check, vFloat& flag1, vFloat& flag2, float init)
 {
     flag1 = init;
-    if (check) {
+    if (check)
+    {
         flag2 = init;
     }
 }
@@ -28,7 +28,6 @@ sfpi_inline void _calculate_comp_init_flag_(bool check, vFloat& flag1, vFloat& f
 template <bool APPROXIMATION_MODE, bool invert_output, bool check_zero, bool second_check, bool is_less_than_equal_zero, int ITERATIONS>
 inline void _calculate_comp_(const int iterations, uint exponent_size_8)
 {
-
     // output_0 and output_1 hold the outputs use use when a zero or negative check is true/false.
     // False = 0.0 = kCONST_0 (5/8-bit exponent format)
     // True  = 1.0 = kCONST_1_FP16B (8-bit exponent format)
@@ -42,20 +41,26 @@ inline void _calculate_comp_(const int iterations, uint exponent_size_8)
     {
         vFloat v = dst_reg[0];
         vFloat flag1, flag2;
-        if constexpr(check_zero)
+        if constexpr (check_zero)
         {
-            v_if (_sfpu_is_fp16_zero_(v, exponent_size_8)) {
+            v_if (_sfpu_is_fp16_zero_(v, exponent_size_8))
+            {
                 _calculate_comp_init_flag_(second_check, flag1, flag2, output_0);
-            } v_else {
+            }
+            v_else
+            {
                 _calculate_comp_init_flag_(second_check, flag1, flag2, output_1);
             }
             v_endif;
         }
         else
         {
-            v_if (v < 0.0F) {
+            v_if (v < 0.0F)
+            {
                 _calculate_comp_init_flag_(second_check, flag1, flag2, output_0);
-            } v_else {
+            }
+            v_else
+            {
                 _calculate_comp_init_flag_(second_check, flag1, flag2, output_1);
             }
             v_endif;
@@ -70,7 +75,8 @@ inline void _calculate_comp_(const int iterations, uint exponent_size_8)
             // Do a bitwise Or (flag1 | flag2) to get <= condition.
             // flag1 < 0 OR flag2 == 0 => DST is Less than or Equal to zero.
             // Result will be either 0x0000(0.0) or 0x3F80(1.0)
-            if constexpr (is_less_than_equal_zero) {
+            if constexpr (is_less_than_equal_zero)
+            {
                 result = reinterpret<vFloat>(reinterpret<vUInt>(flag1) | reinterpret<vUInt>(flag2));
             }
             else
@@ -83,7 +89,9 @@ inline void _calculate_comp_(const int iterations, uint exponent_size_8)
                 // Result will be either 0x0000(0.0) or 0x3F80(1.0)
                 result = reinterpret<vFloat>(reinterpret<vUInt>(flag1) & reinterpret<vUInt>(flag2));
             }
-        } else {
+        }
+        else
+        {
             result = flag1;
         }
 

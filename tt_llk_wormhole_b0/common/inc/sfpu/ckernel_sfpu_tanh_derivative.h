@@ -4,10 +4,9 @@
 
 #pragma once
 
-#include "ckernel_defs.h"
 #include "ckernel.h"
+#include "ckernel_defs.h"
 #include "noc_nonblocking_api.h"
-
 #include "sfpi.h"
 
 using namespace sfpi;
@@ -29,11 +28,12 @@ inline void _calculate_tanh_derivative_(const int iterations)
     {
         vFloat val = dst_reg[0];
 
-        if constexpr (!WITH_PRECOMPUTED_TANH) {
+        if constexpr (!WITH_PRECOMPUTED_TANH)
+        {
             val = lut(val, l0, l1, l2);
         }
 
-        val = val * (-val) + vConst1;
+        val        = val * (-val) + vConst1;
         dst_reg[0] = val;
 
         dst_reg++;

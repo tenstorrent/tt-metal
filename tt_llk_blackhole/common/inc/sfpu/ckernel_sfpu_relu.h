@@ -4,10 +4,9 @@
 
 #pragma once
 
-#include "ckernel_defs.h"
 #include "ckernel.h"
+#include "ckernel_defs.h"
 #include "ckernel_sfpu_converter.h"
-
 #include "sfpi.h"
 
 using namespace sfpi;
@@ -22,11 +21,13 @@ inline void _calculate_lrelu_(const int iterations, uint slope)
 {
     vFloat s = Converter::to_float(slope);
 
-    #pragma GCC unroll 0
-    for (int d = 0; d < iterations; d++) {
+#pragma GCC unroll 0
+    for (int d = 0; d < iterations; d++)
+    {
         vFloat v = dst_reg[0];
 
-        v_if (v < 0.0f) {
+        v_if (v < 0.0f)
+        {
             v *= s;
         }
         v_endif;
@@ -44,11 +45,13 @@ inline void _relu_max_(const int iterations, uint uint_threshold)
     for (int d = 0; d < iterations; d++)
     {
         vFloat a = dst_reg[0];
-        v_if(a > threshold) {
+        v_if (a > threshold)
+        {
             a = threshold;
         }
         v_endif;
-        v_if(a < 0.0f) {
+        v_if (a < 0.0f)
+        {
             a = 0.0f;
         }
         v_endif;
@@ -64,7 +67,8 @@ inline void _relu_min_(const int iterations, uint uint_threshold)
     for (int d = 0; d < iterations; d++)
     {
         vFloat a = dst_reg[0];
-        v_if(a < threshold) {
+        v_if (a < threshold)
+        {
             a = 0.0f;
         }
         v_endif;
