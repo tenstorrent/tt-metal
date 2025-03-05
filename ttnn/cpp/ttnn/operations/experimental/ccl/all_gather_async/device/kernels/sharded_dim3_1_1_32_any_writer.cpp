@@ -60,36 +60,7 @@ void kernel_main() {
     const auto [mapping_table, rt_increment] =
         experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(arg_idx));
     arg_idx += rt_increment;
-    size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_idx);
-
-    DPRINT << "ct args: \n";
-    DPRINT << "my_chip_id: " << (uint32_t)my_chip_id << "\n";
-    DPRINT << "reserved_packet_header_cb_id: " << (uint32_t)reserved_packet_header_cb_id << "\n";
-    DPRINT << "num_packet_headers_storable: " << (uint32_t)num_packet_headers_storable << "\n";
-    DPRINT << "cb0_id: " << (uint32_t)cb0_id << "\n";
-    DPRINT << "packet_size_in_pages: " << (uint32_t)packet_size_in_pages << "\n";
-    DPRINT << "tensor0_page_size: " << (uint32_t)tensor0_page_size << "\n";
-    DPRINT << "num_targets_forward_direction: " << (uint32_t)num_targets_forward_direction << "\n";
-    DPRINT << "num_targets_backward_direction: " << (uint32_t)num_targets_backward_direction << "\n";
-
-    DPRINT << "rt args: \n";
-    DPRINT << "tensor_address0: " << (uint32_t)tensor_address0 << "\n";
-    DPRINT << "tile_id_start: " << (uint32_t)tile_id_start << "\n";
-    DPRINT << "tile_id_end: " << (uint32_t)tile_id_end << "\n";
-    DPRINT << "wait_output_semaphore: " << (uint32_t)wait_output_semaphore << "\n";
-    DPRINT << "reset_global_semaphore: " << (uint32_t)reset_global_semaphore << "\n";
-    DPRINT << "out_ready_sem_bank_addr: " << (uint32_t)out_ready_sem_bank_addr << "\n";
-    DPRINT << "out_ready_sem_noc0_x: " << (uint32_t)out_ready_sem_noc0_x << "\n";
-    DPRINT << "out_ready_sem_noc0_y: " << (uint32_t)out_ready_sem_noc0_y << "\n";
-    DPRINT << "out_ready_sem_wait_value: " << (uint32_t)out_ready_sem_wait_value << "\n";
-
-    DPRINT << "arg_for_fab: " << (uint32_t)arg_for_fab << "\n";
-    DPRINT << "fabric_connection arg 0" << get_arg_val<uint32_t>(arg_for_fab++) << "\n";
-    DPRINT << "fabric_connection arg 1" << get_arg_val<uint32_t>(arg_for_fab++) << "\n";
-    DPRINT << "fabric_connection arg 2" << get_arg_val<uint32_t>(arg_for_fab++) << "\n";
-    DPRINT << "fabric_connection arg 3" << get_arg_val<uint32_t>(arg_for_fab++) << "\n";
-    DPRINT << "fabric_connection arg 4" << get_arg_val<uint32_t>(arg_for_fab++) << "\n";
 
     // packet header cb
     cb_reserve_back(reserved_packet_header_cb_id, 1);
@@ -101,9 +72,6 @@ void kernel_main() {
     cb_reserve_back(reserved_packet_header_cb_id, 1);
     auto packet_header_buffer_seminc = get_write_ptr(reserved_packet_header_cb_id);
     cb_push_back(reserved_packet_header_cb_id, 1);
-    DPRINT << "packet_header_buffer_addr_forward: " << (uint32_t)packet_header_buffer_addr_forward << "\n";
-    DPRINT << "packet_header_buffer_addr_backward: " << (uint32_t)packet_header_buffer_addr_backward << "\n";
-    DPRINT << "packet_header_buffer_seminc: " << (uint32_t)packet_header_buffer_seminc << "\n";
 
     // pre-populate packet headers
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward =
@@ -124,15 +92,8 @@ void kernel_main() {
     }
 
     // 1. mcast via fabric to remote tensor addresses
-    DPRINT << "num_targets_forward_direction: " << num_targets_forward_direction << "\n";
-    DPRINT << "num_targets_backward_direction: " << num_targets_backward_direction << "\n";
-    DPRINT << "my_chip_id: " << my_chip_id << "\n";
-
-    DPRINT << "tensor -> CB: " << (uint32_t)cb0_id << "\n";
-    DPRINT << "packet size in pages: " << (uint32_t)packet_size_in_pages << "\n";
     uint32_t tile_id = tile_id_start;
     while (tile_id < tile_id_end) {
-        DPRINT << "tile_id: " << tile_id << "\n";
         cb_wait_front(cb0_id, packet_size_in_pages);
         size_t l1_read_addr = get_read_ptr(cb0_id);
         uint32_t num_pages_to_read = std::min(tile_id_end - tile_id, packet_size_in_pages);
@@ -140,10 +101,6 @@ void kernel_main() {
         uint32_t contig_pages_advanced = 1;  // always 1 for interleaved
         for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
             uint64_t noc0_dest_noc_addr = get_noc_addr(tile_id, tensor0_addrgen);
-
-            DPRINT << "j: " << j << "\n";
-            DPRINT << "noc0_dest_noc_addr: " << noc0_dest_noc_addr << "\n";
-            DPRINT << "tile_id: " << tile_id << "\n";
 
             write_and_advance_local_read_address_for_fabric_write(
                 noc0_dest_noc_addr,
@@ -188,19 +145,16 @@ void kernel_main() {
     uint64_t out_ready_sem_noc_addr =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
     noc_semaphore_inc(out_ready_sem_noc_addr, 1);
-    DPRINT << "inc done\n";
 
     // 3. wait for mcast output ready semaphore
     if (wait_output_semaphore) {
         while (*reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr) < out_ready_sem_wait_value);
-        DPRINT << "waitval done\n";
     }
 
     // 4. global semaphore reset
     if (reset_global_semaphore) {
-        const uint64_t dest_noc_addr = get_noc_addr(my_x[0], my_y[0], out_ready_sem_bank_addr);
+        const uint64_t dest_noc_addr = get_noc_addr(out_ready_sem_bank_addr);
         noc_inline_dw_write(dest_noc_addr, 0);
-        DPRINT << "reset done\n";
     }
 
     if (fabric_connection.is_logically_connected()) {
@@ -208,5 +162,4 @@ void kernel_main() {
     }
 
     noc_async_write_barrier();
-    DPRINT << "DONE \n";
 }

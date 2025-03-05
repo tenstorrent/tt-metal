@@ -47,28 +47,13 @@ void kernel_main() {
     const auto [mapping_table, rt_increment] =
         experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(arg_idx));
     arg_idx += rt_increment;
-    // print every compile and runtime arg in uint32_t
-    DPRINT << "ct args: \n";
-    DPRINT << "my_chip_id: " << (uint32_t)my_chip_id << "\n";
-    DPRINT << "cb0_id: " << (uint32_t)cb0_id << "\n";
-    DPRINT << "packet_size_in_pages: " << (uint32_t)packet_size_in_pages << "\n";
-    DPRINT << "tensor0_page_size: " << (uint32_t)tensor0_page_size << "\n";
 
-    DPRINT << "rt args: \n";
-    DPRINT << "tensor_address0: " << (uint32_t)tensor_address0 << "\n";
-    DPRINT << "tile_id_start: " << (uint32_t)tile_id_start << "\n";
-    DPRINT << "tile_id_end: " << (uint32_t)tile_id_end << "\n";
-
-    // interleaved addrgen
+    // sharded addrgen
     experimental::ShardedAddrGen<tensor_shard_info> tensor0_addrgen = {
         .bank_base_address = tensor_address0, .shard_array = mapping_table};
 
-    DPRINT << "tensor -> CB: " << (uint32_t)cb0_id << "\n";
-    DPRINT << "packet size in pages: " << (uint32_t)packet_size_in_pages << "\n";
-
     uint32_t tile_id = tile_id_start;
     while (tile_id < tile_id_end) {
-        DPRINT << "tile_id: " << tile_id << "\n";
         cb_reserve_back(cb0_id, packet_size_in_pages);
         const uint32_t l1_write_addr_base = get_write_ptr(cb0_id);
         uint32_t l1_write_addr = l1_write_addr_base;
@@ -84,6 +69,4 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb0_id, packet_size_in_pages);
     }
-
-    DPRINT << "DONE \n";
 }
