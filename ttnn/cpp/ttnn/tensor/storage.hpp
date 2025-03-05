@@ -55,9 +55,9 @@ struct DeviceStorage {
     const auto attribute_values() const { return std::make_tuple(this->memory_config()); }
 
     bool is_allocated() const;
-    distributed::MeshBuffer* get_mesh_buffer() const {
+    std::shared_ptr<distributed::MeshBuffer> get_mesh_buffer() const {
         TT_FATAL(mesh_buffer != nullptr, "Mesh buffer is not allocated");
-        return mesh_buffer.get();
+        return mesh_buffer;
     }
     IDevice* get_device() const {
         if (mesh_buffer != nullptr) {
