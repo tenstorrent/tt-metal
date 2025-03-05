@@ -57,6 +57,16 @@ void ReplayTrace(MeshDevice* device, uint8_t cq_id, const MeshTraceId& trace_id,
 
 void ReleaseTrace(MeshDevice* device, const MeshTraceId& trace_id) { device->release_mesh_trace(trace_id); }
 
+void Synchronize(MeshDevice* device, std::optional<uint8_t> cq_id, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    if (cq_id.has_value()) {
+        device->mesh_command_queue(*cq_id).finish(sub_device_ids);
+    } else {
+        for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
+            device->mesh_command_queue(cq_id).finish(sub_device_ids);
+        }
+    }
+}
+
 void Finish(MeshCommandQueue& mesh_cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     mesh_cq.finish(sub_device_ids);
 }
