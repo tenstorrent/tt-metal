@@ -6,6 +6,7 @@
 #include "rotary_embedding_llama_program_factory.hpp"
 
 #include <tt-metalium/constants.hpp>
+#include "ttnn/types.hpp"
 
 namespace tt {
 
