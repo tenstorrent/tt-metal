@@ -24,7 +24,6 @@ void read_row_from_cb(
     cb_push_back(cb_id, blk);
 }
 void kernel_main() {
-    DPRINT << "HIIII \n\n\n" << ENDL();
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t NCHt = get_arg_val<uint32_t>(1);
     uint32_t Wt = get_arg_val<uint32_t>(2);
@@ -80,16 +79,16 @@ void kernel_main() {
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     uint32_t offs = 0;
-    for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        auto read_in0_and_in1[&]() {
-            for (uint32_t wt = 0; wt < Wt; wt += blk) {
-                read_row_from_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
+    auto read_in0_and_in1 = [&]() {
+        for (uint32_t wt = 0; wt < Wt; wt += blk) {
+            read_row_from_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
 #ifdef FUSE_PRE_ADD
-                // TODO(AP): refactor the ifdefs
-                read_row_from_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
+            // TODO(AP): refactor the ifdefs
+            read_row_from_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
 #endif
-            }  // wt loop
-        };
+        }  // wt loop
+    };
+    for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         read_in0_and_in1();
         read_in0_and_in1();
 #if defined FUSE_GAMMA || defined FUSE_BETA
