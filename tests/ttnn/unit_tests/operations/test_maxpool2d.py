@@ -14,6 +14,25 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 import ttnn
 
 
+# Cache map used for torch tensor reuse - the tensor will not be generated if a tensor of the same dimensions has already been generated
+@pytest.fixture(scope="module")
+def torch_tensor_map(request):
+    torch_tensor_map = {}
+
+    return torch_tensor_map
+
+
+def randomize_torch_tensor(torch_tensor_map, tensor_shape):
+    tensor_shape = tuple(tensor_shape)
+    if tensor_shape in torch_tensor_map.keys():
+        torch_tensor = torch_tensor_map[tensor_shape]
+    else:
+        torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+        torch_tensor_map[tensor_shape] = torch_tensor
+
+    return torch_tensor
+
+
 def run_max_pool(
     act_shape,
     kernel_size,
@@ -21,6 +40,7 @@ def run_max_pool(
     stride,
     dilation,
     device,
+    torch_tensor_map,
     dtype,
     memory_config=None,
     shard_scheme=None,
@@ -130,7 +150,7 @@ def run_max_pool(
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
 
     ## construct the tensor in NCHW shape
-    act = torch.randn(act_shape, dtype=torch.bfloat16)
+    act = randomize_torch_tensor(torch_tensor_map, act_shape)
     # act = torch.zeros(act_shape, dtype=torch.bfloat16)
     # for n in range(act_shape[0]):
     #     for c in range(act_shape[1]):
@@ -337,7 +357,9 @@ def run_max_pool(
         True,
     ],
 )
-def test_run_max_pool(act_shape, kernel_size, padding, stride, dilation, device, dtype, use_program_cache, ceil_mode):
+def test_run_max_pool(
+    act_shape, kernel_size, padding, stride, dilation, device, torch_tensor_map, dtype, use_program_cache, ceil_mode
+):
     run_max_pool(
         act_shape,
         kernel_size,
@@ -345,6 +367,7 @@ def test_run_max_pool(act_shape, kernel_size, padding, stride, dilation, device,
         stride,
         dilation,
         device,
+        torch_tensor_map,
         dtype,
         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ceil_mode=ceil_mode,
@@ -424,6 +447,7 @@ def test_run_max_pool_width_shard(
     stride,
     dilation,
     device,
+    torch_tensor_map,
     dtype,
     use_program_cache,
     ceil_mode,
@@ -435,6 +459,7 @@ def test_run_max_pool_width_shard(
         stride,
         dilation,
         device,
+        torch_tensor_map,
         dtype,
         shard_scheme=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ceil_mode=ceil_mode,
@@ -534,6 +559,7 @@ def test_run_max_pool_block_shard(
     stride,
     dilation,
     device,
+    torch_tensor_map,
     dtype,
     use_program_cache,
     ceil_mode,
@@ -545,6 +571,7 @@ def test_run_max_pool_block_shard(
         stride,
         dilation,
         device,
+        torch_tensor_map,
         dtype,
         shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ceil_mode=ceil_mode,
@@ -565,10 +592,13 @@ def test_run_max_pool_block_shard(
 def test_run_max_pool_mem_config(
     act_shape,
     device,
+    torch_tensor_map,
     memory_config,
     use_program_cache,
 ):
-    run_max_pool(act_shape, (3, 3), (1, 1), (2, 2), (1, 1), device, ttnn.bfloat16, memory_config=memory_config)
+    run_max_pool(
+        act_shape, (3, 3), (1, 1), (2, 2), (1, 1), device, torch_tensor_map, ttnn.bfloat16, memory_config=memory_config
+    )
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
@@ -606,10 +636,11 @@ def test_run_max_pool_yolov4(
     stride,
     dilation,
     device,
+    torch_tensor_map,
     dtype,
     use_program_cache,
 ):
-    run_max_pool(act_shape, kernel_size, padding, stride, dilation, device, dtype)
+    run_max_pool(act_shape, kernel_size, padding, stride, dilation, device, torch_tensor_map, dtype)
 
 
 @pytest.mark.skip("See GH issue #12285")
@@ -718,6 +749,7 @@ def test_run_max_pool_yolov4(
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_pool_core_nondivis(
     device,
+    torch_tensor_map,
     use_program_cache,
     batch_size,
     input_channels,
@@ -762,7 +794,7 @@ def test_pool_core_nondivis(
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
 
     ## construct the tensor in NCHW shape
-    act = torch.randn(act_shape, dtype=torch.bfloat16)
+    act = randomize_torch_tensor(torch_tensor_map, act_shape)
     # act = torch.zeros(act_shape, dtype=torch.bfloat16)
     # act = torch.ones(act_shape, dtype=torch.bfloat16)
     # act = torch.arange(0, volume(act_shape), dtype=torch.bfloat16).reshape(act_shape)
@@ -887,6 +919,7 @@ def test_run_max_pool_squeeze_net_model(
     stride,
     dilation,
     device,
+    torch_tensor_map,
     dtype,
     use_program_cache,
     ceil_mode,
@@ -898,6 +931,7 @@ def test_run_max_pool_squeeze_net_model(
         stride,
         dilation,
         device,
+        torch_tensor_map,
         dtype,
         ceil_mode=ceil_mode,
     )
