@@ -75,6 +75,10 @@ def map_hf_to_meta_keys(loaded_weights):
         "mlp.gate_proj.weight": "feed_forward.w1.weight",
         "mlp.up_proj.weight": "feed_forward.w3.weight",
         "mlp.down_proj.weight": "feed_forward.w2.weight",
+        # MLP bias mappings
+        "mlp.gate_proj.bias": "feed_forward.w1.bias",
+        "mlp.up_proj.bias": "feed_forward.w3.bias",
+        "mlp.down_proj.bias": "feed_forward.w2.bias",
         # Direct module mappings
         "gate_proj.weight": "w1.weight",
         "down_proj.weight": "w2.weight",
@@ -86,6 +90,10 @@ def map_hf_to_meta_keys(loaded_weights):
         "q_proj.bias": "wq.bias",
         "k_proj.bias": "wk.bias",
         "v_proj.bias": "wv.bias",
+        # Direct MLP bias mappings
+        "gate_proj.bias": "w1.bias",
+        "up_proj.bias": "w3.bias",
+        "down_proj.bias": "w2.bias",
         "weight": "emb.weight",  # For host embeddings
         # Full path layer mappings
         "model.layers.{layer}.input_layernorm.weight": "layers.{layer}.attention_norm.weight",
@@ -100,6 +108,10 @@ def map_hf_to_meta_keys(loaded_weights):
         "model.layers.{layer}.mlp.gate_proj.weight": "layers.{layer}.feed_forward.w1.weight",
         "model.layers.{layer}.mlp.up_proj.weight": "layers.{layer}.feed_forward.w3.weight",
         "model.layers.{layer}.mlp.down_proj.weight": "layers.{layer}.feed_forward.w2.weight",
+        # Full path MLP bias mappings
+        "model.layers.{layer}.mlp.gate_proj.bias": "layers.{layer}.feed_forward.w1.bias",
+        "model.layers.{layer}.mlp.up_proj.bias": "layers.{layer}.feed_forward.w3.bias",
+        "model.layers.{layer}.mlp.down_proj.bias": "layers.{layer}.feed_forward.w2.bias",
     }
 
     meta_state_dict = {}
@@ -256,6 +268,10 @@ def map_meta_to_hf_keys(loaded_weights):
         "feed_forward.w1.weight": "mlp.gate_proj.weight",
         "feed_forward.w3.weight": "mlp.up_proj.weight",
         "feed_forward.w2.weight": "mlp.down_proj.weight",
+        # Feed forward bias mappings
+        "feed_forward.w1.bias": "mlp.gate_proj.bias",
+        "feed_forward.w3.bias": "mlp.up_proj.bias",
+        "feed_forward.w2.bias": "mlp.down_proj.bias",
         # Direct mappings for when we get just the final components
         "w1.weight": "gate_proj.weight",
         "w2.weight": "down_proj.weight",
@@ -267,6 +283,10 @@ def map_meta_to_hf_keys(loaded_weights):
         "wq.bias": "q_proj.bias",
         "wk.bias": "k_proj.bias",
         "wv.bias": "v_proj.bias",
+        # Direct MLP bias mappings
+        "w1.bias": "gate_proj.bias",
+        "w3.bias": "up_proj.bias",
+        "w2.bias": "down_proj.bias",
         # Host embeddings
         "emb.weight": "weight",
     }

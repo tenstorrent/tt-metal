@@ -494,7 +494,7 @@ def pad_to_size(x: torch.Tensor, dim: int, size: int) -> torch.Tensor:
     if dim < 0:
         dim = x.dim() + dim
     assert isinstance(x, torch.Tensor), "Input must be a torch.Tensor"
-    assert -x.dim() <= dim < x.dim(), f"Dimension out of range (expected between {-x.dim()} and {x.dim()-1})"
+    assert -x.dim() <= dim < x.dim(), f"Dimension {dim} out of range (expected between {-x.dim()} and {x.dim()-1})"
     dim = x.dim() + dim if dim < 0 else dim
 
     current_size = x.size(dim)

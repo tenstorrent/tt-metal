@@ -11,6 +11,12 @@ import torch.nn.functional as F
 from typing import Optional, Tuple, List, Dict
 
 
+# This is a no-op function for compatibility with the TTNN implementation
+def set_mesh_device(device):
+    """No-op function for compatibility with TTNN implementation."""
+    pass
+
+
 def qwen2_rms_norm(x: torch.Tensor, state_dict: Dict, eps: float = 1e-6) -> torch.Tensor:
     """RMSNorm with weight scaling."""
     return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) * state_dict["weight"]
@@ -113,7 +119,6 @@ def qwen2_5_vl_patch_merger(x: torch.Tensor, state_dict: Dict) -> torch.Tensor:
     """
     # Get the hidden size from the weight matrix shape
     hidden_size = state_dict["mlp"]["0"]["weight"].shape[0]
-    print(f"{x.flatten()[:3]=}")
 
     # Normalize first
     x = qwen2_rms_norm(x, {"weight": state_dict["ln_q"]["weight"]})
@@ -126,7 +131,6 @@ def qwen2_5_vl_patch_merger(x: torch.Tensor, state_dict: Dict) -> torch.Tensor:
     x = F.gelu(x)
     x = F.linear(x, state_dict["mlp"]["2"]["weight"])
 
-    print(f"{x.flatten()[:3]=}")
     return x
 
 
@@ -296,13 +300,6 @@ def qwen2_5_vl_vision_block(
     Returns:
         Transformed hidden states
     """
-    print(f"{hidden_states.flatten()[:3]=}")
-    print(f"{cu_seqlens[:3]=}")
-    print(f"{num_heads=}")
-    print(f"{rotary_pos_emb=}")
-    print(f"{position_embeddings[0].flatten()[-3:]=}")
-    print(f"{position_embeddings[1].flatten()[-3:]=}")
-
     # Layer norm 1
     residual = hidden_states
     hidden_states = qwen2_rms_norm(hidden_states, state_dict["norm1"])
@@ -324,9 +321,6 @@ def qwen2_5_vl_vision_block(
 
     # Add residual connection
     hidden_states = residual + mlp_output
-
-    print(f"{hidden_states.flatten()[:3]=}")
-    print(f"{hidden_states.flatten()[-3:]=}")
 
     return hidden_states
 
