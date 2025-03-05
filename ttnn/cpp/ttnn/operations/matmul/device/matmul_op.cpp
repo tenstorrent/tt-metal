@@ -1447,6 +1447,13 @@ void Matmul::validate(
             "tensor {}",
             optional_output_tensor_c->memory_config(),
             this->output_mem_config);
+    } else if (this->output_mem_config.shard_spec.has_value()) {
+        const auto output_tensor_spec = this->compute_output_specs(input_tensors, {}, optional_input_tensors).at(0);
+        TT_FATAL(
+            output_tensor_spec.memory_config() == this->output_mem_config,
+            "Mismatch between computed {} and provided {} mem config",
+            output_tensor_spec.memory_config(),
+            this->output_mem_config);
     }
 
     TT_FATAL(this->bcast_batch.has_value(), "Error: bcast_batch field should have been automatically populated");
