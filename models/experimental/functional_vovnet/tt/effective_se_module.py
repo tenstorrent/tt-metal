@@ -12,7 +12,6 @@ class TtEffectiveSEModule:
         self,
         stride: int = 1,
         padding: int = 1,
-        # torch_model=None,
         parameters=None,
         device=None,
         base_address=None,
@@ -23,7 +22,6 @@ class TtEffectiveSEModule:
 
         self.fc = Conv(
             device=device,
-            # model=torch_model,
             parameters=parameters,
             path=base_address,
             conv_params=[stride, stride, padding, padding],
@@ -34,8 +32,8 @@ class TtEffectiveSEModule:
         self.activation = ttnn.hardsigmoid
 
     def forward(self, input: ttnn.Tensor) -> ttnn.Tensor:
-        out = ttnn.mean(input, dim=[2, 3], keepdim=True)
+        out = ttnn.mean(input, dim=[2, 3], keepdim=True)  # , memory_config = ttnn.L1_MEMORY_CONFIG)
         out = self.fc(out)[0]
         out = self.activation(out)
-        out = ttnn.multiply(input, out)
+        out = ttnn.multiply(input, out)  # , memory_config = ttnn.L1_MEMORY_CONFIG)
         return out

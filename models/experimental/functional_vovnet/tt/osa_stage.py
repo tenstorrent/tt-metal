@@ -15,13 +15,11 @@ class TtOsaStage:
         base_address=None,
         device=None,
         state_dict=None,
-        # torch_model=None,
         parameters=None,
     ):
         self.device = device
         self.base_address = f"{base_address}.blocks.0"
         self.state_dict = state_dict
-        # self.torch_model = torch_model
         self.maxpool_pad = 0
         self.maxpool_stride = 2
         self.maxpool_kernel = 3
@@ -39,7 +37,6 @@ class TtOsaStage:
             self.blocks += [
                 TtOsaBlock(
                     base_address=self.base_address,
-                    # torch_model=self.torch_model,
                     parameters=parameters,
                     device=self.device,
                 )
