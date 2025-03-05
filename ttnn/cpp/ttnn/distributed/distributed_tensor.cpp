@@ -160,7 +160,7 @@ std::unique_ptr<TensorToMesh> shard_tensor_to_2d_mesh_mapper(
     TT_FATAL(
         mesh_shape[0] <= mesh_device.shape()[0] &&  //
             mesh_shape[1] <= mesh_device.shape()[1],
-        "Device mesh shape does not match the provided mesh shape.");
+        "Device mesh shape {} does not match the provided mesh shape ({}, {}).", mesh_device.shape(), mesh_shape[0], mesh_shape[1]);
     return std::make_unique<ShardTensorTo2dMesh>(mesh_shape[0], mesh_shape[1], config);
 }
 
