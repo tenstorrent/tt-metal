@@ -2,14 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-
-#include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
-#include <tt-metalium/assert.hpp>
-#include "ttnn/distributed/distributed_tensor_config.hpp"
-#include "ttnn/distributed/types.hpp"
-#include "ttnn/tensor/xtensor/partition.hpp"
+#include "tt-metalium/assert.hpp"
 
 namespace ttnn::distributed {
 namespace {
@@ -148,6 +142,21 @@ private:
 
 }  // namespace
 
+std::vector<Tensor> TensorToMesh::map(const Tensor& tensor) const {
+    // This function should never be called directly, it's just to satisfy the linker
+    TT_THROW("Pure virtual function 'map' called - please use or define concrete implementations instead.");
+}
+
+tt::tt_metal::DistributedTensorConfig TensorToMesh::config() const {
+    // This function should never be called directly, it's just to satisfy the linker
+    TT_THROW("Pure virtual function 'config' called - please use or define concrete implementations instead.");
+}
+
+Tensor MeshToTensor::compose(const std::vector<Tensor>& tensors) const {
+    // This function should never be called directly, it's just to satisfy the linker
+    TT_THROW("Pure virtual function 'compose' called  - please use or define concrete implementations instead.");
+}
+
 std::unique_ptr<TensorToMesh> replicate_tensor_to_mesh_mapper(MeshDevice& mesh_device) {
     return std::make_unique<ReplicateTensorToMesh>(mesh_device.num_devices());
 }
@@ -194,7 +203,7 @@ Tensor distribute_tensor(
     std::vector<Tensor> tensors = mapper.map(tensor);
     Tensor output = aggregate_as_tensor(tensors, mapper.config());
     if (mesh_device.has_value()) {
-        return output.to_device(&(mesh_device->get()));
+        return output.to_device(&(mesh_device->get()), output.memory_config());
     }
     return output;
 }
@@ -202,6 +211,14 @@ Tensor distribute_tensor(
 Tensor aggregate_tensor(const Tensor& tensor, const MeshToTensor& composer) {
     return is_multi_device_tensor(tensor) ? composer.compose(get_tensors_from_multi_device_storage(tensor))
                                           : composer.compose({tensor});
+}
+
+Shard2dConfig get_shard2d_config(const std::unordered_map<std::string, std::string>& metadata) {
+    return Shard2dConfig(std::stoi(metadata.at("row_dim")), std::stoi(metadata.at("col_dim")));
+}
+
+Concat2dConfig get_concat2d_config(const std::unordered_map<std::string, std::string>& metadata) {
+    return Concat2dConfig(std::stoi(metadata.at("row_dim")), std::stoi(metadata.at("col_dim")));
 }
 
 }  // namespace ttnn::distributed

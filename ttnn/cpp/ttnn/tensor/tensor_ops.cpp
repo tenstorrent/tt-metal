@@ -29,6 +29,9 @@ namespace tt::tt_metal::tensor_ops {
 
 Tensor tensor_to_device(
     const Tensor& input_tensor, IDevice* target_device, const MemoryConfig& mem_config, QueueId cq_id) {
+    // TODO: remove
+    std::cout << "debugprint2" << std::endl;
+
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::to_device", input_tensor, target_device, mem_config);
     // Tensor can be using borrowed storage. If so, when running in async mode, copy this tensor to owned storage.
@@ -194,6 +197,7 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, distri
             host_storage != nullptr) {
             distributed_config = host_storage->strategy;
         }
+        // TODO: remove, check the tilize tomorrow
 
         Tensor tensor_modified_layout = Tensor(workers.size(), distributed_config);
         for (int worker_index = 0; worker_index < workers.size(); ++worker_index) {

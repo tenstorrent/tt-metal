@@ -210,6 +210,7 @@ def synchronize_devices(
             ttnn._ttnn.device.synchronize_device(devices.get_device(device), queue_id, sub_device_ids)
 
 
+# TODO: All of the TensorTo and MeshTo classes will be slowly cut out over the next few days
 class TensorToMesh:
     """
     Defines the mapping of a torch.Tensor to a device mesh: e.g. Shard/Replicate.
@@ -231,7 +232,6 @@ class MeshToTensor:
     Defines the inverse operation of TensorToMesh. Given a set of per-device
     ttnn.Tensor objects (aggregated into a single ttnn.Tensor), this class defines
     the mapping back to one or many torch.Tensor objects.
-
     You can also "Bring your own MeshToTensor" based on your custom mapping.
     """
 
@@ -260,7 +260,6 @@ class ShardTensorToMesh(TensorToMesh):
 class ShardTensor2dMesh(TensorToMesh):
     """
     Shard a tensor across a 2D mesh of devices.
-
     This class implements a strategy for distributing a tensor across a 2D grid of devices,
     allowing for efficient parallel processing in distributed computing environments.
     """
@@ -268,25 +267,20 @@ class ShardTensor2dMesh(TensorToMesh):
     def __init__(self, mesh_device: MeshDevice, mesh_shape: Tuple[int, int], dims: Tuple[Optional[int], Optional[int]]):
         """
         Initialize the ShardTensor2dMesh.
-
         Args:
             mesh_device: The target device mesh for distributing the tensor.
             mesh_shape: The shape of the 2D mesh as (rows, cols).
             dims: The dimensions to shard along, specified as (row_dim, col_dim).
-
         The `dims` tuple determines how the tensor is sharded across the 2D mesh:
         - row_dim: The dimension to shard across mesh rows (or None for replication).
         - col_dim: The dimension to shard across mesh columns (or None for replication).
-
         Examples:
         1. dims=(2, 3) for a tensor of shape (A, B, C, D):
            - Shard along dimension 2 (C) across mesh rows
            - Shard along dimension 3 (D) across mesh columns
-
         2. dims=(None, 3):
            - Replicate across mesh rows
            - Shard along dimension 3 (D) across mesh columns
-
         3. dims=(None, None):
            - Fully replicate the tensor across all devices
         """
@@ -301,13 +295,10 @@ class ShardTensor2dMesh(TensorToMesh):
     def map(self, tensor: "torch.Tensor") -> List["torch.Tensor"]:
         """
         Map the input tensor to a list of sharded tensors.
-
         Args:
             tensor: The input tensor to be sharded.
-
         Returns:
             A list of sharded tensors, one for each device in the mesh.
-
         Raises:
             ValueError: If the number of sharding dimensions is not 2.
         """
@@ -339,7 +330,6 @@ class ShardTensor2dMesh(TensorToMesh):
     def config(self) -> Dict[str, str]:
         """
         Provide the configuration of the sharding strategy.
-
         Returns:
             A dictionary containing the sharding strategy and dimensions.
         """
@@ -353,7 +343,6 @@ class ShardTensor2dMesh(TensorToMesh):
 class ConcatMesh2dToTensor(MeshToTensor):
     """
     Concatenate tensors from a 2D mesh back into a single tensor.
-
     This class implements the inverse operation of ShardTensor2dMesh, combining
     sharded tensors from a 2D device mesh back into a single tensor.
     """
@@ -361,7 +350,6 @@ class ConcatMesh2dToTensor(MeshToTensor):
     def __init__(self, mesh_device: MeshDevice, mesh_shape: Tuple[int, int], dims: Tuple[int, int]):
         """
         Initialize the ConcatMesh2dToTensor.
-
         Args:
             mesh_device: The source device mesh containing the sharded tensors.
             mesh_shape: The shape of the 2D mesh as (rows, cols).
@@ -372,7 +360,6 @@ class ConcatMesh2dToTensor(MeshToTensor):
                   These dimensions correspond to the tensor dimensions, not the mesh dimensions.
                   For example, if the original tensor was 4D with shape (batch, channel, height, width),
                   and it was sharded across height and width, dims might be (-2, -1) or (2, 3).
-
         Raises:
             ValueError: If either dimension in 'dims' is None or if both dimensions are the same.
         """
@@ -385,13 +372,10 @@ class ConcatMesh2dToTensor(MeshToTensor):
     def compose(self, tensor: ttnn.Tensor) -> "torch.Tensor":
         """
         Compose the sharded tensors back into a single tensor.
-
         Args:
             tensor: A ttnn.Tensor object containing the sharded tensors distributed across multiple devices.
-
         Returns:
             A single torch.Tensor that combines all the sharded tensors from all devices.
-
         This method first concatenates the shards along the column dimension within each row,
         then concatenates the resulting tensors along the row dimension to form the final tensor.
         """
