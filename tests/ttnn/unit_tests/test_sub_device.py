@@ -123,12 +123,10 @@ def run_sub_devices_program(device, create_fabric_sub_device=False):
     eq = torch.equal(x, y)
     assert eq
 
-    event = ttnn.create_event(device)
-
     yt2 = ttnn.interleaved_to_sharded(
         xt, grid_size, shard_size, shard_scheme, shard_orientation, output_dtype=ttnn.bfloat16
     )
-    ttnn.record_event(0, event, [ttnn.SubDeviceId(1)])
+    event = ttnn.record_event(device, 0, [ttnn.SubDeviceId(1)])
     ttnn.wait_for_event(0, event)
     y2 = ttnn.to_torch(yt2, device=device, mesh_composer=output_mesh_composer)
 
