@@ -48,7 +48,7 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "batch_size",
-    (1,),
+    (1, 32),
 )
 @pytest.mark.parametrize(
     "max_seq_len",
@@ -102,6 +102,7 @@ def test_llama_attention_inference(
 
     transformation_mats = rope_setup.get_both_trans_mats()
 
+    # Setup Paged attention configuration
     page_table_tt = None
     paged_attention_config = None
 
@@ -116,7 +117,8 @@ def test_llama_attention_inference(
         # Page table which maps virtual blocks to physical
         reverse_permutation = torch.argsort(permutation)
         page_table = reverse_permutation.reshape(
-            model_args.max_batch_size, paged_attention_config.max_num_blocks // model_args.max_batch_size
+            model_args.batch_size_per_device_group,
+            paged_attention_config.max_num_blocks // model_args.batch_size_per_device_group,
         )
         page_table_tt = ttnn.from_torch(
             page_table,
@@ -125,7 +127,7 @@ def test_llama_attention_inference(
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 mesh_device,
-                dims=(None, -2) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+                dims=(None, None),
                 mesh_shape=model_args.cluster_shape,
             ),
         )
@@ -235,13 +237,26 @@ def test_llama_attention_inference(
                             cache,
                             mesh_composer=ttnn.ConcatMesh2dToTensor(
                                 mesh_device,
-                                dims=(1, 3) if model_args.is_galaxy else (0, 1),
+                                dims=(1, 0) if model_args.is_galaxy else (0, 1),
                                 mesh_shape=model_args.cluster_shape,
                             ),
-                        )[reverse_permutation][:, : model_args.n_kv_heads, :, : model_args.head_dim]
+                        )
+                        .reshape(
+                            model_args.num_device_groups,
+                            paged_attention_config.max_num_blocks,
+                            model_args.n_kv_heads,
+                            paged_attention_config.block_size,
+                            model_args.head_dim,
+                        )[
+                            : 1 if batch_size == 1 else model_args.num_device_groups,
+                            reverse_permutation,
+                            : model_args.n_kv_heads,
+                            :,
+                            : model_args.head_dim,
+                        ]
                         .reshape(
                             model_args.max_batch_size,
-                            paged_attention_config.max_num_blocks // model_args.max_batch_size,
+                            paged_attention_config.max_num_blocks // model_args.batch_size_per_device_group,
                             model_args.n_kv_heads,
                             paged_attention_config.block_size,
                             model_args.head_dim,
