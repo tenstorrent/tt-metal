@@ -58,17 +58,20 @@ def test_run_resnet50_trace_2cqs_inference(
         correct = 0
 
         profiler.start(f"run")
+        # inputs, labels = get_batch(data_loader, image_processor)
+        # tt_inputs_host = ttnn.from_torch(inputs, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
         for iter in range(iterations):
             predictions = []
+            ### TODO optimize input streamer for better e2e performance
             inputs, labels = get_batch(data_loader, image_processor)
             tt_inputs_host = ttnn.from_torch(inputs, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
             output = resnet50_trace_2cq.execute_resnet50_trace_2cqs_inference(tt_inputs_host).to_torch().to(torch.float)
             prediction = output[:, 0, 0, :].argmax(dim=-1)
             for i in range(batch_size):
                 predictions.append(imagenet_label_dict[prediction[i].item()])
-                logger.info(
-                    f"Iter: {iter} Sample: {i} - Expected Label: {imagenet_label_dict[labels[i]]} -- Predicted Label: {predictions[-1]}"
-                )
+                # logger.info(
+                #    f"Iter: {iter} Sample: {i} - Expected Label: {imagenet_label_dict[labels[i]]} -- Predicted Label: {predictions[-1]}"
+                # )
                 if imagenet_label_dict[labels[i]] == predictions[-1]:
                     correct += 1
         profiler.end(f"run")
@@ -79,7 +82,7 @@ def test_run_resnet50_trace_2cqs_inference(
 
     first_iter_time = profiler.get(f"compile")
     # ensuring inference time fluctuations is not noise
-    inference_time_avg = profiler.get("run") / (iterations * batch_size)
+    inference_time_avg = profiler.get("run") / (iterations)
 
     compile_time = first_iter_time - 2 * inference_time_avg
     prep_perf_report(
