@@ -135,52 +135,49 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
     log_trace(tt::LogOp, "[select_version] input_shard_num_cores: {}", input_shard_num_cores);
     log_trace(tt::LogOp, "[select_version] output_shard_num_cores: {}", output_shard_num_cores);
 
-    // Check for minimal interleaved case
-    if (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] == 32 &&
-        input_tensor_page_layout == tt::tt_metal::Layout::TILE && this->enable_persistent_fabric_mode) {
-        if (input_tensor_buffer_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
-            return AllGatherAsyncVersion::MINIMAL_INTERLEAVED_32;
-        } else if (
-            input_tensor_buffer_layout == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED ||
-            input_tensor_buffer_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED ||
-            input_tensor_buffer_layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
-            return AllGatherAsyncVersion::MINIMAL_SHARDED_32;
-        }
-    }
-
     log_trace(tt::LogOp, "[select_version] input_is_sharded: {}", input_is_sharded);
     log_trace(tt::LogOp, "[select_version] output_is_sharded: {}", output_is_sharded);
 
-    if (input_is_sharded && output_is_sharded) {
+    if (input_is_sharded && output_is_sharded && input_tensor_shape[0] == 1 && input_tensor_shape[2] == 32) {
         // Check for first llama post binary matmul case
-        if (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] == 32 &&
-            input_tensor_shape[3] == 960 && input_tensor_memory_config.buffer_type == BufferType::L1 &&
+        if (input_tensor_shape[1] == 1 && input_tensor_shape[3] == 960 &&
+            input_tensor_memory_config.buffer_type == BufferType::L1 &&
             output_mem_config.buffer_type == BufferType::L1 &&
             input_tensor_memory_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED &&
             output_mem_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED &&
             input_tensor_memory_config.shard_spec->shape[0] == 32 &&
-            input_tensor_memory_config.shard_spec->shape[1] == 32 &&
-            output_mem_config.shard_spec->shape[0] == 32 &&
+            input_tensor_memory_config.shard_spec->shape[1] == 32 && output_mem_config.shard_spec->shape[0] == 32 &&
             output_mem_config.shard_spec->shape[1] == 160 && input_shard_num_cores == 30 &&
             output_shard_num_cores == 24) {
             return AllGatherAsyncVersion::LLAMA_POST_BINARY_MATMUL;
         }
 
         // Check for second llama post binary matmul case
-        if (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 8 && input_tensor_shape[2] == 32 &&
-            input_tensor_shape[3] == 128 && input_tensor_memory_config.buffer_type == BufferType::L1 &&
+        if (input_tensor_shape[1] == 8 && input_tensor_shape[3] == 128 &&
+            input_tensor_memory_config.buffer_type == BufferType::L1 &&
             output_mem_config.buffer_type == BufferType::L1 &&
             input_tensor_memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
             output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
             input_tensor_memory_config.shard_spec->shape[0] == 32 &&
-            input_tensor_memory_config.shard_spec->shape[1] == 128 &&
-            output_mem_config.shard_spec->shape[0] == 32 &&
+            input_tensor_memory_config.shard_spec->shape[1] == 128 && output_mem_config.shard_spec->shape[0] == 32 &&
             output_mem_config.shard_spec->shape[1] == 128 && input_shard_num_cores == 8 &&
             output_shard_num_cores == 32) {
             log_trace(tt::LogOp, "All conditions matched for LLAMA_POST_BINARY_MATMUL case");
             return AllGatherAsyncVersion::LLAMA_POST_BINARY_MATMUL;
         }
+        if (input_tensor_shape[1] == 1 && input_tensor_page_layout == tt::tt_metal::Layout::TILE &&
+            this->enable_persistent_fabric_mode) {
+            return AllGatherAsyncVersion::MINIMAL_SHARDED_32;
+        }
     }
+
+    // Check for minimal interleaved case
+    if (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 &&
+        input_tensor_page_layout == tt::tt_metal::Layout::TILE && this->enable_persistent_fabric_mode &&
+        input_tensor_buffer_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
+        return AllGatherAsyncVersion::MINIMAL_INTERLEAVED_32;
+    }
+
     log_trace(tt::LogOp, "All conditions matched for generic case");
     return AllGatherAsyncVersion::GENERIC;
 }
