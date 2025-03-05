@@ -282,27 +282,25 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
     tt::tt_metal::SetRuntimeArgs(program, reduction_kernel_id, output_tensor_cores, reduction_kernel_rt_args);
 
     // KERNEL CREATION
+    tt::tt_metal::NOC reader_noc = NOC::NOC_1;
+    tt::tt_metal::NOC writer_noc = NOC::NOC_0;
     // Reader
-    auto reader_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
-    reader_kernel_config.compile_args = {
+    std::vector<uint32_t> reader_compile_args = {
         ring_index,                 // my_chip_id
         src0_cb_index,              // cb0_id
         op_config.get_page_size(),  // tensor0_page_size
     };
     log_trace(tt::LogOp, "Reader Compile Args:");
-    for (const auto& arg : reader_kernel_config.compile_args) {
-        log_trace(tt::LogOp, "\t{}", arg);
-    }
     auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device/kernels/dataflow/"
         "worker_reader.cpp",
         sender_worker_core_range,
-        reader_kernel_config);
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1, .noc = reader_noc, .compile_args = reader_compile_args});
 
     // Writer
-    auto writer_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
-    writer_kernel_config.compile_args = {
+    std::vector<uint32_t> writer_compile_args = {
         ring_index,                       // my_chip_id
         reserved_packet_header_CB_index,  // reserved_packet_header_cb_id
         num_packet_headers_storable,      // num_packet_headers_storable
@@ -313,15 +311,13 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
         num_targets_backward,             // num_targets_backward_direction
     };
     log_trace(tt::LogOp, "Writer Compile Args:");
-    for (const auto& arg : writer_kernel_config.compile_args) {
-        log_trace(tt::LogOp, "\t{}", arg);
-    }
     auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device/kernels/dataflow/"
         "worker_writer.cpp",
         sender_worker_core_range,
-        writer_kernel_config);
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0, .noc = writer_noc, .compile_args = writer_compile_args});
 
     // Kernel Runtime Args
     for (uint32_t link = 0; link < num_links; link++) {
@@ -382,9 +378,19 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
         std::vector<uint32_t> mcast_end_x;
         std::vector<uint32_t> mcast_end_y;
 
+        uint32_t num_mcast_cores = 0;
         for (const auto& range : output_corerangeset_per_link[link].ranges()) {
             auto start_core = device->worker_core_from_logical_core(range.start_coord);
             auto end_core = device->worker_core_from_logical_core(range.end_coord);
+            num_mcast_cores += (end_core.x - start_core.x + 1) * (end_core.y - start_core.y + 1);
+            bool mcast_range_contains_self =
+                start_core.x <= core.x && core.x <= end_core.x && start_core.y <= core.y && core.y <= end_core.y;
+            if (mcast_range_contains_self) {
+                num_mcast_cores -= 1;
+            }
+            if (writer_noc == NOC::NOC_1) {
+                std::swap(start_core, end_core);
+            }
             mcast_start_x.push_back(start_core.x);
             mcast_start_y.push_back(start_core.y);
             mcast_end_x.push_back(end_core.x);
@@ -399,6 +405,7 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
             worker_num_tiles_to_read,             // num_tiles_to_read
             output_first_core_tile_start_offset,  // first_core_tile_start_offset
             output_tensor_cores_x.size(),         // num_cores
+            num_mcast_cores,                      // num_mcast_cores
             drain_sync_core.x,                    // out_ready_sem_noc0_x
             drain_sync_core.y,                    // out_ready_sem_noc0_y
             out_ready_sem_wait_value,             // out_ready_sem_wait_value
