@@ -1,4 +1,4 @@
-set(UNIT_TESTS_DM_SRC ${CMAKE_CURRENT_SOURCE_DIR}/test_unary.cpp)
+set(UNIT_TESTS_DM_SRC ${CMAKE_CURRENT_SOURCE_DIR}/test_unary_basic.cpp)
 
 add_executable(unit_tests_dm ${UNIT_TESTS_DM_SRC})
 TT_ENABLE_UNITY_BUILD(unit_tests_dm)

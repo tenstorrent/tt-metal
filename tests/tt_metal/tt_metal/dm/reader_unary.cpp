@@ -7,18 +7,17 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t bank_id = get_arg_val<uint32_t>(1);
-    uint32_t num_tiles = get_arg_val<uint32_t>(2);
-
-    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
+    uint32_t src_addr = get_compile_time_arg_val(0);
+    constexpr uint32_t bank_id = get_compile_time_arg_val(1);
+    constexpr uint32_t total_num_tiles = get_compile_time_arg_val(2);
+    constexpr uint32_t ublock_size_tiles = get_compile_time_arg_val(3);
+    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(4);
 
     // ublocks size defined in tiles
-    constexpr uint32_t ublock_size_tiles = 1;
     uint32_t ublock_size_bytes = get_tile_size(cb_id_in0) * ublock_size_tiles;
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
-    for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
+    for (uint32_t i = 0; i < total_num_tiles; i += ublock_size_tiles) {
         uint64_t src_noc_addr = get_noc_addr_from_bank_id<true>(bank_id, src_addr);
 
         cb_reserve_back(cb_id_in0, ublock_size_tiles);
