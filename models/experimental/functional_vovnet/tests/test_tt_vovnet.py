@@ -16,7 +16,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "model_name, pcc",
     (("hf_hub:timm/ese_vovnet19b_dw.ra_in1k", 0.99),),
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_vovnet_model_inference(device, pcc, imagenet_sample_input, model_name, reset_seeds):
     model = timm.create_model(model_name, pretrained=False)
 
