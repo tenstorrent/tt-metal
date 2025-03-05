@@ -167,7 +167,6 @@ def test_conv3d_sweep_blocks(
     ],
     ids=["variant1", "variant2", "variant3", "variant4"],
 )
-@pytest.mark.parametrize("grid_size", [[8, 8]], ids=["grid_8x8"])
 def test_conv3d_mochi_shapes(
     device,
     input_shape,
@@ -177,7 +176,6 @@ def test_conv3d_mochi_shapes(
     padding,
     padding_mode,
     blocking,
-    grid_size,
     use_program_cache,
     is_ci_env,
 ):
@@ -204,7 +202,7 @@ def test_conv3d_mochi_shapes(
         W_out_block=W_out_block,
         C_out_block=C_out_block,
         C_in_block=C_in_block,
-        compute_with_storage_grid_size=grid_size,
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
     )
 
     tt_output = ttnn.experimental.conv3d(
