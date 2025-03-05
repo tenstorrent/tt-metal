@@ -70,7 +70,7 @@ jobs:
           reporter: jest-junit
           working-directory: /work
 
-      - uses: ./.github/actions/upload-artifact-with-job-uuid
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         if: ${{ !cancelled() }}
         with:
           path: |
