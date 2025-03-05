@@ -117,6 +117,10 @@ class ModelArgs:
         self.is_70b = False
         self.from_hf_url = False  # updated below if true
 
+        assert not os.getenv(
+            "FAKE_DEVICE"
+        ), "FAKE_DEVICE has been renamed to MESH_DEVICE for consistency with vLLM, please update your environment variables and run again."
+
         LLAMA_DIR = os.getenv("LLAMA_DIR")
         HF_MODEL = os.getenv("HF_MODEL")
         assert not (LLAMA_DIR and HF_MODEL), "Only one of LLAMA_DIR or HF_MODEL should be set"
