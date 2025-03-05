@@ -5,7 +5,8 @@
 #include "dataflow_api.h"
 #include <array>
 #include "tt_metal/hw/inc/ethernet/dataflow_api.h"
-#include "cpp/ttnn/operations/ccl/kernels/edm/edm_handshake.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/edm_handshake.hpp"
+
 #define MIN_WAIT 100000
 
 struct addr_sem_pair {
