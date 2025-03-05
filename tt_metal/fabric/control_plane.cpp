@@ -167,14 +167,10 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
 }
 
 void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_graph_desc_file) {
-    // TODO: temp testing code, probably will remove
-    std::filesystem::path cluster_desc_file_path;
     eth_coord_t nw_chip_eth_coord;
     std::uint32_t mesh_ns_size, mesh_ew_size;
-    if (mesh_graph_desc_file.find("tg_mesh_graph_descriptor.yaml") != std::string::npos) {
-        cluster_desc_file_path = std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
-                                 "tests/tt_metal/tt_fabric/common/tg_cluster_desc.yaml";
-
+    std::string mesh_graph_desc_filename = std::filesystem::path(mesh_graph_desc_file).filename().string();
+    if (mesh_graph_desc_filename == "tg_mesh_graph_descriptor.yaml") {
         // Add the N150 MMIO devices
         this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back(this->get_mesh_physical_chip_ids(1, 1, 4, 0));
         this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back(this->get_mesh_physical_chip_ids(1, 1, 4, 1));
@@ -184,27 +180,24 @@ void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_
         nw_chip_eth_coord = {0, 3, 7, 0, 1};
         mesh_ns_size = routing_table_generator_->get_mesh_ns_size(/*mesh_id=*/4);
         mesh_ew_size = routing_table_generator_->get_mesh_ew_size(/*mesh_id=*/4);
-    } else if (mesh_graph_desc_file.find("quanta_galaxy_mesh_graph_descriptor.yaml") != std::string::npos) {
-        cluster_desc_file_path = std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
-                                 "tests/tt_metal/tt_fabric/common/quanta_galaxy_cluster_desc.yaml";
-
+    } else if (mesh_graph_desc_filename == "quanta_galaxy_mesh_graph_descriptor.yaml") {
         nw_chip_eth_coord = {0, 3, 7, 0, 0};
         mesh_ns_size = routing_table_generator_->get_mesh_ns_size(/*mesh_id=*/0);
         mesh_ew_size = routing_table_generator_->get_mesh_ew_size(/*mesh_id=*/0);
-    } else if (mesh_graph_desc_file.find("t3k_mesh_graph_descriptor.yaml") != std::string::npos) {
-        cluster_desc_file_path = std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
-                                 "tests/tt_metal/tt_fabric/common/t3k_cluster_desc.yaml";
+    } else if (mesh_graph_desc_filename == "t3k_mesh_graph_descriptor.yaml") {
         nw_chip_eth_coord = {0, 0, 1, 0, 0};
         mesh_ns_size = routing_table_generator_->get_mesh_ns_size(/*mesh_id=*/0);
         mesh_ew_size = routing_table_generator_->get_mesh_ew_size(/*mesh_id=*/0);
-    } else if (mesh_graph_desc_file.find("n300_mesh_graph_descriptor.yaml") != std::string::npos) {
-        cluster_desc_file_path = std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
-                                 "tests/tt_metal/tt_fabric/common/n300_cluster_desc.yaml";
+    } else if (mesh_graph_desc_filename == "n300_mesh_graph_descriptor.yaml") {
+        nw_chip_eth_coord = {0, 0, 0, 0, 0};
+        mesh_ns_size = routing_table_generator_->get_mesh_ns_size(/*mesh_id=*/0);
+        mesh_ew_size = routing_table_generator_->get_mesh_ew_size(/*mesh_id=*/0);
+    } else if (mesh_graph_desc_filename == "n150_mesh_graph_descriptor.yaml") {
         nw_chip_eth_coord = {0, 0, 0, 0, 0};
         mesh_ns_size = routing_table_generator_->get_mesh_ns_size(/*mesh_id=*/0);
         mesh_ew_size = routing_table_generator_->get_mesh_ew_size(/*mesh_id=*/0);
     } else {
-        TT_FATAL(false, "Unsupported mesh graph descriptor file {}", mesh_graph_desc_file);
+        TT_THROW("Unsupported mesh graph descriptor file {}", mesh_graph_desc_file);
     }
 
     // Must pin a NW chip

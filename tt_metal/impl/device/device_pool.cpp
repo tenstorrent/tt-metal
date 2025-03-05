@@ -516,16 +516,13 @@ void DevicePool::initialize_control_plane() {
     // Default mode, auto select mesh graph descriptor. In future, we can add a way for user to specify custom
     // descriptors
     std::string mesh_graph_descriptor;
-    if (tt::Cluster::instance().get_cluster_type() == tt::ClusterType::N300) {
-        mesh_graph_descriptor = "n300_mesh_graph_descriptor.yaml";
-    } else if (tt::Cluster::instance().get_cluster_type() == tt::ClusterType::T3K) {
-        mesh_graph_descriptor = "t3k_mesh_graph_descriptor.yaml";
-    } else if (tt::Cluster::instance().get_cluster_type() == tt::ClusterType::GALAXY) {
-        mesh_graph_descriptor = "quanta_mesh_graph_descriptor.yaml";
-    } else if (tt::Cluster::instance().get_cluster_type() == tt::ClusterType::TG) {
-        mesh_graph_descriptor = "tg_mesh_graph_descriptor.yaml";
-    } else {
-        TT_FATAL(false, "Unknown cluster type");
+    switch (tt::Cluster::instance().get_cluster_type()) {
+        case tt::ClusterType::N150: mesh_graph_descriptor = "n150_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::N300: mesh_graph_descriptor = "n300_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::T3K: mesh_graph_descriptor = "t3k_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::GALAXY: mesh_graph_descriptor = "quanta_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::TG: mesh_graph_descriptor = "tg_mesh_graph_descriptor.yaml"; break;
+        default: TT_THROW("Unknown cluster type");
     }
     const std::filesystem::path mesh_graph_desc_path =
         std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
