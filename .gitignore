@@ -1,0 +1,14 @@
+**/build/**
+**/__pycache__/**
+.idea/
+.cpmcache/
+compile_commands.json
+*.code-workspace
+*.o
+*.elf
+*.d/
+.cache/**
+.envrc
+.vscode/
+*.log
+*.csv
