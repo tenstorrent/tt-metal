@@ -19,7 +19,6 @@ class TtConvNormAct:
         self.device = device
         self.conv = Conv(
             device=device,
-            # model=torch_model,
             path=base_address,
             conv_params=[stride, stride, padding, padding],
             activation="relu",

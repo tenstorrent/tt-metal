@@ -19,7 +19,6 @@ class TtOsaBlock:
         self,
         base_address=None,
         device=None,
-        # torch_model=None,
         parameters=None,
     ) -> None:
         super().__init__()
@@ -28,7 +27,6 @@ class TtOsaBlock:
         self.conv_reduction = TtConvNormAct(
             stride=1,
             padding=0,
-            # torch_model=torch_model,
             parameters=parameters,
             base_address=f"{base_address}.conv_reduction",
             device=self.device,
@@ -40,7 +38,6 @@ class TtOsaBlock:
         self.conv_concat = TtConvNormAct(
             stride=1,
             padding=0,
-            # torch_model=torch_model,
             parameters=parameters,
             base_address=f"{base_address}.conv_concat",
             device=device,
@@ -50,7 +47,6 @@ class TtOsaBlock:
             kernel_size=1,
             stride=1,
             padding=0,
-            # torch_model=torch_model,
             parameters=parameters,
             base_address=f"{base_address}.attn",
             device=device,

@@ -16,14 +16,12 @@ class TtVoVNet:
         self,
         num_classes=1000,
         device=None,
-        # torch_model=None,
         parameters=None,
         base_address=None,
     ):
         self.num_classes = num_classes
 
         self.device = device
-        # self.torch_model = torch_model
         self.base_address = base_address
 
         self.stem = [
@@ -58,7 +56,6 @@ class TtVoVNet:
                     block_per_stage=1,
                     downsample=downsample,
                     base_address=f"stages.{i}",
-                    # torch_model=self.torch_model,
                     parameters=parameters,
                     device=self.device,
                 )
@@ -68,7 +65,6 @@ class TtVoVNet:
         self.head = TtClassifierHead(
             base_address=f"head",
             device=self.device,
-            # torch_model=self.torch_model,
             parameters=parameters,
         )
 
