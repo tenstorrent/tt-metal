@@ -23,7 +23,7 @@ on:
         type: boolean
         description: "Re-run failed jobs (max 3)"
   push:
-    branches: ["main"]
+    branches: ["main", "jchu/ttnn-integration-with-mesh"]
 
 permissions:
   actions: read
