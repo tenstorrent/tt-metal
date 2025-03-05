@@ -208,7 +208,7 @@ def from_torch(
     if dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b:
         if layout != ttnn.TILE_LAYOUT:
             raise RuntimeError("ttnn.from_torch: bfloat8_b/bfloat4_b requires TILE_LAYOUT!")
-        # Tilize tensor, TODO: this is incredibly non-performant when done on host
+        # Tilize tensor, TODO: this is non-performant when done on host
         tensor = ttnn.from_torch(tensor, layout=ttnn.TILE_LAYOUT, tile=tile, pad_value=pad_value, mesh_mapper=None)
         logical_shape = tensor.shape
         padded_shape = tensor.padded_shape
@@ -231,14 +231,14 @@ def from_torch(
         if pad_value is not None:
             tensor = tensor.pad_to_tile(pad_value)
         if ttnn.is_tensor_storage_on_device(tensor):
-            # TODO: support tilizing non bfloat/float types on device tensors making this expensive conversion unnecessary
+            # TODO: support tilizing non bfloat/float types on device tensors making this conversion unnecessary
             tensor = ttnn.from_device(tensor, cq_id=cq_id)
         tensor = ttnn.to_layout(tensor, layout, device=device)
 
     if device is not None:
         if memory_config is None:
             memory_config = ttnn.DRAM_MEMORY_CONFIG
-        # Handle sharding case which will have already output to a multidevice
+        # Handle sharding case which would have already output to a multidevice
         if not ttnn.is_tensor_storage_on_device(tensor):
             tensor = ttnn.to_device(tensor, device, memory_config=memory_config, cq_id=cq_id)
 

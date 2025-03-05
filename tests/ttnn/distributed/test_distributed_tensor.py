@@ -89,21 +89,13 @@ def test_direct_shard2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device):
     K = K // mesh_shape[1] if K < N else K // mesh_shape[0]
     N = N // mesh_shape[0] if K < N else N // mesh_shape[1]
 
-    sharded_mem_config = ttnn.create_sharded_memory_config(
-        shape=(M // core_grid.y, K // core_grid.x),
-        core_grid=core_grid,
-        strategy=ttnn.ShardStrategy.WIDTH,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
-
     mapper = ttnn.ShardTensorTo2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dim)
 
     sharded_tensor = ttnn.from_torch(
         torch_tensor,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=sharded_mem_config if M == 32 else ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=mapper,
         device=mesh_device,
     )
@@ -165,21 +157,13 @@ def test_direct_concat2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device)
     K = K // mesh_shape[1] if K < N else K // mesh_shape[0]
     N = N // mesh_shape[0] if K < N else N // mesh_shape[1]
 
-    sharded_mem_config = ttnn.create_sharded_memory_config(
-        shape=(M // core_grid.y, K // core_grid.x),
-        core_grid=core_grid,
-        strategy=ttnn.ShardStrategy.WIDTH,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
-
     mapper = ttnn.ShardTensorTo2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dim)
 
     sharded_tensor = ttnn.from_torch(
         torch_tensor,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=sharded_mem_config if M == 32 else ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=mapper,
         device=mesh_device,
     )
@@ -329,19 +313,11 @@ def test_shard2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device):
     K = K // mesh_shape[1] if K < N else K // mesh_shape[0]
     N = N // mesh_shape[0] if K < N else N // mesh_shape[1]
 
-    sharded_mem_config = ttnn.create_sharded_memory_config(
-        shape=(M // core_grid.y, K // core_grid.x),
-        core_grid=core_grid,
-        strategy=ttnn.ShardStrategy.WIDTH,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
-
     to_shard = ttnn.from_torch(
         torch_tensor,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=sharded_mem_config if M == 32 else ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         device=mesh_device,
     )
 
@@ -380,19 +356,11 @@ def test_concat2d_to_tensor(M, K, N, dtype, mesh_shape, mesh_device):
     K = K // mesh_shape[1] if K < N else K // mesh_shape[0]
     N = N // mesh_shape[0] if K < N else N // mesh_shape[1]
 
-    sharded_mem_config = ttnn.create_sharded_memory_config(
-        shape=(M // core_grid.y, K // core_grid.x),
-        core_grid=core_grid,
-        strategy=ttnn.ShardStrategy.WIDTH,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
-
     to_shard = ttnn.from_torch(
         torch_tensor,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=sharded_mem_config if M == 32 else ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         device=mesh_device,
     )
 
