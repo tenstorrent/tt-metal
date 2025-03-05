@@ -7,6 +7,8 @@ import pytest
 from loguru import logger
 import os
 import ttnn
+import pandas as pd
+from collections import defaultdict
 from models.demos.llama3_subdevices.tt.llama_common import (
     precompute_freqs,
     PagedAttentionConfig,
@@ -22,14 +24,11 @@ from models.utility_functions import (
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
-from models.perf.device_perf_utils import run_device_perf, check_device_perf, post_process_ops_log
+from models.perf.device_perf_utils import run_device_perf
 from tt_metal.tools.profiler.process_model_log import (
-    post_process_ops_log,
-    run_device_profiler,
     get_latest_ops_log_filename,
 )
-import pandas as pd
-from collections import defaultdict
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 
 @torch.no_grad()
@@ -295,6 +294,10 @@ def merge_device_rows(df):
 
 @pytest.mark.models_device_performance_bare_metal
 def test_llama_TG_perf_device(reset_seeds):
+    profiler = BenchmarkProfiler()
+    benchmark_data = BenchmarkData()
+    step_name = "llama-80-decoder"
+
     batch_size = 32
     subdir = "llama-80-decoder"
     margin = 0.03
@@ -302,9 +305,14 @@ def test_llama_TG_perf_device(reset_seeds):
 
     command = f"pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_decoder_inference"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
-
+    profiler.start("run")
+    profiler.start(step_name)
     post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch_size)
+    profiler.end(step_name)
+    profiler.end("run")
+
     filename = get_latest_ops_log_filename(subdir)
+
     # filename = "/localdev/sraizada/tracy-logs/llama-80-decoder/reports/2025_03_03_13_14_57/ops_perf_results_2025_03_03_13_14_57.csv"
     df = pd.read_csv(filename)
     df = df[df["OP TYPE"].isin(["tt_dnn_device"])]
@@ -334,15 +342,27 @@ def test_llama_TG_perf_device(reset_seeds):
         "NLPConcatHeadsDecodeDeviceOperation": [7039.0],
         "BinaryDeviceOperation": [2577.0, 13666.0, 2574.0],
     }
+    passing = True
     for op_code, durations in kernel_duration_dict.items():
         if op_code in expected_times_dict:
             thresholds = expected_times_dict[op_code]
             # Ensure the lists are of the same length to compare corresponding elements
             if len(durations) == len(thresholds):
-                for duration, threshold in zip(durations, thresholds):  # Compare corresponding items
+                for id, (duration, threshold) in enumerate(zip(durations, thresholds)):  # Compare corresponding items
+                    benchmark_data.add_measurement(profiler, 0, step_name, f"{op_code}_{id}", duration)
                     if duration > threshold:
-                        print(f"{op_code}: {duration} ns exceeds the threshold of {threshold} ns")
+                        passing = False
+                        logger.info(f"{op_code}: {duration} ns exceeds the threshold of {threshold} ns")
             else:
-                print(
+                passing = False
+                logger.info(
                     f"Warning: Length mismatch for {op_code}. Kernel durations: {len(durations)}, Expected thresholds: {len(thresholds)}"
                 )
+
+    benchmark_data.save_partial_run_json(
+        profiler,
+        run_type=f"llama-80-decoder",
+        ml_model_name="llama70b-tg-decoder",
+    )
+
+    assert passing
