@@ -88,12 +88,11 @@ void MAIN {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         constexpr int onetile = 1;
         constexpr int dst0 = 0;
-        /*
-         * X + Y
-         */
-        // E[x]
-        // aka ∑(x-E[x])
-        // cb_x in0 + in1 or in0
+        // Start of
+        //  E[x]
+        //  aka   ∑(x)
+        //      --------
+        //         n
         tile_regs_acquire();
         tile_regs_wait();
 
@@ -125,10 +124,18 @@ void MAIN {
         tile_regs_release();
         cb_push_back(cb_ex, onetile);
         cb_wait_front(cb_ex, onetile);
+        // End of
+        // E[x]
+        // aka   ∑(x)
+        //     --------
+        //        n
 
         cb_wait_front(cb_ex, onetile);
+        // Start of
         // Var Calculation
-        // aka ∑(x-E[x])^2
+        // Var(X) = ∑(x-E[x])^2
+        //         -----------
+        //              n
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             reconfig_data_format(cb_in, cb_ex);
             pack_reconfig_data_format(cb_ex2);
@@ -151,7 +158,6 @@ void MAIN {
             }
             cb_pop_front(cb_inb, blk);
 #endif
-            //(x-E[x])^2
             square_tile_init();
             for (uint32_t j = 0; j < blk; j++) {
                 square_tile(j);
@@ -168,8 +174,6 @@ void MAIN {
             tile_regs_wait();
             if (wt > 0) {
                 cb_wait_front(cb_ex2, onetile);
-                UNPACK(DPRINT << "PREV" << ENDL());
-                UNPACK(print_full_tile(cb_ex2, 0));
                 copy_tile_init(cb_ex2);
                 copy_tile(cb_ex2, 0, dst0);
                 cb_pop_front(cb_ex2, onetile);
@@ -182,15 +186,25 @@ void MAIN {
             }
             cb_pop_front(cb_xmm, blk);
             cb_reserve_back(cb_ex2, onetile);
+            reduce_revert_delta(cb_ex2);
             tile_regs_commit();
             pack_tile(dst0, cb_ex2);
-            reduce_revert_delta(cb_ex2);
             cb_push_back(cb_ex2, onetile);
             tile_regs_release();
         }
 
         tile_regs_acquire();
         tile_regs_wait();
+        // End of
+        // Var Calculation
+        // Var(X) = ∑(x-E[x])^2
+        //         -----------
+
+        // Start of
+        // Calculation
+        //                     1
+        //  cb_ex2pe =   -------------
+        //               √(Var(X) + ε)
         cb_wait_front(cb_ex2, onetile);
 
         reconfig_data_format(cb_ex2, cb_eps);
@@ -214,7 +228,7 @@ void MAIN {
         cb_pop_front(cb_ex2, onetile);
         cb_wait_front(cb_ex2pe, onetile);
 
-        // broadcasts the tile since only the column contains the important data
+        // broadcasts the tile since cb_ex2pe is a column vector that contains the important data
         tile_regs_acquire();
         tile_regs_wait();
         reconfig_data_format_srca(cb_ex2pe);
@@ -226,19 +240,21 @@ void MAIN {
         pack_tile(dst0, cb_ex2pe);
         tile_regs_release();
         cb_push_back(cb_ex2pe, onetile);
+        // End of
+        // Calculation
+        //                     1
+        //  cb_ex2pe =   -------------
+        //               √(Var(X) + ε)
 
-        // Final Val Calc
-
-        // DPRINT << "WT: " <<Wt << " \n\n" << ENDL();
         cb_wait_front(cb_ex2pe, 1);
         reconfig_data_format(cb_in, cb_ex);
         pack_reconfig_data_format(cb_in, cb_out);
-        // PACK(print_full_tile(cb_ex2pe,0));
+        // Start of
+        // Final Val Calc
+        //    x-E[X]
+        //(---------------*𝛄)+ß
+        //  √(Var(X)+ε)
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            if (do_gamma) {
-            }
-            if (do_beta) {
-            }
             tile_regs_acquire();
             tile_regs_wait();
             cb_reserve_back(cb_out, blk);
@@ -270,25 +286,20 @@ void MAIN {
             }
             cb_push_back(cb_xmm, blk);
             tile_regs_release();
-            // UNPACK(DPRINT << "End b4 gamma\n\n" << ENDL());
             if (do_gamma) {
-                // UNPACK(DPRINT << "BEFORE ANYTHING GAMMA\n\n" << ENDL());
                 tile_regs_acquire();
                 tile_regs_wait();
                 cb_wait_front(cb_gamma, blk);
-                // UNPACK(DPRINT << "BEFORE xmm GAMMA\n\n" << ENDL());
                 cb_wait_front(cb_xmm, blk);
-                // UNPACK(DPRINT << "BEFORE BROADCAST GAMMA\n\n" << ENDL());
                 unary_bcast_init<BroadcastType::ROW>(cb_gamma, cb_out);
                 for (uint32_t j = 0; j < blk; j++) {
                     unary_bcast<BroadcastType::ROW>(cb_gamma, j, j);
                 }
-                // UNPACK(DPRINT << "AFTER BROADCAST GAMMA\n\n" << ENDL());
+                cb_pop_front(cb_gamma, blk);
                 binary_dest_reuse_tiles_init<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_xmm);
                 for (uint32_t j = 0; j < blk; j++) {
                     binary_dest_reuse_tiles<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_xmm, j, j);
                 }
-                // UNPACK(DPRINT << "AFTER MATH GAMMA\n\n" << ENDL());
                 tile_regs_commit();
                 if (!do_beta) {
                     cb_xmm = cb_out;
@@ -301,19 +312,17 @@ void MAIN {
                 }
                 cb_push_back(cb_xmm, blk);
                 tile_regs_release();
-                // UNPACK(DPRINT << "PUSH AND PACK GAMMA\n\n" << ENDL());
             }
-            // UNPACK(DPRINT << "End b4 BETA\n\n" << ENDL());
             if (do_beta) {
                 tile_regs_acquire();
                 tile_regs_wait();
                 cb_wait_front(cb_beta, blk);
                 cb_wait_front(cb_xmm, blk);
-                // UNPACK(DPRINT << "End b4 BETA\n\n" << ENDL());
                 unary_bcast_init<BroadcastType::ROW>(cb_beta, cb_out);
                 for (uint32_t j = 0; j < blk; j++) {
                     unary_bcast<BroadcastType::ROW>(cb_beta, j, j);
                 }
+                cb_pop_front(cb_beta, blk);
                 binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_xmm);
                 for (uint32_t j = 0; j < blk; j++) {
                     binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_xmm, j, j);
@@ -326,14 +335,12 @@ void MAIN {
                 tile_regs_release();
                 cb_push_back(cb_out, blk);
             }
-            // UNPACK(print_full_tile(cb_out,0));
-            // UNPACK(DPRINT << "-|-|"<<ENDL());
-            //            UNPACK(DPRINT << "End b4 BETA\n\n" << ENDL());
-            //            DPRINT << wt << "Before cb_out reserve!\n\n\n" << ENDL();
         }
+        // End of
+        // Final Val Calc
+        //    x-E[X]
+        //(---------------*𝛄)+ß
+        //  √(Var(X)+ε)
     }  // NCHt loop
-    // cb_pop_front(cb_scaler, 1); // optional for correctness
-    // cb_pop_front(cb_eps, 1); // optional for correctness
-    // cb_pop_front(cb_col1, 1); // optional for correctness
 }
 }  // namespace NAMESPACE

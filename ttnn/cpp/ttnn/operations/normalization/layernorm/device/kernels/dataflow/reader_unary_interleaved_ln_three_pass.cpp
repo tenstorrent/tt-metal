@@ -80,27 +80,43 @@ void kernel_main() {
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     uint32_t offs = 0;
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
+        // Data for Calculating E[X]
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             read_row_from_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
         }  // wt loop
-
 #ifdef FUSE_PRE_ADD
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             read_row_from_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
         }
 #endif
 
+        // Data for Calculating Variance
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             read_row_from_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
 #ifdef FUSE_PRE_ADD
             read_row_from_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
 #endif
         }  // wt loop
+
+        // Data for calculating the final value
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             read_row_from_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
 #ifdef FUSE_PRE_ADD
             read_row_from_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
 #endif
+            if (ncht == 0) {
+#ifdef FUSE_GAMMA
+                {
+                    read_row_from_cb(cb_id_gamma, addrg, gamma_tile_bytes, wt, blk);
+                }
+#endif
+
+#ifdef FUSE_BETA
+                {
+                    read_row_from_cb(cb_id_beta, addrb, beta_tile_bytes, wt, blk);
+                }
+#endif
+            }
         }  // wt loop
         offs += Wt;
     }  // ncht loop
