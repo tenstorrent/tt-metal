@@ -10,7 +10,7 @@
 #include "debug/assert.h"
 #include <tt-metalium/buffer_constants.hpp>
 #include "cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
-#include "cpp/ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/worker_edm_utils.hpp"
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 
 #include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"

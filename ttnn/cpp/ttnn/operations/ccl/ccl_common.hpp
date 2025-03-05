@@ -13,8 +13,12 @@
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <tt-metalium/program_impl.hpp>
 #include "ttnn/tensor/types.hpp"
-#include "ttnn/operations/ccl/erisc_datamover_builder.hpp"
+#include <tt-metalium/erisc_datamover_builder.hpp>
+#include "erisc_datamover_builder_helper.hpp"
 #include "cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
+
+// TODO: remove this
+using namespace tt::fabric;
 
 namespace ttnn {
 namespace ccl {
@@ -28,7 +32,6 @@ struct SyncModeSpec {
     void add_signal(uint32_t sem_id, uint32_t wait_count);
 };
 
-class FabricEriscDatamoverBuilder;
 class EriscDatamoverBuilder;
 
 std::tuple<uint32_t, std::optional<chip_id_t>, std::optional<chip_id_t>> get_device_index_and_sender_receiver_ids(

@@ -9,7 +9,7 @@
 #include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 #include "cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
-#include "ttnn/operations/ccl/erisc_datamover_builder.hpp"
+#include <tt-metalium/erisc_datamover_builder.hpp>
 
 #include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_common.hpp"
@@ -1039,7 +1039,7 @@ static void log_command_stream(ttnn::ccl::cmd::CclHostLowLevelCommandSequence co
 }
 
 std::vector<uint32_t> generate_edm_connection_rt_args(
-    ttnn::ccl::SenderWorkerAdapterSpec const& connection_info,
+    tt::fabric::SenderWorkerAdapterSpec const& connection_info,
     Program &program,
     CoreRangeSet worker_cores) {
     std::vector<uint32_t> new_rt_args;
@@ -1066,8 +1066,8 @@ void generate_multi_input_command_stream_kernel_rt_args(
     CoreRangeSet const& worker_core_range,
     ttnn::ccl::cmd::CclHostLowLevelCommandSequence const& ccl_command_stream0,
     std::optional<ttnn::ccl::cmd::CclHostLowLevelCommandSequence> const& ccl_command_stream1,
-    std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& forward_fabric_connections,
-    std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& backward_fabric_connections,
+    std::optional<tt::fabric::SenderWorkerAdapterSpec> const& forward_fabric_connections,
+    std::optional<tt::fabric::SenderWorkerAdapterSpec> const& backward_fabric_connections,
     std::optional<std::unordered_map<const Tensor*, IDevice*>> const& tensor_device_override,
     std::optional<std::vector<size_t>> const& tensor_indices,
     ttnn::ccl::tensor_address_runtime_args_overrider *rt_args_overrider) {
@@ -1203,9 +1203,9 @@ void generate_multi_command_stream_kernel_rt_args(
     uint32_t num_pages_per_edm_buffer,  // TODO: get from fabric
     std::vector<std::vector<ttnn::ccl::v2::TensorSlice>> const& command_tensor_slices,
     ttnn::ccl::cmd::CclCommandCode command_type,  // TODAY REQURED TO BE SAME - FUTURE - wrapped with above
-    std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& forward_fabric_connections,
-    std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& backward_fabric_connections,
-    std::optional<std::vector<ttnn::ccl::edm_termination_info_t>> const& edm_termination_infos,
+    std::optional<tt::fabric::SenderWorkerAdapterSpec> const& forward_fabric_connections,
+    std::optional<tt::fabric::SenderWorkerAdapterSpec> const& backward_fabric_connections,
+    std::optional<std::vector<tt::fabric::edm_termination_info_t>> const& edm_termination_infos,
     std::vector<ttnn::ccl::cmd::CclCommandDestArgs> const& dest_args) {
     for (size_t i = 0; i < tensors.size(); i++) {
         TT_FATAL(tensors[i] != nullptr, "Tensor at index {} is nullptr", i);
@@ -1309,7 +1309,7 @@ ttnn::ccl::cmd::CclHostLowLevelCommandSequence build_ccl_cmd_proc_teardown_comma
     IDevice* forward_device,
     size_t line_size,
     size_t line_index,
-    std::vector<ttnn::ccl::edm_termination_info_t> const& edm_termination_infos,
+    std::vector<tt::fabric::edm_termination_info_t> const& edm_termination_infos,
     ccl::SyncModeSpec const& sync_details,
     ccl::EdmLineFabricOpInterface& fabric_interface) {
     TT_FATAL(sync_details.num_signals == 1, "Only one signal is supported for CCL command processor teardown");
@@ -1471,11 +1471,11 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_rt_args
 }
 
 std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_rt_args(
-    std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& forward_fabric_connection,
+    std::optional<tt::fabric::SenderWorkerAdapterSpec> const& forward_fabric_connection,
     const size_t sender_worker_forward_flow_control_semaphore_id,
     const size_t sender_worker_forward_teardown_semaphore_id,
     const size_t sender_worker_forward_buffer_index_semaphore_id,
-    std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& backward_fabric_connection,
+    std::optional<tt::fabric::SenderWorkerAdapterSpec> const& backward_fabric_connection,
     const size_t sender_worker_backward_flow_control_semaphore_id,
     const size_t sender_worker_backward_teardown_semaphore_id,
     const size_t sender_worker_backward_buffer_index_semaphore_id,
@@ -1557,13 +1557,13 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_rt_args
         log_trace(tt::LogOp, "\tbuffer_size_bytes: {}", forward_fabric_connection.value().buffer_size_bytes);
         log_trace(
             tt::LogOp, "\tbuffer_index_semaphore_id: {}", forward_fabric_connection.value().buffer_index_semaphore_id);
-        ttnn::ccl::append_worker_to_fabric_edm_sender_rt_args(
+        tt::fabric::append_worker_to_fabric_edm_sender_rt_args(
             forward_fabric_connection.value(),
             sender_worker_forward_flow_control_semaphore_id,
             sender_worker_forward_teardown_semaphore_id,
             sender_worker_forward_buffer_index_semaphore_id,
             args);
-        logged_arg_idx = ttnn::ccl::log_worker_to_fabric_edm_sender_rt_args(args, logged_arg_idx);
+        logged_arg_idx = tt::fabric::log_worker_to_fabric_edm_sender_rt_args(args, logged_arg_idx);
     }
     args.push_back(backward_fabric_connection.has_value() ? 1 : 0);
     if (backward_fabric_connection.has_value()) {
@@ -1588,13 +1588,13 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_rt_args
         log_trace(tt::LogOp, "\tbuffer_size_bytes: {}", backward_fabric_connection.value().buffer_size_bytes);
         log_trace(
             tt::LogOp, "\tbuffer_index_semaphore_id: {}", backward_fabric_connection.value().buffer_index_semaphore_id);
-        ttnn::ccl::append_worker_to_fabric_edm_sender_rt_args(
+        tt::fabric::append_worker_to_fabric_edm_sender_rt_args(
             backward_fabric_connection.value(),
             sender_worker_backward_flow_control_semaphore_id,
             sender_worker_backward_teardown_semaphore_id,
             sender_worker_backward_buffer_index_semaphore_id,
             args);
-        logged_arg_idx = ttnn::ccl::log_worker_to_fabric_edm_sender_rt_args(args, logged_arg_idx);
+        logged_arg_idx = tt::fabric::log_worker_to_fabric_edm_sender_rt_args(args, logged_arg_idx);
     }
 
     args.push_back(sync_details.has_value() ? 1 : 0);

@@ -17,7 +17,6 @@
 #include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/algorithms.hpp"
 
 using shape_t = ttnn::ccl::Shape4D<uint32_t>;
-using ttnn::ccl::coord_t;
 using address_t = uint32_t;
 
 using tt::tt_metal::BufferType;
@@ -62,7 +61,7 @@ void print_tensor_command(uint32_t command_index, ttnn::ccl::cmd::CclCommandTens
  */
 FORCE_INLINE shape_t worker_wrapped_offset_to_coord(shape_t const& slice_shape, shape_t const& worker_slice_offset) {
     static_assert(
-        sizeof(coord_t) == 2 * sizeof(uint32_t), "worker_wrapped_offset_to_coord not updated to work with 4d shape");
+        sizeof(ttnn::ccl::coord_t) == 2 * sizeof(uint32_t), "worker_wrapped_offset_to_coord not updated to work with 4d shape");
     auto const y = worker_slice_offset.x / slice_shape.x;
     return shape_t(0, 0, y, worker_slice_offset.x - (y * slice_shape.x));
 }
@@ -76,7 +75,7 @@ namespace v2 {
  */
 FORCE_INLINE shape_t worker_wrapped_offset_to_coord(shape_t const& slice_shape, shape_t const& worker_slice_offset) {
     static_assert(
-        sizeof(coord_t) == 2 * sizeof(uint32_t), "worker_wrapped_offset_to_coord not updated to work with 4d shape");
+        sizeof(ttnn::ccl::coord_t) == 2 * sizeof(uint32_t), "worker_wrapped_offset_to_coord not updated to work with 4d shape");
     auto const y = worker_slice_offset.x / slice_shape.x;
     return shape_t(0, 0, y, worker_slice_offset.x - (y * slice_shape.x));
 }

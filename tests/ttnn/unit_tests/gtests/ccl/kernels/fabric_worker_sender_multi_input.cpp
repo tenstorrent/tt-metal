@@ -5,8 +5,8 @@
 #include <cstdint>
 
 #include "dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/edm_fabric_worker_adapters.hpp"
+#include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tests/ttnn/unit_tests/gtests/ccl/kernels/test_kernels.common.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/ccl_send_utils.hpp"
 

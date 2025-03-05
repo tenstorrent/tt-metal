@@ -6,7 +6,7 @@
 
 #include "dataflow_api.h"
 #include "cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
-#include "cpp/ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/worker_edm_utils.hpp"
 #include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 
 using ttnn::ccl::coord_t;
