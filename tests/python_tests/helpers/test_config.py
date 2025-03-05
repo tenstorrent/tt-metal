@@ -31,8 +31,8 @@ def generate_make_command(test_config):
 
     if mathop != "no_mathop":
         if isinstance(mathop, str):  # single tile option
-            if mathop == "reduce":
-                make_cmd += f"mathop={  mathop_args_dict[mathop]} "
+            if mathop in ["reduce_col", "reduce_row", "reduce_scalar"]:
+                make_cmd += f"mathop={mathop} "
                 make_cmd += f"reduce_dim={reduce_dim_args[reduce_dim]} "
                 make_cmd += f"pool_type={reduce_pool_args[pool_type]} "
             else:

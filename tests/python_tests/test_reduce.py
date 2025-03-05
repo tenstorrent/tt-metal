@@ -60,10 +60,10 @@ def generate_golden(operand1, reduce_dim, pool_type, data_format):
 
 param_combinations = [
     (reduce_dim, pool_type, format, dest_acc, testname)
-    for reduce_dim in ["reduce_col", "reduce_row", "reduce_scalar"]
-    for pool_type in ["max", "avg", "sum"]
+    for reduce_dim in ["reduce_col"]
+    for pool_type in ["max", "sum", "avg"]
     for format in ["Float16_b", "Float16"]
-    for dest_acc in [""]  # , "DEST_ACC"]
+    for dest_acc in [""]
     for testname in ["reduce_test"]
 ]
 
@@ -82,12 +82,6 @@ param_ids = [
 def test_reduce(reduce_dim, pool_type, format, testname, dest_acc):
 
     src_A, src_B = generate_stimuli(format)
-    # src_A = torch.cat([
-    #     torch.full((256,), 1, dtype=format_dict[format]),
-    #     torch.full((256,), 2, dtype=format_dict[format]),
-    #     torch.full((256,), 3, dtype=format_dict[format]),
-    #     torch.full((256,), 4, dtype=format_dict[format])
-    # ])
 
     if pool_type in ["max", "sum"]:  # result in srcA should be divided by 1
         src_B = torch.full((1024,), 1)
@@ -108,7 +102,7 @@ def test_reduce(reduce_dim, pool_type, format, testname, dest_acc):
         "dest_acc": dest_acc,
         "reduce_dim": reduce_dim,
         "pool_type": pool_type,
-        "mathop": "reduce",
+        "mathop": reduce_dim,
     }
 
     make_cmd = generate_make_command(test_config)

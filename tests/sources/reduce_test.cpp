@@ -22,7 +22,11 @@ const bool is_fp32_dest_acc_en = true;
 const bool is_fp32_dest_acc_en = false;
 #endif
 
+#ifdef REDUCE_ROW_OPERATION
 const std::uint32_t within_face_16x16_transpose = 1;
+#else
+const std::uint32_t within_face_16x16_transpose = 0;
+#endif
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -49,7 +53,7 @@ void run_kernel()
 #include "llk_math_reduce.h"
 #include "params.h"
 
-const bool row_pool = true;
+const bool row_pool = false;
 
 void run_kernel()
 {
