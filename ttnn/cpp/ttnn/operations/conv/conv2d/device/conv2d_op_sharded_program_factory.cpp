@@ -1147,12 +1147,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         partials_cb_uses_output = cb_config_matmul_partials.globally_allocated_address().value() ==
                                   cb_config_output.globally_allocated_address().value();
     }
-    log_info(
-        LogOp,
-        "Conv2D Matmul Partials CB uses output memory: {}, Handles : {} {}",
-        partials_cb_uses_output,
-        cb_output,
-        cb_matmul_partials);
 
     string reader_kernel;
     string compute_kernel;

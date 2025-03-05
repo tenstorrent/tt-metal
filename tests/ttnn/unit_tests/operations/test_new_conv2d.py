@@ -135,7 +135,7 @@ def run_conv(
         and output_layout == ttnn.ROW_MAJOR_LAYOUT
     ):
         output_layout = ttnn.TILE_LAYOUT
-        logger.warning("Disabling untilize_out when out_c > 256 for Height Sharded")
+        pytest.xfail("Untilize_out is not supported when out_c > 256 for Height Sharded")
 
     conv_config = ttnn.Conv2dConfig(
         dtype=activations_dtype,
@@ -159,8 +159,8 @@ def run_conv(
         conv_config.act_block_h_override = config_override["act_block_h"]
         if fp32_accum and packer_l1_acc and output_layout == ttnn.ROW_MAJOR_LAYOUT:
             conv_config.output_layout = ttnn.TILE_LAYOUT
-            logger.warning(
-                "Forcing output_layout to TILE when act_block_h_override, fp32_accum and packer_l1_acc are enabled"
+            pytest.xfail(
+                "Row Major layout is not supported when act_block_h_override, fp32_accum and packer_l1_acc are all enabled"
             )
 
     if config_override and "act_block_w_div" in config_override and not auto_shard:
