@@ -109,20 +109,18 @@ def prepare_generator_args(
 @pytest.mark.parametrize(
     "warmup_iters, enable_trace, max_batch_size, include_text_only_prompts",
     [
-        # (0, False, 1, False),  # batch1-notrace
-        # (0, True, 1, False),  # batch1-trace
+        (0, False, 1, False),  # batch1-notrace
+        (0, True, 1, False),  # batch1-trace
         (0, True, 32, False),  # batch32-trace
-        # (0, True, 4, True),  # batch4-trace-with-text-prompts
+        (0, True, 4, True),  # batch4-trace-with-text-prompts
     ],
-    ids=[
-        "batch32-trace",
-    ],
+    ids=["batch1-notrace", "batch1-trace", "batch32-trace", "batch4-trace-with-text-prompts"],
 )
 @pytest.mark.parametrize(
     "data_parallel",
     [
-        # 1,
-        4,
+        1,
+        # 4,
     ],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 14951424, "num_command_queues": 2}], indirect=True)
