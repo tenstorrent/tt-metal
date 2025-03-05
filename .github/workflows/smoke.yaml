@@ -17,9 +17,9 @@ jobs:
   metalium-smoke:
     runs-on: >-
       ${{
-        startsWith(inputs.runner-label, 'tt-ubuntu')
-        && fromJSON(format('["{0}"]', inputs.runner-label))
-        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
+        startsWith(inputs.runner, 'tt-ubuntu')
+        && fromJSON(format('["{0}"]', inputs.runner))
+        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner))
       }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
