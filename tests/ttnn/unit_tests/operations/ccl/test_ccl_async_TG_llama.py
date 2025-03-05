@@ -283,11 +283,13 @@ def test_ag_tg_llama_perf(
         ([1, 1, 32, 2048], 0, 4, 24, 16),  # FF2/DO all reduce
         ([1, 1, 32, 1280], 1, 3, 24, 40),  # QKV all reduce
         ([1, 1, 32, 3584], 1, 3, 24, 24),  # FF1 all reduce
+        ([1, 1, 32, 16 * 1024], 1, 3, 32, 32),  # LM head all reduce
     ],
     ids=[
         "ff2",
         "qkv",
         "ff1",
+        "lm_head",
     ],
 )
 @pytest.mark.parametrize(
@@ -356,6 +358,7 @@ def test_all_reduce_tg_llama(
         ("ff2", 10, 29),
         ("qkv", 10, 25),
         ("ff1", 10, 30),
+        ("lm_head", 10, 70),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
