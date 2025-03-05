@@ -138,9 +138,16 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
     log_trace(tt::LogOp, "[select_version] input_is_sharded: {}", input_is_sharded);
     log_trace(tt::LogOp, "[select_version] output_is_sharded: {}", output_is_sharded);
 
-    if (input_is_sharded && output_is_sharded && input_tensor_shape[0] == 1 && input_tensor_shape[2] == 32) {
+    const std::array<uint32_t, 4> llama_post_binary_matmul_case0 = {1, 1, 32, 960};
+    const std::array<uint32_t, 4> llama_post_binary_matmul_case1 = {1, 8, 32, 128};
+    const std::array<uint32_t, 3> llama_batch32_case = {1, 1, 32};  // The last value can be any value
+
+    if (input_is_sharded && output_is_sharded) {
         // Check for first llama post binary matmul case
-        if (input_tensor_shape[1] == 1 && input_tensor_shape[3] == 960 &&
+        if (input_tensor_shape[0] == llama_post_binary_matmul_case0[0] &&
+            input_tensor_shape[1] == llama_post_binary_matmul_case0[1] &&
+            input_tensor_shape[2] == llama_post_binary_matmul_case0[2] &&
+            input_tensor_shape[3] == llama_post_binary_matmul_case0[3] &&
             input_tensor_memory_config.buffer_type == BufferType::L1 &&
             output_mem_config.buffer_type == BufferType::L1 &&
             input_tensor_memory_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED &&
@@ -153,7 +160,10 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
         }
 
         // Check for second llama post binary matmul case
-        if (input_tensor_shape[1] == 8 && input_tensor_shape[3] == 128 &&
+        if (input_tensor_shape[0] == llama_post_binary_matmul_case1[0] &&
+            input_tensor_shape[1] == llama_post_binary_matmul_case1[1] &&
+            input_tensor_shape[2] == llama_post_binary_matmul_case1[2] &&
+            input_tensor_shape[3] == llama_post_binary_matmul_case1[3] &&
             input_tensor_memory_config.buffer_type == BufferType::L1 &&
             output_mem_config.buffer_type == BufferType::L1 &&
             input_tensor_memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
@@ -165,15 +175,18 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
             log_trace(tt::LogOp, "All conditions matched for LLAMA_POST_BINARY_MATMUL case");
             return AllGatherAsyncVersion::LLAMA_POST_BINARY_MATMUL;
         }
-        if (input_tensor_shape[1] == 1 && input_tensor_page_layout == tt::tt_metal::Layout::TILE &&
+        // Check for batch 32 case
+        if (input_tensor_shape[0] == llama_batch32_case[0] && input_tensor_shape[1] == llama_batch32_case[1] &&
+            input_tensor_shape[2] == llama_batch32_case[2] && input_tensor_page_layout == tt::tt_metal::Layout::TILE &&
             this->enable_persistent_fabric_mode) {
             return AllGatherAsyncVersion::MINIMAL_SHARDED_32;
         }
     }
 
     // Check for minimal interleaved case
-    if (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 &&
-        input_tensor_page_layout == tt::tt_metal::Layout::TILE && this->enable_persistent_fabric_mode &&
+    if (input_tensor_shape[0] == llama_batch32_case[0] && input_tensor_shape[1] == llama_batch32_case[1] &&
+        input_tensor_shape[2] == llama_batch32_case[2] && input_tensor_page_layout == tt::tt_metal::Layout::TILE &&
+        this->enable_persistent_fabric_mode &&
         input_tensor_buffer_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
         return AllGatherAsyncVersion::MINIMAL_INTERLEAVED_32;
     }
