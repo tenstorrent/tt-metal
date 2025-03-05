@@ -61,9 +61,12 @@ void MAIN {
 
             BINARY_SFPU_OP(i * 2, i * 2 + 1);
             PROCESS_POST_ACTIVATIONS(i * 2);
-            tile_regs_commit();
+        }
+        tile_regs_commit();
 
-            tile_regs_wait();
+        tile_regs_wait();
+
+        for (uint32_t i = 0; i < onetile; ++i) {
             pack_tile(i * 2, cb_out);
         }
         tile_regs_release();
