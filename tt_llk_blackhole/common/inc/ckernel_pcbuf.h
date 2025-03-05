@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
 #pragma once
 
 // Functions for encoding and decoding PC buffer writes
@@ -30,15 +29,15 @@ inline bool is_pc_buf_fast_cmd(uint cmd)
 inline void decode_pc_buf_cmd(uint cmd, uint &ckernel_id, uint &command_addr)
 {
     // Ckernel ID can be a max of 12 bits.
-    ckernel_id = cmd & 0xFFF;
+    ckernel_id   = cmd & 0xFFF;
     command_addr = (cmd >> 12) & 0x7FFFF;
 }
 
 inline void decode_pc_buf_cmd(uint cmd, uint &ckernel_id, uint &iterations, uint &number_of_extra_params)
 {
     // Ckernel ID can be a max of 12 bits.
-    ckernel_id = cmd & 0xFFF;
-    iterations = (cmd >> 16) & 0x7FFF;
+    ckernel_id             = cmd & 0xFFF;
+    iterations             = (cmd >> 16) & 0x7FFF;
     number_of_extra_params = (cmd >> 12) & 0xF;
 }
 

@@ -4,10 +4,9 @@
 
 #pragma once
 
-#include "ckernel_defs.h"
 #include "ckernel.h"
+#include "ckernel_defs.h"
 #include "noc_nonblocking_api.h"
-
 #include "sfpi.h"
 
 using namespace sfpi;
@@ -24,7 +23,8 @@ inline void _calculate_max_(const int iterations)
     {
         vFloat a = dst_reg[0];
         vFloat b = dst_reg[32];
-        v_if(a < b) {
+        v_if (a < b)
+        {
             dst_reg[0] = b;
         }
         v_endif;

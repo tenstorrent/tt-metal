@@ -4,10 +4,9 @@
 
 #pragma once
 
-#include "ckernel_defs.h"
 #include "ckernel.h"
+#include "ckernel_defs.h"
 #include "noc_nonblocking_api.h"
-
 #include "sfpi.h"
 
 using namespace sfpi;
@@ -20,7 +19,7 @@ namespace sfpu
 template <bool APPROXIMATION_MODE /*unused*/, int ITERATIONS /*unused*/>
 inline void _calculate_cumsum_(const bool first)
 {
-    if(first)
+    if (first)
     {
         // Clear context for F0
         TTI_SFPMOV(0, 9, 4, 0);

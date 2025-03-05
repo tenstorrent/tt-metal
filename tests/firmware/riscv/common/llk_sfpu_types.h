@@ -4,7 +4,8 @@
 
 #pragma once
 
-enum class SfpuType {
+enum class SfpuType
+{
     tanh,
     hardtanh,
     gelu,
@@ -28,7 +29,7 @@ enum class SfpuType {
     clamp,
     gelu_derivative,
     dropout,
-    //abs,
+    // abs,
     sign,
     max,
     sine,

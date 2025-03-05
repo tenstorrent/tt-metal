@@ -4,10 +4,9 @@
 
 #pragma once
 
-#include "ckernel_defs.h"
 #include "ckernel.h"
+#include "ckernel_defs.h"
 #include "noc_nonblocking_api.h"
-
 #include "sfpi.h"
 
 using namespace sfpi;
@@ -19,10 +18,13 @@ namespace sfpu
 
 sfpi_inline vInt _sfpu_is_fp16_zero_(const vFloat& v, uint exponent_size_8)
 {
-    if (exponent_size_8) {
+    if (exponent_size_8)
+    {
         // fp16b
         return v == 0.0F;
-    } else {
+    }
+    else
+    {
         // fp16a
         // if math data format is fp16, SFPU will convert 5 bit exp to 8 bit exp
         // in grayskull, this unconditionally adds bias value to exp (even for zero)

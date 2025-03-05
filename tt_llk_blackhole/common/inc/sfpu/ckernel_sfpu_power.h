@@ -4,9 +4,8 @@
 
 #pragma once
 
-#include "ckernel_defs.h"
 #include "ckernel.h"
-
+#include "ckernel_defs.h"
 #include "sfpi.h"
 
 using namespace sfpi;
@@ -21,9 +20,10 @@ inline void _calculate_power_(const int iterations, uint exponent)
 {
     for (int d = 0; d < iterations; d++)
     {
-        vFloat in = dst_reg[0];
+        vFloat in     = dst_reg[0];
         vFloat result = in * in;
-        for (uint i = 2; i < exponent; i++) {
+        for (uint i = 2; i < exponent; i++)
+        {
             result *= in;
         }
 

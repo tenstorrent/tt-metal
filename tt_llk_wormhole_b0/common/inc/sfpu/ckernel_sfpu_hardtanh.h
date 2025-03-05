@@ -4,10 +4,9 @@
 
 #pragma once
 
-#include "ckernel_defs.h"
 #include "ckernel.h"
+#include "ckernel_defs.h"
 #include "noc_nonblocking_api.h"
-
 #include "sfpi.h"
 
 using namespace sfpi;
@@ -28,25 +27,27 @@ inline void _calculate_hardtanh_(const int iterations, uint param0, uint param1,
     vFloat p0 = s2vFloat16(param0);
     vFloat p1 = s2vFloat16(param1);
     vFloat p2 = s2vFloat16(param2);
-    // SFPU microcode
-    #pragma GCC unroll 0
+// SFPU microcode
+#pragma GCC unroll 0
     for (int d = 0; d < iterations; d++)
     {
         vFloat val = dst_reg[0];
 
-        val += p0;// 12 bits
-        v_if (val < 0.0f) {
+        val += p0; // 12 bits
+        v_if (val < 0.0f)
+        {
             val = 0.0f;
         }
         v_endif;
 
-        val += p1;// 12 bits
-        v_if (val >= 0.0f) {
+        val += p1; // 12 bits
+        v_if (val >= 0.0f)
+        {
             val = 0.0f;
         }
         v_endif;
 
-        val += p2;// 12 bits
+        val += p2; // 12 bits
 
         dst_reg[0] = val;
 

@@ -4,9 +4,8 @@
 
 #pragma once
 
-#include "ckernel_defs.h"
 #include "ckernel.h"
-
+#include "ckernel_defs.h"
 #include "sfpi.h"
 
 using namespace sfpi;
@@ -43,7 +42,7 @@ inline void _calculate_max_int32_(const int iterations)
 
         TTI_SFPCAST(0 /*lreg*/, 1 /*ldest*/, INSTR_MOD_CAST);
         // Required after cast due to a bug in Blackhole RTL.
-        TTI_SFPSETSGN (0 /* imm */, 1 /*lreg_c*/, 0 /*ldest*/, 0 /*imod*/);
+        TTI_SFPSETSGN(0 /* imm */, 1 /*lreg_c*/, 0 /*ldest*/, 0 /*imod*/);
         TTI_SFPSTORE(0, INSTR_MOD_LOAD_STORE, ADDR_MOD_7, 0);
 
         TTI_SFPENCC(0x003, 0, 0, 10);

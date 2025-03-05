@@ -4,10 +4,9 @@
 
 #pragma once
 
-#include "ckernel_defs.h"
 #include "ckernel.h"
+#include "ckernel_defs.h"
 #include "noc_nonblocking_api.h"
-
 #include "sfpi.h"
 
 using namespace sfpi;

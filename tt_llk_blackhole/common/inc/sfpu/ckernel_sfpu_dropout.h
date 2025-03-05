@@ -4,10 +4,9 @@
 
 #pragma once
 
-#include "ckernel_defs.h"
 #include "ckernel.h"
+#include "ckernel_defs.h"
 #include "noc_nonblocking_api.h"
-
 #include "sfpi.h"
 
 using namespace sfpi;
@@ -27,8 +26,9 @@ inline void _calculate_dropout_(const int iterations, uint prob, uint scale)
 
     vUInt rand = l_reg[LRegs::LReg3];
 
-    #pragma GCC unroll 0
-    for (int d = 0; d < iterations; d++) {
+#pragma GCC unroll 0
+    for (int d = 0; d < iterations; d++)
+    {
         ////////////////////////
         // Scale samples
         ///////////////////////
@@ -37,7 +37,8 @@ inline void _calculate_dropout_(const int iterations, uint prob, uint scale)
         ////////////////////////
         // Drop samples
         ///////////////////////
-        v_if (rand < prob) {
+        v_if (rand < prob)
+        {
             dst_reg[0] = vConst0;
         }
         v_endif;
@@ -46,9 +47,10 @@ inline void _calculate_dropout_(const int iterations, uint prob, uint scale)
         // 16-bit PRNG update
         ///////////////////////
         vUInt lfsr = vConstIntPrgm1;
-        vUInt tmp = lfsr & rand;
-        rand = rand >> 1;
-        v_if (tmp != 0) {
+        vUInt tmp  = lfsr & rand;
+        rand       = rand >> 1;
+        v_if (tmp != 0)
+        {
             vUInt mask = vConstIntPrgm0;
             rand ^= mask;
         }
@@ -60,7 +62,8 @@ inline void _calculate_dropout_(const int iterations, uint prob, uint scale)
     l_reg[LRegs::LReg3] = rand;
 }
 
-inline void _init_dropout_seed_(uint16_t p2){
+inline void _init_dropout_seed_(uint16_t p2)
+{
     FWLOG1("calculate_dropout() -- input seed:%x", p2);
 
     uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(0, 0, NOC_NODE_ID);
@@ -74,9 +77,9 @@ inline void _init_dropout_seed_(uint16_t p2){
 
     vInt result = l_reg[LRegs::LReg3];
 
-    vInt tmp = vConstTileId << 10;
+    vInt tmp  = vConstTileId << 10;
     vInt ptis = per_tensix_input_seed;
-    result = ~(tmp & ptis) & (tmp | ptis);
+    result    = ~(tmp & ptis) & (tmp | ptis);
 
     l_reg[LRegs::LReg3] = result;
 }
