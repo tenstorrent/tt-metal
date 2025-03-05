@@ -28,6 +28,7 @@ void bind_untilize_with_halo_v2(py::module& module) {
         Keyword Args:
             pad_val (int, optional): pad value.
             ncores_nhw (int, optional): Number of cores per NHW..
+            ncores_c (int, optional): Number of cores per C.
             max_out_nsticks_per_core (int, optional): Max output nsticks per core.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             remote_read (bool, optional): Remote read.  Defaults to `False`.
@@ -51,6 +52,7 @@ void bind_untilize_with_halo_v2(py::module& module) {
                const ttnn::Tensor& remote_config,
                const uint32_t pad_val,
                const uint32_t ncores_nhw,
+               const uint32_t ncores_c,
                const uint32_t max_out_nsticks_per_core,
                const std::optional<MemoryConfig>& memory_config,
                const bool remote_read,
@@ -64,6 +66,7 @@ void bind_untilize_with_halo_v2(py::module& module) {
                     remote_config,
                     pad_val,
                     ncores_nhw,
+                    ncores_c,
                     max_out_nsticks_per_core,
                     memory_config,
                     remote_read,
@@ -76,6 +79,7 @@ void bind_untilize_with_halo_v2(py::module& module) {
             py::kw_only(),
             py::arg("pad_val"),
             py::arg("ncores_nhw"),
+            py::arg("ncores_c"),
             py::arg("max_out_nsticks_per_core"),
             py::arg("memory_config") = std::nullopt,
             py::arg("remote_read") = false,
