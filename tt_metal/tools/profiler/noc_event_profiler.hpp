@@ -91,6 +91,7 @@ FORCE_INLINE void recordMulticastNocEvent(
 
     ev_md.noc_xfer_type = noc_event_type;
     ev_md.num_bytes = std::min(std::numeric_limits<std::uint32_t>::max(), num_bytes);
+
     ev_md.noc_vc = vc;
     ev_md.noc_type =
         (noc == 1) ? KernelProfilerNocEventMetadata::NocType::NOC_1 : KernelProfilerNocEventMetadata::NocType::NOC_0;
