@@ -349,9 +349,9 @@ def test_shard2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device):
 
     shards = ttnn.get_device_tensors(ttnn.distribute_tensor(to_shard, mapper, mesh_device))
 
-    ttnn.aggregate_as_tensor(shards)
+    sharded_tensor = ttnn.aggregate_as_tensor(shards)
 
-    out_pass, out_pcc = comp_pcc(torch_tensor, ttnn.to_torch(shards), pcc=0.99)
+    out_pass, out_pcc = comp_pcc(torch_tensor, ttnn.to_torch(sharded_tensor), pcc=0.99)
     logger.info(f"PCC value: {out_pcc}")
     assert out_pass
 
@@ -361,7 +361,7 @@ def test_shard2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device):
 )
 @pytest.mark.parametrize(
     "M, K, N",
-    [pytest.param(32, 128, 64), pytest.param(32, 128, 64)],
+    [pytest.param(32, 64, 128), pytest.param(32, 128, 64)],
 )
 @pytest.mark.parametrize("dtype", [ttnn.uint16, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.float32])
 def test_concat2d_to_tensor(M, K, N, dtype, mesh_shape, mesh_device):
