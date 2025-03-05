@@ -25,7 +25,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     const uint32_t pad_val,
     const uint32_t ncores_nhw,
     const uint32_t max_out_nsticks_per_core,
-    const Tensor& padding_config,
+    const Tensor& padding_config1,
+    const Tensor& padding_config2,
     const Tensor& local_config,
     const Tensor& remote_config,
     const bool remote_read,
@@ -114,9 +115,10 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     log_debug(tt::LogOp, "CB {} :: npages = {}, pagesize = {}", pad_cb_id, pad_cb_npages, pad_cb_pagesize);
 
     // Additional CBs for sharded data kernel configs
-    uint32_t padding_config_cb_id = tt::CBIndex::c_2;
-    uint32_t local_config_cb_id = tt::CBIndex::c_3;
-    uint32_t remote_config_cb_id = tt::CBIndex::c_4;
+    uint32_t padding_config_cb_id1 = tt::CBIndex::c_2;
+    uint32_t padding_config_cb_id2 = tt::CBIndex::c_3;
+    uint32_t local_config_cb_id = tt::CBIndex::c_4;
+    uint32_t remote_config_cb_id = tt::CBIndex::c_5;
 
     tt::DataFormat kernel_config_df = tt::DataFormat::RawUInt16;  // NOTE: UInt16 is not supported for CB types
     uint32_t config_nbytes =
@@ -141,17 +143,25 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
             CreateKernel(program, compute_kernel, all_cores, ComputeConfig{.compile_args = compute_ct_args});
     }
 
-    TT_ASSERT(padding_config.get_dtype() == DataType::UINT16);
+    TT_ASSERT(padding_config1.get_dtype() == DataType::UINT16);
+    TT_ASSERT(padding_config2.get_dtype() == DataType::UINT16);
     TT_ASSERT(local_config.get_dtype() == DataType::UINT16);
     TT_ASSERT(remote_config.get_dtype() == DataType::UINT16);
 
-    auto padding_config_buffer = padding_config.device_buffer();
+    auto padding_config_buffer1 = padding_config1.device_buffer();
     const uint32_t num_cores = all_cores.num_cores();
-    auto padding_config_cb_config =
-        CircularBufferConfig(padding_config_buffer->size() / num_cores, {{padding_config_cb_id, kernel_config_df}})
-            .set_page_size(padding_config_cb_id, padding_config_buffer->page_size())
-            .set_globally_allocated_address(*padding_config_buffer);
-    CBHandle padding_config_cb = CreateCircularBuffer(program, all_cores, padding_config_cb_config);
+    auto padding_config_cb_config1 =
+        CircularBufferConfig(padding_config_buffer1->size() / num_cores, {{padding_config_cb_id1, kernel_config_df}})
+            .set_page_size(padding_config_cb_id1, padding_config_buffer1->page_size())
+            .set_globally_allocated_address(*padding_config_buffer1);
+    CBHandle padding_config_cb1 = CreateCircularBuffer(program, all_cores, padding_config_cb_config1);
+
+    auto padding_config_buffer2 = padding_config2.device_buffer();
+    auto padding_config_cb_config2 =
+        CircularBufferConfig(padding_config_buffer2->size() / num_cores, {{padding_config_cb_id2, kernel_config_df}})
+            .set_page_size(padding_config_cb_id2, padding_config_buffer2->page_size())
+            .set_globally_allocated_address(*padding_config_buffer2);
+    CBHandle padding_config_cb2 = CreateCircularBuffer(program, all_cores, padding_config_cb_config2);
 
     auto local_config_buffer = local_config.device_buffer();
     auto local_config_cb_config =
@@ -198,7 +208,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         true};
 
     if (enable_split_reader) {
-        reader_ct_args[0] = padding_config_cb_id;
+        reader_ct_args[0] = padding_config_cb_id1;
         reader_ct_args[1] = local_config_cb_id;
         reader_ct_args[2] = remote_config_cb_id;
     } else {
@@ -214,9 +224,10 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_ct_args});
 
     if (enable_split_reader) {
+        reader_ct_args[0] = padding_config_cb_id2;
         reader_ct_args[16] = false;
     } else {
-        reader_ct_args[0] = padding_config_cb_id;
+        reader_ct_args[0] = padding_config_cb_id1;
         reader_ct_args[1] = 0;
         reader_ct_args[2] = remote_config_cb_id;
     }
@@ -229,17 +240,20 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
             .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_ct_args});
 
     if (!capture_buffers) {
-        padding_config_buffer = nullptr;
+        padding_config_buffer1 = nullptr;
+        padding_config_buffer2 = nullptr;
         local_config_buffer = nullptr;
         remote_config_buffer = nullptr;
     }
     // Capture padding_config_buffer, local_config_buffer, remote_config_buffer to cache this with the program
     auto override_runtime_arguments_callback = [src_cb,
                                                 out_cb,
-                                                padding_config_cb,
+                                                padding_config_cb1,
+                                                padding_config_cb2,
                                                 local_config_cb,
                                                 remote_config_cb,
-                                                padding_config_buffer,
+                                                padding_config_buffer1,
+                                                padding_config_buffer2,
                                                 local_config_buffer,
                                                 remote_config_buffer](
                                                    const void* operation,

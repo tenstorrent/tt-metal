@@ -15,7 +15,8 @@ namespace ttnn::operations::data_movement {
 ttnn::Tensor ExecuteUntilizeWithHaloV2::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    const Tensor& padding_config,
+    const Tensor& padding_config1,
+    const Tensor& padding_config2,
     const Tensor& local_config,
     const Tensor& remote_config,
     const uint32_t pad_val,
@@ -39,7 +40,7 @@ ttnn::Tensor ExecuteUntilizeWithHaloV2::invoke(
                    remote_read,
                    transpose_mcast,
                    enable_split_reader},
-               {input_tensor, padding_config, local_config, remote_config},
+               {input_tensor, padding_config1, padding_config2, local_config, remote_config},
                {},
                {},
                queue_id)
@@ -48,7 +49,8 @@ ttnn::Tensor ExecuteUntilizeWithHaloV2::invoke(
 
 ttnn::Tensor ExecuteUntilizeWithHaloV2::invoke(
     const ttnn::Tensor& input_tensor,
-    const Tensor& padding_config,
+    const Tensor& padding_config1,
+    const Tensor& padding_config2,
     const Tensor& local_config,
     const Tensor& remote_config,
     const uint32_t pad_val,
@@ -61,7 +63,8 @@ ttnn::Tensor ExecuteUntilizeWithHaloV2::invoke(
     return invoke(
         DefaultQueueId,
         input_tensor,
-        padding_config,
+        padding_config1,
+        padding_config2,
         local_config,
         remote_config,
         pad_val,

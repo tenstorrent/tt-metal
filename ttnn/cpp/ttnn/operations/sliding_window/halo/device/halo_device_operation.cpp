@@ -98,19 +98,24 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
     auto kernel_config = sliding_window::generate_halo_kernel_config_tensors(
         tensor_metadata, shard_boundaries, is_block_sharded, transpose_mcast_, remote_read_, device);
 
-    const auto& pad_config = std::get<0>(kernel_config);
-    const auto& local_config = std::get<1>(kernel_config);
-    const auto& remote_config = std::get<2>(kernel_config);
+    const auto& pad_config1 = std::get<0>(kernel_config);
+    const auto& pad_config2 = std::get<1>(kernel_config);
+    const auto& local_config = std::get<2>(kernel_config);
+    const auto& remote_config = std::get<3>(kernel_config);
 
-    auto pad_config_tensor =
-        sliding_window::construct_on_host_config_tensor(pad_config, this->config_, this->parallel_config_);
+    auto pad_config_tensor1 =
+        sliding_window::construct_on_host_config_tensor(pad_config1, this->config_, this->parallel_config_);
+    auto pad_config_tensor2 =
+        sliding_window::construct_on_host_config_tensor(pad_config2, this->config_, this->parallel_config_);
     auto local_config_tensor =
         sliding_window::construct_on_host_config_tensor(local_config, this->config_, this->parallel_config_);
     auto remote_config_tensor =
         sliding_window::construct_on_host_config_tensor(remote_config, this->config_, this->parallel_config_);
 
-    auto pad_config_device_tensor =
-        sliding_window::move_config_tensor_to_device(pad_config_tensor, parallel_config_, is_block_sharded, device);
+    auto pad_config_device_tensor1 =
+        sliding_window::move_config_tensor_to_device(pad_config_tensor1, parallel_config_, is_block_sharded, device);
+    auto pad_config_device_tensor2 =
+        sliding_window::move_config_tensor_to_device(pad_config_tensor2, parallel_config_, is_block_sharded, device);
     auto local_config_device_tensor =
         sliding_window::move_config_tensor_to_device(local_config_tensor, parallel_config_, is_block_sharded, device);
     auto remote_config_device_tensor =
@@ -124,7 +129,8 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
         pad_val_,
         config_.num_cores_nhw,
         max_out_nsticks_per_core_,
-        pad_config_device_tensor,
+        pad_config_device_tensor1,
+        pad_config_device_tensor2,
         local_config_device_tensor,
         remote_config_device_tensor,
         remote_read_,

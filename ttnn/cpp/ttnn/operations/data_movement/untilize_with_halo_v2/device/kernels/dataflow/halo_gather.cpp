@@ -170,17 +170,7 @@ void kernel_main() {
         const uint64_t padding_l1_addr = get_noc_addr(my_noc_x, my_noc_y, get_read_ptr(pad_cb_id));
         const uint32_t dst_base_addr = out_base_l1_addr;
         uint16_t nsticks = 1;
-        uint16_t start_index = 0;
-        // Determine the read offset based on whether split reader is enabled
-        // Each entry in config_data is of size 2. so if split reader is enabled,
-        // even entries and odd entries are processed on separate cores.
-        uint16_t read_offset = enable_split_reader ? 4 : 2;
-        // If split reader is enabled and this instance is a reader, set the start index to 2
-        // to read all odd indexed entries
-        if constexpr (enable_split_reader && is_reader) {
-            start_index = 2;
-        }
-        for (uint16_t j = start_index; nsticks; j += read_offset) {
+        for (uint16_t j = 0; nsticks; j += 2) {
             uint16_t dst_local_idx = config_data[j + 0];
             nsticks = config_data[j + 1];
 

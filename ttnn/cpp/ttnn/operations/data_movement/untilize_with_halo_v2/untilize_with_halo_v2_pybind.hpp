@@ -47,7 +47,8 @@ void bind_untilize_with_halo_v2(py::module& module) {
         ttnn::pybind_overload_t{
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& padding_config,
+               const ttnn::Tensor& padding_config1,
+               const ttnn::Tensor& padding_config2,
                const ttnn::Tensor& local_config,
                const ttnn::Tensor& remote_config,
                const uint32_t pad_val,
@@ -61,7 +62,8 @@ void bind_untilize_with_halo_v2(py::module& module) {
                 return self(
                     queue_id,
                     input_tensor,
-                    padding_config,
+                    padding_config1,
+                    padding_config2,
                     local_config,
                     remote_config,
                     pad_val,
@@ -73,7 +75,8 @@ void bind_untilize_with_halo_v2(py::module& module) {
                     enable_split_reader);
             },
             py::arg("input_tensor"),
-            py::arg("padding_config"),
+            py::arg("padding_config1"),
+            py::arg("padding_config2"),
             py::arg("local_config"),
             py::arg("remote_config"),
             py::kw_only(),

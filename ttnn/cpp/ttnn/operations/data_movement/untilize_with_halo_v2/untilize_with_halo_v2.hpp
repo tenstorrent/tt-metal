@@ -13,7 +13,8 @@ struct ExecuteUntilizeWithHaloV2 {
     static ttnn::Tensor invoke(
         QueueId queue_id,
         const ttnn::Tensor& input_tensor,
-        const Tensor& padding_config,
+        const Tensor& padding_config1,
+        const Tensor& padding_config2,
         const Tensor& local_config,
         const Tensor& remote_config,
         const uint32_t pad_val,
@@ -26,7 +27,8 @@ struct ExecuteUntilizeWithHaloV2 {
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        const Tensor& padding_config,
+        const Tensor& padding_config1,
+        const Tensor& padding_config2,
         const Tensor& local_config,
         const Tensor& remote_config,
         const uint32_t pad_val,

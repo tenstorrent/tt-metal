@@ -74,9 +74,10 @@ std::vector<ttnn::TensorSpec> UntilizeWithHaloV2::compute_output_specs(const std
 operation::ProgramWithCallbacks UntilizeWithHaloV2::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    const auto& padding_config = input_tensors.at(1);
-    const auto& local_config = input_tensors.at(2);
-    const auto& remote_config = input_tensors.at(3);
+    const auto& padding_config1 = input_tensors.at(1);
+    const auto& padding_config2 = input_tensors.at(2);
+    const auto& local_config = input_tensors.at(3);
+    const auto& remote_config = input_tensors.at(4);
     auto& output_tensor = output_tensors.at(0);
 
     Program program = CreateProgram();
@@ -87,7 +88,8 @@ operation::ProgramWithCallbacks UntilizeWithHaloV2::create_program(
         pad_val_,
         ncores_nhw_,
         max_out_nsticks_per_core_,
-        padding_config,
+        padding_config1,
+        padding_config2,
         local_config,
         remote_config,
         remote_read_,
