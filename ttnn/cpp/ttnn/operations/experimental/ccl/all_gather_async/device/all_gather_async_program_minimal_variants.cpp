@@ -418,7 +418,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     auto input_cores_vec = corerange_to_cores(input_tensor_cores, std::nullopt, true);
     auto output_cores_vec = corerange_to_cores(output_tensor_cores, std::nullopt, true);
     auto cores_per_device = output_cores_vec.size() + ring_size - 1 / ring_size;
-    uint32_t start_core_index_for_device = output_cores_vec.size() / (float)ring_size * ring_index;
+    uint32_t start_core_index_for_device = output_cores_vec.size() / ring_size * ring_index;
     uint32_t end_core_index_for_device = start_core_index_for_device + cores_per_device;
     TT_FATAL(
         output_cores_vec.size() % ring_size == 0 || output_cores_vec.size() == 1,
