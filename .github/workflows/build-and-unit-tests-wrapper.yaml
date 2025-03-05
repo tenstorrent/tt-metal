@@ -7,7 +7,9 @@ jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
-
+    with:
+      tracy: true
+      build-wheel: true
   sd-unit-tests:
     needs: build-artifact
     secrets: inherit
