@@ -21,7 +21,7 @@ from models.utility_functions import nearest_32
 def test_direct_replicate_to_tensor_mesh(mesh_device, dtype):
     torch.manual_seed(1234)
 
-    mapper = ttnn.CppReplicateTensorToMesh(mesh_device)
+    mapper = ttnn.ReplicateTensorToMesh(mesh_device)
 
     if dtype == ttnn.uint16:
         torch_tensor = torch.randint(0, 32767, (1, 1, 32, 256))
@@ -46,7 +46,7 @@ def test_direct_replicate_to_tensor_mesh(mesh_device, dtype):
 def test_direct_shard_to_tensor_mesh(mesh_device, dtype):
     torch.manual_seed(1234)
 
-    mapper = ttnn.CppShardTensorToMesh(mesh_device, dim=3)
+    mapper = ttnn.ShardTensorToMesh(mesh_device, dim=3)
 
     if dtype == ttnn.uint16:
         torch_tensor = torch.randint(0, 32767, (1, 1, 32, 256))
@@ -97,7 +97,7 @@ def test_direct_shard2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device):
         use_height_and_width_as_shard_shape=True,
     )
 
-    mapper = ttnn.CppShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dim)
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dim)
 
     sharded_tensor = ttnn.from_torch(
         torch_tensor,
@@ -117,7 +117,7 @@ def test_direct_shard2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device):
 def test_direct_concat_to_tensor_mesh(mesh_device, dtype):
     torch.manual_seed(1234)
 
-    mapper = ttnn.CppShardTensorToMesh(mesh_device, dim=3)
+    mapper = ttnn.ShardTensorToMesh(mesh_device, dim=3)
 
     if dtype == ttnn.uint16:
         torch_tensor = torch.randint(0, 32767, (1, 1, 32, 256))
@@ -173,7 +173,7 @@ def test_direct_concat2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device)
         use_height_and_width_as_shard_shape=True,
     )
 
-    mapper = ttnn.CppShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dim)
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dim)
 
     sharded_tensor = ttnn.from_torch(
         torch_tensor,

@@ -17,18 +17,20 @@
 namespace ttnn::distributed {
 
 // Mapper interface that distributes a host tensor onto a multi-device configuration.
+// The __attribute__((weak)) instructs pybind imports not to look for a symbol for these functions, as the linker won't
+// create one.
 class TensorToMesh {
 public:
     virtual ~TensorToMesh() = default;
-    virtual std::vector<Tensor> map(const Tensor& tensor) const = 0;
-    virtual tt::tt_metal::DistributedTensorConfig config() const = 0;
+    virtual __attribute__((weak)) std::vector<Tensor> map(const Tensor& tensor) const = 0;
+    virtual __attribute__((weak)) tt::tt_metal::DistributedTensorConfig config() const = 0;
 };
 
 // Composer interface that aggregates a multi-device tensor into a host tensor.
 class MeshToTensor {
 public:
     virtual ~MeshToTensor() = default;
-    virtual Tensor compose(const std::vector<Tensor>& tensors) const = 0;
+    virtual __attribute__((weak)) Tensor compose(const std::vector<Tensor>& tensors) const = 0;
 };
 
 struct Shard2dConfig {
@@ -68,9 +70,5 @@ Tensor distribute_tensor(
 
 // Aggregates a multi-device tensor into a host tensor according to the `composer`.
 Tensor aggregate_tensor(const Tensor& tensor, const MeshToTensor& composer);
-
-Shard2dConfig get_shard2d_config(const std::unordered_map<std::string, std::string>& metadata);
-
-Concat2dConfig get_concat2d_config(const std::unordered_map<std::string, std::string>& metadata);
 
 }  // namespace ttnn::distributed
