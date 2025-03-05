@@ -402,16 +402,10 @@ int main() {
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     noc_local_state_init(noc_index);
     uint8_t prev_noc_mode = DM_DEDICATED_NOC;
-    trigger_sync_register_init();
-
-
-#if defined(ARCH_BLACKHOLE)
-    // When dispatch_s is on an ethernet core on blockhole, we've been seeing
-    // issues where posted atomic incremenets seem to fail to complete.
-    const bool post_atomic_increments = false;
-#else
-    const bool post_atomic_increments = true;
+#ifdef ARCH_BLACKHOLE
+    uint8_t prev_noc_index = noc_index;
 #endif
+    trigger_sync_register_init();
 
     while (1) {
         reset_ncrisc_with_iram();
@@ -450,7 +444,7 @@ int main() {
                     1,
                     31 /*wrap*/,
                     false /*linked*/,
-                    post_atomic_increments /*posted*/);
+                    true /*posted*/);
             }
         }
 
@@ -493,17 +487,26 @@ int main() {
             uint8_t cmd_buf;
             if (noc_mode == DM_DEDICATED_NOC) {
                 if (prev_noc_mode != noc_mode) {
+#ifdef ARCH_BLACKHOLE
+                    noc_async_atomic_barrier(prev_noc_index);
+#endif
                     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
                 }
                 cmd_buf = BRISC_AT_CMD_BUF;
             } else {
                 if (prev_noc_mode != noc_mode) {
+#ifdef ARCH_BLACKHOLE
+                    noc_async_atomic_barrier(prev_noc_index);
+#endif
                     dynamic_noc_init();
                 }
                 dynamic_noc_local_state_init();
                 cmd_buf = DYNAMIC_NOC_BRISC_AT_CMD_BUF;
             }
             prev_noc_mode = noc_mode;
+#ifdef ARCH_BLACKHOLE
+            prev_noc_index = noc_index;
+#endif
 
             uint32_t tt_l1_ptr* cb_l1_base =
                 (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.local_cb_offset);
@@ -520,7 +523,7 @@ int main() {
                     (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.remote_cb_offset);
                 end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
                 experimental::setup_remote_cb_interfaces<true>(
-                    cb_l1_base, end_cb_index, noc_index, noc_mode, post_atomic_increments, cmd_buf);
+                    cb_l1_base, end_cb_index, noc_index, noc_mode, true, cmd_buf);
                 start_ncrisc_kernel_run(enables);
                 int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
                 void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
@@ -542,7 +545,7 @@ int main() {
                         (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.remote_cb_offset);
                     uint32_t end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
                     experimental::setup_remote_cb_interfaces<true>(
-                        cb_l1_base, end_cb_index, noc_index, noc_mode, post_atomic_increments, cmd_buf);
+                        cb_l1_base, end_cb_index, noc_index, noc_mode, true, cmd_buf);
                 }
                 start_ncrisc_kernel_run(enables);
                 wait_for_go_message();
@@ -600,7 +603,7 @@ int main() {
                     1,
                     31 /*wrap*/,
                     false /*linked*/,
-                    post_atomic_increments /*posted*/);
+                    true /*posted*/);
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
             }
         }
