@@ -4,6 +4,7 @@
 
 #include "tt-metalium/circular_buffer.hpp"
 #include "tt-metalium/circular_buffer_types.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d_op_program_factory_common.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
@@ -19,32 +20,6 @@ namespace ttnn::operations::conv {
 namespace conv2d {
 
 using namespace tt;
-
-// In order to make circular buffer indicies sequential, we use variable to keep track of the next available index.
-// Circular buffer indices should be assigned right before their creation.
-struct CBIndices {
-    // Invalid value for cb id is 32, number greater than the maximum number of index circular buffer can have.
-    // Not assigning get_next_cb_index() value before creating cb will throw exception in circular_buffer_types.cpp
-    // which can be used as a reminder.
-    uint32_t weight_cb = 32;
-    uint32_t tilize_mode_tilized_act_cb = 32;
-    uint32_t act_cb = 32;
-    uint32_t bias_cb = 32;
-    uint32_t sharded_act_cb = 32;
-    uint32_t cb_for_reader_indices = 32;
-    uint32_t cb_for_l1_array = 32;
-    uint32_t act_cb_row_major_bfloat16 = 32;
-    uint32_t act_cb_second_reader = 32;
-    uint32_t matmul_partials_cb = 32;
-    uint32_t untilize_mode_reblock_cb = 32;
-    uint32_t out0_cb = 32;
-    uint32_t temp_sum_cb = 32;
-
-    uint32_t get_next_cb_index() { return next_cb_index++; }
-
-private:
-    uint32_t next_cb_index = CBIndex::c_0;
-};
 
 tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     tt_metal::Program& program,
