@@ -32,7 +32,7 @@ After setting up the environment correctly, run a demo to test the environment.
   - First use a single device for simpler bring-up if models can fit on that single device; Wormhole has 12 GB DRAM storage and can support models of up to roughly 12B parameters in BFP8. If possible, use a smaller version of the model that fits on a single device. The model can be scaled up in size and on more devices.
  
 > [!NOTE]
-> In the llama3 demo implementation the decode stage supports batch=32. Each row is a separate user in 32x32 tiles used by the TT-Metalium stack. In prefill, rows map to different input tokens. Implement prefill with batch=1; prefill is compute-bound and multiple batches do not benefit performance. See [Converting Torch Model to TT-NN](https://docs.tenstorrent.com/docs-test/ttnn/latest/ttnn/converting_torch_model_to_ttnn.html) for model conversion.
+> In the llama3 demo implementation the decode stage supports batch=32. Each row is a separate user in 32x32 tiles used by the TT-Metalium stack. The prefill stage supports batch=1 where rows map to different iput tokens. Because prefill in compute-bound, multiple batches do not benefit performance. See [Converting Torch Model to TT-NN](https://docs.tenstorrent.com/docs-test/ttnn/latest/ttnn/converting_torch_model_to_ttnn.html) for model conversion.
 
 ## Systematic Component-wise Model Bring-Up
 
@@ -41,8 +41,7 @@ After setting up the environment correctly, run a demo to test the environment.
    - Implement the module in TT-NN then pass the same inputs to the reference and TT-NN modules to check for correctness.
    - Create a unit test with model dimensions, feed random data activations and real weights.
    - Verify that output PCC matches the reference output, use reference implementation for validation.
-   - Unit tests are useful for the accuarcy/precision analysis layer.
-3. Test each module by verifying the PCC.
+   - Unit tests are useful for the accuracy/precision analysis layer.
 
 > [!NOTE]
 > Examples of standard modules used are: Layernorm/RMSNorm, RotaryEmbedding, Attention, or Multilayer Perceptron (MLP).
@@ -63,7 +62,7 @@ After setting up the environment correctly, run a demo to test the environment.
 
 11. Prefill implementation:
     - Bring-up layer-by-layer similar to decode.
-    - Run the entire model including prefill an decode.
+    - Run the entire model including prefill and decode.
 12. See: [LLMs Bring-up in TT-NN](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/LLMs/llms.md) or [ViT in TT-NN](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/LLMs/llms.md) for more information on these steps.
 
 ## CNN Bring-up
