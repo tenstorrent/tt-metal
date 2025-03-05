@@ -120,10 +120,10 @@ void SubDeviceManagerTracker::remove_sub_device_manager(SubDeviceManagerId sub_d
     sub_device_managers_.erase(sub_device_manager);
 }
 
-SubDeviceManager* SubDeviceManagerTracker::get_active_sub_device_manager() const { return active_sub_device_manager_; }
+SubDeviceManager& SubDeviceManagerTracker::get_active_sub_device_manager() const { return *active_sub_device_manager_; }
 
-SubDeviceManager* SubDeviceManagerTracker::get_default_sub_device_manager() const {
-    return default_sub_device_manager_;
+SubDeviceManager& SubDeviceManagerTracker::get_default_sub_device_manager() const {
+    return *default_sub_device_manager_;
 }
 
 std::optional<DeviceAddr> SubDeviceManagerTracker::lowest_occupied_compute_l1_address(

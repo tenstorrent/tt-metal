@@ -96,11 +96,11 @@ bool Device::is_mmio_capable() const {
 }
 
 CoreRangeSet Device::worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->sub_device(sub_device_id).cores(core_type);
+    return sub_device_manager_tracker_->get_active_sub_device_manager().sub_device(sub_device_id).cores(core_type);
 }
 
 uint32_t Device::num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->sub_device(sub_device_id).num_cores(core_type);
+    return sub_device_manager_tracker_->get_active_sub_device_manager().sub_device(sub_device_id).num_cores(core_type);
 }
 
 /* Get all dispatch cores associated with this device. On return, my_dispatch_cores contains dispatch cores used by
@@ -933,8 +933,8 @@ void Device::init_command_queue_device() {
     // Set num_worker_sems and go_signal_noc_data on dispatch for the default sub device config
     for (auto& hw_cq : this->command_queues_) {
         hw_cq->set_go_signal_noc_data_and_dispatch_sems(
-            sub_device_manager_tracker_->get_active_sub_device_manager()->num_sub_devices(),
-            sub_device_manager_tracker_->get_active_sub_device_manager()->noc_mcast_unicast_data());
+            sub_device_manager_tracker_->get_active_sub_device_manager().num_sub_devices(),
+            sub_device_manager_tracker_->get_active_sub_device_manager().noc_mcast_unicast_data());
     }
 }
 
@@ -1251,15 +1251,15 @@ uint32_t Device::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& 
 }
 
 const std::unique_ptr<Allocator>& Device::allocator() const {
-    return sub_device_manager_tracker_->get_default_sub_device_manager()->allocator(SubDeviceId{0});
+    return sub_device_manager_tracker_->get_default_sub_device_manager().allocator(SubDeviceId{0});
 }
 
 const std::unique_ptr<Allocator>& Device::allocator(SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->allocator(sub_device_id);
+    return sub_device_manager_tracker_->get_active_sub_device_manager().allocator(sub_device_id);
 }
 
 uint32_t Device::num_sub_devices() const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->num_sub_devices();
+    return sub_device_manager_tracker_->get_active_sub_device_manager().num_sub_devices();
 }
 
 CoreCoord Device::dram_core_from_dram_channel(uint32_t dram_channel) const {
@@ -1347,7 +1347,7 @@ void Device::begin_trace(const uint8_t cq_id, const uint32_t tid) {
             // Create an empty trace buffer here. This will get initialized in end_trace
             auto trace_buffer = trace_buffer_pool_->emplace(
                 tid,
-                sub_device_manager_tracker_->get_active_sub_device_manager()->id(),
+                sub_device_manager_tracker_->get_active_sub_device_manager().id(),
                 Trace::create_empty_trace_buffer());
             this->command_queues_[cq_id]->record_begin(tid, trace_buffer->desc);
         },
@@ -1367,11 +1367,11 @@ void Device::end_trace(const uint8_t cq_id, const uint32_t tid) {
             auto trace = trace_buffer_pool_->get_trace(tid);
             TT_FATAL(trace.has_value(), "Expected trace {} to exist on device, when ending trace", tid);
             TT_FATAL(
-                trace->sub_device_manager_id == sub_device_manager_tracker_->get_active_sub_device_manager()->id(),
+                trace->sub_device_manager_id == sub_device_manager_tracker_->get_active_sub_device_manager().id(),
                 "Trace {} must be captured fully on the same sub-device manager. Currently active manager {}, capture "
                 "began on {}",
                 tid,
-                sub_device_manager_tracker_->get_active_sub_device_manager()->id(),
+                sub_device_manager_tracker_->get_active_sub_device_manager().id(),
                 trace->sub_device_manager_id);
 
             this->command_queues_[cq_id]->record_end();
@@ -1402,7 +1402,7 @@ void Device::load_trace(const uint8_t cq_id, const uint32_t trace_id, const Trac
 
     auto trace_buffer = trace_buffer_pool_->emplace(
         trace_id,
-        sub_device_manager_tracker_->get_active_sub_device_manager()->id(),
+        sub_device_manager_tracker_->get_active_sub_device_manager().id(),
         Trace::create_empty_trace_buffer());
 
     *trace_buffer->desc = trace_desc;
@@ -1424,12 +1424,12 @@ void Device::replay_trace(
                 "explicitly.",
                 tid);
             TT_FATAL(
-                trace->sub_device_manager_id == sub_device_manager_tracker_->get_active_sub_device_manager()->id(),
+                trace->sub_device_manager_id == sub_device_manager_tracker_->get_active_sub_device_manager().id(),
                 "Trace {} was captured on a different sub-device manager {} than the active sub-device manager {}, and "
                 "cannot be replayed. Load sub-device manager {} on device before replaying trace.",
                 tid,
                 trace->sub_device_manager_id,
-                sub_device_manager_tracker_->get_active_sub_device_manager()->id(),
+                sub_device_manager_tracker_->get_active_sub_device_manager().id(),
                 trace->sub_device_manager_id);
             command_queue(cq_id).enqueue_trace(trace->trace_buffer, block_on_device);
         },
@@ -1525,19 +1525,18 @@ void Device::generate_device_bank_to_noc_tables()
 }
 
 uint8_t Device::num_noc_mcast_txns(SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->num_noc_mcast_txns(sub_device_id);
+    return sub_device_manager_tracker_->get_active_sub_device_manager().num_noc_mcast_txns(sub_device_id);
 }
 
 uint8_t Device::num_noc_unicast_txns(SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->num_noc_unicast_txns(sub_device_id);
+    return sub_device_manager_tracker_->get_active_sub_device_manager().num_noc_unicast_txns(sub_device_id);
 }
 
 uint8_t Device::noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data, bool unicast_data) const {
     if (mcast_data) {
-        return sub_device_manager_tracker_->get_active_sub_device_manager()->noc_mcast_data_start_index(sub_device_id);
+        return sub_device_manager_tracker_->get_active_sub_device_manager().noc_mcast_data_start_index(sub_device_id);
     } else if (unicast_data) {
-        return sub_device_manager_tracker_->get_active_sub_device_manager()->noc_unicast_data_start_index(
-            sub_device_id);
+        return sub_device_manager_tracker_->get_active_sub_device_manager().noc_unicast_data_start_index(sub_device_id);
     } else {
         return 0;
     }
@@ -1548,11 +1547,11 @@ CoreCoord Device::virtual_program_dispatch_core(uint8_t cq_id) const {
 }
 
 SubDeviceManagerId Device::get_active_sub_device_manager_id() const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->id();
+    return sub_device_manager_tracker_->get_active_sub_device_manager().id();
 }
 
 SubDeviceManagerId Device::get_default_sub_device_manager_id() const {
-    return sub_device_manager_tracker_->get_default_sub_device_manager()->id();
+    return sub_device_manager_tracker_->get_default_sub_device_manager().id();
 }
 
 SubDeviceManagerId Device::create_sub_device_manager(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
@@ -1574,19 +1573,19 @@ void Device::remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id)
 }
 
 const std::vector<SubDeviceId> &Device::get_sub_device_ids() const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->get_sub_device_ids();
+    return sub_device_manager_tracker_->get_active_sub_device_manager().get_sub_device_ids();
 }
 
 const std::vector<SubDeviceId> &Device::get_sub_device_stall_group() const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->get_sub_device_stall_group();
+    return sub_device_manager_tracker_->get_active_sub_device_manager().get_sub_device_stall_group();
 }
 
 void Device::set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    sub_device_manager_tracker_->get_active_sub_device_manager()->set_sub_device_stall_group(sub_device_ids);
+    sub_device_manager_tracker_->get_active_sub_device_manager().set_sub_device_stall_group(sub_device_ids);
 }
 
 void Device::reset_sub_device_stall_group() {
-    sub_device_manager_tracker_->get_active_sub_device_manager()->reset_sub_device_stall_group();
+    sub_device_manager_tracker_->get_active_sub_device_manager().reset_sub_device_stall_group();
 }
 
 std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignment() {
