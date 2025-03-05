@@ -28,6 +28,7 @@ from models.demos.whisper.tt.ttnn_optimized_functional_whisper import (
     WHISPER_L1_SMALL_SIZE,
 )
 from models.generation_utils import get_logits_processor
+from models.demos.utils.llm_demo_utils import verify_perf
 
 
 def load_input_paths(folder_path):
@@ -99,6 +100,7 @@ def run_generate(
     kv_cache=None,
     stream_generation=False,
     feature_dtype_to_use=torch.bfloat16,
+    return_perf_metrics=False,
 ):
     start_encode = time.time()
 
@@ -179,6 +181,7 @@ def run_generate(
 
             if i == 0:
                 first_token_time = time.time()
+                ttft = first_token_time - start_encode
 
             # Update input_ids and current_decode_pos
             if not kv_cache:
@@ -190,27 +193,43 @@ def run_generate(
                 ttnn.plus_one(current_decode_pos)
 
             total_decode_time += time.time() - start_iter
+            avg_decode_throughput = (i + 1) / total_decode_time
 
             ttnn_transcription = processor.batch_decode(next_tokens.unsqueeze(dim=1), skip_special_tokens=True)[0]
             if print_each_iter:
                 logger.info(processor.batch_decode(torch.stack(output_ids, dim=1), skip_special_tokens=True)[0])
-            yield ttnn_transcription
+
+            if return_perf_metrics:
+                yield ttnn_transcription, ttft, avg_decode_throughput
+            else:
+                yield ttnn_transcription
 
             if next_tokens == config.eos_token_id:
                 break
 
-        ttft = first_token_time - start_encode
         total_generate_time = time.time() - start_encode
         logger.info(f"Time to first token: {(ttft*1000):.3f}ms")
         logger.info(f"Total decode time: {total_decode_time:.3f}s")
         logger.info(f"Total generate time: {total_generate_time:.3f}s")
-        logger.info(f"Average decode throughput: {(i+1) / total_decode_time:.3f} t/s/u")
+        logger.info(f"Average decode throughput: {avg_decode_throughput:.3f} t/s/u")
 
     # conditionally return generator or full response
     if stream_generation:
         return _run_generate()
     else:
-        return "".join(_run_generate())
+        output = []
+        for x in _run_generate():
+            if return_perf_metrics:
+                out_cur, ttft, avg_decode_throughput = x
+            else:
+                out_cur = x
+            output.append(out_cur)
+        output = "".join(output)
+
+        if return_perf_metrics:
+            return output, ttft, avg_decode_throughput
+        else:
+            return output
 
 
 def create_functional_whisper_for_conditional_generation_inference_pipeline(ttnn_model, device):
@@ -225,7 +244,7 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(ttnn
         hf_ref_model, config, ttnn_model, device
     )
 
-    def _model_pipeline(data, sampling_rate, stream=False):
+    def _model_pipeline(data, sampling_rate, stream=False, return_perf_metrics=False):
         logger.info(f"Running model on audio data with duration {data.shape[0]/sampling_rate:.3f}s")
 
         return run_generate(
@@ -241,12 +260,13 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(ttnn
             generation_config=hf_ref_model.generation_config,
             kv_cache=kv_cache,
             stream_generation=stream,
+            return_perf_metrics=return_perf_metrics,
         )
 
     return _model_pipeline
 
 
-def run_demo_functional_whisper_for_audio_classification_inference(input_path, ttnn_model, device, num_inputs):
+def run_demo_whisper_for_audio_classification_inference(input_path, ttnn_model, device, num_inputs):
     torch.manual_seed(1234)
 
     feature_extractor = AutoFeatureExtractor.from_pretrained("sanchit-gandhi/whisper-medium-fleurs-lang-id")
@@ -301,7 +321,7 @@ def run_demo_functional_whisper_for_audio_classification_inference(input_path, t
         logger.info(predicted_label)
 
 
-def run_demo_functional_whisper_for_audio_classification_dataset(ttnn_model, device):
+def run_demo_whisper_for_audio_classification_dataset(ttnn_model, device):
     torch.manual_seed(1234)
 
     feature_extractor = AutoFeatureExtractor.from_pretrained("sanchit-gandhi/whisper-medium-fleurs-lang-id")
@@ -353,7 +373,7 @@ def run_demo_functional_whisper_for_audio_classification_dataset(ttnn_model, dev
     logger.info(predicted_label)
 
 
-def run_demo_functional_whisper_for_conditional_generation_inference(input_path, ttnn_model, device, num_inputs):
+def run_demo_whisper_for_conditional_generation_inference(input_path, ttnn_model, device, num_inputs):
     torch.manual_seed(0)
 
     # instantiate model inference pipeline
@@ -365,16 +385,28 @@ def run_demo_functional_whisper_for_conditional_generation_inference(input_path,
     if len(input_data) < num_inputs:
         assert False, "num_inputs exceeds number of audio files available in folder"
 
+    total_ttft = 0
+    total_decode_throughput = 0
+    num_warmup_runs = 1
     for i in range(num_inputs):
         input_file_path = input_data[i]
         samplerate, data = wavfile.read(input_file_path)
 
         # perform model inference
-        ttnn_output = model_pipeline(data, samplerate, stream=False)
+        ttnn_output, ttft, avg_decode_throughput = model_pipeline(
+            data, samplerate, stream=False, return_perf_metrics=True
+        )
+        if i >= num_warmup_runs:  # Exclude first compile run
+            total_ttft += ttft
+            total_decode_throughput += avg_decode_throughput
         logger.info(f"Model Output (Input {i+1}): {ttnn_output}")
 
+    avg_ttft = total_ttft / (num_inputs - num_warmup_runs)
+    avg_decode_throughput = total_decode_throughput / (num_inputs - num_warmup_runs)
+    return avg_ttft, avg_decode_throughput
 
-def run_demo_functional_whisper_for_conditional_generation_dataset(ttnn_model, device):
+
+def run_demo_whisper_for_conditional_generation_dataset(ttnn_model, device):
     torch.manual_seed(0)
 
     # instantiate model inference pipeline
@@ -415,7 +447,7 @@ def run_demo_functional_whisper_for_conditional_generation_dataset(ttnn_model, d
 def test_demo_for_audio_classification(
     input_path, ttnn_model, device, num_inputs, use_program_cache, enable_async_mode
 ):
-    return run_demo_functional_whisper_for_audio_classification_inference(input_path, ttnn_model, device, num_inputs)
+    return run_demo_whisper_for_audio_classification_inference(input_path, ttnn_model, device, num_inputs)
 
 
 @pytest.mark.parametrize(
@@ -427,7 +459,7 @@ def test_demo_for_audio_classification(
 def test_demo_for_audio_classification_dataset(ttnn_model, device, use_program_cache, enable_async_mode, is_ci_env):
     if is_ci_env:
         pytest.skip("Skipping test in CI since it provides redundant testing")
-    return run_demo_functional_whisper_for_audio_classification_dataset(ttnn_model, device)
+    return run_demo_whisper_for_audio_classification_dataset(ttnn_model, device)
 
 
 @pytest.mark.parametrize(
@@ -435,15 +467,20 @@ def test_demo_for_audio_classification_dataset(ttnn_model, device, use_program_c
     (ttnn_optimized_functional_whisper,),
 )
 @pytest.mark.parametrize(
-    "num_inputs",
-    ((2),),
+    "num_inputs, expected_perf_metrics",
+    ((2, {"prefill_t/s": 3.95, "decode_t/s": 45.4, "decode_t/s/u": 45.4}),),
 )
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_demo_for_conditional_generation(
-    input_path, ttnn_model, device, num_inputs, use_program_cache, enable_async_mode
+    input_path, ttnn_model, device, num_inputs, expected_perf_metrics, use_program_cache, enable_async_mode, is_ci_env
 ):
-    return run_demo_functional_whisper_for_conditional_generation_inference(input_path, ttnn_model, device, num_inputs)
+    ttft, decode_throughput = run_demo_whisper_for_conditional_generation_inference(
+        input_path, ttnn_model, device, num_inputs
+    )
+    if is_ci_env:
+        measurements = {"prefill_t/s": 1 / ttft, "decode_t/s": decode_throughput, "decode_t/s/u": decode_throughput}
+        verify_perf(measurements, expected_perf_metrics)
 
 
 @pytest.mark.parametrize(
@@ -455,4 +492,4 @@ def test_demo_for_conditional_generation(
 def test_demo_for_conditional_generation_dataset(ttnn_model, device, use_program_cache, enable_async_mode, is_ci_env):
     if is_ci_env:
         pytest.skip("Skipping test in CI since it provides redundant testing")
-    return run_demo_functional_whisper_for_conditional_generation_dataset(ttnn_model, device)
+    return run_demo_whisper_for_conditional_generation_dataset(ttnn_model, device)
