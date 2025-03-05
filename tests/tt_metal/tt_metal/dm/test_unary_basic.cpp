@@ -15,8 +15,10 @@ using namespace tt::test_utils;
 
 namespace unit_tests::dm {
 
+// Test config
 struct DmConfig {
-    size_t num_tiles = 0;
+    size_t total_num_tiles = 0;
+    size_t num_tiles_per_ublock = 0;
     size_t tile_byte_size = 0;
     DataFormat l1_data_format = DataFormat::Invalid;
     CoreRangeSet cores = CoreRangeSet();
@@ -27,8 +29,11 @@ struct DmConfig {
 /// @param test_config - Configuration of the test -- see struct
 /// @return
 bool run_dm(IDevice* device, const DmConfig& test_config) {
-    const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
+    // Program
     Program program = CreateProgram();
+
+    // DRAM Buffers
+    const size_t byte_size = test_config.total_num_tiles * test_config.tile_byte_size;
     InterleavedBufferConfig dram_config{
         .device = device, .size = byte_size, .page_size = byte_size, .buffer_type = BufferType::DRAM};
 
@@ -40,77 +45,96 @@ bool run_dm(IDevice* device, const DmConfig& test_config) {
     // Input
     vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         -100.0f, 100.0f, byte_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
+    // TODO: what range of values do we want
 
     // Golden output
     vector<uint32_t> packed_golden = packed_input;
 
-    // Same runtime args for every core
-    vector<uint32_t> reader_rt_args = {
+    uint8_t l1_cb_index = CBIndex::c_0;
+
+    // Same compile-time args for every core
+    vector<uint32_t> reader_compile_args = {
         (uint32_t)input_dram_byte_address,
         (uint32_t)0,
-        (uint32_t)test_config.num_tiles,
+        (uint32_t)test_config.total_num_tiles,
+        (uint32_t)test_config.num_tiles_per_ublock,
+        (uint8_t)l1_cb_index,
     };
 
-    vector<uint32_t> writer_rt_args = {
+    vector<uint32_t> writer_compile_args = {
         (uint32_t)output_dram_byte_address,
         (uint32_t)0,
-        (uint32_t)test_config.num_tiles,
+        (uint32_t)test_config.total_num_tiles,
+        (uint32_t)test_config.num_tiles_per_ublock,
+        (uint8_t)l1_cb_index,
     };
 
+    // Loop through cores
     for (const CoreRange& core_range : test_config.cores.ranges()) {
-        CircularBufferConfig l1_cb_config =
-            CircularBufferConfig(byte_size, {{CBIndex::c_0, test_config.l1_data_format}})
-                .set_page_size(CBIndex::c_0, test_config.tile_byte_size);
+        // Circular Buffers
+        CircularBufferConfig l1_cb_config = CircularBufferConfig(byte_size, {{l1_cb_index, test_config.l1_data_format}})
+                                                .set_page_size(l1_cb_index, test_config.tile_byte_size);
 
         auto l1_cb = CreateCircularBuffer(program, core_range, l1_cb_config);
 
+        // Kernels
         auto reader_kernel = CreateKernel(
             program,
             "tests/tt_metal/tt_metal/dm/reader_unary.cpp",
             test_config.cores,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_1,
+                .noc = NOC::RISCV_1_default,
+                .compile_args = reader_compile_args});
 
         auto writer_kernel = CreateKernel(
             program,
             "tests/tt_metal/tt_metal/dm/writer_unary.cpp",
             test_config.cores,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-
-        for (const CoreCoord& core_coord : core_range) {
-            SetRuntimeArgs(program, writer_kernel, core_coord, writer_rt_args);
-            SetRuntimeArgs(program, reader_kernel, core_coord, reader_rt_args);
-        }
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = writer_compile_args});
     }
 
+    // Launch program and record outputs
     vector<uint32_t> dest_buffer_data;
     detail::WriteToBuffer(input_dram_buffer, packed_input);
     detail::LaunchProgram(device, program);
     detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
 
     // Print output and golden vectors
-    log_info("Golden vector");
-    print_vector<uint32_t>(packed_golden);
-    log_info("Output vector");
-    print_vector<uint32_t>(dest_buffer_data);
+    // log_info("Golden vector");
+    // print_vector<uint32_t>(packed_golden);
+    // log_info("Output vector");
+    // print_vector<uint32_t>(dest_buffer_data);
 
+    // Return comparison
     return is_close_packed_vectors<bfloat16, uint32_t>(
         dest_buffer_data, packed_golden, [&](const bfloat16& a, const bfloat16& b) {
             return is_close(a, b);
         });  // TODO: do we want a different rtol and atol
 }
-
 }  // namespace unit_tests::dm
 
 TEST_F(DeviceFixture, TensixDataMovement) {
-    size_t num_tiles = 1;
+    // Parameters
+    size_t total_num_tiles = 1;
+    size_t num_tiles_per_ublock = 1;
 
+    // Cores
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
+
+    // Test config
     unit_tests::dm::DmConfig test_config = {
-        .num_tiles = num_tiles,
+        .total_num_tiles = total_num_tiles,
+        .num_tiles_per_ublock = num_tiles_per_ublock,
         .tile_byte_size = 2 * 32 * 32,
         .l1_data_format = DataFormat::Float16_b,
         .cores = core_range_set};
+
+    // Run
     for (unsigned int id = 0; id < num_devices_; id++) {
         EXPECT_TRUE(run_dm(devices_.at(id), test_config));
     }
