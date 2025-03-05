@@ -39,7 +39,7 @@ std::ostream& operator<<(std::ostream& os, const std::optional<T>& optional_valu
     return os;
 }
 
-std::string graph_demangle(const std::string_view& name) {
+std::string graph_demangle(const std::string_view name) {
     int status = -4;
     char* res = abi::__cxa_demangle(name.data(), NULL, NULL, &status);
     const char* const demangled_name = (status == 0) ? res : name.data();
