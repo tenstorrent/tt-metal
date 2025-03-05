@@ -50,7 +50,8 @@ void validate_rope_input_and_params(const autograd::TensorPtr& input, const Rota
         params.neg_sin_cache.get_logical_shape()};
 
     auto expected_trig_shape = ttnn::Shape{1U, 1U, input_seq_len, input_head_dim};
-    if (!std::ranges::all_of(trig_param_shapes, [=](auto shape) { return shape == expected_trig_shape; })) {
+    if (!std::ranges::all_of(
+            trig_param_shapes, [expected_trig_shape](auto shape) { return shape == expected_trig_shape; })) {
         throw std::runtime_error(fmt::format(
             "All trigonometric rotary embedding parameters must have shape [1, 1, {}, {}], but got shapes: "
             "cos_cache: {}, sin_cache: {}, neg_cos_cache: {}, neg_sin_cache: {}",
@@ -129,7 +130,7 @@ std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(uint32_t head_dim, uint32_t sequ
     // take the scaled freqs mod 2π to satisfy ttnn inputs constraints for sin/cos
     auto pi = static_cast<float>(std::numbers::pi);
     scaled_freqs = xt::fmod(scaled_freqs, 2.0F * pi);
-    scaled_freqs = scaled_freqs.reshape({1U, 1U, sequence_length, head_dim});
+    scaled_freqs = scaled_freqs.reshape({1, 1, sequence_length, head_dim});
 
     xt::xarray<float> sin_freqs = xt::sin(scaled_freqs);
     xt::xarray<float> cos_freqs = xt::cos(scaled_freqs);
@@ -139,7 +140,7 @@ std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(uint32_t head_dim, uint32_t sequ
 }
 
 ttnn::Tensor gen_trans_mat(int head_dim) {
-    xt::xarray<float> trans_mat = xt::zeros<float>({1U, 1U, head_dim, head_dim});
+    xt::xarray<float> trans_mat = xt::zeros<float>({1, 1, head_dim, head_dim});
     for (int i = 0; i < head_dim; i += 2) {
         trans_mat(0, 0, i, i + 1) = 1.0F;
     }
