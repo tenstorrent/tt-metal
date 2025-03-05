@@ -27,24 +27,26 @@ class TtLinearParameters:
         *,
         dtype: ttnn.DataType | None = None,
         device: ttnn.Device,
+        shard_dim: int,
     ) -> TtLinearParameters:
         if "bias" in state:
             bias = state["bias"].unsqueeze(0)
         else:
             bias = None
-
         return cls(
             weight=from_torch(
                 state["weight"].transpose(0, 1),
                 dtype=dtype,
                 mesh_device=device,
-                shard_dim=-1,
+                shard_dim=shard_dim,
+                layout=ttnn.TILE_LAYOUT,
             ),
             bias=from_torch(
                 bias,
                 dtype=dtype,
                 mesh_device=device,
-                shard_dim=-1,
+                shard_dim=shard_dim,
+                layout=ttnn.TILE_LAYOUT,
             )
             if bias is not None
             else None,
@@ -80,9 +82,52 @@ class TtLinearParameters:
                 dtype=dtype,
                 mesh_device=device,
                 shard_dim=-1,
+                layout=ttnn.TILE_LAYOUT,
             ),
             bias=from_torch(
                 shuffle_heads(torch_bias),
+                dtype=dtype,
+                mesh_device=device,
+                shard_dim=-1,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            if torch_bias is not None
+            else None,
+        )
+
+    @classmethod
+    def from_torch_time_embed(
+        cls,
+        state: dict[str, torch.Tensor],
+        *,
+        num_chunks: int,
+        dtype: ttnn.DataType | None = None,
+        device: ttnn.Device,
+    ) -> TtLinearParameters:
+        if "bias" in state:
+            torch_bias = state["bias"].unsqueeze(0)
+        else:
+            torch_bias = None
+
+        def shuffle_chunks(tensor):
+            # Given torch tensor with output features in the last dimension,
+            # shuffle heads to allow for column parallel computation
+            in_dim = tensor.shape[0]
+            tensor = tensor.reshape(in_dim, num_chunks, device.get_num_devices(), -1)
+            tensor = tensor.permute(0, 2, 1, 3)
+            tensor = tensor.reshape(in_dim, -1)
+            return tensor
+
+        torch_weight = state["weight"].transpose(0, 1)
+        return cls(
+            weight=from_torch(
+                shuffle_chunks(torch_weight),
+                dtype=dtype,
+                mesh_device=device,
+                shard_dim=-1,
+            ),
+            bias=from_torch(
+                shuffle_chunks(torch_bias),
                 dtype=dtype,
                 mesh_device=device,
                 shard_dim=-1,
@@ -117,6 +162,7 @@ class TtLinear:
         dtype: ttnn.DataType | None = None,
         deallocate: bool = False,
     ) -> ttnn.Tensor:
+        print(f"x shape {x.shape} weight shape {self._weight.shape}")
         assert x.shape[-1] == self._in_channels, "input tensor does not have the expected shape"
 
         weight = self._weight

@@ -35,26 +35,32 @@ class TtSD3Transformer2DModelParameters:
         cls,
         state: dict[str, torch.Tensor],
         *,
+        num_heads: int,
+        embedding_dim: int,
         dtype: ttnn.DataType | None = None,
         device: ttnn.Device,
     ) -> TtSD3Transformer2DModelParameters:
         return cls(
-            pos_embed=TtPatchEmbedParameters.from_torch(substate(state, "pos_embed"), device=device),
+            pos_embed=TtPatchEmbedParameters.from_torch(
+                substate(state, "pos_embed"), device=device, out_channels=embedding_dim
+            ),
             time_text_embed=TtCombinedTimestepTextProjEmbeddingsParameters.from_torch(
                 substate(state, "time_text_embed"), dtype=dtype, device=device
             ),
             context_embedder=TtLinearParameters.from_torch(
-                substate(state, "context_embedder"), dtype=dtype, device=device
+                substate(state, "context_embedder"), dtype=dtype, device=device, shard_dim=None
             ),
             transformer_blocks=[
-                TtTransformerBlockParameters.from_torch(s, dtype=dtype, device=device)
+                TtTransformerBlockParameters.from_torch(s, num_heads=num_heads, dtype=dtype, device=device)
                 for s in indexed_substates(state, "transformer_blocks")
             ],
             time_embed_out=TtLinearParameters.from_torch(
-                substate(state, "norm_out.linear"), dtype=dtype, device=device
+                substate(state, "norm_out.linear"), dtype=dtype, device=device, shard_dim=None
             ),
             norm_out=TtLayerNormParameters.from_torch(substate(state, "norm_out.norm"), dtype=dtype, device=device),
-            proj_out=TtLinearParameters.from_torch(substate(state, "proj_out"), dtype=dtype, device=device),
+            proj_out=TtLinearParameters.from_torch(
+                substate(state, "proj_out"), dtype=dtype, device=device, shard_dim=None
+            ),
         )
 
 
@@ -64,15 +70,16 @@ class TtSD3Transformer2DModel:
         parameters: TtSD3Transformer2DModelParameters,
         *,
         # in_channels: int = 16,
-        num_attention_heads: int,
+        num_heads: int,
+        device,
     ) -> None:
         super().__init__()
 
-        self._pos_embed = TtPatchEmbed(parameters.pos_embed)
-        self._time_text_embed = TtCombinedTimestepTextProjEmbeddings(parameters.time_text_embed)
+        self._pos_embed = TtPatchEmbed(parameters.pos_embed, device)
+        self._time_text_embed = TtCombinedTimestepTextProjEmbeddings(parameters.time_text_embed, device)
         self._context_embedder = TtLinear(parameters.context_embedder)
         self._transformer_blocks = [
-            TtTransformerBlock(block, num_heads=num_attention_heads) for block in parameters.transformer_blocks
+            TtTransformerBlock(block, num_heads=num_heads, device=device) for block in parameters.transformer_blocks
         ]
         self._time_embed_out = TtLinear(parameters.time_embed_out)
         self._norm_out = TtLayerNorm(parameters.norm_out, eps=1e-6)
@@ -89,7 +96,6 @@ class TtSD3Transformer2DModel:
         timestep: ttnn.Tensor,
     ) -> ttnn.Tensor:
         height, width = list(spatial.shape)[-2:]
-
         spatial = self._pos_embed(spatial)
         time_embed = self._time_text_embed(timestep=timestep, pooled_projection=pooled_projection)
         prompt = self._context_embedder(prompt)
@@ -97,6 +103,10 @@ class TtSD3Transformer2DModel:
         # time_embed = time_embed.unsqueeze(1)
         time_embed = time_embed.reshape([time_embed.shape[0], 1, time_embed.shape[1]])
 
+        spatial = ttnn.unsqueeze(spatial, 0)
+        assert spatial.shape[-2] % 32 == 0
+        prompt = ttnn.unsqueeze(prompt, 0)
+        assert prompt.shape[-2] % 32 == 0
         for i, block in enumerate(self._transformer_blocks, start=1):
             spatial, prompt_out = block(
                 spatial=spatial,

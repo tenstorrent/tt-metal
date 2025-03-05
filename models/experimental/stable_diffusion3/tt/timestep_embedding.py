@@ -28,8 +28,12 @@ class TtEmbeddingParameters:
         device: ttnn.Device,
     ) -> TtEmbeddingParameters:
         return cls(
-            linear_1=TtLinearParameters.from_torch(substate(state, "linear_1"), dtype=dtype, device=device),
-            linear_2=TtLinearParameters.from_torch(substate(state, "linear_2"), dtype=dtype, device=device),
+            linear_1=TtLinearParameters.from_torch(
+                substate(state, "linear_1"), dtype=dtype, device=device, shard_dim=None
+            ),
+            linear_2=TtLinearParameters.from_torch(
+                substate(state, "linear_2"), dtype=dtype, device=device, shard_dim=None
+            ),
         )
 
 
@@ -57,13 +61,12 @@ class TtCombinedTimestepTextProjEmbeddingsParameters:
 
 
 class TtCombinedTimestepTextProjEmbeddings:
-    def __init__(self, parameters: TtCombinedTimestepTextProjEmbeddingsParameters) -> None:
+    def __init__(self, parameters: TtCombinedTimestepTextProjEmbeddingsParameters, device) -> None:
         super().__init__()
 
         self._timestep_embedder = _TimestepEmbedding(parameters.timestep_embedder)
         self._text_embedder = _TimestepEmbedding(parameters.text_embedder)
 
-        device = self._timestep_embedder.device
         self._time_proj_factor = self._create_time_proj_factor(num_channels=256, device=device)
 
     def __call__(self, *, timestep: ttnn.Tensor, pooled_projection: ttnn.Tensor) -> ttnn.Tensor:
@@ -75,6 +78,7 @@ class TtCombinedTimestepTextProjEmbeddings:
         time_proj_factor = ttnn.to_layout(time_proj_factor, ttnn.TILE_LAYOUT)
 
         emb = timestep * time_proj_factor
+
         c = ttnn.cos(emb)
         s = ttnn.sin(emb)
 
@@ -97,7 +101,7 @@ class TtCombinedTimestepTextProjEmbeddings:
         exponent = exponent / half_dim
         factor = torch.exp(exponent).unsqueeze(0)
 
-        return ttnn.from_torch(factor, device=device)
+        return ttnn.from_torch(factor, device=device, mesh_mapper=ttnn.ReplicateTensorToMesh(device))
 
 
 class _TimestepEmbedding:

@@ -30,8 +30,10 @@ class TtFeedForwardParameters:
         device: ttnn.Device,
     ) -> TtFeedForwardParameters:
         return cls(
-            in_proj=TtLinearParameters.from_torch(substate(state, "net.0.proj"), dtype=dtype, device=device),
-            out_proj=TtLinearParameters.from_torch(substate(state, "net.2"), dtype=dtype, device=device),
+            in_proj=TtLinearParameters.from_torch(
+                substate(state, "net.0.proj"), dtype=dtype, device=device, shard_dim=-1
+            ),
+            out_proj=TtLinearParameters.from_torch(substate(state, "net.2"), dtype=dtype, device=device, shard_dim=-2),
         )
 
 
