@@ -10,6 +10,9 @@ DEFAULT:
     // SPDX-FileCopyrightText: © {years} Tenstorrent AI ULC
     //
     // SPDX-License-Identifier: {license}
+  new_notice_python: | # notice for new Python files
+    # SPDX-License-Identifier: {license}
+    # SPDX-FileCopyrightText: © {years} Tenstorrent AI ULC
 
   # comment lines matching:
   # SPDX-FileCopyrightText: year[-year] Espressif Systems
@@ -21,3 +24,9 @@ DEFAULT:
     - "*.cpp"
     - "*.cc"
     - "*.h"
+    - "*.py"
+  ignore:  # You can also select ignoring files here
+    perform_check: no  # Don't check files from that block
+    include:
+      - tt_llk_blackhole/hw_speific/
+      - tt_llk_wormhole_b0/hw_specific/
