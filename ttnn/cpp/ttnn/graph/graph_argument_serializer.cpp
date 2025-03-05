@@ -15,12 +15,12 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Layout& layout) {
     }
 }
 
-std::ostream& operator<<(std::ostream& os, const Tile& config) {
+std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Tile& config) {
     tt::stl::reflection::operator<<(os, config);
     return os;
 }
 
-std::ostream& operator<<(std::ostream& os, const Tensor& tensor) {
+std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Tensor& tensor) {
     tt::stl::reflection::operator<<(os, tensor);
     return os;
 }
