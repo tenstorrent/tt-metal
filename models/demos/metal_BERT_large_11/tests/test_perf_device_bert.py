@@ -44,7 +44,7 @@ def test_perf_device_bare_metal(batch_size, test, expected_perf):
     run_bert_perf(batch_size, test, expected_perf)
 
 
-@pytest.mark.skip("#7525: Hangs non-deterministically on device perf")
+@pytest.mark.skip("#7525: Hangs non-deterministically on device perf, likely same issue as demo model")
 @skip_for_grayskull("Incorrect device metrics for grayskull")
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
