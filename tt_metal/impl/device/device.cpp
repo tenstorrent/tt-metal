@@ -276,6 +276,7 @@ std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, si
     // Tensix/Eth <-> Tensix/Eth src and dst addrs must be L1_ALIGNMENT aligned
     const auto &logical_size = this->logical_grid_size();
     const auto &compute_size = this->compute_with_storage_grid_size();
+    std::cout << "num dram banks " << static_cast<size_t>(soc_desc.get_num_dram_views()) << std::endl;
     AllocatorConfig config(
         {.num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_views()),
          .dram_bank_size = soc_desc.dram_view_size,
@@ -690,25 +691,33 @@ void Device::initialize_and_launch_firmware() {
     }
 
     // Determine which noc-coords are harvested
-    // TODO(PGK/Almeet): fix this w/ new UMD
-    std::vector<uint32_t> harvested_rows;
-    uint32_t harvested_noc_rows = CoordinateManager::shuffle_tensix_harvesting_mask_to_noc0_coords(
+    std::vector<uint32_t> harvested_axis_coord;
+    uint32_t harvested_noc_coords = CoordinateManager::shuffle_tensix_harvesting_mask_to_noc0_coords(
         tt::Cluster::instance().get_soc_desc(this->id()).arch, tt::Cluster::instance().get_harvesting_mask(this->id()));
-    for (uint32_t y = 0; y < soc_d.grid_size.y; y++) {
-        bool row_harvested = (harvested_noc_rows >> y) & 0x1;
-        if (row_harvested) {
-            harvested_rows.push_back(y);
+    uint32_t max_along_axis =
+        hal.get_tensix_harvest_axis() == HalTensixHarvestAxis::ROW ? soc_d.grid_size.y : soc_d.grid_size.x;
+    for (uint32_t idx = 0; idx < max_along_axis; idx++) {  // upddate for col harvesting
+        bool harvested_axis = (harvested_noc_coords >> idx) & 0x1;
+        if (harvested_axis) {
+            harvested_axis_coord.push_back(idx);
         }
     }
-    TT_ASSERT(harvested_rows.size() <= MAX_HARVESTED_ROWS, "Detected more harvested rows than fit in mailbox.");
-    for (int idx = 0; idx < MAX_HARVESTED_ROWS; idx++) {
-        core_info->harvested_y[idx] = (idx < harvested_rows.size()) ? harvested_rows[idx] : CORE_COORD_INVALID;
-        // Populate harvested rows in virtual coordinate space if virtualization is supported by HW.
-        // Harvested rows in the virtual space are placed at the end of the worker grid,
-        if (hal.is_coordinate_virtualization_enabled() and idx < harvested_rows.size()) {
-            core_info->virtual_harvested_y[idx] = (hal.get_virtual_worker_start_y() + this->logical_grid_size().y + harvested_rows.size() - (idx + 1));
+    TT_ASSERT(
+        harvested_axis_coord.size() <= MAX_HARVESTED_ON_AXIS, "Detected more harvested rows than fit in mailbox.");
+    for (int idx = 0; idx < MAX_HARVESTED_ON_AXIS; idx++) {
+        core_info->harvested_coords[idx] =
+            (idx < harvested_axis_coord.size()) ? harvested_axis_coord[idx] : CORE_COORD_INVALID;
+        // Populate harvested rows/cols in virtual coordinate space if virtualization is supported by HW.
+        // Harvested rows/cols in the virtual space are placed at the end of the worker grid,
+        if (hal.is_coordinate_virtualization_enabled() and idx < harvested_axis_coord.size()) {
+            core_info->virtual_harvested_coords[idx] =
+                hal.get_tensix_harvest_axis() == HalTensixHarvestAxis::ROW
+                    ? (hal.get_virtual_worker_start_y() + this->logical_grid_size().y + harvested_axis_coord.size() -
+                       (idx + 1))
+                    : (hal.get_virtual_worker_start_x() + this->logical_grid_size().x + harvested_axis_coord.size() -
+                       (idx + 1));
         } else {
-            core_info->virtual_harvested_y[idx] = CORE_COORD_INVALID;
+            core_info->virtual_harvested_coords[idx] = CORE_COORD_INVALID;
         }
     }
 

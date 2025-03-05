@@ -59,7 +59,4 @@ private:
     void load_dram_metadata_from_device_descriptor();
     void generate_logical_eth_coords_mapping();
     void generate_physical_routing_to_profiler_flat_id();
-    // This is temporary until virtual coordinates are enabled because BH chips on
-    //  different cards use different physical PCIe NoC endpoints
-    void update_pcie_cores(const BoardType& board_type);
 };

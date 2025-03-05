@@ -274,7 +274,7 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
         // Silicon driver will attempt to open this many hugepages as channels per mmio chip,
         // and assert if workload uses more than available.
         uint32_t num_host_mem_ch_per_mmio_device = std::min(HOST_MEM_CHANNELS, (uint32_t)all_chips_set.size());
-        // This will remove harvested rows from the soc descriptor
+        // This will remove harvested rows/cols from the soc descriptor
         const bool perform_harvesting = true;
         const bool clean_system_resources = true;
         device_driver = std::make_unique<tt::umd::Cluster>(
@@ -538,7 +538,7 @@ void Cluster::write_dram_vec(std::vector<uint32_t> &vec, tt_target_dram dram, ui
     write_core(
         vec.data(),
         vec.size() * sizeof(uint32_t),
-        tt_cxy_pair(chip_id, translated_coord.x, translated_coord.y),
+        tt_cxy_pair(chip_id, dram_core.x, dram_core.y),
         addr + offset,
         small_access);
 }
@@ -561,8 +561,7 @@ void Cluster::read_dram_vec(
         desc_to_use.get_dram_core_for_channel(d_chan, d_subchannel, CoordSystem::VIRTUAL);
     tt_cxy_pair dram_core = tt_cxy_pair(chip_id, dram_core_coord.x, dram_core_coord.y);
     size_t offset = desc_to_use.get_address_offset(d_view);
-    read_core(
-        vec, sz_in_bytes, tt_cxy_pair(chip_id, translated_coord.x, translated_coord.y), addr + offset, small_access);
+    read_core(vec, sz_in_bytes, tt_cxy_pair(chip_id, dram_core.x, dram_core.y), addr + offset, small_access);
 }
 
 void Cluster::write_core(

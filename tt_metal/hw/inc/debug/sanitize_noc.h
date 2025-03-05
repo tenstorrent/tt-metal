@@ -81,22 +81,38 @@ AddressableCoreType get_core_type(uint8_t noc_id, uint8_t x, uint8_t y, bool& is
     }
 
     // Check if coordinate maps to a harvested row in the physical space.
-    for (uint32_t idx = 0; idx < MAX_HARVESTED_ROWS; idx++) {
-        uint16_t harvested_y = core_info->harvested_y[idx];
-        if (y == NOC_0_Y_PHYS_COORD(noc_id, core_info->noc_size_y, (uint32_t)harvested_y)) {
-            is_virtual_coord = false;
-            // DPRINT << "here 2" << ENDL();
-            return AddressableCoreType::HARVESTED;
+    for (uint32_t idx = 0; idx < MAX_HARVESTED_ON_AXIS; idx++) {
+        uint16_t harvested_coords = core_info->harvested_coords[idx];
+        if constexpr (tensix_harvest_axis == 0x01) {
+            if (y == NOC_0_Y_PHYS_COORD(noc_id, core_info->noc_size_y, (uint32_t)harvested_coords)) {
+                is_virtual_coord = false;
+                return AddressableCoreType::HARVESTED;
+            }
+        } else if constexpr (tensix_harvest_axis == 0x10) {
+            if (x == NOC_0_X_PHYS_COORD(noc_id, core_info->noc_size_x, (uint32_t)harvested_coords)) {
+                is_virtual_coord = false;
+                return AddressableCoreType::HARVESTED;
+            }
+        } else {
+            ASSERT(false);
         }
     }
     if constexpr (COORDINATE_VIRTUALIZATION_ENABLED) {
         // Check if coordinate maps to a harvested row in the virtual space.
-        for (uint32_t idx = 0; idx < MAX_HARVESTED_ROWS; idx++) {
-            uint16_t virtual_harvested_y = core_info->virtual_harvested_y[idx];
-            if (y == NOC_0_Y(noc_id, core_info->noc_size_y, (uint32_t)virtual_harvested_y)) {
-                is_virtual_coord = true;
-                // DPRINT << "here 3" << ENDL();
-                return AddressableCoreType::HARVESTED;
+        for (uint32_t idx = 0; idx < MAX_HARVESTED_ON_AXIS; idx++) {
+            uint16_t virtual_harvested_coords = core_info->virtual_harvested_coords[idx];
+            if constexpr (tensix_harvest_axis == 0x01) {
+                if (y == NOC_0_Y(noc_id, core_info->noc_size_y, (uint32_t)virtual_harvested_coords)) {
+                    is_virtual_coord = true;
+                    return AddressableCoreType::HARVESTED;
+                }
+            } else if constexpr (tensix_harvest_axis == 0x10) {
+                if (x == NOC_0_X(noc_id, core_info->noc_size_x, (uint32_t)virtual_harvested_coords)) {
+                    is_virtual_coord = true;
+                    return AddressableCoreType::HARVESTED;
+                }
+            } else {
+                ASSERT(false);
             }
         }
     }
