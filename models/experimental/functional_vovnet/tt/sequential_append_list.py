@@ -31,9 +31,9 @@ class TtSequentialAppendList:
     def forward(self, x: ttnn.Tensor, concat_list: List[ttnn.Tensor]) -> ttnn.Tensor:
         for i, module in enumerate(self.mid_convs):
             if i == 0:
-                concat_list.append(ttnn.to_layout(module(x)[0], layout=ttnn.TILE_LAYOUT))
+                concat_list.append(ttnn.to_layout(module.forward(x)[0], layout=ttnn.TILE_LAYOUT))
             else:
-                concat_list.append(ttnn.to_layout(module(concat_list[-1])[0], layout=ttnn.TILE_LAYOUT))
+                concat_list.append(ttnn.to_layout(module.forward(concat_list[-1])[0], layout=ttnn.TILE_LAYOUT))
 
         x = ttnn.concat(concat_list, dim=1)
         return x
