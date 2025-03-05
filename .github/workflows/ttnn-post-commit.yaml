@@ -132,8 +132,13 @@ jobs:
       - name: ⬇️ Download Build
         uses: actions/download-artifact@v4
         with:
-          name: ${{ inputs.build-artifact-name }}
+          name: eager-dist-${{ matrix.os }}-any
           path: docker-job
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
+      - name: Set ttnn fast runtime if exists in config
+        if: ${{ matrix.test-group.fast_runtime_mode_off }}
+        run: |
+          echo "TTNN_CONFIG_OVERRIDES={\"enable_fast_runtime_mode\": false}" >> $GITHUB_ENV
       - name: Extract files
         run: tar -xvf ttm_any.tar
       - name: ⬇️ Download Wheel
@@ -145,7 +150,7 @@ jobs:
         run: |
           WHEEL_FILENAME=$(ls -1 *.whl)
           pip3 install $WHEEL_FILENAME
-      - name: Run cpp post commit tests
+      - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
           ${{ matrix.test-group.cmd }}
@@ -154,6 +159,12 @@ jobs:
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: U06CXU895AP # Michael Chiou
+      - uses: ./.github/actions/upload-artifact-with-job-uuid
+        if: ${{ !cancelled() }}
+        with:
+          path: |
+            generated/test_reports/
+          prefix: "test_reports_"
       - name: Cleanup
         if: always()
         run: |
