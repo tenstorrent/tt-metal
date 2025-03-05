@@ -450,7 +450,8 @@ void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buff
         auto data_index = host_page_id * page_size;
         std::memcpy(page.data(), host_buffer.data() + data_index, page_size);
         if (buffer.is_l1()) {
-            auto core_coordinates = device->worker_core_from_logical_core(buffer.logical_core_from_bank_id(bank_id));
+            auto core_coordinates =
+                device->worker_core_from_logical_core(buffer.allocator()->get_logical_core_from_bank_id(bank_id));
             llrt::write_hex_vec_to_core(device->id(), core_coordinates, page, absolute_address);
         } else {
             WriteToDeviceDRAMChannel(device, bank_id, bank_local_address, page);
@@ -486,8 +487,8 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
                 break;
             case BufferType::L1:
             case BufferType::L1_SMALL: {
-                auto core_coordinates =
-                    device->worker_core_from_logical_core(buffer.logical_core_from_bank_id(bank_index));
+                auto core_coordinates = device->worker_core_from_logical_core(
+                    buffer.allocator()->get_logical_core_from_bank_id(bank_index));
                 llrt::write_hex_vec_to_core(device->id(), core_coordinates, page, absolute_address);
             } break;
             default: TT_THROW("Unsupported buffer type to write to device!");
@@ -547,8 +548,8 @@ void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buf
                 break;
             case BufferType::L1:
             case BufferType::L1_SMALL: {
-                auto core_coordinates =
-                    device->worker_core_from_logical_core(buffer.logical_core_from_bank_id(bank_index));
+                auto core_coordinates = device->worker_core_from_logical_core(
+                    buffer.allocator()->get_logical_core_from_bank_id(bank_index));
                 tt::Cluster::instance().read_core(page.data(), page_size, tt_cxy_pair(device->id(), core_coordinates), absolute_address);
             } break;
             default: TT_THROW("Unsupported buffer type to read from device!");
@@ -573,7 +574,8 @@ void read_pages_to_host_helper(
     auto absolute_address = dev_buffer.sharded_page_address(bank_id, dev_page_id);
     uint32_t host_buffer_start = host_page_id * page_size;
     if (dev_buffer.is_l1()) {
-        auto core_coordinates = device->worker_core_from_logical_core(dev_buffer.logical_core_from_bank_id(bank_id));
+        auto core_coordinates =
+            device->worker_core_from_logical_core(dev_buffer.allocator()->get_logical_core_from_bank_id(bank_id));
         tt::Cluster::instance().read_core(
             host_buffer + host_buffer_start, page_size, tt_cxy_pair(device->id(), core_coordinates), absolute_address);
     } else {

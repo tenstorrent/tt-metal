@@ -757,11 +757,12 @@ std::optional<DeviceAddr> MeshDevice::lowest_occupied_compute_l1_address(
     return sub_device_manager_tracker_->lowest_occupied_compute_l1_address(sub_device_ids);
 }
 
-const std::unique_ptr<Allocator>& MeshDevice::allocator() const {
-    return sub_device_manager_tracker_->get_default_sub_device_manager()->allocator(SubDeviceId{0});
-}
-const std::unique_ptr<Allocator>& MeshDevice::allocator(SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->allocator(sub_device_id);
+const std::unique_ptr<Allocator>& MeshDevice::allocator(std::optional<SubDeviceId> sub_device_id) const {
+    if (sub_device_id.has_value()) {
+        return sub_device_manager_tracker_->get_active_sub_device_manager()->allocator(sub_device_id.value());
+    } else {
+        return allocator();
+    }
 }
 
 MeshSubDeviceManagerId MeshDevice::mesh_create_sub_device_manager(
