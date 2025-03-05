@@ -350,6 +350,7 @@ std::tuple<
     std::vector<std::vector<uint16_t>>,
     std::vector<std::vector<uint16_t>>,
     std::vector<std::vector<uint16_t>>,
+    std::vector<std::vector<uint16_t>>,
     std::vector<std::vector<uint16_t>>>
 generate_halo_kernel_config_tensors(
     const std::vector<PixelMetadata>& tensor_metadata,
@@ -444,7 +445,7 @@ generate_halo_kernel_config_tensors(
         // find max length
         size_t max_len = 0;
         for (auto& data : config) {
-            max_len = std::max(max_len, 2 * data.size());  // each data is 2 * data.size()
+            max_len = std::max(max_len, 2 * (data.size() / 2 + 1));  // each data is 2 * data.size()
         }
         std::vector<std::vector<std::vector<uint16_t>>> flattened_config(2);
         uint32_t vector_id = 0;
@@ -455,11 +456,11 @@ generate_halo_kernel_config_tensors(
             for (auto data_elem : data) {
                 auto [dst_start, length] = data_elem;
                 if (vector_id) {
-                    flat_data[vector_id][idx1++] = dst_start;
-                    flat_data[vector_id][idx1++] = length;
+                    flat_data[0][idx1++] = dst_start;
+                    flat_data[0][idx1++] = length;
                 } else {
-                    flat_data[vector_id][idx2++] = dst_start;
-                    flat_data[vector_id][idx2++] = length;
+                    flat_data[1][idx2++] = dst_start;
+                    flat_data[1][idx2++] = length;
                 }
                 vector_id = (vector_id + 1) % 2;
             }
@@ -474,32 +475,45 @@ generate_halo_kernel_config_tensors(
         return flattened_config;
     };
 
-    auto flatten_local_config = [](auto& config) -> std::vector<std::vector<uint16_t>> {
+    auto flatten_local_config = [](auto& config) -> std::vector<std::vector<std::vector<uint16_t>>> {
         // find max length
         size_t max_len = 0;
         for (auto& [_, data] : config) {
-            max_len = std::max(max_len, 3 * data.size());  // each key is 3, data is 3 * data.size()
+            max_len = std::max(max_len, 3 * (data.size() / 2 + 1));  // each key is 3, data is 3 * data.size()
         }
         max_len += 3;  // key tuple
-        std::vector<std::vector<uint16_t>> flattened_config;
+        std::vector<std::vector<std::vector<uint16_t>>> flattened_config(2);
+        uint32_t vector_id = 0;
         for (auto& [key, data] : config) {
             auto [nocx, nocy, len] = key;
-            std::vector<uint16_t> flat_data(max_len, 0);
-            flat_data[0] = nocx;
-            flat_data[1] = nocy;
-            flat_data[2] = len;
-            uint32_t idx = 3;
+            std::vector<std::vector<uint16_t>> flat_data(2, std::vector<uint16_t>(max_len, 0));
+            flat_data[0][0] = nocx;
+            flat_data[0][1] = nocy;
+            flat_data[1][0] = nocx;
+            flat_data[1][1] = nocy;
+            uint32_t idx1 = 3, idx2 = 3;
             for (size_t i = 0; i < data.size(); ++i) {
                 auto [src_start, dst_start, length] = data[i];
-                flat_data[idx++] = src_start;
-                flat_data[idx++] = dst_start;
-                flat_data[idx++] = length;
+                if (vector_id) {
+                    flat_data[0][idx1++] = src_start;
+                    flat_data[0][idx1++] = dst_start;
+                    flat_data[0][idx1++] = length;
+                    flat_data[0][2] += 3;
+                } else {
+                    flat_data[1][idx2++] = src_start;
+                    flat_data[1][idx2++] = dst_start;
+                    flat_data[1][idx2++] = length;
+                    flat_data[1][2] += 3;
+                }
+                vector_id = (vector_id + 1) % 2;
             }
             // null plug
-            flat_data.emplace_back(0);
-            flat_data.emplace_back(0);
-            flat_data.emplace_back(0);
-            flattened_config.emplace_back(flat_data);
+            for (auto i = 0; i < 3; i++) {
+                flat_data[0].emplace_back(0);
+                flat_data[1].emplace_back(0);
+            }
+            flattened_config[0].emplace_back(flat_data[0]);
+            flattened_config[1].emplace_back(flat_data[1]);
         }
         return flattened_config;
     };
@@ -564,11 +578,16 @@ generate_halo_kernel_config_tensors(
 
     align_config(flattened_pad_config[0], 2);
     align_config(flattened_pad_config[1], 2);
-    align_config(flattened_local_config, 2);
+    align_config(flattened_local_config[0], 2);
+    align_config(flattened_local_config[1], 2);
     align_config(flattened_remote_config, 2);
 
     return std::make_tuple(
-        flattened_pad_config[0], flattened_pad_config[1], flattened_local_config, flattened_remote_config);
+        flattened_pad_config[0],
+        flattened_pad_config[1],
+        flattened_local_config[0],
+        flattened_local_config[1],
+        flattened_remote_config);
 }
 
 std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(

@@ -66,18 +66,6 @@ void copy_sticks_async(
                             continue;
                         }
                     }
-                } else {
-                    if constexpr (is_reader) {
-                        // Skip every even iteration for readers in local configuration
-                        if (iteration % 2 == 0) {
-                            continue;
-                        }
-                    } else {
-                        // Skip every odd iteration for writer in local configuration
-                        if (iteration % 2 == 1) {
-                            continue;
-                        }
-                    }
                 }
             }
             uint16_t src_local_idx = config_data[i + j + 0];
