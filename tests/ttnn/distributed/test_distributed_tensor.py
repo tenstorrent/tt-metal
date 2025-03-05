@@ -97,7 +97,7 @@ def test_direct_shard2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device):
         use_height_and_width_as_shard_shape=True,
     )
 
-    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dim)
+    mapper = ttnn.ShardTensorTo2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dim)
 
     sharded_tensor = ttnn.from_torch(
         torch_tensor,
@@ -173,7 +173,7 @@ def test_direct_concat2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device)
         use_height_and_width_as_shard_shape=True,
     )
 
-    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dim)
+    mapper = ttnn.ShardTensorTo2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dim)
 
     sharded_tensor = ttnn.from_torch(
         torch_tensor,
