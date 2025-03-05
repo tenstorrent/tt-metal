@@ -4,6 +4,7 @@
 
 #include "ops/rope_op.hpp"
 
+#include <numbers>
 #include <xtensor/xmanipulation.hpp>
 
 #include "autograd/auto_context.hpp"
@@ -127,7 +128,7 @@ std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(uint32_t head_dim, uint32_t sequ
     xt::xarray<float> scaled_freqs = scales * freqs;
 
     // take the scaled freqs mod 2π to satisfy ttnn inputs constraints for sin/cos
-    float pi = std::acos(-1.0F);
+    auto pi = static_cast<float>(std::numbers::pi);
     scaled_freqs = xt::fmod(scaled_freqs, 2.0F * pi);
     scaled_freqs = scaled_freqs.reshape({1, 1, sequence_length, head_dim});
 
