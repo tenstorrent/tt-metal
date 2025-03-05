@@ -7,10 +7,10 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
-#include <exception>
 #include <fstream>
 #include <iostream>
 #include <type_traits>
+#include <unistd.h>
 #if defined(UTILS_LOGGER_PYTHON_OSTREAM_REDIRECT) && (UTILS_LOGGER_PYTHON_OSTREAM_REDIRECT == 1)
 #include <pybind11/iostream.h>
 #endif
@@ -40,7 +40,7 @@ namespace tt {
     X(Reportify)     \
     X(GraphCompiler) \
     X(Dispatch)      \
-    X(Fabric)         \
+    X(Fabric)        \
     X(Metal)         \
     X(MetalTrace)
 
@@ -116,11 +116,14 @@ public:
 #if defined(UTILS_LOGGER_PYTHON_OSTREAM_REDIRECT) && (UTILS_LOGGER_PYTHON_OSTREAM_REDIRECT == 1)
             pybind11::scoped_ostream_redirect stream(*fd);
 #endif
-            std::string level_str = fmt::format(
-                fmt::fg(level_color[static_cast<std::underlying_type_t<Level>>(level)]) | fmt::emphasis::bold,
+            const auto level_style =
+                fmt::fg(level_color[static_cast<std::underlying_type_t<Level>>(level)]) | fmt::emphasis::bold;
+            const auto level_str = fmt::format(
+                use_styles ? level_style : fmt::text_style{},
                 "{:8}",
                 level_names[static_cast<std::underlying_type_t<Level>>(level)]);
-            std::string type_str = fmt::format(fmt::fg(fmt::color::green), "{:>23}", type_names[type]);
+            const auto type_style = fmt::fg(fmt::color::green);
+            const auto type_str = fmt::format(use_styles ? type_style : fmt::text_style{}, "{:>23}", type_names[type]);
             fmt::print(*fd, "{} | {} | ", type_str, level_str);
             fmt::print(*fd, fmt, std::forward<Args>(args)...);
             *fd << std::endl;
@@ -128,6 +131,8 @@ public:
     }
 
     void flush() { *fd << std::flush; }
+
+    bool get_use_styles() const { return this->use_styles; }
 
 private:
     Logger() {
@@ -161,12 +166,15 @@ private:
             }
         }
 
+        use_styles = isatty(fileno(stdout));
+
 #if !defined(UTILS_LOGGER_PYTHON_OSTREAM_REDIRECT) || (UTILS_LOGGER_PYTHON_OSTREAM_REDIRECT == 0)
         static char const* file_env = std::getenv("TT_METAL_LOGGER_FILE");
         if (file_env) {
             log_file.open(file_env);
             if (log_file.is_open()) {
                 fd = &log_file;
+                use_styles = false;
             }
         }
 #endif
@@ -176,6 +184,7 @@ private:
     std::ostream* fd = &std::cout;
     std::uint64_t mask = (1 << LogAlways);
     Level min_level = Level::Info;
+    bool use_styles = true;
 };
 #pragma GCC visibility pop
 
@@ -192,12 +201,18 @@ static void log_debug(fmt::format_string<Args...> fmt, Args&&... args) {
 
 template <typename... Args>
 static void log_trace_(
-    LogType type, std::string const& src_info, fmt::format_string<std::string const&, Args...> fmt, Args&&... args) {
-    Logger::get().log_level_type(Logger::Level::Trace, type, fmt, src_info, std::forward<Args>(args)...);
+    LogType type,
+    const fmt::text_style src_style,
+    const std::string& src_info,
+    fmt::format_string<const std::string&, Args...> fmt,
+    Args&&... args) {
+    const bool use_styles = Logger::get().get_use_styles();
+    const auto src_info_stylized = use_styles ? fmt::format(src_style, fmt::runtime(src_info)) : src_info;
+    Logger::get().log_level_type(Logger::Level::Trace, type, fmt, src_info_stylized, std::forward<Args>(args)...);
 }
 
 #define log_trace(log_type, ...) \
-    log_trace_(log_type, fmt::format(fmt::fg(fmt::color::green), "{}:{}", __FILE__, __LINE__), "{} - " __VA_ARGS__)
+    log_trace_(log_type, fmt::fg(fmt::color::green), fmt::format("{}:{}", __FILE__, __LINE__), "{} - " __VA_ARGS__)
 #else
 template <typename... Args>
 static void log_debug(LogType type, fmt::format_string<Args...> fmt, Args&&... args) {}
