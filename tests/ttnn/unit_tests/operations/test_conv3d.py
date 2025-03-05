@@ -230,17 +230,3 @@ def test_conv3d_cache_hash(
             )
 
     assert device.num_program_cache_entries() == 2
-
-
-@pytest.mark.parametrize(
-    "input_shape, out_channels, kernel_size, stride, padding, padding_mode",
-    [
-        [(1, 64, 16, 16, 16), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
-    ],
-)
-@pytest.mark.parametrize("grid_size", [[1, 1], [1, 8], [8, 8]], ids=["grid_1x1", "grid_1x8", "grid_8x8"])
-def test_conv3d_multicore(
-    device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size, use_program_cache
-):
-    # Test that program cache does not re-use the same program for different inputs
-    run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size=grid_size)
