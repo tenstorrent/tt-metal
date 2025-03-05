@@ -135,7 +135,9 @@ def run_conv(
         and output_layout == ttnn.ROW_MAJOR_LAYOUT
     ):
         output_layout = ttnn.TILE_LAYOUT
-        pytest.xfail("Untilize_out is not supported when out_c > 256 for Height Sharded")
+        pytest.xfail(
+            "Untilize_out is not supported when out_c > 256 for Height Sharded. https://github.com/tenstorrent/tt-metal/issues/18633"
+        )
 
     conv_config = ttnn.Conv2dConfig(
         dtype=activations_dtype,
