@@ -48,7 +48,8 @@ sliding_window::ParallelConfig determine_parallel_config(
     tt::tt_metal::ShardOrientation block_shard_orientation,
     bool enable_channels_padding,
     bool is_out_tiled = true,
-    uint32_t act_block_h_override = 0);
+    uint32_t act_block_h_override = 0,
+    bool width_shard_half_tile = false);
 
 sliding_window::ParallelConfig determine_output_parallel_config(
     const sliding_window::ParallelConfig& input_parallel_config,

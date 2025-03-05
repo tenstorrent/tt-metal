@@ -92,7 +92,8 @@ ParallelConfig determine_parallel_config(
     ShardOrientation block_shard_orientation,
     bool enable_channels_padding,
     bool is_out_tiled,
-    uint32_t act_block_h_override) {
+    uint32_t act_block_h_override,
+    bool width_shard_half_tile) {
     uint32_t effective_tile_height = is_out_tiled ? tt::constants::TILE_HEIGHT : 1;
     uint32_t effective_tile_width = tt::constants::TILE_WIDTH;
     uint32_t out_nhw_ntiles =
@@ -123,6 +124,9 @@ ParallelConfig determine_parallel_config(
                 ? find_closest_largest_divisor_with_num_padding(
                       out_channels_ntiles, input_channles_ntiles, start_divisor_c)
                 : find_closest_largest_divisor(out_channels_ntiles, input_channles_ntiles, start_divisor_c);
+        if (width_shard_half_tile && input_channles_ntiles / num_cores_c == 1 && 2 * num_cores_c <= start_divisor_c) {
+            num_cores_c *= 2;
+        }
         uint32_t cores_x = block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_nhw : num_cores_c;
         uint32_t cores_y = block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_c : num_cores_nhw;
         CoreRange core_range = CoreRange(CoreCoord({0, 0}), CoreCoord({cores_x - 1, cores_y - 1}));
@@ -131,6 +135,9 @@ ParallelConfig determine_parallel_config(
         uint32_t num_cores_c = enable_channels_padding
                                    ? find_closest_largest_divisor_with_num_padding(input_channles_ntiles, max_num_cores)
                                    : find_closest_largest_divisor(input_channles_ntiles, max_num_cores);
+        if (width_shard_half_tile && input_channles_ntiles / num_cores_c == 1 && 2 * num_cores_c <= max_num_cores) {
+            num_cores_c *= 2;
+        }
         grid = tt::tt_metal::num_cores_to_corerangeset(num_cores_c, compute_grid_size, true);
     } else {
         TT_THROW("Conv2d supports Height, Block or Width Sharded Layouts but got {}", shard_layout);
