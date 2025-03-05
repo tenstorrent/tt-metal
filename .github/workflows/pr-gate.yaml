@@ -43,7 +43,15 @@ jobs:
   # TODO: Earmark some runners for low-latency jobs and activate Smoke tests here in PR Gate
   smoke-tests:
     needs: pr-gate-build
-    uses: ./.github/workflows/zzz_smoke.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { platform: "tt-ubuntu-2204-n300-large-stable" },
+          { platform: "N150" },
+          { platform: "N300" },
+        ]
+    uses: ./.github/workflows/smoke.yaml
     with:
       docker-image: ${{ needs.pr-gate-build.outputs.ci-build-docker-image }}
       package-artifact-name: ${{ needs.pr-gate-build.outputs.packages-artifact-name }}
