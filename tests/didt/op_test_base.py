@@ -35,12 +35,10 @@ class OpTestBase:
         # that will allow opening mesh_device with any specific device from the available ones
         if isinstance(mesh_device, ttnn.MeshDevice):
             self.from_torch_mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
-            self.to_torch_mesh_mapper = ttnn.ListMeshToTensor(self.mesh_device)
             self.device_ids = self.mesh_device.get_device_ids()
         else:
             # ttnn.Device
             self.from_torch_mesh_mapper = None
-            self.to_torch_mesh_mapper = None
             self.device_ids = [self.mesh_device.id()]
 
         self.in0_mem_config = in0_mem_config
@@ -159,7 +157,9 @@ class OpTestBase:
                 # First, load activations from DRAM to required memory config
                 self.activations = self.convert_activations_to_memory_config(a_t[act])
                 output = self.run_device_operation()
-                reference_out[act] = ttnn.to_torch(output, mesh_composer=self.to_torch_mesh_mapper)
+                reference_out[act] = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(output.cpu())]
+                # reference_out[act] = ttnn.to_torch(output, mesh_composer=self.to_torch_mesh_mapper)
+
                 output.deallocate(True)
                 self.deallocate_activations()
 

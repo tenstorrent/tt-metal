@@ -316,7 +316,8 @@ void DevicePool::initialize_active_devices() const {
             dev->init_fabric();
         }
     }
-    dev->allocate_dram_debug_buffer();
+    // FIXME MT: Temp remove this feature
+    // dev->allocate_dram_debug_buffer();
 
     // Activate FD kernels
     // Remaining steps are for setting up FD

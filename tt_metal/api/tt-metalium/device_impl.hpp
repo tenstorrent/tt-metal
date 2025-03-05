@@ -149,7 +149,8 @@ public:
     void init_command_queue_host() override;
     void init_command_queue_device() override;
 
-    void allocate_dram_debug_buffer() override;
+    // FIXME MT: Temp remove feature
+    // void allocate_dram_debug_buffer() override;
     void init_fabric() override;
 
     // Puts device into reset

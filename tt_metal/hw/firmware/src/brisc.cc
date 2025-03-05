@@ -201,19 +201,19 @@ void device_setup() {
     // The size of the buffer is 32 4 byte values, and for trisc kernels we are using lower half of it.
     // Number of valid elements to dump is 16 for trisc kernels
     // MAKE SURE TO DOUBLE CHECK THIS VALUE WHEN REBASING
-    volatile uint32_t* dbg_dump_trisc = (volatile uint32_t*)0x001e4;
-    *(dbg_dump_trisc + 1) = 0;
-    *(dbg_dump_trisc + 2) = 0;
-    *(dbg_dump_trisc + 3) = 0;
-    *(dbg_dump_trisc + 4) = 0;
-    *(dbg_dump_trisc + 5) = 0x99cbcb99;
-    *(dbg_dump_trisc + 6) = 0x99cbcb99;
-    *(dbg_dump_trisc + 7) = 0x99cbcb99;
-    *(dbg_dump_trisc + 8) = 0x99cbcb99;
-    *(dbg_dump_trisc + 9) = 0x99cbcb99;
-    *(dbg_dump_trisc + 10) = 0x99cbcb99;
-    *(dbg_dump_trisc + 11) = 0x99cbcb99;
-    *(dbg_dump_trisc + 12) = 0x99cbcb99;
+    // FIXME MT:volatile uint32_t* dbg_dump_trisc = (volatile uint32_t*)0x001e4;
+    // FIXME MT:*(dbg_dump_trisc + 1) = 0;
+    // FIXME MT:*(dbg_dump_trisc + 2) = 0;
+    // FIXME MT:*(dbg_dump_trisc + 3) = 0;
+    // FIXME MT:*(dbg_dump_trisc + 4) = 0;
+    // FIXME MT:*(dbg_dump_trisc + 5) = 0x99cbcb99;
+    // FIXME MT:*(dbg_dump_trisc + 6) = 0x99cbcb99;
+    // FIXME MT:*(dbg_dump_trisc + 7) = 0x99cbcb99;
+    // FIXME MT:*(dbg_dump_trisc + 8) = 0x99cbcb99;
+    // FIXME MT:*(dbg_dump_trisc + 9) = 0x99cbcb99;
+    // FIXME MT:*(dbg_dump_trisc + 10) = 0x99cbcb99;
+    // FIXME MT:*(dbg_dump_trisc + 11) = 0x99cbcb99;
+    // FIXME MT:*(dbg_dump_trisc + 12) = 0x99cbcb99;
 
     // This address corresponds to:
     // auto buf = GET_MAILBOX_ADDRESS_DEV(watcher.debug_ring_buf);
@@ -222,20 +222,20 @@ void device_setup() {
     // The size of the buffer is 32 4 byte values, and for trisc kernels we are using lower half of it.
     // Number of valid elements to dump is 16 for trisc kernels
     // MAKE SURE TO DOUBLE CHECK THIS VALUE WHEN REBASING
-    volatile uint32_t* dbg_dump_ncrisc = (volatile uint32_t*)0x00224;
-    *(dbg_dump_ncrisc + 0) = 0x77deda77;
-    *(dbg_dump_ncrisc + 1) = 0;
-    *(dbg_dump_ncrisc + 2) = 0;
-    *(dbg_dump_ncrisc + 3) = 0;
-    *(dbg_dump_ncrisc + 4) = 0;
-    *(dbg_dump_ncrisc + 5) = 0x77cccc77;
-    *(dbg_dump_ncrisc + 6) = 0x77cccc77;
-    *(dbg_dump_ncrisc + 7) = 0x77cccc77;
-    *(dbg_dump_ncrisc + 8) = 0x77cccc77;
-    *(dbg_dump_ncrisc + 9) = 0x77cccc77;
-    *(dbg_dump_ncrisc + 10) = 0x77cccc77;
-    *(dbg_dump_ncrisc + 11) = 0x77cccc77;
-    *(dbg_dump_ncrisc + 12) = 0x77cccc77;
+    // FIXME MT:volatile uint32_t* dbg_dump_ncrisc = (volatile uint32_t*)0x00224;
+    // FIXME MT:*(dbg_dump_ncrisc + 0) = 0x77deda77;
+    // FIXME MT:*(dbg_dump_ncrisc + 1) = 0;
+    // FIXME MT:*(dbg_dump_ncrisc + 2) = 0;
+    // FIXME MT:*(dbg_dump_ncrisc + 3) = 0;
+    // FIXME MT:*(dbg_dump_ncrisc + 4) = 0;
+    // FIXME MT:*(dbg_dump_ncrisc + 5) = 0x77cccc77;
+    // FIXME MT:*(dbg_dump_ncrisc + 6) = 0x77cccc77;
+    // FIXME MT:*(dbg_dump_ncrisc + 7) = 0x77cccc77;
+    // FIXME MT:*(dbg_dump_ncrisc + 8) = 0x77cccc77;
+    // FIXME MT:*(dbg_dump_ncrisc + 9) = 0x77cccc77;
+    // FIXME MT:*(dbg_dump_ncrisc + 10) = 0x77cccc77;
+    // FIXME MT:*(dbg_dump_ncrisc + 11) = 0x77cccc77;
+    // FIXME MT:*(dbg_dump_ncrisc + 12) = 0x77cccc77;
 
 #ifdef ARCH_BLACKHOLE
     // Disable DEST CG
