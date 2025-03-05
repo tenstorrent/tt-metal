@@ -6,7 +6,7 @@
 #include "dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "debug/assert.h"
-#include "cpp/ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/worker_edm_utils.hpp"
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
 #include <tt-metalium/buffer_constants.hpp>

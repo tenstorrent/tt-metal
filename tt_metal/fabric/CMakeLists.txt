@@ -2,6 +2,7 @@ set(FABRIC_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/control_plane.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/routing_table_generator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_graph.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/erisc_datamover_builder.cpp
 )
 
 add_library(fabric OBJECT ${FABRIC_SRC})

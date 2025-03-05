@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/edm_fabric_worker_adapters.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 
 bool terminate_fabric_endpoints_farthest_to_nearest (
     tt::fabric::WorkerToFabricEdmSender &sender,

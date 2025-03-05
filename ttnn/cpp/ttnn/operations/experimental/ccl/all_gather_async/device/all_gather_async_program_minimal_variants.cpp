@@ -35,7 +35,7 @@ namespace ttnn {
 using namespace ccl;
 
 void append_fabric_connection_rt_args(
-    const std::optional<ttnn::ccl::SenderWorkerAdapterSpec>& connection,
+    const std::optional<tt::fabric::SenderWorkerAdapterSpec>& connection,
     const CoreCoord& core,
     tt::tt_metal::Program& program,
     std::vector<uint32_t>& writer_rt_args) {
@@ -192,15 +192,15 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
             // drain sync core is the first worker core
             drain_sync_core = device->worker_core_from_logical_core(core);
         }
-        std::optional<ttnn::ccl::SenderWorkerAdapterSpec> forward_fabric_connection =
+        std::optional<tt::fabric::SenderWorkerAdapterSpec> forward_fabric_connection =
             line_topology.is_first_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD)
                 ? std::nullopt
-                : std::optional<ttnn::ccl::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
+                : std::optional<tt::fabric::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
                       device, ttnn::ccl::EdmLineFabricOpInterface::FORWARD));
-        std::optional<ttnn::ccl::SenderWorkerAdapterSpec> backward_fabric_connection =
+        std::optional<tt::fabric::SenderWorkerAdapterSpec> backward_fabric_connection =
             line_topology.is_last_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD)
                 ? std::nullopt
-                : std::optional<ttnn::ccl::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
+                : std::optional<tt::fabric::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
                       device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
 
         // Set reader runtime args
@@ -473,15 +473,15 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_post_binary
             // drain sync core is the first worker core
             drain_sync_core = device->worker_core_from_logical_core(core);
         }
-        std::optional<ttnn::ccl::SenderWorkerAdapterSpec> forward_fabric_connection =
+        std::optional<tt::fabric::SenderWorkerAdapterSpec> forward_fabric_connection =
             line_topology.is_first_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD)
                 ? std::nullopt
-                : std::optional<ttnn::ccl::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
+                : std::optional<tt::fabric::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
                       device, ttnn::ccl::EdmLineFabricOpInterface::FORWARD));
-        std::optional<ttnn::ccl::SenderWorkerAdapterSpec> backward_fabric_connection =
+        std::optional<tt::fabric::SenderWorkerAdapterSpec> backward_fabric_connection =
             line_topology.is_last_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD)
                 ? std::nullopt
-                : std::optional<ttnn::ccl::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
+                : std::optional<tt::fabric::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
                       device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
 
         // Set reader runtime args
