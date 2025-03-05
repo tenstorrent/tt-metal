@@ -264,7 +264,7 @@ def prepare_generator_args(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
-            1,
+            1,  # data_parallel
         ),
         (  # Long-context run - Single user, long prompt (adapted to the model being used and architecture)
             "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
@@ -278,7 +278,7 @@ def prepare_generator_args(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
-            1,
+            1,  # data_parallel
         ),
         (  # Batch-1 run (Reasoning) - single user, small prompt, long thinking time
             "models/tt_transformers/demo/input_data_questions_reasoning.json",  # input_prompts
@@ -292,7 +292,7 @@ def prepare_generator_args(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             False,  # stop_at_eos
             False,  # ci_only
-            1,
+            1,  # data_parallel
         ),
         (  # CI Batch-1 run - Measures the performance of a single user over 4096 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -306,7 +306,7 @@ def prepare_generator_args(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             False,  # stop_at_eos
             True,  # ci_only
-            1,
+            1,  # data_parallel
         ),
         (  # CI Batch-32 run - Measures the performance of a 32 users over 4096 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -320,7 +320,7 @@ def prepare_generator_args(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             False,  # stop_at_eos
             True,  # ci_only
-            1,
+            1,  # data_parallel
         ),
         (  # Batch-1 run (Latency) - single user, small prompt
             "models/demos/llama3/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -334,7 +334,21 @@ def prepare_generator_args(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
-            4,
+            4,  # data_parallel
+        ),
+        (  # Batch-1 run (Latency) - single user, small prompt
+            "models/demos/llama3/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            1024,  # max_seq_len
+            1,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # ci_only
+            8,  # data_parallel
         ),
     ],
     ids=[
@@ -344,7 +358,8 @@ def prepare_generator_args(
         "reasoning-1",  # reasoning
         "ci-1",  # CI batch 1
         "ci-32",  # CI batch 32
-        "batch-1-DP",  # DP latency
+        "batch-1-DP-4",  # DP 4 latency
+        "batch-1-DP-8",  # DP 8 latency
     ],
 )
 @pytest.mark.parametrize(
@@ -426,6 +441,12 @@ def test_demo_text(
     # uneven split of devices per DP group not supported
     if data_parallel > num_devices or num_devices % data_parallel != 0:
         pytest.skip(f"Invalid number of DP groups: {data_parallel}, for {num_devices} devices")
+
+    llama_dir = os.getenv("LLAMA_DIR")
+    if is_ci_env and num_devices == 32 and (data_parallel > 4 or (data_parallel == 4 and "3.1-70B" not in llama_dir)):
+        pytest.skip("CI runs only Llama3 70b DP = 4, TP = 8 on TG")
+    if is_ci_env and num_devices == 8 and data_parallel > 1 and not ("3.2-1B" in llama_dir or "3.1-8B" in llama_dir):
+        pytest.skip("CI runs only hybrid Llama3 1b and 8b on T3K")
 
     if not stop_at_eos:
         logger.info(f"The decode generation will only stop at the max_generated_tokens limit == {max_generated_tokens}")
