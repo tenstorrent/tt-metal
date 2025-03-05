@@ -6,14 +6,14 @@ import math
 import ttnn
 import torch
 from tqdm import tqdm
-from models.tt_transformers.tt.decoder import TtTransformerBlock
+from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.multimodal.llama_cross_block import TtLlamaCrossAttentionTransformerBlock
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.common.rmsnorm import RMSNorm
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.embedding import TtLlamaEmbedding
-from models.tt_transformers.tt.rope import TtLlamaRotarySetup
+from models.tt_transformers.tt.embedding import Embedding
+from models.tt_transformers.tt.rope import RotarySetup
 
 from models.utility_functions import (
     nearest_32,
@@ -120,7 +120,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         self.num_frozen_embeddings = self.tok_embeddings.num_embeddings
         self._thresh = self.num_frozen_embeddings - 1
 
-        self.rope_setup = TtLlamaRotarySetup(
+        self.rope_setup = RotarySetup(
             mesh_device,
             configuration.max_batch_size,
             configuration.head_dim,
@@ -136,7 +136,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         self.cross_attention_layers = []
         for i in tqdm(range(configuration.n_layers), desc="Loading text transformer layers"):
             layer_id = i
-            block = TtTransformerBlock(
+            block = TransformerBlock(
                 configuration,
                 mesh_device,
                 dtype,
