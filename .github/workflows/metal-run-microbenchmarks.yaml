@@ -55,6 +55,7 @@ jobs:
           ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type "$PIPELINE_TYPE"
       - name: Upload microbenchmark report csvs
         uses: actions/upload-artifact@v4
+        timeout-minutes: 10
         with:
           name: microbenchmark-report-csv-${{ matrix.runner-info.arch }}
           path: generated/profiler/.logs

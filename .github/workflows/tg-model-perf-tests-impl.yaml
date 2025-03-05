@@ -97,17 +97,20 @@ jobs:
       - name: Upload Models perf report
         if: ${{ !cancelled() && steps.check-perf-report.conclusion == 'success' && !matrix.test-group.tracy}}
         uses: actions/upload-artifact@v4
+        timeout-minutes: 10
         with:
           name: perf-report-csv-${{ matrix.test-group.model-type }}-${{ matrix.test-group.arch }}-${{ matrix.test-group.machine-type }}
           path: "${{ steps.check-perf-report.outputs.perf_report_filename }}"
       - name: Upload CCL perf report
         if: ${{ !cancelled() && steps.check-perf-report.conclusion == 'success' && matrix.test-group.tracy}}
         uses: actions/upload-artifact@v4
+        timeout-minutes: 10
         with:
           name: perf-report-csv-${{ matrix.test-group.model-type }}-${{ matrix.test-group.arch }}-${{ matrix.test-group.model }}-bare-metal
           path:
             ${{ steps.check-perf-report.outputs.perf_report_filename_all_gather }}
       - uses: ./.github/actions/upload-artifact-with-job-uuid
+        timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           path: |

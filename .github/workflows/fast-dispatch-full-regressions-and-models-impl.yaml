@@ -75,6 +75,7 @@ jobs:
           export PYTHONPATH=$TT_METAL_HOME
           ${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/upload-artifact-with-job-uuid
+        timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           path: |
@@ -126,6 +127,7 @@ jobs:
             pytest -n auto tests/nightly/single_card/${{ matrix.model }}
           fi
       - uses: ./.github/actions/upload-artifact-with-job-uuid
+        timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           path: |
@@ -184,6 +186,7 @@ jobs:
           export PYTHONPATH=$TT_METAL_HOME
           ${{ matrix.test-config.cmd }}
       - uses: ./.github/actions/upload-artifact-with-job-uuid
+        timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           path: |
