@@ -244,6 +244,7 @@ FORCE_INLINE void cq_noc_inline_dw_write_with_state(uint64_t dst_addr, uint32_t 
 
 // TODO: noc_inline_dw_write currently hardcodes most of these parameters, which we copied here
 // If needed, add templates for setting these
+// TODO: uplift for BH to not do inline write
 template <enum CQNocInlineFlags flags>
 FORCE_INLINE void cq_noc_inline_dw_write_init_state(uint64_t dst_addr, uint32_t val = 0, uint8_t be = 0xF) {
     WAYPOINT("NIIW");

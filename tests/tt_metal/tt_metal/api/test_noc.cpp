@@ -294,7 +294,7 @@ TEST_F(DeviceFixture, TensixInlineWriteDynamicNoc) {
     uint32_t value_to_write = 39;
 
     for (tt_metal::IDevice* device : this->devices_) {
-        std::vector<uint32_t> readback(64 / sizeof(uint32_t), 0);
+        std::vector<uint32_t> readback(80 / sizeof(uint32_t), 0);
         tt_metal::detail::WriteToDeviceL1(device, receiver_core, receiver_addr0, readback);
 
         CoreCoord virtual_receiver_core = device->worker_core_from_logical_core(receiver_core);

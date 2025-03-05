@@ -71,8 +71,8 @@
 // to allow one memory port to move ahead of another. To workaround this hang, we emulate inline writes on Blackhole by
 // writing the value to be written to local L1 first and then issue a noc async write.
 #define MEM_L1_INLINE_BASE 16
-#define MEM_L1_INLINE_SIZE 32  // Each noc has 16B to store value written out by inline writes
-#define MEM_MAILBOX_BASE 48
+#define MEM_L1_INLINE_SIZE 64  // Each risc and noc has 16B to store value written out by inline writes
+#define MEM_MAILBOX_BASE (MEM_L1_INLINE_BASE + MEM_L1_INLINE_SIZE)
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
 #define MEM_MAILBOX_SIZE 12640
 #define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)
