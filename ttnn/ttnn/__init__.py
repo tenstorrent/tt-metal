@@ -188,7 +188,6 @@ from ttnn.device import (
     disable_and_clear_program_cache,
     manage_device,
     synchronize_device,
-    synchronize_mesh_device,
     dump_device_memory_state,
     get_memory_view,
     GetPCIeDeviceID,

@@ -61,7 +61,6 @@ void py_module(py::module& module) {
         py::arg("device"),
         py::arg("trace_id"));
 
-    // TODO: #18572 - Replace the implementation of this overload with the TT-distributed implementation.
     module.def(
         "begin_trace_capture",
         [](MeshDevice* device, QueueId cq_id) {
