@@ -68,16 +68,17 @@ const core_descriptor_t& get_core_descriptor_config(
     ARCH arch = tt::Cluster::instance().arch();
     uint32_t harvesting_mask = tt::Cluster::instance().get_harvesting_mask(device_id);
     std::bitset<32> mask_bitset(harvesting_mask);
-    uint32_t num_harvested_rows = mask_bitset.count();
+    uint32_t num_harvested_on_axis = mask_bitset.count();
 
-    if (num_harvested_rows > 2) {
-        TT_THROW("At most two rows can be harvested, but detected {} harvested rows", num_harvested_rows);
+    if (num_harvested_on_axis > 2) {
+        TT_THROW(
+            "At most two rows or cols can be harvested, but detected {} along harvested axis", num_harvested_on_axis);
     }
-    if (num_harvested_rows == 1 and arch == tt::ARCH::GRAYSKULL) {
+    if (num_harvested_on_axis == 1 and arch == tt::ARCH::GRAYSKULL) {
         TT_THROW("One row harvested Grayskull is not supported");
     }
 
-    std::string product_name = get_product_name(arch, num_harvested_rows);
+    std::string product_name = get_product_name(arch, num_harvested_on_axis);
     if (tt::Cluster::instance().is_galaxy_cluster()) {
         if (tt::Cluster::instance().get_board_type(device_id) == BoardType::N150) {
             // some Galaxy machines are setup with N150s that have 0 harvested rows.

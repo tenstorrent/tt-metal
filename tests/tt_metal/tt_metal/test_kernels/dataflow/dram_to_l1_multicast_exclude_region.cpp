@@ -32,8 +32,12 @@ void kernel_main() {
     // multicast local L1 buffer to all destination cores
     uint64_t dst_noc_multicast_addr =
         get_noc_multicast_addr(dst_noc_x_start, dst_noc_y_start, dst_noc_x_end, dst_noc_y_end, dst_addr);
+    DPRINT << "dst_noc_multicast_addr " << HEX() << dst_noc_multicast_addr << DEC() << ENDL();
     uint32_t noc_exclude_region =
         get_noc_exclude_region(exclude_start_x, exclude_start_y, exclude_dir_x, exclude_dir_y);
+    DPRINT << "noc_exclude_region " << HEX() << noc_exclude_region << DEC() << ENDL();
+    DPRINT << "local_addr " << HEX() << local_addr << DEC() << " src_buffer_size " << src_buffer_size << " num_dests "
+           << num_dests << ENDL();
     noc_async_write_multicast_exclude_region(
         local_addr, dst_noc_multicast_addr, src_buffer_size, num_dests, noc_exclude_region);
     noc_async_write_barrier();

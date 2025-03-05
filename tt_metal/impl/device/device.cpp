@@ -276,6 +276,7 @@ std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, si
     // Tensix/Eth <-> Tensix/Eth src and dst addrs must be L1_ALIGNMENT aligned
     const auto &logical_size = this->logical_grid_size();
     const auto &compute_size = this->compute_with_storage_grid_size();
+    std::cout << "num dram banks " << static_cast<size_t>(soc_desc.get_num_dram_views()) << std::endl;
     AllocatorConfig config(
         {.num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_views()),
          .dram_bank_size = soc_desc.dram_view_size,
@@ -621,57 +622,102 @@ void Device::initialize_and_launch_firmware() {
     // Get a list of unique DRAM cores.
     std::unordered_set<CoreCoord> unique_dram_cores(dram_cores.begin(), dram_cores.end());
     TT_ASSERT(
-        pcie_cores.size() + dram_cores.size() + eth_cores.size() <= MAX_NON_WORKER_CORES,
+        pcie_cores.size() + dram_cores.size() + eth_cores.size() <= MAX_PHYSICAL_NON_WORKER_CORES,
         "Detected more pcie/dram/eth cores than fit in the device mailbox.");
     TT_ASSERT(
         eth_cores.size() <= MAX_VIRTUAL_NON_WORKER_CORES,
         "Detected more eth cores (virtual non-workers) than can fit in device mailbox.");
-    for (int idx = 0; idx < MAX_NON_WORKER_CORES; idx++) {
+    for (int idx = 0; idx < MAX_PHYSICAL_NON_WORKER_CORES; idx++) {
         core_info->non_worker_cores[idx] = {CORE_COORD_INVALID, CORE_COORD_INVALID, AddressableCoreType::UNKNOWN};
     }
     for (int idx = 0; idx < MAX_VIRTUAL_NON_WORKER_CORES; idx++) {
         core_info->virtual_non_worker_cores[idx] = {CORE_COORD_INVALID, CORE_COORD_INVALID, AddressableCoreType::UNKNOWN};
     }
 
+    // On Blackhole, virtualized Tensix coordinates overlap with NoC1 physical DRAM coordinates beause virtualized
+    // Tensix coordinates == NoC0 Tensix physical coordinates. This causes false negative Watcher sanitization errors
+    // because it appears as a mixed use of physical and virtual To workaround this, skip over populating
+    // `non_worker_cores` for BH DRAM when virtualization is enabled
     int non_worker_cores_idx = 0;
     for (const tt::umd::CoreCoord& core : pcie_cores) {
+        std::cout << "pcie core is " << core.str() << " virtual is "
+                  << tt::Cluster::instance().get_virtual_coordinate_from_physical_coordinates(this->id(), core).str()
+                  << std::endl;
+        tt::umd::CoreCoord translated_coord =
+            soc_d.translate_coord_to(core, CoordSystem::PHYSICAL, CoordSystem::VIRTUAL);
+        std::cout << "\tupdated to " << translated_coord.str() << std::endl;
         core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::PCIE};
     }
-    for (const tt::umd::CoreCoord& core : dram_cores) {
-        core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::DRAM};
+    bool skip_physical_dram = this->arch() == ARCH::BLACKHOLE and hal.is_coordinate_virtualization_enabled();
+    if (not skip_physical_dram) {
+        for (const tt::umd::CoreCoord& core : dram_cores) {
+            std::cout << "dram core is " << core.str() << " virtual is "
+                    << tt::Cluster::instance().get_virtual_coordinate_from_physical_coordinates(this->id(), core).str()
+                    << std::endl;
+            core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::DRAM};
+        }
     }
     for (const tt::umd::CoreCoord& core : eth_cores) {
         core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::ETH};
     }
+
+    std::cout << "non_worker_cores_idx " << non_worker_cores_idx << std::endl;
+    for (int i = 0; i < non_worker_cores_idx; i++) {
+        std::cout << "physical (" << (uint32_t)core_info->non_worker_cores[i].x << ", "
+                  << (uint32_t)core_info->non_worker_cores[i].y << ")" << std::endl;
+    }
+
     if (hal.is_coordinate_virtualization_enabled()) {
-        // Track Virtual Non Worker Cores (In this case only Eth) separately
+        // Track Virtual Non Worker Cores separately
         uint32_t virtual_non_worker_cores_idx = 0;
         for (const tt::umd::CoreCoord& core : eth_cores) {
             auto virtual_core = this->virtual_core_from_physical_core({core.x, core.y});
             core_info->virtual_non_worker_cores[virtual_non_worker_cores_idx++] = {virtual_core.x, virtual_core.y, AddressableCoreType::ETH};
         }
+
+        if (this->arch() == ARCH::BLACKHOLE) {
+            for (const CoreCoord& core : pcie_cores) {
+                auto virtual_core = this->virtual_core_from_physical_core({core.x, core.y});
+                core_info->virtual_non_worker_cores[virtual_non_worker_cores_idx++] = {
+                    virtual_core.x, virtual_core.y, AddressableCoreType::PCIE};
+            }
+
+            for (const CoreCoord& core : unique_dram_cores) {
+                auto virtual_core = this->virtual_core_from_physical_core({core.x, core.y});
+                core_info->virtual_non_worker_cores[virtual_non_worker_cores_idx++] = {
+                    virtual_core.x, virtual_core.y, AddressableCoreType::DRAM};
+            }
+        }
     }
 
     // Determine which noc-coords are harvested
-    // TODO(PGK/Almeet): fix this w/ new UMD
-    std::vector<uint32_t> harvested_rows;
-    uint32_t harvested_noc_rows = CoordinateManager::shuffle_tensix_harvesting_mask_to_noc0_coords(
+    std::vector<uint32_t> harvested_axis_coord;
+    uint32_t harvested_noc_coords = CoordinateManager::shuffle_tensix_harvesting_mask_to_noc0_coords(
         tt::Cluster::instance().get_soc_desc(this->id()).arch, tt::Cluster::instance().get_harvesting_mask(this->id()));
-    for (uint32_t y = 0; y < soc_d.grid_size.y; y++) {
-        bool row_harvested = (harvested_noc_rows >> y) & 0x1;
-        if (row_harvested) {
-            harvested_rows.push_back(y);
+    uint32_t max_along_axis =
+        hal.get_tensix_harvest_axis() == HalTensixHarvestAxis::ROW ? soc_d.grid_size.y : soc_d.grid_size.x;
+    for (uint32_t idx = 0; idx < max_along_axis; idx++) {  // upddate for col harvesting
+        bool harvested_axis = (harvested_noc_coords >> idx) & 0x1;
+        if (harvested_axis) {
+            harvested_axis_coord.push_back(idx);
         }
     }
-    TT_ASSERT(harvested_rows.size() <= MAX_HARVESTED_ROWS, "Detected more harvested rows than fit in mailbox.");
-    for (int idx = 0; idx < MAX_HARVESTED_ROWS; idx++) {
-        core_info->harvested_y[idx] = (idx < harvested_rows.size()) ? harvested_rows[idx] : CORE_COORD_INVALID;
-        // Populate harvested rows in virtual coordinate space if virtualization is supported by HW.
-        // Harvested rows in the virtual space are placed at the end of the worker grid,
-        if (hal.is_coordinate_virtualization_enabled() and idx < harvested_rows.size()) {
-            core_info->virtual_harvested_y[idx] = (hal.get_virtual_worker_start_y() + this->logical_grid_size().y + harvested_rows.size() - (idx + 1));
+    TT_ASSERT(
+        harvested_axis_coord.size() <= MAX_HARVESTED_ON_AXIS, "Detected more harvested rows than fit in mailbox.");
+    for (int idx = 0; idx < MAX_HARVESTED_ON_AXIS; idx++) {
+        core_info->harvested_coords[idx] =
+            (idx < harvested_axis_coord.size()) ? harvested_axis_coord[idx] : CORE_COORD_INVALID;
+        // Populate harvested rows/cols in virtual coordinate space if virtualization is supported by HW.
+        // Harvested rows/cols in the virtual space are placed at the end of the worker grid,
+        if (hal.is_coordinate_virtualization_enabled() and idx < harvested_axis_coord.size()) {
+            core_info->virtual_harvested_coords[idx] =
+                hal.get_tensix_harvest_axis() == HalTensixHarvestAxis::ROW
+                    ? (hal.get_virtual_worker_start_y() + this->logical_grid_size().y + harvested_axis_coord.size() -
+                       (idx + 1))
+                    : (hal.get_virtual_worker_start_x() + this->logical_grid_size().x + harvested_axis_coord.size() -
+                       (idx + 1));
         } else {
-            core_info->virtual_harvested_y[idx] = CORE_COORD_INVALID;
+            core_info->virtual_harvested_coords[idx] = CORE_COORD_INVALID;
         }
     }
 
@@ -1145,7 +1191,7 @@ CoreType Device::core_type_from_virtual_core(const CoreCoord &virtual_coord) con
 }
 
 CoreCoord Device::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const {
-    if (coord.x >= this->grid_size().x || coord.y >= this->grid_size().y) {
+    if (coord.x >= this->grid_size().x || coord.y >= this->grid_size().y || this->arch() == ARCH::BLACKHOLE) {
         // Coordinate already in virtual space: NOC0 and NOC1 are the same
         return coord;
     } else {
@@ -1162,7 +1208,7 @@ CoreCoord Device::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) co
 }
 
 CoreCoord Device::virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) const {
-     if (coord.x >= this->grid_size().x || coord.y >= this->grid_size().y) {
+    if (coord.x >= this->grid_size().x || coord.y >= this->grid_size().y || this->arch() == ARCH::BLACKHOLE) {
         // Coordinate already in virtual space: NOC0 and NOC1 are the same
         return coord;
     } else {
@@ -1481,8 +1527,8 @@ void Device::generate_device_bank_to_noc_tables()
     dram_bank_offset_map_.clear();
     dram_bank_offset_map_.resize(num_dram_banks);
     for (unsigned bank_id = 0; bank_id < num_dram_banks; bank_id++) {
-        dram_noc_coord_per_bank[bank_id] =
-            this->dram_core_from_dram_channel(allocator->get_dram_channel_from_bank_id(bank_id));
+        auto physical_dram_core = this->dram_core_from_dram_channel(allocator->get_dram_channel_from_bank_id(bank_id));
+        dram_noc_coord_per_bank[bank_id] = this->virtual_core_from_physical_core(physical_dram_core);
         dram_bank_offset_map_[bank_id] = allocator->get_bank_offset(BufferType::DRAM, bank_id);
     }
     const size_t num_l1_banks = allocator->get_num_banks(BufferType::L1);
@@ -1499,10 +1545,18 @@ void Device::generate_device_bank_to_noc_tables()
 
     dram_bank_to_noc_xy_.clear();
     dram_bank_to_noc_xy_.reserve(tt::tt_metal::hal.get_num_nocs() * dram_noc_coord_per_bank.size());
+    bool dram_is_virtualized =
+        hal.get_virtualized_core_types().find(AddressableCoreType::DRAM) != hal.get_virtualized_core_types().end();
     for (unsigned int noc = 0; noc < tt::tt_metal::hal.get_num_nocs(); noc++) {
         for (unsigned int bank_id = 0; bank_id < dram_noc_coord_per_bank.size(); bank_id++) {
-            uint16_t noc_x = tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.x, dram_noc_coord_per_bank[bank_id].x);
-            uint16_t noc_y = tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.y, dram_noc_coord_per_bank[bank_id].y);
+            uint16_t noc_x, noc_y;
+            if (dram_is_virtualized) {
+                noc_x = dram_noc_coord_per_bank[bank_id].x;
+                noc_y = dram_noc_coord_per_bank[bank_id].y;
+            } else {
+                noc_x = tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.x, dram_noc_coord_per_bank[bank_id].x);
+                noc_y = tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.y, dram_noc_coord_per_bank[bank_id].y);
+            }
             uint16_t xy = ((noc_y << tt::tt_metal::hal.get_noc_addr_node_id_bits()) | noc_x)
                           << tt::tt_metal::hal.get_noc_coord_reg_offset();
             dram_bank_to_noc_xy_.push_back(xy);
