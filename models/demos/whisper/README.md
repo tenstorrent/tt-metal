@@ -1,8 +1,8 @@
-# Whisper Demo (Wormhole)
+# Whisper Demo (Wormhole & Blackhole)
 
 ## How to Run
 
-Whisper uses 8x8 core grid size, so the following environment variable needs to be set on a N300 setup:
+If running on Wormhole N300 (not required for N150 or Blackhole), the following environment variable needs to be set since Whisper requires at least 8x8 core grid size:
 
 ```sh
 export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
