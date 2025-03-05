@@ -398,7 +398,7 @@ def test_concat2d_to_tensor(M, K, N, dtype, mesh_shape, mesh_device):
 
     mapper = ttnn.shard_tensor_to_2d_mesh_mapper(mesh_device, mesh_shape=mesh_shape, dims=shard_dim)
 
-    composer = ttnn.concat_2d_mesh_to_tensor_composer(mesh_device, dims=concat_dim, mesh_shape=mesh_shape)
+    composer = ttnn.concat_2d_mesh_to_tensor_composer(mesh_device, dims=concat_dim)
 
     out_tensor = ttnn.aggregate_tensor(ttnn.distribute_tensor(to_shard, mapper, mesh_device), composer)
 
