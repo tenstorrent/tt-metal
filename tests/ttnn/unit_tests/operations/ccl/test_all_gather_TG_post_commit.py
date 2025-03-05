@@ -17,6 +17,8 @@ from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
 
+NUM_BUFFERS = 8
+
 
 def report_mismatches(golden, actual, max_printable=None):
     printed = 0
@@ -111,7 +113,7 @@ def run_with_trace(
                     cluster_axis=cluster_axis,
                     mesh_device=mesh_device,
                     topology=ttnn.Topology.Linear,
-                    multi_device_global_semaphore=ccl_semaphore_handles[i % 8]
+                    multi_device_global_semaphore=ccl_semaphore_handles[i % NUM_BUFFERS]
                     if type(ccl_semaphore_handles) == list
                     else ccl_semaphore_handles,
                     num_links=num_links,
@@ -279,7 +281,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
 
         # create global semaphore handles
         ccl_semaphore_handles = [
-            create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(8)
+            create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(NUM_BUFFERS)
         ]
     try:
         # ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor)
@@ -312,7 +314,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
                         cluster_axis=cluster_axis,
                         mesh_device=mesh_device,
                         topology=ttnn.Topology.Linear,
-                        multi_device_global_semaphore=ccl_semaphore_handles[i % 8],
+                        multi_device_global_semaphore=ccl_semaphore_handles[i % NUM_BUFFERS],
                         num_links=num_links,
                         memory_config=output_mem_config,
                         subdevice_id=worker_sub_device_id,
