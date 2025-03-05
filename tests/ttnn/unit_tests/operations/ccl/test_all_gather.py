@@ -88,8 +88,7 @@ def run_with_trace(
         num_buffers_per_channel=n_buffer,
         topology=all_gather_topology,
     )
-    for d in mesh_device.get_devices():
-        ttnn.synchronize_device(d)
+    ttnn.synchronize_device(mesh_device)
 
     # Capture trace
     logger.info("Capturing trace")
@@ -105,15 +104,13 @@ def run_with_trace(
             topology=all_gather_topology,
         )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-    for d in mesh_device.get_devices():
-        ttnn.synchronize_device(d)
+    ttnn.synchronize_device(mesh_device)
 
     # Run the op
     logger.info("Starting Trace perf test...")
     ttnn.execute_trace(mesh_device, trace_id, blocking=False)
     ttnn.release_trace(mesh_device, trace_id)
-    for d in mesh_device.get_devices():
-        ttnn.synchronize_device(d)
+    ttnn.synchronize_device(mesh_device)
 
     return tt_out_tensor
 
@@ -172,8 +169,7 @@ def run_all_gather_impl(
                 input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config, topology=all_gather_topology
             )
 
-            for d in mesh_device.get_devices():
-                ttnn.synchronize_device(d)
+            ttnn.synchronize_device(mesh_device)
             logger.info(f"Done iteration {i}")
 
     for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
@@ -1251,8 +1247,7 @@ def run_all_gather_sharded(
                 topology=all_gather_topology,
             )
         ## Wait for completion
-        for d in mesh_device.get_devices():
-            ttnn.synchronize_device(d)
+        ttnn.synchronize_device(mesh_device)
 
     torch.set_printoptions(sci_mode=False)
     all_eq = True

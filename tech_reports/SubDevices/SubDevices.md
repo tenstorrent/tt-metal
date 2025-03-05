@@ -118,7 +118,7 @@ The following are some examples of the different python level APIs that take in 
 
   Resets the sub_device_ids that will be stalled on by default for Fast Dispatch commands such as reading, writing, synchronizing back to all SubDevice IDs.
 
-* `ttnn.synchronize_devices(..., sub_device_ids=[sub_device_id_0, sub_device_id_1])`
+* `ttnn.synchronize_device(..., sub_device_ids=[sub_device_id_0, sub_device_id_1])`
 
   This will stall the host waiting for completion of the specified sub-device's programs. Not specifying any sub-device ids means we will stall waiting for all sub-devices set by `set_sub_device_stall_group` to complete.
 

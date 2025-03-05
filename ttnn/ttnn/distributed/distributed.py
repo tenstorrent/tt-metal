@@ -191,25 +191,6 @@ def create_mesh_device(*args, **kwargs):
         close_mesh_device(mesh_device)
 
 
-def synchronize_devices(
-    devices: Union["ttnn.Device", "ttnn.MeshDevice"],
-    queue_id: Optional[int] = ttnn.DefaultQueueId,
-    sub_device_ids: List[ttnn.SubDeviceId] = [],
-) -> None:
-    """
-    synchronize_devices(devices: Union[ttnn.Device, ttnn.MeshDevice], queue_id: Optional[int] = None, sub_device_ids: List[ttnn.SubDeviceId] = []) -> None:
-
-    Synchronize the devices with host by waiting for all operations to complete.
-    If queue_id is provided then only the operations associated with that queue_id are waited for,
-    otherwise operations for all command queues are waited on.
-    """
-    if isinstance(devices, ttnn.Device):
-        ttnn._ttnn.device.synchronize_device(devices, queue_id, sub_device_ids)
-    else:
-        for device in devices.get_device_ids():
-            ttnn._ttnn.device.synchronize_device(devices.get_device(device), queue_id, sub_device_ids)
-
-
 class TensorToMesh:
     """
     Defines the mapping of a torch.Tensor to a device mesh: e.g. Shard/Replicate.

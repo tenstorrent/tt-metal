@@ -102,6 +102,9 @@ void ReplayTrace(MeshDevice* device, uint8_t cq_id, const MeshTraceId& trace_id,
 
 void ReleaseTrace(MeshDevice* device, const MeshTraceId& trace_id);
 
+void Synchronize(
+    MeshDevice* device, std::optional<uint8_t> cq_id, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+
 void Finish(MeshCommandQueue& mesh_cq, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
 }  // namespace distributed

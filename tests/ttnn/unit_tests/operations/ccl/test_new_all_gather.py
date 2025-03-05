@@ -90,8 +90,7 @@ def run_with_trace(
         subdevice_id=subdevice_id,
         enable_persistent_fabric_mode=enable_persistent_fabric,
     )
-    for d in mesh_device.get_devices():
-        ttnn.synchronize_device(d)
+    ttnn.synchronize_device(mesh_device)
 
     # Capture trace
     logger.info("Capturing trace")
@@ -108,15 +107,13 @@ def run_with_trace(
             enable_persistent_fabric_mode=enable_persistent_fabric,
         )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-    for d in mesh_device.get_devices():
-        ttnn.synchronize_device(d)
+    ttnn.synchronize_device(mesh_device)
 
     # Run the op
     logger.info("Starting Trace perf test...")
     ttnn.execute_trace(mesh_device, trace_id, blocking=False)
     ttnn.release_trace(mesh_device, trace_id)
-    for d in mesh_device.get_devices():
-        ttnn.synchronize_device(d)
+    ttnn.synchronize_device(mesh_device)
 
     return tt_out_tensor
 
@@ -310,7 +307,7 @@ def run_all_gather_impl(
             tt_out_tensor_list.append(tt_out_tensor)
 
         logger.info(f"Waiting for op")
-        ttnn.synchronize_devices(mesh_device, sub_device_ids=sub_device_stall_group)
+        ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
         logger.info(f"Done op")
 
     passed = True

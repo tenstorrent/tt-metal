@@ -53,6 +53,7 @@ enable_program_cache = ttnn._ttnn.device.enable_program_cache
 disable_and_clear_program_cache = ttnn._ttnn.device.disable_and_clear_program_cache
 
 synchronize_device = ttnn._ttnn.device.synchronize_device
+synchronize_mesh_device = ttnn._ttnn.device.synchronize_mesh_device
 GetDefaultDevice = ttnn._ttnn.device.GetDefaultDevice
 SetDefaultDevice = ttnn._ttnn.device.SetDefaultDevice
 GetPCIeDeviceID = ttnn._ttnn.device.GetPCIeDeviceID

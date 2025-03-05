@@ -313,7 +313,7 @@ def test_unet_trace_2cq_multi_device(
     assert input_trace_addr == buffer_address(l1_input_tensor)
     ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
 
-    ttnn.synchronize_devices(mesh_device)
+    ttnn.synchronize_device(mesh_device)
 
     outputs = []
     start = time.time()
@@ -328,7 +328,7 @@ def test_unet_trace_2cq_multi_device(
 
         ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
         outputs.append(output_tensor.cpu(blocking=False))
-    ttnn.synchronize_devices(mesh_device)
+    ttnn.synchronize_device(mesh_device)
     end = time.time()
     logger.info(f"Average model time={1000.0 * (end-start) / iterations : .2f} ms")
     logger.info(f"Average model performance={iterations * total_batch / (end-start) : .2f} fps")
@@ -599,7 +599,7 @@ def test_unet_trace_2cq_same_io_multi_device(
     assert input_trace_addr == buffer_address(l1_input_tensor)
     ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
     dram_output_tensor = ttnn.reshard(output_tensor, output_dram_memory_config, dram_output_tensor)
-    ttnn.synchronize_devices(mesh_device)
+    ttnn.synchronize_device(mesh_device)
 
     outputs = []
     start = time.time()
@@ -629,7 +629,7 @@ def test_unet_trace_2cq_same_io_multi_device(
     ttnn.record_event(0, model_event)
     ttnn.wait_for_event(1, model_event)
     outputs.append(dram_output_tensor.cpu(blocking=False, cq_id=1))
-    ttnn.synchronize_devices(mesh_device)
+    ttnn.synchronize_device(mesh_device)
     end = time.time()
 
     inference_time = (end - start) / iterations

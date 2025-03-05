@@ -354,9 +354,7 @@ def run_inference_prefill(tt_model, model_args, prefill_seqlen, mesh_device, pt_
 
         # Device sync to get proper e2e timing
         profiler.start(f"e2e_prefill_inference_sync_{batch_id}")
-        devices = mesh_device.get_devices()
-        for device in devices:
-            ttnn.synchronize_device(device)
+        ttnn.synchronize_device(mesh_device)
         profiler.end(f"e2e_prefill_inference_sync_{batch_id}")
 
 

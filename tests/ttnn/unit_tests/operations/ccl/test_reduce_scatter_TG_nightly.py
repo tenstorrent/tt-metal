@@ -74,8 +74,7 @@ def run_with_trace(
         memory_config=output_mem_config,
         topology=ttnn.Topology.Linear,
     )
-    for d in mesh_device.get_devices():
-        ttnn.synchronize_device(d)
+    ttnn.synchronize_device(mesh_device)
 
     # Capture trace
     logger.info("Capturing trace")
@@ -92,15 +91,13 @@ def run_with_trace(
             topology=ttnn.Topology.Linear,
         )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-    for d in mesh_device.get_devices():
-        ttnn.synchronize_device(d)
+    ttnn.synchronize_device(mesh_device)
 
     # Run the op
     logger.info("Starting Trace perf test...")
     ttnn.execute_trace(mesh_device, trace_id, blocking=False)
     ttnn.release_trace(mesh_device, trace_id)
-    for d in mesh_device.get_devices():
-        ttnn.synchronize_device(d)
+    ttnn.synchronize_device(mesh_device)
 
     return tt_out_tensor
 
@@ -280,8 +277,8 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
                     topology=ttnn.Topology.Linear,
                 )
             if enable_persistent_fabric:
-                ttnn.synchronize_devices(mesh_device, sub_device_ids=sub_device_stall_group)
-        ttnn.synchronize_devices(mesh_device, sub_device_ids=sub_device_stall_group)
+                ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+        ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
 
     if enable_persistent_fabric and teardown_persistent_fabric:
         logger.info("Tearing down persistent fabric interface")

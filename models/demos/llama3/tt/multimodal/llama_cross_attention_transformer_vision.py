@@ -13,10 +13,6 @@ from models.utility_functions import (
 from models.common.lightweightmodule import LightweightModule
 from models.demos.llama3.tt.multimodal.llama_vision_encoder import TtLlamaVisionEncoder
 
-from models.demos.falcon7b_common.tests.test_utils import (
-    synchronize_devices,
-)
-
 
 class TtLlamaCrossAttentionTransformerVision(LightweightModule):
     def __init__(

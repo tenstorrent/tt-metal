@@ -33,7 +33,7 @@ def create_and_load_sub_device_manager_with_fabric_interface(
 def teardown_fabric_interface(mesh_device):
     logger.debug(f"Tearing down fabric (this may take a while if context switch interval is large)")
     ttnn.teardown_edm_fabric(mesh_device)
-    ttnn.synchronize_devices(mesh_device)
+    ttnn.synchronize_device(mesh_device)
 
 
 def create_global_semaphore_with_same_address(mesh_device, cores, initial_value):

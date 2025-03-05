@@ -190,7 +190,7 @@ def run_yolov4_trace_2cqs_inference(
         input_tensor = ttnn.reshard(tt_image_res, input_mem_config, input_tensor)
         ttnn.record_event(0, op_event)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
-    ttnn.synchronize_devices(device)
+    ttnn.synchronize_device(device)
 
     if use_signpost:
         signpost(header="stop")
