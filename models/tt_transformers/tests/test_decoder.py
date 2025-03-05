@@ -59,7 +59,7 @@ def test_decoder_inference(
     ensure_gc,
 ):
     dtype = ttnn.bfloat8_b
-    mesh_device.enable_async(False)
+    mesh_device.enable_async(True)
 
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
     model_args.n_layers = 1
@@ -177,7 +177,6 @@ def test_decoder_inference(
             mode="decode",
             page_table=page_table_tt,
         )
-        print("out model")
         tt_out = ttnn.to_torch(
             tt_out,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
