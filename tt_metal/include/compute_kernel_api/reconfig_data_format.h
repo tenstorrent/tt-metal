@@ -13,6 +13,8 @@ namespace ckernel {
  */
 template <bool to_from_int8 = false>
 ALWI void reconfig_data_format(const uint32_t srca_new_operand, const uint32_t srcb_new_operand) {
+    UNPACK(DeviceZoneScopedN("RECONFIG_DATA_FORMAT UNPACK"));
+    MATH(DeviceZoneScopedN("RECONFIG_DATA_FORMAT MATH"));
     UNPACK((llk_unpack_reconfig_data_format<to_from_int8, DST_ACCUM_MODE>(srca_new_operand, srcb_new_operand)));
     MATH((llk_math_reconfig_data_format<to_from_int8, DST_ACCUM_MODE>(srca_new_operand, srcb_new_operand)));
 }

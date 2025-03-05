@@ -35,13 +35,14 @@ namespace ckernel {
  *
  * | Argument       | Description                                       | Type     | Valid Range                                         | Required |
  * |----------------|---------------------------------------------------|----------|-----------------------------------------------------|----------|
- * | ifrom_dst      | The index of the tile in the DST register         | uint32_t | Must be less than the size of the DST register (16) | True     | 
- * | icb            | The identifier of the output circular buffer (CB) | uint32_t | 0 to 31                                             | True     | 
+ * | ifrom_dst      | The index of the tile in the DST register         | uint32_t | Must be less than the size of the DST register (16) | True     |
+ * | icb            | The identifier of the output circular buffer (CB) | uint32_t | 0 to 31                                             | True     |
  * | icb_tile       | The index of the tile in the output CB to copy to | uint32_t | Must be less than the size of the CB                | True     |
  */
- // clang-format on
+// clang-format on
 template <bool out_of_order_output = false>
 ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_index = 0) {
+    PACK(DeviceZoneScopedN("PACK_TILE"));
     PACK((llk_pack<out_of_order_output, false, DST_ACCUM_MODE>(ifrom_dst, icb, output_tile_index)));
 }
 
@@ -71,11 +72,11 @@ ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_
  *
  * | Argument       | Description                                       | Type     | Valid Range                                         | Required |
  * |----------------|---------------------------------------------------|----------|-----------------------------------------------------|----------|
- * | ifrom_dst      | The index of the tile in the DST register         | uint32_t | Must be less than the size of the DST register (16) | True     | 
- * | icb            | The identifier of the output circular buffer (CB) | uint32_t | 0 to 31                                             | True     | 
+ * | ifrom_dst      | The index of the tile in the DST register         | uint32_t | Must be less than the size of the DST register (16) | True     |
+ * | icb            | The identifier of the output circular buffer (CB) | uint32_t | 0 to 31                                             | True     |
  * | ntiles         | The number of tiles to copy from DST to CB        | uint32_t | Must be less than the size of the CB                | True     |
  */
- // clang-format on
+// clang-format on
 ALWI void matmul_pack_tile(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
     PACK((llk_matmul_pack<false, false, DST_ACCUM_MODE>(ifrom_dst, icb, ntiles)));
 }
