@@ -4,11 +4,7 @@
 
 #pragma once
 
-#include <stdint.h>
-
-#if defined(KERNEL_BUILD) || defined(FW_BUILD)
-#include "risc_attribs.h"
-#endif
+#include <cstdint>
 
 // TODO: move routing table here
 namespace tt::tt_fabric {
