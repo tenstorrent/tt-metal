@@ -19,9 +19,10 @@
 #include "tt_metal/common/scoped_timer.hpp"
 #include <tt-metalium/host_api.hpp>
 
+namespace tt::tt_metal {
+
 using std::vector;
 using namespace tt;
-using namespace tt::tt_metal;
 
 Program create_simple_unary_program(Buffer& input, Buffer& output) {
     Program program = CreateProgram();
@@ -275,7 +276,7 @@ TEST_F(CommandQueueTraceFixture, TensixInstantiateTraceSanity) {
     vector<uint32_t> data_fd, data_bd;
 
     // Backdoor read the trace buffer
-    ::detail::ReadFromBuffer(trace_inst->buffer, data_bd);
+    detail::ReadFromBuffer(trace_inst->buffer, data_bd);
 
     // Frontdoor reaad the trace buffer
     data_fd.resize(trace_inst->buffer->size() / sizeof(uint32_t));
@@ -911,3 +912,5 @@ TEST_F(RandomProgramTraceFixture, TensixActiveEthTestProgramsTraceAndNoTrace) {
         ReleaseTrace(this->device_, trace_id);
     }
 }
+
+}  // namespace tt::tt_metal

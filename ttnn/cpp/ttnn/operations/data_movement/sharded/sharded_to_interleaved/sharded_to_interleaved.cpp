@@ -7,8 +7,6 @@
 #include "device/sharded_to_interleaved_op.hpp"
 #include "sharded_to_interleaved.hpp"
 
-using namespace tt::tt_metal;
-
 namespace ttnn::operations::data_movement {
 
 ttnn::Tensor ShardedToInterleavedOperation::invoke(
@@ -21,9 +19,9 @@ ttnn::Tensor ShardedToInterleavedOperation::invoke(
         return input_tensor;
     }
 
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
+    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
     auto shard_spec = input_tensor.shard_spec().value();
-    return operation::run(
+    return tt::tt_metal::operation::run(
                ShardedToInterleavedDeviceOperation{
                    .output_mem_config = memory_config,
                    .output_dtype = output_dtype.value_or(input_tensor.get_dtype()),

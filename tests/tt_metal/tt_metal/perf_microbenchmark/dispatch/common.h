@@ -17,6 +17,8 @@
 #include "llrt.hpp"
 #include <tt-metalium/tt_align.hpp>
 
+using namespace tt::tt_metal;  // test only
+
 extern bool debug_g;
 extern bool use_coherent_data_g;
 extern uint32_t dispatch_buffer_page_size_g;

@@ -70,6 +70,7 @@ CPMAddPackage(
     VERSION 1.13.0
     OPTIONS
         "INSTALL_GTEST OFF"
+        "BUILD_SHARED_LIBS OFF"
 )
 
 if(googletest_ADDED)

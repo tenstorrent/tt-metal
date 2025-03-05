@@ -71,7 +71,7 @@ int main() {
     // Now we create a tensor with the buffer we just created
     auto x = tt::tt_metal::Tensor(
         // Let the tensor take ownership of the buffer
-        OwnedStorage{std::move(buffer)},
+        tt::tt_metal::OwnedStorage{std::move(buffer)},
         // IMPORTANT: SHAPE MUST BE 4D ELSE EVERYTHING WILL BREAK during the PAD operation
         ttnn::Shape({1, 1, tensor_width, tensor_height}),
         // The data type of the tensor

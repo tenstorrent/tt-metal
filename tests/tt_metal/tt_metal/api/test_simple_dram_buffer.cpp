@@ -41,6 +41,8 @@ bool SimpleDramWriteOnly(IDevice* device, size_t local_address, size_t byte_size
 }
 }  // namespace tt::test::buffer::detail
 
+namespace tt::tt_metal {
+
 TEST_F(DeviceFixture, TestSimpleDramBufferReadOnlyLo) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         size_t lo_address = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::DRAM);
@@ -85,3 +87,5 @@ TEST_F(DeviceFixture, TestSimpleDramBufferWriteOnlyHi) {
         ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), hi_address, 16 * 1024));
     }
 }
+
+}  // namespace tt::tt_metal

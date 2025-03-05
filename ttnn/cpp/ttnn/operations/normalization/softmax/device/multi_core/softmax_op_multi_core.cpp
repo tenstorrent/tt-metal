@@ -4,6 +4,8 @@
 
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/buffer.hpp>
+#include "tt-metalium/circular_buffer.hpp"
+#include "tt-metalium/circular_buffer_types.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/normalization/softmax/device/softmax_op.hpp"
 #include "ttnn/operations/math.hpp"
@@ -22,16 +24,18 @@ namespace ttnn::operations::normalization {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-inline bool is_dram(const Tensor& input_tensor) { return input_tensor.memory_config().buffer_type == BufferType::DRAM; }
+inline bool is_dram(const Tensor& input_tensor) {
+    return input_tensor.memory_config().buffer_type == tt::tt_metal::BufferType::DRAM;
+}
 inline bool is_dram(const std::optional<const Tensor>& input_tensor) {
     return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
 }
-inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DRAM; }
+inline bool is_dram(const tt::tt_metal::Buffer* b) { return b->buffer_type() == tt::tt_metal::BufferType::DRAM; }
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 // implementation of softmax with optional scale/mask (see the header for input_tensor more detailed description)
-operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
+tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     const Tensor& input_tensor,
     const Tensor& output_tensor,
     const std::optional<const Tensor>& mask,
@@ -62,10 +66,10 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     }
     uint32_t mask_Ht = mask_H / TILE_HEIGHT;
 
-    Program program = CreateProgram();
+    auto program = tt::tt_metal::CreateProgram();
 
     // This should allocate input_tensor DRAM buffer on the device
-    IDevice* device = input_tensor.device();
+    auto* device = input_tensor.device();
 
     tt::DataFormat in0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     uint32_t in0_tile_size = tt::tt_metal::detail::TileSize(in0_cb_data_format);
@@ -100,7 +104,8 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
 
     uint32_t num_tiles = input_tensor.volume() / TILE_HW;
 
-    uint32_t block_size = fp32_dest_acc_en ? find_max_divisor(Wt, 4) : find_max_divisor(Wt, 8);
+    uint32_t block_size =
+        fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(Wt, 4) : tt::tt_metal::find_max_divisor(Wt, 8);
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t in0_t = numeric_stable ? tt::div_up(Wt, block_size) * block_size : block_size * 2;
@@ -206,7 +211,9 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
 
     // Create circular buffers
     // see softmax.cpp for which buffers are needed
-
+    using tt::tt_metal::CBHandle;
+    using tt::tt_metal::CircularBuffer;
+    using tt::tt_metal::CircularBufferConfig;
     auto c_in0_config = CircularBufferConfig(in0_t * in0_tile_size, {{tt::CBIndex::c_0, in0_cb_data_format}})
                             .set_page_size(tt::CBIndex::c_0, in0_tile_size);
     auto cb_in0_id = CreateCircularBuffer(program, all_device_cores, c_in0_config);
@@ -374,7 +381,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
          cb_intermed2_id,
          cb_intermed4_id](
             const void* operation,
-            Program& program,
+            tt::tt_metal::Program& program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
@@ -403,7 +410,8 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
             }
 
             int32_t num_tiles = input_tensors.at(0).volume() / TILE_HW;
-            uint32_t block_size = fp32_dest_acc_en ? find_max_divisor(Wt, 4) : find_max_divisor(Wt, 8);
+            uint32_t block_size =
+                fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(Wt, 4) : tt::tt_metal::find_max_divisor(Wt, 8);
 
             // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
             uint32_t in0_t = numeric_stable ? tt::div_up(Wt, block_size) * block_size : block_size * 2;
@@ -547,7 +555,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
 }  // scale_mask_softmax_multi_core
 
 // implementation of softmax with optional scale/mask (see the header for input_tensor more detailed description)
-operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
+tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     const Tensor& input_tensor,
     const Tensor& output_tensor,
     const std::optional<const Tensor>& mask,
@@ -560,10 +568,13 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     uint32_t block_wt,
     DeviceComputeKernelConfig compute_kernel_config,
     bool numeric_stable) {
+    using tt::tt_metal::CBHandle;
+    using tt::tt_metal::CircularBuffer;
+    using tt::tt_metal::CircularBufferConfig;
     ////////////////////////////////////////////////////////////////////////////
     //                       Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    IDevice* device = input_tensor.device();
+    auto* device = input_tensor.device();
 
     // convert data format
     tt::DataFormat in0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
@@ -662,7 +673,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program program = CreateProgram();
+    auto program = tt::tt_metal::CreateProgram();
     // define core ranges
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
@@ -680,10 +691,10 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)block_wt, (std::uint32_t)is_dram_mask};
     std::map<string, string> softmax_defines;
     // hw_dims_only_causal_mask does not support RM Layout atm
-    bool use_row_major_kernel = (mask.has_value() and mask->get_layout() == Layout::ROW_MAJOR);
+    bool use_row_major_kernel = (mask.has_value() and mask->get_layout() == tt::tt_metal::Layout::ROW_MAJOR);
     if (use_row_major_kernel) {
         auto mask_stick_size = mask->get_padded_shape()[3] * mask->element_size();
-        bool mask_stick_size_is_power_of_two = is_power_of_two_at_least_32(mask_stick_size);
+        bool mask_stick_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(mask_stick_size);
         reader_compile_time_args.push_back((std::uint32_t)mask_stick_size_is_power_of_two);
         if (mask_stick_size_is_power_of_two) {
             uint32_t mask_log2_stick_size = (std::uint32_t)log2(mask_stick_size);
@@ -832,7 +843,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     }
     uint32_t num_cores_per_batch_index = 0;
 
-    if (shard_orient == ShardOrientation::COL_MAJOR) {
+    if (shard_orient == tt::tt_metal::ShardOrientation::COL_MAJOR) {
         for (int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             for (int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
                 CoreCoord core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
@@ -915,7 +926,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     auto override_runtime_arguments_callback =
         [reader_kernels_id, cb_in0_id, cb_out0_id, cb_in3_id, num_cores, grid_size](
             const void* operation,
-            Program& program,
+            tt::tt_metal::Program& program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {

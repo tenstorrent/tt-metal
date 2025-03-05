@@ -19,11 +19,12 @@
 #include "test_golden_impls.hpp"
 #include <tt-metalium/test_tiles.hpp>
 
+namespace tt::tt_metal {
+
 using std::vector;
 using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
-using namespace tt::tt_metal;
 
 namespace unit_tests::compute::transpose {
 
@@ -58,7 +59,8 @@ void validate_transpose_wh(
         shape,
         tests::utils::TensorLayoutType::TILED_NFACES,
         tests::utils::TensorLayoutType::LIN_ROW_MAJOR);
-    vector<uint16_t> gold_reduced = gold_transpose_wh(src_linear, shape);  // result is uint16_t untilized
+    vector<uint16_t> gold_reduced =
+        ::unit_tests::compute::gold_transpose_wh(src_linear, shape);  // result is uint16_t untilized
 
     // Tilize from row major and convert to pairs (uint32_t)
     TT_FATAL(shape.size() == 4, "Error");
@@ -211,3 +213,5 @@ TEST_F(DeviceFixture, TensixComputeTransposeWHShortInit) {
         .transpose_type = unit_tests::compute::transpose::TransposeType::WH};
     unit_tests::compute::transpose::run_single_core_transpose(this->devices_.at(0), test_config);
 }
+
+}  // namespace tt::tt_metal

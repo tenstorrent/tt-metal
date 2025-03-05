@@ -78,7 +78,7 @@ void weights_initialization(DistributedTransformer& model) {
             core::XTensorToMeshVariant<float> shard_composer = core::ShardXTensorToMesh<float>(device->shape(), 0);
             auto weight_xtensor = init::normal_init(tensor_shape, {0.F, 0.02F});
             tensor_ptr->set_value(
-                core::from_xtensor<float, DataType::BFLOAT16>(weight_xtensor, device, shard_composer));
+                core::from_xtensor<float, ttnn::DataType::BFLOAT16>(weight_xtensor, device, shard_composer));
         } else if (name.find("bias") != std::string::npos) {
             init::constant_init(tensor_ptr, tensor.get_logical_shape(), 0.F);
         }
@@ -176,6 +176,7 @@ ttml::autograd::TensorPtr DistributedTransformer::operator()(
     const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) {
     auto tok_emb_out = (*tok_emb)(x);
     auto out = (*pos_emb)(tok_emb_out);
+
     for (auto& block : blocks) {
         if (runner_type == RunnerType::MemoryEfficient) {
             out = memory_efficient_runner(*block, out, mask);
@@ -185,6 +186,7 @@ ttml::autograd::TensorPtr DistributedTransformer::operator()(
             throw std::runtime_error("Unknown runner type. Supported runner types ['default', 'memory_efficient']");
         }
     }
+
     out = (*ln_fc)(out);
     auto logits = (*fc)(out);
     auto log_softmax = ttml::ops::log_softmax_moreh(logits, 3);

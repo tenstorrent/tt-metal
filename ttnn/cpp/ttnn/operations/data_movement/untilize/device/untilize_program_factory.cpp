@@ -738,6 +738,11 @@ operation::ProgramWithCallbacks untilize_multi_core(
     const std::optional<CoreRangeSet>& sub_core_grids) {
     tt::tt_metal::Program program{};
 
+    if (sub_core_grids.has_value()) {
+        return untilize_multi_core_parallelize_column_subgrid(
+            a, output, use_pack_untilize, fp32_dest_acc_en, sub_core_grids.value());
+    }
+
     bool src_sharded = a.memory_config().is_sharded();
     bool out_sharded = output.memory_config().is_sharded();
 
@@ -803,12 +808,8 @@ operation::ProgramWithCallbacks untilize_multi_core(
         if (!src_sharded and !out_sharded) {
             uint32_t ntiles_height = ntiles / ntiles_per_block;
             if (ntiles_height == 1) {
-                if (sub_core_grids.has_value()) {
-                    return untilize_multi_core_parallelize_column_subgrid(
-                        a, output, use_pack_untilize, fp32_dest_acc_en, sub_core_grids.value());
-                } else {
-                    return untilize_multi_core_parallelize_column(a, output, use_pack_untilize, fp32_dest_acc_en);
-                }
+                return untilize_multi_core_parallelize_column(a, output, use_pack_untilize, fp32_dest_acc_en);
+
             } else {
                 return untilize_single_core(a, output, use_pack_untilize, fp32_dest_acc_en);
             }

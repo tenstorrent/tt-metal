@@ -64,7 +64,7 @@ public:
         }
     }
 
-    std::map<chip_id_t, IDevice*> devices_;
+    std::map<chip_id_t, tt_metal::IDevice*> devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 
@@ -77,18 +77,18 @@ struct ChipSenderReceiverEthCore {
     CoreCoord receiver_core;
 };
 
-std::tuple<Program, Program> build(
-    IDevice* device0,
-    IDevice* device1,
+std::tuple<tt_metal::Program, tt_metal::Program> build(
+    tt_metal::IDevice* device0,
+    tt_metal::IDevice* device1,
     CoreCoord eth_sender_core,
     CoreCoord eth_receiver_core,
     std::size_t num_samples,
     std::size_t sample_page_size,
     std::size_t num_channels,
-    KernelHandle& local_kernel,
-    KernelHandle& remote_kernel) {
-    Program program0;
-    Program program1;
+    tt_metal::KernelHandle& local_kernel,
+    tt_metal::KernelHandle& remote_kernel) {
+    tt_metal::Program program0;
+    tt_metal::Program program1;
 
     std::vector<uint32_t> const& ct_args = {num_channels};
 
@@ -124,16 +124,16 @@ std::tuple<Program, Program> build(
         throw e;
     }
 
-    return std::tuple<Program, Program>{std::move(program0), std::move(program1)};
+    return std::tuple<tt_metal::Program, tt_metal::Program>{std::move(program0), std::move(program1)};
 }
 
 void run(
-    IDevice* device0,
-    IDevice* device1,
-    Program& program0,
-    Program& program1,
-    KernelHandle local_kernel,
-    KernelHandle remote_kernel,
+    tt_metal::IDevice* device0,
+    tt_metal::IDevice* device1,
+    tt_metal::Program& program0,
+    tt_metal::Program& program1,
+    tt_metal::KernelHandle local_kernel,
+    tt_metal::KernelHandle remote_kernel,
 
     CoreCoord eth_sender_core,
     CoreCoord eth_receiver_core,
@@ -254,8 +254,8 @@ int main(int argc, char** argv) {
                         num_samples,
                         sample_page_size,
                         max_channels_per_direction);
-                    KernelHandle local_kernel;
-                    KernelHandle remote_kernel;
+                    tt_metal::KernelHandle local_kernel;
+                    tt_metal::KernelHandle remote_kernel;
                     try {
                         auto [program0, program1] = build(
                             device_0,

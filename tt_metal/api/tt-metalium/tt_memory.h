@@ -54,6 +54,7 @@ public:
     uint32_t get_text_size() const { return this->text_size_; }
     uint32_t get_packed_size() const { return data_.size() * sizeof(word_t); }
     uint32_t get_text_addr() const { return this->text_addr_; }
+    void set_text_addr(const uint32_t& addr) { this->text_addr_ = addr; }
 
     size_t size() const { return data_.size(); }
 
@@ -66,6 +67,7 @@ public:
     // Iterate over spans_ to act on data_ (eg., to device)
     void process_spans(const std::function<void (std::vector<uint32_t>::const_iterator, uint64_t addr, uint32_t len)>& callback) const;
     void process_spans(const std::function<void (std::vector<uint32_t>::iterator, uint64_t addr, uint32_t len)>& callback);
+    void update_spans(std::function<void(uint64_t& addr)>& callback);
 };
 
 }  // namespace ll_api

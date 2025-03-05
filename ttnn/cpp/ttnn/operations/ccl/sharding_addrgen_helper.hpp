@@ -7,6 +7,9 @@
 #include "cpp/ttnn/operations/ccl/common/types/sharding_common.hpp"
 
 namespace shard_builder {
+
+using namespace tt::tt_metal;
+
 void extend_sharding_compile_time_args(const tt::tt_metal::Tensor& t, std::vector<uint32_t>& args);
 void extend_sharding_run_time_args(const tt::tt_metal::Tensor& t, std::vector<uint32_t>& args);
 std::vector<uint32_t> generate_run_time_args(const tt::tt_metal::Tensor& t);

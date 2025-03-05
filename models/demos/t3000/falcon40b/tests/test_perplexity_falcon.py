@@ -172,8 +172,7 @@ def run_test_perplexity(
             tt_cache_path,
             use_global_cos_sin_cache=True,
         )
-        for device in mesh_device.get_devices():
-            ttnn.synchronize_device(device)
+        ttnn.synchronize_device(mesh_device)
 
         # Initialize kvcache
         logger.info("Initializing kvcache...")

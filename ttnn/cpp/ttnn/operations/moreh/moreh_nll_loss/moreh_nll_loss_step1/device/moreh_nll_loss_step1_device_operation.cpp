@@ -45,7 +45,8 @@ MorehNllLossStep1DeviceOperation::spec_return_value_t MorehNllLossStep1DeviceOpe
     const auto& target_tensor = tensor_args.target_tensor;
     return TensorSpec(
         target_tensor.get_logical_shape(),
-        TensorLayout(operation_attributes.dtype, PageConfig(Layout::TILE), operation_attributes.memory_config));
+        tt::tt_metal::TensorLayout(
+            operation_attributes.dtype, tt::tt_metal::PageConfig(Layout::TILE), operation_attributes.memory_config));
 }
 
 MorehNllLossStep1DeviceOperation::tensor_return_value_t MorehNllLossStep1DeviceOperation::create_output_tensors(

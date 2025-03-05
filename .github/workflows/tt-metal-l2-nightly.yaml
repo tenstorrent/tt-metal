@@ -69,11 +69,17 @@ jobs:
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e ARCH_NAME=${{ inputs.arch || 'wormhole_b0' }}
+            -e GITHUB_ACTIONS=true
           run_args: |
             WHEEL_FILENAME=$(ls -1 *.whl)
             pip3 install --user $WHEEL_FILENAME
             ${{ matrix.test-group.cmd }}
-
+      - uses: ./.github/actions/upload-artifact-with-job-uuid
+        if: ${{ !cancelled() }}
+        with:
+          path: |
+            generated/test_reports/
+          prefix: "test_reports_"
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:

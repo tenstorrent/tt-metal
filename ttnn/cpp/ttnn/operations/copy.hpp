@@ -6,7 +6,6 @@
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/common/queue_id.hpp"
-#include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
 #include "cpp/ttnn/operations/experimental/copy/typecast/typecast.hpp"
@@ -77,28 +76,20 @@ struct Typecast {
             optional_output_tensor);
     }
 
-    static Tensor invoke(
-        const Tensor& input,
-        const DataType& output_dtype,
-        const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        return invoke(DefaultQueueId, input, output_dtype, memory_config_arg, optional_output_tensor);
-    }
-
     // eltwise_typecast implementation in tt_eager :
     // ---------------------------------------------
     // inline Tensor eltwise_typecast(
     //     const Tensor& input_tensor,
     //     uint32_t tt_input_dtype,
     //     uint32_t tt_output_dtype,
-    //     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG)
+    //     const MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG)
 
     static ttnn::Tensor invoke(
         const QueueId queue_id,
         const Tensor& input_tensor,
         const DataType& tt_input_dtype,
         const DataType& tt_output_dtype,
-        const std::optional<MemoryConfig>& memory_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        const std::optional<MemoryConfig>& memory_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
         TT_ASSERT(
             input_tensor.device()->arch() != tt::ARCH::GRAYSKULL,

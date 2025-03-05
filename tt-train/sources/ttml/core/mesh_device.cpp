@@ -12,7 +12,7 @@ MeshDevice::MeshDevice(tt::tt_metal::distributed::MeshShape shape) :
         DEFAULT_L1_SMALL_SIZE,
         DEFAULT_TRACE_REGION_SIZE,
         /* num_command_queues*/ 1,
-        DispatchCoreConfig{})) {
+        tt::tt_metal::DispatchCoreConfig{})) {
     assert(m_mesh_device);
 }
 
