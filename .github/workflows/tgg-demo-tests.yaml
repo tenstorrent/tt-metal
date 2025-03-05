@@ -71,7 +71,7 @@ jobs:
         timeout-minutes: 180
         run: |
           ${{ matrix.test-group.cmd }}
-      - uses: ./.github/actions/upload-artifact-with-job-uuid
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
