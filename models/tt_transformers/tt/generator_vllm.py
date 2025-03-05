@@ -169,12 +169,28 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
         super().__init__(*args, **kwargs)
 
         self.MLLAMA_IMAGE_TOKEN_ID = 128256
-        self.max_gen_len = self.model_args.max_seq_len - 1  # TODO: double check what this should be
+        self.max_gen_len = self.model_args[0].max_seq_len - 1  # TODO: double check what this should be
 
     @classmethod
     def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size):
         max_seq_len = 131072
-        model_args, model = create_multimodal_model(mesh_device, max_batch_size, max_seq_len, use_paged_kv_cache=True)
+
+        data_parallel, submesh_devices = generate_submeshes(mesh_device)
+
+        model_args = []
+        model = []
+
+        for submesh in submesh_devices:
+            model_args_i, model_i, state_dict = create_multimodal_model(
+                mesh_device=submesh,
+                max_batch_size=max_batch_size // data_parallel,
+                max_seq_len=max_seq_len,
+                use_paged_kv_cache=True,
+                checkpoint=state_dict,
+            )
+            model_args.append(model_args_i)
+            model.append(model_i)
+
         return cls(model, model_args, mesh_device)
 
     @property

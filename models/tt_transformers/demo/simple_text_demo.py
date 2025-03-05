@@ -334,7 +334,7 @@ def prepare_generator_args(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
-            8,
+            4,
         ),
     ],
     ids=[
@@ -569,7 +569,7 @@ def test_demo_text(
                 kv_cache=tt_kv_cache,
                 argmax_on_device=argmax_on_device,
             )
-            logits = torch.cat(logits, 0)
+
             # Get the next token
             if argmax_on_device:
                 out_tok = logits.unsqueeze(1)
