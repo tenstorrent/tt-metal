@@ -4,10 +4,10 @@
 """Record module inputs/outputs for testing functional implementations."""
 
 import torch
-from models.demos.qwen25_vl.model import Qwen2_5_VLForConditionalGeneration, Qwen2_5_VLMLP
+from models.demos.qwen25_vl.reference.model import Qwen2_5_VLForConditionalGeneration, Qwen2_5_VLMLP
 from transformers import AutoTokenizer, AutoProcessor
 from qwen_vl_utils import process_vision_info
-from models.demos.qwen25_vl.instrument import instrument
+from models.demos.qwen25_vl.reference.instrument import instrument
 
 # Instrument the vision MLP
 Qwen2_5_VLMLP.forward = instrument("Qwen2_5_VLMLP")(Qwen2_5_VLMLP.forward)

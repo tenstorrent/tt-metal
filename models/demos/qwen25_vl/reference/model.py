@@ -54,7 +54,7 @@ from transformers.utils import (
     replace_return_docstrings,
 )
 from transformers.models.qwen2_5_vl.configuration_qwen2_5_vl import Qwen2_5_VLConfig, Qwen2_5_VLVisionConfig
-from models.demos.qwen25_vl.instrument import instrument
+from models.demos.qwen25_vl.reference.instrument import instrument
 
 if is_flash_attn_2_available():
     from flash_attn import flash_attn_varlen_func

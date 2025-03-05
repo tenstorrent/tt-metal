@@ -1151,7 +1151,9 @@ class ModelArgs:
             else:
                 from transformers import AutoConfig
 
-            config = AutoConfig.from_pretrained(self.model_name).to_dict()
+            # Populate the actual config class should downstream models need it
+            self.hf_config = AutoConfig.from_pretrained(self.model_name)
+            config = self.hf_config.to_dict()
         else:
             config_file = os.path.join(checkpoint_dir, "config.json")
             assert os.path.exists(config_file), f"config.json file not found at {config_file}"

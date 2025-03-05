@@ -11,33 +11,52 @@ import torch.nn.functional as torch_F
 from glob import glob
 from scipy.stats import pearsonr
 import numpy as np
+import importlib
+import sys
 
-from models.demos.qwen25_vl.functional import (
-    qwen2_rms_norm,
-    qwen2_5_vl_mlp,
-    qwen2_5_vl_vision_sdpa_attention,
-    qwen2_5_vl_patch_merger,
-    qwen2_5_vision_patch_embed,
-    qwen2_5_vl_vision_block,
-    qwen2_5_vision_transformer,
-    qwen2_5_vl_rot_pos_emb,
-    qwen2_5_vl_get_window_index,
-    qwen2_5_vision_rotary_embedding,
-)
+
+def get_script_dir():
+    """Get the directory where this script is located."""
+    return os.path.dirname(os.path.abspath(__file__))
 
 
 @pytest.fixture
 def vision_weights():
     """Load the converted vision weights."""
-    weights_path = "weights/vision_weights.pt"
+    script_dir = get_script_dir()
+    weights_path = os.path.join(script_dir, "weights/vision_weights.pt")
     if not os.path.exists(weights_path):
         pytest.skip(f"Vision weights not found at {weights_path}. Run convert.py first.")
     return torch.load(weights_path, weights_only=False)
 
 
+@pytest.fixture(params=["functional", "functional_ttnn"], ids=["torch", "ttnn"])
+def implementation(request, mesh_device):
+    """Fixture to run tests with both PyTorch and TTNN implementations."""
+    module_name = request.param
+
+    if module_name == "functional_ttnn":
+        try:
+            import ttnn
+        except ImportError:
+            pytest.skip("TTNN not available")
+
+    try:
+        module = importlib.import_module(f"models.demos.qwen25_vl.reference.{module_name}")
+
+        # Set the mesh_device for the TTNN implementation
+        if module_name == "functional_ttnn" and hasattr(module, "set_mesh_device"):
+            module.set_mesh_device(mesh_device)
+
+        return module
+    except ImportError:
+        pytest.skip(f"{module_name} implementation not available")
+
+
 def load_earliest_run(module_name):
     """Load the earliest recorded run for a given module."""
-    pattern = f"module_io_data/{module_name}_*"
+    script_dir = get_script_dir()
+    pattern = os.path.join(script_dir, f"module_io_data/{module_name}_*")
     runs = sorted(glob(pattern))  # Default sort will put earliest run first
     if not runs:
         pytest.skip(f"No recorded runs found for {module_name}")
@@ -54,11 +73,7 @@ def load_earliest_run(module_name):
             return None
         if isinstance(data, dict):
             if data.get("type") == "tensor" and "path" in data:
-                try:
-                    return torch.load(data["path"])
-                except Exception as e:
-                    print(f"Error loading tensor from {data['path']}: {e}")
-                    return None
+                return torch.load(os.path.join(script_dir, data["path"]))
             return {k: load_tensor_data(v) for k, v in data.items()}
         elif isinstance(data, list):
             loaded = [load_tensor_data(x) for x in data]
@@ -89,7 +104,7 @@ def pearson_correlation(x, y):
     return pearsonr(x_flat, y_flat)[0]
 
 
-def test_qwen2_rms_norm(vision_weights):
+def test_qwen2_rms_norm(vision_weights, implementation):
     """Test RMSNorm functional implementation."""
     inputs, outputs, _ = load_earliest_run("Qwen2RMSNorm")
 
@@ -98,14 +113,14 @@ def test_qwen2_rms_norm(vision_weights):
     norm1_weights = vision_weights["blocks"]["0"]["norm1"]
 
     # Run functional implementation
-    result = qwen2_rms_norm(hidden_states, norm1_weights)
+    result = implementation.qwen2_rms_norm(hidden_states, norm1_weights)
 
     # Check correlation with recorded output
     pcc = pearson_correlation(result, outputs)
     assert pcc > 0.999, f"PCC {pcc} below threshold"
 
 
-def test_qwen2_mlp(vision_weights):
+def test_qwen2_mlp(vision_weights, implementation):
     """Test MLP functional implementation."""
     inputs, outputs, _ = load_earliest_run("Qwen2_5_VLMLP")  # Load vision MLP inputs
 
@@ -113,15 +128,32 @@ def test_qwen2_mlp(vision_weights):
     hidden_states = inputs["args"][0]
     block_weights = vision_weights["blocks"]["0"]["mlp"]  # Use first block's MLP weights
 
+    # Print shapes for debugging
+    print(f"Input shape: {hidden_states.shape}, Output shape: {outputs.shape}")
+    print(f"Gate weight shape: {block_weights['gate_proj']['weight'].shape}")
+    print(f"Up weight shape: {block_weights['up_proj']['weight'].shape}")
+    print(f"Down weight shape: {block_weights['down_proj']['weight'].shape}")
+
     # Run functional implementation
-    result = qwen2_5_vl_mlp(hidden_states, block_weights)  # Use vision MLP implementation
+    result = implementation.qwen2_5_vl_mlp(hidden_states, block_weights)
+    print(f"Result shape: {result.shape}")
+
+    # Reshape to match expected output if needed
+    if result.shape != outputs.shape:
+        if result.numel() == outputs.numel():
+            result = result.reshape(outputs.shape)
+            print(f"Reshaped to: {result.shape}")
+        else:
+            print(
+                f"ERROR: Cannot reshape {result.numel()} elements to shape {outputs.shape} with {outputs.numel()} elements"
+            )
 
     # Check correlation with recorded output
     pcc = pearson_correlation(result, outputs)
     assert pcc > 0.999, f"PCC {pcc} below threshold"
 
 
-def test_qwen2_5_vl_vision_sdpa_attention(vision_weights):
+def test_qwen2_5_vl_vision_sdpa_attention(vision_weights, implementation):
     """Test Vision SDPA Attention functional implementation."""
     inputs, outputs, settings = load_earliest_run("Qwen2_5_VLVisionSdpaAttention")
 
@@ -135,7 +167,7 @@ def test_qwen2_5_vl_vision_sdpa_attention(vision_weights):
     attn_weights = vision_weights["blocks"]["0"]["attn"]
 
     # Run functional implementation with num_heads from settings, ensuring it's an int
-    result = qwen2_5_vl_vision_sdpa_attention(
+    result = implementation.qwen2_5_vl_vision_sdpa_attention(
         hidden_states, cu_seqlens, attn_weights, int(settings["num_heads"]), rotary_pos_emb, position_embeddings
     )
 
@@ -144,7 +176,7 @@ def test_qwen2_5_vl_vision_sdpa_attention(vision_weights):
     assert pcc > 0.999, f"PCC {pcc} below threshold"
 
 
-def test_qwen2_5_vl_patch_merger(vision_weights):
+def test_qwen2_5_vl_patch_merger(vision_weights, implementation):
     """Test Patch Merger functional implementation."""
     inputs, outputs, _ = load_earliest_run("Qwen2_5_VLPatchMerger")
 
@@ -153,14 +185,14 @@ def test_qwen2_5_vl_patch_merger(vision_weights):
     merger_weights = vision_weights["merger"]
 
     # Run functional implementation
-    result = qwen2_5_vl_patch_merger(x, merger_weights)
+    result = implementation.qwen2_5_vl_patch_merger(x, merger_weights)
 
     # Check correlation with recorded output
     pcc = pearson_correlation(result, outputs)
     assert pcc > 0.999, f"PCC {pcc} below threshold"
 
 
-def test_qwen2_5_vision_patch_embed(vision_weights):
+def test_qwen2_5_vision_patch_embed(vision_weights, implementation):
     """Test Vision Patch Embed functional implementation."""
     inputs, outputs, _ = load_earliest_run("Qwen2_5_VisionPatchEmbed")
     model_settings = load_model_settings()
@@ -172,7 +204,9 @@ def test_qwen2_5_vision_patch_embed(vision_weights):
     temporal_patch_size = model_settings["temporal_patch_size"]
 
     # Run functional implementation
-    result = qwen2_5_vision_patch_embed(hidden_states, patch_embed_weights, patch_size, temporal_patch_size)
+    result = implementation.qwen2_5_vision_patch_embed(
+        hidden_states, patch_embed_weights, patch_size, temporal_patch_size
+    )
 
     # Check correlation with recorded output
     pcc = pearson_correlation(result, outputs)
@@ -181,7 +215,8 @@ def test_qwen2_5_vision_patch_embed(vision_weights):
 
 def load_model_settings():
     """Load settings from the model's metadata file."""
-    pattern = f"module_io_data/Qwen2_5_VisionTransformerPretrainedModel_*"
+    script_dir = get_script_dir()
+    pattern = os.path.join(script_dir, f"module_io_data/Qwen2_5_VisionTransformerPretrainedModel_*")
     runs = sorted(glob(pattern))
     if not runs:
         pytest.skip("No recorded runs found for VisionTransformerPretrainedModel")
@@ -192,7 +227,7 @@ def load_model_settings():
     return metadata["settings"]
 
 
-def test_qwen2_5_vl_vision_block(vision_weights):
+def test_qwen2_5_vl_vision_block(vision_weights, implementation):
     """Test Vision Block functional implementation."""
     inputs, outputs, _ = load_earliest_run("Qwen2_5_VLVisionBlock")
     model_settings = load_model_settings()  # Load settings from model metadata
@@ -203,17 +238,8 @@ def test_qwen2_5_vl_vision_block(vision_weights):
     rotary_pos_emb = inputs["kwargs"].get("rotary_pos_emb")
     cu_seqlens = inputs["kwargs"].get("cu_seqlens")
 
-    # Print the shapes of the inputs and print the settings
-    print(f"hidden_states shape: {hidden_states.shape if hidden_states is not None else None}")
-    print(f"cu_seqlens shape: {cu_seqlens.shape if cu_seqlens is not None else None}")
-    print(f"num_heads: {model_settings['num_heads']}")
-    print(f"rotary_pos_emb shape: {rotary_pos_emb.shape if rotary_pos_emb is not None else None}")
-    print(
-        f"position_embeddings shape: {[ a.shape for a in position_embeddings ] if position_embeddings is not None else None}"
-    )
-
     # Run functional implementation with first block's weights
-    result = qwen2_5_vl_vision_block(
+    result = implementation.qwen2_5_vl_vision_block(
         hidden_states,
         cu_seqlens,
         vision_weights["blocks"]["0"],
@@ -227,7 +253,7 @@ def test_qwen2_5_vl_vision_block(vision_weights):
     assert pcc > 0.999, f"PCC {pcc} below threshold"
 
 
-def test_qwen2_5_vision_rotary_embedding():
+def test_qwen2_5_vision_rotary_embedding(implementation):
     """Test the vision rotary embedding functional implementation."""
     inputs, outputs, _ = load_earliest_run("Qwen2_5_VisionRotaryEmbedding")
     model_settings = load_model_settings()  # Load settings from model metadata
@@ -236,14 +262,14 @@ def test_qwen2_5_vision_rotary_embedding():
     seqlen = inputs["args"][0]
     head_dim = model_settings["hidden_size"] // model_settings["num_heads"]
 
-    result = qwen2_5_vision_rotary_embedding(seqlen, dim=head_dim // 2, device=outputs.device)
+    result = implementation.qwen2_5_vision_rotary_embedding(seqlen, dim=head_dim // 2, device=outputs.device)
 
     # Check correlation with recorded output
     pcc = pearson_correlation(result, outputs)
     assert pcc > 0.999, f"PCC {pcc} below threshold"
 
 
-def test_qwen2_5_vl_rot_pos_emb(vision_weights):
+def test_qwen2_5_vl_rot_pos_emb(vision_weights, implementation):
     """Test rotary position embedding function."""
     inputs, outputs, _ = load_earliest_run("Qwen2_5_VisionTransformerPretrainedModel_rot_pos_emb")
     model_settings = load_model_settings()  # Load settings from model metadata
@@ -254,14 +280,14 @@ def test_qwen2_5_vl_rot_pos_emb(vision_weights):
     head_dim = model_settings["hidden_size"] // model_settings["num_heads"]
 
     # Run functional implementation
-    result = qwen2_5_vl_rot_pos_emb(grid_thw, spatial_merge_size, head_dim)
+    result = implementation.qwen2_5_vl_rot_pos_emb(grid_thw, spatial_merge_size, head_dim)
 
     # Check correlation with recorded output
     pcc = pearson_correlation(result, outputs)
     assert pcc > 0.999, f"PCC {pcc} below threshold"
 
 
-def test_qwen2_5_vl_get_window_index(vision_weights):
+def test_qwen2_5_vl_get_window_index(vision_weights, implementation):
     """Test window index generation function."""
     inputs, outputs, _ = load_earliest_run("Qwen2_5_VisionTransformerPretrainedModel_get_window_index")
     model_settings = load_model_settings()  # Load settings from model metadata
@@ -273,7 +299,9 @@ def test_qwen2_5_vl_get_window_index(vision_weights):
     patch_size = model_settings["patch_size"]
 
     # Run functional implementation
-    window_index, cu_window_seqlens = qwen2_5_vl_get_window_index(grid_thw, window_size, spatial_merge_size, patch_size)
+    window_index, cu_window_seqlens = implementation.qwen2_5_vl_get_window_index(
+        grid_thw, window_size, spatial_merge_size, patch_size
+    )
 
     # Check correlation with recorded output (first element of tuple is window_index)
     pcc = pearson_correlation(window_index, outputs[0])
@@ -284,17 +312,13 @@ def test_qwen2_5_vl_get_window_index(vision_weights):
     assert cu_window_seqlens == expected_cu_seqlens, "cu_window_seqlens do not match"
 
 
-def test_qwen2_5_vision_transformer(vision_weights):
+def test_qwen2_5_vision_transformer(vision_weights, implementation):
     """Test Vision Transformer functional implementation."""
     inputs, outputs, model_settings = load_earliest_run("Qwen2_5_VisionTransformerPretrainedModel")
 
     # Extract inputs
     hidden_states = inputs["args"][0]
     grid_thw = inputs["kwargs"]["grid_thw"]
-
-    # Print input shapes (if not none, otherwise print None)
-    print(f"hidden_states shape: {hidden_states.shape if hidden_states is not None else None}")
-    print(f"grid_thw shape: {grid_thw.shape if grid_thw is not None else None}")
 
     # Calculate head_dim from the hidden size and num_heads
     num_heads = model_settings["num_heads"]
@@ -320,16 +344,7 @@ def test_qwen2_5_vision_transformer(vision_weights):
     n_blocks = 1
     vision_weights["blocks"] = {k: v for k, v in vision_weights["blocks"].items() if int(k) < n_blocks}
 
-    # Now show the settings we are going to pass
-    print(f"num_heads: {model_settings['num_heads']}")
-    print(f"head_dim: {head_dim}")
-    print(f"spatial_merge_size: {spatial_merge_size}")
-    print(f"window_size: {window_size}")
-    print(f"fullatt_block_indexes: {fullatt_block_indexes}")
-    print(f"patch_size: {patch_size}")
-    print(f"temporal_patch_size: {temporal_patch_size}")
-
-    result = qwen2_5_vision_transformer(
+    result = implementation.qwen2_5_vision_transformer(
         hidden_states,
         vision_weights,
         grid_thw,
@@ -344,7 +359,4 @@ def test_qwen2_5_vision_transformer(vision_weights):
 
     # Compare with both model output and recorded output
     pcc_recorded = pearson_correlation(result, outputs)
-    print(f"\nCorrelations:")
-    print(f"PCC with recorded output: {pcc_recorded}")
-
     assert pcc_recorded > 0.999, f"PCC {pcc_recorded} below threshold"
