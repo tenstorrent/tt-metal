@@ -5,7 +5,6 @@
 #include "ops/rope_op.hpp"
 
 #include <numbers>
-#include <xtensor/xmanipulation.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/graph.hpp"
@@ -14,13 +13,13 @@
 #include "core/tt_tensor_utils.hpp"
 #include "core/ttnn_all_includes.hpp"
 #include "core/xtensor_utils.hpp"
+#include "ttnn/tensor/xtensor/xtensor_all_includes.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
-#include "xtensor/xtensor_forward.hpp"
 
 namespace ttml::ops {
 
 void validate_rope_input_and_params(const autograd::TensorPtr& input, const RotaryEmbeddingParams& params) {
-    if (input->get_rank() != 4) {
+    if (input->get_rank() != 4U) {
         throw std::runtime_error(
             fmt::format("RoPE only supports rank-4 input tensors, but got rank {}.", input->get_rank()));
     }
@@ -50,7 +49,7 @@ void validate_rope_input_and_params(const autograd::TensorPtr& input, const Rota
         params.neg_cos_cache.get_logical_shape(),
         params.neg_sin_cache.get_logical_shape()};
 
-    auto expected_trig_shape = ttnn::Shape{1, 1, input_seq_len, input_head_dim};
+    auto expected_trig_shape = ttnn::Shape{1U, 1U, input_seq_len, input_head_dim};
     if (!std::ranges::all_of(trig_param_shapes, [=](auto shape) { return shape == expected_trig_shape; })) {
         throw std::runtime_error(fmt::format(
             "All trigonometric rotary embedding parameters must have shape [1, 1, {}, {}], but got shapes: "
@@ -63,7 +62,7 @@ void validate_rope_input_and_params(const autograd::TensorPtr& input, const Rota
             params.neg_sin_cache.get_logical_shape()));
     }
 
-    auto expected_trans_mat_shape = ttnn::Shape{1, 1, 32, 32};
+    auto expected_trans_mat_shape = ttnn::Shape{1U, 1U, 32U, 32U};
     if (trans_mat_shape != expected_trans_mat_shape) {
         throw std::runtime_error(fmt::format(
             "RoPE trans_mat must be of shape {}, but has shape {}", expected_trans_mat_shape, trans_mat_shape));
@@ -122,7 +121,7 @@ std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(uint32_t head_dim, uint32_t sequ
     auto freqs = xt::ones_like(theta_pow) / theta_pow;
 
     xt::xarray<float> seq_pos = xt::arange<float>(sequence_length);
-    xt::xarray<float> seq_pos_repeated_to_head = xt::repeat(seq_pos, head_dim, seq_pos.dimension() - 1);
+    xt::xarray<float> seq_pos_repeated_to_head = xt::repeat(seq_pos, head_dim, seq_pos.dimension() - 1U);
     xt::xarray<float> scales = seq_pos_repeated_to_head.reshape({sequence_length, static_cast<uint32_t>(head_dim)});
 
     xt::xarray<float> scaled_freqs = scales * freqs;
@@ -130,7 +129,7 @@ std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(uint32_t head_dim, uint32_t sequ
     // take the scaled freqs mod 2π to satisfy ttnn inputs constraints for sin/cos
     auto pi = static_cast<float>(std::numbers::pi);
     scaled_freqs = xt::fmod(scaled_freqs, 2.0F * pi);
-    scaled_freqs = scaled_freqs.reshape({1, 1, sequence_length, head_dim});
+    scaled_freqs = scaled_freqs.reshape({1U, 1U, sequence_length, head_dim});
 
     xt::xarray<float> sin_freqs = xt::sin(scaled_freqs);
     xt::xarray<float> cos_freqs = xt::cos(scaled_freqs);
@@ -140,7 +139,7 @@ std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(uint32_t head_dim, uint32_t sequ
 }
 
 ttnn::Tensor gen_trans_mat(int head_dim) {
-    xt::xarray<float> trans_mat = xt::zeros<float>({1, 1, head_dim, head_dim});
+    xt::xarray<float> trans_mat = xt::zeros<float>({1U, 1U, head_dim, head_dim});
     for (int i = 0; i < head_dim; i += 2) {
         trans_mat(0, 0, i, i + 1) = 1.0F;
     }
