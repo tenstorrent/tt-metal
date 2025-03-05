@@ -75,17 +75,9 @@ void validate_rope_input_and_params(const autograd::TensorPtr& input, const Rota
 autograd::TensorPtr rope(const autograd::TensorPtr& input, const RotaryEmbeddingParams& params) {
     validate_rope_input_and_params(input, params);
 
-    // we need to ensure everything in sight is interleaved over L1 before
-    // calling ttnn rope and then move the result back for storing it in the
-    // grad graph, whence the calls to ttnn_fixed::to_l1_interleaved and
-    // ttnn_fixed::to_dram_interleaved.
-    auto input_l1 = ttnn_fixed::to_l1_interleaved(input->get_value());
-    auto cos_cache_l1 = ttnn_fixed::to_l1_interleaved(params.cos_cache);
-    auto sin_cache_l1 = ttnn_fixed::to_l1_interleaved(params.sin_cache);
-    auto trans_mat_l1 = ttnn_fixed::to_l1_interleaved(params.trans_mat);
-
-    auto out_tensor = ttnn::experimental::rotary_embedding_llama(input_l1, cos_cache_l1, sin_cache_l1, trans_mat_l1);
-    auto out = autograd::create_tensor(ttnn_fixed::to_dram_interleaved(out_tensor));
+    auto out_tensor = ttnn::experimental::rotary_embedding_llama(
+        input->get_value(), params.cos_cache, params.sin_cache, params.trans_mat);
+    auto out = autograd::create_tensor(out_tensor);
 
     // In the backward pass we rotate by -θ, so we need negated cos and sin
     // caches. Note: we can just reuse trans_mat here since the data movement
@@ -94,14 +86,9 @@ autograd::TensorPtr rope(const autograd::TensorPtr& input, const RotaryEmbedding
     autograd::GradFunction grad_fn = [input, params, out]() {
         auto dL_dout = out->get_grad();
 
-        auto dL_dout_l1 = ttnn_fixed::to_l1_interleaved(dL_dout);
-        auto neg_cos_cache_l1 = ttnn_fixed::to_l1_interleaved(params.neg_cos_cache);
-        auto neg_sin_cache_l1 = ttnn_fixed::to_l1_interleaved(params.neg_sin_cache);
-        auto trans_mat_l1 = ttnn_fixed::to_l1_interleaved(params.trans_mat);
-
-        auto dL_dinput =
-            ttnn::experimental::rotary_embedding_llama(dL_dout_l1, neg_cos_cache_l1, neg_sin_cache_l1, trans_mat_l1);
-        input->add_grad(ttnn_fixed::to_dram_interleaved(dL_dinput));
+        auto dL_dinput = ttnn::experimental::rotary_embedding_llama(
+            dL_dout, params.neg_cos_cache, params.neg_sin_cache, params.trans_mat);
+        input->add_grad(dL_dinput);
     };
 
     auto links = autograd::get_links(input);
