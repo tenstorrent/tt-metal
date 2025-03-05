@@ -286,7 +286,8 @@ void relay_to_next_cb(
         preamble_size == 0 || preamble_size == sizeof(tt::packet_queue::dispatch_packet_header_t),
         "Dispatcher preamble size must be 0 or sizeof(dispatch_packet_header_t)");
 
-    // DPRINT << "relay_to_next_cb: " << data_ptr << " " << cb_fence << " " << length << ENDL();
+    DPRINT << is_h_variant << is_d_variant << " relay_to_next_cb: " << data_ptr << " " << cb_fence << " " << length
+           << ENDL();
 
     // First page should be valid since it has the command
     ASSERT(data_ptr <= dispatch_cb_end - dispatch_cb_page_size);

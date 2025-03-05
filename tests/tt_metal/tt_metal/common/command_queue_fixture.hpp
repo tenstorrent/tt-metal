@@ -146,7 +146,12 @@ protected:
             chip_ids.push_back(id);
         }
 
-        const auto& dispatch_core_config = tt::llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
+        const auto& rt_options = tt::llrt::RunTimeOptions::get_instance();
+        if (rt_options.get_fd_fabric()) {
+            tt::tt_metal::detail::InitializeFabricConfig(tt::FabricConfig::FABRIC_2D);
+        }
+
+        const auto& dispatch_core_config = rt_options.get_dispatch_core_config();
         reserved_devices_ = tt::tt_metal::detail::CreateDevices(
             chip_ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
         for (const auto& [id, device] : reserved_devices_) {
