@@ -42,13 +42,15 @@ ALWI void batchnorm_bcast_tiles(
     for (uint32_t i = 0; i < onetile; ++i) {
         copy_tile(cb_batch_var, i, i * 2);
     }
+    add_binary_tile_init();
     copy_tile_to_dst_init_short_with_dt(cb_batch_var, cb_eps);
     for (uint32_t i = 0; i < onetile; ++i) {
         copy_tile(cb_eps, i, i * 2 + 1);
 
-        add_binary_tile_init();
         add_binary_tile(i * 2, i * 2 + 1);
-        rsqrt_tile_init();
+    }
+    rsqrt_tile_init();
+    for (uint32_t i = 0; i < onetile; ++i) {
         rsqrt_tile(i * 2);
 
         pack_tile(i * 2, cb_den);
@@ -75,20 +77,20 @@ ALWI void batchnorm_bcast_tiles(
         for (uint32_t i = 0; i < onetile; ++i) {
             copy_tile(cb_other, i, i * 2);
         }
+        sub_binary_tile_init();
         copy_tile_to_dst_init_short_with_dt(cb_other, cb_bcast);
         for (uint32_t i = 0; i < onetile; ++i) {
             copy_tile(cb_bcast, i, i * 2 + 1);
-            sub_binary_tile_init();
             sub_binary_tile(i * 2, i * 2 + 1);
         }
         cb_pop_front(cb_other, onetile);
 
         //(input - batch_mean)/(sqrt(batch_var + eps))
         cb_reserve_back(cb_affine_or_out, onetile);
+        mul_binary_tile_init();
         copy_tile_to_dst_init_short_with_dt(cb_bcast, cb_den);
         for (uint32_t i = 0; i < onetile; ++i) {
             copy_tile(cb_den, i, i * 2 + 1);
-            mul_binary_tile_init();
             mul_binary_tile(i * 2, i * 2 + 1);
 
             pack_tile(i * 2, cb_affine_or_out);
@@ -106,10 +108,10 @@ ALWI void batchnorm_bcast_tiles(
             for (uint32_t i = 0; i < onetile; ++i) {
                 copy_tile(cb_affine_or_out, i, i * 2);
             }
+            mul_binary_tile_init();
             copy_tile_to_dst_init_short_with_dt(cb_affine_or_out, cb_weight);
             for (uint32_t i = 0; i < onetile; ++i) {
                 copy_tile(cb_weight, i, i * 2 + 1);
-                mul_binary_tile_init();
                 mul_binary_tile(i * 2, i * 2 + 1);
 
                 pack_tile(i * 2, cb_scaled_output);
@@ -129,10 +131,10 @@ ALWI void batchnorm_bcast_tiles(
             for (uint32_t i = 0; i < onetile; ++i) {
                 copy_tile(cb_tmp_1, i, i * 2);
             }
+            add_binary_tile_init();
             copy_tile_to_dst_init_short_with_dt(cb_tmp_1, cb_bias);
             for (uint32_t i = 0; i < onetile; ++i) {
                 copy_tile(cb_bias, i, i * 2 + 1);
-                add_binary_tile_init();
                 add_binary_tile(i * 2, i * 2 + 1);
 
                 pack_tile(i * 2, cb_output_0);
