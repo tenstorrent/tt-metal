@@ -18,7 +18,9 @@ ttnn::Tensor ExecuteLlamaReduceScatter::invoke(
     const ttnn::Tensor& input_tensor,
     const int32_t dim,
     const std::optional<ttnn::MemoryConfig>& memory_config) {
-    return ttnn::prim::llama_reduce_scatter(input_tensor, dim, memory_config);
+    auto output = ttnn::prim::llama_reduce_scatter(input_tensor, dim, memory_config);
+    std::cout << "final output memory config: " << output.memory_config() << std::endl;
+    return output;
 }
 
 }  // namespace ttnn::operations::experimental::ccl

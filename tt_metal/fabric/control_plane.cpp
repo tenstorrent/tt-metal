@@ -611,7 +611,7 @@ std::vector<std::pair<routing_plane_id_t, CoreCoord>> ControlPlane::get_routers_
         router_port_directions_to_physical_eth_chan_map_[src_mesh_id][src_chip_id];
     for (const auto& [direction, eth_chans] : router_direction_eth_channels) {
         for (const auto& src_chan_id : eth_chans) {
-            chan_id_t next_chan_id = 0;
+            chan_id_t next_chan_id = std::numeric_limits<chan_id_t>::max();
             if (src_mesh_id != dst_mesh_id) {
                 // Inter-mesh routing
                 next_chan_id = this->inter_mesh_routing_tables_[src_mesh_id][src_chip_id][src_chan_id][dst_mesh_id];

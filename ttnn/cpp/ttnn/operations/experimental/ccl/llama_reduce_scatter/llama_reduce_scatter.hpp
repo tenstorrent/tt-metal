@@ -20,7 +20,7 @@ struct ExecuteLlamaReduceScatter {
 }  // namespace operations::experimental::ccl
 
 namespace experimental {
-constexpr auto llama_reduce_scatter = ttnn::register_operation<
+constexpr auto llama_reduce_scatter = ttnn::register_operation_with_auto_launch_op<
     "ttnn::experimental::llama_reduce_scatter",
     ttnn::operations::experimental::ccl::ExecuteLlamaReduceScatter>();
 }  // namespace experimental
