@@ -389,11 +389,27 @@ def test_ufld_v2_basic_block(device, batch_size, input_channels, height, width):
     assert_with_pcc(ttnn_output, torch_out, 0.999)
 
 
+def sharded_tens(x, device):
+    core_grid = ttnn.CoreGrid(y=8, x=8)
+    n, h, w, c = x.shape
+    num_cores = core_grid.x * core_grid.y
+    shard_h = (n * w * h + num_cores - 1) // num_cores
+    print("sahrd h is", shard_h)
+    grid_size = core_grid
+    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+    shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, 16), ttnn.ShardOrientation.ROW_MAJOR)
+    input_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+    return input_mem_config
+
+
 @pytest.mark.parametrize(
     "batch_size,input_channels,height,width",
     [
-        # (1, 3, 320, 800),
-        (2, 3, 320, 800),
+        (1, 3, 320, 800),
+        # (2, 3, 320, 800),
     ],
 )
 @skip_for_grayskull()
@@ -427,6 +443,23 @@ def test_UFD_V2_Model(device, batch_size, input_channels, height, width, use_pre
     ttnn_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
     ttnn_input_tensor = ttnn.from_torch(
         ttnn_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    ttnn_input_tensor = ttnn.pad(
+        ttnn_input_tensor,
+        [ttnn_input_tensor.shape[0], ttnn_input_tensor.shape[1], ttnn_input_tensor.shape[2], 16],
+        [0, 0, 0, 0],
+        0,
+    )
+    print(
+        "-----ttnn tensor shape", ttnn_input_tensor.shape, ttnn_input_tensor.layout, ttnn_input_tensor.memory_config()
+    )
+    in_config = sharded_tens(ttnn_input_tensor, device=device)
+    ttnn_input_tensor = ttnn.to_memory_config(ttnn_input_tensor, memory_config=in_config)
+    print(
+        "-----ttnn tensor shape after sharding",
+        ttnn_input_tensor.shape,
+        ttnn_input_tensor.layout,
+        ttnn_input_tensor.memory_config(),
     )
     parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model,

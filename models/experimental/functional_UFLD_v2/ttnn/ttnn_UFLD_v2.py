@@ -25,7 +25,11 @@ class ttnn_UFLD_V2_Conv2D:
         weights_dtype=ttnn.bfloat8_b,
         use_1d_systolic_array=True,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        is_first_conv=False,
+        is_spl_conv=False,
     ):
+        self.is_first_conv = is_first_conv
+        self.is_spl_conv = is_spl_conv
         self.conv = conv
         self.device = device
         self.in_channels = conv.in_channels
@@ -44,17 +48,23 @@ class ttnn_UFLD_V2_Conv2D:
             packer_l1_acc=False,
             math_approx_mode=True,
         )
+        if self.is_first_conv:
+            input_channels_alignment = 16
+        if self.is_spl_conv:
+            input_channels_alignment = 8
+        else:
+            input_channels_alignment = 8
         self.conv_config = ttnn.Conv2dConfig(
             dtype=activation_dtype,
             weights_dtype=weights_dtype,
-            shard_layout=shard_layout,
+            shard_layout=None if is_spl_conv else shard_layout,
             deallocate_activation=self.deallocate_activation,
             enable_act_double_buffer=False,
             enable_split_reader=False,
             enable_subblock_padding=False,
             reshard_if_not_optimal=False,
             activation=activation,
-            input_channels_alignment=8,
+            input_channels_alignment=input_channels_alignment,
         )
         config_override = None
         if config_override and "act_block_h" in config_override:
@@ -72,6 +82,9 @@ class ttnn_UFLD_V2_Conv2D:
         input_height = self.conv.input_height
         input_width = self.conv.input_width
         batch_size = self.conv.batch_size
+        if self.is_first_conv:
+            print("pasddddded")
+            self.in_channels = 16  # pad
         [x, [output_height, output_width], [self.weight, self.bias]] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
@@ -96,11 +109,14 @@ class ttnn_UFLD_V2_Conv2D:
 
 
 class ttnn_Basic_Block:
-    def __init__(self, conv_args, conv_pth, device, is_downsample=False):
+    def __init__(self, conv_args, conv_pth, device, is_downsample=False, is_spl_conv=False):
+        self.is_spl_conv = is_spl_conv
         self.is_downsample = is_downsample
         self.conv_args = conv_args
         self.conv1 = ttnn_UFLD_V2_Conv2D(self.conv_args.conv1, conv_pth.conv1, device=device, activation="relu")
-        self.conv2 = ttnn_UFLD_V2_Conv2D(self.conv_args.conv2, conv_pth.conv2, device=device, activation="")
+        self.conv2 = ttnn_UFLD_V2_Conv2D(
+            self.conv_args.conv2, conv_pth.conv2, device=device, activation="", is_spl_conv=self.is_spl_conv
+        )
         if is_downsample:
             self.downsample = ttnn_UFLD_V2_Conv2D(
                 self.conv_args.downsample[0], conv_pth.downsample, device=device, activation=""
@@ -109,12 +125,18 @@ class ttnn_Basic_Block:
     def __call__(self, input):
         x_identity = input
         x, out_ht, out_wdth = self.conv1(input)
+        if self.is_spl_conv:
+            x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+        p(x, "before issue")
         x, out_ht, out_wdth = self.conv2(x)
+        p(x, "AFTER issue")
         if self.is_downsample:
             x_identity, out_ht, out_wdth = self.downsample(input)
-        x = ttnn.add(x, x_identity, memory_config=x.memory_config())
+        if self.is_spl_conv:
+            x_identity = ttnn.sharded_to_interleaved(x_identity, ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.add(x, x_identity, memory_config=ttnn.L1_MEMORY_CONFIG if self.is_spl_conv else x.memory_config())
         x = ttnn.relu(x)
-
+        ttnn.deallocate(x_identity)
         return x
 
 
@@ -122,7 +144,9 @@ class ttnn_Resnet_34:
     def __init__(self, conv_args, conv_pth, device):
         self.maxpool_args = conv_args.maxpool
         self.device = device
-        self.conv1 = ttnn_UFLD_V2_Conv2D(conv_args.conv1, conv_pth.conv1, device=self.device, activation="relu")
+        self.conv1 = ttnn_UFLD_V2_Conv2D(
+            conv_args.conv1, conv_pth.conv1, device=self.device, activation="relu", is_first_conv=True
+        )
         # layer-1
         self.layer1_0 = ttnn_Basic_Block(
             conv_args.layer1[0], conv_pth.layer1_0, device=self.device, is_downsample=False
@@ -162,12 +186,14 @@ class ttnn_Resnet_34:
             conv_args.layer3[5], conv_pth.layer3_5, device=self.device, is_downsample=False
         )
         # layer-4
-        self.layer4_0 = ttnn_Basic_Block(conv_args.layer4[0], conv_pth.layer4_0, device=self.device, is_downsample=True)
+        self.layer4_0 = ttnn_Basic_Block(
+            conv_args.layer4[0], conv_pth.layer4_0, device=self.device, is_downsample=True, is_spl_conv=True
+        )
         self.layer4_1 = ttnn_Basic_Block(
-            conv_args.layer4[1], conv_pth.layer4_1, device=self.device, is_downsample=False
+            conv_args.layer4[1], conv_pth.layer4_1, device=self.device, is_downsample=False, is_spl_conv=True
         )
         self.layer4_2 = ttnn_Basic_Block(
-            conv_args.layer4[2], conv_pth.layer4_2, device=self.device, is_downsample=False
+            conv_args.layer4[2], conv_pth.layer4_2, device=self.device, is_downsample=False, is_spl_conv=True
         )
 
     def __call__(self, x, batch_size=1):  # [1, 320, 800, 3]
