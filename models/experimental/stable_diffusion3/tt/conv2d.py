@@ -8,15 +8,21 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import ttnn
+from models.utility_functions import (
+    nearest_32,
+)
 
-if TYPE_CHECKING:
-    import torch
+import torch
 
 
 @dataclass
 class TtConv2dParameters:
     weight: ttnn.Tensor
     bias: ttnn.Tensor | None
+    in_channels: int
+    out_channels: int
+    kernel_size: tuple[int, int]
+    stride: tuple[int, int]
 
     @classmethod
     def from_torch(
@@ -24,35 +30,50 @@ class TtConv2dParameters:
         state: dict[str, torch.Tensor],
         *,
         dtype: ttnn.DataType | None = None,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        stride: int,
+        device,
     ) -> TtConv2dParameters:
+        weight = state["weight"].flatten(1, 3)
+        assert (weight.shape[-1] % 32) == 0
+        # pad_len = nearest_32(weight.shape[-1]) - weight.shape[-1]
+        # padding = torch.zeros(out_channels, pad_len, dtype=weight.dtype)
+        # padded_weight = torch.cat([weight, padding], dim=-1)
+        weight = weight.permute(1, 0).reshape(1, 1, -1, out_channels)
+
         return cls(
-            weight=ttnn.from_torch(state["weight"], dtype=dtype),
-            bias=ttnn.from_torch(state["bias"].reshape((1, 1, 1, -1)), dtype=dtype) if "bias" in state else None,
+            weight=ttnn.as_tensor(
+                weight,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+            ),
+            bias=(
+                ttnn.as_tensor(
+                    state["bias"].reshape((1, 1, 1, -1)),
+                    dtype=dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+                )
+                if "bias" in state
+                else None
+            ),
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
         )
-
-    @property
-    def in_channels(self) -> int:
-        return self.weight.shape[1]
-
-    @property
-    def out_channels(self) -> int:
-        return self.weight.shape[0]
-
-    @property
-    def kernel_size(self) -> tuple[int, int]:
-        return self.weight.shape[-2], self.weight.shape[-1]
 
 
 class TtConv2d:
-    def __init__(
-        self,
-        parameters: TtConv2dParameters,
-        *,
-        stride: tuple[int, int] = (1, 1),
-        padding: tuple[int, int] = (0, 0),
-    ) -> None:
-        self._stride = stride
-        self._padding = padding
+    def __init__(self, parameters: TtConv2dParameters, device) -> None:
+        self._stride = parameters.stride
 
         self._in_channels = parameters.in_channels
         self._out_channels = parameters.out_channels
@@ -60,53 +81,44 @@ class TtConv2d:
 
         self._weight = parameters.weight
         self._bias = parameters.bias
+        self._unfold = torch.nn.Unfold(kernel_size=self._kernel_size, stride=self._stride)
+        self._device = device
 
-    def call_without_reshape(
-        self, x: ttnn.Tensor, *, conv_config: ttnn.Conv2dConfig | None = None
-    ) -> tuple[ttnn.Tensor, list[int]]:
-        batch_size = x.shape[0]
-        device = x.device()
-        memory_config_in = ttnn.get_memory_config(x)
-
-        result, [output_height, output_width], [prepared_weight, prepared_bias] = ttnn.conv2d(
-            input_tensor=x,
-            weight_tensor=self._weight,
-            bias_tensor=self._bias,
-            in_channels=self._in_channels,
-            out_channels=self._out_channels,
-            device=device,
-            kernel_size=self._kernel_size,
-            stride=self._stride,
-            padding=self._padding,
-            batch_size=batch_size,
-            input_height=x.shape[1],
-            input_width=x.shape[2],
-            return_output_dim=True,
-            return_weights_and_bias=True,
-            conv_config=conv_config,
+        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
         )
 
-        result = ttnn.to_memory_config(result, memory_config=memory_config_in)
-
-        self._weight = prepared_weight
-        self._bias = prepared_bias
-
-        shape = [batch_size, output_height, output_width, self._out_channels]
-        return result, shape
-
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        result, shape = self.call_without_reshape(x)
-        # TODO: deallocate result
-        return result.reshape(shape)
+        host_x = ttnn.from_device(x)
+        torch_tensor = ttnn.to_torch(host_x, mesh_composer=ttnn.ConcatMeshToTensor(self._device, dim=0))
+        unfolded_x = ttnn.as_tensor(
+            self._unfold(torch_tensor[0 : x.shape[0], ...]),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self._device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self._device),
+        )
+        unfolded_permuted_x = ttnn.permute(unfolded_x, (0, 2, 1))
 
-    @property
-    def in_channels(self) -> int:
-        return self._in_channels
+        # Need to pad the last dimension of x to be a multiple of a tile
+        assert (unfolded_permuted_x.shape[-1] % 32) == 0
+        # pad_len = nearest_32(x.shape[-1]) - x.shape[-1]
+        # padding = torch.zeros((x.shape[0], x.shape[1], pad_len), dtype=x.dtype, device=x.device)
+        # x = torch.cat([x, padding], dim=-1)
 
-    @property
-    def out_channels(self) -> int:
-        return self._out_channels
+        out = ttnn.linear(
+            unfolded_permuted_x,
+            self._weight,
+            bias=self._bias,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+            core_grid=ttnn.CoreGrid(y=8, x=8),
+        )
 
-    @property
-    def kernel_size(self) -> tuple[int, int]:
-        return self._kernel_size
+        return out
