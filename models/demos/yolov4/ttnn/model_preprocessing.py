@@ -776,89 +776,156 @@ def create_yolov4_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Ten
     return parameters
 
 
-def create_ds1_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor, device):
+def create_ds1_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor, is_320_res, device):
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         custom_preprocessor=custom_preprocessor,
         device=device,
     )
+    parameters["is_320_res"] = is_320_res
     parameters.conv_args = {}
     parameters.conv_args = infer_ttnn_module_args(model=model, run_model=lambda model: model(input_tensor), device=None)
 
     # DS1
-    parameters.conv_args.c1["act_block_h"] = 128
-    parameters.conv_args.c1["enable_split_reader"] = True
-    parameters.conv_args.c1["enable_act_double_buffer"] = True
-    parameters.conv_args.c1["deallocate_activation"] = True
-    parameters.conv_args.c1["reshard_if_not_optimal"] = False
-    parameters.conv_args.c1["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    parameters.conv_args.c1["transpose_shards"] = False
+    if is_320_res:
+        parameters.conv_args.c1["act_block_h"] = 128
+        parameters.conv_args.c1["enable_split_reader"] = True
+        parameters.conv_args.c1["enable_act_double_buffer"] = True
+        parameters.conv_args.c1["deallocate_activation"] = True
+        parameters.conv_args.c1["reshard_if_not_optimal"] = False
+        parameters.conv_args.c1["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        parameters.conv_args.c1["transpose_shards"] = False
 
-    parameters.conv_args.c2["act_block_h"] = None
-    parameters.conv_args.c2["enable_split_reader"] = True
-    parameters.conv_args.c2["enable_act_double_buffer"] = True
-    parameters.conv_args.c2["deallocate_activation"] = True
-    parameters.conv_args.c2["reshard_if_not_optimal"] = False
-    parameters.conv_args.c2["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    parameters.conv_args.c2["transpose_shards"] = False
+        parameters.conv_args.c2["act_block_h"] = None
+        parameters.conv_args.c2["enable_split_reader"] = True
+        parameters.conv_args.c2["enable_act_double_buffer"] = True
+        parameters.conv_args.c2["deallocate_activation"] = True
+        parameters.conv_args.c2["reshard_if_not_optimal"] = False
+        parameters.conv_args.c2["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        parameters.conv_args.c2["transpose_shards"] = False
 
-    parameters.conv_args.c3["act_block_h"] = None
-    parameters.conv_args.c3["enable_split_reader"] = True
-    parameters.conv_args.c3["enable_act_double_buffer"] = True
-    parameters.conv_args.c3["deallocate_activation"] = False
-    parameters.conv_args.c3["reshard_if_not_optimal"] = False
-    parameters.conv_args.c3["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    parameters.conv_args.c3["transpose_shards"] = False
+        parameters.conv_args.c3["act_block_h"] = None
+        parameters.conv_args.c3["enable_split_reader"] = True
+        parameters.conv_args.c3["enable_act_double_buffer"] = True
+        parameters.conv_args.c3["deallocate_activation"] = False
+        parameters.conv_args.c3["reshard_if_not_optimal"] = False
+        parameters.conv_args.c3["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        parameters.conv_args.c3["transpose_shards"] = False
 
-    parameters.conv_args.c4["act_block_h"] = None
-    parameters.conv_args.c4["enable_split_reader"] = True
-    parameters.conv_args.c4["enable_act_double_buffer"] = True
-    parameters.conv_args.c4["deallocate_activation"] = True
-    parameters.conv_args.c4["reshard_if_not_optimal"] = False
-    parameters.conv_args.c4["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    parameters.conv_args.c4["transpose_shards"] = False
+        parameters.conv_args.c4["act_block_h"] = None
+        parameters.conv_args.c4["enable_split_reader"] = True
+        parameters.conv_args.c4["enable_act_double_buffer"] = True
+        parameters.conv_args.c4["deallocate_activation"] = True
+        parameters.conv_args.c4["reshard_if_not_optimal"] = False
+        parameters.conv_args.c4["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        parameters.conv_args.c4["transpose_shards"] = False
 
-    parameters.conv_args.c5["act_block_h"] = None
-    parameters.conv_args.c5["enable_split_reader"] = True
-    parameters.conv_args.c5["enable_act_double_buffer"] = True
-    parameters.conv_args.c5["deallocate_activation"] = False
-    parameters.conv_args.c5["reshard_if_not_optimal"] = False
-    parameters.conv_args.c5["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    parameters.conv_args.c5["transpose_shards"] = False
+        parameters.conv_args.c5["act_block_h"] = None
+        parameters.conv_args.c5["enable_split_reader"] = True
+        parameters.conv_args.c5["enable_act_double_buffer"] = True
+        parameters.conv_args.c5["deallocate_activation"] = False
+        parameters.conv_args.c5["reshard_if_not_optimal"] = False
+        parameters.conv_args.c5["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        parameters.conv_args.c5["transpose_shards"] = False
 
-    parameters.conv_args.c6["act_block_h"] = None
-    parameters.conv_args.c6["enable_split_reader"] = True
-    parameters.conv_args.c6["enable_act_double_buffer"] = True
-    parameters.conv_args.c6["deallocate_activation"] = True
-    parameters.conv_args.c6["reshard_if_not_optimal"] = False
-    parameters.conv_args.c6["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    parameters.conv_args.c6["transpose_shards"] = False
+        parameters.conv_args.c6["act_block_h"] = None
+        parameters.conv_args.c6["enable_split_reader"] = True
+        parameters.conv_args.c6["enable_act_double_buffer"] = True
+        parameters.conv_args.c6["deallocate_activation"] = True
+        parameters.conv_args.c6["reshard_if_not_optimal"] = False
+        parameters.conv_args.c6["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        parameters.conv_args.c6["transpose_shards"] = False
 
-    parameters.conv_args.c7["act_block_h"] = None
-    parameters.conv_args.c7["enable_split_reader"] = True
-    parameters.conv_args.c7["enable_act_double_buffer"] = True
-    parameters.conv_args.c7["deallocate_activation"] = True
-    parameters.conv_args.c7["reshard_if_not_optimal"] = False
-    parameters.conv_args.c7["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    parameters.conv_args.c7["transpose_shards"] = False
+        parameters.conv_args.c7["act_block_h"] = None
+        parameters.conv_args.c7["enable_split_reader"] = True
+        parameters.conv_args.c7["enable_act_double_buffer"] = True
+        parameters.conv_args.c7["deallocate_activation"] = True
+        parameters.conv_args.c7["reshard_if_not_optimal"] = False
+        parameters.conv_args.c7["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        parameters.conv_args.c7["transpose_shards"] = False
 
-    parameters.conv_args.c8["act_block_h"] = None
-    parameters.conv_args.c8["enable_split_reader"] = True
-    parameters.conv_args.c8["enable_act_double_buffer"] = True
-    parameters.conv_args.c8["deallocate_activation"] = True
-    parameters.conv_args.c8["reshard_if_not_optimal"] = False
-    parameters.conv_args.c8["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    parameters.conv_args.c8["transpose_shards"] = False
+        parameters.conv_args.c8["act_block_h"] = None
+        parameters.conv_args.c8["enable_split_reader"] = True
+        parameters.conv_args.c8["enable_act_double_buffer"] = True
+        parameters.conv_args.c8["deallocate_activation"] = True
+        parameters.conv_args.c8["reshard_if_not_optimal"] = False
+        parameters.conv_args.c8["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        parameters.conv_args.c8["transpose_shards"] = False
+    else:
+        parameters.conv_args.c1["act_block_h"] = 240
+        parameters.conv_args.c1["enable_split_reader"] = False
+        parameters.conv_args.c1["enable_act_double_buffer"] = False
+        parameters.conv_args.c1["deallocate_activation"] = True
+        parameters.conv_args.c1["reshard_if_not_optimal"] = False
+        parameters.conv_args.c1["shard_layout"] = None
+        parameters.conv_args.c1["transpose_shards"] = True
+
+        parameters.conv_args.c2["act_block_h"] = None
+        parameters.conv_args.c2["enable_split_reader"] = False
+        parameters.conv_args.c2["enable_act_double_buffer"] = False
+        parameters.conv_args.c2["deallocate_activation"] = True
+        parameters.conv_args.c2["reshard_if_not_optimal"] = False
+        parameters.conv_args.c2["shard_layout"] = None
+        parameters.conv_args.c2["transpose_shards"] = False
+
+        parameters.conv_args.c3["act_block_h"] = None
+        parameters.conv_args.c3["enable_split_reader"] = True
+        parameters.conv_args.c3["enable_act_double_buffer"] = True
+        parameters.conv_args.c3["deallocate_activation"] = False
+        parameters.conv_args.c3["reshard_if_not_optimal"] = False
+        parameters.conv_args.c3["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        parameters.conv_args.c3["transpose_shards"] = False
+
+        parameters.conv_args.c4["act_block_h"] = None
+        parameters.conv_args.c4["enable_split_reader"] = True
+        parameters.conv_args.c4["enable_act_double_buffer"] = True
+        parameters.conv_args.c4["deallocate_activation"] = True
+        parameters.conv_args.c4["reshard_if_not_optimal"] = False
+        parameters.conv_args.c4["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        parameters.conv_args.c4["transpose_shards"] = False
+
+        parameters.conv_args.c5["act_block_h"] = None
+        parameters.conv_args.c5["enable_split_reader"] = True
+        parameters.conv_args.c5["enable_act_double_buffer"] = True
+        parameters.conv_args.c5["deallocate_activation"] = False
+        parameters.conv_args.c5["reshard_if_not_optimal"] = False
+        parameters.conv_args.c5["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        parameters.conv_args.c5["transpose_shards"] = False
+
+        parameters.conv_args.c6["act_block_h"] = 240
+        parameters.conv_args.c6["enable_split_reader"] = False
+        parameters.conv_args.c6["enable_act_double_buffer"] = False
+        parameters.conv_args.c6["deallocate_activation"] = True
+        parameters.conv_args.c6["reshard_if_not_optimal"] = False
+        parameters.conv_args.c6["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        parameters.conv_args.c6["transpose_shards"] = False
+
+        parameters.conv_args.c7["act_block_h"] = None
+        parameters.conv_args.c7["enable_split_reader"] = True
+        parameters.conv_args.c7["enable_act_double_buffer"] = True
+        parameters.conv_args.c7["deallocate_activation"] = True
+        parameters.conv_args.c7["reshard_if_not_optimal"] = False
+        parameters.conv_args.c7["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        parameters.conv_args.c7["transpose_shards"] = False
+
+        parameters.conv_args.c8["act_block_h"] = None
+        parameters.conv_args.c8["enable_split_reader"] = True
+        parameters.conv_args.c8["enable_act_double_buffer"] = True
+        parameters.conv_args.c8["deallocate_activation"] = True
+        parameters.conv_args.c8["reshard_if_not_optimal"] = False
+        parameters.conv_args.c8["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        parameters.conv_args.c8["transpose_shards"] = False
 
     return parameters
 
 
-def create_ds2_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor, device):
+def create_ds2_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor, is_320_res, device):
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         custom_preprocessor=custom_preprocessor,
         device=device,
     )
+    parameters["is_320_res"] = is_320_res
     parameters.conv_args = {}
     parameters.conv_args = infer_ttnn_module_args(model=model, run_model=lambda model: model(input_tensor), device=None)
 
@@ -938,12 +1005,14 @@ def create_ds2_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor
     return parameters
 
 
-def create_ds3_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor, device):
+def create_ds3_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor, is_320_res, device):
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         custom_preprocessor=custom_preprocessor,
         device=device,
     )
+    parameters["is_320_res"] = is_320_res
+    parameters.conv_args = {}
     parameters.conv_args = {}
     parameters.conv_args = infer_ttnn_module_args(model=model, run_model=lambda model: model(input_tensor), device=None)
 
@@ -1023,12 +1092,13 @@ def create_ds3_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor
     return parameters
 
 
-def create_ds4_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor, device):
+def create_ds4_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor, is_320_res, device):
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         custom_preprocessor=custom_preprocessor,
         device=device,
     )
+    parameters["is_320_res"] = is_320_res
     parameters.conv_args = {}
     parameters.conv_args = infer_ttnn_module_args(model=model, run_model=lambda model: model(input_tensor), device=None)
 
@@ -1108,12 +1178,13 @@ def create_ds4_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor
     return parameters
 
 
-def create_ds5_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor, device):
+def create_ds5_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor, is_320_res, device):
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         custom_preprocessor=custom_preprocessor,
         device=device,
     )
+    parameters["is_320_res"] = is_320_res
     parameters.conv_args = {}
     parameters.conv_args = infer_ttnn_module_args(model=model, run_model=lambda model: model(input_tensor), device=None)
 
@@ -1193,12 +1264,13 @@ def create_ds5_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor
     return parameters
 
 
-def create_neck_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor, device):
+def create_neck_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor, is_320_res, device):
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         custom_preprocessor=custom_preprocessor,
         device=device,
     )
+    parameters["is_320_res"] = is_320_res
     parameters.conv_args = {}
     parameters.conv_args = infer_ttnn_module_args(
         model=model, run_model=lambda model: model(input_tensor[0], input_tensor[1], input_tensor[2]), device=None

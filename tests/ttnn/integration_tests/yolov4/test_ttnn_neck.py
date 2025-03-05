@@ -17,7 +17,11 @@ import os
 
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_neck(device, reset_seeds, model_location_generator):
+@pytest.mark.parametrize(
+    "is_320_res",
+    [True, False],
+)
+def test_neck(device, reset_seeds, model_location_generator, is_320_res):
     torch.manual_seed(0)
     model_path = model_location_generator("models", model_subdir="Yolo")
 
@@ -31,22 +35,40 @@ def test_neck(device, reset_seeds, model_location_generator):
     else:
         weights_pth = str(model_path / "yolov4.pth")
 
-    torch_input_tensor1 = torch.randn(1, 10, 10, 1024, dtype=torch.bfloat16)
-    torch_input_tensor2 = torch.randn(1, 20, 20, 512, dtype=torch.bfloat16)
-    torch_input_tensor3 = torch.randn(1, 40, 40, 256, dtype=torch.bfloat16)
-    ttnn_input_tensor1 = ttnn.from_torch(torch_input_tensor1, dtype=ttnn.bfloat16)
-    ttnn_input_tensor1 = ttnn.reshape(ttnn_input_tensor1, (1, 1, 100, 1024))
-    ttnn_input_tensor1 = ttnn.to_layout(ttnn_input_tensor1, layout=ttnn.TILE_LAYOUT)
-    ttnn_input_tensor1 = ttnn.to_device(ttnn_input_tensor1, device=device)
-    ttnn_input_tensor2 = ttnn.from_torch(torch_input_tensor2, dtype=ttnn.bfloat16)
-    ttnn_input_tensor2 = ttnn.reshape(ttnn_input_tensor2, (1, 1, 400, 512))
-    ttnn_input_tensor2 = ttnn.to_layout(ttnn_input_tensor2, layout=ttnn.TILE_LAYOUT)
-    ttnn_input_tensor2 = ttnn.to_device(ttnn_input_tensor2, device=device)
-    ttnn_input_tensor3 = ttnn.from_torch(torch_input_tensor3, dtype=ttnn.bfloat16)
-    ttnn_input_tensor3 = ttnn.reshape(ttnn_input_tensor3, (1, 1, 1600, 256))
-    ttnn_input_tensor3 = ttnn.to_layout(ttnn_input_tensor3, layout=ttnn.TILE_LAYOUT)
-    ttnn_input_tensor3 = ttnn.to_device(ttnn_input_tensor3, device=device)
-    ttnn_input_tensor = [ttnn_input_tensor1, ttnn_input_tensor2, ttnn_input_tensor3]
+    if is_320_res:
+        torch_input_tensor1 = torch.randn(1, 10, 10, 1024, dtype=torch.bfloat16)
+        torch_input_tensor2 = torch.randn(1, 20, 20, 512, dtype=torch.bfloat16)
+        torch_input_tensor3 = torch.randn(1, 40, 40, 256, dtype=torch.bfloat16)
+        ttnn_input_tensor1 = ttnn.from_torch(torch_input_tensor1, dtype=ttnn.bfloat16)
+        ttnn_input_tensor1 = ttnn.reshape(ttnn_input_tensor1, (1, 1, 100, 1024))
+        ttnn_input_tensor1 = ttnn.to_layout(ttnn_input_tensor1, layout=ttnn.TILE_LAYOUT)
+        ttnn_input_tensor1 = ttnn.to_device(ttnn_input_tensor1, device=device)
+        ttnn_input_tensor2 = ttnn.from_torch(torch_input_tensor2, dtype=ttnn.bfloat16)
+        ttnn_input_tensor2 = ttnn.reshape(ttnn_input_tensor2, (1, 1, 400, 512))
+        ttnn_input_tensor2 = ttnn.to_layout(ttnn_input_tensor2, layout=ttnn.TILE_LAYOUT)
+        ttnn_input_tensor2 = ttnn.to_device(ttnn_input_tensor2, device=device)
+        ttnn_input_tensor3 = ttnn.from_torch(torch_input_tensor3, dtype=ttnn.bfloat16)
+        ttnn_input_tensor3 = ttnn.reshape(ttnn_input_tensor3, (1, 1, 1600, 256))
+        ttnn_input_tensor3 = ttnn.to_layout(ttnn_input_tensor3, layout=ttnn.TILE_LAYOUT)
+        ttnn_input_tensor3 = ttnn.to_device(ttnn_input_tensor3, device=device)
+        ttnn_input_tensor = [ttnn_input_tensor1, ttnn_input_tensor2, ttnn_input_tensor3]
+    else:
+        torch_input_tensor1 = torch.randn(1, 20, 20, 1024, dtype=torch.bfloat16)
+        torch_input_tensor2 = torch.randn(1, 40, 40, 512, dtype=torch.bfloat16)
+        torch_input_tensor3 = torch.randn(1, 80, 80, 256, dtype=torch.bfloat16)
+        ttnn_input_tensor1 = ttnn.from_torch(torch_input_tensor1, dtype=ttnn.bfloat16)
+        ttnn_input_tensor1 = ttnn.reshape(ttnn_input_tensor1, (1, 1, 400, 1024))
+        ttnn_input_tensor1 = ttnn.to_layout(ttnn_input_tensor1, layout=ttnn.TILE_LAYOUT)
+        ttnn_input_tensor1 = ttnn.to_device(ttnn_input_tensor1, device=device)
+        ttnn_input_tensor2 = ttnn.from_torch(torch_input_tensor2, dtype=ttnn.bfloat16)
+        ttnn_input_tensor2 = ttnn.reshape(ttnn_input_tensor2, (1, 1, 1600, 512))
+        ttnn_input_tensor2 = ttnn.to_layout(ttnn_input_tensor2, layout=ttnn.TILE_LAYOUT)
+        ttnn_input_tensor2 = ttnn.to_device(ttnn_input_tensor2, device=device)
+        ttnn_input_tensor3 = ttnn.from_torch(torch_input_tensor3, dtype=ttnn.bfloat16)
+        ttnn_input_tensor3 = ttnn.reshape(ttnn_input_tensor3, (1, 1, 6400, 256))
+        ttnn_input_tensor3 = ttnn.to_layout(ttnn_input_tensor3, layout=ttnn.TILE_LAYOUT)
+        ttnn_input_tensor3 = ttnn.to_device(ttnn_input_tensor3, device=device)
+        ttnn_input_tensor = [ttnn_input_tensor1, ttnn_input_tensor2, ttnn_input_tensor3]
 
     torch_input_tensor1 = torch_input_tensor1.permute(0, 3, 1, 2).float()
     torch_input_tensor2 = torch_input_tensor2.permute(0, 3, 1, 2).float()
@@ -65,7 +87,7 @@ def test_neck(device, reset_seeds, model_location_generator):
     torch_model.eval()
     ref1, ref2, ref3 = torch_model(torch_input_tensor[0], torch_input_tensor[1], torch_input_tensor[2])
 
-    parameters = create_neck_model_parameters(torch_model, torch_input_tensor, device)
+    parameters = create_neck_model_parameters(torch_model, torch_input_tensor, is_320_res, device)
 
     ttnn_model = TtNeck(device, parameters, parameters.conv_args)
 
