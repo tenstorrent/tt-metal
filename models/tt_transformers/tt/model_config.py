@@ -167,7 +167,7 @@ class ModelOptimizations:
 
 
 dtype_mf_settings = [
-    LlamaOptimizations(
+    ModelOptimizations(
         {
             "TensorPrecision": {
                 TensorGroup.FF1_FF3: PrecisionSetting.BFP4,
@@ -179,7 +179,7 @@ dtype_mf_settings = [
             },
         }
     ),
-    LlamaOptimizations(
+    ModelOptimizations(
         {
             "TensorPrecision": {
                 TensorGroup.FF1_FF3: PrecisionSetting.BFP4,
@@ -191,7 +191,7 @@ dtype_mf_settings = [
             },
         }
     ),
-    LlamaOptimizations(
+    ModelOptimizations(
         {
             "TensorPrecision": {
                 TensorGroup.FF1_FF3: PrecisionSetting.BFP4,
@@ -203,7 +203,7 @@ dtype_mf_settings = [
             },
         }
     ),
-    LlamaOptimizations(
+    ModelOptimizations(
         {
             "TensorPrecision": {
                 TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
@@ -215,7 +215,7 @@ dtype_mf_settings = [
             },
         }
     ),
-    LlamaOptimizations(
+    ModelOptimizations(
         {
             "TensorPrecision": {
                 TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
@@ -227,7 +227,7 @@ dtype_mf_settings = [
             },
         }
     ),
-    LlamaOptimizations(
+    ModelOptimizations(
         {
             "TensorPrecision": {
                 TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
@@ -239,7 +239,7 @@ dtype_mf_settings = [
             },
         }
     ),
-    LlamaOptimizations(
+    ModelOptimizations(
         {
             "TensorPrecision": {
                 TensorGroup.FF1_FF3: PrecisionSetting.BF16,
@@ -251,7 +251,7 @@ dtype_mf_settings = [
             },
         }
     ),
-    LlamaOptimizations(
+    ModelOptimizations(
         {
             "TensorPrecision": {
                 TensorGroup.FF1_FF3: PrecisionSetting.BF16,
@@ -263,7 +263,7 @@ dtype_mf_settings = [
             },
         }
     ),
-    LlamaOptimizations(
+    ModelOptimizations(
         {
             "TensorPrecision": {
                 TensorGroup.FF1_FF3: PrecisionSetting.BF16,
@@ -275,7 +275,7 @@ dtype_mf_settings = [
             },
         }
     ),
-    LlamaOptimizations(
+    ModelOptimizations(
         {
             "TensorPrecision": {
                 TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
@@ -295,7 +295,7 @@ dtype_mf_settings = [
             },
         }
     ),
-    LlamaOptimizations(
+    ModelOptimizations(
         {
             "TensorPrecision": {
                 TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
@@ -315,7 +315,7 @@ dtype_mf_settings = [
             },
         }
     ),
-    LlamaOptimizations(
+    ModelOptimizations(
         {
             "TensorPrecision": {
                 TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
@@ -415,9 +415,7 @@ class ModelArgs:
         assert not (LLAMA_DIR and HF_MODEL), "Only one of LLAMA_DIR or HF_MODEL should be set"
         if LLAMA_DIR:
             if any([os.getenv("LLAMA_CKPT_DIR"), os.getenv("LLAMA_TOKENIZER_PATH")]):
-                logger.warning(
-                    "LLAMA_DIR will override LLAMA_CKPT_DIR and LLAMA_TOKENIZER_PATH"
-                )
+                logger.warning("LLAMA_DIR will override LLAMA_CKPT_DIR and LLAMA_TOKENIZER_PATH")
             self.CKPT_DIR = LLAMA_DIR
             self.TOKENIZER_PATH = LLAMA_DIR
             self.CACHE_PATH = os.getenv("TT_CACHE_PATH")

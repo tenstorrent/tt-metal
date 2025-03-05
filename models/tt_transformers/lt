@@ -1453,7 +1453,7 @@ def export_results_to_markdown(output_entries, stdscr):
                 else:
                     data_to_plot[code_name] = ([float(speed)], [float(top1)], [float(top5)], [desc])
 
-        # plot the data into pareto front between speed and top1 for each mode-device pair
+        # plot the data between speed and top1 for each mode-device pair
         for code_name, data in data_to_plot.items():
             speed, top1, top5, desc = data
             plot_data_with_desc(speed, top1, "Speed (t/s/u)", "Top-1 (%)", desc, code_name)
@@ -1547,7 +1547,7 @@ def plot_data_with_desc(objective1, objective2, objective1_label, objective2_lab
     plt.xlabel(objective1_label)
     plt.ylabel(objective2_label)
     plt.title(
-        f"Pareto Front between {objective1_label} and {objective2_label}\n (use data-point index to find details in *_point_desc.csv)"
+        f"Pareto Plot between {objective1_label} and {objective2_label}\n (use data-point index to find details in *_point_desc.csv)"
     )
     plt.legend()
     plt.grid(True)
