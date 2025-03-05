@@ -19,6 +19,16 @@ set(TYPES
     kernel
 )
 
+# for wormhole, we need to generate two different linker scripts
+set(WH_LD_SCRIPTS
+    kernel # base name
+    app # base name
+)
+set(IRAM_OPTIONS
+    "" # No IRAM
+    ENABLE_IRAM # With IRAM
+)
+
 include(FetchContent)
 set(SFPI_x86_64_Linux_RELEASE
     "v6.2.0/sfpi-release.tgz"
@@ -45,6 +55,38 @@ foreach(ARCH IN LISTS ARCHS)
     set(DEV_MEM_MAP "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}/dev_mem_map.h")
     set(HW_INCLUDES "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}")
     set(HW_OUTPUT_DIR "${PROJECT_SOURCE_DIR}/runtime/hw/toolchain/${ARCH}")
+
+    if("${ARCH}" STREQUAL "wormhole")
+        foreach(SCRIPT_TYPE IN LISTS WH_LD_SCRIPTS)
+            foreach(IRAM_OPT IN LISTS IRAM_OPTIONS)
+                if(IRAM_OPT)
+                    set(OUTPUT_FILE "${HW_OUTPUT_DIR}/erisc-b0-${SCRIPT_TYPE}_iram.ld")
+                    set(IRAM_FLAG "-D${IRAM_OPT}")
+                    set(IRAM_COMMENT " with IRAM")
+                else()
+                    set(OUTPUT_FILE "${HW_OUTPUT_DIR}/erisc-b0-${SCRIPT_TYPE}.ld")
+                    set(IRAM_FLAG "")
+                    set(IRAM_COMMENT "")
+                endif()
+
+                add_custom_command(
+                    OUTPUT
+                        ${OUTPUT_FILE}
+                    COMMAND
+                        ${CMAKE_CXX_COMPILER} ${IRAM_FLAG} -I${HW_INCLUDES} -E -P -x c -o ${OUTPUT_FILE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/erisc-b0-${SCRIPT_TYPE}.ld
+                    DEPENDS
+                        ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/erisc-b0-${SCRIPT_TYPE}.ld
+                    COMMENT "Preprocessing toolchain/erisc-b0-${SCRIPT_TYPE}.ld${IRAM_COMMENT}"
+                    VERBATIM
+                )
+
+                # Add to preprocessed files list
+                list(APPEND PREPROCESSED_LD_FILES ${OUTPUT_FILE})
+            endforeach()
+        endforeach()
+    endif()
+
     foreach(PROC IN LISTS PROCS)
         foreach(TYPE IN LISTS TYPES)
             set(HW_OUTPUT_FILE "${HW_OUTPUT_DIR}/${TYPE}_${PROC}.ld")
