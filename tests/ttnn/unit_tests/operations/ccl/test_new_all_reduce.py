@@ -86,8 +86,9 @@ def run_all_reduce_impl(
         mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
+    num_buffers = 8
     ccl_semaphore_handles = [
-        create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(8)
+        create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_buffers)
     ]
 
     logger.info(f"Output shape: {output_shape}")
@@ -165,7 +166,7 @@ def run_all_reduce_impl(
 
         intermediate_tensor = torch.zeros(intermediate_shape)
         tt_intermediate_tensors = []
-        for i in range(8):
+        for i in range(num_buffers):
             tt_intermediate_tensor = ttnn.from_torch(
                 intermediate_tensor,
                 device=mesh_device,
@@ -203,10 +204,10 @@ def run_all_reduce_impl(
 
                 out = ttnn.experimental.all_reduce_async(
                     tt_input,
-                    tt_intermediate_tensors[i % 8],
+                    tt_intermediate_tensors[i % num_buffers],
                     cluster_axis=cluster_axis,
                     mesh_device=mesh_device,
-                    multi_device_global_semaphore=ccl_semaphore_handles[i % 8],
+                    multi_device_global_semaphore=ccl_semaphore_handles[i % num_buffers],
                     memory_config=output_mem_config,
                     topology=ttnn.Topology.Linear,
                     num_links=num_links,
