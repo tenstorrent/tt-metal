@@ -26,7 +26,8 @@ jobs:
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on:
-      - ubuntu-latest
+      - build
+      - in-service
     steps:
       - uses: actions/checkout@v4
         with:
