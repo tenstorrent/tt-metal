@@ -40,6 +40,7 @@ void kernel_main() {
     uint32_t num_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
     uint32_t first_core_tile_start_offset = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_cores = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t num_mcast_cores = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
@@ -106,8 +107,8 @@ void kernel_main() {
         cb_wait_front(cb0_id, num_tiles_to_read_this_core);
         size_t l1_read_addr = get_read_ptr(cb0_id);
 
-        uint64_t noc0_dest_noc_addr = get_noc_addr(
-            core_noc_x[core_id], core_noc_y[core_id], reduction_input_addr + writer_chip_offset, 0 /*noc_id*/);
+        uint64_t noc0_dest_noc_addr =
+            get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], reduction_input_addr + writer_chip_offset);
 
         // Within-shard offset
         noc0_dest_noc_addr += shard_tile_id * tensor0_page_size;
@@ -133,7 +134,7 @@ void kernel_main() {
     // 2. mcast output ready semaphore
     auto* pkt_hdr = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
     uint64_t out_ready_sem_noc_addr_in_pkt =
-        safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr, 0);
+        safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
     pkt_hdr->to_noc_unicast_atomic_inc(tt::fabric::NocUnicastAtomicIncCommandHeader{
         out_ready_sem_noc_addr_in_pkt,
         static_cast<uint16_t>(1),  // increment 1
@@ -175,10 +176,9 @@ void kernel_main() {
         noc_semaphore_set_multicast(
             reduction_semaphore_send_addr,
             reduction_semaphore_recv_noc_addr,
-            num_cores,
+            i == 0 ? num_mcast_cores : 0,
             false,  // linked = false
-            true,   // multicast_path_reserve = true
-            0);
+            true);  // multicast_path_reserve = true
     }
 
     // 4. global semaphore reset
