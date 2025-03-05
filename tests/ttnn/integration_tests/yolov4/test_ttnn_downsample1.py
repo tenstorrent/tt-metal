@@ -17,7 +17,11 @@ import os
 
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_down1(device, reset_seeds, model_location_generator):
+@pytest.mark.parametrize(
+    "is_320_res",
+    [True, False],
+)
+def test_down1(device, reset_seeds, model_location_generator, is_320_res):
     torch.manual_seed(0)
     model_path = model_location_generator("models", model_subdir="Yolo")
 
@@ -31,7 +35,10 @@ def test_down1(device, reset_seeds, model_location_generator):
     else:
         weights_pth = str(model_path / "yolov4.pth")
 
-    torch_input = torch.randn((1, 3, 320, 320), dtype=torch.bfloat16)
+    if is_320_res:
+        torch_input = torch.randn((1, 3, 320, 320), dtype=torch.bfloat16)
+    else:
+        torch_input = torch.randn((1, 3, 640, 640), dtype=torch.bfloat16)
     torch_input = torch_input.float()
     torch_model = DownSample1()
 
@@ -42,7 +49,7 @@ def test_down1(device, reset_seeds, model_location_generator):
     torch_model.eval()
     ref = torch_model(torch_input)
 
-    parameters = create_ds1_model_parameters(torch_model, torch_input, device)
+    parameters = create_ds1_model_parameters(torch_model, torch_input, is_320_res, device)
 
     ttnn_model = Down1(device, parameters, parameters.conv_args)
 
@@ -50,11 +57,11 @@ def test_down1(device, reset_seeds, model_location_generator):
     ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16)
 
     result_ttnn = ttnn_model(ttnn_input)
-
-    start_time = time.time()
-    for x in range(100):
-        result_ttnn = ttnn_model(ttnn_input)
-    logger.info(f"Time taken: {time.time() - start_time}")
+    if is_320_res:
+        start_time = time.time()
+        for x in range(100):
+            result_ttnn = ttnn_model(ttnn_input)
+        logger.info(f"Time taken: {time.time() - start_time}")
 
     result = ttnn.to_torch(result_ttnn)
     result = result.permute(0, 3, 1, 2)

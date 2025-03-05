@@ -125,6 +125,7 @@ class Down4:
         output_tensor_left = ttnn.mish(output_tensor_left)
 
         res1_split = self.conv3(output_tensor_split)[0]
+        ttnn.deallocate(output_tensor_split)
         res1_split = ttnn.mish(res1_split)
 
         output_tensor = self.res1_conv1(res1_split)[0]

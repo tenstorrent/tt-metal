@@ -9,6 +9,7 @@ from models.demos.yolov4.ttnn.common import Conv
 
 class Down3:
     def __init__(self, device, parameters, conv_args) -> None:
+        self.parameters = parameters
         self.conv1 = Conv(
             device,
             conv_args.c1,
@@ -125,6 +126,7 @@ class Down3:
         output_tensor_left = ttnn.mish(output_tensor_left)
 
         res1_split = self.conv3(output_tensor_split)[0]
+        ttnn.deallocate(output_tensor_split)
         res1_split = ttnn.mish(res1_split)
 
         output_tensor = self.res1_conv1(res1_split)[0]
@@ -195,12 +197,24 @@ class Down3:
 
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
         output_tensor_left = ttnn.to_layout(output_tensor_left, layout=ttnn.ROW_MAJOR_LAYOUT)
-        output_sharded_memory_config = ttnn.create_sharded_memory_config(
-            [32, 256],
-            core_grid=output_tensor_left.memory_config().shard_spec.grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            use_height_and_width_as_shard_shape=True,
-        )
+        if self.parameters.is_320_res:
+            output_sharded_memory_config = ttnn.create_sharded_memory_config(
+                [32, 256],
+                core_grid=output_tensor_left.memory_config().shard_spec.grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                use_height_and_width_as_shard_shape=True,
+            )
+        else:
+            output_sharded_memory_config = ttnn.create_sharded_memory_config(
+                [
+                    output_tensor.memory_config().shard_spec.shape[0],
+                    2 * output_tensor.memory_config().shard_spec.shape[1],
+                ],
+                core_grid=output_tensor_left.memory_config().shard_spec.grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                use_height_and_width_as_shard_shape=True,
+            )
+
         output_tensor = ttnn.concat(
             [output_tensor, output_tensor_left], dim=3, memory_config=output_sharded_memory_config
         )

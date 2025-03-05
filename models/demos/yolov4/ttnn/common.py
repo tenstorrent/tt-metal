@@ -51,12 +51,15 @@ class Conv:
         weight = ttnn.from_device(conv_pth.weight)
         self.weight = weight
 
-        self.input_memory_config = (
-            ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
-            if conv_param.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-            and not conv_param.shard_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
-            else ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
-        )
+        if conv_param.shard_layout is None:
+            self.input_memory_config = ttnn.L1_MEMORY_CONFIG
+        elif (
+            conv_param.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+            and conv_param.shard_layout != ttnn.TensorMemoryLayout.WIDTH_SHARDED
+        ):
+            self.input_memory_config = ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
+        else:
+            self.input_memory_config = ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
 
         self.conv_kwargs = {
             "in_channels": conv_param.in_channels,
