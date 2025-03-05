@@ -88,7 +88,7 @@ def test_attention(
     spatial_padded_4D = torch.nn.functional.pad(
         spatial.unsqueeze(0), pad=(0, 0, 0, spatial_padding), mode="constant", value=0
     )
-    tt_spatial = from_torch(spatial_padded_4D, dtype=ttnn_dtype, mesh_device=mesh_device)
+    tt_spatial = from_torch(spatial_padded_4D, dtype=ttnn_dtype, mesh_device=mesh_device, layout=ttnn.TILE_LAYOUT)
     prompt_extra = prompt_sequence_length % TILE_SIZE
     if prompt_extra > 0:
         prompt_padding = TILE_SIZE - prompt_extra
@@ -97,7 +97,11 @@ def test_attention(
     prompt_padded_4D = torch.nn.functional.pad(
         prompt.unsqueeze(0), pad=(0, 0, 0, prompt_padding), mode="constant", value=0
     )
-    tt_prompt = from_torch(prompt_padded_4D, dtype=ttnn_dtype, mesh_device=mesh_device) if joint_attention else None
+    tt_prompt = (
+        from_torch(prompt_padded_4D, dtype=ttnn_dtype, mesh_device=mesh_device, layout=ttnn.TILE_LAYOUT)
+        if joint_attention
+        else None
+    )
 
     with torch.no_grad():
         spatial_output, prompt_output = torch_model(spatial=spatial, prompt=prompt)
@@ -112,7 +116,7 @@ def test_attention(
     tt_spatial_output = tt_spatial_output_padded[:, :, 0:spatial_sequence_length, :]
     tt_prompt_output = tt_prompt_output_padded[:, :, 0:prompt_sequence_length, :]
 
-    assert_quality(spatial_output, tt_spatial_output, pcc=0.990, shard_dim=-1)
+    assert_quality(spatial_output, tt_spatial_output, pcc=0.990, shard_dim=0)
 
     if joint_attention:
-        assert_quality(prompt_output, tt_prompt_output, pcc=0.990, shard_dim=-1)
+        assert_quality(prompt_output, tt_prompt_output, pcc=0.990, shard_dim=0)

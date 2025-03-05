@@ -37,12 +37,17 @@ class TtTransformerBlockParameters:
         cls,
         state: dict[str, torch.Tensor],
         *,
+        num_heads: int,
         dtype: ttnn.DataType | None = None,
         device: ttnn.Device,
     ) -> TtTransformerBlockParameters:
         return cls(
-            dual_attn=TtAttentionParameters.from_torch(substate(state, "attn"), dtype=dtype, device=device),
-            spatial_attn=TtAttentionParameters.from_torch(substate(state, "attn2"), dtype=dtype, device=device)
+            dual_attn=TtAttentionParameters.from_torch(
+                substate(state, "attn"), num_heads=num_heads, dtype=dtype, device=device
+            ),
+            spatial_attn=TtAttentionParameters.from_torch(
+                substate(state, "attn2"), num_heads=num_heads, dtype=dtype, device=device
+            )
             if has_substate(state, "attn2")
             else None,
             spatial_norm_1=TtLayerNormParameters.from_torch(substate(state, "norm1.norm"), dtype=dtype, device=device),
@@ -51,10 +56,16 @@ class TtTransformerBlockParameters:
                 substate(state, "norm1_context.norm"), dtype=dtype, device=device
             ),
             spatial_time_embed=TtLinearParameters.from_torch(
-                substate(state, "norm1.linear"), dtype=dtype, device=device
+                substate(state, "norm1.linear"),
+                dtype=dtype,
+                device=device,
+                shard_dim=None,
             ),
             prompt_time_embed=TtLinearParameters.from_torch(
-                substate(state, "norm1_context.linear"), dtype=dtype, device=device
+                substate(state, "norm1_context.linear"),
+                dtype=dtype,
+                device=device,
+                shard_dim=None,
             ),
             spatial_ff=TtFeedForwardParameters.from_torch(substate(state, "ff"), dtype=dtype, device=device),
             prompt_ff=TtFeedForwardParameters.from_torch(substate(state, "ff_context"), dtype=dtype, device=device)
@@ -69,12 +80,15 @@ class TtTransformerBlock:
         parameters: TtTransformerBlockParameters,
         *,
         num_heads: int,
+        device,
     ) -> None:
         eps = 1e-6
 
-        self._dual_attn = TtAttention(parameters.dual_attn, num_heads=num_heads)
+        self._dual_attn = TtAttention(parameters.dual_attn, num_heads=num_heads, device=device)
         self._spatial_attn = (
-            TtAttention(parameters.spatial_attn, num_heads=num_heads) if parameters.spatial_attn is not None else None
+            TtAttention(parameters.spatial_attn, num_heads=num_heads, device=device)
+            if parameters.spatial_attn is not None
+            else None
         )
 
         self._spatial_norm_1 = TtLayerNorm(parameters.spatial_norm_1, eps=eps)

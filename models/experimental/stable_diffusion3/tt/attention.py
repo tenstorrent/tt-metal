@@ -50,7 +50,9 @@ class TtAttentionParameters:
                 ),
                 norm_q=TtRmsNormParameters.from_torch(substate(state, "norm_q"), dtype=dtype, device=device),
                 norm_k=TtRmsNormParameters.from_torch(substate(state, "norm_k"), dtype=dtype, device=device),
-                out_proj=TtLinearParameters.from_torch(substate(state, "to_out.0"), dtype=dtype, device=device),
+                out_proj=TtLinearParameters.from_torch(
+                    substate(state, "to_out.0"), dtype=dtype, device=device, shard_dim=None
+                ),
             ),
             prompt=TtAttentionPartParameters(
                 qkv_proj=TtLinearParameters.from_torch_col_parallel(
@@ -58,7 +60,9 @@ class TtAttentionParameters:
                 ),
                 norm_q=TtRmsNormParameters.from_torch(substate(state, "norm_added_q"), dtype=dtype, device=device),
                 norm_k=TtRmsNormParameters.from_torch(substate(state, "norm_added_k"), dtype=dtype, device=device),
-                out_proj=TtLinearParameters.from_torch(substate(state, "to_add_out"), dtype=dtype, device=device)
+                out_proj=TtLinearParameters.from_torch(
+                    substate(state, "to_add_out"), dtype=dtype, device=device, shard_dim=None
+                )
                 if has_substate(state, "to_add_out")
                 else None,
             )

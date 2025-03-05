@@ -16,7 +16,7 @@ def allocate_tensor_on_device_like(
     return ttnn.allocate_tensor_on_device(t.shape, t.dtype, t.layout, device, memory_config=memory_config)
 
 
-def from_torch(tensor, mesh_device, dtype, shard_dim=None):
+def from_torch(tensor, layout, mesh_device, dtype, shard_dim=None):
     if shard_dim is None:
         return ttnn.from_torch(
             tensor,
@@ -24,7 +24,7 @@ def from_torch(tensor, mesh_device, dtype, shard_dim=None):
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             dtype=dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.TILE_LAYOUT,
+            layout=layout,
         )
     else:
         return ttnn.as_tensor(
@@ -33,7 +33,7 @@ def from_torch(tensor, mesh_device, dtype, shard_dim=None):
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=shard_dim),
             dtype=dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.TILE_LAYOUT,
+            layout=layout,
         )
 
 
