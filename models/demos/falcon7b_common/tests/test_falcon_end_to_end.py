@@ -5,12 +5,12 @@
 import numpy as np
 import pytest
 import torch
+import ttnn
 from loguru import logger
 from models.demos.falcon7b_common.tests.test_utils import (
     concat_device_out_layer_present,
     get_rand_falcon_inputs,
     load_hf_model,
-    synchronize_devices,
     get_num_devices,
 )
 from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
@@ -160,7 +160,7 @@ def run_test_FalconCausalLM_end_to_end(
             layer_past_len=kv_cache_len,
             use_cache=use_cache,
         )
-    synchronize_devices(mesh_device)
+    ttnn.synchronize_device(mesh_device)
     profiler.end("first_model_run_with_compile", force_enable=True)
     del tt_out
     del tt_layer_past
@@ -235,7 +235,7 @@ def run_test_FalconCausalLM_end_to_end(
             layer_past_len=kv_cache_len,
             use_cache=use_cache,
         )
-    synchronize_devices(mesh_device)
+    ttnn.synchronize_device(mesh_device)
     profiler.end(f"model_run_for_inference")
 
     if llm_mode == "prefill":

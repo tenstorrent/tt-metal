@@ -48,7 +48,7 @@
 
 /////////////
 // Firmware/kernel code holes
-#define MEM_BRISC_FIRMWARE_SIZE (5 * 1024 + 512)
+#define MEM_BRISC_FIRMWARE_SIZE (5 * 1024 + 1024)
 // TODO: perhaps put NCRISC FW in the scratch area and free 1.5K after init (GS/WH)
 #define MEM_NCRISC_FIRMWARE_SIZE 1536
 #define MEM_TRISC0_FIRMWARE_SIZE 1536
@@ -81,7 +81,11 @@
 // TODO: remove this w/ the ring buffer
 #define MEM_NCRISC_INIT_IRAM_L1_SIZE MEM_NCRISC_FIRMWARE_SIZE
 
-#define MEM_MAP_END (MEM_TRISC2_FIRMWARE_BASE + MEM_TRISC2_FIRMWARE_SIZE)
+#define MEM_NOC_COUNTER_SIZE 4
+#define MEM_NOC_COUNTER_L1_SIZE 5 * 4 * MEM_NOC_COUNTER_SIZE
+#define MEM_NOC_COUNTER_BASE (MEM_TRISC2_FIRMWARE_BASE + MEM_TRISC2_FIRMWARE_SIZE)
+
+#define MEM_MAP_END (MEM_NOC_COUNTER_BASE + MEM_NOC_COUNTER_L1_SIZE)
 
 // Every address after MEM_MAP_END is a "scratch" address
 // These can be used by FW during init, but aren't usable once FW reaches "ready"

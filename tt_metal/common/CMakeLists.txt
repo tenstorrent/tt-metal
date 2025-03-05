@@ -8,6 +8,7 @@ target_sources(
         core_coord.cpp
         mesh_coord.cpp
         metal_soc_descriptor.cpp
+        shape.cpp
         shape2d.cpp
         shape_base.cpp
         tt_backend_api_types.cpp
@@ -39,4 +40,5 @@ target_link_libraries(
         Tracy::TracyClient
         TT::Metalium::HostDevCommon
         yaml-cpp::yaml-cpp
+        Boost::asio
 )

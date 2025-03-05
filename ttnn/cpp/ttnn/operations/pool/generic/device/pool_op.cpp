@@ -95,13 +95,13 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
         uint32_t out_nhw_per_core = output_shape[0] * output_shape[1] * output_shape[2] / ncores;
         CoreRangeSet shard_grid = sliding_window_config.core_range_set;
         std::array<uint32_t, 2> shard_shape = {out_nhw_per_core, input.get_padded_shape()[-1]};
-        mem_config.shard_spec = ShardSpec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR};
+        mem_config.shard_spec = tt::tt_metal::ShardSpec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR};
     }
 
     return TensorSpec(
         output_shape,
-        TensorLayout::fromPaddedShape(
-            output_dtype, PageConfig(input.get_layout()), mem_config, output_shape, padded_output_shape));
+        tt::tt_metal::TensorLayout::fromPaddedShape(
+            output_dtype, tt::tt_metal::PageConfig(input.get_layout()), mem_config, output_shape, padded_output_shape));
 }
 
 Pool2D::tensor_return_value_t Pool2D::create_output_tensors(
@@ -114,11 +114,11 @@ tt::stl::hash::hash_t Pool2D::compute_program_hash(
     const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
     auto input_mem_config = tensors.input_tensor_.memory_config();
     auto dtype = tensors.input_tensor_.dtype();
-    return operation::hash_operation<Pool2D>(
+    return tt::tt_metal::operation::hash_operation<Pool2D>(
         op_attr.sliding_window_config_.get_hash(), op_attr.pool_type_, op_attr.memory_config_, input_mem_config, dtype);
 }
 
-operation::OpPerformanceModel Pool2D::create_op_performance_model(
+tt::tt_metal::operation::OpPerformanceModel Pool2D::create_op_performance_model(
     const operation_attributes_t& op_attr, const tensor_args_t& inputs, const Tensor& output) {
     const auto& input = inputs.input_tensor_;
     const auto& input_shape = input.get_logical_shape();
@@ -150,7 +150,7 @@ operation::OpPerformanceModel Pool2D::create_op_performance_model(
 
     int ideal_dev_clock_cycles = std::ceil((float)num_mul_adds / (float)(num_cores * tensix_mul_adds_per_cycle_lofi));
 
-    operation::OpPerformanceModel result({input}, {output}, ideal_dev_clock_cycles);
+    tt::tt_metal::operation::OpPerformanceModel result({input}, {output}, ideal_dev_clock_cycles);
     return result;
 }
 

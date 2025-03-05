@@ -103,11 +103,8 @@ from ttnn._ttnn.multi_device import (
 
 from ttnn._ttnn.events import (
     MeshEvent,
-    create_event,
     record_event,
     wait_for_event,
-    record_mesh_event,
-    wait_for_mesh_event,
     record_mesh_event,
     wait_for_mesh_event,
 )
@@ -198,6 +195,7 @@ from ttnn.device import (
     disable_and_clear_program_cache,
     manage_device,
     synchronize_device,
+    synchronize_mesh_device,
     dump_device_memory_state,
     get_memory_view,
     GetPCIeDeviceID,
@@ -234,6 +232,7 @@ from ttnn.core import (
     get_memory_config,
     light_metal_begin_capture,
     light_metal_end_capture,
+    LightMetalReplay,
     create_sharded_memory_config,
     create_sharded_memory_config_,
     dump_memory_config,

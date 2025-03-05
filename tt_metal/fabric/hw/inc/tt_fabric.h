@@ -1127,7 +1127,7 @@ typedef struct fvcc_inbound_state {
     // we can process other fvcs and come back to check status of this pull request later.
     inline void forward_message(uint64_t dest_addr) {
         uint64_t noc_addr = dest_addr + offsetof(ctrl_chan_msg_buf, wrptr);
-        noc_fast_atomic_increment<DM_DYNAMIC_NOC>(
+        noc_fast_atomic_increment<DM_DEDICATED_NOC, true>(
             noc_index,
             NCRISC_AT_CMD_BUF,
             noc_addr,
@@ -1550,7 +1550,7 @@ bool wait_all_src_dest_ready(volatile router_state_t* router_state, uint32_t tim
 // we can process other fvcs and come back to check status of this pull request later.
 inline uint64_t tt_fabric_send_pull_request(uint64_t dest_addr, volatile local_pull_request_t* local_pull_request) {
     uint64_t noc_addr = dest_addr + offsetof(chan_req_buf, wrptr);
-    noc_fast_atomic_increment<DM_DYNAMIC_NOC>(
+    noc_fast_atomic_increment<DM_DEDICATED_NOC, true>(
         noc_index,
         NCRISC_AT_CMD_BUF,
         noc_addr,

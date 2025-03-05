@@ -105,7 +105,7 @@ public:
 
     static constexpr uint32_t MAX_NUM_HW_CQS = 2;
 
-    static constexpr uint32_t DISPATCH_MESSAGE_ENTRIES = 16;
+    static constexpr uint32_t DISPATCH_MESSAGE_ENTRIES = 8;
 
     static constexpr uint32_t DISPATCH_MESSAGES_MAX_OFFSET =
         std::numeric_limits<decltype(go_msg_t::dispatch_message_offset)>::max();
