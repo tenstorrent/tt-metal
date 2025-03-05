@@ -87,25 +87,28 @@ jobs:
           {name: ttnn ccl cpp unit tests, cmd: ./build/test/ttnn/unit_tests_ttnn_ccl},
           {name: ttnn tensor cpp unit tests, cmd: ./build/test/ttnn/unit_tests_ttnn_tensor},
         ]
-    name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
-    env:
-      TT_METAL_HOME: /work
-      PYTHONPATH: /work
-      LD_LIBRARY_PATH: /work/build/lib
-      ARCH_NAME: ${{ inputs.arch }}
-      LOGURU_LEVEL: INFO
-      GTEST_OUTPUT: xml:generated/test_reports/
-      DONT_USE_VIRTUAL_ENVIRONMENT: 1
-      GITHUB_ACTIONS: true
-    volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf
-    options: "--device /dev/tenstorrent"
     runs-on:
       - ${{ inputs.runner-label }}
       - cloud-virtual-machine
       - in-service
+    name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
+    container:
+      image: ${{ inputs.docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ inputs.arch }}
+        LOGURU_LEVEL: INFO
+        GTEST_OUTPUT: xml:generated/test_reports/
+        DONT_USE_VIRTUAL_ENVIRONMENT: 1
+        GITHUB_ACTIONS: true
+      volumes:
+          - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+          - /dev/hugepages-1G:/dev/hugepages-1G
+          - /mnt/MLPerf:/mnt/MLPerf
+      options: "--device /dev/tenstorrent"
+    
     defaults:
       run:
         shell: bash
