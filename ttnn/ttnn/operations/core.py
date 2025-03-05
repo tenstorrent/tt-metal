@@ -156,7 +156,7 @@ def from_torch(
     layout: Optional[ttnn.Layout] = ttnn.ROW_MAJOR_LAYOUT,
     device: Optional[ttnn.Device] = None,
     memory_config: Optional[ttnn.MemoryConfig] = None,
-    mesh_mapper: Optional[Union[ttnn.TensorToMesh, ttnn.CppTensorToMesh]] = None,
+    mesh_mapper: Optional[ttnn.TensorToMesh] = None,
     cq_id: Optional[int] = ttnn.DefaultQueueId,
 ) -> ttnn.Tensor:
     """
@@ -220,15 +220,8 @@ def from_torch(
     tilize_input = []
 
     if mesh_mapper:
-        if isinstance(mesh_mapper, ttnn.CppTensorToMesh):
-            tensor = ttnn.distribute_tensor(tensor, mesh_mapper, device)
-            tilize_input = ttnn.to_torch(tensor)
-        else:
-            strategy = mesh_mapper.config()
-            shards = mesh_mapper.map(ttnn.to_torch(tensor))
-            tilize_input = shards
-            if tile is None:
-                tensor = ttnn.Tensor(tilize_input, dtype, strategy)
+        tensor = ttnn.distribute_tensor(tensor, mesh_mapper, device)
+        tilize_input = ttnn.to_torch(tensor)
 
     # TODO: find cleaner way of tilizing
     if tile is not None:
@@ -535,7 +528,7 @@ def as_tensor(
     memory_config: Optional[ttnn.MemoryConfig] = None,
     cache_file_name: Optional[Union[str, pathlib.Path]] = None,
     preprocess: Optional[Callable[[ttnn.Tensor], ttnn.Tensor]] = None,
-    mesh_mapper: Union[ttnn.TensorToMesh, ttnn.CppTensorToMesh] = None,
+    mesh_mapper: Optional[ttnn.TensorToMesh] = None,
     use_device_tilizer: bool = False,
 ) -> ttnn.Tensor:
     """
@@ -587,7 +580,7 @@ def as_tensor(
         layout: Optional[ttnn.Layout],
         device: Optional[ttnn.Device],
         memory_config: Optional[ttnn.MemoryConfig],
-        mesh_mapper: Union[ttnn.TensorToMesh, ttnn.CppTensorToMesh],
+        mesh_mapper: Optional[ttnn.TensorToMesh],
     ):
         if preprocess:
             tensor = preprocess(tensor)
@@ -620,7 +613,7 @@ def as_tensor(
             dtype: Optional[ttnn.DataType],
             layout: Optional[ttnn.Layout],
             cache_file_name: str,
-            mesh_mapper: Union[ttnn.TensorToMesh, ttnn.CppTensorToMesh],
+            mesh_mapper: Optional[ttnn.TensorToMesh],
         ):
             tensor = torch_to_ttnn(tensor, dtype, layout, device, memory_config, mesh_mapper)
             logger.debug(
@@ -631,9 +624,7 @@ def as_tensor(
             ttnn._ttnn.tensor.dump_tensor(cache_file_name, tensor, distributed_config)
             return tensor
 
-        if isinstance(mesh_mapper, ttnn.ReplicateTensorToMesh) or isinstance(
-            mesh_mapper, ttnn.CppReplicateTensorToMesh
-        ):
+        if isinstance(mesh_mapper, ttnn.ReplicateTensorToMesh):
             storage_type = f"_multi_device" if mesh_mapper else ""
         elif mesh_mapper:
             storage_type = f"_multi_device_{device.get_num_devices()}"
