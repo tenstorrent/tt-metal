@@ -46,12 +46,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test-group: [
-          { platform: "tt-ubuntu-2204-n300-large-stable" },
-          { platform: "N150" },
-          { platform: "N300" },
+        platform: [
+          "tt-ubuntu-2204-n300-large-stable",
+          "N150",
+          "N300",
         ]
     uses: ./.github/workflows/smoke.yaml
     with:
       docker-image: ${{ needs.pr-gate-build.outputs.ci-build-docker-image }}
       package-artifact-name: ${{ needs.pr-gate-build.outputs.packages-artifact-name }}
+      runner: ${{ matrix.platform }}
