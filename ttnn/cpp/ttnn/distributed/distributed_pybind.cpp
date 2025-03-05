@@ -651,18 +651,12 @@ void py_module(py::module& module) {
     module.def(
         "concat_2d_mesh_to_tensor_composer",
         [](MeshDevice& mesh_device,
-           const std::tuple<int, int> mesh_shape,
            const std::tuple<int, int> dims) -> std::unique_ptr<MeshToTensor> {
-            TT_FATAL(
-                std::get<0>(mesh_shape) <= mesh_device.shape()[0] &&  //
-                    std::get<1>(mesh_shape) <= mesh_device.shape()[1],
-                "Device mesh shape does not match the provided mesh shape.");
             return concat_2d_mesh_to_tensor_composer(
                 mesh_device, Concat2dConfig{.row_dim = std::get<0>(dims), .col_dim = std::get<1>(dims)});
         },
         py::arg("mesh_device"),
         py::arg("dims"),
-        py::arg("mesh_shape"),
         R"doc(
             Create a Concat2dMeshToTensor composer with the given mesh device and dimensions.
 
