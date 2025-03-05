@@ -117,6 +117,7 @@ jobs:
           path: /work/${{ steps.check-device-perf-report.outputs.device_perf_report_filename }}
 
       - uses: ./.github/actions/upload-artifact-with-job-uuid
+        timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           path: |
