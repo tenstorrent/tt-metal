@@ -82,7 +82,7 @@ class Generator:
                     page_table=page_table_user if page_table is not None else None,
                     user_id=group_user_id,
                     last_token_idx=last_token_idx,
-                    kv_cache=kv_cache[model_id],
+                    kv_cache=kv_cache[model_id] if kv_cache is not None else None,
                     model_id=model_id,
                 )
                 out_list.append(logits)
@@ -209,10 +209,11 @@ class Generator:
             tt_logits = self._decode_forward_no_trace_text(**decode_kwargs)
 
         if read_from_device:
-            ret = []
+            to_host = []
             for i, t in enumerate(tokens):
-                ret.append(self.read_decode_output(tt_logits[i], t.shape[0], i))
-            return ret
+                to_host.append(self.read_decode_output(tt_logits[i], t.shape[0], i))
+            to_host = torch.cat(to_host, 0)
+            return to_host
         else:
             return tt_logits
 
@@ -236,8 +237,9 @@ class Generator:
         tt_page_table = []
 
         for i in range(self.data_parallel):
+            user_page_table = page_table[i] if page_table is not None else None
             tt_tokens_i, tt_current_pos_i, tt_rot_mats_i, tt_page_table_i = self.model[i].prepare_inputs_decode(
-                tokens[i], current_pos[i], page_table[i]
+                tokens[i], current_pos[i], user_page_table
             )
             tt_tokens.append(tt_tokens_i)
             tt_current_pos.append(tt_current_pos_i)
@@ -245,12 +247,13 @@ class Generator:
             tt_page_table.append(tt_page_table_i)
 
         for i in range(self.data_parallel):
+            user_kv_cache = kv_cache[i] if kv_cache is not None else None
             tt_logits_i = self.model[i].ttnn_decode_forward(
                 tt_tokens[i],
                 tt_current_pos[i],
                 rot_mats=tt_rot_mats[i],
                 page_table=tt_page_table[i],
-                kv_cache=kv_cache[i],
+                kv_cache=user_kv_cache,
                 argmax_on_device=argmax_on_device,
             )
             tt_logits.append(tt_logits_i)
@@ -279,17 +282,21 @@ class Generator:
         device_inputs = []
         tt_out_trace = []
         for i in range(self.data_parallel):
-            host_inputs = self.model[i].prepare_decode_inputs_host(tokens[i], current_pos[i], page_table=page_table[i])
+            user_page_table = page_table[i] if page_table is not None else None
+            host_inputs = self.model[i].prepare_decode_inputs_host(
+                tokens[i], current_pos[i], page_table=user_page_table
+            )
 
             device_inputs_i = copy_host_to_device(host_inputs, mesh_device=self.model_args[i].mesh_device)
             device_inputs.append(device_inputs_i)
 
         trace_id = ttnn.begin_trace_capture(self.model_args[i].mesh_device, cq_id=0)
         for i in range(self.data_parallel):
+            user_kv_cache = kv_cache[i] if kv_cache is not None else None
             transformed_inputs = self.model[i].transform_decode_inputs_device(*(device_inputs[i]))
             tt_out_trace.append(
                 self.model[i].ttnn_decode_forward(
-                    *transformed_inputs, kv_cache=kv_cache[i], argmax_on_device=argmax_on_device
+                    *transformed_inputs, kv_cache=user_kv_cache, argmax_on_device=argmax_on_device
                 )
             )
 
@@ -312,7 +319,8 @@ class Generator:
         """
         host_inputs = []
         for i in range(self.data_parallel):
-            host_inputs_i = self.model[i].prepare_decode_inputs_host(tokens[i], current_pos[i], page_table[i])
+            user_page_table = page_table[i] if page_table is not None else None
+            host_inputs_i = self.model[i].prepare_decode_inputs_host(tokens[i], current_pos[i], user_page_table)
             host_inputs.append(host_inputs_i)
 
         to_device = []
@@ -370,6 +378,7 @@ class Generator:
         page_table=None,
         kv_cache=None,
         cross_page_table=None,
+        model_id=-1,
     ):
         """
         Performs vision encode step then text prefill.
@@ -384,7 +393,7 @@ class Generator:
                 vision_tokens,
                 cross_attention_masks,
                 full_text_row_masked_out_mask,
-            ) = self.model.compute_vision_tokens_masks(
+            ) = self.model[model_id].compute_vision_tokens_masks(
                 batch_images=[vision_images],
                 batch_masks=[vision_mask],
                 total_len=total_len,
@@ -407,7 +416,7 @@ class Generator:
             rot_mats,
             tt_page_table,
             tt_cross_page_table,
-        ) = self.model.prepare_inputs_prefill(
+        ) = self.model[model_id].prepare_inputs_prefill(
             tokens,
             cross_attention_masks,
             full_text_row_masked_out_mask,
@@ -417,7 +426,7 @@ class Generator:
             text_only_inference=text_only_inference,
         )
 
-        tt_logits = self.model.ttnn_prefill_forward(
+        tt_logits = self.model[model_id].ttnn_prefill_forward(
             tt_h,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
@@ -436,9 +445,7 @@ class Generator:
         del tt_page_table
         del tt_cross_page_table
 
-        logits = self.model.process_output_prefill(tt_logits, B, last_token_idx=(last_token_idx % 32))
-
-        return xattn_caches, cross_attention_masks, full_text_row_masked_out_mask, logits
+        return xattn_caches, cross_attention_masks, full_text_row_masked_out_mask, tt_logits
 
     def prefill_forward(
         self,
@@ -456,33 +463,61 @@ class Generator:
         Batched version of _prefill_forward_single_user for vision model.
         """
         batch, batch_seq_len = tokens.shape
-        output_logits = torch.zeros(batch, 1, self.model_args.vocab_size)
-        output_xattn_masks = []
-        output_full_text_row_masked_out_masks = []
+        output_logits = torch.zeros(batch, 1, self.model_args[0].vocab_size)
 
-        for user_id in range(batch):
-            logger.info(f"Prefilling User {user_id + 1}")
-            seq_len = prompt_lens[user_id]
-            (
-                xattn_caches,
-                cross_attention_masks,
-                full_text_row_masked_out_mask,
-                logits,
-            ) = self._prefill_forward_single_user(
-                vision_images=vision_images[user_id],
-                vision_mask=vision_masks[user_id],
-                tokens=tokens[user_id : user_id + 1, :seq_len],  # Keep batch dimension
-                xattn_caches=xattn_caches,
-                user_id=user_id,
-                total_len=total_lens[user_id],
-                prefill_len=seq_len,
-                page_table=page_table,
-                kv_cache=kv_cache,
-                cross_page_table=cross_page_table,
-            )
-            output_logits[user_id] = logits
-            output_xattn_masks.append(cross_attention_masks)
-            output_full_text_row_masked_out_masks.append(full_text_row_masked_out_mask)
+        data_parallel = min(batch, self.data_parallel)
+        batch_per_device = batch // data_parallel
+
+        out_list = [[] for _ in range(data_parallel)]
+        output_xattn_masks = [[] for _ in range(data_parallel)]
+        output_full_text_row_masked_out_masks = [[] for _ in range(data_parallel)]
+
+        if page_table is not None:
+            assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
+            page_table = torch.chunk(page_table, self.data_parallel, 0)  # cross_page_table
+        if cross_page_table is not None:
+            assert isinstance(cross_page_table, torch.Tensor), "cross_page_table mush be torch.Tensor"
+            page_table = torch.chunk(cross_page_table, self.data_parallel, 0)
+
+        for group_user_id in range(batch_per_device):
+            for model_id in range(data_parallel):
+                user_id = group_user_id + model_id * batch_per_device
+
+                logger.info(f"Prefilling User {user_id + 1}")
+                seq_len = prompt_lens[user_id]
+                user_page_table = page_table[model_id] if page_table is not None else None
+                user_kv_cache = kv_cache[model_id] if kv_cache is not None else None
+                user_cross_page_table = cross_page_table[model_id] if kv_cache is not None else None
+                (
+                    xattn_caches[model_id],
+                    cross_attention_masks,
+                    full_text_row_masked_out_mask,
+                    logits,
+                ) = self._prefill_forward_single_user(
+                    vision_images=vision_images[user_id],
+                    vision_mask=vision_masks[user_id],
+                    tokens=tokens[user_id : user_id + 1, :seq_len],  # Keep batch dimension
+                    xattn_caches=xattn_caches[model_id],
+                    user_id=group_user_id,
+                    total_len=total_lens[user_id],
+                    prefill_len=seq_len,
+                    page_table=user_page_table,
+                    kv_cache=user_kv_cache,
+                    cross_page_table=user_cross_page_table,
+                    model_id=model_id,
+                )
+                out_list[model_id].append(logits)
+                output_xattn_masks[model_id].append(cross_attention_masks)
+                output_full_text_row_masked_out_masks[model_id].append(full_text_row_masked_out_mask)
+
+        # We gather prefill output at the end of prefill to reduce unnecessary device sync
+        for group_user_id in range(batch_per_device):
+            for model_id in range(data_parallel):
+                user_id = group_user_id + model_id * batch_per_device
+                last_token_idx = prompt_lens[user_id] - 1
+                output_logits[user_id] = self.model[model_id].process_output_prefill(
+                    out_list[model_id][group_user_id], 1, last_token_idx=(last_token_idx % 32)
+                )
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
 
@@ -501,6 +536,13 @@ class Generator:
         enable_trace=True,
         read_from_device=True,
     ):
+        tokens = torch.chunk(tokens, self.data_parallel, 0)
+        start_pos = torch.chunk(start_pos, self.data_parallel, 0)
+        page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
+        cross_page_table = (
+            torch.chunk(cross_page_table, self.data_parallel, 0) if cross_page_table is not None else None
+        )
+
         decode_kwargs = {
             "position_id": start_pos,
             "tokens": tokens,
@@ -519,7 +561,8 @@ class Generator:
         if read_from_device:
             to_host = []
             for i, t in enumerate(tokens):
-                to_host.append(self.read_decode_output(tt_logits, t.shape[0], i))
+                to_host.append(self.read_decode_output(tt_logits[i], t.shape[0], i))
+            to_host = torch.cat(to_host, 0)
             return to_host
         else:
             return tt_logits
@@ -548,39 +591,64 @@ class Generator:
 
         # forward_decode should be traced callable
         # decorator does compilation, capture, execute
-        B, S = tokens.shape
-        assert S == 1
+        tt_h = []
+        tt_xattn_mask = []
+        tt_full_text_mask_expand_1NSH = []
+        tt_full_text_mask_expand_11SD = []
+        tt_position_id = []
+        tt_rot_mats = []
+        tt_page_table = []
+        tt_cross_page_table = []
 
-        (
-            tt_h,
-            tt_xattn_mask,
-            tt_full_text_mask_expand_1NSH,
-            tt_full_text_mask_expand_11SD,
-            tt_position_id,
-            tt_rot_mats,
-            tt_page_table,
-            tt_cross_page_table,
-        ) = self.model.prepare_inputs_decode(
-            tokens,
-            cross_attention_masks,
-            full_text_row_masked_out_mask,
-            position_id=position_id,
-            page_table=page_table,
-            cross_page_table=cross_page_table,
-        )
+        for i in range(self.data_parallel):
+            B, S = tokens[i].shape
+            assert S == 1
 
-        tt_logits = self.model.ttnn_decode_forward(
-            tt_h,
-            tt_xattn_mask,
-            tt_full_text_mask_expand_1NSH,
-            tt_full_text_mask_expand_11SD,
-            xattn_caches,
-            tt_position_id,
-            tt_rot_mats,
-            page_table=tt_page_table,
-            kv_cache=kv_cache,
-            cross_page_table=tt_cross_page_table,
-        )
+            user_page_table = page_table[i] if page_table is not None else None
+            user_cross_page_table = cross_page_table[i] if cross_page_table is not None else None
+            (
+                tt_h_i,
+                tt_xattn_mask_i,
+                tt_full_text_mask_expand_1NSH_i,
+                tt_full_text_mask_expand_11SD_i,
+                tt_position_id_i,
+                tt_rot_mats_i,
+                tt_page_table_i,
+                tt_cross_page_table_i,
+            ) = self.model[i].prepare_inputs_decode(
+                tokens[i],
+                cross_attention_masks[i],
+                full_text_row_masked_out_mask[i],
+                position_id=position_id[i],
+                page_table=user_page_table,
+                cross_page_table=user_cross_page_table,
+            )
+
+            tt_h.append(tt_h_i)
+            tt_xattn_mask.append(tt_xattn_mask_i)
+            tt_full_text_mask_expand_1NSH.append(tt_full_text_mask_expand_1NSH_i)
+            tt_full_text_mask_expand_11SD.append(tt_full_text_mask_expand_11SD_i)
+            tt_position_id.append(tt_position_id_i)
+            tt_rot_mats.append(tt_rot_mats_i)
+            tt_page_table.append(tt_page_table_i)
+            tt_cross_page_table.append(tt_cross_page_table_i)
+
+        tt_logits = []
+        for i in range(self.data_parallel):
+            user_kv_cache = kv_cache[i] if kv_cache is not None else None
+            tt_logits_i = self.model[i].ttnn_decode_forward(
+                tt_h[i],
+                tt_xattn_mask[i],
+                tt_full_text_mask_expand_1NSH[i],
+                tt_full_text_mask_expand_11SD[i],
+                xattn_caches[i],
+                tt_position_id[i],
+                tt_rot_mats[i],
+                page_table=tt_page_table[i],
+                kv_cache=user_kv_cache,
+                cross_page_table=tt_cross_page_table[i],
+            )
+            tt_logits.append(tt_logits_i)
 
         return tt_logits
 
@@ -598,112 +666,160 @@ class Generator:
         """
         Captures a trace for the decode_forward method.
         """
-        (
-            tt_h,
-            tt_xattn_mask,
-            tt_full_text_mask_expand_1NSH,
-            tt_full_text_mask_expand_11SD,
-            tt_position_id,
-            tt_rot_mats,
-            tt_page_table,
-            tt_cross_page_table,
-        ) = self.model.prepare_inputs_decode(
-            tokens,
-            cross_attention_masks,
-            full_text_row_masked_out_mask,
-            position_id=position_id,
-            page_table=page_table,
-            cross_page_table=cross_page_table,
-        )
+        tt_h = []
+        tt_xattn_mask = []
+        tt_full_text_mask_expand_1NSH = []
+        tt_full_text_mask_expand_11SD = []
+        tt_position_id = []
+        tt_rot_mats = []
+        tt_page_table = []
+        tt_cross_page_table = []
+        for i in range(self.data_parallel):
+            user_page_table = page_table[i] if page_table is not None else None
+            user_cross_page_table = cross_page_table[i] if cross_page_table is not None else None
+            (
+                tt_h_i,
+                tt_xattn_mask_i,
+                tt_full_text_mask_expand_1NSH_i,
+                tt_full_text_mask_expand_11SD_i,
+                tt_position_id_i,
+                tt_rot_mats_i,
+                tt_page_table_i,
+                tt_cross_page_table_i,
+            ) = self.model[i].prepare_inputs_decode(
+                tokens[i],
+                cross_attention_masks[i],
+                full_text_row_masked_out_mask[i],
+                position_id=position_id[i],
+                page_table=user_page_table,
+                cross_page_table=user_cross_page_table,
+            )
+
+            tt_h.append(tt_h_i)
+            tt_xattn_mask.append(tt_xattn_mask_i)
+            tt_full_text_mask_expand_1NSH.append(tt_full_text_mask_expand_1NSH_i)
+            tt_full_text_mask_expand_11SD.append(tt_full_text_mask_expand_11SD_i)
+            tt_position_id.append(tt_position_id_i)
+            tt_rot_mats.append(tt_rot_mats_i)
+            tt_page_table.append(tt_page_table_i)
+            tt_cross_page_table.append(tt_cross_page_table_i)
 
         # Compile run
-        tt_logits_rm = self.model.ttnn_decode_forward(
-            tt_h,
-            tt_xattn_mask,
-            tt_full_text_mask_expand_1NSH,
-            tt_full_text_mask_expand_11SD,
-            xattn_caches,
-            tt_position_id,
-            tt_rot_mats,
-            page_table=tt_page_table,
-            kv_cache=kv_cache,
-            cross_page_table=tt_cross_page_table,
-        )
+        for i in range(self.data_parallel):
+            user_kv_cache = kv_cache[i] if kv_cache is not None else None
+            # tt_logits_rm unused later, no need to make a list
+            tt_logits_rm = self.model[i].ttnn_decode_forward(
+                tt_h[i],
+                tt_xattn_mask[i],
+                tt_full_text_mask_expand_1NSH[i],
+                tt_full_text_mask_expand_11SD[i],
+                xattn_caches[i],
+                tt_position_id[i],
+                tt_rot_mats[i],
+                page_table=tt_page_table[i],
+                kv_cache=user_kv_cache,
+                cross_page_table=tt_cross_page_table[i],
+            )
         logger.info("Done Compiling Model")
 
         # Get inputs ready for trace run
-        (
-            tt_h,
-            tt_xattn_mask,
-            tt_full_text_mask_expand_1NSH,
-            tt_full_text_mask_expand_11SD,
-            tt_position_id,
-            tt_rope_id,
-            tt_page_table,
-            tt_cross_page_table,
-        ) = self.model.prepare_decode_inputs_host(
-            tokens,
-            cross_attention_masks,
-            full_text_row_masked_out_mask,
-            position_id,
-            page_table=page_table,
-            cross_page_table=cross_page_table,
-        )
-
-        (
-            tt_h,
-            tt_xattn_mask,
-            tt_full_text_mask_expand_1NSH,
-            tt_full_text_mask_expand_11SD,
-            tt_position_id,
-            tt_rope_id,
-            tt_page_table,
-            tt_cross_page_table,
-        ) = copy_host_to_device(
+        tt_h = []
+        tt_xattn_mask = []
+        tt_full_text_mask_expand_1NSH = []
+        tt_full_text_mask_expand_11SD = []
+        tt_position_id = []
+        tt_rope_id = []
+        tt_page_table = []
+        tt_cross_page_table = []
+        for i in range(self.data_parallel):
+            user_page_table = page_table[i] if page_table is not None else None
+            user_cross_page_table = cross_page_table[i] if cross_page_table is not None else None
             (
-                tt_h,
-                tt_xattn_mask,
-                tt_full_text_mask_expand_1NSH,
-                tt_full_text_mask_expand_11SD,
-                tt_position_id,
-                tt_rope_id,
-                tt_page_table,
-                tt_cross_page_table,
-            ),
-            mesh_device=self.mesh_device,
-        )
+                tt_h_i,
+                tt_xattn_mask_i,
+                tt_full_text_mask_expand_1NSH_i,
+                tt_full_text_mask_expand_11SD_i,
+                tt_position_id_i,
+                tt_rope_id_i,
+                tt_page_table_i,
+                tt_cross_page_table_i,
+            ) = self.model[i].prepare_decode_inputs_host(
+                tokens[i],
+                cross_attention_masks[i],
+                full_text_row_masked_out_mask[i],
+                position_id[i],
+                page_table=user_page_table,
+                cross_page_table=user_cross_page_table,
+            )
+
+            (
+                tt_h_i,
+                tt_xattn_mask_i,
+                tt_full_text_mask_expand_1NSH_i,
+                tt_full_text_mask_expand_11SD_i,
+                tt_position_id_i,
+                tt_rope_id_i,
+                tt_page_table_i,
+                tt_cross_page_table_i,
+            ) = copy_host_to_device(
+                (
+                    tt_h_i,
+                    tt_xattn_mask_i,
+                    tt_full_text_mask_expand_1NSH_i,
+                    tt_full_text_mask_expand_11SD_i,
+                    tt_position_id_i,
+                    tt_rope_id_i,
+                    tt_page_table_i,
+                    tt_cross_page_table_i,
+                ),
+                mesh_device=self.model_args[i].mesh_device,
+            )
+
+            tt_h.append(tt_h_i)
+            tt_xattn_mask.append(tt_xattn_mask_i)
+            tt_full_text_mask_expand_1NSH.append(tt_full_text_mask_expand_1NSH_i)
+            tt_full_text_mask_expand_11SD.append(tt_full_text_mask_expand_11SD_i)
+            tt_position_id.append(tt_position_id_i)
+            tt_rope_id.append(tt_rope_id_i)
+            tt_page_table.append(tt_page_table_i)
+            tt_cross_page_table.append(tt_cross_page_table_i)
 
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         tt_h_trace_input = tt_h
-        B = tokens.shape[0]
-        # Do on-device transformations of inputs before forward
-        (
-            tt_h_transform,
-            tt_rot_mats,
-            tt_xattn_mask_transform,
-            tt_full_text_mask_expand_1NSH_transform,
-            tt_full_text_mask_expand_11SD_transform,
-        ) = self.model.transform_decode_inputs_device(
-            tt_h,
-            tt_rope_id,
-            tt_xattn_mask,
-            tt_full_text_mask_expand_1NSH,
-            tt_full_text_mask_expand_11SD,
-            B=B,
-        )
 
-        tt_logits_rm = self.model.ttnn_decode_forward(
-            tt_h_transform,
-            tt_xattn_mask_transform,
-            tt_full_text_mask_expand_1NSH_transform,
-            tt_full_text_mask_expand_11SD_transform,
-            xattn_caches,
-            tt_position_id,
-            tt_rot_mats,
-            page_table=tt_page_table,
-            kv_cache=kv_cache,
-            cross_page_table=tt_cross_page_table,
-        )
+        tt_logits_rm = []
+        # Do on-device transformations of inputs before forward
+        for i in range(self.data_parallel):
+            B = tokens[i].shape[0]
+            user_kv_cache = kv_cache[i] if kv_cache is not None else None
+            (
+                tt_h_transform,
+                tt_rot_mats,
+                tt_xattn_mask_transform,
+                tt_full_text_mask_expand_1NSH_transform,
+                tt_full_text_mask_expand_11SD_transform,
+            ) = self.model[i].transform_decode_inputs_device(
+                tt_h[i],
+                tt_rope_id[i],
+                tt_xattn_mask[i],
+                tt_full_text_mask_expand_1NSH[i],
+                tt_full_text_mask_expand_11SD[i],
+                B=B,
+            )
+
+            tt_logits_rm_i = self.model[i].ttnn_decode_forward(
+                tt_h_transform,
+                tt_xattn_mask_transform,
+                tt_full_text_mask_expand_1NSH_transform,
+                tt_full_text_mask_expand_11SD_transform,
+                xattn_caches[i],
+                tt_position_id[i],
+                tt_rot_mats,
+                page_table=tt_page_table[i],
+                kv_cache=user_kv_cache,
+                cross_page_table=tt_cross_page_table[i],
+            )
+            tt_logits_rm.append(tt_logits_rm_i)
 
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         logger.info("Done Capturing Decode Trace")
@@ -743,26 +859,10 @@ class Generator:
         """
         Executes the trace for the decode_forward method but does not read back outputs.
         """
-        (
-            tt_h,
-            tt_xattn_mask,
-            tt_full_text_mask_expand_1NSH,
-            tt_full_text_mask_expand_11SD,
-            tt_position_id,
-            tt_rope_id,
-            tt_page_table,
-            tt_cross_page_table,
-        ) = self.model.prepare_decode_inputs_host(
-            tokens,
-            cross_attention_masks,
-            full_text_row_masked_out_mask,
-            position_id=position_id,
-            page_table=page_table,
-            cross_page_table=cross_page_table,
-        )
-
-        copy_host_to_device(
-            host_tensors=(
+        for i in range(self.data_parallel):
+            user_page_table = page_table[i] if page_table is not None else None
+            user_cross_page_table = cross_page_table[i] if cross_page_table is not None else None
+            (
                 tt_h,
                 tt_xattn_mask,
                 tt_full_text_mask_expand_1NSH,
@@ -771,18 +871,37 @@ class Generator:
                 tt_rope_id,
                 tt_page_table,
                 tt_cross_page_table,
-            ),
-            device_tensors=(
-                trace_h,
-                trace_xattn_mask,
-                trace_full_text_mask_expand_1NSH,
-                trace_full_text_mask_expand_11SD,
-                trace_position_id,
-                trace_rope_id,
-                trace_page_table,
-                trace_cross_page_table,
-            ),
-        )
+            ) = self.model[i].prepare_decode_inputs_host(
+                tokens[i],
+                cross_attention_masks[i],
+                full_text_row_masked_out_mask[i],
+                position_id=position_id[i],
+                page_table=user_page_table,
+                cross_page_table=user_cross_page_table,
+            )
+
+            copy_host_to_device(
+                host_tensors=(
+                    tt_h,
+                    tt_xattn_mask,
+                    tt_full_text_mask_expand_1NSH,
+                    tt_full_text_mask_expand_11SD,
+                    tt_position_id,
+                    tt_rope_id,
+                    tt_page_table,
+                    tt_cross_page_table,
+                ),
+                device_tensors=(
+                    trace_h[i],
+                    trace_xattn_mask[i],
+                    trace_full_text_mask_expand_1NSH[i],
+                    trace_full_text_mask_expand_11SD[i],
+                    trace_position_id[i],
+                    trace_rope_id[i],
+                    trace_page_table[i],
+                    trace_cross_page_table[i],
+                ),
+            )
 
         ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
 
@@ -876,7 +995,8 @@ class Generator:
 
         prompt_tokens_tensor = torch.tensor(prompt_tokens, dtype=torch.long).reshape(1, -1)  # B, S
         # Suboptimal to allocate caches every time
-        xattn_caches = self.model.setup_cache(self.model_args.max_batch_size)
+        model_id = 0
+        xattn_caches = self.model[model_id].setup_cache(self.model_args[model_id].max_batch_size)
         (
             xattn_caches,
             cross_attention_masks,
@@ -890,9 +1010,17 @@ class Generator:
             user_id=0,
             total_len=total_len,
             prefill_len=prefill_len,
+            model_id=model_id,
         )
 
-        logits = logits.view(1, 1, self.model_args.vocab_size)
+        last_token_idx = prefill_len - 1
+        logits = self.model[model_id].process_output_prefill(logits, 1, last_token_idx=(last_token_idx % 32))
+        logits = logits.view(1, 1, self.model_args[model_id].vocab_size)
+
+        output_xattn_masks = [[] for _ in range(self.data_parallel)]
+        output_full_text_row_masked_out_masks = [[] for _ in range(self.data_parallel)]
+        output_xattn_masks[model_id].append(cross_attention_masks)
+        output_full_text_row_masked_out_masks[model_id].append(full_text_row_masked_out_mask)
 
         def sample(logits):
             if temperature > 0:
@@ -917,12 +1045,11 @@ class Generator:
             logits = self.decode_forward(
                 position_id,
                 next_token_tensor,
-                [cross_attention_masks],
-                [full_text_row_masked_out_mask],
-                xattn_caches,
+                output_xattn_masks,
+                output_full_text_row_masked_out_masks,
+                [xattn_caches],
                 enable_trace=False,
             )
-
             next_token, text = sample(logits)
             yield TokenResult(
                 token=next_token[0].item(),
@@ -936,8 +1063,9 @@ class Generator:
         top_p: float = 0.9,
         max_gen_len=None,
     ):
-        if max_gen_len is None or max_gen_len == 0 or max_gen_len >= self.model.configuration.max_seq_len:
-            max_gen_len = self.model.configuration.max_seq_len - 1
+        model_id = 0
+        if max_gen_len is None or max_gen_len == 0 or max_gen_len >= self.model[model_id].configuration.max_seq_len:
+            max_gen_len = self.model[model_id].configuration.max_seq_len - 1
 
         tokens = []
 
@@ -968,8 +1096,9 @@ class Generator:
         top_p: float = 0.9,
         max_gen_len=None,
     ):
-        if max_gen_len is None or max_gen_len == 0 or max_gen_len >= self.model.configuration.max_seq_len:
-            max_gen_len = self.model.configuration.max_seq_len - 1
+        model_id = 0
+        if max_gen_len is None or max_gen_len == 0 or max_gen_len >= self.model[model_id].configuration.max_seq_len:
+            max_gen_len = self.model[model_id].configuration.max_seq_len - 1
 
         model_input = self.formatter.encode_content(content)
 
