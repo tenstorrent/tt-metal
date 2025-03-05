@@ -1889,6 +1889,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     tt_metal::NOC in0_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
     tt_metal::NOC in1_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
+    tt_metal::NOC_MODE noc_mode =
+        use_hop_cores ? tt_metal::NOC_MODE::DM_DEDICATED_NOC : tt_metal::NOC_MODE::DM_DYNAMIC_NOC;
 
     /* Create the kernels */
     auto mm_kernel_in0_id = tt_metal::CreateKernel(
@@ -1898,7 +1900,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = in0_noc,
-            .noc_mode = tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
+            .noc_mode = noc_mode,
             .compile_args = in0_sender_compile_time_args});
 
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
@@ -1908,7 +1910,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = in1_noc,
-            .noc_mode = tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
+            .noc_mode = noc_mode,
             .compile_args = in1_sender_writer_compile_time_args,
             .defines = mm_in1_kernel_defines});
 
@@ -2092,7 +2094,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
     }
 
     auto override_runtime_arguments_callback =
-        [mm_kernel_in0_id, mm_kernel_in1_sender_writer_id, cb_src0, cb_src1, cb_output, num_cores, cores, global_cb](
+        [mm_kernel_in0_id, mm_kernel_in1_sender_writer_id, cb_src0, cb_src1, cb_output, num_cores, cores](
             const void* operation,
             tt::tt_metal::Program& program,
             const std::vector<tt::tt_metal::Tensor>& input_tensors,
@@ -2100,6 +2102,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
             const std::vector<tt::tt_metal::Tensor>& output_tensors) {
             TT_ASSERT(input_tensors.size() + optional_input_tensors.size() == 3);
             TT_ASSERT(output_tensors.size() == 1);
+
+            auto& global_cb = static_cast<const ttnn::operations::matmul::Matmul*>(operation)->global_cb;
 
             auto src_buffer_a = input_tensors[0].buffer();
             auto src_buffer_b = input_tensors[1].buffer();
