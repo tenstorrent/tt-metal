@@ -402,6 +402,9 @@ int main() {
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     noc_local_state_init(noc_index);
     uint8_t prev_noc_mode = DM_DEDICATED_NOC;
+#ifdef ARCH_BLACKHOLE
+    uint8_t prev_noc_index = noc_index;
+#endif
     trigger_sync_register_init();
 
     while (1) {
@@ -484,17 +487,26 @@ int main() {
             uint8_t cmd_buf;
             if (noc_mode == DM_DEDICATED_NOC) {
                 if (prev_noc_mode != noc_mode) {
+#ifdef ARCH_BLACKHOLE
+                    noc_async_atomic_barrier(prev_noc_index);
+#endif
                     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
                 }
                 cmd_buf = BRISC_AT_CMD_BUF;
             } else {
                 if (prev_noc_mode != noc_mode) {
+#ifdef ARCH_BLACKHOLE
+                    noc_async_atomic_barrier(prev_noc_index);
+#endif
                     dynamic_noc_init();
                 }
                 dynamic_noc_local_state_init();
                 cmd_buf = DYNAMIC_NOC_BRISC_AT_CMD_BUF;
             }
             prev_noc_mode = noc_mode;
+#ifdef ARCH_BLACKHOLE
+            prev_noc_index = noc_index;
+#endif
 
             uint32_t tt_l1_ptr* cb_l1_base =
                 (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.local_cb_offset);
