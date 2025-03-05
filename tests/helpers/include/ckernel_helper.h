@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#ifndef CKERNEL_HELPER_H
-#define CKERNEL_HELPER_H
+#pragma once
 
 namespace ckernel
 {
@@ -16,10 +15,6 @@ volatile std::uint32_t tt_reg_ptr *mailbox_base[4] = {
     reinterpret_cast<volatile std::uint32_t tt_reg_ptr *>(TENSIX_MAILBOX2_BASE),
     reinterpret_cast<volatile std::uint32_t tt_reg_ptr *>(TENSIX_MAILBOX3_BASE)};
 
-std::uint32_t cfg_state_id __attribute__((section(".bss")))   = 0; // Flip between 0 and 1 to keep state between kernel calls
-std::uint32_t dest_offset_id __attribute__((section(".bss"))) = 0; // Flip between 0 and 1 to keep dest pointer between kernel calls
+std::uint32_t cfg_state_id   = 0; // Flip between 0 and 1 to keep state between kernel calls
+std::uint32_t dest_offset_id = 0; // Flip between 0 and 1 to keep dest pointer between kernel calls
 } // namespace ckernel
-
-using namespace ckernel;
-
-#endif

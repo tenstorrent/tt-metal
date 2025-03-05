@@ -23,8 +23,7 @@ def generate_make_command(test_config):
     approx_mode = test_config.get("approx_mode", "false")
     math_fidelity = test_config.get("math_fidelity", 0)
 
-    make_cmd += f" math_fidelity={math_fidelity} "
-    make_cmd += f" approx_mode={approx_mode} "
+    make_cmd += f" math_fidelity={math_fidelity} approx_mode={approx_mode} "
 
     reduce_dim = test_config.get("reduce_dim", "no_reduce_dim")
     pool_type = test_config.get("pool_type", "no_reduce_dim")
@@ -36,23 +35,20 @@ def generate_make_command(test_config):
                 make_cmd += f"reduce_dim={reduce_dim_args[reduce_dim]} "
                 make_cmd += f"pool_type={reduce_pool_args[pool_type]} "
             else:
-                make_cmd += f"mathop={  mathop_args_dict[mathop]} "
+                make_cmd += f"mathop={mathop_args_dict[mathop]} "
         else:  # multiple tiles handles mathop as int
-
-            if mathop == 1:
-                make_cmd += " mathop=ELTWISE_BINARY_ADD "
-            elif mathop == 2:
-                make_cmd += " mathop=ELTWISE_BINARY_SUB "
-            else:
-                make_cmd += " mathop=ELTWISE_BINARY_MUL "
+            mathop_map = {
+                1: "ELTWISE_BINARY_ADD",
+                2: "ELTWISE_BINARY_SUB",
+                3: "ELTWISE_BINARY_MUL",
+            }
+            make_cmd += f"mathop={mathop_map.get(mathop, 'ELTWISE_BINARY_MUL')} "
 
             kern_cnt = str(test_config.get("kern_cnt"))
             pack_addr_cnt = str(test_config.get("pack_addr_cnt"))
             pack_addrs = test_config.get("pack_addrs")
 
-            make_cmd += f" kern_cnt={kern_cnt} "
-            make_cmd += f" pack_addr_cnt={pack_addr_cnt} pack_addrs={pack_addrs}"
+            make_cmd += f" kern_cnt={kern_cnt} pack_addr_cnt={pack_addr_cnt} pack_addrs={pack_addrs}"
 
     print(make_cmd)
-
     return make_cmd

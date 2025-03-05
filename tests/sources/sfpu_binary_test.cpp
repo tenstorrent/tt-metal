@@ -13,7 +13,6 @@ const bool unpack_to_dest = true;
 // Globals
 uint32_t unp_cfg_context        = 0;
 uint32_t pack_sync_tile_dst_ptr = 0;
-volatile uint32_t tt_l1_ptr l1_buffer[16] __attribute__((section(".text#"))) __attribute__((aligned(16)));
 
 #ifdef DEST_ACC
 const bool is_fp32_dest_acc_en = true;
@@ -29,7 +28,7 @@ const bool is_fp32_dest_acc_en = false;
 
 void run_kernel()
 {
-    volatile uint32_t* buffer_A = (volatile uint32_t*)0x1a000;
+    volatile uint32_t* buffer_A = reinterpret_cast<volatile uint32_t*>(0x1a000);
 
     _llk_unpack_A_hw_configure_<is_fp32_dest_acc_en, StochRndType::None>(DATA_FORMAT, DATA_FORMAT, FACE_R_DIM, 0, 4);
     _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(0, 0, FACE_R_DIM, 4, DATA_FORMAT, DATA_FORMAT);
@@ -49,11 +48,9 @@ void run_kernel()
 using namespace ckernel;
 using namespace ckernel::sfpu;
 
-#define ELTWISE_BINARY_SFPU_OP 0
-
 void run_kernel()
 {
-    const bool is_int_fpu_en = false;
+    constexpr auto ELTWISE_BINARY_SFPU_OP = 0 constexpr bool is_int_fpu_en = false;
 // copy srca to dest
 #ifdef ARCH_BLACKHOLE
     _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, BroadcastType::NONE, false, is_fp32_dest_acc_en, is_int_fpu_en>(0, 0, 4, DATA_FORMAT);
@@ -98,7 +95,7 @@ void run_kernel()
 
 void run_kernel()
 {
-    volatile uint32_t* buffer_Dest = (volatile uint32_t*)0x1c000;
+    volatile uint32_t* buffer_Dest = reinterpret_cast<volatile uint32_t*>(0x1c000);
 
     std::fill(buffer_Dest, buffer_Dest + 16 * 16 * 4, 0xdeadbeef);
 

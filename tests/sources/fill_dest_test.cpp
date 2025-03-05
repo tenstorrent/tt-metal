@@ -12,7 +12,6 @@
 // Globals
 uint32_t unp_cfg_context        = 0;
 uint32_t pack_sync_tile_dst_ptr = 0;
-volatile uint32_t tt_l1_ptr l1_buffer[16] __attribute__((section(".text#"))) __attribute__((aligned(16)));
 
 #ifdef DEST_ACC
 const bool is_fp32_dest_acc_en = true;
@@ -28,8 +27,8 @@ const bool is_fp32_dest_acc_en = false;
 
 void run_kernel()
 {
-    volatile uint32_t* const buffer_A = (volatile uint32_t*)0x1a000;
-    volatile uint32_t* const buffer_B = (volatile uint32_t*)0x1b000;
+    volatile uint32_t* const buffer_A = reinterpret_cast<volatile uint32_t*>(0x1a000);
+    volatile uint32_t* const buffer_B = reinterpret_cast<volatile uint32_t*>(0x1b000);
 
     for (uint index = 0; index < 16; index++)
     {
@@ -76,7 +75,7 @@ void run_kernel()
 
 void run_kernel()
 {
-    volatile uint32_t* const buffer_Dest = (volatile uint32_t*)0x1c000;
+    volatile uint32_t* const buffer_Dest = reinterpret_cast<volatile uint32_t*>(0x1c000);
 
 #ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<false, is_fp32_dest_acc_en, false>(DATA_FORMAT, DATA_FORMAT, 16 * 16 * 4);

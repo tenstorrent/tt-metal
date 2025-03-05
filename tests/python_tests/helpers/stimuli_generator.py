@@ -12,14 +12,12 @@ def flatten_list(sublists):
 def generate_random_face(stimuli_format="Float16_b", const_value=1, const_face=False):
 
     if stimuli_format in ["Float16_b", "Float16", "Float32"]:
-
         if const_face:
             srcA_face = torch.ones(256, dtype=format_dict[stimuli_format]) * const_value
         else:  # random for both faces
             srcA_face = torch.rand(256, dtype=format_dict[stimuli_format]) + 0.1
 
     elif stimuli_format == "Bfp8_b":
-
         size = 256
         integer_part = torch.randint(0, 3, (size,))
         fraction = torch.randint(0, 16, (size,)).to(dtype=torch.bfloat16) / 16.0
@@ -54,27 +52,22 @@ def generate_stimuli(
     srcA = []
     srcB = []
 
-    for i in range(4 * tile_cnt):
+    for _ in range(4 * tile_cnt):
         face_a, face_b = generate_random_face_ab(
             stimuli_format, const_face, const_value_A, const_value_B
         )
-        srcA.append(face_a.tolist())
-        srcB.append(face_b.tolist())
-
-    srcA = flatten_list(srcA)
-    srcB = flatten_list(srcB)
+        srcA.extend(face_a.tolist())
+        srcB.extend(face_b.tolist())
 
     if not sfpu:
-        if stimuli_format != "Bfp8_b":
-            return torch.tensor(srcA, dtype=format_dict[stimuli_format]), torch.tensor(
-                srcB, dtype=format_dict[stimuli_format]
-            )
-        else:
-            return torch.tensor(srcA, dtype=torch.bfloat16), torch.tensor(
-                srcB, dtype=torch.bfloat16
-            )
+        dtype = (
+            format_dict[stimuli_format]
+            if stimuli_format != "Bfp8_b"
+            else torch.bfloat16
+        )
+        return torch.tensor(srcA, dtype=dtype), torch.tensor(srcB, dtype=dtype)
     else:
         srcA = generate_random_face(stimuli_format, const_value_A, const_face)
-        srcB = torch.full((256,), 0)
+        srcB = torch.zeros(256)
         srcA = torch.cat((srcA, torch.zeros(1024 - 256)))
         return srcA, srcB
