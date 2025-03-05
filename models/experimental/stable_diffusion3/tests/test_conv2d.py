@@ -4,19 +4,31 @@
 
 from __future__ import annotations
 
+import os
 import pytest
 import torch
 import ttnn
 
 from ..tt.patch_embedding import TtConv2d, TtConv2dParameters
-from ..tt.utils import assert_quality
+from ..tt.utils import assert_quality, to_torch
 
 
 @pytest.mark.parametrize(
+    "mesh_device",
+    [
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
+        )
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
     ("batch_size", "in_channels", "out_channels", "kernel_size", "stride", "height", "width"),
     [
-        (10, 32, 32, (2, 3), (2, 2), 64, 64),
-        (10, 20, 32, (3, 3), (2, 3), 128, 256),
+        (2, 16, 2432, (2, 2), (2, 2), 64, 64),
+        (2, 16, 2432, (2, 2), (2, 2), 128, 128),
+        (2, 16, 1536, (2, 2), (2, 2), 64, 64),
+        (2, 16, 1536, (2, 2), (2, 2), 128, 128),
         # these are needed in the VAE for an image resolution of 1024x1024:
         # (1, 128, 128, (3, 3), (1, 1), 1024, 1024),
         # (1, 128, 3, (3, 3), (1, 1), 1024, 1024),
@@ -34,7 +46,7 @@ from ..tt.utils import assert_quality
 @pytest.mark.usefixtures("use_program_cache")
 def test_conv2d(
     *,
-    device: ttnn.Device,
+    mesh_device: ttnn.MeshDevice,
     batch_size: int,
     in_channels: int,
     out_channels: int,
@@ -56,15 +68,21 @@ def test_conv2d(
     parameters = TtConv2dParameters.from_torch(
         torch_model.state_dict(),
         dtype=dtype,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        kernel_size=kernel_size,
+        stride=stride,
+        device=mesh_device,
     )
-    tt_model = TtConv2d(parameters, stride=stride)
+    tt_model = TtConv2d(parameters, mesh_device)
 
     torch_input_tensor = torch.ones((batch_size, in_channels, height, width))
 
     tt_input_tensor = ttnn.from_torch(
-        torch_input_tensor.permute([0, 2, 3, 1]),  # BCYX -> BYXC
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
+        torch_input_tensor,  # .permute([0, 2, 3, 1]),  # BCYX -> BYXC
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         dtype=dtype,
     )
 
@@ -72,6 +90,10 @@ def test_conv2d(
         torch_output = torch_model(torch_input_tensor)
 
     tt_output = tt_model(tt_input_tensor)
-    tt_output_torch = ttnn.to_torch(tt_output).permute([0, 3, 1, 2])
+    tt_output_torch = (
+        to_torch(tt_output, mesh_device=mesh_device, dtype=dtype, shard_dim=0)[0]
+        .permute(0, 2, 1)
+        .reshape(batch_size, out_channels, height // kernel_size[1], width // kernel_size[0])
+    )
 
     assert_quality(torch_output, tt_output_torch, pcc=0.999_900)
