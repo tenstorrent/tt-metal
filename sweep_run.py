@@ -2,7 +2,8 @@ import os
 import re
 
 # List of operations
-ops = ["fmod", "ceil", "remainder", "typecast", "floor"]
+# ops = ["bitwise_and", "bitwise_left_shift", "bitwise_not", "bitwise_or", "bitwise_right_shift", "bitwise_xor"]
+ops = ["bitwise_left_shift", "bitwise_right_shift"]
 
 
 # Function to modify the file
@@ -26,7 +27,10 @@ def modify_file(file_path):
 
 # Loop through each operation and run the commands
 for op in ops:
-    module_name = f"eltwise.unary.{op}.{op}_survey"
+    bitwise = ""
+    if op.startswith("bitwise"):
+        bitwise = "bitwise."
+    module_name = f"eltwise.unary.{bitwise}{op}.{op}_survey"
     file_path = f"tests/sweep_framework/sweeps/eltwise/unary/{op}/{op}_survey.py"  # Assuming file structure
 
     # Modify the file if it exists
