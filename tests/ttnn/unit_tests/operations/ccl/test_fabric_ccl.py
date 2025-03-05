@@ -44,4 +44,6 @@ def test_fabric_reduce_scatter(n300_mesh_device):
     )
     print(tt_input)
     output = ttnn.experimental.llama_reduce_scatter(tt_input, dim, memory_config=sharded_mem_config)
+    print(output.memory_config())
     print(output)
+    print(output.memory_config())
