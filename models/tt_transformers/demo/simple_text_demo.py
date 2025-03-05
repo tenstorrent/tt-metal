@@ -21,7 +21,7 @@ import ttnn
 from llama_models.llama3.api.tokenizer import Tokenizer
 
 from models.tt_transformers.tt.generator import Generator
-from models.tt_transformers.tt.model_config import ModelOptimizations
+from models.tt_transformers.tt.model_config import ModelOptimizations, dtype_mf_settings
 from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
     PagedAttentionConfig,
@@ -29,7 +29,6 @@ from models.tt_transformers.tt.common import (
 )
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.demos.utils.llm_demo_utils import create_benchmark_data
-from models.demos.llama3.tt.model_config import LlamaOptimizations, dtype_mf_settings
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -267,8 +266,8 @@ def create_tt_model(
     "optimizations",
     [
         *[pytest.param(setting, id=setting.id) for setting in dtype_mf_settings],
-        LlamaOptimizations.performance,
-        LlamaOptimizations.accuracy,
+        ModelOptimizations.performance,
+        ModelOptimizations.accuracy,
     ],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 23887872, "num_command_queues": 2}], indirect=True)
