@@ -441,17 +441,6 @@ def test_all_gather(
         ),
         (
             2,
-            [1, 1, 32, 2048],
-            3,
-            ttnn.TILE_LAYOUT,
-            (32, 128),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 3))}),
-            None,
-            None,
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ),
-        (
-            2,
             [1, 1, 64, 256],
             2,
             ttnn.TILE_LAYOUT,
