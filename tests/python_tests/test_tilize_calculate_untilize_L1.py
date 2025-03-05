@@ -49,9 +49,9 @@ def generate_golden(op, operand1, operand2, data_format, math_fidelity):
 
 param_combinations = [
     (mathop, tile_cnt, format, dest_acc, testname, math_fidelity)
-    for mathop in ["elwadd"]  # , "elwsub", "elwmul"]
+    for mathop in ["elwadd", "elwsub", "elwmul"]
     for tile_cnt in range(1, 2)
-    for format in ["Float16_b"]  # , "Float16"]
+    for format in ["Float16_b", "Float16"]
     for dest_acc in [""]  # , "DEST_ACC"]
     for testname in ["tilize_calculate_untilize_L1"]
     for math_fidelity in [4]  # [0,2,3,4]
@@ -72,25 +72,7 @@ def test_tilize_calculate_untilize_L1(
     format, testname, tile_cnt, mathop, dest_acc, math_fidelity
 ):
 
-    # src_A, src_B = generate_stimuli(format,tile_cnt)#,sfpu=False,const_face=True,const_value_A=1,const_value_B=2)
-    # src_A, src_B = generate_stimuli(format,tile_cnt,sfpu=False,const_face=True,const_value_A=1,const_value_B=2)
-
-    src_A = torch.cat(
-        [
-            torch.ones(256, dtype=torch.bfloat16),
-            torch.ones(256, dtype=torch.bfloat16) * 2,
-            torch.ones(256, dtype=torch.bfloat16) * 3,
-            torch.ones(256, dtype=torch.bfloat16) * 4,
-        ]
-    )
-    src_B = torch.cat(
-        [
-            torch.ones(256, dtype=torch.bfloat16),
-            torch.ones(256, dtype=torch.bfloat16) * 2,
-            torch.ones(256, dtype=torch.bfloat16) * 3,
-            torch.ones(256, dtype=torch.bfloat16) * 4,
-        ]
-    )
+    src_A, src_B = generate_stimuli(format, tile_cnt)
 
     golden_tensor = generate_golden(mathop, src_A, src_B, format, math_fidelity)
     print(golden_tensor.view(32, 32))

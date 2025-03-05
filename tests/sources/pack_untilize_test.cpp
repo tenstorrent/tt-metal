@@ -57,7 +57,7 @@ void run_kernel()
     _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, BroadcastType::NONE, is_fp32_dest_acc_en, is_int_fpu_en>(0, 0, 4, DATA_FORMAT);
 #endif
     _llk_math_pack_sync_init_<DstSync::SyncFull, is_fp32_dest_acc_en>();
-    _llk_math_hw_configure_<false, false>(DATA_FORMAT, DATA_FORMAT);
+    _llk_math_hw_configure_<true, false>(DATA_FORMAT, DATA_FORMAT);
     _llk_math_wait_for_dest_available_<DstSync::SyncFull>();
     _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncFull, BroadcastType::NONE, is_fp32_dest_acc_en, false>(0, DATA_FORMAT, DATA_FORMAT);
     _llk_math_dest_section_done_<DstSync::SyncFull, is_fp32_dest_acc_en>();
@@ -82,13 +82,9 @@ void run_kernel()
 
 #ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<UNTILIZE, is_fp32_dest_acc_en, false>(DATA_FORMAT, DATA_FORMAT, 16 * 16 * 4);
-#else
-    _llk_pack_hw_configure_<UNTILIZE, is_fp32_dest_acc_en>(DATA_FORMAT, DATA_FORMAT, 16 * 16 * 4);
-#endif
-
-#ifdef ARCH_BLACKHOLE
     _llk_pack_dest_init_<DstSync::SyncFull, DstTileFaceLayout::RowMajor, is_fp32_dest_acc_en>();
 #else
+    _llk_pack_hw_configure_<UNTILIZE, is_fp32_dest_acc_en>(DATA_FORMAT, DATA_FORMAT, 16 * 16 * 4);
     _llk_pack_dest_init_<DstSync::SyncFull, DstTileFaceLayout::RowMajor, UNTILIZE, is_fp32_dest_acc_en>();
 #endif
 

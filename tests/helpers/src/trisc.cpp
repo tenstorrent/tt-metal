@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <l1_address_map.h>
-#include <tensix.h>
+#include <cstdint>
 
 #include "ckernel.h"
 #include "ckernel_addr_map.h"
@@ -14,30 +13,30 @@
 #include "ckernel_helper.h"
 #include "params.h"
 
-#ifdef LLK_TRISC_UNPACK
-volatile uint32_t* mailbox = (volatile uint32_t*)(0x19FFC);
-#elif defined(LLK_TRISC_MATH)
-volatile uint32_t* mailbox = (volatile uint32_t*)(0x19FF8);
-#elif defined(LLK_TRISC_PACK)
-volatile uint32_t* mailbox = (volatile uint32_t*)(0x19FF4);
-#endif
-
 int main()
 {
+#ifdef LLK_TRISC_UNPACK
+    volatile std::uint32_t* mailbox = (volatile std::uint32_t*)(0x19FFC);
+#elif defined(LLK_TRISC_MATH)
+    volatile std::uint32_t* mailbox = (volatile std::uint32_t*)(0x19FF8);
+#elif defined(LLK_TRISC_PACK)
+    volatile std::uint32_t* mailbox = (volatile std::uint32_t*)(0x19FF4);
+#endif
+
     *mailbox = 0x2; // write value different than 1 to mailbox to indicate kernel is running
 
     for (int i = 0; i < 64; i++)
     {
-        regfile[i] = 0;
+        ckernel::regfile[i] = 0;
     }
 
-    reset_cfg_state_id();
-    reset_dest_offset_id();
+    ckernel::reset_cfg_state_id();
+    ckernel::reset_dest_offset_id();
+    ckernel::tensix_sync();
 
-    tensix_sync();
     run_kernel();
 
-    *mailbox = KERNEL_COMPLETE; // 0x1
+    *mailbox = ckernel::KERNEL_COMPLETE; // 0x1
 
     for (;;)
     {

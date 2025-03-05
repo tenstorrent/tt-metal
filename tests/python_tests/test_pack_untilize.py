@@ -27,6 +27,9 @@ param_ids = [f" format={comb[0]} " for comb in param_combinations]
 def test_pack_untilize(format, testname):
 
     src_A, src_B = generate_stimuli(format)
+    src_A = torch.cat(
+        [torch.full((256,), i, dtype=format_dict[format]) for i in range(1, 5)]
+    )
     src_B = torch.full((1024,), 0)
 
     golden_tensor = generate_golden(src_A, format)

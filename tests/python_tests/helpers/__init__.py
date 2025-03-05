@@ -20,8 +20,6 @@ from .unpack import (
 from .utils import (
     run_shell_command,
     calculate_read_words_count,
-    tilize,
-    untilize,
     compare_pcc,
     format_kernel_list,
     print_faces,
@@ -34,6 +32,7 @@ from .device import (
     assert_tensix_operations_finished,
 )
 from .test_config import generate_make_command
+from .tilize_untilize import tilize, untilize
 from ttexalens import Verbosity
 
 Verbosity.set(Verbosity.ERROR)

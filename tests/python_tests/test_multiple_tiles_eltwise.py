@@ -46,7 +46,7 @@ param_combinations = [
     (mathop, tile_cnt, format, dest_acc, testname, math_fidelity)
     for mathop in range(1, 4)
     for tile_cnt in range(1, 4)
-    for format in ["Bfp8_b", "Float16", "Bfp8_b"]
+    for format in ["Float16_b", "Float16", "Bfp8_b"]
     for dest_acc in ["", "DEST_ACC"]
     for testname in ["multiple_tiles_eltwise_test"]
     for math_fidelity in [0, 2, 3, 4]
