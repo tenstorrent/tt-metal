@@ -282,8 +282,8 @@ void DevicePool::initialize_device(IDevice* dev) const {
 
     watcher_attach(dev);
 
-    // TODO: add handling of EDM
-    if (tt::Cluster::instance().get_fabric_config() == FabricConfig::FABRIC_2D) {
+    if (tt::Cluster::instance().get_fabric_config() == FabricConfig::FABRIC_1D ||
+        tt::Cluster::instance().get_fabric_config() == FabricConfig::FABRIC_2D) {
         // Initialize fabric on mmio device
         dev->init_fabric();
     }
@@ -384,8 +384,10 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
             this->activate_device(device_id);
         }
     }
+
     // Only can launch Fabric if all devices are active
-    if (tt::Cluster::instance().get_fabric_config() == FabricConfig::FABRIC_2D) {
+    if (tt::Cluster::instance().get_fabric_config() == FabricConfig::FABRIC_1D ||
+        tt::Cluster::instance().get_fabric_config() == FabricConfig::FABRIC_2D) {
         for (int i = 0; i < tt::Cluster::instance().number_of_devices(); i++) {
             if (not _inst->is_device_active(i)) {
                 // Fabric currently requires all devices to be active
@@ -394,15 +396,19 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
         }
     }
 
-    // TODO: add handling of EDM
-    if (tt::Cluster::instance().get_fabric_config() == FabricConfig::FABRIC_2D) {
+    if (tt::Cluster::instance().get_fabric_config() == FabricConfig::FABRIC_1D ||
+        tt::Cluster::instance().get_fabric_config() == FabricConfig::FABRIC_2D) {
         // Initialize control plane, does not configure kernels/routing tables
         // We always need a control plane for mapping of logical devices to physical devices
         // TODO: add single device support
         _inst->initialize_control_plane();
-        // write routing tables to all ethernet cores
-        this->control_plane->configure_routing_tables();
+
+        if (tt::Cluster::instance().get_fabric_config() == FabricConfig::FABRIC_2D) {
+            // write routing tables to all ethernet cores
+            this->control_plane->configure_routing_tables();
+        }
     }
+
     this->using_fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
     if (this->using_fast_dispatch) {
         populate_fd_kernels(devices_to_activate, this->num_hw_cqs);
