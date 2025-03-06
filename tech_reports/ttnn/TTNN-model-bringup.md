@@ -75,48 +75,48 @@ The diagram below illustrates the corresponding Downsample1 module:
 
 ## 3.3 Optimization
   - When writing TTNN models, there can be several levels of optimization. We can break them down into 3 stages. At the first stage, optimization can be acheived at per-op level. For instance, for a convolution op:
-  - STAGE 1: 
-  - Based on the height, width and number of chanels, you may decide the sharding stratefy (height-sharding, width-sharding, or block-sharding). You may refer to the documentation on convolutions for more details here: [Conv sharding strategy](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/CNNs/ttcnn.md#sharding) [sharding strategy explained in yolov4-tech report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/YoloV4-TTNN/yolov4.md#24-use-best-shardlayout-for-convolutio)  
+  - STAGE 1:
+  - Based on the height, width and number of chanels, you may decide the sharding stratefy (height-sharding, width-sharding, or block-sharding). You may refer to the documentation on convolutions for more details here: [Conv sharding strategy](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/CNNs/ttcnn.md#sharding) [sharding strategy explained in yolov4-tech report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/YoloV4-TTNN/yolov4.md#24-use-best-shardlayout-for-convolutio)
   - At the op-level, you may also optimize by selecting the optimal data type such as bfloat8_b over bfloat_16 when possible. Here is another example of it in yolo-v4 tech report: [data-type optimization](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/YoloV4-TTNN/yolov4.md#23-data-type-optimization)
   - At the op-level, another argument is the math_fidelity. Always set the math_fidelity=ttnn.MathFidelity.LoFi unless you observe noticeable drop in PCC.
   - At the module-level, there are parameters to optimize based on your module graph. For instance, for the convolution op, you should set the deallocate_activation to True if you will not be using the input tensor to the conv anywhere else on the model graph. Please refer to the example here: [Yolo-v4 architecture](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/YoloV4-TTNN/yolov4.md#3-yolov4-architecture).
-  - At the module-level as well as the full-model-level, there are intial oprimizations you may consider, for instance, when the module or the full model consists of cosequtive ops, idally there should be minimal changes in sharding strategy between ops. For instance, if the model starts with width-sharding op, it would be ideal to keep the same strategy for the following op as reshards can be expensive. So it is recommended to find the best sharding strategies per op. However, once you have a module implementation, you may generate the perf sheet (this will be covered on a following section of this reort) to analyze the device run-time of the full module/full model and identify where keeping the same sharding strategy could be beneficial looking at the end to end device time versus doing reshareds between ops.  
+  - At the module-level as well as the full-model-level, there are intial oprimizations you may consider, for instance, when the module or the full model consists of cosequtive ops, idally there should be minimal changes in sharding strategy between ops. For instance, if the model starts with width-sharding op, it would be ideal to keep the same strategy for the following op as reshards can be expensive. So it is recommended to find the best sharding strategies per op. However, once you have a module implementation, you may generate the perf sheet (this will be covered on a following section of this reort) to analyze the device run-time of the full module/full model and identify where keeping the same sharding strategy could be beneficial looking at the end to end device time versus doing reshareds between ops.
 
 ## 4.  End to end model performance
 ### 4.1 Performance Sheet
 
-  - STAGE 2 of optimization: 
-  - at this stage, we need to utilize several tools available to us. We will start by the perf_sheet. You will need to build metal with perf-analyzer enabled fist. Then follow the instructions to generate the perf sheet per your module or full model.    
+  - STAGE 2 of optimization:
+  - at this stage, we need to utilize several tools available to us. We will start by the perf_sheet. You will need to build metal with perf-analyzer enabled fist. Then follow the instructions to generate the perf sheet per your module or full model.
   - When you build metal use:
     ```
     build_metal.sh -p
     ```
-. This will enable the profiler. 
+. This will enable the profiler.
   - Once build with the command above to enable profiler, and once you have a pytest for your TTNN module or full model, you may follow the example bellow from the ResNet model replacing the path to the test_perf_resnet.py with the path to your implementation:
- 
+
     ```
     ./tt_metal/tools/profiler/profile_this.py -n resnet -c "pytest models/demos/resnet/tests/test_perf_resnet.py::test_perf_bare_metal[20-0.0185-25]"'
     ```
-  - Once you execute such command, a .csv perf sheet will apear in your execution path. You may open the file via excel for better utilities. 
-  - You may refer to [TTNN profiler documentation](https://docs.tenstorrent.com/ttnn/latest/ttnn/profiling_ttnn_operations.html) for a more comprehensive overview of the profiler tool and the details of the generated perf sheet by it. 
-  - [Perf Report Headers](https://docs.tenstorrent.com/ttnn/latest/ttnn/profiling_ttnn_operations.html#perf-report-headers) will be particularly helpful in understanding the content of the generated perf sheet. 
-  - The first thing to check on the perf sheet would be to look at the device kernel duration reported in ns per op. By using excel tools, you can quickly identify the largest values in the column. Then see, which op they correspond too. Here are some examples: 
-  - ![perf-sheet snippet](images/perf-sheet-sample1.png)  
-  - Once you idenfify the op, it is recommended to check the number of cores used for the op among other configs/parameters. For instance for the shared snnipet, you can see how the device kernel durations are high when ops are running on low number of cores. For the examples of a convolution op, you may increase the number of cores used by adjsting the sharding strategy (height, width or block sharding). See an example here in [yolov4 tech report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/YoloV4-TTNN/yolov4.md#24-use-best-shardlayout-for-convolution) 
-  - another factor to consider is per op utilization. One way to increase utilization would be to adjsut the data-type. see an example here in [yolov4 tech report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/YoloV4-TTNN/yolov4.md#data-type-optimization) 
-  - The utilization percentage is calculated by - (PM ideal/device kernel duration) * (108/core_count) 
+  - Once you execute such command, a .csv perf sheet will apear in your execution path. You may open the file via excel for better utilities.
+  - You may refer to [TTNN profiler documentation](https://docs.tenstorrent.com/ttnn/latest/ttnn/profiling_ttnn_operations.html) for a more comprehensive overview of the profiler tool and the details of the generated perf sheet by it.
+  - [Perf Report Headers](https://docs.tenstorrent.com/ttnn/latest/ttnn/profiling_ttnn_operations.html#perf-report-headers) will be particularly helpful in understanding the content of the generated perf sheet.
+  - The first thing to check on the perf sheet would be to look at the device kernel duration reported in ns per op. By using excel tools, you can quickly identify the largest values in the column. Then see, which op they correspond too. Here are some examples:
+  - ![perf-sheet snippet](images/perf-sheet-sample1.png)
+  - Once you idenfify the op, it is recommended to check the number of cores used for the op among other configs/parameters. For instance for the shared snnipet, you can see how the device kernel durations are high when ops are running on low number of cores. For the examples of a convolution op, you may increase the number of cores used by adjsting the sharding strategy (height, width or block sharding). See an example here in [yolov4 tech report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/YoloV4-TTNN/yolov4.md#24-use-best-shardlayout-for-convolution)
+  - another factor to consider is per op utilization. One way to increase utilization would be to adjsut the data-type. see an example here in [yolov4 tech report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/YoloV4-TTNN/yolov4.md#data-type-optimization)
+  - The utilization percentage is calculated by - (PM ideal/device kernel duration) * (108/core_count)
   - Another approach to improve utilization is by applying sharding techniques to eliminate the need for data movement inter-tensix-cores between the consecutive OPs. you may checkout the example here in [yolov4 tech report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/YoloV4-TTNN/yolov4.md#21-sharding-on-all-relevant-ops)
 
 
 ### 4.2 Visualizer
 
-- Install ttnn-visualiser from the following the wheel file 
+- Install ttnn-visualiser from the following the wheel file
 
-   ``` 
-   python3 -m pip install ttnn_visualizer-0.15.0-py3-none-any.whl 
+   ```
+   python3 -m pip install ttnn_visualizer-0.15.0-py3-none-any.whl
    ```
 
- - To start the visualizer, run in terminal: 
+ - To start the visualizer, run in terminal:
     ```
     ttnn-visualizer
     ```
@@ -145,10 +145,10 @@ The diagram below illustrates the corresponding Downsample1 module:
     }
     ```
  - To generate ops information in a csv file, run profiler (for example):
-    ``` 
+    ```
     python -m tracy -p -r -v -m pytest models/demos/yolov4/demo/demo.py
     ```
-  
+
 
 Reports Folder (sample generated database file and folder structure)             |  Performance Data Folder (Sample generated performance ops information csv and folder structure)
 :-------------------------:|:-------------------------:
@@ -162,18 +162,18 @@ Reports Folder (sample generated database file and folder structure)            
 
 
 ### 4.3 Trace and 2cq
-  - You may consider a naive TTNN implementation by taking the example of [YOLO-v4 basic demo](https://github.com/tenstorrent/tt-metal/blob/774156701fe466c47d78fbdbd8265811801773f1/models/demos/yolov4/demo/demo.py). Then consider studying [the demo implementated using trace and 2 command quueues available in TTNN](https://github.com/tenstorrent/tt-metal/blob/774156701fe466c47d78fbdbd8265811801773f1/models/demos/yolov4/tests/yolov4_perfomant_webdemo.py). You may refer to this test for [trace implementation for yolov4](https://github.com/tenstorrent/tt-metal/blob/efa1a5630cfd6e84adc3ebf5fbe2d18bd5e40de8/models/demos/yolov4/tests/yolov4_perfomant_webdemo.py#L74) and to this test for the combination of [trace + 2cq implementation for yolov4](https://github.com/tenstorrent/tt-metal/blob/efa1a5630cfd6e84adc3ebf5fbe2d18bd5e40de8/models/demos/yolov4/tests/yolov4_perfomant_webdemo.py#L133) 
+  - You may consider a naive TTNN implementation by taking the example of [YOLO-v4 basic demo](https://github.com/tenstorrent/tt-metal/blob/774156701fe466c47d78fbdbd8265811801773f1/models/demos/yolov4/demo/demo.py). Then consider studying [the demo implementated using trace and 2 command quueues available in TTNN](https://github.com/tenstorrent/tt-metal/blob/774156701fe466c47d78fbdbd8265811801773f1/models/demos/yolov4/tests/yolov4_perfomant_webdemo.py). You may refer to this test for [trace implementation for yolov4](https://github.com/tenstorrent/tt-metal/blob/efa1a5630cfd6e84adc3ebf5fbe2d18bd5e40de8/models/demos/yolov4/tests/yolov4_perfomant_webdemo.py#L74) and to this test for the combination of [trace + 2cq implementation for yolov4](https://github.com/tenstorrent/tt-metal/blob/efa1a5630cfd6e84adc3ebf5fbe2d18bd5e40de8/models/demos/yolov4/tests/yolov4_perfomant_webdemo.py#L133)
 
-  - As you start on implementing trace + 2cq for your model, we recommend getting your model to work with trace only first. Then get it working with 2cq only. And finally, combine the two. Also, it is the recommended flow to have seprate unit tests for each case. 
+  - As you start on implementing trace + 2cq for your model, we recommend getting your model to work with trace only first. Then get it working with 2cq only. And finally, combine the two. Also, it is the recommended flow to have seprate unit tests for each case.
 
-  - To understand trace technique for optimization refer to [Metal Trace Documentation](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md#1-metal-trace) 
+  - To understand trace technique for optimization refer to [Metal Trace Documentation](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md#1-metal-trace)
 
-  - To understand the multiple command queues technique for optimization refer to [Multiple Command Queues Documentation](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md#2-multiple-command-queues) 
+  - To understand the multiple command queues technique for optimization refer to [Multiple Command Queues Documentation](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md#2-multiple-command-queues)
 
   - Finally, to understand how both of these optimization techniques can be used together refer to [Putting Trace and Multiple Command Queues Together Documentation](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md#3-putting-trace-and-multiple-command-queues-together)
 
 
 ## 5. Conclusion
 
-  - This document walks you through a systematic approach to bringing up new models in TTNN library using existing implementations as examples. It aims at enabling you to ramp up quicky on an intial bring up phase and then guiding you though knobs and tools available for performace analysis and optimizations. 
-  - Please note, this is an inital draft and it will be enhanced to include more details on memory visualizer and trace and 2cq concepts. 
+  - This document walks you through a systematic approach to bringing up new models in TTNN library using existing implementations as examples. It aims at enabling you to ramp up quicky on an intial bring up phase and then guiding you though knobs and tools available for performace analysis and optimizations.
+  - Please note, this is an inital draft and it will be enhanced to include more details on memory visualizer and trace and 2cq concepts.
