@@ -4,8 +4,9 @@
 
 from typing import Optional, Tuple
 from loguru import logger
-import enum
 
+import enum
+import pytest
 import torch
 
 import ttnn
@@ -113,7 +114,8 @@ def get_config_dict(config):
         raise Exception(f"config {config} is not a supported enum.")
 
 
-def run(
+def run_matmul(
+    device,
     batch_sizes,
     input_shapes,
     batch_matrix_multiply,
@@ -124,8 +126,6 @@ def run(
     input_b_dtype,
     output_dtype,
     input_layout,
-    *,
-    device,
 ) -> list:
     (m_size, k_size, n_size) = input_shapes
     input_shape_a = (*batch_sizes, m_size, k_size)
@@ -174,3 +174,286 @@ def run(
 
     expected_pcc = 0.99
     return [check_with_pcc(torch_output_tensor, output_tensor, expected_pcc), e2e_perf]
+
+
+@pytest.mark.parametrize("batch_sizes", parameters["mcast_2d"]["batch_sizes"])
+@pytest.mark.parametrize("input_shapes", parameters["mcast_2d"]["input_shapes"])
+@pytest.mark.parametrize("batch_matrix_multiply", parameters["mcast_2d"]["batch_matrix_multiply"])
+@pytest.mark.parametrize(
+    "input_a_sharded_memory_config_specs", parameters["mcast_2d"]["input_a_sharded_memory_config_specs"]
+)
+@pytest.mark.parametrize(
+    "input_b_sharded_memory_config_specs", parameters["mcast_2d"]["input_b_sharded_memory_config_specs"]
+)
+@pytest.mark.parametrize("compute_kernel_config", parameters["mcast_2d"]["compute_kernel_config"])
+@pytest.mark.parametrize("input_a_dtype", parameters["mcast_2d"]["input_a_dtype"])
+@pytest.mark.parametrize("input_b_dtype", parameters["mcast_2d"]["input_b_dtype"])
+@pytest.mark.parametrize("output_dtype", parameters["mcast_2d"]["output_dtype"])
+@pytest.mark.parametrize("input_layout", parameters["mcast_2d"]["input_layout"])
+def test_mcast_2d(
+    device,
+    batch_sizes,
+    input_shapes,
+    batch_matrix_multiply,
+    input_a_sharded_memory_config_specs,
+    input_b_sharded_memory_config_specs,
+    compute_kernel_config,
+    input_a_dtype,
+    input_b_dtype,
+    output_dtype,
+    input_layout,
+):
+    run_matmul(
+        device,
+        batch_sizes,
+        input_shapes,
+        batch_matrix_multiply,
+        input_a_sharded_memory_config_specs,
+        input_b_sharded_memory_config_specs,
+        compute_kernel_config,
+        input_a_dtype,
+        input_b_dtype,
+        output_dtype,
+        input_layout,
+    )
+
+
+@pytest.mark.parametrize("batch_sizes", parameters["mcast_2d_transposed"]["batch_sizes"])
+@pytest.mark.parametrize("input_shapes", parameters["mcast_2d_transposed"]["input_shapes"])
+@pytest.mark.parametrize("batch_matrix_multiply", parameters["mcast_2d_transposed"]["batch_matrix_multiply"])
+@pytest.mark.parametrize(
+    "input_a_sharded_memory_config_specs", parameters["mcast_2d_transposed"]["input_a_sharded_memory_config_specs"]
+)
+@pytest.mark.parametrize(
+    "input_b_sharded_memory_config_specs", parameters["mcast_2d_transposed"]["input_b_sharded_memory_config_specs"]
+)
+@pytest.mark.parametrize("compute_kernel_config", parameters["mcast_2d_transposed"]["compute_kernel_config"])
+@pytest.mark.parametrize("input_a_dtype", parameters["mcast_2d_transposed"]["input_a_dtype"])
+@pytest.mark.parametrize("input_b_dtype", parameters["mcast_2d_transposed"]["input_b_dtype"])
+@pytest.mark.parametrize("output_dtype", parameters["mcast_2d_transposed"]["output_dtype"])
+@pytest.mark.parametrize("input_layout", parameters["mcast_2d_transposed"]["input_layout"])
+def test_mcast_2d_transposed(
+    device,
+    batch_sizes,
+    input_shapes,
+    batch_matrix_multiply,
+    input_a_sharded_memory_config_specs,
+    input_b_sharded_memory_config_specs,
+    compute_kernel_config,
+    input_a_dtype,
+    input_b_dtype,
+    output_dtype,
+    input_layout,
+):
+    run_matmul(
+        device,
+        batch_sizes,
+        input_shapes,
+        batch_matrix_multiply,
+        input_a_sharded_memory_config_specs,
+        input_b_sharded_memory_config_specs,
+        compute_kernel_config,
+        input_a_dtype,
+        input_b_dtype,
+        output_dtype,
+        input_layout,
+    )
+
+
+@pytest.mark.parametrize("batch_sizes", parameters["mcast_2d_shard_width_gt_1_TILE"]["batch_sizes"])
+@pytest.mark.parametrize("input_shapes", parameters["mcast_2d_shard_width_gt_1_TILE"]["input_shapes"])
+@pytest.mark.parametrize("batch_matrix_multiply", parameters["mcast_2d_shard_width_gt_1_TILE"]["batch_matrix_multiply"])
+@pytest.mark.parametrize(
+    "input_a_sharded_memory_config_specs",
+    parameters["mcast_2d_shard_width_gt_1_TILE"]["input_a_sharded_memory_config_specs"],
+)
+@pytest.mark.parametrize(
+    "input_b_sharded_memory_config_specs",
+    parameters["mcast_2d_shard_width_gt_1_TILE"]["input_b_sharded_memory_config_specs"],
+)
+@pytest.mark.parametrize("compute_kernel_config", parameters["mcast_2d_shard_width_gt_1_TILE"]["compute_kernel_config"])
+@pytest.mark.parametrize("input_a_dtype", parameters["mcast_2d_shard_width_gt_1_TILE"]["input_a_dtype"])
+@pytest.mark.parametrize("input_b_dtype", parameters["mcast_2d_shard_width_gt_1_TILE"]["input_b_dtype"])
+@pytest.mark.parametrize("output_dtype", parameters["mcast_2d_shard_width_gt_1_TILE"]["output_dtype"])
+@pytest.mark.parametrize("input_layout", parameters["mcast_2d_shard_width_gt_1_TILE"]["input_layout"])
+def test_mcast_2d_shard_width_gt_1_TILE(
+    device,
+    batch_sizes,
+    input_shapes,
+    batch_matrix_multiply,
+    input_a_sharded_memory_config_specs,
+    input_b_sharded_memory_config_specs,
+    compute_kernel_config,
+    input_a_dtype,
+    input_b_dtype,
+    output_dtype,
+    input_layout,
+):
+    run_matmul(
+        device,
+        batch_sizes,
+        input_shapes,
+        batch_matrix_multiply,
+        input_a_sharded_memory_config_specs,
+        input_b_sharded_memory_config_specs,
+        compute_kernel_config,
+        input_a_dtype,
+        input_b_dtype,
+        output_dtype,
+        input_layout,
+    )
+
+
+@pytest.mark.parametrize("batch_sizes", parameters["mcast_in0"]["batch_sizes"])
+@pytest.mark.parametrize("input_shapes", parameters["mcast_in0"]["input_shapes"])
+@pytest.mark.parametrize("batch_matrix_multiply", parameters["mcast_in0"]["batch_matrix_multiply"])
+@pytest.mark.parametrize(
+    "input_a_sharded_memory_config_specs", parameters["mcast_in0"]["input_a_sharded_memory_config_specs"]
+)
+@pytest.mark.parametrize(
+    "input_b_sharded_memory_config_specs", parameters["mcast_in0"]["input_b_sharded_memory_config_specs"]
+)
+@pytest.mark.parametrize("compute_kernel_config", parameters["mcast_in0"]["compute_kernel_config"])
+@pytest.mark.parametrize("input_a_dtype", parameters["mcast_in0"]["input_a_dtype"])
+@pytest.mark.parametrize("input_b_dtype", parameters["mcast_in0"]["input_b_dtype"])
+@pytest.mark.parametrize("output_dtype", parameters["mcast_in0"]["output_dtype"])
+@pytest.mark.parametrize("input_layout", parameters["mcast_in0"]["input_layout"])
+def test_mcast_in0(
+    device,
+    batch_sizes,
+    input_shapes,
+    batch_matrix_multiply,
+    input_a_sharded_memory_config_specs,
+    input_b_sharded_memory_config_specs,
+    compute_kernel_config,
+    input_a_dtype,
+    input_b_dtype,
+    output_dtype,
+    input_layout,
+):
+    run_matmul(
+        device,
+        batch_sizes,
+        input_shapes,
+        batch_matrix_multiply,
+        input_a_sharded_memory_config_specs,
+        input_b_sharded_memory_config_specs,
+        compute_kernel_config,
+        input_a_dtype,
+        input_b_dtype,
+        output_dtype,
+        input_layout,
+    )
+
+
+@pytest.mark.parametrize("batch_sizes", parameters["mcast_in1"]["batch_sizes"])
+@pytest.mark.parametrize("input_shapes", parameters["mcast_in1"]["input_shapes"])
+@pytest.mark.parametrize("batch_matrix_multiply", parameters["mcast_in1"]["batch_matrix_multiply"])
+@pytest.mark.parametrize(
+    "input_a_sharded_memory_config_specs", parameters["mcast_in1"]["input_a_sharded_memory_config_specs"]
+)
+@pytest.mark.parametrize(
+    "input_b_sharded_memory_config_specs", parameters["mcast_in1"]["input_b_sharded_memory_config_specs"]
+)
+@pytest.mark.parametrize("compute_kernel_config", parameters["mcast_in1"]["compute_kernel_config"])
+@pytest.mark.parametrize("input_a_dtype", parameters["mcast_in1"]["input_a_dtype"])
+@pytest.mark.parametrize("input_b_dtype", parameters["mcast_in1"]["input_b_dtype"])
+@pytest.mark.parametrize("output_dtype", parameters["mcast_in1"]["output_dtype"])
+@pytest.mark.parametrize("input_layout", parameters["mcast_in1"]["input_layout"])
+def test_mcast_in1(
+    device,
+    batch_sizes,
+    input_shapes,
+    batch_matrix_multiply,
+    input_a_sharded_memory_config_specs,
+    input_b_sharded_memory_config_specs,
+    compute_kernel_config,
+    input_a_dtype,
+    input_b_dtype,
+    output_dtype,
+    input_layout,
+):
+    run_matmul(
+        device,
+        batch_sizes,
+        input_shapes,
+        batch_matrix_multiply,
+        input_a_sharded_memory_config_specs,
+        input_b_sharded_memory_config_specs,
+        compute_kernel_config,
+        input_a_dtype,
+        input_b_dtype,
+        output_dtype,
+        input_layout,
+    )
+
+
+@pytest.mark.parametrize("batch_sizes", parameters["bmm"]["batch_sizes"])
+@pytest.mark.parametrize("input_shapes", parameters["bmm"]["input_shapes"])
+@pytest.mark.parametrize("batch_matrix_multiply", parameters["bmm"]["batch_matrix_multiply"])
+@pytest.mark.parametrize(
+    "input_a_sharded_memory_config_specs", parameters["bmm"]["input_a_sharded_memory_config_specs"]
+)
+@pytest.mark.parametrize(
+    "input_b_sharded_memory_config_specs", parameters["bmm"]["input_b_sharded_memory_config_specs"]
+)
+@pytest.mark.parametrize("compute_kernel_config", parameters["bmm"]["compute_kernel_config"])
+@pytest.mark.parametrize("input_a_dtype", parameters["bmm"]["input_a_dtype"])
+@pytest.mark.parametrize("input_b_dtype", parameters["bmm"]["input_b_dtype"])
+@pytest.mark.parametrize("output_dtype", parameters["bmm"]["output_dtype"])
+@pytest.mark.parametrize("input_layout", parameters["bmm"]["input_layout"])
+def test_bmm(
+    device,
+    batch_sizes,
+    input_shapes,
+    batch_matrix_multiply,
+    input_a_sharded_memory_config_specs,
+    input_b_sharded_memory_config_specs,
+    compute_kernel_config,
+    input_a_dtype,
+    input_b_dtype,
+    output_dtype,
+    input_layout,
+):
+    run_matmul(
+        device,
+        batch_sizes,
+        input_shapes,
+        batch_matrix_multiply,
+        input_a_sharded_memory_config_specs,
+        input_b_sharded_memory_config_specs,
+        compute_kernel_config,
+        input_a_dtype,
+        input_b_dtype,
+        output_dtype,
+        input_layout,
+    )
+
+
+def run(
+    batch_sizes,
+    input_shapes,
+    batch_matrix_multiply,
+    input_a_sharded_memory_config_specs,
+    input_b_sharded_memory_config_specs,
+    compute_kernel_config,
+    input_a_dtype,
+    input_b_dtype,
+    output_dtype,
+    input_layout,
+    *,
+    device,
+) -> list:
+    return run_matmul(
+        device,
+        batch_sizes,
+        input_shapes,
+        batch_matrix_multiply,
+        input_a_sharded_memory_config_specs,
+        input_b_sharded_memory_config_specs,
+        compute_kernel_config,
+        input_a_dtype,
+        input_b_dtype,
+        output_dtype,
+        input_layout,
+    )

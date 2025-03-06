@@ -5,6 +5,7 @@
 from typing import Optional, Tuple
 from loguru import logger
 
+import pytest
 import torch
 
 import ttnn
@@ -17,7 +18,7 @@ TIMEOUT = 5
 # TODO: Consolidate tests for duplicate use cases into sweep with shapes
 # TODO: Missing coverage for Stable Diffusion matmul in: tests/ttnn/unit_tests/operations/test_matmul.py
 parameters = {
-    "default": {
+    "pytorch": {
         "matmul_specs": [
             # Create program config from core_grid
             (
@@ -78,7 +79,8 @@ parameters = {
 }
 
 
-def run(
+def run_matmul(
+    device,
     matmul_specs,
     compute_kernel_config,
     input_a_memory_config,
@@ -88,8 +90,6 @@ def run(
     input_b_dtype,
     output_dtype,
     input_layout,
-    *,
-    device,
 ) -> list:
     batch_sizes, input_shapes, batch_matrix_multiply, create_program_config_specs = matmul_specs
 
@@ -141,3 +141,65 @@ def run(
         expected_pcc = 0.97
 
     return [check_with_pcc(torch_output_tensor, output_tensor, expected_pcc), e2e_perf]
+
+
+@pytest.mark.parametrize("matmul_specs", parameters["pytorch"]["matmul_specs"])
+@pytest.mark.parametrize("compute_kernel_config", parameters["pytorch"]["compute_kernel_config"])
+@pytest.mark.parametrize("input_a_memory_config", parameters["pytorch"]["input_a_memory_config"])
+@pytest.mark.parametrize("input_b_memory_config", parameters["pytorch"]["input_b_memory_config"])
+@pytest.mark.parametrize("output_memory_config", parameters["pytorch"]["output_memory_config"])
+@pytest.mark.parametrize("input_a_dtype", parameters["pytorch"]["input_a_dtype"])
+@pytest.mark.parametrize("input_b_dtype", parameters["pytorch"]["input_b_dtype"])
+@pytest.mark.parametrize("output_dtype", parameters["pytorch"]["output_dtype"])
+@pytest.mark.parametrize("input_layout", parameters["pytorch"]["input_layout"])
+def test_pytorch(
+    device,
+    matmul_specs,
+    compute_kernel_config,
+    input_a_memory_config,
+    input_b_memory_config,
+    output_memory_config,
+    input_a_dtype,
+    input_b_dtype,
+    output_dtype,
+    input_layout,
+):
+    run_matmul(
+        device,
+        matmul_specs,
+        compute_kernel_config,
+        input_a_memory_config,
+        input_b_memory_config,
+        output_memory_config,
+        input_a_dtype,
+        input_b_dtype,
+        output_dtype,
+        input_layout,
+    )
+
+
+def run(
+    matmul_specs,
+    compute_kernel_config,
+    input_a_memory_config,
+    input_b_memory_config,
+    output_memory_config,
+    input_a_dtype,
+    input_b_dtype,
+    output_dtype,
+    input_layout,
+    *,
+    device,
+):
+    return run_matmul(
+        device,
+        matmul_specs,
+        compute_kernel_config,
+        input_a_memory_config,
+        input_b_memory_config,
+        output_memory_config,
+        input_a_dtype,
+        input_b_dtype,
+        output_dtype,
+        input_layout,
+    )
