@@ -4,6 +4,7 @@
 
 #include "dataflow_api.h"
 #include <tt-metalium/buffer_constants.hpp>
+#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include <cstdint>
 #include <utility>
 
@@ -15,10 +16,19 @@ using tt::tt_metal::BufferType;
 ///////////////////////////////////////////////////
 
 constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
-constexpr BufferType buffer0_type = static_cast<BufferType>(get_compile_time_arg_val(1));
-constexpr uint32_t cb0_id = get_compile_time_arg_val(2);
-constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(3);
-constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(4);
+constexpr uint32_t cb0_id = get_compile_time_arg_val(1);
+constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(2);
+constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(3);
+
+typedef ShardedInfo<
+    get_compile_time_arg_val(4),
+    get_compile_time_arg_val(5),
+    get_compile_time_arg_val(6),
+    get_compile_time_arg_val(7),
+    get_compile_time_arg_val(8),
+    get_compile_time_arg_val(9),
+    get_compile_time_arg_val(10)>
+    tensor_shard_info;
 
 /*
  * CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time)
@@ -34,11 +44,13 @@ void kernel_main() {
     address_t tensor_address0 = get_arg_val<address_t>(arg_idx++);
     uint32_t tile_id_start = get_arg_val<uint32_t>(arg_idx++);
     uint32_t tile_id_end = get_arg_val<uint32_t>(arg_idx++);
+    const auto [mapping_table, rt_increment] =
+        experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(arg_idx));
+    arg_idx += rt_increment;
 
-    // interleaved addrgen
-    constexpr bool is_dram = buffer0_type == tt::tt_metal::BufferType::DRAM;
-    auto tensor0_addrgen = InterleavedAddrGenFast<is_dram>{
-        .bank_base_address = tensor_address0, .page_size = tensor0_page_size, .data_format = get_dataformat(cb0_id)};
+    // sharded addrgen
+    experimental::ShardedAddrGen<tensor_shard_info> tensor0_addrgen = {
+        .bank_base_address = tensor_address0, .shard_array = mapping_table};
 
     uint32_t tile_id = tile_id_start;
     while (tile_id < tile_id_end) {
@@ -48,7 +60,8 @@ void kernel_main() {
 
         uint32_t num_pages_to_read = std::min(tile_id_end - tile_id, packet_size_in_pages);
         for (uint32_t j = 0; j < num_pages_to_read; j++) {
-            noc_async_read_tile(tile_id, tensor0_addrgen, l1_write_addr);
+            auto tile_address = get_noc_addr(tile_id, tensor0_addrgen);
+            noc_async_read(tile_address, l1_write_addr, tensor0_page_size);
             l1_write_addr += tensor0_page_size;
             tile_id++;
         }

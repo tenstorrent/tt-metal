@@ -6,6 +6,7 @@
 #include <tt-metalium/buffer_constants.hpp>
 #include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "minimal_ccl_common.hpp"
 #include <cstdint>
 #include <utility>
@@ -20,12 +21,21 @@ using tt::tt_metal::BufferType;
 constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
 constexpr uint32_t reserved_packet_header_cb_id = get_compile_time_arg_val(1);
 constexpr uint32_t num_packet_headers_storable = get_compile_time_arg_val(2);
-constexpr BufferType buffer0_type = static_cast<BufferType>(get_compile_time_arg_val(3));
-constexpr uint32_t cb0_id = get_compile_time_arg_val(4);
-constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(5);
-constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(6);
-constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(7);
-constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(8);
+constexpr uint32_t cb0_id = get_compile_time_arg_val(3);
+constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(4);
+constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(5);
+constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(6);
+constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(7);
+
+typedef ShardedInfo<
+    get_compile_time_arg_val(8),
+    get_compile_time_arg_val(9),
+    get_compile_time_arg_val(10),
+    get_compile_time_arg_val(11),
+    get_compile_time_arg_val(12),
+    get_compile_time_arg_val(13),
+    get_compile_time_arg_val(14)>
+    tensor_shard_info;
 
 /*
  * CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time)
@@ -47,6 +57,9 @@ void kernel_main() {
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
+    const auto [mapping_table, rt_increment] =
+        experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(arg_idx));
+    arg_idx += rt_increment;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_idx);
 
     // packet header cb
@@ -70,10 +83,9 @@ void kernel_main() {
     pkt_hdr_backward->to_chip_multicast(
         tt::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
 
-    // interleaved addrgen
-    constexpr bool is_dram = buffer0_type == tt::tt_metal::BufferType::DRAM;
-    auto tensor0_addrgen = InterleavedAddrGenFast<is_dram>{
-        .bank_base_address = tensor_address0, .page_size = tensor0_page_size, .data_format = get_dataformat(cb0_id)};
+    // sharded addrgen
+    experimental::ShardedAddrGen<tensor_shard_info> tensor0_addrgen = {
+        .bank_base_address = tensor_address0, .shard_array = mapping_table};
 
     if (fabric_connection.is_logically_connected()) {
         fabric_connection.open();
@@ -88,7 +100,7 @@ void kernel_main() {
 
         uint32_t contig_pages_advanced = 1;  // always 1 for interleaved
         for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
-            uint64_t noc0_dest_noc_addr = get_noc_addr(tile_id, tensor0_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+            uint64_t noc0_dest_noc_addr = get_noc_addr(tile_id, tensor0_addrgen);
 
             write_and_advance_local_read_address_for_fabric_write(
                 noc0_dest_noc_addr,
