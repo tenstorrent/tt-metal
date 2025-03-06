@@ -54,4 +54,12 @@ class TtFeedForward:
         result = self.out_proj(x3)
         ttnn.deallocate(x3)
 
+        result = ttnn.experimental.all_reduce(
+            result,
+            math_op=ttnn.ReduceType.Sum,
+            num_links=1,
+            memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+            topology=ttnn.Topology.Ring,
+        )
+
         return result

@@ -116,7 +116,9 @@ def test_attention(
     tt_spatial_output = tt_spatial_output_padded[:, :, 0:spatial_sequence_length, :]
     tt_prompt_output = tt_prompt_output_padded[:, :, 0:prompt_sequence_length, :]
 
-    assert_quality(spatial_output, tt_spatial_output, pcc=0.990, shard_dim=0)
+    assert_quality(spatial_output, tt_spatial_output, pcc=0.990, shard_dim=0, num_devices=mesh_device.get_num_devices())
 
     if joint_attention:
-        assert_quality(prompt_output, tt_prompt_output, pcc=0.990, shard_dim=0)
+        assert_quality(
+            prompt_output, tt_prompt_output, pcc=0.990, shard_dim=0, num_devices=mesh_device.get_num_devices()
+        )

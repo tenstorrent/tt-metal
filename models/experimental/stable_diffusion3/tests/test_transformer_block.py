@@ -110,7 +110,9 @@ def test_transformer_block(
 
     assert (prompt_output is None) == (tt_prompt_output is None)
 
-    assert_quality(spatial_output, tt_spatial_output, pcc=0.995, shard_dim=0)
+    assert_quality(spatial_output, tt_spatial_output, pcc=0.995, shard_dim=0, num_devices=mesh_device.get_num_devices())
 
     if prompt_output is not None and tt_prompt_output is not None:
-        assert_quality(prompt_output, tt_prompt_output, pcc=0.995, shard_dim=0)
+        assert_quality(
+            prompt_output, tt_prompt_output, pcc=0.995, shard_dim=0, num_devices=mesh_device.get_num_devices()
+        )
