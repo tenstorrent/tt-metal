@@ -93,7 +93,7 @@ def test_run_resnet50_trace_2cqs_inference(
         comments="tests",
     )
 
-    logger.info(
-        f"ttnn_{model_version}_batch_size{batch_size} tests inference time (avg): {inference_time_avg}, FPS: {batch_size/inference_time_avg}"
-    )
-    logger.info(f"ttnn_{model_version}_batch_size{batch_size} compile time: {compile_time}")
+    # logger.info(
+    #    f"ttnn_{model_version}_batch_size{batch_size} tests inference time (avg): {inference_time_avg}, FPS: {batch_size/inference_time_avg}"
+    # )
+    # logger.info(f"ttnn_{model_version}_batch_size{batch_size} compile time: {compile_time}")
