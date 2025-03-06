@@ -17,7 +17,7 @@ jobs:
           },
           {
             name: "BH_performance",
-            arch: wormhole_b0,
+            arch: blackhole,
             # current blackhole baremetals are not tagged with bare-metal
             # will need to be tagged if running perf tests on BH
             runs-on: ["BH", "bare-metal", "in-service"],
@@ -36,7 +36,6 @@ jobs:
         if: ${{ matrix.test-group.name == 'BH_performance' }}
         run: |
           sudo cpupower frequency-set -g performance
-      - uses: ./.github/actions/ensure-active-weka-mount
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
