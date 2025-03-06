@@ -166,7 +166,7 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
     auto submeshes = mesh_device->create_submeshes(MeshShape(1, 1));
     TT_FATAL(
         device_ids.size() == submeshes.size(),
-        "Create unexpected number of submeshes {} instead of {}",
+        "Created an unexpected number of submeshes: {} instead of {}",
         submeshes.size(),
         device_ids.size());
     std::map<int, std::shared_ptr<MeshDevice>> result;
