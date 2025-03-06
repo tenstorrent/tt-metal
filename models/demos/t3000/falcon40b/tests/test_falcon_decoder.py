@@ -216,7 +216,7 @@ def run_test_FalconDecoder_inference(
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=model_config["KV_CACHE_MEMCFG"],
-            mesh_mapper=(mesh_device, dim=1),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=1),
         )
 
         tt_layer_past = (tt_k_cache, tt_v_cache)
