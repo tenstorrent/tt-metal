@@ -41,6 +41,7 @@ jobs:
           git config --global --add safe.directory /__w/tt-metal/tt-metal
 
       - uses: actions/download-artifact@v4
+        timeout-minutes: 10
         with:
           name: ${{ inputs.package-artifact-name || 'packages artifact unresolved!' }}
           path: /work/pkgs/
@@ -66,7 +67,13 @@ jobs:
           name: Metalium ${{ matrix.platform }} smoke tests
           path: /work/test-reports/*.xml
           reporter: jest-junit
-
+      - uses: ./.github/actions/upload-artifact-with-job-uuid
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          path: |
+            /work/test-reports/
+          prefix: "test_reports_"
       # Arbitrary limit that's higher than we would like, but the JIT build seems inconsistent.
       # Keep it here as a guardrail to keep Smoke tests fast.  We can adjust as needed.
       - name: Check for slow tests

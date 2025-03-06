@@ -44,7 +44,7 @@ struct ExecuteAllReduceAsync {
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        ttnn::Tensor& all_gather_output_tensor,
+        ttnn::Tensor& buffer_tensor,
         const uint32_t cluster_axis,
         const MeshDevice& mesh_device,
         const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,

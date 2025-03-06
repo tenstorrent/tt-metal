@@ -46,7 +46,7 @@ struct AllReduceAsync {
         MemoryConfig output_mem_config,
         ccl::Topology topology,
         GlobalSemaphore semaphore,
-        std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+        std::optional<SubDeviceId>& sub_device_id,
         bool enable_persistent_fabric_mode) :
         forward_device(forward_device),
         backward_device(backward_device),
@@ -93,13 +93,20 @@ AllReduceAsync create_all_reduce_async_struct(
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     bool enable_persistent_fabric_mode);
 
-uint32_t find_scatter_dim(const ttnn::Shape& input_tensor_padded_shape, size_t num_workers);
 }  // namespace all_reduce_async_detail
 }  // namespace ccl
 
+std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
+    size_t num_links,
+    size_t num_workers_per_link,
+    bool persistent_fabric_mode,
+    IDevice* device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const std::optional<CoreRangeSet>& reserved_core_range = std::nullopt);
+
 tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers(
     const Tensor& input_tensor,
-    const Tensor& all_gather_output_tensor,
+    const Tensor& buffer_tensor,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
@@ -117,7 +124,7 @@ namespace ccl {
 
 Tensor all_reduce_async(
     const Tensor& input_tensor,
-    Tensor& all_gather_output_tensor,
+    Tensor& buffer_tensor,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,

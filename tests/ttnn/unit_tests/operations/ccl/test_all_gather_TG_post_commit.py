@@ -15,6 +15,9 @@ from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
     create_global_semaphore_with_same_address,
 )
 from models.perf.benchmarking_utils import BenchmarkProfiler
+from tracy import signpost
+
+NUM_BUFFERS = 8
 
 
 def report_mismatches(golden, actual, max_printable=None):
@@ -95,8 +98,7 @@ def run_with_trace(
             memory_config=output_mem_config,
             topology=all_gather_topology,
         )
-    for d in mesh_device.get_devices():
-        ttnn.synchronize_device(d)
+    ttnn.synchronize_device(mesh_device)
 
     # Capture trace
     logger.info("Capturing trace")
@@ -111,7 +113,7 @@ def run_with_trace(
                     cluster_axis=cluster_axis,
                     mesh_device=mesh_device,
                     topology=ttnn.Topology.Linear,
-                    multi_device_global_semaphore=ccl_semaphore_handles[i % 8]
+                    multi_device_global_semaphore=ccl_semaphore_handles[i % NUM_BUFFERS]
                     if type(ccl_semaphore_handles) == list
                     else ccl_semaphore_handles,
                     num_links=num_links,
@@ -130,8 +132,7 @@ def run_with_trace(
                     topology=all_gather_topology,
                 )
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-        for d in mesh_device.get_devices():
-            ttnn.synchronize_device(d)
+        ttnn.synchronize_device(mesh_device)
         return trace_id
 
     if warmup_iters > 0:
@@ -144,23 +145,23 @@ def run_with_trace(
     if warmup_iters > 0:
         ttnn.execute_trace(mesh_device, trace_id_warmup, blocking=False)
         ttnn.release_trace(mesh_device, trace_id_warmup)
-        for d in mesh_device.get_devices():
-            ttnn.synchronize_device(d)
+        ttnn.synchronize_device(mesh_device)
     profiler.end("all-gather-async-trace-warmup")
 
     profiler.start("all-gather-async-trace")
+    signpost("start")
     ttnn.execute_trace(mesh_device, trace_id, blocking=False)
     ttnn.release_trace(mesh_device, trace_id)
-    for d in mesh_device.get_devices():
-        ttnn.synchronize_device(d)
+    ttnn.synchronize_device(mesh_device)
+    signpost("stop")
     profiler.end("all-gather-async-trace")
     time_taken = profiler.get_duration("all-gather-async-trace") - profiler.get_duration(
         "all-gather-async-trace-warmup"
     )
     effective_iter = num_iter - warmup_iters
-    logger.info(f"Time taken: {time_taken} s")
-    logger.info(f"Time per iter: {time_taken / effective_iter} s")
-    logger.info(f"Time per iter: {time_taken / effective_iter * 1e6} us")
+    logger.info(f"Time taken e2e: {time_taken} s")
+    logger.info(f"Time per iter e2e: {time_taken / effective_iter} s")
+    logger.info(f"Time per iter e2e: {time_taken / effective_iter * 1e6} us")
 
     return tt_out_tensor
 
@@ -280,7 +281,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
 
         # create global semaphore handles
         ccl_semaphore_handles = [
-            create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(8)
+            create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(NUM_BUFFERS)
         ]
     try:
         # ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor)
@@ -303,6 +304,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
             )
 
         else:
+            signpost("start")
             for i in range(num_iters):
                 if use_all_gather_async:
                     logger.info("Running all-gather async")
@@ -312,7 +314,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
                         cluster_axis=cluster_axis,
                         mesh_device=mesh_device,
                         topology=ttnn.Topology.Linear,
-                        multi_device_global_semaphore=ccl_semaphore_handles[i % 8],
+                        multi_device_global_semaphore=ccl_semaphore_handles[i % NUM_BUFFERS],
                         num_links=num_links,
                         memory_config=output_mem_config,
                         subdevice_id=worker_sub_device_id,
@@ -328,8 +330,8 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
                         memory_config=output_mem_config,
                         topology=ttnn.Topology.Linear,
                     )
-            ttnn.synchronize_devices(mesh_device, sub_device_ids=sub_device_stall_group)
-
+            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+            signpost("stop")
     except Exception as e:
         logger.error(f"Exception: {e}")
         raise e

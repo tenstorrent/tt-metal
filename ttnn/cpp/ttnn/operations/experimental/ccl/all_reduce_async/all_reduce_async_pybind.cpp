@@ -99,7 +99,7 @@ void bind_all_reduce_async(pybind11::module& module, const ccl_operation_t& oper
         ttnn::pybind_overload_t{
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               ttnn::Tensor& all_gather_output_tensor,
+               ttnn::Tensor& buffer_tensor,
                const uint32_t cluster_axis,
                const MeshDevice& mesh_device,
                const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
@@ -109,7 +109,7 @@ void bind_all_reduce_async(pybind11::module& module, const ccl_operation_t& oper
                std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) -> ttnn::Tensor {
                 return self(
                     input_tensor,
-                    all_gather_output_tensor,
+                    buffer_tensor,
                     cluster_axis,
                     mesh_device,
                     multi_device_global_semaphore,
@@ -119,7 +119,7 @@ void bind_all_reduce_async(pybind11::module& module, const ccl_operation_t& oper
                     worker_subdevice_id_opt);
             },
             py::arg("input_tensor"),
-            py::arg("all_gather_output_tensor"),
+            py::arg("buffer_tensor"),
             py::arg("cluster_axis"),
             py::arg("mesh_device"),
             py::arg("multi_device_global_semaphore"),

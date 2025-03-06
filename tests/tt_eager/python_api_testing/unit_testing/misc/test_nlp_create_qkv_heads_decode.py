@@ -367,8 +367,7 @@ def test_create_min_width_shard(
             overlap_coregrid=overlap_coregrid,
         )
 
-    # BH does s2i and i2s inside of to_device and from_device as device ops
-    expected_entries = 1 if not is_blackhole() else 3 if overlap_coregrid else 4
+    expected_entries = 1
     assert device.num_program_cache_entries() == expected_entries
 
 
@@ -461,7 +460,7 @@ def test_create_heads_with_slice(
             slice_size=slice_size,
         )
     # BH does s2i and i2s inside of to_device and from_device as device ops
-    expected_entries = 1 if not is_blackhole() else 4 if overlap_coregrid else 5
+    expected_entries = 1
     assert device.num_program_cache_entries() == expected_entries
 
 

@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
 #include "all_reduce_async_op.hpp"
 #include "ttnn/operations/math.hpp"
 #include "cpp/ttnn/global_semaphore.hpp"
@@ -56,76 +55,68 @@ AllReduceAsync create_all_reduce_async_struct(
         enable_persistent_fabric_mode};
 }
 
-uint32_t find_scatter_dim(const ttnn::Shape& input_tensor_padded_shape, size_t num_workers) {
-    // iterate until we find a dimension that is divisible by num_workers
-    TT_FATAL(input_tensor_padded_shape.size() == 4, "Expected input tensor to have 4 dimensions");
-    ttnn::Shape input_tensor_shape_in_tiles{
-        input_tensor_padded_shape[0],
-        input_tensor_padded_shape[1],
-        input_tensor_padded_shape[2] / tt::constants::TILE_HEIGHT,
-        input_tensor_padded_shape[3] / tt::constants::TILE_WIDTH};
-    for (uint32_t dim = 0; dim < 4; ++dim) {
-        if (input_tensor_shape_in_tiles[dim] % num_workers == 0) {
-            tt::log_debug(
-                "Found scatter dimension {} for input tensor with padded shape {}", dim, input_tensor_padded_shape);
-            return dim;
-        }
-    }
-    TT_THROW(
-        "No scatter dimension found for input tensor with padded shape {} and num_workers {}",
-        input_tensor_padded_shape,
-        num_workers);
-}
-
 }  // namespace all_reduce_detail
 }  // namespace ccl
 
 void AllReduceAsync::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensors.size() == 2, "Error, Input tensor size should be 2 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
+    const auto& buffer_tensor = input_tensors[1];
     const auto& layout = input_tensors[0].get_layout();
     const auto& dtype = input_tensors[0].get_dtype();
     const auto& page_size = input_tensors[0].buffer()->page_size();
     TT_FATAL(page_size % input_tensors[0].buffer()->alignment() == 0, "All Gather currently requires aligned pages");
+    TT_FATAL(
+        this->ring_size % 2 == 0,
+        "AllReduceAsync currently only supports even number of blocks in the reduction kernel.");
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_reduce need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_reduce need to be allocated in buffers on device!");
+
+    TT_FATAL(buffer_tensor.storage_type() == StorageType::DEVICE, "Operands to all_reduce need to be on device!");
+    TT_FATAL(buffer_tensor.buffer() != nullptr, "Operands to all_reduce need to be allocated in buffers on device!");
+
     TT_FATAL(this->num_links > 0, "Error, num_links should be more than 0 but has {}", this->num_links);
     TT_FATAL(
         this->num_links <= input_tensor.device()->compute_with_storage_grid_size().y,
         "Worker cores used by links are parallelizaed over rows");
 
     TT_FATAL(
-        input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED ||
-            input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
-            input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
-            input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
-        "Unsupported memory layout {}.",
+        input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+        "Unsupported memory layout for input tensor{}.",
         input_tensor.memory_config().memory_layout);
-}
 
-// static void validate_output_tensor_allocation(const std::vector<Tensor>& output_tensors) {
-//     for (const auto& output_tensor : output_tensors) {
-//         const auto& buffers = output_tensor.buffers();
-//         const auto first_address = buffers.front()->address();
-//         TT_FATAL(
-//             std::all_of(
-//                 buffers.begin(),
-//                 buffers.end(),
-//                 [&first_address](const auto& buffer) {
-//                     return buffer != nullptr && buffer->address() == first_address;
-//                 }),
-//             "Output buffers for all_reduce async must be lock-step allocated but some of the tensors were allocated
-//             at " "different addresses across devices.");
-//     }
-// }
+    TT_FATAL(
+        buffer_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+        "Unsupported memory layout for buffer tensor {}.",
+        buffer_tensor.memory_config().memory_layout);
+    TT_FATAL(
+        this->output_mem_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+        "Unsupported memory layout for output tensor {}.",
+        this->output_mem_config.memory_layout);
+
+    TT_FATAL(
+        buffer_tensor.memory_config().shard_spec->grid.contains(this->output_mem_config.shard_spec->grid),
+        "The output tensor must reside on a subset of the cores of the buffer tensor");
+
+    const uint32_t output_shard_shape_volume =
+        this->output_mem_config.shard_spec->shape[0] * this->output_mem_config.shard_spec->shape[1];
+    const uint32_t buffer_shard_shape_volume =
+        buffer_tensor.memory_config().shard_spec->shape[0] * buffer_tensor.memory_config().shard_spec->shape[1];
+    TT_FATAL(
+        output_shard_shape_volume * this->ring_size <= buffer_shard_shape_volume,
+        "The shard size for the buffer must be large enough to hold the intermediate tensor. Require at least {} but "
+        "has {}",
+        output_shard_shape_volume * this->ring_size,
+        buffer_shard_shape_volume);
+}
 
 std::vector<ttnn::TensorSpec> AllReduceAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
-    auto shape = input_tensor.get_padded_shape();  // TODO: Replace with get_logical_shape()
-    return {TensorSpec(
-        shape,
-        TensorLayout(input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config))};
+    auto shape = input_tensor.get_logical_shape();
+    auto output_tensor_layout =
+        input_tensor.get_tensor_spec().tensor_layout().with_memory_config(this->output_mem_config);
+    return {TensorSpec(shape, output_tensor_layout)};
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program(
@@ -151,7 +142,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program(
     tt::log_debug(
         tt::LogOp, "output_tensor_memory_config.shard_spec->shape: {}", output_tensor_memory_config.shard_spec->shape);
 
-    tt::log_info(tt::LogOp, "Running TG Llama specific all_reduce_async_minimal_multi_core_with_workers");
+    tt::log_debug(tt::LogOp, "Running TG Llama specific all_reduce_async_minimal_multi_core_with_workers");
     return all_reduce_async_minimal_multi_core_with_workers(
         input_tensors[0],
         input_tensors[1],
@@ -174,7 +165,7 @@ const tt::tt_metal::operation::Hash AllReduceAsync::compute_program_hash(
     auto input_dtype = input_tensors[0].get_dtype();
     auto input_memory_config = input_tensors[0].memory_config();
 
-    return tt::tt_metal::operation::hash_operation<AllReduceAsync>(
+    return operation::hash_operation<AllReduceAsync>(
         this->num_links,
         this->ring_size,
         this->ring_index,
@@ -183,8 +174,7 @@ const tt::tt_metal::operation::Hash AllReduceAsync::compute_program_hash(
         input_shape,
         input_memory_layout,
         input_dtype,
-        input_memory_config,
-        this->semaphore);
+        input_memory_config);
 }
 
 namespace operations {
@@ -193,7 +183,7 @@ namespace ccl {
 
 Tensor all_reduce_async(
     const Tensor& input_tensor,
-    Tensor& all_gather_output_tensor,
+    Tensor& buffer_tensor,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
@@ -209,12 +199,10 @@ Tensor all_reduce_async(
     auto devices = input_tensor.get_workers();
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
-    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
-    CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
-    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     std::vector<GlobalSemaphore> semaphores = multi_device_global_semaphore.global_semaphores;
 
-    tt::tt_metal::operation::launch_op(
+    operation::launch_op(
         [num_preferred_links,
          memory_config,
          mesh_view,
@@ -237,9 +225,9 @@ Tensor all_reduce_async(
                                                                 : mesh_view.get_devices_on_row(coordinate[0]);
 
             const auto& input_tensor = input_tensors.at(0);
-            const auto& all_gather_output_tensor = input_tensors.at(1);
+            const auto& buffer_tensor = input_tensors.at(1);
 
-            return tt::tt_metal::operation::run(
+            return operation::run(
                 ttnn::ccl::all_reduce_detail::create_all_reduce_async_struct(
                     input_device_tensor,
                     num_preferred_links.has_value() ? num_preferred_links.value() : 1,
@@ -249,9 +237,9 @@ Tensor all_reduce_async(
                     semaphores,
                     subdevice_id,
                     enable_persistent_fabric_mode),
-                {input_tensor, all_gather_output_tensor});
+                {input_tensor, buffer_tensor});
         },
-        {input_tensor, all_gather_output_tensor},
+        {input_tensor, buffer_tensor},
         output_tensors);
     return output_tensors.at(0);
 }
@@ -259,5 +247,59 @@ Tensor all_reduce_async(
 }  // namespace ccl
 }  // namespace experimental
 }  // namespace operations
+
+std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
+    size_t num_links,
+    size_t num_workers_per_link,
+    bool persistent_fabric_mode,
+    IDevice* device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const std::optional<CoreRangeSet>& reserved_core_range) {
+    std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
+    CoreRangeSet sender_worker_core_range;
+    if (persistent_fabric_mode) {
+        const size_t num_workers_preferred = num_workers_per_link * num_links;
+        auto available_cores = device->worker_cores(
+            tt::tt_metal::HalProgrammableCoreType::TENSIX,
+            sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
+        if (reserved_core_range.has_value()) {
+            available_cores = available_cores.subtract(*reserved_core_range);
+        }
+        if (available_cores.num_cores() < num_workers_preferred) {
+            log_warning(
+                tt::LogOp,
+                "AllGather is being launched on a subdevice with fewer worker cores available than ideal. Ideally {} "
+                "cores ({} per link and {} links) are made available but only {} are available. This may lead to "
+                "performance loss.",
+                num_workers_preferred,
+                num_workers_per_link,
+                num_links,
+                available_cores.num_cores());
+        }
+        for (const auto& cr : available_cores.ranges()) {
+            auto start = cr.start_coord;
+            auto end = cr.end_coord;
+            for (size_t y = start.y; y <= end.y; y++) {
+                for (size_t x = start.x; x <= end.x; x++) {
+                    sender_worker_core_range =
+                        sender_worker_core_range.merge(CoreRangeSet(CoreRange(CoreCoord(x, y), CoreCoord(x, y))));
+                    if (sender_worker_core_range.num_cores() == num_workers_preferred) {
+                        break;
+                    }
+                }
+                if (sender_worker_core_range.num_cores() == num_workers_preferred) {
+                    break;
+                }
+            }
+            if (sender_worker_core_range.num_cores() == num_workers_preferred) {
+                break;
+            }
+        }
+    } else {
+        sender_worker_core_range =
+            CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(num_workers_per_link - 1, num_links - 1)));
+    }
+    return {sender_worker_core_range, corerange_to_cores(sender_worker_core_range, std::nullopt, true)};
+}
 
 }  // namespace ttnn
