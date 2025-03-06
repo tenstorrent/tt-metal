@@ -130,8 +130,6 @@ jobs:
         run: |
           WHEEL_FILENAME=$(ls -1 *.whl)
           pip3 install $WHEEL_FILENAME
-      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
-      - uses: ./.github/actions/prepare-metal-run
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
