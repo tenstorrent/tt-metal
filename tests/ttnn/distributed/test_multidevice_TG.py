@@ -39,7 +39,7 @@ def test_galaxy_matmul_1d_fracture(mesh_device):
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
-        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
     weights = ttnn.from_torch(
         weights_pt,

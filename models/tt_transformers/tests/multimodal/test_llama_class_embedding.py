@@ -15,7 +15,7 @@ import torch.nn as nn
 ##### TTNN imports #####
 import ttnn
 from ttnn import experimental as ttl
-from ttnn import ConcatMeshToTensor, ttnn.replicate_tensor_to_mesh_mapper
+from ttnn import ConcatMeshToTensor, replicate_tensor_to_mesh_mapper
 from models.utility_functions import skip_for_grayskull
 from models.utility_functions import (
     comp_pcc,
