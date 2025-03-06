@@ -438,6 +438,8 @@ def run_llama3_demo(
             ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)
         else:
             all_outputs.append(tt_output_torch.tolist()[0])  # Update generated token to list of TT outputs
+            if all_outputs[-1] in [128001, 128009]:  # EoT tokens
+                users_decoding = False
 
         # Print out generated outputs for each user at the end of every iteration
         iteration_time = time() - iteration_time_start
@@ -515,12 +517,12 @@ def run_llama3_demo(
         #     {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
         # ),
         (  # Batch-32 run (Throughput) - 32 users, small prompt
-            "models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json",  # input_prompts
+            "models/demos/llama3_subdevices/demo/input_data_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             1024,  # max_seq_len
             32,  # batch_size
-            200,  # max_generated_tokens
+            1024,  # max_generated_tokens
             False,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
