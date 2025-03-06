@@ -29,7 +29,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     const Tensor& padding_config2,
     const Tensor& local_config1,
     const Tensor& local_config2,
-    const Tensor& remote_config,
+    const Tensor& remote_config1,
+    const Tensor& remote_config2,
     const bool remote_read,
     const bool transpose_mcast,
     Tensor& output_tensor,
@@ -120,7 +121,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     uint32_t padding_config_cb_id2 = tt::CBIndex::c_3;
     uint32_t local_config_cb_id1 = tt::CBIndex::c_4;
     uint32_t local_config_cb_id2 = tt::CBIndex::c_5;
-    uint32_t remote_config_cb_id = tt::CBIndex::c_6;
+    uint32_t remote_config_cb_id1 = tt::CBIndex::c_6;
+    uint32_t remote_config_cb_id2 = tt::CBIndex::c_7;
 
     tt::DataFormat kernel_config_df = tt::DataFormat::RawUInt16;  // NOTE: UInt16 is not supported for CB types
     uint32_t config_nbytes =
@@ -149,7 +151,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     TT_ASSERT(padding_config2.get_dtype() == DataType::UINT16);
     TT_ASSERT(local_config1.get_dtype() == DataType::UINT16);
     TT_ASSERT(local_config2.get_dtype() == DataType::UINT16);
-    TT_ASSERT(remote_config.get_dtype() == DataType::UINT16);
+    TT_ASSERT(remote_config1.get_dtype() == DataType::UINT16);
+    TT_ASSERT(remote_config2.get_dtype() == DataType::UINT16);
 
     auto padding_config_buffer1 = padding_config1.device_buffer();
     const uint32_t num_cores = all_cores.num_cores();
@@ -180,12 +183,19 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
             .set_globally_allocated_address(*local_config_buffer2);
     CBHandle local_config_cb2 = CreateCircularBuffer(program, all_cores, local_config_cb_config2);
 
-    auto remote_config_buffer = remote_config.device_buffer();
-    auto remote_config_cb_config =
-        CircularBufferConfig(remote_config_buffer->size() / num_cores, {{remote_config_cb_id, kernel_config_df}})
-            .set_page_size(remote_config_cb_id, remote_config_buffer->page_size())
-            .set_globally_allocated_address(*remote_config_buffer);
-    CBHandle remote_config_cb = CreateCircularBuffer(program, all_cores, remote_config_cb_config);
+    auto remote_config_buffer1 = remote_config1.device_buffer();
+    auto remote_config_cb_config1 =
+        CircularBufferConfig(remote_config_buffer1->size() / num_cores, {{remote_config_cb_id1, kernel_config_df}})
+            .set_page_size(remote_config_cb_id1, remote_config_buffer1->page_size())
+            .set_globally_allocated_address(*remote_config_buffer1);
+    CBHandle remote_config_cb1 = CreateCircularBuffer(program, all_cores, remote_config_cb_config1);
+
+    auto remote_config_buffer2 = remote_config2.device_buffer();
+    auto remote_config_cb_config2 =
+        CircularBufferConfig(remote_config_buffer2->size() / num_cores, {{remote_config_cb_id2, kernel_config_df}})
+            .set_page_size(remote_config_cb_id2, remote_config_buffer2->page_size())
+            .set_globally_allocated_address(*remote_config_buffer2);
+    CBHandle remote_config_cb2 = CreateCircularBuffer(program, all_cores, remote_config_cb_config2);
 
     bool const is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
     bool const is_width_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED;
@@ -214,13 +224,13 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         (uint32_t)(transpose_mcast ? 1 : 0),
         is_width_sharded,
         aligned_input_nstick_nbytes,
-        enable_split_reader,
+        true,
         true};
 
-    if (enable_split_reader) {
+    if (true) {
         reader_ct_args[0] = padding_config_cb_id1;
         reader_ct_args[1] = local_config_cb_id1;
-        reader_ct_args[2] = remote_config_cb_id;
+        reader_ct_args[2] = remote_config_cb_id1;
     } else {
         reader_ct_args[0] = 0;
         reader_ct_args[1] = local_config_cb_id1;
@@ -233,14 +243,15 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_ct_args});
 
-    if (enable_split_reader) {
+    if (true) {
         reader_ct_args[0] = padding_config_cb_id2;
         reader_ct_args[1] = local_config_cb_id2;
+        reader_ct_args[2] = remote_config_cb_id2;
         reader_ct_args[16] = false;
     } else {
         reader_ct_args[0] = padding_config_cb_id1;
         reader_ct_args[1] = 0;
-        reader_ct_args[2] = remote_config_cb_id;
+        reader_ct_args[2] = remote_config_cb_id1;
     }
 
     KernelHandle reader_kernel_id1 = CreateKernel(
@@ -255,7 +266,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         padding_config_buffer2 = nullptr;
         local_config_buffer1 = nullptr;
         local_config_buffer2 = nullptr;
-        remote_config_buffer = nullptr;
+        remote_config_buffer1 = nullptr;
+        remote_config_buffer2 = nullptr;
     }
     // Capture padding_config_buffer, local_config_buffer, remote_config_buffer to cache this with the program
     auto override_runtime_arguments_callback = [src_cb,
@@ -264,12 +276,14 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
                                                 padding_config_cb2,
                                                 local_config_cb1,
                                                 local_config_cb2,
-                                                remote_config_cb,
+                                                remote_config_cb1,
+                                                remote_config_cb2,
                                                 padding_config_buffer1,
                                                 padding_config_buffer2,
                                                 local_config_buffer1,
                                                 local_config_buffer2,
-                                                remote_config_buffer](
+                                                remote_config_buffer1,
+                                                remote_config_buffer2](
                                                    const void* operation,
                                                    Program& program,
                                                    const std::vector<Tensor>& input_tensors,

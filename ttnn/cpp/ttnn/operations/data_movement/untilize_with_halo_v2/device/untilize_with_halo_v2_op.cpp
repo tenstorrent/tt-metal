@@ -78,7 +78,8 @@ operation::ProgramWithCallbacks UntilizeWithHaloV2::create_program(
     const auto& padding_config2 = input_tensors.at(2);
     const auto& local_config1 = input_tensors.at(3);
     const auto& local_config2 = input_tensors.at(4);
-    const auto& remote_config = input_tensors.at(5);
+    const auto& remote_config1 = input_tensors.at(5);
+    const auto& remote_config2 = input_tensors.at(6);
     auto& output_tensor = output_tensors.at(0);
 
     Program program = CreateProgram();
@@ -93,7 +94,8 @@ operation::ProgramWithCallbacks UntilizeWithHaloV2::create_program(
         padding_config2,
         local_config1,
         local_config2,
-        remote_config,
+        remote_config1,
+        remote_config2,
         remote_read_,
         transpose_mcast_,
         output_tensor,

@@ -102,7 +102,8 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
     const auto& pad_config2 = std::get<1>(kernel_config);
     const auto& local_config1 = std::get<2>(kernel_config);
     const auto& local_config2 = std::get<3>(kernel_config);
-    const auto& remote_config = std::get<4>(kernel_config);
+    const auto& remote_config1 = std::get<4>(kernel_config);
+    const auto& remote_config2 = std::get<5>(kernel_config);
 
     auto pad_config_tensor1 =
         sliding_window::construct_on_host_config_tensor(pad_config1, this->config_, this->parallel_config_);
@@ -112,8 +113,10 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
         sliding_window::construct_on_host_config_tensor(local_config1, this->config_, this->parallel_config_);
     auto local_config_tensor2 =
         sliding_window::construct_on_host_config_tensor(local_config2, this->config_, this->parallel_config_);
-    auto remote_config_tensor =
-        sliding_window::construct_on_host_config_tensor(remote_config, this->config_, this->parallel_config_);
+    auto remote_config_tensor1 =
+        sliding_window::construct_on_host_config_tensor(remote_config1, this->config_, this->parallel_config_);
+    auto remote_config_tensor2 =
+        sliding_window::construct_on_host_config_tensor(remote_config2, this->config_, this->parallel_config_);
 
     auto pad_config_device_tensor1 =
         sliding_window::move_config_tensor_to_device(pad_config_tensor1, parallel_config_, is_block_sharded, device);
@@ -123,8 +126,10 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
         sliding_window::move_config_tensor_to_device(local_config_tensor1, parallel_config_, is_block_sharded, device);
     auto local_config_device_tensor2 =
         sliding_window::move_config_tensor_to_device(local_config_tensor2, parallel_config_, is_block_sharded, device);
-    auto remote_config_device_tensor =
-        sliding_window::move_config_tensor_to_device(remote_config_tensor, parallel_config_, is_block_sharded, device);
+    auto remote_config_device_tensor1 =
+        sliding_window::move_config_tensor_to_device(remote_config_tensor1, parallel_config_, is_block_sharded, device);
+    auto remote_config_device_tensor2 =
+        sliding_window::move_config_tensor_to_device(remote_config_tensor2, parallel_config_, is_block_sharded, device);
 
     Program program = CreateProgram();
 
@@ -138,7 +143,8 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
         pad_config_device_tensor2,
         local_config_device_tensor1,
         local_config_device_tensor2,
-        remote_config_device_tensor,
+        remote_config_device_tensor1,
+        remote_config_device_tensor2,
         remote_read_,
         transpose_mcast_,
         output_tensor,

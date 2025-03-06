@@ -42,7 +42,6 @@ void copy_sticks_async(
     const uint32_t out_base_l1_addr) {
     int i = 0;
     int length = config_data[i + 2];
-    uint16_t iteration = 0;
     while (length) {
         uint16_t noc_x = ((is_block_sharded && !is_col_major) || is_width_sharded) ? my_noc_x : config_data[i + 0];
         uint16_t noc_y = ((is_block_sharded && is_col_major) || is_width_sharded) ? my_noc_y : config_data[i + 1];
@@ -52,22 +51,6 @@ void copy_sticks_async(
         const uint64_t base_addr = get_noc_addr(noc_x, noc_y, is_read ? in_base_l1_addr : out_base_l1_addr);
 
         for (uint16_t j = 0; j < length; j += 3) {
-            iteration++;
-            if constexpr (enable_split_reader) {
-                if constexpr (is_remote_config) {
-                    if constexpr (is_reader) {
-                        // Skip every odd iteration for readers in remote configuration
-                        if (iteration % 2 == 1) {
-                            continue;
-                        }
-                    } else {
-                        // Skip every even iteration for writer in remote configuration
-                        if (iteration % 2 == 0) {
-                            continue;
-                        }
-                    }
-                }
-            }
             uint16_t src_local_idx = config_data[i + j + 0];
             uint16_t dst_local_idx = config_data[i + j + 1];
             uint16_t nsticks = config_data[i + j + 2];
