@@ -10,7 +10,6 @@
 #include <dev_msgs.h>
 #include <hal.hpp>
 #include <allocator.hpp>
-#include "buffers/dispatch.hpp"
 #include "dprint_server.hpp"
 #include <command_queue.hpp>
 #include <profiler.hpp>
@@ -454,8 +453,7 @@ void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buff
     }
 }
 
-DeviceAddr CalculateAddressDeviceInterleavedContiguous(
-    const Buffer& buffer, uint32_t bank_index, uint32_t page_index, uint32_t num_round_robins) {
+DeviceAddr CalculateAddressDeviceInterleavedContiguous(const Buffer& buffer, uint32_t bank_index, uint32_t page_index) {
     DeviceAddr addr = 0;
     if (buffer.is_dram()) {
         addr = buffer.bank_local_page_address(bank_index, page_index);
@@ -464,15 +462,6 @@ DeviceAddr CalculateAddressDeviceInterleavedContiguous(
         addr = buffer.page_address(bank_index, page_index);
     }
 
-    if (buffer_dispatch::are_pages_larger_than_max_prefetch_cmd_size(buffer)) {
-        // const buffer_dispatch::PartialPageSpec& partial_page_spec =
-        //     buffer_dispatch::calculate_partial_page_spec(buffer);
-        // const uint32_t full_padded_page_size =
-        //     partial_page_spec.partial_page_size * partial_page_spec.num_partial_pages_per_full_page;
-        // const DeviceAddr full_page_address_offset =
-        //     (num_round_robins > 0) ? (full_padded_page_size - buffer.aligned_page_size()) * num_round_robins : 0;
-        // addr += (buffer.aligned_page_size() * num_round_robins);
-    }
     return addr;
 }
 
@@ -489,14 +478,12 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
 
     auto device = buffer.device();
     auto num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
-    uint32_t num_round_robins = 0;
     uint32_t bank_index = 0;
     int data_index = 0;
     std::vector<uint32_t> page;
     page.resize(page_size / sizeof(uint32_t));
     for (int page_index = 0; page_index < num_pages; page_index++) {
-        const DeviceAddr address =
-            CalculateAddressDeviceInterleavedContiguous(buffer, bank_index, page_index, num_round_robins);
+        const DeviceAddr address = CalculateAddressDeviceInterleavedContiguous(buffer, bank_index, page_index);
         std::memcpy(page.data(), host_buffer.data() + data_index, page_size);
         switch (buffer.buffer_type()) {
             case BufferType::DRAM: WriteToDeviceDRAMChannel(device, bank_index, address, page); break;
@@ -506,10 +493,6 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
                 WriteToDeviceL1(device, logical_core, address, page, CoreType::WORKER);
             } break;
             default: TT_THROW("Unsupported buffer type to write to device!");
-        }
-
-        if (bank_index + 1 == num_banks) {
-            num_round_robins += 1;
         }
 
         bank_index = (bank_index + 1) % num_banks;
@@ -550,14 +533,12 @@ void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buf
     auto device = buffer.device();
     auto num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
 
-    uint32_t num_round_robins = 0;
     size_t host_idx = 0;
     uint32_t bank_index = 0;
     std::vector<uint32_t> page;
     page.resize(page_size / sizeof(uint32_t));
     for (int page_index = 0; page_index < num_pages; page_index++) {
-        const DeviceAddr address =
-            CalculateAddressDeviceInterleavedContiguous(buffer, bank_index, page_index, num_round_robins);
+        const DeviceAddr address = CalculateAddressDeviceInterleavedContiguous(buffer, bank_index, page_index);
         page.clear();
         switch (buffer.buffer_type()) {
             case BufferType::DRAM:
@@ -575,10 +556,6 @@ void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buf
         // Copy page into host buffer
         std::memcpy(host_buffer + host_idx, page.data(), page_size);
         host_idx += page_size;
-
-        if (bank_index + 1 == num_banks) {
-            num_round_robins += 1;
-        }
 
         bank_index = (bank_index + 1) % num_banks;
     }
