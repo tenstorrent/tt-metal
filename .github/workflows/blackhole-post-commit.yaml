@@ -110,7 +110,6 @@ jobs:
       arch: blackhole
       runner-label: ${{ inputs.runner-label || 'BH' }}
       timeout: 60
-      os: "ubuntu-22.04"
 
 #   profiler-regression:
 #     needs: build-artifact-profiler
