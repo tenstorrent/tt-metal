@@ -7,7 +7,7 @@
 #include <cstdint>
 
 #include "ckernel_debug.h"
-#include "compute_kernel_api.h"
+// #include "compute_kernel_api.h"
 #include "dprint.h"
 #include "tensix_types.h"
 
@@ -34,6 +34,32 @@ constexpr int WIDTH = 8;
 constexpr uint16_t NUM_FACES_PER_TILE = 4;
 constexpr uint16_t NUM_ROWS_PER_FACE = 16;
 constexpr uint16_t NUM_ROWS_PER_TILE = NUM_FACES_PER_TILE * NUM_ROWS_PER_FACE;
+// Temporary here, will remove before merge and file an issue
+ALWI void dbg_read_dest_acc_row(int row_addr, uint32_t* rd_data) {
+    MATH((dbg_get_array_row(dbg_array_id::DEST, row_addr, rd_data)));
+}
+
+/**
+ * Pauses the cores so that the debug interface can be used to inspect the value of the registers.
+ *
+ * Return value: None
+ */
+ALWI void dbg_halt() {
+    PACK(dbg_thread_halt<PackThreadId>());
+    UNPACK(dbg_thread_halt<UnpackThreadId>());
+    MATH(dbg_thread_halt<MathThreadId>());
+}
+
+/**
+ * Resumes the execution of the cores after a debug halt.
+ *
+ * Return value: None
+ */
+ALWI void dbg_unhalt() {
+    PACK(dbg_thread_unhalt<PackThreadId>());
+    UNPACK(dbg_thread_unhalt<UnpackThreadId>());
+    MATH(dbg_thread_unhalt<MathThreadId>());
+}
 
 // Helper function to print array
 inline void dprint_array_with_data_type(uint32_t data_format, uint32_t* data, uint32_t count) {

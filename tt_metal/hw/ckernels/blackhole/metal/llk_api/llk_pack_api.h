@@ -218,14 +218,18 @@ inline void llk_pack_untilize_init(
     static_assert(diagonal == false && "Diagonal packing is not supported for BH!");
     const std::uint32_t output_id = get_output_id(output);
 
-    _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, diagonal>(
+    _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(
         pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, num_faces);
 
+    if constexpr (narrow_row) {
+        TT_SETADCXX(p_setadc::PAC, row_num_datums - 1, 0x0);
+    } else {
+        TT_SETADCXX(p_setadc::PAC, FACE_R_DIM - 1, 0x0);
+    }
     // Pack row by row
     // if constexpr (diagonal) {
     //     TT_SETADCXX(p_setadc::PAC, 1-1, 0x0);
     // } else {
-    TT_SETADCXX(p_setadc::PAC, FACE_R_DIM - 1, 0x0);
     // }
 }
 
@@ -261,7 +265,7 @@ inline void llk_pack_untilize(
             16;
 
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
-        _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal>(
+        _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(
             pack_tile_addr, pack_dst_format[output_id], face_r_dim, num_faces, block_rt * block_ct_dim);
 
         pack_tile_addr += full_ct_dim * get_local_cb_interface(output_id).fifo_page_size;
