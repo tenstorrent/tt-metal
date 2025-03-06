@@ -109,7 +109,6 @@ void MAIN {
         reduce_revert_delta(cb_ex);
         tile_regs_release();
         cb_push_back(cb_ex, onetile);
-        cb_wait_front(cb_ex, onetile);
         // End of
         // E[x]
         // aka   ∑(x)
