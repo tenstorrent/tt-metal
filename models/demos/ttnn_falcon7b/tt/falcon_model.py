@@ -10,7 +10,7 @@ import ttnn
 
 from models.demos.ttnn_falcon7b.tt.falcon_decoder import TtFalconDecoderLayer
 from models.demos.ttnn_falcon7b.tt.common import create_attention_mask
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
+from ttnn import ShardTensorToMesh, replicate_tensor_to_mesh_mapper, ConcatMeshToTensor
 
 
 class TtFalconModelShared:

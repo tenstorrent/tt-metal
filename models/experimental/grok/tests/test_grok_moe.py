@@ -13,7 +13,7 @@ if os.getenv("CI") == "true":
     os.environ["GROK_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Grok/Grok-1/"
 
 import ttnn
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
+from ttnn import replicate_tensor_to_mesh_mapper, ConcatMeshToTensor
 
 from models.experimental.grok.tt.grok_mlp import TtGrokMLP
 from models.experimental.grok.tt.grok_moe import TtMoeLayer
@@ -86,7 +86,7 @@ def test_grok_moe_inference(t3k_mesh_device, use_program_cache, reset_seeds):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
+            ttnn.replicate_tensor_to_mesh_mapper(t3k_mesh_device),
         )
         # Run TT model
         tt_out = tt_model(tt_decode_input)

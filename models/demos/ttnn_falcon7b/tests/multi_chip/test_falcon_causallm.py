@@ -22,7 +22,7 @@ from models.demos.ttnn_falcon7b.tt.common import (
 )
 
 from loguru import logger
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
+from ttnn import ShardTensorToMesh, replicate_tensor_to_mesh_mapper, ConcatMeshToTensor
 
 
 PRETRAINED_MODEL_NAME = f"tiiuae/falcon-7b-instruct"
@@ -153,7 +153,7 @@ def test_falcon_causal_lm(
             model_config,
             tt_cache_path=get_tt_cache_path(f"{model_version}"),
             device=mesh_device,
-            weights_mesh_mapper=ReplicateTensorToMesh(mesh_device),
+            weights_ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         ),
         convert_to_ttnn=convert_to_ttnn,
     )
@@ -369,7 +369,7 @@ def test_t3k_falcon_causal_lm_with_trace(
             model_config,
             tt_cache_path=get_tt_cache_path(f"{model_version}"),
             device=t3k_mesh_device,
-            weights_mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
+            weights_ttnn.replicate_tensor_to_mesh_mapper(t3k_mesh_device),
         ),
         convert_to_ttnn=convert_to_ttnn,
     )
@@ -393,7 +393,7 @@ def test_t3k_falcon_causal_lm_with_trace(
             torch.full(scalar_shape, layer.self_attn.scalar),
             device=t3k_mesh_device,
             layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
+            ttnn.replicate_tensor_to_mesh_mapper(t3k_mesh_device),
         )
     # TODO: Generate embeddings and attention_mask on device
     tt_embeddings, tt_attention_mask = tt_FalconCausalLM.model_preprocessing(

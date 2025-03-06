@@ -5,7 +5,7 @@
 import torch
 import ttnn
 from models.utility_functions import nearest_32
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
+from ttnn import ShardTensorToMesh, replicate_tensor_to_mesh_mapper, ConcatMeshToTensor
 from models.common.lightweightmodule import LightweightModule
 
 
@@ -135,7 +135,7 @@ class TtMixtralAttention(LightweightModule):
         self.reduce_mask = ttnn.from_torch(
             reduce_mask_torch,
             device=self.mesh_device,
-            mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+            ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
         )

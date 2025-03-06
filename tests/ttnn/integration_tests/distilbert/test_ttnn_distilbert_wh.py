@@ -29,13 +29,13 @@ def test_distilbert_for_question_answering(mesh_device, model_name, batch_size, 
     tt_model_name = f"ttnn_{model_name}_optimized"
 
     inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
-    weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    weights_mesh_mapper = ttnn.replicate_tensor_to_mesh_mapper(mesh_device)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
     if ttnn.GetNumAvailableDevices() == 2:
         batch_size = batch_size * 2
 
-    with ttnn.distribute(ttnn.ReplicateTensorToMesh(mesh_device)):
+    with ttnn.distribute(ttnn.replicate_tensor_to_mesh_mapper(mesh_device)):
         parameters = preprocess_model_parameters(
             model_name=tt_model_name,
             initialize_model=lambda: HF_model,

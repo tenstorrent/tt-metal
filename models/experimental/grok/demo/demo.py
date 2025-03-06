@@ -17,7 +17,7 @@ if os.getenv("CI") == "true":
     os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
 
 import ttnn
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
+from ttnn import replicate_tensor_to_mesh_mapper, ConcatMeshToTensor
 from models.experimental.grok.tt.grok_common import (
     prepare_inputs_ttnn,
     prepare_rotation_mat_ttnn,
@@ -85,7 +85,7 @@ def preprocess_inputs(input_prompts, tokenizer, model_args, dtype, instruct, mes
             device=mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ReplicateTensorToMesh(mesh_device),
+            ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
         for i in range(max_prompt_len)
     ]
@@ -95,7 +95,7 @@ def preprocess_inputs(input_prompts, tokenizer, model_args, dtype, instruct, mes
             device=mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ReplicateTensorToMesh(mesh_device),
+            ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
         for i in range(max_prompt_len)
     ]

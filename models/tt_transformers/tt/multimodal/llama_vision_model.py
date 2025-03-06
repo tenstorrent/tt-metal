@@ -243,7 +243,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
             device=self.mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
         )
 
         padded_masks = _pad_masks(  # torch.Size([1, 512, 1, 4])
@@ -314,7 +314,7 @@ class CrossAttentionTransformer(torch.nn.Module):
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
             )
             tt_xattn_mask = ttnn.to_layout(tt_xattn_mask, ttnn.TILE_LAYOUT)
             tt_xattn_mask = ttnn.typecast(tt_xattn_mask, ttnn.bfloat4_b)
@@ -333,7 +333,7 @@ class CrossAttentionTransformer(torch.nn.Module):
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
             )
             tt_full_text_mask_expand_1NSH = ttnn.to_layout(tt_full_text_mask_expand_1NSH, ttnn.TILE_LAYOUT)
             tt_full_text_mask_expand_1NSH = ttnn.typecast(tt_full_text_mask_expand_1NSH, ttnn.bfloat4_b)
@@ -356,7 +356,7 @@ class CrossAttentionTransformer(torch.nn.Module):
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     dtype=ttnn.int32,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                    mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
                 )
         else:
             assert cross_attention_masks is None and full_text_row_masked_out_mask is None
@@ -385,7 +385,7 @@ class CrossAttentionTransformer(torch.nn.Module):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
             )
 
         return (
@@ -503,7 +503,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             device=None,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
         )
 
         rot_position_id = torch.maximum(
@@ -535,7 +535,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             device=None,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
         )
 
         full_text_mask = torch.cat(full_text_mask, dim=1).unsqueeze(0)
@@ -553,7 +553,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             device=None,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
         )
 
         full_text_mask_expand_11SD = full_text_mask
@@ -569,7 +569,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             device=None,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
         )
 
         if isinstance(page_table, torch.Tensor):
@@ -578,7 +578,7 @@ class CrossAttentionTransformer(torch.nn.Module):
                 page_table,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
             )
 
         if isinstance(cross_page_table, torch.Tensor):
@@ -587,7 +587,7 @@ class CrossAttentionTransformer(torch.nn.Module):
                 cross_page_table,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
             )
 
         return (

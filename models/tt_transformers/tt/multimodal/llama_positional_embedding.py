@@ -13,7 +13,7 @@ from models.utility_functions import (
 )
 from models.common.lightweightmodule import LightweightModule
 
-from ttnn import ShardTensorToMesh, ConcatMeshToTensor, ReplicateTensorToMesh
+from ttnn import ShardTensorToMesh, ConcatMeshToTensor, ttnn.replicate_tensor_to_mesh_mapper
 
 TILE_SIZE = 32
 
@@ -48,7 +48,7 @@ class TtLlamaPositionalEmbedding(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
         )
         padded_gated_embeddings, self.ar_mapping = self.generate_padded_gated_embeddings(
             gated_positional_embedding, gated_positional_embedding_gate
@@ -59,7 +59,7 @@ class TtLlamaPositionalEmbedding(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
         )
 
         # Add batch and ntok dimensions
@@ -72,7 +72,7 @@ class TtLlamaPositionalEmbedding(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
         )
 
     def generate_padded_gated_embeddings(self, gated_embedding, gate):

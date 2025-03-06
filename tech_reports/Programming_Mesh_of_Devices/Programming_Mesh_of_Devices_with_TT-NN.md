@@ -461,7 +461,7 @@ with ttnn.distribute(ttnn.ShardTensorToMesh(mesh_device, dim=0)):
     )
 
 # Replicate model parameters to devices in the mesh
-with ttnn.distribute(ttnn.ReplicateTensorToMesh(mesh_device)):
+with ttnn.distribute(ttnn.replicate_tensor_to_mesh_mapper(mesh_device)):
     parameters = ttnn.model_preprocessing.preprocess_model_parameters(
         initialize_model=lambda: model,
         device=mesh_device,
@@ -539,7 +539,7 @@ mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(2,4))
 # Initialize input activations on all devices in the mesh
 # Alternatively, we can shard the input activations on the height dimension and
 # subsequently invoke all-gather on the height dimension to form a complete tensor per device.
-with ttnn.distribute(ttnn.ReplicateTensorToMesh(mesh_device)):
+with ttnn.distribute(ttnn.replicate_tensor_to_mesh_mapper(mesh_device)):
     hidden_states = ttnn.from_torch(
         torch_hidden_states,
         dtype=ttnn.bfloat16,

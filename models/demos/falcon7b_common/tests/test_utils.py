@@ -4,7 +4,7 @@
 
 import torch
 import ttnn
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
+from ttnn import ShardTensorToMesh, replicate_tensor_to_mesh_mapper
 from transformers import FalconForCausalLM
 from models.utility_functions import tt_tensors_to_torch_tensors
 
@@ -20,14 +20,14 @@ def initialize_kv_cache(configuration, num_layers, batch_size, max_seq_len, mesh
             dtype=ttnn.bfloat16,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
         tt_v_cache = tt_from_torch(
             v_cache,
             dtype=ttnn.bfloat16,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
         kv_cache += ((tt_k_cache, tt_v_cache),)
     return kv_cache

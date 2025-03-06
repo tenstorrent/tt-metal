@@ -161,7 +161,7 @@ def test_cross_attention_transformer_block_inference(
                     dtype=ttnn.bfloat4_b,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                    mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
                 )
                 tt_full_text_mask_expand_1NSH = ttnn.from_torch(
                     full_text_mask_expand_1NSH[b : b + 1],
@@ -169,7 +169,7 @@ def test_cross_attention_transformer_block_inference(
                     dtype=ttnn.bfloat4_b,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                    mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
                 )
                 tt_full_text_mask_expand_11SD = ttnn.from_torch(
                     full_text_mask_expand_11SD[b : b + 1],
@@ -207,7 +207,7 @@ def test_cross_attention_transformer_block_inference(
                 dtype=ttnn.bfloat4_b,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
             )
             tt_xattn_mask = ttnn.reshape(
                 tt_xattn_mask,
@@ -222,7 +222,7 @@ def test_cross_attention_transformer_block_inference(
                 dtype=ttnn.bfloat4_b,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
             )
             tt_full_text_mask_expand_1NSH = ttnn.reshape(
                 tt_full_text_mask_expand_1NSH,
@@ -241,7 +241,7 @@ def test_cross_attention_transformer_block_inference(
                 device=mesh_device,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
             )
             tt_full_text_mask_expand_11SD = ttnn.to_layout(tt_full_text_mask_expand_11SD, ttnn.TILE_LAYOUT)
 

@@ -1215,7 +1215,7 @@ mesh_tensor_replicated = ttnn.from_torch(
     torch_input_tensor,
     layout=ttnn.TILE_LAYOUT,
     device=mesh_device,
-    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
 )
 ```
 
