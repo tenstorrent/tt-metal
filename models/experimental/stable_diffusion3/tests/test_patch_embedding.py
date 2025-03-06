@@ -72,6 +72,5 @@ def test_patch_embedding(
     torch_output = torch_model(torch_input_tensor)
 
     tt_output = tt_model(tt_input_tensor)
-    tt_output_torch = to_torch(tt_output, mesh_device=mesh_device, dtype=dtype, shard_dim=0)[0:batch_size, ...]
 
-    assert_quality(torch_output, tt_output_torch, pcc=0.999_990)
+    assert_quality(torch_output, tt_output, pcc=0.999_990, shard_dim=0, num_devices=mesh_device.get_num_devices())
