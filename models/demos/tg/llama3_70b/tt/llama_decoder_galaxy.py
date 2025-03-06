@@ -110,8 +110,7 @@ class TtLlamaDecoder_galaxy:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=shard_tensor_to_2d_mesh_mapper
-(self.mesh_device, self.cluster_shape, (None, 2)),
+            mesh_mapper=shard_tensor_to_2d_mesh_mapper(self.mesh_device, self.cluster_shape, (None, 2)),
             cache_file_name=self.cache_path / attn_norm_sharded_str,
         )
 
@@ -121,8 +120,7 @@ class TtLlamaDecoder_galaxy:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=shard_tensor_to_2d_mesh_mapper
-(self.mesh_device, self.cluster_shape, (None, 2)),
+            mesh_mapper=shard_tensor_to_2d_mesh_mapper(self.mesh_device, self.cluster_shape, (None, 2)),
             cache_file_name=self.cache_path / ffn_norm_sharded_str,
         )
 
