@@ -383,6 +383,9 @@ def test_all_reduce(
     use_program_cache,
     function_level_defaults,
 ):
+    if len(mesh_device.get_devices()) != 32:
+        pytest.skip("Not TG!")
+
     profiler = BenchmarkProfiler()
 
     run_all_reduce_impl(
@@ -461,6 +464,9 @@ def test_all_reduce_loopback(
     use_program_cache,
     function_level_defaults,
 ):
+    if len(mesh_device.get_devices()) != 32:
+        pytest.skip("Not TG!")
+
     run_all_reduce_impl(
         mesh_device,
         output_shape,

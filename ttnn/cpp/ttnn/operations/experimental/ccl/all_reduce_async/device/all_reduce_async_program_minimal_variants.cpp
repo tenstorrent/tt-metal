@@ -42,7 +42,7 @@ CoreRangeSet cores_to_corerangeset(const std::vector<CoreCoord>& cores) {
     return CoreRangeSet(core_ranges);
 }
 
-operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers(
+tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers(
     const Tensor& input_tensor,
     const Tensor& buffer_tensor,
     std::optional<IDevice*> forward_device,
@@ -53,7 +53,7 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
     const uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
-    const std::optional<SubDeviceId>& sub_device_id,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode) {
     tt::tt_metal::Program program{};
 
