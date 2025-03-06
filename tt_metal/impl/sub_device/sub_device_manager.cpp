@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
+#include <memory>
 #include <vector>
 
 #include <sub_device_manager.hpp>
@@ -14,8 +16,6 @@
 #include <data_types.hpp>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
-#include <trace.hpp>
-#include <trace_buffer.hpp>
 #include <span.hpp>
 #include <tt_align.hpp>
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
@@ -118,22 +118,6 @@ const std::unique_ptr<Allocator>& SubDeviceManager::allocator(SubDeviceId sub_de
 std::unique_ptr<Allocator>& SubDeviceManager::sub_device_allocator(SubDeviceId sub_device_id) {
     auto sub_device_index = this->get_sub_device_index(sub_device_id);
     return sub_device_allocators_[sub_device_index];
-}
-
-std::shared_ptr<TraceBuffer>& SubDeviceManager::create_trace(uint32_t tid) {
-    auto [trace, emplaced] = trace_buffer_pool_.emplace(tid, Trace::create_empty_trace_buffer());
-    TT_ASSERT(emplaced, "Trace buffer with tid {} already exists", tid);
-    return trace->second;
-}
-
-void SubDeviceManager::release_trace(uint32_t tid) { trace_buffer_pool_.erase(tid); }
-
-std::shared_ptr<TraceBuffer> SubDeviceManager::get_trace(uint32_t tid) {
-    auto trace = trace_buffer_pool_.find(tid);
-    if (trace != trace_buffer_pool_.end()) {
-        return trace->second;
-    }
-    return nullptr;
 }
 
 bool SubDeviceManager::has_allocations() const {

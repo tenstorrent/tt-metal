@@ -29,6 +29,7 @@ struct TraceWorkerDescriptor {
 struct TraceDescriptor {
     // Mapping of sub_device_id to descriptor
     std::unordered_map<SubDeviceId, TraceWorkerDescriptor> descriptors;
+
     // Store the keys of the map in a vector after descriptor has finished being populated
     // This is an optimization since we sometimes need to only pass the keys in a container
     std::vector<SubDeviceId> sub_device_ids;

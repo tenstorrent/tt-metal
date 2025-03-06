@@ -6,7 +6,6 @@
 
 #include <cstdint>
 #include <memory>
-#include <unordered_set>
 #include <vector>
 
 #include "allocator.hpp"
@@ -17,8 +16,6 @@
 
 namespace tt::tt_metal {
 
-class TraceBuffer;
-
 inline namespace v0 {
 class IDevice;
 }  // namespace v0
@@ -28,6 +25,7 @@ public:
     // Constructor used for the default/global device
     SubDeviceManager(
         IDevice* device, std::unique_ptr<Allocator>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices);
+
     // Constructor used for regular sub-devices
     SubDeviceManager(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, IDevice* device);
 
@@ -52,10 +50,6 @@ public:
 
     const std::unique_ptr<Allocator>& allocator(SubDeviceId sub_device_id) const;
     std::unique_ptr<Allocator>& sub_device_allocator(SubDeviceId sub_device_id);
-
-    std::shared_ptr<TraceBuffer>& create_trace(uint32_t tid);
-    void release_trace(uint32_t tid);
-    std::shared_ptr<TraceBuffer> get_trace(uint32_t tid);
 
     uint8_t num_sub_devices() const;
     bool has_allocations() const;
@@ -94,8 +88,6 @@ private:
     std::vector<uint8_t> num_noc_unicast_txns_;
     std::vector<uint8_t> noc_mcast_data_start_index_;
     std::vector<uint8_t> noc_unicast_data_start_index_;
-
-    std::unordered_map<uint32_t, std::shared_ptr<TraceBuffer>> trace_buffer_pool_;
 
     // TODO #15944: Temporary until migration to actual fabric is complete
     std::optional<SubDeviceId> fabric_sub_device_id_ = std::nullopt;

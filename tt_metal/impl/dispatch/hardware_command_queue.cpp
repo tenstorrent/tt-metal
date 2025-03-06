@@ -403,12 +403,10 @@ void HWCommandQueue::enqueue_wait_for_event(const std::shared_ptr<Event>& sync_e
     event_dispatch::issue_wait_for_event_commands(id_, sync_event->cq_id, this->manager, sync_event->event_id);
 }
 
-void HWCommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
+void HWCommandQueue::enqueue_trace(const std::shared_ptr<TraceBuffer>& trace_buffer, bool blocking) {
     ZoneScopedN("HWCommandQueue_enqueue_trace");
-
-    auto trace_inst = this->device_->get_trace(trace_id);
-    auto descriptor = trace_inst->desc;
-    auto buffer = trace_inst->buffer;
+    auto descriptor = trace_buffer->desc;
+    auto buffer = trace_buffer->buffer;
     uint32_t num_sub_devices = descriptor->sub_device_ids.size();
 
     auto cmd_sequence_sizeB = trace_dispatch::compute_trace_cmd_size(num_sub_devices);
@@ -430,10 +428,10 @@ void HWCommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
         virtual_enqueue_program_dispatch_core_);
 
     trace_dispatch::update_worker_state_post_trace_execution(
-        trace_inst->desc->descriptors, this->manager, this->config_buffer_mgr, this->expected_num_workers_completed);
+        descriptor->descriptors, this->manager, this->config_buffer_mgr, this->expected_num_workers_completed);
 
     if (blocking) {
-        this->finish(trace_inst->desc->sub_device_ids);
+        this->finish(descriptor->sub_device_ids);
     }
 }
 

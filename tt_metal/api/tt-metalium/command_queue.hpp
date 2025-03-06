@@ -54,7 +54,7 @@ public:
     // This function is temporarily needed since MeshCommandQueue relies on the CommandQueue object
     virtual WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) = 0;
 
-    virtual void enqueue_trace(const uint32_t trace_id, bool blocking) = 0;
+    virtual void enqueue_trace(const std::shared_ptr<TraceBuffer>& trace_buffer, bool blocking) = 0;
 
     virtual void enqueue_program(Program& program, bool blocking) = 0;
 

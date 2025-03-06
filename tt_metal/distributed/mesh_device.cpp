@@ -27,6 +27,8 @@
 #include <mesh_coord.hpp>
 #include <small_vector.hpp>
 
+#include "tt_metal/impl/trace/trace_buffer_pool.hpp"
+
 namespace tt::tt_metal::distributed {
 
 namespace {
@@ -119,7 +121,8 @@ MeshDevice::MeshDevice(
     view_(std::move(mesh_device_view)),
     mesh_id_(generate_unique_mesh_id()),
     parent_mesh_(std::move(parent_mesh)),
-    thread_pool_(create_boost_thread_pool(view_->shape().mesh_size())) {}
+    thread_pool_(create_boost_thread_pool(view_->shape().mesh_size())),
+    trace_buffer_pool_(std::make_unique<TraceBufferPool<MeshTraceId, MeshTraceBuffer>>()) {}
 
 std::shared_ptr<MeshDevice> MeshDevice::create(
     const MeshDeviceConfig& config,
@@ -509,10 +512,10 @@ std::vector<CoreCoord> MeshDevice::get_ethernet_sockets(chip_id_t connected_chip
 
 // Core and worker management methods (These are OK)
 CoreRangeSet MeshDevice::worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->sub_device(sub_device_id).cores(core_type);
+    return sub_device_manager_tracker_->get_active_sub_device_manager().sub_device(sub_device_id).cores(core_type);
 }
 uint32_t MeshDevice::num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->sub_device(sub_device_id).num_cores(core_type);
+    return sub_device_manager_tracker_->get_active_sub_device_manager().sub_device(sub_device_id).num_cores(core_type);
 }
 
 // Bank and memory management methods
@@ -591,41 +594,48 @@ void MeshDevice::release_trace(const uint32_t tid) {
     }
 }
 
-std::shared_ptr<MeshTraceBuffer>& MeshDevice::create_mesh_trace(const MeshTraceId& trace_id) {
-    auto [trace, emplaced] = trace_buffer_pool_.emplace(trace_id, MeshTrace::create_empty_mesh_trace_buffer());
-    TT_FATAL(emplaced, "Trace buffer with tid {} already exists", *trace_id);
-    return trace->second;
-}
-
-void MeshDevice::release_mesh_trace(const MeshTraceId& trace_id) { trace_buffer_pool_.erase(trace_id); }
-
-std::shared_ptr<MeshTraceBuffer> MeshDevice::get_mesh_trace(const MeshTraceId& trace_id) {
-    auto trace = trace_buffer_pool_.find(trace_id);
-    if (trace != trace_buffer_pool_.end()) {
-        return trace->second;
-    }
-    TT_THROW("Trace Instance with ID {} is not initialized", *trace_id);
-}
+void MeshDevice::release_mesh_trace(const MeshTraceId& trace_id) { trace_buffer_pool_->erase(trace_id); }
 
 void MeshDevice::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
-    auto& mesh_trace_buffer = this->create_mesh_trace(trace_id);
+    auto mesh_trace_buffer = trace_buffer_pool_->emplace(
+        trace_id,
+        sub_device_manager_tracker_->get_active_sub_device_manager().id(),
+        MeshTrace::create_empty_mesh_trace_buffer());
     mesh_command_queues_[cq_id]->record_begin(trace_id, mesh_trace_buffer->desc);
 }
 
 void MeshDevice::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
-    auto trace_buffer = this->get_mesh_trace(trace_id);
+    auto trace = trace_buffer_pool_->get_trace(trace_id);
+    TT_FATAL(trace.has_value(), "Expected trace {} to exist on device, when ending trace", trace_id);
+    TT_FATAL(
+        trace->sub_device_manager_id == sub_device_manager_tracker_->get_active_sub_device_manager().id(),
+        "Trace {} must be captured fully on the same sub-device manager. Currently active manager {}, capture "
+        "began on {}",
+        trace_id,
+        sub_device_manager_tracker_->get_active_sub_device_manager().id(),
+        trace->sub_device_manager_id);
     mesh_command_queues_[cq_id]->record_end();
-    MeshTrace::populate_mesh_buffer(*(mesh_command_queues_[cq_id]), trace_buffer);
+    MeshTrace::populate_mesh_buffer(*(mesh_command_queues_[cq_id]), trace->trace_buffer);
 }
 
 void MeshDevice::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking) {
-    mesh_command_queues_[cq_id]->enqueue_trace(trace_id, blocking);
+    auto trace = trace_buffer_pool_->get_trace(trace_id);
+    TT_FATAL(
+        trace.has_value(),
+        "Trace {} must exist on device. Expected trace to be previously captured on device, or loaded "
+        "explicitly.",
+        trace_id);
+    TT_FATAL(
+        trace->sub_device_manager_id == sub_device_manager_tracker_->get_active_sub_device_manager().id(),
+        "Trace {} was captured on a different sub-device manager {} than the active sub-device manager {}, and cannot "
+        "be replayed. Load sub-device manager {} on device before replaying trace.",
+        trace_id,
+        trace->sub_device_manager_id,
+        sub_device_manager_tracker_->get_active_sub_device_manager().id(),
+        trace->sub_device_manager_id);
+    mesh_command_queues_[cq_id]->enqueue_trace(trace->trace_buffer, blocking);
 }
 
-std::shared_ptr<TraceBuffer> MeshDevice::get_trace(uint32_t tid) {
-    TT_THROW("get_trace() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->get_trace(tid);
-}
 uint32_t MeshDevice::get_trace_buffers_size() const { return trace_buffers_size_; }
 void MeshDevice::set_trace_buffers_size(uint32_t size) { trace_buffers_size_ = size; }
 
@@ -699,26 +709,25 @@ std::vector<std::pair<transfer_info_cores, uint32_t>> MeshDevice::extract_dst_no
 
 // Methods for SubDevice Management
 uint8_t MeshDevice::num_noc_mcast_txns(SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->num_noc_mcast_txns(sub_device_id);
+    return sub_device_manager_tracker_->get_active_sub_device_manager().num_noc_mcast_txns(sub_device_id);
 }
 uint8_t MeshDevice::num_noc_unicast_txns(SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->num_noc_unicast_txns(sub_device_id);
+    return sub_device_manager_tracker_->get_active_sub_device_manager().num_noc_unicast_txns(sub_device_id);
 }
 uint8_t MeshDevice::noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data, bool unicast_data) const {
     if (mcast_data) {
-        return sub_device_manager_tracker_->get_active_sub_device_manager()->noc_mcast_data_start_index(sub_device_id);
+        return sub_device_manager_tracker_->get_active_sub_device_manager().noc_mcast_data_start_index(sub_device_id);
     } else if (unicast_data) {
-        return sub_device_manager_tracker_->get_active_sub_device_manager()->noc_unicast_data_start_index(
-            sub_device_id);
+        return sub_device_manager_tracker_->get_active_sub_device_manager().noc_unicast_data_start_index(sub_device_id);
     } else {
         return 0;
     }
 }
 SubDeviceManagerId MeshDevice::get_active_sub_device_manager_id() const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->id();
+    return sub_device_manager_tracker_->get_active_sub_device_manager().id();
 }
 SubDeviceManagerId MeshDevice::get_default_sub_device_manager_id() const {
-    return sub_device_manager_tracker_->get_default_sub_device_manager()->id();
+    return sub_device_manager_tracker_->get_default_sub_device_manager().id();
 }
 CoreCoord MeshDevice::virtual_program_dispatch_core(uint8_t cq_id) const {
     return validate_and_get_reference_value(scoped_devices_->root_devices(), [cq_id](const auto& device) {
@@ -726,20 +735,20 @@ CoreCoord MeshDevice::virtual_program_dispatch_core(uint8_t cq_id) const {
     });
 }
 const std::vector<SubDeviceId>& MeshDevice::get_sub_device_ids() const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->get_sub_device_ids();
+    return sub_device_manager_tracker_->get_active_sub_device_manager().get_sub_device_ids();
 }
 const std::vector<SubDeviceId>& MeshDevice::get_sub_device_stall_group() const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->get_sub_device_stall_group();
+    return sub_device_manager_tracker_->get_active_sub_device_manager().get_sub_device_stall_group();
 }
 void MeshDevice::set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    sub_device_manager_tracker_->get_active_sub_device_manager()->set_sub_device_stall_group(sub_device_ids);
+    sub_device_manager_tracker_->get_active_sub_device_manager().set_sub_device_stall_group(sub_device_ids);
 }
 void MeshDevice::reset_sub_device_stall_group() {
-    sub_device_manager_tracker_->get_active_sub_device_manager()->reset_sub_device_stall_group();
+    sub_device_manager_tracker_->get_active_sub_device_manager().reset_sub_device_stall_group();
 }
 
 uint32_t MeshDevice::num_sub_devices() const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->num_sub_devices();
+    return sub_device_manager_tracker_->get_active_sub_device_manager().num_sub_devices();
 }
 
 bool MeshDevice::is_mmio_capable() const {
@@ -758,10 +767,10 @@ std::optional<DeviceAddr> MeshDevice::lowest_occupied_compute_l1_address(
 }
 
 const std::unique_ptr<Allocator>& MeshDevice::allocator() const {
-    return sub_device_manager_tracker_->get_default_sub_device_manager()->allocator(SubDeviceId{0});
+    return sub_device_manager_tracker_->get_default_sub_device_manager().allocator(SubDeviceId{0});
 }
 const std::unique_ptr<Allocator>& MeshDevice::allocator(SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->allocator(sub_device_id);
+    return sub_device_manager_tracker_->get_active_sub_device_manager().allocator(sub_device_id);
 }
 
 MeshSubDeviceManagerId MeshDevice::mesh_create_sub_device_manager(

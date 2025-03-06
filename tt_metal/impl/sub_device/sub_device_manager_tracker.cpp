@@ -120,18 +120,10 @@ void SubDeviceManagerTracker::remove_sub_device_manager(SubDeviceManagerId sub_d
     sub_device_managers_.erase(sub_device_manager);
 }
 
-SubDeviceManager* SubDeviceManagerTracker::get_active_sub_device_manager() const { return active_sub_device_manager_; }
+SubDeviceManager& SubDeviceManagerTracker::get_active_sub_device_manager() const { return *active_sub_device_manager_; }
 
-SubDeviceManager* SubDeviceManagerTracker::get_default_sub_device_manager() const {
-    return default_sub_device_manager_;
-}
-
-SubDeviceManagerId SubDeviceManagerTracker::get_active_sub_device_manager_id() const {
-    return active_sub_device_manager_->id();
-}
-
-SubDeviceManagerId SubDeviceManagerTracker::get_default_sub_device_manager_id() const {
-    return default_sub_device_manager_->id();
+SubDeviceManager& SubDeviceManagerTracker::get_default_sub_device_manager() const {
+    return *default_sub_device_manager_;
 }
 
 std::optional<DeviceAddr> SubDeviceManagerTracker::lowest_occupied_compute_l1_address(
@@ -145,7 +137,7 @@ std::optional<DeviceAddr> SubDeviceManagerTracker::lowest_occupied_compute_l1_ad
     } else {
         DeviceAddr lowest_addr = std::numeric_limits<DeviceAddr>::max();
         for (const auto& sub_device_id : sub_device_ids) {
-            const auto& allocator = this->get_active_sub_device_manager()->sub_device_allocator(sub_device_id);
+            const auto& allocator = this->get_active_sub_device_manager().sub_device_allocator(sub_device_id);
             if (allocator) {
                 auto found_addr = allocator->get_lowest_occupied_l1_address(global_bank_id);
                 if (found_addr.has_value()) {

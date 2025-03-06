@@ -47,12 +47,15 @@ class MeshTraceDescriptor {
 public:
     // Mapping of sub_device_id to descriptor
     std::unordered_map<SubDeviceId, TraceWorkerDescriptor> descriptors;
+
     // Store the keys of the map in a vector after descriptor has finished being populated
     // This is an optimization since we sometimes need to only pass the keys in a container
     std::vector<SubDeviceId> sub_device_ids;
+
     // Trace data per logical Device in a Mesh.
     std::vector<MeshTraceData> ordered_trace_data;
     uint32_t total_trace_size = 0;
+
     // Once the trace is captured/staged inside the sysmem_managers on a MeshDevice, assemble all
     // dispatch commands related to the MeshTrace
     void assemble_dispatch_commands(MeshDevice* device, const std::vector<MeshTraceStagingMetadata>& mesh_trace_md);
@@ -62,6 +65,7 @@ public:
 struct MeshTraceBuffer {
     // The trace descriptor associated with a MeshTrace
     std::shared_ptr<MeshTraceDescriptor> desc;
+
     // The MeshBuffer this trace will be serialized to, before being run on a
     // MeshDevice
     std::shared_ptr<MeshBuffer> mesh_buffer;
@@ -72,9 +76,11 @@ class MeshTrace {
 public:
     // Get global (unique) ID for trace
     static MeshTraceId next_id();
+
     // Create an empty MeshTraceBuffer, which needs to be populated
     // with a MeshTraceDescriptor and a MeshBuffer, to get tied to a MeshDevice.
     static std::shared_ptr<MeshTraceBuffer> create_empty_mesh_trace_buffer();
+
     // Once the Trace Data per logical device has been captured in the
     // MeshTraceDescriptor corresponding to this MeshTraceBuffer,
     // it can be binarized to a MeshDevice through a Command Queue.

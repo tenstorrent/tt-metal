@@ -255,38 +255,6 @@ TEST_F(MultiCommandQueueSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceBe
     ReleaseTrace(this->device_, tid);
 }
 
-TEST_F(CommandQueueTraceFixture, TensixInstantiateTraceSanity) {
-    CreateDevice(2048);
-    CommandQueue& command_queue = this->device_->command_queue();
-
-    auto input = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
-    vector<uint32_t> input_data(input->size() / sizeof(uint32_t), 0);
-    for (uint32_t i = 0; i < input_data.size(); i++) {
-        input_data[i] = i;
-    }
-    auto output = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
-    auto simple_program = std::make_shared<Program>(create_simple_unary_program(*input, *output));
-    EnqueueProgram(command_queue, *simple_program, true);
-    uint32_t tid = BeginTraceCapture(this->device_, command_queue.id());
-    EnqueueProgram(command_queue, *simple_program, kNonBlocking);
-    EndTraceCapture(this->device_, command_queue.id(), tid);
-
-    // Instantiate a trace on a device bound command queue
-    auto trace_inst = this->device_->get_trace(tid);
-    vector<uint32_t> data_fd, data_bd;
-
-    // Backdoor read the trace buffer
-    detail::ReadFromBuffer(trace_inst->buffer, data_bd);
-
-    // Frontdoor reaad the trace buffer
-    data_fd.resize(trace_inst->buffer->size() / sizeof(uint32_t));
-    EnqueueReadBuffer(command_queue, trace_inst->buffer, data_fd.data(), kBlocking);
-    EXPECT_EQ(data_fd, data_bd);
-
-    log_trace(LogTest, "Trace buffer content: {}", data_fd);
-    ReleaseTrace(this->device_, tid);
-}
-
 TEST_F(CommandQueueTraceFixture, TensixEnqueueProgramTraceCapture) {
     CreateDevice(2048);
     auto input = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
