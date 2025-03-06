@@ -32,7 +32,7 @@ After setting up the environment correctly, run a demo to test the environment.
   - First use a single device for simpler bring-up if models can fit on that single device; Wormhole has 12 GB DRAM storage and can support models of up to roughly 12B parameters in BFP8. If possible, use a smaller version of the model that fits on a single device. The model can be scaled up in size and on more devices.
  
 > [!NOTE]
-> In the llama3 demo implementation the decode stage supports batch=32. Each row is a separate user in 32x32 tiles used by the TT-Metalium stack. The prefill stage supports batch=1 where rows map to different iput tokens. Because prefill in compute-bound, multiple batches do not benefit performance. See [Converting Torch Model to TT-NN](https://docs.tenstorrent.com/docs-test/ttnn/latest/ttnn/converting_torch_model_to_ttnn.html) for model conversion.
+> In the llama3 demo implementation the decode stage supports batch=32. Each row is a separate user in 32x32 tiles used by the TT-Metalium stack. The prefill stage supports batch=1 where rows map to different iput tokens. Because prefill is compute-bound, multiple batches do not benefit performance. See [Converting Torch Model to TT-NN](https://docs.tenstorrent.com/docs-test/ttnn/latest/ttnn/converting_torch_model_to_ttnn.html) for model conversion.
 
 ## Systematic Component-wise Large Language Model (LLM) Bring-Up
 
@@ -46,12 +46,12 @@ After setting up the environment correctly, run a demo to test the environment.
 > [!NOTE]
 > Examples of standard modules used are: Layernorm/RMSNorm, RotaryEmbedding, Attention, or Multilayer Perceptron (MLP).
 
-4. Compose all modules into higher level nodules like single layer decoder or full decoder.
+4. Compose all modules into higher level modules like single layer decoder or full decoder.
 5. Implement decode mode then use decode to run prefill.
 6. Test the model configuration without a dedicated prefill implementation.
 7. Create a full model test. Use real inputs to produce real outputs; for LLMs, input text to output decoded tokens.
 8. Run the same inputs through the reference and TT-NN models to check the accuracy of your implementation. Teacher forcing is the ideal method to use with LLMs.
-9. Generate tokens from the reference and TT-NN models. Input the reference tokens into both models in the next interation. Depending on differeneces in the outputs, you can check accuarcy metrics.
+9. Generate tokens from the reference and TT-NN models. Input the reference tokens into both models in the next interation. Depending on differences in the outputs, you can check accuracy metrics.
 10. Verify the output tokens are:
     - Meaningful and coherent.
     - Similar to reference model tokens.
