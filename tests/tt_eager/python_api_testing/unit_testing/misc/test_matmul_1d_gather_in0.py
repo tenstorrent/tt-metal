@@ -47,6 +47,9 @@ def get_physical_to_logical_core_mapping(device):
     Returns a dictionary.
     """
     mapping = {}
+    is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
+    if is_mesh_device:
+        device = device.get_device(device.get_device_ids()[0])
     grid = device.compute_with_storage_grid_size()
     for x in range(grid.x):
         for y in range(grid.y):
@@ -116,6 +119,60 @@ PREFETCHER_NOC1_GRID = [
     (2, 4),
     (2, 5),
     (2, 9),
+]
+
+LM_HEAD_16_GRID = [
+    (1, 0),
+    (1, 1),
+    (1, 2),
+    (1, 3),
+    (1, 4),
+    (1, 5),
+    (1, 6),
+    (1, 7),
+    (1, 8),
+    (1, 9),
+    (2, 0),
+    (2, 1),
+    (2, 2),
+    (2, 3),
+    (2, 4),
+    (2, 5),
+]
+
+LM_HEAD_32_GRID = [
+    (1, 0),
+    (1, 1),
+    (1, 2),
+    (1, 3),
+    (1, 4),
+    (1, 5),
+    (1, 6),
+    (1, 7),
+    (1, 8),
+    (1, 9),
+    (2, 0),
+    (2, 1),
+    (2, 2),
+    (2, 3),
+    (2, 4),
+    (2, 5),
+    (2, 6),
+    (2, 7),
+    (2, 8),
+    (2, 9),
+    (3, 0),
+    (3, 1),
+    (3, 2),
+    (3, 3),
+    (3, 4),
+    (3, 5),
+    (3, 6),
+    (3, 7),
+    (3, 8),
+    (3, 9),
+    (5, 0),
+    (5, 1),
 ]
 
 
