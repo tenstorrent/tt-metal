@@ -72,6 +72,13 @@ BufferDispatchConstants generate_buffer_dispatch_constants(
     return buf_dispatch_constants;
 }
 
+void update_byte_offset_in_cq(uint32_t& byte_offset, bool issue_wait, uint32_t num_sub_devices) {
+    if (issue_wait) {
+        // commands prefixed with CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
+        byte_offset += (hal.get_alignment(HalMemType::HOST) * num_sub_devices);
+    }
+}
+
 // Initialize Dispatch Parameters - reused across write txns
 ShardedBufferWriteDispatchParams initialize_sharded_buf_dispatch_params(
     Buffer& buffer,
@@ -265,8 +272,8 @@ void issue_buffer_dispatch_command_sequence(
             data_size_bytes,
         pcie_alignment);
     if (dispatch_params.issue_wait) {
-        cmd_sequence_sizeB += hal.get_alignment(HalMemType::HOST) *
-                              num_worker_counters;  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
+        cmd_sequence_sizeB +=
+            pcie_alignment * num_worker_counters;  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
     }
     SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
@@ -313,9 +320,8 @@ void write_interleaved_buffer_to_device(
         dispatch_params.issue_wait =
             (dispatch_params.dst_page_index == starting_dst_page_index and
              dispatch_params.address == buffer.address());  // only stall for the first write of the buffer
-        if (dispatch_params.issue_wait) {
-            data_offsetB *= 2;  // commands prefixed with CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
-        }
+
+        update_byte_offset_in_cq(data_offsetB, dispatch_params.issue_wait, sub_device_ids.size());
 
         uint32_t space_availableB = std::min(
             buf_dispatch_constants.issue_queue_cmd_limit -
@@ -474,10 +480,9 @@ void write_sharded_buffer_to_core(
         uint32_t data_offset_bytes = (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd));
         dispatch_params.issue_wait =
             dispatch_params.total_pages_written == 0;  // only stall for the first write of the buffer
-        if (dispatch_params.issue_wait) {
-            // commands prefixed with CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
-            data_offset_bytes *= 2;
-        }
+
+        update_byte_offset_in_cq(data_offset_bytes, dispatch_params.issue_wait, sub_device_ids.size());
+
         uint32_t space_available_bytes = std::min(
             buf_dispatch_constants.issue_queue_cmd_limit -
                 sysmem_manager.get_issue_queue_write_ptr(dispatch_params.cq_id),
