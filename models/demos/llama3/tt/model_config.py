@@ -116,6 +116,7 @@ class TtModelArgs:
         self.tile_size = 32
         self.is_70b = False
         self.from_hf_url = False  # updated below if true
+        self.arch_name = ttnn.get_arch_name()
 
         LLAMA_DIR = os.getenv("LLAMA_DIR")
         HF_MODEL = os.getenv("HF_MODEL")
@@ -382,12 +383,10 @@ class TtModelArgs:
 
             # For maximum performance, set the prefill grid row to 8, even if it can fit in a smaller grid
             # prefill_rows = lambda seq_len: min(seq_len, 1024) // self.tile_size
-            # prefill_rows = lambda seq_len: min(seq_len, 512) // self.tile_size
             prefill_rows = 8  # TODO if BH = 10, if wh = 8
             mlp1_3_grid = lambda seq_len: (
                 (8, min(min(seq_len, 1024) // 32, 4))
                 if self.is_galaxy
-                # else self.find_prefill_grid(prefill_rows(seq_len), self.dim // self.tile_size)
                 else self.find_prefill_grid(prefill_rows, self.dim // self.tile_size)
             )
             mlp2_grid = lambda seq_len: (
@@ -397,15 +396,13 @@ class TtModelArgs:
             )
 
             self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
-                # m=min(seq_len, 1024),
-                m=min(seq_len, 512),
+                m=min(seq_len, 512) if self.arch_name == "blackhole" else min(seq_len, 1024),  # WH
                 k=self.dim // self.cluster_shape[0],
                 n=self.hidden_dim // self.cluster_shape[1],
                 grid_size=mlp1_3_grid(seq_len),
             )
             self.model_config["PREFILL_MLP_W2_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
-                # m=min(seq_len, 1024),
-                m=min(seq_len, 512),
+                m=min(seq_len, 512) if self.arch_name == "blackhole" else min(seq_len, 1024),  # WH
                 k=self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1),
                 n=self.dim,
                 grid_size=mlp2_grid(seq_len),
@@ -1230,7 +1227,7 @@ class TtModelArgs:
 
     def create_dram_sharded_mem_config(self, k, n):
         """Create DRAM-sharded memory config for width-sharded tensors"""
-        dram_cores = 8
+        dram_cores = 8 if self.arch_name == "blackhole" else 12  # WH has 12 dram cores
         padded_size = math.ceil(n / (self.tile_size * dram_cores)) * (self.tile_size * dram_cores)
         shard_spec = ttnn.ShardSpec(
             self.dram_weight_grid, (k, padded_size // dram_cores), ttnn.ShardOrientation.ROW_MAJOR
@@ -1316,12 +1313,9 @@ class TtModelArgs:
         """Find a grid such that the number of row tiles evenly divides into the number
         of rows and the number of column tiles evenly divides into the number of columns
         """
-        # TODO WH
-        # max_rows = 8
-        # max_cols = 8
-        # TODO BH
         max_rows = 8
         max_cols = 8
+        # TODO Improve configuration for BH (higher core grid than WH)
 
         # Find number of cols that evenly divides into the number of columns
         cols = None
