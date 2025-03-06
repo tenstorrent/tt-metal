@@ -61,6 +61,9 @@ run_common_func_tests() {
   #RoBERTa
   pytest --disable-warnings models/demos/roberta/demo/demo.py --timeout 600; fail+=$?
 
+  #UFLD_v2
+
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/experimental/functional_UFLD_v2/demo/demo.py::test_tu_simple_res34_inference --timeout 600; fail+=$?
   return $fail
 }
 

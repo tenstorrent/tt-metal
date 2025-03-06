@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 dataset = "Tusimple"
 data_root = "models/experimental/functional_UFLD_v2/demo"  # Need to be modified before running
 epoch = 100

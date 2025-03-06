@@ -5,27 +5,21 @@
 import ttnn
 
 
-def p(x, b="x"):
-    print(f"{b}'s shape is {x.shape}")
-    print(f"{b}'s layout is {x.layout}")
-    print(f"{b}'s dtype is {x.dtype}")
-    print(f"{b}'s config is {x.memory_config()}")
-
-
 class ttnn_UFLD_V2_Conv2D:
     def __init__(
         self,
         conv,
         conv_pth,
-        bn=None,
         device=None,
         cache={},
         activation="",
         activation_dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat8_b,
-        use_1d_systolic_array=True,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        is_blk=False,
     ):
+        if is_blk:
+            shard_layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
         self.conv = conv
         self.device = device
         self.in_channels = conv.in_channels
@@ -34,8 +28,6 @@ class ttnn_UFLD_V2_Conv2D:
         self.padding = conv.padding
         self.stride = conv.stride
         self.groups = conv.groups
-        self.use_1d_systolic_array = use_1d_systolic_array
-        self.deallocate_activation = False
         self.cache = cache
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
@@ -48,17 +40,14 @@ class ttnn_UFLD_V2_Conv2D:
             dtype=activation_dtype,
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
-            deallocate_activation=self.deallocate_activation,
+            deallocate_activation=False,
             enable_act_double_buffer=False,
             enable_split_reader=False,
             enable_subblock_padding=False,
-            reshard_if_not_optimal=False,
+            reshard_if_not_optimal=True,
             activation=activation,
             input_channels_alignment=8,
         )
-        config_override = None
-        if config_override and "act_block_h" in config_override:
-            self.conv_config.act_block_h_override = config_override["act_block_h"]
         if conv_pth.bias is not None:
             bias = ttnn.from_device(conv_pth.bias)
             self.bias = bias
@@ -96,14 +85,18 @@ class ttnn_UFLD_V2_Conv2D:
 
 
 class ttnn_Basic_Block:
-    def __init__(self, conv_args, conv_pth, device, is_downsample=False):
+    def __init__(self, conv_args, conv_pth, device, is_downsample=False, blk_sharded=False):
         self.is_downsample = is_downsample
-        self.conv_args = conv_args
-        self.conv1 = ttnn_UFLD_V2_Conv2D(self.conv_args.conv1, conv_pth.conv1, device=device, activation="relu")
-        self.conv2 = ttnn_UFLD_V2_Conv2D(self.conv_args.conv2, conv_pth.conv2, device=device, activation="")
+
+        self.conv1 = ttnn_UFLD_V2_Conv2D(
+            conv_args.conv1, conv_pth.conv1, device=device, activation="relu", is_blk=blk_sharded
+        )
+        self.conv2 = ttnn_UFLD_V2_Conv2D(
+            conv_args.conv2, conv_pth.conv2, device=device, activation="", is_blk=blk_sharded
+        )
         if is_downsample:
             self.downsample = ttnn_UFLD_V2_Conv2D(
-                self.conv_args.downsample[0], conv_pth.downsample, device=device, activation=""
+                conv_args.downsample[0], conv_pth.downsample, device=device, activation="", is_blk=blk_sharded
             )
 
     def __call__(self, input):
@@ -112,9 +105,16 @@ class ttnn_Basic_Block:
         x, out_ht, out_wdth = self.conv2(x)
         if self.is_downsample:
             x_identity, out_ht, out_wdth = self.downsample(input)
+        if x_identity.is_sharded():
+            if x.memory_config().shard_spec.shape != x_identity.memory_config().shard_spec.shape:
+                memory_config_req = x.memory_config()
+                memory_config_req.shard_spec.shape = x_identity.memory_config().shard_spec.shape
+                memory_config_req.shard_spec.grid = x_identity.memory_config().shard_spec.grid
+                memory_config_req.shard_spec.orientation = x_identity.memory_config().shard_spec.orientation
+                x = ttnn.reshard(x, memory_config_req)
         x = ttnn.add(x, x_identity, memory_config=x.memory_config())
         x = ttnn.relu(x)
-
+        ttnn.deallocate(x_identity)
         return x
 
 
@@ -145,35 +145,42 @@ class ttnn_Resnet_34:
             conv_args.layer2[3], conv_pth.layer2_3, device=self.device, is_downsample=False
         )
         # layer-3
-        self.layer3_0 = ttnn_Basic_Block(conv_args.layer3[0], conv_pth.layer3_0, device=self.device, is_downsample=True)
+        self.layer3_0 = ttnn_Basic_Block(
+            conv_args.layer3[0], conv_pth.layer3_0, device=self.device, is_downsample=True, blk_sharded=True
+        )
         self.layer3_1 = ttnn_Basic_Block(
-            conv_args.layer3[1], conv_pth.layer3_1, device=self.device, is_downsample=False
+            conv_args.layer3[1], conv_pth.layer3_1, device=self.device, is_downsample=False, blk_sharded=True
         )
         self.layer3_2 = ttnn_Basic_Block(
-            conv_args.layer3[2], conv_pth.layer3_2, device=self.device, is_downsample=False
+            conv_args.layer3[2], conv_pth.layer3_2, device=self.device, is_downsample=False, blk_sharded=True
         )
         self.layer3_3 = ttnn_Basic_Block(
-            conv_args.layer3[3], conv_pth.layer3_3, device=self.device, is_downsample=False
+            conv_args.layer3[3], conv_pth.layer3_3, device=self.device, is_downsample=False, blk_sharded=True
         )
         self.layer3_4 = ttnn_Basic_Block(
-            conv_args.layer3[4], conv_pth.layer3_4, device=self.device, is_downsample=False
+            conv_args.layer3[4], conv_pth.layer3_4, device=self.device, is_downsample=False, blk_sharded=True
         )
         self.layer3_5 = ttnn_Basic_Block(
-            conv_args.layer3[5], conv_pth.layer3_5, device=self.device, is_downsample=False
+            conv_args.layer3[5], conv_pth.layer3_5, device=self.device, is_downsample=False, blk_sharded=True
         )
         # layer-4
-        self.layer4_0 = ttnn_Basic_Block(conv_args.layer4[0], conv_pth.layer4_0, device=self.device, is_downsample=True)
+        self.layer4_0 = ttnn_Basic_Block(
+            conv_args.layer4[0], conv_pth.layer4_0, device=self.device, is_downsample=True, blk_sharded=True
+        )
         self.layer4_1 = ttnn_Basic_Block(
-            conv_args.layer4[1], conv_pth.layer4_1, device=self.device, is_downsample=False
+            conv_args.layer4[1], conv_pth.layer4_1, device=self.device, is_downsample=False, blk_sharded=True
         )
         self.layer4_2 = ttnn_Basic_Block(
-            conv_args.layer4[2], conv_pth.layer4_2, device=self.device, is_downsample=False
+            conv_args.layer4[2], conv_pth.layer4_2, device=self.device, is_downsample=False, blk_sharded=True
         )
 
-    def __call__(self, x, batch_size=1):  # [1, 320, 800, 3]
-        x, out_ht, out_wdth = self.conv1(x)
-        x = ttnn.max_pool2d(
-            x,
+    def __call__(self, x, batch_size=1):
+        x1, out_ht, out_wdth = self.conv1(x)
+        if x.is_sharded():
+            ttnn.deallocate(x)
+            x1 = ttnn.reallocate(x1)
+        x1 = ttnn.max_pool2d(
+            x1,
             batch_size=batch_size,
             input_h=out_ht,
             input_w=out_wdth,
@@ -183,35 +190,32 @@ class ttnn_Resnet_34:
             padding=[self.maxpool_args.padding, self.maxpool_args.padding],
             dilation=[self.maxpool_args.dilation, self.maxpool_args.dilation],
         )
-        if x.is_sharded():
-            x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.sharded_to_interleaved(x1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(x1)
+        x = ttnn.reallocate(x)
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x = self.layer1_0(x)
         x = self.layer1_1(x)
         x = self.layer1_2(x)
-
         x = self.layer2_0(x)
         x = self.layer2_1(x)
         x = self.layer2_2(x)
         x = self.layer2_3(x)
-
         x = self.layer3_0(x)
         x = self.layer3_1(x)
         x = self.layer3_2(x)
         x = self.layer3_3(x)
         x = self.layer3_4(x)
         x = self.layer3_5(x)
-
-        x = self.layer4_0(input=x)
-        x = self.layer4_1(input=x)
-        x = self.layer4_2(input=x)
+        x = self.layer4_0(x)
+        x = self.layer4_1(x)
+        x = self.layer4_2(x)
 
         return x
 
 
 class ttnn_UFLD_V2:
     def __init__(self, conv_args, conv_pth, device):
-        self.device = device
         self.input_height = 320
         self.input_width = 800
         self.num_grid_row = 100
@@ -226,25 +230,20 @@ class ttnn_UFLD_V2:
         self.dim3 = 2 * self.num_cls_row * self.num_lane_on_row
         self.dim4 = 2 * self.num_cls_col * self.num_lane_on_col
         self.total_dim = self.dim1 + self.dim2 + self.dim3 + self.dim4
-        mlp_mid_dim = 2048
         self.input_height = self.input_height
         self.input_width = self.input_width
         self.input_dim = self.input_height // 32 * self.input_width // 32 * 8
         self.conv_pth = conv_pth
-        self.res_model = ttnn_Resnet_34(conv_args, conv_pth.res_model, device=self.device)
-        self.pool = ttnn_UFLD_V2_Conv2D(conv_args.pool, conv_pth.pool, activation="", device=self.device)
+        self.res_model = ttnn_Resnet_34(conv_args, conv_pth.res_model, device=device)
+        self.pool = ttnn_UFLD_V2_Conv2D(conv_args.pool, conv_pth.pool, activation="", device=device)
 
-    def __call__(self, input):
-        batch_size = input.shape[0]
+    def __call__(self, input, batch_size=1):
         fea = self.res_model(input, batch_size=batch_size)
         fea, out_h, out_w = self.pool(fea)
         if fea.is_sharded():
             fea = ttnn.sharded_to_interleaved(fea, ttnn.L1_MEMORY_CONFIG)
-        fea = ttnn.reshape(fea, (batch_size, out_h, out_w, fea.shape[-1]))
-        fea = ttnn.permute(fea, (0, 3, 1, 2))
-        fea = ttnn.reshape(
-            fea, (batch_size, int(fea.shape[0] * fea.shape[1] * fea.shape[2] * fea.shape[3]) // batch_size)
-        )
+        fea = ttnn.permute(fea, (0, 1, 3, 2))
+        fea = ttnn.reshape(fea, (fea.shape[0], fea.shape[1], 1, fea.shape[2] * fea.shape[3]))
         grid_size = (8, 8)
         shard_grid = ttnn.CoreRangeSet(
             {
@@ -254,9 +253,7 @@ class ttnn_UFLD_V2:
                 )
             }
         )
-        shard_shape = [32, 32]
-        print("shard shape is", shard_shape)
-        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+        shard_spec = ttnn.ShardSpec(shard_grid, [32, 32], ttnn.ShardOrientation.ROW_MAJOR)
         width_sharded_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec
         )
@@ -274,24 +271,4 @@ class ttnn_UFLD_V2:
             bias=self.conv_pth.cls.linear_2.bias,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
         )
-        if out.is_sharded():
-            out = ttnn.sharded_to_interleaved(out, ttnn.L1_MEMORY_CONFIG)
-        if out.layout != ttnn.ROW_MAJOR_LAYOUT:
-            out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
-        loc_row, loc_col, exist_row, exist_col = (
-            out[:, : self.dim1],
-            out[:, self.dim1 : self.dim1 + self.dim2],
-            out[:, self.dim1 + self.dim2 : self.dim1 + self.dim2 + self.dim3],
-            out[:, -self.dim4 :],
-        )
-        loc_row = ttnn.reshape(loc_row, (-1, self.num_grid_row, self.num_cls_row, self.num_lane_on_row))
-        loc_col = ttnn.reshape(loc_col, (-1, self.num_grid_col, self.num_cls_col, self.num_lane_on_col))
-        exist_row = ttnn.reshape(exist_row, (-1, 2, self.num_cls_row, self.num_lane_on_row))
-        exist_col = ttnn.reshape(exist_col, (-1, 2, self.num_cls_col, self.num_lane_on_col))
-        pred_dict = {
-            "loc_row": loc_row,
-            "loc_col": loc_col,
-            "exist_row": exist_row,
-            "exist_col": exist_col,
-        }
-        return out, pred_dict
+        return out

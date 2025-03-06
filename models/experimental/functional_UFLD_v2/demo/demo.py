@@ -1,5 +1,15 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 import torch
 import pytest
+import json
+import numpy as np
+import os
+import ttnn
+from pathlib import Path
+from loguru import logger
 from models.experimental.functional_UFLD_v2.reference.UFLD_v2_model import Tu_Simple
 from models.experimental.functional_UFLD_v2.demo import model_config as cfg
 from models.experimental.functional_UFLD_v2.demo.demo_utils import (
@@ -16,13 +26,6 @@ from ttnn.model_preprocessing import (
     preprocess_linear_weight,
     preprocess_linear_bias,
 )
-import json
-import numpy as np
-import os
-import ttnn
-import gdown
-from pathlib import Path
-from loguru import logger
 
 
 def custom_preprocessor(model, name):
@@ -294,44 +297,18 @@ def custom_preprocessor(model, name):
     return parameters
 
 
-def attempt_download(file, key="dumps"):
-    tests = Path(__file__).parent.parent / key
-    file_path = tests / Path(str(file).strip().replace("'", "").lower())
-    print("tests and file path is", tests, file_path)
-    if not file_path.exists():
-        google_drive_url = "https://drive.google.com/file/d/1pkz8homK433z39uStGK3ZWkDXrnBAMmX/view"
-
-        file_id = google_drive_url.split("/d/")[1].split("/")[0]
-        google_drive_download_url = f"https://drive.google.com/uc?id={file_id}"
-
-        try:
-            print(f"Downloading from Google Drive: {google_drive_download_url} to {file_path}...")
-            gdown.download(google_drive_download_url, str(file_path), quiet=False)
-
-            # Check if the file exists and its size
-            assert file_path.exists() and file_path.stat().st_size > 1e6, f"Download failed for {file}"
-
-        except Exception as e:
-            print(f"Error downloading from Google Drive: {e}")
-
-    return file_path
-
-
 @pytest.mark.parametrize(
     "batch_size,input_channels,height,width",
     [
-        (2, 3, 320, 800),
+        (1, 3, 320, 800),
     ],
 )
 @pytest.mark.parametrize(
     "use_pretrained_weight",
-    [
-        # False,
-        True  # uncomment  to run the model for real weights
-    ],
+    [False, True],
     ids=[
-        # "pretrained_weight_false",
-        "pretrained_weight_true",  # uncomment to run the model for real weights
+        "pretrained_weight_false",
+        "pretrained_weight_true",
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
@@ -341,8 +318,10 @@ def test_tu_simple_res34_inference(batch_size, input_channels, height, width, de
     if use_pretrained_weight:
         logger.info(f"Demo Inference using Pre-trained Weights")
         file = "tusimple_res34.pth"
-        downloaded_file_path = attempt_download(file, key="reference")
-        state_dict = torch.load(downloaded_file_path)
+    weights_path = "models/experimental/functional_UFLD_v2/tusimple_res34.pth"
+    if not os.path.exists(weights_path):
+        os.system("bash models/experimental/functional_UFLD_v2/weights_download.sh")
+        state_dict = torch.load(weights_path)
         new_state_dict = {}
         for key, value in state_dict["model"].items():
             new_key = key.replace("model.", "res_model.")
