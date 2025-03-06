@@ -21,7 +21,7 @@ import ttnn
 from llama_models.llama3.api.tokenizer import Tokenizer
 
 from models.tt_transformers.tt.generator import Generator
-from models.tt_transformers.tt.model_config import ModelOptimizations
+from models.tt_transformers.tt.model_config import ModelOptimizations, dtype_mf_settings
 from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
     PagedAttentionConfig,
@@ -265,6 +265,7 @@ def create_tt_model(
 @pytest.mark.parametrize(
     "optimizations",
     [
+        *[pytest.param(setting, id=setting.id) for setting in dtype_mf_settings],
         ModelOptimizations.performance,
         ModelOptimizations.accuracy,
     ],

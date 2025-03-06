@@ -35,28 +35,306 @@ from models.tt_transformers.tt.load_checkpoints import (
 )
 
 
-@dataclass
-class ModelOptimizations:
-    bfp4_mlp: bool
-    # Future fields will go here:
-    # bfp8_activations: bool
-    # bfp8_layernorm: bool
-    # bfp8_ccl: bool
+class TensorGroup(Enum):
+    FF1_FF3 = "ff1_3"
+    FF2 = "ff2"
+    WQKV = "wqkv"
+    WO = "wo"
+    KV_CACHE = "kv_cache"
+    ACTIVATION = "activation"
 
+
+class PrecisionSetting(Enum):
+    BFP4 = "bfp4"
+    BFP8 = "bfp8"
+    BF16 = "bf16"
+
+    @classmethod
+    def index(cls, value):
+        """Returns the 0-based index of the enum value"""
+        return list(cls).index(value)
+
+
+class OpGroup(Enum):
+    LI_FF1_FF3 = "li_ff1_3"
+    LI_FF2 = "li_ff2"
+    LI_QKV_DECODE = "li_qkv_decode"
+    LI_O_DECODE = "li_o_decode"
+    SDPA_DECODE = "sdpa_decode"
+    LI_QKV_PREFILL = "li_qkv_prefill"
+    LI_O_PREFILL = "li_o_prefill"
+    SDPA_PREFILL = "sdpa_prefill"
+
+
+class MathFidelitySetting(Enum):
+    LOFI = "lofi"
+    HIFI2 = "hifi2"
+    HIFI2_NA = "hifi2na"
+    HIFI2_FP16 = "hifi2fp16"
+    HIFI4 = "hifi4"
+
+    @classmethod
+    def index(cls, value):
+        """Returns the 0-based index of the enum value"""
+        return list(cls).index(value)
+
+
+class ModelOptimizations:
     @classmethod
     def accuracy(cls, model_name):
         """Configuration optimized for accuracy
         Only 70B models uses bfp4 MLPs in this configuration
         """
-        bfp4 = model_name in ["Llama3.1-70B", "DeepSeek-R1-Distill-Llama-70B", "Qwen2.5-72B"]
-        return cls(bfp4_mlp=bfp4)
+        if model_name in ["Llama3.1-70B", "DeepSeek-R1-Distill-Llama-70B", "Qwen2.5-72B"]:
+            inst = ModelOptimizations.performance(model_name)
+        else:
+            inst = cls()
+        inst.__name__ = "accuracy"
+        return inst
 
     @classmethod
     def performance(cls, model_name):
         """Configuration optimized for performance
-        All models use bfp4 MLPs in this configuration
+        All models use bfp4 in FF1 and FF3 MLPs in this configuration
         """
-        return cls(bfp4_mlp=True)
+        inst = cls(
+            {
+                "TensorPrecision": {TensorGroup.FF1_FF3: PrecisionSetting.BFP4},
+                "OpFidelity": {OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI},
+            }
+        )
+        inst.__name__ = "performance"
+        return inst
+
+    def __init__(self, settings: dict = None):
+        self._opt_settings = self._default_settings()
+        self._names = {}
+        for key, enum_type in (("TensorPrecision", TensorGroup), ("OpFidelity", OpGroup)):
+            self._opt_settings[key].update((settings or {}).get(key, {}))
+            curr = self._opt_settings[key]
+            self._names[key] = {
+                "full_name": ", ".join([f"{k.value}: {curr[k].value if curr[k] else 'orig'}" for k in list(enum_type)]),
+                "half_name": "_".join([f"{curr[k].value if curr[k] else 'orig'}" for k in list(enum_type)]),
+            }
+
+        self._full_name = (
+            "precision_cfg, fidelity_cfg = {"
+            + self._names["TensorPrecision"]["full_name"]
+            + "}, {"
+            + self._names["OpFidelity"]["full_name"]
+            + "}"
+        )
+        # NOTE: self.__name__ is used as section header in PERF.md; It is also used by, for example test_llama_accuracy.py to look for comparative results in PERF.md
+        self.__name__ = self._full_name
+        # NOTE: _half_name is used as pytest marker ids -- it can uniquely identify the optimization setting
+        self._half_name = self._names["TensorPrecision"]["half_name"] + "__" + self._names["OpFidelity"]["half_name"]
+
+        # TODO: maybe we could warn about some unwanted settings here
+
+    def _default_settings(self):
+        return {
+            "TensorPrecision": {
+                TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
+                TensorGroup.FF2: PrecisionSetting.BFP8,
+                TensorGroup.WQKV: PrecisionSetting.BFP8,
+                TensorGroup.WO: PrecisionSetting.BFP8,
+                TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
+                TensorGroup.ACTIVATION: None,  # this signals that original dtype should be used
+            },
+            "OpFidelity": {
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2,
+                OpGroup.LI_FF2: MathFidelitySetting.HIFI2,
+                OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI2,
+                OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2_NA,
+                OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI2,
+                OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
+                OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
+                OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI2_FP16,
+            },
+        }
+
+    @property
+    def tensor_dtype_settings(self):
+        return self._opt_settings["TensorPrecision"]
+
+    @property
+    def op_fidelity_settings(self):
+        return self._opt_settings["OpFidelity"]
+
+    @property
+    def id(self):
+        return self._half_name
+
+
+dtype_mf_settings = [
+    ModelOptimizations(
+        {
+            "TensorPrecision": {
+                TensorGroup.FF1_FF3: PrecisionSetting.BFP4,
+                TensorGroup.FF2: PrecisionSetting.BFP4,
+            },
+            "OpFidelity": {
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI,
+                OpGroup.LI_FF2: MathFidelitySetting.LOFI,
+            },
+        }
+    ),
+    ModelOptimizations(
+        {
+            "TensorPrecision": {
+                TensorGroup.FF1_FF3: PrecisionSetting.BFP4,
+                TensorGroup.FF2: PrecisionSetting.BFP8,
+            },
+            "OpFidelity": {
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI,
+                OpGroup.LI_FF2: MathFidelitySetting.HIFI2,
+            },
+        }
+    ),
+    ModelOptimizations(
+        {
+            "TensorPrecision": {
+                TensorGroup.FF1_FF3: PrecisionSetting.BFP4,
+                TensorGroup.FF2: PrecisionSetting.BF16,
+            },
+            "OpFidelity": {
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI,
+                OpGroup.LI_FF2: MathFidelitySetting.HIFI4,
+            },
+        }
+    ),
+    ModelOptimizations(
+        {
+            "TensorPrecision": {
+                TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
+                TensorGroup.FF2: PrecisionSetting.BFP4,
+            },
+            "OpFidelity": {
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2,
+                OpGroup.LI_FF2: MathFidelitySetting.LOFI,
+            },
+        }
+    ),
+    ModelOptimizations(
+        {
+            "TensorPrecision": {
+                TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
+                TensorGroup.FF2: PrecisionSetting.BFP8,
+            },
+            "OpFidelity": {
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2,
+                OpGroup.LI_FF2: MathFidelitySetting.HIFI2,
+            },
+        }
+    ),
+    ModelOptimizations(
+        {
+            "TensorPrecision": {
+                TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
+                TensorGroup.FF2: PrecisionSetting.BF16,
+            },
+            "OpFidelity": {
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2,
+                OpGroup.LI_FF2: MathFidelitySetting.HIFI4,
+            },
+        }
+    ),
+    ModelOptimizations(
+        {
+            "TensorPrecision": {
+                TensorGroup.FF1_FF3: PrecisionSetting.BF16,
+                TensorGroup.FF2: PrecisionSetting.BFP4,
+            },
+            "OpFidelity": {
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI4,
+                OpGroup.LI_FF2: MathFidelitySetting.LOFI,
+            },
+        }
+    ),
+    ModelOptimizations(
+        {
+            "TensorPrecision": {
+                TensorGroup.FF1_FF3: PrecisionSetting.BF16,
+                TensorGroup.FF2: PrecisionSetting.BFP8,
+            },
+            "OpFidelity": {
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI4,
+                OpGroup.LI_FF2: MathFidelitySetting.HIFI2,
+            },
+        }
+    ),
+    ModelOptimizations(
+        {
+            "TensorPrecision": {
+                TensorGroup.FF1_FF3: PrecisionSetting.BF16,
+                TensorGroup.FF2: PrecisionSetting.BF16,
+            },
+            "OpFidelity": {
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI4,
+                OpGroup.LI_FF2: MathFidelitySetting.HIFI4,
+            },
+        }
+    ),
+    ModelOptimizations(
+        {
+            "TensorPrecision": {
+                TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
+                TensorGroup.FF2: PrecisionSetting.BFP8,
+                TensorGroup.WQKV: PrecisionSetting.BFP8,
+                TensorGroup.WO: PrecisionSetting.BFP4,
+                TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
+                TensorGroup.ACTIVATION: PrecisionSetting.BF16,
+            },
+            "OpFidelity": {
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2,
+                OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2_NA,
+                OpGroup.LI_O_DECODE: MathFidelitySetting.LOFI,
+                OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
+                OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
+                OpGroup.LI_O_PREFILL: MathFidelitySetting.LOFI,
+            },
+        }
+    ),
+    ModelOptimizations(
+        {
+            "TensorPrecision": {
+                TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
+                TensorGroup.FF2: PrecisionSetting.BFP8,
+                TensorGroup.WQKV: PrecisionSetting.BFP8,
+                TensorGroup.WO: PrecisionSetting.BFP4,
+                TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
+                TensorGroup.ACTIVATION: PrecisionSetting.BFP8,
+            },
+            "OpFidelity": {
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2,
+                OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2_NA,
+                OpGroup.LI_O_DECODE: MathFidelitySetting.LOFI,
+                OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
+                OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
+                OpGroup.LI_O_PREFILL: MathFidelitySetting.LOFI,
+            },
+        }
+    ),
+    ModelOptimizations(
+        {
+            "TensorPrecision": {
+                TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
+                TensorGroup.FF2: PrecisionSetting.BFP8,
+                TensorGroup.WQKV: PrecisionSetting.BFP8,
+                TensorGroup.WO: PrecisionSetting.BFP4,
+                TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
+            },
+            "OpFidelity": {
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2,
+                OpGroup.LI_FF2: MathFidelitySetting.HIFI2,
+                OpGroup.LI_O_DECODE: MathFidelitySetting.LOFI,
+                OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
+                OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
+                OpGroup.LI_O_PREFILL: MathFidelitySetting.LOFI,
+            },
+        }
+    ),
+]
 
 
 class CheckpointType(Enum):
@@ -125,13 +403,13 @@ class ModelArgs:
         HF_MODEL = os.getenv("HF_MODEL")
         assert not (LLAMA_DIR and HF_MODEL), "Only one of LLAMA_DIR or HF_MODEL should be set"
         if LLAMA_DIR:
-            if any([os.getenv("LLAMA_CKPT_DIR"), os.getenv("LLAMA_TOKENIZER_PATH"), os.getenv("TT_CACHE_PATH")]):
-                logger.warning(
-                    "LLAMA_DIR is set and will override LLAMA_CKPT_DIR, LLAMA_TOKENIZER_PATH, and TT_CACHE_PATH"
-                )
+            if any([os.getenv("LLAMA_CKPT_DIR"), os.getenv("LLAMA_TOKENIZER_PATH")]):
+                logger.warning("LLAMA_DIR will override LLAMA_CKPT_DIR and LLAMA_TOKENIZER_PATH")
             self.CKPT_DIR = LLAMA_DIR
             self.TOKENIZER_PATH = LLAMA_DIR
-            self.CACHE_PATH = os.path.join(LLAMA_DIR, self.device_name)
+            self.CACHE_PATH = os.getenv("TT_CACHE_PATH")
+            if not self.CACHE_PATH:
+                self.CACHE_PATH = os.path.join(LLAMA_DIR, self.device_name)
             self.model_name = os.path.basename(LLAMA_DIR)  # May be overridden by config
         elif HF_MODEL:
             self.CKPT_DIR = HF_MODEL
@@ -152,10 +430,6 @@ class ModelArgs:
                 self.CKPT_DIR
             ), f"Checkpoint directory {self.CKPT_DIR} does not exist, please set LLAMA_DIR=... or LLAMA_CKPT_DIR=..."
             os.makedirs(self.CACHE_PATH, exist_ok=True)
-            # Check if weights exist in the specified folder. If not warn the user to run the download and untar script.
-        #            assert os.path.isfile(
-        #                self.CKPT_DIR + "/consolidated.00.pth"
-        #            ), f"weights consolidated.00.pth file does not exist. Please use the script `models/tt_transformers/scripts/get_weights.py` to download and untar the weights."
 
         logger.info(f"Checkpoint directory: {self.CKPT_DIR}")
         logger.info(f"Tokenizer file: {self.TOKENIZER_PATH + '/tokenizer.model'}")
@@ -171,7 +445,7 @@ class ModelArgs:
 
         self.instruct = instruct
         # If the weights file contain the keyword `instruct` also set self.instruct to true
-        if "instruct" in self.CACHE_PATH.lower():
+        if "instruct" in self.CKPT_DIR.lower():
             self.instruct = True
 
         # Load model params
@@ -304,6 +578,12 @@ class ModelArgs:
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,
             )
+            self.compute_kernel_config_hifi2_na = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
+            )
             self.compute_kernel_config_sdpa = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi4,
                 math_approx_mode=False,
@@ -311,8 +591,29 @@ class ModelArgs:
                 packer_l1_acc=False,
             )
 
+            # Configure data precision and math fidelity for tensors and kernels
             self.model_config["COMPUTE_KERNEL_CONFIG_HIFI2"] = self.compute_kernel_config_hifi2
+            precision_setting_lookup = {
+                PrecisionSetting.BFP4: ttnn.bfloat4_b,
+                PrecisionSetting.BFP8: ttnn.bfloat8_b,
+                PrecisionSetting.BF16: ttnn.bfloat16,
+                None: None,  # this signals that original dtype should be used
+            }
+            for tensor_group, precision in self.optimizations.tensor_dtype_settings.items():
+                dtype = precision_setting_lookup[precision]
+                self.model_config[f"{tensor_group.value.upper()}_DTYPE"] = dtype
+            math_fidelity_setting_lookup = {
+                MathFidelitySetting.LOFI: self.compute_kernel_config_lofi,
+                MathFidelitySetting.HIFI2: self.compute_kernel_config_hifi2,
+                MathFidelitySetting.HIFI2_NA: self.compute_kernel_config_hifi2_na,
+                MathFidelitySetting.HIFI2_FP16: self.compute_kernel_config_hifi2_fp16,
+                MathFidelitySetting.HIFI4: self.compute_kernel_config_hifi4,
+            }
+            for op_group, math_fidelity in self.optimizations.op_fidelity_settings.items():
+                math_cfg = math_fidelity_setting_lookup[math_fidelity]
+                self.model_config[f"{op_group.value.upper()}_COMPUTE_KERNEL_CFG"] = math_cfg
 
+            # Create memory config for sharded tensors
             residual_grid = self.dram_shard_core_grid_for_k(self.dim // self.num_devices)
             self.model_config["DECODE_RESIDUAL_MEMCFG"] = (
                 ttnn.L1_MEMORY_CONFIG  # FIXME: when residual add support typecasting for sharded tensors
@@ -1121,19 +1422,19 @@ class ModelArgs:
         # Meta-style config dicts don't specity model name or rope_scaling_factor so hard-code these
         # Set the model name based on the checkpoint directory being loaded
         if "3.2-1B" in checkpoint_dir:
-            self.model_name = "Llama3.2-1B" + "-Instruct" if self.instruct else ""
+            self.model_name = "Llama3.2-1B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 32
         elif "3.2-3B" in checkpoint_dir:
-            self.model_name = "Llama3.2-3B" + "-Instruct" if self.instruct else ""
+            self.model_name = "Llama3.2-3B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 32
         elif "3.1-8B" in checkpoint_dir:
-            self.model_name = "Llama3.1-8B" + "-Instruct" if self.instruct else ""
+            self.model_name = "Llama3.1-8B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8
         elif "3.2-11B" in checkpoint_dir:
-            self.model_name = "Llama3.2-11B" + "-Instruct" if self.instruct else ""
+            self.model_name = "Llama3.2-11B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8  # shared with 3.1-8B
         elif "3.1-70B" in checkpoint_dir:
-            self.model_name = "Llama3.1-70B" + "-Instruct" if self.instruct else ""
+            self.model_name = "Llama3.1-70B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8
             self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
         else:

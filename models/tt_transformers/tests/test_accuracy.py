@@ -13,7 +13,11 @@ from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
 )
 from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.model_config import ModelArgs, ModelOptimizations
+from models.tt_transformers.tt.model_config import (
+    ModelArgs,
+    ModelOptimizations,
+    dtype_mf_settings,
+)
 from pathlib import Path
 
 
@@ -75,6 +79,7 @@ def get_accuracy_thresholds(base_model_name: str, device_name: str, optimization
 @pytest.mark.parametrize(
     "optimizations",
     [
+        *[pytest.param(setting, id=setting.id) for setting in dtype_mf_settings],
         pytest.param(ModelOptimizations.accuracy, id="accuracy"),
         pytest.param(ModelOptimizations.performance, id="performance"),
     ],
