@@ -64,7 +64,7 @@ void validate_rope_input_and_params(const autograd::TensorPtr& input, const Rota
             params.neg_sin_cache.get_logical_shape()));
     }
 
-    auto expected_trans_mat_shape = ttnn::Shape{1U, 1U, 32U, 32U};
+    auto expected_trans_mat_shape = ttnn::Shape{1U, 1U, ttnn::TILE_SIZE, ttnn::TILE_SIZE};
     if (trans_mat_shape != expected_trans_mat_shape) {
         throw std::runtime_error(fmt::format(
             "RoPE trans_mat must be of shape {}, but has shape {}", expected_trans_mat_shape, trans_mat_shape));
@@ -139,12 +139,12 @@ std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(uint32_t head_dim, uint32_t sequ
     return {core::from_xtensor(sin_freqs, device), core::from_xtensor(cos_freqs, device)};
 }
 
-ttnn::Tensor gen_trans_mat(int head_dim) {
-    xt::xarray<float> trans_mat = xt::zeros<float>({1, 1, head_dim, head_dim});
-    for (int i = 0; i < head_dim; i += 2) {
+ttnn::Tensor gen_trans_mat() {
+    xt::xarray<float> trans_mat = xt::zeros<float>({1, 1, ttnn::TILE_SIZE, ttnn::TILE_SIZE});
+    for (int i = 0; i < ttnn::TILE_SIZE; i += 2) {
         trans_mat(0, 0, i, i + 1) = 1.0F;
     }
-    for (int j = 1; j < head_dim; j += 2) {
+    for (int j = 1; j < ttnn::TILE_SIZE; j += 2) {
         trans_mat(0, 0, j, j - 1) = -1.0F;
     }
 
@@ -163,7 +163,7 @@ RotaryEmbeddingParams build_rope_params(uint32_t sequence_length, uint32_t head_
         throw std::invalid_argument("RoPE head_dim must be greater than 0");
     }
     auto [sin_freqs, cos_freqs] = gen_freqs(head_dim, sequence_length, theta);
-    auto trans_mat = gen_trans_mat(head_dim);
+    auto trans_mat = gen_trans_mat();
 
     return {
         .cos_cache = cos_freqs,
