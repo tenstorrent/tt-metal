@@ -3,14 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-
 import torch
 
 import ttnn
-
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
-from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data_gen_with_range, compare_pcc
-from models.utility_functions import torch_random, skip_for_grayskull, is_wormhole_b0, is_blackhole
+from models.utility_functions import is_blackhole, is_wormhole_b0, run_for_wormhole_b0, skip_for_grayskull, torch_random
+from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import compare_pcc, data_gen_with_range
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
 
 
 def run_unary_test(device, h, w, ttnn_function, pcc=0.9999):
@@ -488,3 +486,22 @@ def test_unary_ceil(input_shapes, device):
     golden_tensor = golden_function(in_data1)
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(golden_tensor, output_tensor, 0.999)
+
+
+@run_for_wormhole_b0()
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b])
+def test_interleaved_complex_rotate90(device, h: int, w: int, dtype: ttnn.DataType):
+    ttnn_function = ttnn.interleaved_complex_rotate90
+    golden_function = ttnn.get_golden_function(ttnn_function)
+
+    torch.manual_seed(0)
+
+    tt_input = ttnn.from_torch(torch.randn([h, w]), device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+    torch_input = ttnn.to_torch(tt_input)
+
+    torch_output = golden_function(torch_input, device=device)
+    tt_output = ttnn_function(tt_input)
+
+    assert torch.equal(torch_output, ttnn.to_torch(tt_output))

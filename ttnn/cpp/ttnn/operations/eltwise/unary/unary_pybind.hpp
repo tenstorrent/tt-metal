@@ -1574,6 +1574,12 @@ void py_module(py::module& module) {
     detail::bind_unary_operation(module, ttnn::bitwise_not, R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_not|(\mathrm{{input\_tensor}}_i))doc", R"doc(INT32)doc",
     R"doc(Supported input range is [-2147483647, 2147483647]. Supported for Wormhole_B0 only.)doc",
     R"doc(torch.tensor([[1, 2], [3, 4]], dtype=torch.int32))doc");
+    detail::bind_unary_operation(
+        module,
+        ttnn::interleaved_complex_rotate90,
+        R"doc((\mathrm{{output\_tensor}}_{2i}, \mathrm{{output\_tensor}}_{2i+1}) = (-\mathrm{{input\_tensor}}_{2i+1}, \mathrm{{input\_tensor}}_{2i}))doc",
+        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B)doc",
+        R"doc(The last dimension of the input tensor must be even.)doc");
 
     //  Unaries with fast_and_approximate_mode
     detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::exp, R"doc(BFLOAT16, BFLOAT8_B)doc");
