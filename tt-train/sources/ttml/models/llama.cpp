@@ -128,7 +128,6 @@ Llama::Llama(const LlamaConfig& config) {
 
     create_name("llama");
     register_module(tok_emb, "tok_emb");
-    register_module(pos_emb, "pos_emb");
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
         register_module(blocks[block_idx], fmt::format("llama_block_{}", block_idx));
     }

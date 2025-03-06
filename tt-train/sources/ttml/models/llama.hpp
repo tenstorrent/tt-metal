@@ -37,7 +37,6 @@ class Llama : public ttml::autograd::ModuleBase {
 private:
     RunnerType runner_type = RunnerType::Default;
     std::shared_ptr<ttml::autograd::ModuleBase> tok_emb;
-    std::shared_ptr<ttml::autograd::ModuleBase> pos_emb;
     std::vector<std::shared_ptr<ttml::modules::LlamaBlock>> blocks;
     std::shared_ptr<ttml::modules::RMSNormLayer> ln_fc;
     std::shared_ptr<ttml::autograd::ModuleBase> fc;
