@@ -612,9 +612,6 @@ class ModelArgs:
                 PrecisionSetting.BF16: ttnn.bfloat16,
                 None: None,  # this signals that original dtype should be used
             }
-            self.model_config["ACTIVATION_DTYPE"] = precision_setting_lookup[
-                self.optimizations.tensor_dtype_settings[TensorGroup.ACTIVATION]
-            ]
             for tensor_group, precision in self.optimizations.tensor_dtype_settings.items():
                 dtype = precision_setting_lookup[precision]
                 self.model_config[f"{tensor_group.value.upper()}_DTYPE"] = dtype
