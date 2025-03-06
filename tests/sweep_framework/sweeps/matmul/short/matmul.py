@@ -4,6 +4,7 @@
 
 from typing import Optional, Tuple
 
+import pytest
 import torch
 
 import ttnn
@@ -14,7 +15,7 @@ from models.utility_functions import torch_random
 TIMEOUT = 5
 
 parameters = {
-    "default": {
+    "pytorch": {
         "batch_sizes": [(1,)],
         "m_size": [384, 1024],  # [1, 16, 128, 1024]
         "k_size": [1024, 4096],  # [16, 128, 1024, 4096]
@@ -33,7 +34,8 @@ parameters = {
 }
 
 
-def run(
+def run_matmul(
+    device,
     batch_sizes,
     m_size,
     k_size,
@@ -48,8 +50,6 @@ def run(
     input_a_memory_config,
     output_memory_config,
     core_grid,
-    *,
-    device,
 ) -> list:
     input_shape_a = (*batch_sizes, m_size, k_size)
     input_shape_b = (k_size, n_size)
@@ -84,3 +84,90 @@ def run(
     expected_pcc = 0.99
 
     return [check_with_pcc(torch_output_tensor, output_tensor, expected_pcc), e2e_perf]
+
+
+@pytest.mark.parametrize("batch_sizes", parameters["pytorch"]["batch_sizes"])
+@pytest.mark.parametrize("m_size", parameters["pytorch"]["m_size"])
+@pytest.mark.parametrize("k_size", parameters["pytorch"]["k_size"])
+@pytest.mark.parametrize("n_size", parameters["pytorch"]["n_size"])
+@pytest.mark.parametrize("batch_matrix_multiply", parameters["pytorch"]["batch_matrix_multiply"])
+@pytest.mark.parametrize("input_a_dtype", parameters["pytorch"]["input_a_dtype"])
+@pytest.mark.parametrize("input_b_dtype", parameters["pytorch"]["input_b_dtype"])
+@pytest.mark.parametrize("output_dtype", parameters["pytorch"]["output_dtype"])
+@pytest.mark.parametrize("input_a_layout", parameters["pytorch"]["input_a_layout"])
+@pytest.mark.parametrize("input_b_layout", parameters["pytorch"]["input_b_layout"])
+@pytest.mark.parametrize("input_b_memory_config", parameters["pytorch"]["input_b_memory_config"])
+@pytest.mark.parametrize("input_a_memory_config", parameters["pytorch"]["input_a_memory_config"])
+@pytest.mark.parametrize("output_memory_config", parameters["pytorch"]["output_memory_config"])
+@pytest.mark.parametrize("core_grid", parameters["pytorch"]["core_grid"])
+def test_pytorch(
+    device,
+    batch_sizes,
+    m_size,
+    k_size,
+    n_size,
+    batch_matrix_multiply,
+    input_a_dtype,
+    input_b_dtype,
+    output_dtype,
+    input_a_layout,
+    input_b_layout,
+    input_b_memory_config,
+    input_a_memory_config,
+    output_memory_config,
+    core_grid,
+):
+    run_matmul(
+        device,
+        batch_sizes,
+        m_size,
+        k_size,
+        n_size,
+        batch_matrix_multiply,
+        input_a_dtype,
+        input_b_dtype,
+        output_dtype,
+        input_a_layout,
+        input_b_layout,
+        input_b_memory_config,
+        input_a_memory_config,
+        output_memory_config,
+        core_grid,
+    )
+
+
+def run(
+    batch_sizes,
+    m_size,
+    k_size,
+    n_size,
+    batch_matrix_multiply,
+    input_a_dtype,
+    input_b_dtype,
+    output_dtype,
+    input_a_layout,
+    input_b_layout,
+    input_b_memory_config,
+    input_a_memory_config,
+    output_memory_config,
+    core_grid,
+    *,
+    device,
+) -> list:
+    return run_matmul(
+        device,
+        batch_sizes,
+        m_size,
+        k_size,
+        n_size,
+        batch_matrix_multiply,
+        input_a_dtype,
+        input_b_dtype,
+        output_dtype,
+        input_a_layout,
+        input_b_layout,
+        input_b_memory_config,
+        input_a_memory_config,
+        output_memory_config,
+        core_grid,
+    )
