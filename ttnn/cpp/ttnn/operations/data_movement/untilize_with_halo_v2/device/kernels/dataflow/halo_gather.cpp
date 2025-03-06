@@ -119,7 +119,7 @@ FORCE_INLINE static void copy_sticks_async(
     uint32_t out_base_l1_addr,
     uint16_t num_blocks) {
     uint32_t i = 0;
-    uint16_t length = 0;
+    uint16_t length = config_data[i + 2];
     while (length) {
         GatherConfigHeader header;
         decode_gather_config_header(config_data, i, header);
