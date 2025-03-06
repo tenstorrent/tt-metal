@@ -391,7 +391,7 @@ class TtModelArgs:
 
             # Chunk values based on what works best empirically
             self.model_config["SDPA_PROGCFG"] = lambda seqlen: ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(8, 8),
+                compute_with_storage_grid_size=(7, 10),
                 exp_approx_mode=False,
                 q_chunk_size=256 if seqlen >= 2048 else 64,
                 k_chunk_size=256 if seqlen >= 2048 else 64,
@@ -451,28 +451,32 @@ class TtModelArgs:
             else:
                 self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"] = None
 
-            self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
-                m=min(seq_len, 1024),
-                k=self.dim // self.cluster_shape[0],
-                n=self.hidden_dim // self.cluster_shape[1],
-                grid_size=(8, min(min(seq_len, 1024) // 32, 4))
-                if self.is_galaxy
-                else ((8, 8) if seq_len >= 1024 else (8, 4)),
+            self.model_config[
+                "PREFILL_MLP_W1_W3_PRG_CONFIG"
+            ] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(4, 7),
+                in0_block_w=2,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
+                out_subblock_h=1,  # Must be divisible by per_core_M
+                out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+                per_core_M=max(
+                    1, 4 if seq_len >= 2048 else seq_len // self.tile_size // 4  # 8 rows
+                ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+                per_core_N=math.ceil(self.hidden_dim / self.cluster_shape[1] / 32 / 7),  # N / TILE_WIDTH / grid width
+                transpose_mcast=False,
+                fused_activation=None,
+                fuse_batch=seq_len <= 2048,
             )
             self.model_config["PREFILL_MLP_W2_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
                 m=min(seq_len, 1024),
                 k=self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1),
                 n=self.dim,
-                grid_size=(8, min(min(seq_len, 1024) // 32, 4))
-                if self.is_galaxy
-                else ((8, 8) if seq_len >= 1024 else (8, 4)),
+                grid_size=(4, 4) if self.is_galaxy else ((8, 8) if seq_len >= 1024 else (8, 4)),
             )
-
             self.model_config["WO_PREFILL_PROGCFG"] = lambda seq_len: self.matmul_config(
                 m=min(seq_len, 1024 if self.is_galaxy else 2048),
                 k=self.dim // self.cluster_shape[0] if self.is_galaxy else self.dim,
                 n=self.dim // self.cluster_shape[1] if self.is_galaxy else self.dim,
-                grid_size=(8, 8),
+                grid_size=(7, 10),
                 in0_block_w=1,
                 fuse_batch=seq_len <= 1024,  # if self.is_galaxy else 2048),
             )
@@ -504,12 +508,12 @@ class TtModelArgs:
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
             self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
             self.model_config["XQKV_PREFILL_PROGCFG"] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(8, 8),
+                compute_with_storage_grid_size=(4, 8),
                 in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                 per_core_M=max(
-                    1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8  # 8 rows
+                    1, 4 if seq_len >= 2048 else seq_len // self.tile_size // 4  # 8 rows
                 ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                 per_core_N=math.ceil(self.qkv_size / self.cluster_shape[1] / 32 / 8),  # N / TILE_WIDTH / grid width
                 transpose_mcast=False,
@@ -1264,7 +1268,7 @@ class TtModelArgs:
         xs_1BSH = ttnn.from_torch(
             x_1BSH,
             device=self.mesh_device,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mesh_mapper,
