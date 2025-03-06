@@ -6,7 +6,7 @@ import torch
 import pytest
 from loguru import logger
 import ttnn
-from ttnn import ShardTensorToMesh, ConcatMeshToTensor
+from ttnn import shard_tensor_to_mesh_mapper, ConcatMeshToTensor
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull, skip_for_wormhole_b0
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_case
@@ -73,7 +73,7 @@ def run_all_gather_matmul_on_t3000_impl(
         layout=layout,
         device=t3k_mesh_device,
         memory_config=mem_config_weights,
-        mesh_mapper=ShardTensorToMesh(t3k_mesh_device, dim=dim),
+        mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(t3k_mesh_device, dim=dim),
         tile=ttnn.Tile(tile),
     )
 

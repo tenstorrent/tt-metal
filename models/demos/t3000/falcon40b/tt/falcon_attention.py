@@ -8,7 +8,7 @@ from torch import nn
 from typing import Optional, Tuple
 
 import ttnn
-from ttnn import ShardTensorToMesh, replicate_tensor_to_mesh_mapper
+from ttnn import shard_tensor_to_mesh_mapper, replicate_tensor_to_mesh_mapper
 
 from models.utility_functions import nearest_32
 from models.demos.t3000.falcon40b.tt.model_utils import convert_to_layout
@@ -165,7 +165,7 @@ class TtFalconAttention:
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=self.model_config["FUSED_QKV_MM_WEIGHTS_MEMCFG"],
-            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=-1),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=-1),
             cache_file_name=query_key_value_path,
             preprocess=lambda x: torch.transpose(x.reshape(1, 1, *x.shape), -2, -1),
         )
@@ -178,7 +178,7 @@ class TtFalconAttention:
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=self.model_config["SELFOUT_MM_WEIGHTS_MEMCFG"],
-            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=-1),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=-1),
             cache_file_name=selfout_path,
             preprocess=lambda x: torch.transpose(x.reshape(1, 1, *x.shape), -2, -1),
         )

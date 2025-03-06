@@ -25,7 +25,7 @@ def fall_back_rope(xq, xk, rot_mats, mesh_device):
     xq = ttnn.from_torch(
         xq,
         device=mesh_device,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+        mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=-1),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -33,7 +33,7 @@ def fall_back_rope(xq, xk, rot_mats, mesh_device):
     xk = ttnn.from_torch(
         xk,
         device=mesh_device,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+        mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=-1),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -135,7 +135,7 @@ class TtQwenAttention(LightweightModule):
                 dim=-1,
             ),
             device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=-1),
             dtype=self.dtype,
             memory_config=wqkv_mem_config,
             layout=self.model_config["ATTN_W_LAYOUT_TILE"],
@@ -152,7 +152,7 @@ class TtQwenAttention(LightweightModule):
                 dim=-1,
             ).unsqueeze(0),
             device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=-1),
             dtype=self.dtype,
             memory_config=self.model_config["ATTN_BIAS_WEIGHTS_MEMCFG"],
             layout=self.model_config["ATTN_B_LAYOUT_TILE"],
@@ -174,7 +174,7 @@ class TtQwenAttention(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+                mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=-1),
                 cache_file_name=cache_name("wo_width_sharded"),
             )
             self.wo = ttnn.to_device(wo_ttnn, self.mesh_device)
@@ -190,7 +190,7 @@ class TtQwenAttention(LightweightModule):
                     -1,
                 ),
                 device=self.mesh_device,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-2),
+                mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=-2),
                 memory_config=wo_mem_config,
                 dtype=self.dtype,
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
@@ -236,7 +236,7 @@ class TtQwenAttention(LightweightModule):
             ttnn.as_tensor(
                 k_or_v,
                 device=self.mesh_device,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=1),
+                mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=1),
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
                 dtype=self.dtype,
                 cache_file_name=f"{weight_cache_path}/kvcache_{k_or_v.shape}"

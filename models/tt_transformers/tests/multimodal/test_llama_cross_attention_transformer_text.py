@@ -209,7 +209,7 @@ def test_cross_attention_transformer_text_inference(
                     dtype=ttnn.bfloat4_b,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+                    mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=-1),
                 )
 
                 rot_mats = get_prefill_rot_mat(

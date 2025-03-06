@@ -7,7 +7,7 @@ from typing import List
 from tqdm import tqdm
 import torch
 import ttnn
-from ttnn import ShardTensorToMesh, replicate_tensor_to_mesh_mapper
+from ttnn import shard_tensor_to_mesh_mapper, replicate_tensor_to_mesh_mapper
 
 
 from models.utility_functions import nearest_32, profiler
@@ -139,7 +139,7 @@ class TtLlamaModel_optimized:
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=3),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=3),
             cache_file_name=self.cache_path / lm_head_str,
         )
         self.lm_head = ttnn.to_device(padded_lm_head_ttnn, self.mesh_device)
@@ -150,7 +150,7 @@ class TtLlamaModel_optimized:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
             cache_file_name=self.cache_path / norm_str,
         )
         self.norm = ttnn.to_device(norm_ttnn, self.mesh_device)
@@ -161,7 +161,7 @@ class TtLlamaModel_optimized:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=2),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=2),
             cache_file_name=self.cache_path / norm_sharded_str,
         )
         self.norm_sharded = ttnn.to_device(norm_sharded_ttnn, self.mesh_device)

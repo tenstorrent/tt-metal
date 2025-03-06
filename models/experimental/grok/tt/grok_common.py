@@ -5,7 +5,7 @@
 from loguru import logger
 import torch
 import ttnn
-from ttnn import ShardTensorToMesh, ConcatMeshToTensor, replicate_tensor_to_mesh_mapper
+from ttnn import shard_tensor_to_mesh_mapper, ConcatMeshToTensor, replicate_tensor_to_mesh_mapper
 from models.utility_functions import nearest_32
 
 

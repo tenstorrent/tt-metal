@@ -231,7 +231,7 @@ def test_unet_trace_2cq_multi_device(
     if not is_n300_with_eth_dispatch_cores(mesh_device) and not is_t3k_with_eth_dispatch_cores(mesh_device):
         pytest.skip("Test is only valid for N300 or T3000")
 
-    inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+    inputs_mesh_mapper = ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0)
     weights_mesh_mapper = ttnn.replicate_tensor_to_mesh_mapper(mesh_device)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
@@ -489,7 +489,7 @@ def test_unet_trace_2cq_same_io_multi_device(
     if not is_n300_with_eth_dispatch_cores(mesh_device) and not is_t3k_with_eth_dispatch_cores(mesh_device):
         pytest.skip("Test is only valid for N300 or T3000")
 
-    inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+    inputs_mesh_mapper = ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0)
     weights_mesh_mapper = ttnn.replicate_tensor_to_mesh_mapper(mesh_device)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 

@@ -913,7 +913,7 @@ for i, split_size in enumerate(split_sizes):
         ttnn.as_tensor(
             combined_split,
             device=mesh_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=-1),
             layout=ttnn.TILE_LAYOUT,
             dtype=dtype,
             memory_config=memory_config,
@@ -1206,7 +1206,7 @@ mesh_tensor_sharded = ttnn.from_torch(
     torch_input_tensor,
     layout=ttnn.TILE_LAYOUT,
     device=mesh_device,
-    mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
+    mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=3),
 )
 
 # Convert to ttnn.Tensor, tilize and move onto mesh_device (2x4 devices) by replication

@@ -9,7 +9,7 @@ from tqdm import tqdm
 
 import ttnn
 
-from ttnn import replicate_tensor_to_mesh_mapper, ShardTensorToMesh
+from ttnn import replicate_tensor_to_mesh_mapper, shard_tensor_to_mesh_mapper
 from models.demos.t3000.falcon40b.tt.falcon_decoder import TtFalconDecoderLayer
 from models.demos.t3000.falcon40b.tt.falcon_embeddings import TtFalconEmbeddings
 from models.demos.t3000.falcon40b.tt.falcon_attention import generate_cos_sin_cache
@@ -107,7 +107,7 @@ class TtFalconModelShared:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
             memory_config=self.model_config["LN_F_WEIGHTS_MEMCFG"],
-            ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
             cache_file_name=layernorm_weights_path,
             preprocess=lambda x: x.reshape(1, 1, -1, 32),
         )
@@ -118,7 +118,7 @@ class TtFalconModelShared:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
             memory_config=self.model_config["LN_F_BIAS_MEMCFG"],
-            ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
             cache_file_name=layernorm_bias_path,
             preprocess=lambda x: x.reshape(1, 1, -1, 32),
         )
@@ -138,7 +138,7 @@ class TtFalconModelShared:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
             memory_config=attention_mask_memconfig,
-            ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
             preprocess=lambda x: (x * -1e5),
         )
 
@@ -181,7 +181,7 @@ class TtFalconModelShared:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
         )
 
         # Generate input and attention_mask ---------------------------------------------
@@ -230,7 +230,7 @@ class TtFalconModelShared:
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.mesh_device,
                 memory_config=self.model_config["DEFAULT_MEMCFG"],
-                ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
+                mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
                 preprocess=lambda x: (x.transpose(0, 2) * -1e5).expand(1, 1, -1, -1),
             )
 

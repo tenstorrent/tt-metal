@@ -8,7 +8,7 @@ import ttnn
 from typing import List
 from models.demos.t3000.falcon40b.tt.model_utils import falcon_prefill_matmul, determine_tensor_deallocation
 
-from ttnn import ShardTensorToMesh, replicate_tensor_to_mesh_mapper
+from ttnn import shard_tensor_to_mesh_mapper, replicate_tensor_to_mesh_mapper
 
 
 class TtFalconMLP:
@@ -43,7 +43,7 @@ class TtFalconMLP:
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=self.model_config["DENSE_H_TO_4H_MM_WEIGHTS_MEMCFG"],
-            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=3),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=3),
             cache_file_name=tt_cache_path / dense_h_to_4h_str,
             preprocess=lambda x: torch.transpose(x.reshape(1, 1, *x.shape), -2, -1),
         )
@@ -54,7 +54,7 @@ class TtFalconMLP:
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=self.model_config["DENSE_4H_TO_H_MM_WEIGHTS_MEMCFG"],
-            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=2),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=2),
             cache_file_name=tt_cache_path / f"{dense_4h_to_h_str}_height_fractured",
             preprocess=lambda x: torch.transpose(x.reshape(1, 1, *x.shape), -2, -1),
         )

@@ -6,7 +6,7 @@ import torch
 import pytest
 from loguru import logger
 import ttnn
-from ttnn import ShardTensorToMesh, ConcatMeshToTensor
+from ttnn import shard_tensor_to_mesh_mapper, ConcatMeshToTensor
 from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import (
     FalconForCausalLM,
 )
@@ -95,7 +95,7 @@ def run_test_FalconModel_inference(
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
                 memory_config=model_config["KV_CACHE_MEMCFG"],
-                mesh_mapper=ShardTensorToMesh(mesh_device, dim=1),
+                mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=1),
             )
             tt_v_cache = ttnn.as_tensor(
                 tensor=tt_kv_cache_host,
@@ -103,7 +103,7 @@ def run_test_FalconModel_inference(
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
                 memory_config=model_config["KV_CACHE_MEMCFG"],
-                mesh_mapper=ShardTensorToMesh(mesh_device, dim=1),
+                mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=1),
             )
             tt_layer_past += ((tt_k_cache, tt_v_cache),)
 
@@ -136,7 +136,7 @@ def run_test_FalconModel_inference(
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
                 memory_config=model_config["KV_CACHE_MEMCFG"],
-                mesh_mapper=ShardTensorToMesh(mesh_device, dim=1),
+                mesh_mapper=(mesh_device, dim=1),
             )
             tt_v_cache = ttnn.as_tensor(
                 tensor=tt_v_cache_host,
@@ -144,7 +144,7 @@ def run_test_FalconModel_inference(
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
                 memory_config=model_config["KV_CACHE_MEMCFG"],
-                mesh_mapper=ShardTensorToMesh(mesh_device, dim=1),
+                mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=1),
             )
 
             tt_layer_past += ((tt_k_cache, tt_v_cache),)

@@ -106,7 +106,7 @@ def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=1),
         )
         for _ in range(2)
     ]

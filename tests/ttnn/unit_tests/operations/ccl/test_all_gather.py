@@ -151,7 +151,7 @@ def run_all_gather_impl(
         dtype=input_dtype,
         layout=layout,
         tile=ttnn.Tile(tile),
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim),
+        mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim),
         device=mesh_device,
     )
     if trace_mode:

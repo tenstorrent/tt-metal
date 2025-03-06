@@ -4,7 +4,7 @@
 
 import torch
 import ttnn
-from ttnn import ShardTensorToMesh, replicate_tensor_to_mesh_mapper
+from ttnn import shard_tensor_to_mesh_mapper, replicate_tensor_to_mesh_mapper
 from models.common.lightweightmodule import LightweightModule
 
 
@@ -44,7 +44,7 @@ class TtMoeLayer(LightweightModule):
             memory_config=self.model_config["GATE_WEIGHTS_MEMCFG"],
             cache_file_name=cache_name,
             device=self.mesh_device,
-            mesh_mapper=ShardTensorToMesh(mesh_device, dim=1),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=1),
         )
 
         self.tile_size = 32
@@ -58,7 +58,7 @@ class TtMoeLayer(LightweightModule):
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
-            ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
         self.top8_mask_11B_64 = ttnn.sum(self.top8_mask_11B_64, dim=2)
 

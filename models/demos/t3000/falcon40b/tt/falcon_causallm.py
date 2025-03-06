@@ -6,7 +6,7 @@ import torch
 from typing import Optional, Tuple
 
 import ttnn
-from ttnn import ShardTensorToMesh
+from ttnn import shard_tensor_to_mesh_mapper
 from models.demos.t3000.falcon40b.tt.falcon_model import TtFalconModelShared
 
 from models.demos.t3000.falcon40b.tt.model_utils import falcon_prefill_matmul, determine_tensor_deallocation
@@ -50,7 +50,7 @@ class TtFalconCausalLM(TtFalconModelShared):
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=self.model_config["LM_HEAD_MM_WEIGHTS_MEMCFG"],
-            mesh_mapper=ShardTensorToMesh(mesh_device, dim=3),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=3),
             cache_file_name=lm_head_path,
             preprocess=lambda x: torch.transpose(x.reshape(1, 1, *x.shape), -2, -1),
         )

@@ -98,7 +98,7 @@ def test_unet_upblock_multi_device(
     if not is_n300_with_eth_dispatch_cores(mesh_device):
         pytest.skip("Test is only valid for N300")
 
-    inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+    inputs_mesh_mapper = ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0)
     weights_mesh_mapper = ttnn.replicate_tensor_to_mesh_mapper(mesh_device)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 

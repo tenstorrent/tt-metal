@@ -119,7 +119,7 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos, mode, rop
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensorToMesh(llama_decoder_model.mesh_device, dim=3),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(llama_decoder_model.mesh_device, dim=3),
             device=llama_decoder_model.mesh_device,
         )
         xs = ttnn.to_device(xs, llama_decoder_model.mesh_device)
@@ -171,7 +171,7 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos, mode, rop
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensorToMesh(llama_decoder_model.mesh_device, dim=3),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(llama_decoder_model.mesh_device, dim=3),
             device=llama_decoder_model.mesh_device,
         )
         xs = ttnn.to_device(xs, llama_decoder_model.mesh_device)

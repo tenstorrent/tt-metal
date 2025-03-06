@@ -4,7 +4,7 @@
 
 import torch
 import ttnn
-from ttnn import ShardTensorToMesh, replicate_tensor_to_mesh_mapper
+from ttnn import shard_tensor_to_mesh_mapper, replicate_tensor_to_mesh_mapper
 from transformers import FalconForCausalLM
 from models.utility_functions import tt_tensors_to_torch_tensors
 
@@ -106,7 +106,7 @@ def get_rand_falcon_inputs(
                 dtype=model_config["DEFAULT_DTYPE"],
                 device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
+                mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0),
             )
 
             if model_config["PREFILL_OPTIMIZED_MODE"] and seq_len in [2048, 128, 1024]:
@@ -121,7 +121,7 @@ def get_rand_falcon_inputs(
                         dtype=ttnn.bfloat4_b,
                         device=mesh_device,
                         layout=ttnn.TILE_LAYOUT,
-                        mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
+                        mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0),
                     )
                     for attn_mask in attn_masks
                 ]
@@ -131,7 +131,7 @@ def get_rand_falcon_inputs(
                     dtype=model_config["DEFAULT_DTYPE"],
                     device=mesh_device,
                     layout=ttnn.TILE_LAYOUT,
-                    mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
+                    mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0),
                 )
 
         # Generate kvcache for each layer
@@ -145,14 +145,14 @@ def get_rand_falcon_inputs(
                 dtype=model_config["DEFAULT_DTYPE"],
                 device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
+                mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0),
             )
             tt_v_cache = tt_from_torch(
                 tt_v_cache.unsqueeze(1),
                 dtype=model_config["DEFAULT_DTYPE"],
                 device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
+                mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0),
             )
             tt_layer_past += ((tt_k_cache, tt_v_cache),)
 
@@ -169,7 +169,7 @@ def get_rand_falcon_inputs(
                 dtype=model_config["DEFAULT_DTYPE"],
                 device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ShardTensorToMesh(mesh_device, dim=2),
+                mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=2),
             )
 
             attention_mask_bool = torch.zeros(global_batch, 1, q_len, kv_len, dtype=bool)
@@ -200,7 +200,7 @@ def get_rand_falcon_inputs(
                 device=mesh_device,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=model_config["ATTN_MASK_MEMCFG"],
-                mesh_mapper=ShardTensorToMesh(mesh_device, dim=device_shard_dim),
+                mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=device_shard_dim),
             )
             if not model_config["l1_sharded"]:
                 # Tilize attn masks
@@ -227,14 +227,14 @@ def get_rand_falcon_inputs(
                 dtype=model_config["DEFAULT_DTYPE"],
                 device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
+                mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0),
             )
             tt_v_cache = tt_from_torch(
                 tt_v_cache.unsqueeze(1),
                 dtype=model_config["DEFAULT_DTYPE"],
                 device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
+                mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0),
             )
             tt_layer_past += ((tt_k_cache, tt_v_cache),)
 

@@ -6,7 +6,7 @@ from loguru import logger
 import torch
 from torch import nn
 import ttnn
-from ttnn import ShardTensorToMesh, replicate_tensor_to_mesh_mapper, ConcatMeshToTensor
+from ttnn import shard_tensor_to_mesh_mapper, replicate_tensor_to_mesh_mapper, ConcatMeshToTensor
 
 
 import scipy

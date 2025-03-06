@@ -9,7 +9,7 @@ import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_case_t3k
-from ttnn.distributed.distributed import ShardTensorToMesh
+from ttnn.distributed.distributed import shard_tensor_to_mesh_mapper
 
 
 def sharded_impl(
@@ -73,7 +73,7 @@ def sharded_impl(
         device=device,
         dtype=input_dtype,
         layout=tensor_layout,
-        mesh_mapper=ShardTensorToMesh(mesh_device=device, dim=dim),
+        mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device=device, dim=dim),
         tile=ttnn.Tile(tile),
     )
 
@@ -142,7 +142,6 @@ def run_normal(
         device=device,
         dtype=input_dtype,
         layout=layout,
-        mesh_mapper=ShardTensorToMesh(mesh_device=device, dim=dim),
         tile=ttnn.Tile(tile),
     )
     for i in range(num_iters):

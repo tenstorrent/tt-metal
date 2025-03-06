@@ -306,12 +306,12 @@ def distribute(default: Union[ttnn.TensorToMesh, ttnn.MeshToTensor, MeshToTensor
             used to map tensors to a mesh or compose tensors from a mesh.
 
     Example:
-        with distribute(ShardTensorToMesh(mesh_device, dim=3)):
+        with distribute(shard_tensor_to_mesh_mapper(mesh_device, dim=3)):
             # Code here will use the default mapper
             result = ttnn.from_torch(torch_tensor)
 
         is equivalent to:
-        result = ttnn.from_torch(torch_tensor, mesh_mapper=ShardTensorToMesh(mesh_device, dim=3))
+        result = ttnn.from_torch(torch_tensor, ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=3))
     """
     _original_to_torch = ttnn.to_torch
     _original_from_torch = ttnn.from_torch

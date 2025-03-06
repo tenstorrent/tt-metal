@@ -74,7 +74,7 @@ def test_qwen_rms_norm_inference(mesh_device, use_program_cache, reset_seeds, en
         device=mesh_device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+        mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=-1),
         memory_config=ttnn.L1_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG,
     )
 

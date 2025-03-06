@@ -13,7 +13,7 @@ from models.utility_functions import (
 )
 from models.common.lightweightmodule import LightweightModule
 
-from ttnn import ShardTensorToMesh, ConcatMeshToTensor, ttnn.replicate_tensor_to_mesh_mapper
+from ttnn import shard_tensor_to_mesh_mapper, ConcatMeshToTensor, ttnn.replicate_tensor_to_mesh_mapper
 
 
 class TtLlamaTilePositionEmbedding(LightweightModule):

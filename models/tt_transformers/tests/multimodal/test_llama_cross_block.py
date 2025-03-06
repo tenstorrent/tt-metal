@@ -97,7 +97,7 @@ def test_cross_attention_transformer_block_inference(
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=1),
         )
         for _ in range(2)
     ]
@@ -177,7 +177,7 @@ def test_cross_attention_transformer_block_inference(
                     dtype=ttnn.bfloat4_b,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+                    mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=-1),
                 )
                 tt_out = tt_model(
                     tt_tensor_x,

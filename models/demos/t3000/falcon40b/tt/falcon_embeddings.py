@@ -4,7 +4,7 @@
 
 import torch
 import ttnn
-from ttnn import ShardTensorToMesh
+from ttnn import shard_tensor_to_mesh_mapper
 
 
 class TtFalconEmbeddings(torch.nn.Module):
@@ -25,7 +25,7 @@ class TtFalconEmbeddings(torch.nn.Module):
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_path / base_name,
-            mesh_mapper=ShardTensorToMesh(mesh_device, dim=-1),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=-1),
             preprocess=lambda x: x.reshape(1, 1, *x.shape),
         )
 

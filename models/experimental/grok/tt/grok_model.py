@@ -61,7 +61,7 @@ class TtTransformer(LightweightModule):
             dtype=ttnn.bfloat16,
             memory_config=self.model_config["OUTPUT_WEIGHTS_MEMCFG"],
             cache_file_name=output_cache_name,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=-1),
         )
 
         self.compute_kernel = self.args.get_compute_kernel_output_config()

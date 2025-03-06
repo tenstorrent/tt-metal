@@ -52,7 +52,7 @@ def test_perf_bert_tiny(
     torch_position_ids = torch.zeros((batch_size, sequence_size), dtype=torch.int32)
     torch_attention_mask = torch.zeros(1, sequence_size)
 
-    inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+    inputs_mesh_mapper = ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0)
 
     with ttnn.distribute(ttnn.replicate_tensor_to_mesh_mapper(mesh_device)):
         parameters = preprocess_model_parameters(

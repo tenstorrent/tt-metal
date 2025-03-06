@@ -22,7 +22,7 @@ from models.demos.ttnn_falcon7b.tt.common import (
 )
 
 from loguru import logger
-from ttnn import ShardTensorToMesh, replicate_tensor_to_mesh_mapper, ConcatMeshToTensor
+from ttnn import shard_tensor_to_mesh_mapper, replicate_tensor_to_mesh_mapper, ConcatMeshToTensor
 
 
 PRETRAINED_MODEL_NAME = f"tiiuae/falcon-7b-instruct"
@@ -111,7 +111,7 @@ def test_falcon_causal_lm(
                 kv_cache_len,
                 configuration,
                 mesh_device,
-                mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
+                mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0),
             )
             tt_layer_past += (tt_current_layer_past,)
         attention_mask = None
@@ -127,7 +127,7 @@ def test_falcon_causal_lm(
                 kv_cache_len,
                 configuration,
                 mesh_device,
-                mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
+                mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0),
             )
             past_key_values += (current_layer_past,)
             tt_layer_past += (tt_current_layer_past,)
@@ -327,7 +327,7 @@ def test_t3k_falcon_causal_lm_with_trace(
                 kv_cache_len,
                 configuration,
                 t3k_mesh_device,
-                mesh_mapper=ShardTensorToMesh(t3k_mesh_device, dim=0),
+                mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(t3k_mesh_device, dim=0),
             )
             tt_layer_past += (tt_current_layer_past,)
         attention_mask = None
@@ -343,7 +343,7 @@ def test_t3k_falcon_causal_lm_with_trace(
                 kv_cache_len,
                 configuration,
                 t3k_mesh_device,
-                mesh_mapper=ShardTensorToMesh(t3k_mesh_device, dim=0),
+                mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(t3k_mesh_device, dim=0),
             )
             past_key_values += (current_layer_past,)
             tt_layer_past += (tt_current_layer_past,)

@@ -11,7 +11,7 @@ from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 from ttnn import (
-    ShardTensorToMesh,
+    shard_tensor_to_mesh_mapper,
     ShardTensor2dMesh,
     ttnn.replicate_tensor_to_mesh_mapper,
     ConcatMeshToTensor,
@@ -46,7 +46,7 @@ def test_galaxy_matmul_1d_fracture(mesh_device):
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
-        mesh_mapper=ShardTensorToMesh(mesh_device, dim=3),
+        mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=3),
     )
 
     gt = act_pt @ weights_pt

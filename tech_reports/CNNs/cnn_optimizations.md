@@ -196,7 +196,7 @@ Combining these two features should For more details on tracing and multi-CQs, c
 Throughput can be improved if multiple chips are availible by replicating the CNN across each chip. For our UNet model, we replicate across the outermost dimension:
 
 ```python
-inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0) # Shard input tensor on dimension 0 across each device
+inputs_mesh_mapper = ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0) # Shard input tensor on dimension 0 across each device
 weights_mesh_mapper = ttnn.replicate_tensor_to_mesh_mapper(mesh_device) # Replicate weights across all devices
 output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0) # Map multi-device tensor back to single host tensor
 ```

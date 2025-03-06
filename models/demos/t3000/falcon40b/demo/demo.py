@@ -130,7 +130,7 @@ def initialize_and_fill_kv_cache(
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=model_config["KV_CACHE_MEMCFG"],
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=1),
         )
         tt_v_cache = ttnn.as_tensor(
             tensor=tt_v_cache_host,
@@ -138,7 +138,7 @@ def initialize_and_fill_kv_cache(
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=model_config["KV_CACHE_MEMCFG"],
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=1),
         )
         kv_cache += ((tt_k_cache, tt_v_cache),)
 

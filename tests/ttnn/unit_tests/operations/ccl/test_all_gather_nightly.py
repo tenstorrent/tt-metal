@@ -12,7 +12,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_gather import (
     is_unsupported_case,
     run_all_gather_on_t3000_impl,
 )
-from ttnn import ShardTensorToMesh
+from ttnn import shard_tensor_to_mesh_mapperesh_mapper
 
 
 # Enumerate the post-commit cases explicitly
@@ -186,7 +186,7 @@ def run_line_all_gather_instances(
     input_tensor = torch.rand(input_shape).bfloat16()
 
     ttnn_tensor = ttnn.from_torch(
-        input_tensor, tile=ttnn.Tile(tile), mesh_mapper=ShardTensorToMesh(t3k_mesh_device, dim=dim)
+        input_tensor, tile=ttnn.Tile(tile), ttnn.shard_tensor_to_mesh_mapper(t3k_mesh_device, dim=dim)
     )
     input_tensor_mesh = ttnn.to_device(ttnn_tensor, t3k_mesh_device)
 
