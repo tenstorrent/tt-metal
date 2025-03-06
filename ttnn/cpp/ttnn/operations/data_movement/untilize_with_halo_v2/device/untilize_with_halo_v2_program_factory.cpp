@@ -230,7 +230,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     if (true) {
         reader_ct_args[0] = padding_config_cb_id1;
         reader_ct_args[1] = local_config_cb_id1;
-        reader_ct_args[2] = remote_config_cb_id1;
+        reader_ct_args[2] = remote_config_cb_id2;
     } else {
         reader_ct_args[0] = 0;
         reader_ct_args[1] = local_config_cb_id1;
@@ -246,7 +246,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     if (true) {
         reader_ct_args[0] = padding_config_cb_id2;
         reader_ct_args[1] = local_config_cb_id2;
-        reader_ct_args[2] = remote_config_cb_id2;
+        reader_ct_args[2] = remote_config_cb_id1;
         reader_ct_args[16] = false;
     } else {
         reader_ct_args[0] = padding_config_cb_id1;
