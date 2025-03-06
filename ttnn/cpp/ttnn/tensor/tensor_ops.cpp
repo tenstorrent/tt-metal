@@ -64,15 +64,12 @@ Tensor tensor_to_device(
     if (device_tensor.mesh_device_ != nullptr and device_tensor.mesh_device_ != mesh_device) {
         // if (device_tensor.storage_type() == StorageType::DEVICE) { careful this is hang
         TT_ASSERT(device_tensor.device() == mesh_device && "Currently do not support moving between devices");
-        device_tensor.populate_buffers_and_metadata(input_tensor);
+        return input_tensor;
     } else {
         tensor_impl::validate_on_device_dtype_and_layout(
             input_tensor.get_padded_shape(), input_tensor.get_dtype(), input_tensor.get_layout());
-        auto local_tensor =
-            tensor_impl::to_device_mesh_tensor_wrapper(input_tensor, mesh_device, mem_config);  // add cq-id
-        device_tensor.populate_buffers_and_metadata(local_tensor);
+        return tensor_impl::to_device_mesh_tensor_wrapper(input_tensor, mesh_device, mem_config, cq_id);
     }
-    return device_tensor;
 }
 
 Tensor tensor_to_device(
@@ -144,7 +141,7 @@ Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, QueueId cq_id) {
 
 Tensor tensor_cpu(const Tensor& input_tensor, distributed::MeshDevice* mesh_device, bool blocking, QueueId cq_id) {
     ZoneScoped;
-    return tensor_impl::to_host_mesh_tensor_wrapper(input_tensor, blocking);
+    return tensor_impl::to_host_mesh_tensor_wrapper(input_tensor, blocking, cq_id);
 }
 
 Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, IDevice* worker) {

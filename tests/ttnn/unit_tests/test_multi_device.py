@@ -210,7 +210,7 @@ def test_multi_device_replicate(mesh_device, shape, layout, memory_config):
 )
 def test_ttnn_multi_device_all_gather(pcie_mesh_device):
     """Multidevice API test for ttnn.all_gather CCL operation"""
-    pytest.skip("TT-Mesh: Skipping because we need CCL port to fabric")
+    pytest.skip("TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)")
     if pcie_mesh_device.get_num_devices() <= 1:
         pytest.skip("Requires multiple devices to run")
     full_tensor = torch.rand((1, 1, 32, 32 * pcie_mesh_device.get_num_devices()), dtype=torch.bfloat16)
@@ -474,7 +474,6 @@ def test_multi_device_permute(mesh_device, layout, memory_config, dtype):
     indirect=True,
 )
 def test_max(mesh_device):
-    pytest.skip("TT-Mesh: Skipping because there's an issue in reshape which needs to be fixed")
     gate_logits_1SB8 = ttnn.from_torch(
         torch.randn(1, 1, 32, 8),
         dtype=ttnn.bfloat16,
@@ -494,7 +493,7 @@ def test_max(mesh_device):
 )
 def test_ttnn_multi_device_all_gather_all_devices(t3k_mesh_device):
     """Multidevice API test for ttnn.all_gather CCL operation for full 8-device T3K"""
-    pytest.skip("TT-Mesh: Skipping because we need CCL port to fabric")
+    pytest.skip("TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)")
 
     full_tensor = torch.ones((1, 1, 32, 32 * t3k_mesh_device.get_num_devices()), dtype=torch.bfloat16)
     for i in range(t3k_mesh_device.get_num_devices()):
@@ -605,7 +604,6 @@ def test_4b_tensor(mesh_device):
 
 
 def test_slicing(mesh_device):
-    pytest.skip("TT-Mesh: logic in slicing needs to be fixed")
     tensor = ttnn.from_torch(
         torch.randn(1, 32, 32, 32),
         dtype=ttnn.bfloat16,
@@ -673,7 +671,7 @@ def test_visualize_mesh_device(t3k_mesh_device):
 @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x2_grid")], indirect=True)
 def test_all_gather_multiple_submeshes(mesh_device):
     """Test all_gather with multiple submeshes"""
-    pytest.skip("TT-Mesh: Skipping pending CCL port to fabric")
+    pytest.skip("TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)")
 
     def model(submesh):
         # Reshape to a 1x4 mesh to enforce ring connected topological order.
@@ -697,7 +695,7 @@ def test_all_gather_multiple_submeshes(mesh_device):
 
 @pytest.mark.parametrize("mesh_device", [pytest.param((1, 8), id="1x8_line")], indirect=True)
 def test_line_all_gather_after_reshape(mesh_device):
-    pytest.skip("TT-Mesh: Skipping pending CCL port to fabric")
+    pytest.skip("TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)")
     torch_input_tensor = torch.rand((1, 1, 64, 128), dtype=torch.bfloat16)
 
     mesh_tensor = ttnn.from_torch(

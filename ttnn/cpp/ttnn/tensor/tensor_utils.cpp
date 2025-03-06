@@ -83,11 +83,6 @@ void apply(const Tensor& tensor, const std::function<void(const Tensor&)>& calla
     }
 }
 
-std::vector<IDevice*> get_devices(const Tensor& tensor) {
-    std::vector<IDevice*> devices;
-    TT_THROW("Not implemented");
-}
-
 uint32_t num_buffers_in_tensor(const Tensor& tensor) {
     if (std::holds_alternative<MultiDeviceHostStorage>(tensor.get_storage())) {
         auto host_storage = std::get<tt::tt_metal::MultiDeviceHostStorage>(tensor.get_storage());

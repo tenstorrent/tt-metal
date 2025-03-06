@@ -244,7 +244,7 @@ void Tensor::deallocate_impl(bool force, bool deallocation_through_destructor) {
                                 if constexpr (std::is_same_v<type, DeviceStorage>) {
                                     if (s.mesh_buffer != nullptr and (force or s.mesh_buffer.use_count() == 1)) {
                                         s.mesh_buffer->deallocate();
-                                    } else if (force or s.buffer.use_count() == 1) {
+                                    } else if (s.buffer and (force or s.buffer.use_count() == 1)) {
                                         DeallocateBuffer(*(s.buffer));
                                     }
                                     // Safe to reset this buf object since this is the last reference (in
@@ -942,7 +942,7 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id
 
     auto& device_storage = std::get<DeviceStorage>(device_tensor.get_storage());
     if (auto mesh_buffer = device_storage.mesh_buffer; mesh_buffer != nullptr) {
-        tensor_impl::copy_to_mesh_tensor_wrapper(async_safe_tensor, device_tensor);
+        tensor_impl::copy_to_mesh_tensor_wrapper(async_safe_tensor, device_tensor, cq_id);
         return;
     }
 
