@@ -493,7 +493,7 @@ generate_halo_kernel_config_tensors(
             uint32_t idx1 = 3, idx2 = 3;
             for (size_t i = 0; i < data.size(); ++i) {
                 auto [src_start, dst_start, length] = data[i];
-                if (i % 2 == 0) {
+                if (i % 2 != 0) {
                     flat_data[0][idx1++] = src_start;
                     flat_data[0][idx1++] = dst_start;
                     flat_data[0][idx1++] = length;

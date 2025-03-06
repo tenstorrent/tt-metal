@@ -181,8 +181,7 @@ Result conv2d(
                 parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
                 0,
                 input_tensor_post_tm.memory_config(),
-                true,
-                conv_config.enable_halo_split_reader);
+                true);
 
             if (conv_config.deallocate_activation) {
                 input_tensor_post_tm.deallocate(/*force*/ true);

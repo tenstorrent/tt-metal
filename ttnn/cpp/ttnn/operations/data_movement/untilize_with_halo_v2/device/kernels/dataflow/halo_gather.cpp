@@ -32,7 +32,6 @@ template <
     bool is_read,
     bool is_col_major,
     bool is_remote_config,
-    bool enable_split_reader,
     bool is_reader>
 void copy_sticks_async(
     const tt_l1_ptr uint16_t* config_data,
@@ -104,8 +103,7 @@ void kernel_main() {
     constexpr bool is_col_major = get_compile_time_arg_val(12) == 1;
     constexpr uint32_t is_width_sharded = get_compile_time_arg_val(13);
     constexpr uint32_t input_aligned_page_size = get_compile_time_arg_val(14);
-    constexpr bool enable_split_reader = get_compile_time_arg_val(15);
-    constexpr bool is_reader = get_compile_time_arg_val(16);
+    constexpr bool is_reader = get_compile_time_arg_val(15);
 
     constexpr uint32_t elem_nbytes = sizeof(uint16_t);
     constexpr uint16_t pad_core_id = 0xFFFF;
@@ -115,46 +113,34 @@ void kernel_main() {
     const uint32_t in_base_l1_addr = get_read_ptr(in_cb_id);
     const uint32_t out_base_l1_addr = get_write_ptr(out_cb_id);
 
-    // pad sticks
-    if constexpr (padding_config_cb_id) {
-        // construct the pad stick in its buffer
-        if constexpr (enable_split_reader) {
-            if constexpr (is_reader) {
-                cb_reserve_back(pad_cb_id, 1);
-                const uint16_t pad_val = pad_val_u32;
-                fill_with_val(get_write_ptr(pad_cb_id), stick_nbytes / elem_nbytes, pad_val);
-                cb_push_back(pad_cb_id, 1);
-            } else {
-                cb_wait_front(pad_cb_id, 1);
-            }
-        } else {
-            cb_reserve_back(pad_cb_id, 1);
-            const uint16_t pad_val = pad_val_u32;
-            fill_with_val(get_write_ptr(pad_cb_id), stick_nbytes / elem_nbytes, pad_val);
-            cb_push_back(pad_cb_id, 1);
-        }
+    if constexpr (is_reader) {
+        cb_reserve_back(pad_cb_id, 1);
+        const uint16_t pad_val = pad_val_u32;
+        fill_with_val(get_write_ptr(pad_cb_id), stick_nbytes / elem_nbytes, pad_val);
+        cb_push_back(pad_cb_id, 1);
+    } else {
+        cb_wait_front(pad_cb_id, 1);
+    }
 
-        uint32_t padding_config_l1_addr = get_read_ptr(padding_config_cb_id);
-        volatile tt_l1_ptr uint16_t* config_data =
-            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(padding_config_l1_addr);
+    uint32_t padding_config_l1_addr = get_read_ptr(padding_config_cb_id);
+    volatile tt_l1_ptr uint16_t* config_data = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(padding_config_l1_addr);
 
-        const uint64_t padding_l1_addr = get_noc_addr(my_noc_x, my_noc_y, get_read_ptr(pad_cb_id));
-        const uint32_t dst_base_addr = out_base_l1_addr;
-        uint16_t nsticks = 1;
-        for (uint16_t j = 0; nsticks; j += 2) {
-            uint16_t dst_local_idx = config_data[j + 0];
-            nsticks = config_data[j + 1];
+    const uint64_t padding_l1_addr = get_noc_addr(my_noc_x, my_noc_y, get_read_ptr(pad_cb_id));
+    const uint32_t dst_base_addr = out_base_l1_addr;
+    uint16_t nsticks = 1;
+    for (uint16_t j = 0; nsticks; j += 2) {
+        uint16_t dst_local_idx = config_data[j + 0];
+        nsticks = config_data[j + 1];
 
-            uint64_t dst_addr = dst_base_addr + dst_local_idx * stick_nbytes;
-            for (uint16_t k = 0; k < nsticks; ++k) {
-                noc_async_read(padding_l1_addr, dst_addr, stick_nbytes);
-                dst_addr += stick_nbytes;
-            }
+        uint64_t dst_addr = dst_base_addr + dst_local_idx * stick_nbytes;
+        for (uint16_t k = 0; k < nsticks; ++k) {
+            noc_async_read(padding_l1_addr, dst_addr, stick_nbytes);
+            dst_addr += stick_nbytes;
         }
     }
 
     // input shards
-    if constexpr ((enable_split_reader && is_reader) || (!enable_split_reader && local_config_cb_id)) {
+    if constexpr (is_reader) {
         cb_reserve_back(src_cb_id, in_nsticks);
         cb_push_back(src_cb_id, in_nsticks);
     }
@@ -172,7 +158,6 @@ void kernel_main() {
             remote_read,
             is_col_major,
             true,
-            enable_split_reader,
             is_reader>(config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr);
     }
     // copy data as per local config
@@ -187,7 +172,6 @@ void kernel_main() {
             false,
             is_col_major,
             false,
-            enable_split_reader,
             is_reader>(config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr);
     }
 
