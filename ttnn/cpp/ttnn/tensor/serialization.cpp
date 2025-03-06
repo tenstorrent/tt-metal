@@ -291,15 +291,12 @@ MultiDeviceHostStorage load_multi_device_host_storage(
 template <typename T>
 Storage load_storage(
     FILE* input_file, DataType data_type, Layout layout, StorageType storage_type, T device, uint8_t version_id) {
-    if (storage_type == StorageType::MULTI_DEVICE_HOST or storage_type == StorageType::MULTI_DEVICE) {
+    if (storage_type == StorageType::MULTI_DEVICE_HOST or storage_type == StorageType::DEVICE) {
         if constexpr (std::is_same_v<T, MeshDevice*>) {
             return load_multi_device_host_storage(input_file, data_type, layout, device, version_id);
-        } else {
-            TT_THROW("MeshDevice is required for MULTI_DEVICE_HOST storage");
         }
-    } else {
-        return load_owned_storage(input_file, data_type);
     }
+    return load_owned_storage(input_file, data_type);
 }
 
 template <typename T>
@@ -469,8 +466,6 @@ void dump_tensor(
             } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
                 dump_borrowed_storage(output_file, storage);
             } else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
-                TT_THROW("Device storage isn't supported");
-            } else if constexpr (std::is_same_v<StorageType, MultiDeviceStorage>) {
                 TT_THROW("Device storage isn't supported");
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
                 auto distribute_config = get_distributed_tensor_config(strategy);

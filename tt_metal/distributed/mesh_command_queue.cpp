@@ -35,6 +35,11 @@ MeshCommandQueue::MeshCommandQueue(MeshDevice* mesh_device, uint32_t id, std::sh
     this->populate_dispatch_core_type();
 }
 
+MeshCommandQueue::~MeshCommandQueue() {
+    // need to be called per subdeivce-id?
+    this->finish();
+}
+
 void MeshCommandQueue::populate_virtual_program_dispatch_core() {
     int device_idx = 0;
     for (auto device : this->mesh_device_->get_devices()) {
@@ -194,10 +199,7 @@ void MeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
 }
 
 void MeshCommandQueue::write_shard_to_device(
-    std::shared_ptr<Buffer>& shard_view,
-    const void* src,
-    const BufferRegion& region,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    Buffer* shard_view, const void* src, const BufferRegion& region, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     auto device = shard_view->device();
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
     buffer_dispatch::write_to_device_buffer(
@@ -205,10 +207,7 @@ void MeshCommandQueue::write_shard_to_device(
 }
 
 void MeshCommandQueue::read_shard_from_device(
-    std::shared_ptr<Buffer>& shard_view,
-    void* dst,
-    const BufferRegion& region,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    Buffer* shard_view, void* dst, const BufferRegion& region, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     this->drain_events_from_completion_queue();
     auto device = shard_view->device();
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
@@ -431,15 +430,14 @@ void MeshCommandQueue::enqueue_write_shards(
     // TODO: #17215 - this API is used by TTNN, as it currently implements rich ND sharding API for multi-devices.
     // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
 
-    auto dispatch_lambda =
-        std::function<void(uint32_t)>([&shard_data_transfers, &buffer, this](uint32_t shard_idx) {
-            auto& shard_data_transfer = shard_data_transfers[shard_idx];
-            auto device_shard_view = buffer->get_device_buffer(shard_data_transfer.shard_coord);
-            this->write_shard_to_device(
-                device_shard_view,
-                shard_data_transfer.host_data,
-                shard_data_transfer.region.value_or(BufferRegion(0, device_shard_view->size())));
-        });
+    auto dispatch_lambda = std::function<void(uint32_t)>([&shard_data_transfers, &buffer, this](uint32_t shard_idx) {
+        auto& shard_data_transfer = shard_data_transfers[shard_idx];
+        auto device_shard_view = buffer->get_device_buffer(shard_data_transfer.shard_coord);
+        this->write_shard_to_device(
+            device_shard_view,
+            shard_data_transfer.host_data,
+            shard_data_transfer.region.value_or(BufferRegion(0, device_shard_view->size())));
+    });
 
     for (std::size_t shard_idx = 0; shard_idx < shard_data_transfers.size(); shard_idx++) {
         thread_pool_->enqueue([&dispatch_lambda, shard_idx]() { dispatch_lambda(shard_idx); });
@@ -457,15 +455,14 @@ void MeshCommandQueue::enqueue_read_shards(
     bool blocking) {
     // TODO: #17215 - this API is used by TTNN, as it currently implements rich ND sharding API for multi-devices.
     // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
-    auto dispatch_lambda =
-        std::function<void(uint32_t)>([&shard_data_transfers, &buffer, this](uint32_t shard_idx) {
-            auto& shard_data_transfer = shard_data_transfers[shard_idx];
-            auto device_shard_view = buffer->get_device_buffer(shard_data_transfer.shard_coord);
-            read_shard_from_device(
-                device_shard_view,
-                shard_data_transfer.host_data,
-                shard_data_transfer.region.value_or(BufferRegion(0, device_shard_view->size())));
-        });
+    auto dispatch_lambda = std::function<void(uint32_t)>([&shard_data_transfers, &buffer, this](uint32_t shard_idx) {
+        auto& shard_data_transfer = shard_data_transfers[shard_idx];
+        auto device_shard_view = buffer->get_device_buffer(shard_data_transfer.shard_coord);
+        read_shard_from_device(
+            device_shard_view,
+            shard_data_transfer.host_data,
+            shard_data_transfer.region.value_or(BufferRegion(0, device_shard_view->size())));
+    });
 
     for (std::size_t shard_idx = 0; shard_idx < shard_data_transfers.size(); shard_idx++) {
         thread_pool_->enqueue([&dispatch_lambda, shard_idx]() { dispatch_lambda(shard_idx); });

@@ -187,8 +187,7 @@ std::unique_ptr<MeshToTensor> concat_2d_mesh_to_tensor_composer(MeshDevice& mesh
 Tensor distribute_tensor(
     const Tensor& tensor, const TensorToMesh& mapper, std::optional<std::reference_wrapper<MeshDevice>> mesh_device) {
     TT_FATAL(
-        tensor.storage_type() != tt::tt_metal::StorageType::MULTI_DEVICE &&
-            tensor.storage_type() != tt::tt_metal::StorageType::MULTI_DEVICE_HOST,
+        tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
         "TensorToMesh does not support multi-device or multi-device host tensors; got storage type: {}",
         tensor.storage_type());
     std::vector<Tensor> tensors = mapper.map(tensor);
@@ -200,8 +199,8 @@ Tensor distribute_tensor(
 }
 
 Tensor aggregate_tensor(const Tensor& tensor, const MeshToTensor& composer) {
-    return is_multi_device_tensor(tensor) ? composer.compose(get_tensors_from_multi_device_storage(tensor))
-                                          : composer.compose({tensor});
+    return is_host_mesh_tensor(tensor) ? composer.compose(get_tensors_from_multi_device_storage(tensor))
+                                       : composer.compose({tensor});
 }
 
 }  // namespace ttnn::distributed

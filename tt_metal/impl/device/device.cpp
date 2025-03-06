@@ -32,6 +32,7 @@
 #include <sub_device_types.hpp>
 #include <span.hpp>
 #include <types.hpp>
+#include <tt-metalium/program_cache.hpp>
 
 #include "impl/dispatch/topology.hpp"
 #include "impl/dispatch/hardware_command_queue.hpp"

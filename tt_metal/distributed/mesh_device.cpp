@@ -22,6 +22,7 @@
 #include <sub_device_manager.hpp>
 #include <sub_device_types.hpp>
 #include "tt_metal/common/thread_pool.hpp"
+#include "tt_metal/api/tt-metalium/device_pool.hpp"
 
 #include <hal.hpp>
 #include <mesh_coord.hpp>
@@ -83,7 +84,11 @@ MeshDevice::ScopedDevices::ScopedDevices(
 
 MeshDevice::ScopedDevices::~ScopedDevices() {
     if (!opened_devices_.empty()) {
-        tt::tt_metal::detail::CloseDevices(opened_devices_);
+        std::vector<IDevice*> devices_to_close;
+        for (auto& [id, device] : opened_devices_) {
+            devices_to_close.push_back(device);
+        }
+        tt::DevicePool::instance().close_devices(devices_to_close, /*skip_synchronize=*/true);
     }
 }
 
@@ -95,6 +100,9 @@ uint8_t MeshDevice::num_hw_cqs() const {
 }
 
 bool MeshDevice::is_initialized() const {
+    if (!scoped_devices_) {
+        return false;
+    }
     return validate_and_get_reference_value(
         scoped_devices_->root_devices(), [](const auto& device) { return device->is_initialized(); });
 }
@@ -330,6 +338,7 @@ bool MeshDevice::close() {
         submesh->close();
     }
     submeshes_.clear();
+    mesh_command_queues_.clear();
     sub_device_manager_tracker_.reset();
     if (scoped_devices_) {
         scoped_devices_.reset();
@@ -359,6 +368,7 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDevice::get_submeshes() const { ret
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device) { return os << mesh_device.to_string(); }
 
 void MeshDevice::enable_async(bool enable) {
+    /*
     auto devices = this->get_devices();
     if (enable && devices.size() == 1) {
         tt::log_warning("Async mode is always disabled for a single device, ignoring enable_async call");
@@ -367,6 +377,7 @@ void MeshDevice::enable_async(bool enable) {
     for (auto device : devices) {
         dynamic_cast<Device*>(device)->force_enable_async(enable);
     }
+    */
 }
 
 void MeshDevice::enable_program_cache() {
