@@ -27,6 +27,7 @@
 #include <hal.hpp>
 #include <mesh_coord.hpp>
 #include <small_vector.hpp>
+#include <env_lib.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -34,6 +35,14 @@ namespace {
 MeshDeviceID generate_unique_mesh_id() {
     static std::atomic<MeshDeviceID> next_id{0};
     return next_id++;
+}
+
+std::shared_ptr<ThreadPool> create_default_thread_pool(uint32_t num_threads, uint32_t logical_cpu_offset = 0) {
+    if (tt::parse_env("TT_MESH_BOOST_THREAD_POOL", false)) {
+        return create_boost_thread_pool(num_threads);
+    } else {
+        return create_device_bound_thread_pool(num_threads, logical_cpu_offset);
+    }
 }
 
 // Helper function to verify all devices in the MeshDevice have the same value
@@ -139,8 +148,8 @@ MeshDevice::MeshDevice(
     view_(std::move(mesh_device_view)),
     mesh_id_(generate_unique_mesh_id()),
     parent_mesh_(std::move(parent_mesh)),
-    dispatch_thread_pool_(create_boost_thread_pool(view_->shape().mesh_size())),
-    reader_thread_pool_(create_boost_thread_pool(view_->shape().mesh_size())) {}
+    dispatch_thread_pool_(create_default_thread_pool(view_->shape().mesh_size())),
+    reader_thread_pool_(create_default_thread_pool(view_->shape().mesh_size(), view_->shape().mesh_size())) {}
 
 std::shared_ptr<MeshDevice> MeshDevice::create(
     const MeshDeviceConfig& config,
@@ -387,6 +396,7 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
 }
 
 bool MeshDevice::close() {
+    mesh_command_queues_.clear();
     sub_device_manager_tracker_.reset();
     scoped_devices_.reset();
     parent_mesh_.reset();
