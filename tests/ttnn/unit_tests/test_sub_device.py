@@ -53,7 +53,7 @@ def run_sub_devices(device, create_fabric_sub_device=False):
 def run_sub_devices_program(device, create_fabric_sub_device=False):
     is_mesh_device = isinstance(device, ttnn.MeshDevice)
     if is_mesh_device:
-        inputs_mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
+        inputs_mesh_mapper = ttnn.shard_tensor_to_mesh_mapper(device, dim=0)
         output_mesh_composer = ttnn.ConcatMeshToTensor(device, dim=0)
         num_devices = device.get_num_devices()
     else:

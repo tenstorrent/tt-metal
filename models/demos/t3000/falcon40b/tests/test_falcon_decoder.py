@@ -7,7 +7,7 @@ import pytest
 from loguru import logger
 
 import ttnn
-from ttnn import ShardTensorToMesh, ConcatMeshToTensor
+from ttnn import shard_tensor_to_mesh_mapper, ConcatMeshToTensor
 from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import (
     FalconForCausalLM,
 )
@@ -93,7 +93,7 @@ def run_test_FalconDecoder_inference(
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"],
-            mesh_mapper=ShardTensorToMesh(mesh_device, dim=-1),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=-1),
         )
 
         attention_mask_memconfig = model_config["ATTN_MASK_MEMCFG"]
@@ -108,7 +108,7 @@ def run_test_FalconDecoder_inference(
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=attention_mask_memconfig,
-            mesh_mapper=ShardTensorToMesh(mesh_device, dim=1),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=1),
             preprocess=lambda x: (x * -1e5).expand(-1, mesh_device.get_num_devices(), -1, -1),
         )
 
@@ -121,7 +121,7 @@ def run_test_FalconDecoder_inference(
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=model_config["KV_CACHE_MEMCFG"],
-            mesh_mapper=ShardTensorToMesh(mesh_device, dim=1),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=1),
         )
         tt_v_cache = ttnn.as_tensor(
             tensor=tt_v_cache_host,
@@ -129,7 +129,7 @@ def run_test_FalconDecoder_inference(
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=model_config["KV_CACHE_MEMCFG"],
-            mesh_mapper=ShardTensorToMesh(mesh_device, dim=1),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=1),
         )
         tt_layer_past = (tt_k_cache, tt_v_cache)
 
@@ -167,7 +167,7 @@ def run_test_FalconDecoder_inference(
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"],
-            mesh_mapper=ShardTensorToMesh(mesh_device, dim=-1),
+            mesh_mapper=(mesh_device, dim=-1),
             preprocess=lambda x: x.unsqueeze(1).transpose(0, 2),
         )
 
@@ -192,7 +192,7 @@ def run_test_FalconDecoder_inference(
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=attention_mask_memconfig,
-            mesh_mapper=ShardTensorToMesh(mesh_device, dim=1),
+            mesh_mapper=(mesh_device, dim=1),
             preprocess=lambda x: (x.transpose(0, 2) * -1e5).expand(-1, configuration.num_attention_heads, -1, -1),
         )
 
@@ -207,7 +207,7 @@ def run_test_FalconDecoder_inference(
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=model_config["KV_CACHE_MEMCFG"],
-            mesh_mapper=ShardTensorToMesh(mesh_device, dim=1),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=1),
         )
 
         tt_v_cache = ttnn.as_tensor(
@@ -216,7 +216,7 @@ def run_test_FalconDecoder_inference(
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=model_config["KV_CACHE_MEMCFG"],
-            mesh_mapper=ShardTensorToMesh(mesh_device, dim=1),
+            mesh_mapper=(mesh_device, dim=1),
         )
 
         tt_layer_past = (tt_k_cache, tt_v_cache)

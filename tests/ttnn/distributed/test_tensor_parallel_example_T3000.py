@@ -62,7 +62,7 @@ def test_tensor_parallel_falcon_mlp():
         )
 
     # Shard model parameters on width dimension to devices in the mesh
-    with ttnn.distribute(ttnn.ShardTensorToMesh(mesh_device, dim=-1)):
+    with ttnn.distribute(ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=-1)):
         parameters = ttnn.model_preprocessing.preprocess_model_parameters(
             initialize_model=lambda: model,
             device=mesh_device,

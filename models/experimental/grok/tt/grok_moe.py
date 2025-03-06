@@ -4,7 +4,7 @@
 
 import torch
 import ttnn
-from ttnn import ShardTensorToMesh, replicate_tensor_to_mesh_mapper
+from ttnn import shard_tensor_to_mesh_mapper, replicate_tensor_to_mesh_mapper
 from models.experimental.grok.tt.grok_common import LightweightModule
 from models.experimental.grok.scripts.tlog import tlog, tlog_mesh_device
 
@@ -55,7 +55,7 @@ class TtMoeLayer(LightweightModule):
             dtype=ttnn.uint16,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
-            mesh_mapper=ShardTensorToMesh(mesh_device, dim=3),
+            ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=3),
         )
         top8_mask = torch.full((1, 1, 32, 64), fill_value=torch.finfo(torch.float).min)
         top8_mask[:, :, :, 1:9] = 0.0

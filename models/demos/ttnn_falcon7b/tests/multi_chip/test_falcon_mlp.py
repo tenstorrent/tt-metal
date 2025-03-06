@@ -11,7 +11,7 @@ from models.demos.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_
 from models.demos.ttnn_falcon7b.tt.common import create_custom_preprocessor, strip_state_dict_prefix
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from ttnn import ShardTensorToMesh, replicate_tensor_to_mesh_mapper, ConcatMeshToTensor
+from ttnn import shard_tensor_to_mesh_mapper, replicate_tensor_to_mesh_mapper, ConcatMeshToTensor
 import transformers
 
 from loguru import logger
@@ -88,7 +88,7 @@ def test_falcon_mlp(
             tt_cache_path=get_tt_cache_path(f"{model_name}"),
             device=mesh_device,
             base_file_name=get_model_prefix(),
-            weights_ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+            weights_mesh_mapper=replicate_tensor_to_mesh_mapper(mesh_device),
         ),
     )
 
@@ -98,7 +98,7 @@ def test_falcon_mlp(
         dtype=model_config["DEFAULT_DTYPE"],
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
+        mesh_mapper=shard_tensor_to_mesh_mapper(mesh_device, dim=0),
     )
     ttnn_output = ttnn_model(ttnn_input)
 

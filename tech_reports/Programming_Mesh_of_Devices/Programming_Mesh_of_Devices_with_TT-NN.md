@@ -140,7 +140,7 @@ torch_tensor[..., 32:64] = 2.0
 # Convert to ttnn.Tensor; MeshTensor holds buffers to two shards in host-memory
 mesh_tensor = ttnn.from_torch(
     torch_tensor,
-    mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
+    mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=3),
     layout=ttnn.TILE_LAYOUT,
 )
 ```
@@ -306,7 +306,7 @@ mesh_tensor = ttnn.from_torch(
     torch_tensor,
     layout=ttnn.TILE_LAYOUT,
     device=mesh_device,
-    mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
+    mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=3),
 )
 
 # Execute All-Gather on the tensor; `num_links=1` specifies the number of ethernet links to use
@@ -338,7 +338,7 @@ mesh_tensor = ttnn.from_torch(
     torch_input_tensor,
     layout=ttnn.TILE_LAYOUT,
     device=mesh_device,
-    mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
+    mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=3),
 )
 
 # Execute Line All-Gather on the tensor
@@ -452,7 +452,7 @@ torch_output = model.forward(torch_hidden_states)
 mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(y=1, x=4))
 
 # Shard input activations on batch dimension to devices in the mesh
-with ttnn.distribute(ttnn.ShardTensorToMesh(mesh_device, dim=0)):
+with ttnn.distribute(ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0)):
     hidden_states = ttnn.from_torch(
         torch_hidden_states,
         dtype=ttnn.bfloat16,
@@ -548,7 +548,7 @@ with ttnn.distribute(ttnn.replicate_tensor_to_mesh_mapper(mesh_device)):
     )
 
 # Shard model parameters on width dimension to devices in the mesh
-with ttnn.distribute(ttnn.ShardTensorToMesh(t3k_mesh_device, dim=-1)):
+with ttnn.distribute(ttnn.shard_tensor_to_mesh_mapper(t3k_mesh_device, dim=-1)):
     parameters = ttnn.model_preprocessing.preprocess_model_parameters(
         initialize_model=lambda: model,
         device=t3k_mesh_device,

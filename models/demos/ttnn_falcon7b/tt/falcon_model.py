@@ -10,7 +10,7 @@ import ttnn
 
 from models.demos.ttnn_falcon7b.tt.falcon_decoder import TtFalconDecoderLayer
 from models.demos.ttnn_falcon7b.tt.common import create_attention_mask
-from ttnn import ShardTensorToMesh, replicate_tensor_to_mesh_mapper, ConcatMeshToTensor
+from ttnn import shard_tensor_to_mesh_mapper, replicate_tensor_to_mesh_mapper, ConcatMeshToTensor
 
 
 class TtFalconModelShared:
@@ -58,7 +58,7 @@ class TtFalconModelShared:
             mesh_mapper = None
         else:
             shard_dim = 2 if llm_mode == "decode" else 0
-            mesh_mapper = ShardTensorToMesh(self.device, dim=shard_dim)
+            mesh_mapper = ttnn.shard_tensor_to_mesh_mapper(self.device, dim=shard_dim)
 
         # Generate input and attention_mask ---------------------------------------------
         if llm_mode == "prefill":

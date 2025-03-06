@@ -7,7 +7,7 @@ from typing import Optional, Tuple
 
 import torch
 import ttnn
-from ttnn import replicate_tensor_to_mesh_mapper, ShardTensorToMesh
+from ttnn import replicate_tensor_to_mesh_mapper, shard_tensor_to_mesh_mapper
 
 from models.demos.falcon7b_common.tt.falcon_decoder import TtFalconDecoderLayer
 from models.demos.falcon7b_common.tt.model_utils import get_weights_cached, layernorm
@@ -177,7 +177,7 @@ class TtFalconModelShared(torch.nn.Module):
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.mesh_device,
                 memory_config=self.model_config["INPUT_MEMCFG"],
-                mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=0),
+                ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=0),
             )
         elif llm_mode == "decode":
             assert batch_size % 32 == 0, "For decode, batch_size must be multiple of 32!"
@@ -226,7 +226,7 @@ class TtFalconModelShared(torch.nn.Module):
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.mesh_device,
                 memory_config=self.model_config["INPUT_MEMCFG"],
-                mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=1),
+                ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=1),
             )
         else:
             raise NotImplementedError(f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode.")

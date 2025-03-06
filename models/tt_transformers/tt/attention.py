@@ -63,7 +63,7 @@ class Attention(LightweightModule):
                 dtype=ttnn.bfloat4_b,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=1),
+                mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=1),
             )
             user_selection_matrix = torch.eye(8, 8)
             user_selection_matrix = torch.nn.functional.pad(user_selection_matrix, (0, 24), "constant", 0)  # (8, 32)
@@ -128,7 +128,7 @@ class Attention(LightweightModule):
             self.wqkv_bias_prefill = ttnn.as_tensor(
                 qkv_bias,
                 device=self.mesh_device,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+                mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=-1),
                 dtype=self.dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.TILE_LAYOUT,
@@ -153,7 +153,7 @@ class Attention(LightweightModule):
                 bias_tensor = ttnn.as_tensor(
                     qkv_bias_decode,
                     device=self.mesh_device,
-                    mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+                    mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=-1),
                     dtype=self.dtype,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     layout=ttnn.TILE_LAYOUT,
