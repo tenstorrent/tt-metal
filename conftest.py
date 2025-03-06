@@ -182,8 +182,7 @@ def set_fabric(fabric_config):
 
 
 @pytest.fixture(scope="function")
-def mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device_params):
-    # def mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
+def mesh_device(request, silicon_arch_name, device_params):
     """
     Pytest fixture to set up a device mesh for tests.
 
@@ -194,7 +193,6 @@ def mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device_param
     Args:
         request: Pytest request object.
         silicon_arch_name: Name of the silicon architecture.
-        silicon_arch_wormhole_b0: Silicon architecture parameter.
         device_params: Additional device configuration parameters.
 
     Yields:
