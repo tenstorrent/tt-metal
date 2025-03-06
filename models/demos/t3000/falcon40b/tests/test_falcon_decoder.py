@@ -167,7 +167,7 @@ def run_test_FalconDecoder_inference(
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"],
-            mesh_mapper=(mesh_device, dim=-1),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=-1),
             preprocess=lambda x: x.unsqueeze(1).transpose(0, 2),
         )
 
