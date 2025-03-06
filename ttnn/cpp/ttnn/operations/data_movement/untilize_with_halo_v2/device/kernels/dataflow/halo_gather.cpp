@@ -118,30 +118,30 @@ FORCE_INLINE static void copy_sticks_async(
     uint32_t in_base_l1_addr,
     uint32_t out_base_l1_addr,
     uint16_t num_blocks) {
-    uint32_t i = 0;
-    uint16_t length = config_data[i + 2];
+    uint32_t config_data_offset = 0;
+    uint16_t length = config_data[config_data_offset + 2];
     while (length) {
         GatherConfigHeader header;
-        decode_gather_config_header(config_data, i, header);
-        i += GATHER_CONFIG_HEADER_NUM_ELEMENTS;
+        decode_gather_config_header(config_data, config_data_offset, header);
+        config_data_offset += GATHER_CONFIG_HEADER_NUM_ELEMENTS;
 
         const uint16_t real_noc_x = ((is_block_sharded && !is_col_major) || is_width_sharded) ? my_noc_x : header.noc_x;
         const uint16_t real_noc_y = ((is_block_sharded && is_col_major) || is_width_sharded) ? my_noc_y : header.noc_y;
-
         const uint64_t base_addr = get_noc_addr(real_noc_x, real_noc_y, is_read ? in_base_l1_addr : out_base_l1_addr);
 
         length = header.length;
 
         // TODO: Remove branch here by always providing a blocking config - even if there's only one block
         if constexpr (blocking) {
-            uint16_t block_j_start = 0;
-            for (size_t b = 0; b < num_blocks && block_j_start < length; b++) {
-                uint16_t steps_in_block = blocking_config_data[b];
-                uint16_t block_stride = steps_in_block * GATHER_CONFIG_HEADER_NUM_ELEMENTS;
-                uint16_t block_end_j = block_j_start + block_stride;
-                for (uint16_t j = block_j_start; j < block_end_j; j += GATHER_CONFIG_HEADER_NUM_ELEMENTS) {
-                    GatherStep step;
-                    decode_gather_config_step(config_data, i + j, step);
+            GatherStep step;
+            uint16_t block_offset = 0;
+            for (uint16_t block_id = 0; block_id < num_blocks && block_offset < length; block_id++) {
+                const uint16_t num_steps_in_block = blocking_config_data[block_id];
+                const uint16_t block_stride = num_steps_in_block * GATHER_CONFIG_HEADER_NUM_ELEMENTS;
+                const uint16_t block_end_offset = block_offset + block_stride;
+                for (uint16_t step_offset = block_offset; step_offset < block_end_offset;
+                     step_offset += GATHER_CONFIG_HEADER_NUM_ELEMENTS) {
+                    decode_gather_config_step(config_data, config_data_offset + step_offset, step);
                     copy_stick<
                         stick_nbytes,
                         input_aligned_page_size,
@@ -151,14 +151,13 @@ FORCE_INLINE static void copy_sticks_async(
                         is_col_major,
                         blocking>(step, base_addr, in_base_l1_addr, out_base_l1_addr);
                 }
-
-                block_j_start += block_stride;
+                block_offset += block_stride;
             }
-            i += length;
+            config_data_offset += length;
         } else {
+            GatherStep step;
             for (uint16_t j = 0; j < length; j += GATHER_CONFIG_HEADER_NUM_ELEMENTS) {
-                GatherStep step;
-                decode_gather_config_step(config_data, i + j, step);
+                decode_gather_config_step(config_data, config_data_offset + j, step);
                 copy_stick<
                     stick_nbytes,
                     input_aligned_page_size,
@@ -168,11 +167,11 @@ FORCE_INLINE static void copy_sticks_async(
                     is_col_major,
                     blocking>(step, base_addr, in_base_l1_addr, out_base_l1_addr);
             }
-            i += length;
+            config_data_offset += length;
         }
 
         // Get next command’s length; if 0 => done
-        length = config_data[i + 2];
+        length = config_data[config_data_offset + 2];
     }
 }
 
