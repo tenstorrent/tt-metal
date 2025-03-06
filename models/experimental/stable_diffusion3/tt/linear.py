@@ -162,7 +162,6 @@ class TtLinear:
         dtype: ttnn.DataType | None = None,
         deallocate: bool = False,
     ) -> ttnn.Tensor:
-        print(f"x shape {x.shape} weight shape {self._weight.shape}")
         assert x.shape[-1] == self._in_channels, "input tensor does not have the expected shape"
 
         weight = self._weight
