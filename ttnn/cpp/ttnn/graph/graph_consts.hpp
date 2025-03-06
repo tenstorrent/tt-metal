@@ -10,7 +10,6 @@ constexpr auto kNodeType = "node_type";
 constexpr auto kCounter = "counter";
 constexpr auto kConnections = "connections";
 constexpr auto kParams = "params";
-constexpr auto kArguments = "arguments";
 // params keys
 constexpr auto kName = "name";
 constexpr auto kInputs = "inputs";
