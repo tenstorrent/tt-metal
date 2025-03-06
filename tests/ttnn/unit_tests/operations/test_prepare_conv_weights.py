@@ -198,9 +198,7 @@ def test_prepare_conv_weights(
     assert passing
 
 
-@skip_for_grayskull()
 @skip_for_blackhole()
-# @skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override",
     (
