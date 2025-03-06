@@ -9,12 +9,12 @@
 
 #include "cpp/pybind11/decorators.hpp"
 
-#include "slice.hpp"
+#include "slice_write.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
-void bind_slice(py::module& module) {
+void bind_slice_write(py::module& module) {
     auto doc =
         R"doc(
             Returns a sliced tensor. If the input tensor is on host, the slice will be performed on host, and if its on device it will be performed on device.
@@ -33,63 +33,30 @@ void bind_slice(py::module& module) {
                 ttnn.Tensor: the output tensor.
 
             Example:
-                >>> tensor = ttnn.slice(ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16), device=device), [0, 0, 0, 0], [1, 1, 64, 16], [1, 1, 2, 1])
-                >>> print(tensor.shape)
-                [1, 1, 32, 16]
-                >>> input = ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16), device=device)
-                >>> output = ttnn.slice(input, [0, 0, 0, 0], [1, 1, 32, 32])
-                >>> print(output.shape)
-                [1, 1, 32, 32]
+                >>> tensor = ttnn.slice_write
                 )doc";
 
     // TODO: implementing the array version and overloading the pybind with all the possible array sizes is better than
     // a vector with a fixed size default value
-    using OperationType = decltype(ttnn::slice);
+    using OperationType = decltype(ttnn::slice_write);
     ttnn::bind_registered_operation(
         module,
-        ttnn::slice,
+        ttnn::slice_write,
         doc,
         ttnn::pybind_overload_t{
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
-               const ttnn::SmallVector<int>& slice_start,
-               const ttnn::SmallVector<int>& slice_end,
-               const std::optional<ttnn::SmallVector<int>>& step,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<Tensor>& optional_output_tensor,
-               QueueId queue_id) {
-                const auto step_value = step.value_or(ttnn::SmallVector<int>(slice_end.size(), 1));
-                return self(
-                    queue_id, input_tensor, slice_start, slice_end, step_value, memory_config, optional_output_tensor);
-            },
-            py::arg("input_tensor"),
-            py::arg("slice_start"),
-            py::arg("slice_end"),
-            py::arg("slice_step") = std::nullopt,  // should consider a better default value
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId,
-        },
-
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const std::array<uint32_t, 4>& begins,
-               const std::array<uint32_t, 4>& ends,
+               const ttnn::Tensor& output_tensor,
+               const std::array<uint32_t, 4>& start,
+               const std::array<uint32_t, 4>& end,
                const std::array<uint32_t, 4>& step,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<Tensor>& optional_output_tensor,
-               QueueId queue_id) {
-                return self(queue_id, input_tensor, begins, ends, step, memory_config, optional_output_tensor);
-            },
+               QueueId queue_id) { return self(queue_id, input_tensor, output_tensor, start, end, step); },
             py::arg("input_tensor"),
-            py::arg("starts"),
-            py::arg("ends"),
-            py::arg("steps"),
+            py::arg("output_tensor"),
+            py::arg("start"),
+            py::arg("end"),
+            py::arg("step"),
             py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId,
         });
 }

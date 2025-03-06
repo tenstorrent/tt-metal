@@ -211,6 +211,7 @@ Result conv2d_DRAM(
                         tt::LogOp, "Padded sliced input tensor shape: {}", sliced_input_tensor.get_logical_shape());
                     auto conv_config_l1 = conv_config;
                     conv_config_l1.reshard_if_not_optimal = true;
+                    conv_config_l1.output_layout = Layout::TILE;
                     ttnn::Tensor sliced_output_tensor;
                     std::tie(
                         sliced_output_tensor,

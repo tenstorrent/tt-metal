@@ -508,7 +508,7 @@ def test_conv_features_multi_device(
             True,
             32,
             ttnn.bfloat8_b,
-            ttnn.bfloat8_b,
+            ttnn.bfloat16,
             (4, 4),
             (2, 2),
             (1, 1),

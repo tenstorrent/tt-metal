@@ -59,7 +59,7 @@ struct SliceWriteOperation {
     // }
 
     template <typename T, std::size_t N>
-    static void invoke(
+    static ttnn::Tensor invoke(
         QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& output_tensor,
@@ -68,7 +68,7 @@ struct SliceWriteOperation {
         const std::array<T, N>& step);
 
     template <typename T, std::size_t N>
-    static void invoke(
+    static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& output_tensor,
         const std::array<T, N>& output_tensor_start,
@@ -79,7 +79,7 @@ struct SliceWriteOperation {
 }  // namespace data_movement
 }  // namespace operations
 
-constexpr auto slice = ttnn::
+constexpr auto slice_write = ttnn::
     register_operation_with_auto_launch_op<"ttnn::slice_write", ttnn::operations::data_movement::SliceWriteOperation>();
 
 }  // namespace ttnn
