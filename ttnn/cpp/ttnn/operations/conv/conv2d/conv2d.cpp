@@ -5,7 +5,8 @@
 #include <optional>
 #include <utility>
 
-
+#include "ttnn/operations/data_movement/slice_write/slice_write.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -132,7 +133,17 @@ Result conv2d_DRAM(
     std::optional<ttnn::Tensor> bias_tensor_on_device;
     TT_FATAL(input_tensor_on_device.memory_config().is_dram(), "Conv DRAM expects the input tensor to be in DRAM.");
 
-    Tensor dram_output_tensor;
+    Tensor dram_output_tensor = tt_metal::create_device_tensor(
+        TensorSpec(
+            ttnn::Shape({batch_size, output_height, output_width, out_channels}),
+            tt_metal::TensorLayout(
+                conv_config.dtype,
+                tt_metal::PageConfig(tt_metal::Layout::ROW_MAJOR),
+                MemoryConfig{
+                    .memory_layout = TensorMemoryLayout::INTERLEAVED,
+                    .buffer_type = BufferType::DRAM,
+                })),
+        device);
     bool first_run = true;
     bool auto_shard = false;
     const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups, conv_config);
@@ -247,17 +258,12 @@ Result conv2d_DRAM(
                         },
                         device);
 
-                    if (first_run) {
-                        dram_output_tensor = sliced_output_tensor;
-                    } else {
-                        dram_output_tensor = ttnn::concat(
-                            std::vector<ttnn::Tensor>{dram_output_tensor, sliced_output_tensor},
-                            2,
-                            MemoryConfig{
-                                .memory_layout = TensorMemoryLayout::INTERLEAVED,
-                                .buffer_type = BufferType::DRAM,
-                            });
-                    }
+                    ttnn::slice_write(
+                        sliced_output_tensor,
+                        dram_output_tensor,
+                        std::array<uint32_t, 4>{batch_index, output_slice_height_start, 0, 0},
+                        std::array<uint32_t, 4>{batch_index + 1, output_slice_height_end, output_width, out_channels},
+                        std::array<uint32_t, 4>{1, 1, 1, 1});
                     log_debug(tt::LogOp, "Dram output tensor shape: {}", dram_output_tensor.get_logical_shape());
                     first_run = false;
             }

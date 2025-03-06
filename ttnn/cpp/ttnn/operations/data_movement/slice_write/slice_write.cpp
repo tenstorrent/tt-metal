@@ -340,12 +340,12 @@ ttnn::Tensor SliceWriteOperation::invoke(
 //     tt::stl::Span<const uint32_t> ends,
 //     tt::stl::Span<const uint32_t> step);
 
-// template ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
-//     const ttnn::Tensor& input_tensor,
-//     const ttnn::Tensor& output_tensor,
-//     const std::array<uint32_t, 4>& output_tensor_start,
-//     const std::array<uint32_t, 4>& output_tensor_end,
-//     const std::array<uint32_t, 4>& step);
+template ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& output_tensor,
+    const std::array<uint32_t, 4>& output_tensor_start,
+    const std::array<uint32_t, 4>& output_tensor_end,
+    const std::array<uint32_t, 4>& step);
 
 // template ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 1>(
 //     QueueId queue_id,
