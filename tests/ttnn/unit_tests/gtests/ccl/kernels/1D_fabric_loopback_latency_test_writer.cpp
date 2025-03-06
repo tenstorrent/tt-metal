@@ -143,20 +143,18 @@ void kernel_main() {
     // DPRINT << "Waiting for fabric write slot0\n";
     {
         DeviceZoneScopedN("Flush");
-        // send_seminc_packet();
-        // wait_for_semaphore_then_reset(1);
+        send_seminc_packet();
+        wait_for_semaphore_then_reset(1);
     }
 
     {
         for (size_t i = 0; i < num_bursts_to_send; i++) {
-            DPRINT << "Burst " << (uint32_t)i << "\n";
             // Wait for the fabric endpoint to have a completely empty sender channel buffer
 
             // Burst
             {
                 DeviceZoneScopedN("BURST-WRITE");
                 for (size_t j = 0; j < burst_size; j++) {
-                    DPRINT << "Burst write " << (uint32_t)j << "\n";
                     if constexpr (enable_fused_payload_with_sync) {
                         static_assert(!enable_fused_payload_with_sync, "Fused payload with sync is not supported");
                     } else {
@@ -172,8 +170,6 @@ void kernel_main() {
                 {
                     DeviceZoneScopedN("WAIT-FOR-ALL-SEMAPHORES");
                     for (size_t j = 0; j < burst_size; j++) {
-                        // DeviceZoneScopedN("WAIT-FOR-ONE-SEMAPHORE");
-                        DPRINT << "Waiting for semaphore " << (uint32_t)j << "\n";
                         noc_semaphore_wait_min(reinterpret_cast<volatile uint32_t*>(semaphore_address), j + 1);
                     }
                 }

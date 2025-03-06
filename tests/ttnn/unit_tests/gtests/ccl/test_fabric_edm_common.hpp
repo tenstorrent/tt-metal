@@ -2430,7 +2430,7 @@ inline void RunPersistent1dFabricLatencyTest(
     static constexpr uint32_t source_payload_cb_index = tt::CB::c_in1;
     static constexpr size_t packet_header_cb_size_in_headers = 4;
     static constexpr bool enable_persistent_fabric_mode = true;
-    std::vector<size_t> dest_buffer_addresses;
+    std::vector<size_t> dest_buffer_addresses(writer_specs.size(), 0);
 
     for (size_t i = 0; i < writer_specs.size(); i++) {
         if (writer_specs.at(i).has_value()) {
@@ -2454,7 +2454,7 @@ inline void RunPersistent1dFabricLatencyTest(
                     device_dest_buffers.end(),
                     [address](const auto& buffer) { return buffer->address() == address; }),
                 "All destination buffers must have the same address");
-            dest_buffer_addresses.push_back(address);
+            dest_buffer_addresses.at(i) = address;
             TT_FATAL(address != 0, "address uninitialized");
         }
     }
