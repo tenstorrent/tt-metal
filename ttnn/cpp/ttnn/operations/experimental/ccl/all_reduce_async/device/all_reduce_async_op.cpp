@@ -21,7 +21,7 @@ AllReduceAsync create_all_reduce_async_struct(
     const std::vector<IDevice*>& devices,
     const ttnn::ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphores,
-    std::optional<SubDeviceId>& sub_device_id,
+    std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode) {
     uint32_t num_devices = devices.size();
 
@@ -66,6 +66,9 @@ void AllReduceAsync::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& dtype = input_tensors[0].get_dtype();
     const auto& page_size = input_tensors[0].buffer()->page_size();
     TT_FATAL(page_size % input_tensors[0].buffer()->alignment() == 0, "All Gather currently requires aligned pages");
+    TT_FATAL(
+        this->ring_size % 2 == 0,
+        "AllReduceAsync currently only supports even number of blocks in the reduction kernel.");
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_reduce need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_reduce need to be allocated in buffers on device!");
@@ -110,13 +113,13 @@ void AllReduceAsync::validate(const std::vector<Tensor>& input_tensors) const {
 
 std::vector<ttnn::TensorSpec> AllReduceAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
-    auto shape = input_tensor.get_padded_shape();
-    return {TensorSpec(
-        shape,
-        TensorLayout(input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config))};
+    auto shape = input_tensor.get_logical_shape();
+    auto output_tensor_layout =
+        input_tensor.get_tensor_spec().tensor_layout().with_memory_config(this->output_mem_config);
+    return {TensorSpec(shape, output_tensor_layout)};
 }
 
-operation::ProgramWithCallbacks AllReduceAsync::create_program(
+tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     tt::log_debug(tt::LogOp, "DEBUG: create_program is called");
 
@@ -155,7 +158,8 @@ operation::ProgramWithCallbacks AllReduceAsync::create_program(
         this->enable_persistent_fabric_mode);
 }
 
-const operation::Hash AllReduceAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
+const tt::tt_metal::operation::Hash AllReduceAsync::compute_program_hash(
+    const std::vector<Tensor>& input_tensors) const {
     auto input_shape = input_tensors[0].get_padded_shape();
     auto input_memory_layout = input_tensors[0].get_layout();
     auto input_dtype = input_tensors[0].get_dtype();
@@ -186,7 +190,7 @@ Tensor all_reduce_async(
     const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
-    std::optional<SubDeviceId> subdevice_id,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool enable_persistent_fabric_mode) {
     TT_FATAL(
         topology == ttnn::ccl::Topology::Linear,
@@ -249,7 +253,7 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     size_t num_workers_per_link,
     bool persistent_fabric_mode,
     IDevice* device,
-    const std::optional<SubDeviceId>& sub_device_id,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const std::optional<CoreRangeSet>& reserved_core_range) {
     std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
     CoreRangeSet sender_worker_core_range;
