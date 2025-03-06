@@ -5,6 +5,7 @@
 import json
 import time
 from loguru import logger
+from collections import defaultdict
 
 from tt_metal.tools.profiler.common import clear_profiler_runtime_artifacts
 from tt_metal.tools.profiler.process_model_log import (
@@ -44,6 +45,43 @@ def run_device_perf(command, subdir, num_iterations, cols, batch_size, has_signp
     logger.info(
         f"\nTest: {command}"
         f"\nPerformance statistics over {num_iterations} iterations"
+        f"\n{json.dumps(post_processed_results, indent=4)}"
+    )
+    return post_processed_results
+
+
+def run_device_perf_detailed(command, subdir, cols, op_name="", has_signposts=False, warmup_iters=0):
+    duration_cols = [col + " DURATION [ns]" for col in cols]
+
+    clear_profiler_runtime_artifacts()
+
+    results = {}
+    for d_col in duration_cols:
+        results[f"AVG {d_col}"] = 0
+        results[f"MIN {d_col}"] = float("inf")
+        results[f"MAX {d_col}"] = -float("inf")
+        results[f"STD {d_col}"] = 0
+
+    run_device_profiler(command, subdir)
+    r = post_process_ops_log(
+        subdir, duration_cols, op_name=op_name, has_signposts=has_signposts, detailed=True, warmup_iters=warmup_iters
+    )
+    for d_col in duration_cols:
+        results[f"AVG {d_col}"] = r[f"AVG {d_col}"]
+        results[f"MIN {d_col}"] = r[f"MIN {d_col}"]
+        results[f"MAX {d_col}"] = r[f"MAX {d_col}"]
+        results[f"STD {d_col}"] = r[f"STD {d_col}"]
+
+    post_processed_results = defaultdict(dict)
+    for col, d_col in zip(cols, duration_cols):
+        post_processed_results[col]["AVG"] = results[f"AVG {d_col}"]
+        post_processed_results[col]["MIN"] = results[f"MIN {d_col}"]
+        post_processed_results[col]["MAX"] = results[f"MAX {d_col}"]
+        post_processed_results[col]["STD"] = results[f"STD {d_col}"]
+
+    logger.info(
+        f"\nTest: {command}"
+        f"\nPerformance statistics for op: {op_name}"
         f"\n{json.dumps(post_processed_results, indent=4)}"
     )
     return post_processed_results
