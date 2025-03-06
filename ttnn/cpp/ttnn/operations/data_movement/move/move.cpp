@@ -40,8 +40,14 @@ static inline Tensor move(QueueId queue_id, const Tensor& input_tensor, const st
         // TODO: Should this throw error?
         return input_tensor;
     }
+    // Special handling for Mesh vs single device. Needs to be consolidated after full
+    // migration
+    if (input_tensor.device_storage().mesh_buffer) {
+        input_tensor.mesh_buffer()->deallocate();
+    } else {
+        DeallocateBuffer(*input_tensor.buffer());
+    }
 
-    DeallocateBuffer(*input_tensor.buffer());
     auto output_tensor = create_device_tensor(
         TensorSpec(
             input_tensor.get_logical_shape(),
@@ -147,8 +153,14 @@ static inline Tensor move_sharded(
             auto shard_grid = shard_spec.grid;
             auto input_dtype = input_tensor.get_dtype();
             auto input_layout = input_tensor.get_layout();
+            // Special handling for Mesh vs single device. Needs to be consolidated after full
+            // migration
 
-            DeallocateBuffer(*input_tensor.buffer());
+            if (input_tensor.device_storage().mesh_buffer) {
+                input_tensor.mesh_buffer()->deallocate();
+            } else {
+                DeallocateBuffer(*input_tensor.buffer());
+            }
             // log_debug(LogOp, "OUTPUT SHARD SPEC: {}", out_shard_spec);
             auto shard_mem_config = output_mem_config;
             shard_mem_config.shard_spec = shard_spec;

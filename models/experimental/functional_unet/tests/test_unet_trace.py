@@ -210,10 +210,7 @@ def test_unet_trace_2cq(
 
 
 def buffer_address(tensor):
-    addr = []
-    for ten in ttnn.get_device_tensors(tensor):
-        addr.append(ten.buffer_address())
-    return addr
+    return tensor.buffer_address()
 
 
 @skip_for_grayskull("UNet not currently supported on GS")

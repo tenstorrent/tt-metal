@@ -19,10 +19,7 @@ except ModuleNotFoundError:
 
 
 def buffer_address(tensor):
-    addr = []
-    for ten in ttnn.get_device_tensors(tensor):
-        addr.append(ten.buffer_address())
-    return addr
+    return tensor.buffer_address()
 
 
 # TODO: Create ttnn apis for this
