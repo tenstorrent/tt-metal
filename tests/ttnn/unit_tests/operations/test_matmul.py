@@ -2089,7 +2089,7 @@ def test_interleaved_input_sharded_output_matmul(device):
 
     out_mem_config = ttnn.create_sharded_memory_config(
         shape=(32, 256),
-        core_grid=ttnn.CoreGrid(x=1, y=8),
+        core_grid=ttnn.CoreGrid(x=8, y=1),
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
     )
@@ -2100,8 +2100,8 @@ def test_interleaved_input_sharded_output_matmul(device):
 
     # Block sharded
     out_mem_config = ttnn.create_sharded_memory_config(
-        shape=(32, 256),
-        core_grid=ttnn.CoreGrid(x=1, y=8),
+        shape=(256, 256),
+        core_grid=ttnn.CoreGrid(x=1, y=1),
         strategy=ttnn.ShardStrategy.BLOCK,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
     )
