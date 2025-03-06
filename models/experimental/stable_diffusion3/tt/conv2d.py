@@ -82,12 +82,26 @@ class TtConv2d:
         )
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        host_x = ttnn.from_device(x)
-        torch_tensor = ttnn.to_torch(host_x, mesh_composer=ttnn.ConcatMeshToTensor(self._device, dim=0)).permute(
-            [0, 3, 1, 2]
-        )
+        # host_x = ttnn.from_device(x)
+        # torch_pixel_values = ttnn.to_torch(host_x, mesh_composer=ttnn.ConcatMeshToTensor(self._device, dim=0)) #.permute([0, 3, 1, 2])
+
+        print(x.shape)
+
+        batch_size = 2
+        patch_size = 2
+        stride_h = patch_size
+        stride_w = 1
+        folded_pixel_values = ttnn.fold(x, stride_h, stride_w)
+        folded_shape = folded_pixel_values.shape
+        folded_pixel_values = ttnn.reshape(folded_pixel_values, (batch_size, folded_shape[-2] // batch_size, -1))
+        folded_pixel_values = ttnn.to_layout(folded_pixel_values, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+
+        print("x", folded_pixel_values.shape)
+        unfolded_permuted_x = folded_pixel_values
+
+        """
         unfolded_x = ttnn.as_tensor(
-            self._unfold(torch_tensor[0 : x.shape[0], ...]),
+            self._unfold(torch_pixel_values[0 : x.shape[0], ...]),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self._device,
@@ -95,9 +109,11 @@ class TtConv2d:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self._device),
         )
         unfolded_permuted_x = ttnn.permute(unfolded_x, (0, 2, 1))
+        print(unfolded_permuted_x.shape)
+        """
 
         # Need to pad the last dimension of x to be a multiple of a tile
-        assert (unfolded_permuted_x.shape[-1] % 32) == 0
+        ###assert (unfolded_permuted_x.shape[-1] % 32) == 0
         # pad_len = nearest_32(x.shape[-1]) - x.shape[-1]
         # padding = torch.zeros((x.shape[0], x.shape[1], pad_len), dtype=x.dtype, device=x.device)
         # x = torch.cat([x, padding], dim=-1)
