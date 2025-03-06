@@ -150,7 +150,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     return mesh_device;
 }
 
-std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_single_devices(
+std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
     const std::vector<int>& device_ids,
     size_t l1_small_size,
     size_t trace_region_size,
@@ -178,14 +178,14 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_single_devices(
     return result;
 }
 
-std::shared_ptr<MeshDevice> MeshDevice::create_single_device(
+std::shared_ptr<MeshDevice> MeshDevice::create_unit_mesh(
     int device_id,
     size_t l1_small_size,
     size_t trace_region_size,
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap) {
-    return create_single_devices(
+    return create_unit_meshes(
                {device_id}, l1_small_size, trace_region_size, num_command_queues, dispatch_core_config, l1_bank_remap)
         .at(device_id);
 }
@@ -233,6 +233,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
     auto submesh = std::make_shared<MeshDevice>(
         scoped_devices_, std::make_unique<MeshDeviceView>(submesh_devices_container), shared_from_this());
 
+    submeshes_.push_back(submesh);
     log_trace(LogMetal, "Instantiating submesh {}: {} with offset: {}", submesh->id(), submesh_shape, offset);
     log_trace(LogMetal, "Submesh {} instantiated with {} devices", submesh->id(), submesh->get_devices().size());
     return submesh;
@@ -378,9 +379,7 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
 
 bool MeshDevice::close() {
     sub_device_manager_tracker_.reset();
-    if (scoped_devices_) {
-        scoped_devices_.reset();
-    }
+    scoped_devices_.reset();
     parent_mesh_.reset();
     view_.reset();
     return true;
@@ -400,6 +399,17 @@ MeshDeviceID MeshDevice::id() const { return mesh_id_; }
 chip_id_t MeshDevice::build_id() const { return reference_device()->id(); }
 
 bool MeshDevice::is_parent_mesh() const { return parent_mesh_ == nullptr; }
+
+std::vector<std::shared_ptr<MeshDevice>> MeshDevice::get_submeshes() const {
+    std::vector<std::shared_ptr<MeshDevice>> result;
+    result.reserve(submeshes_.size());
+    for (const auto& weak_submesh : submeshes_) {
+        if (auto submesh = weak_submesh.lock()) {
+            result.push_back(std::move(submesh));
+        }
+    }
+    return result;
+}
 
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device) { return os << mesh_device.to_string(); }
 

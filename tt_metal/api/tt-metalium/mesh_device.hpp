@@ -65,7 +65,9 @@ private:
     std::shared_ptr<ScopedDevices> scoped_devices_;
     MeshDeviceID mesh_id_;
     std::unique_ptr<MeshDeviceView> view_;
-    std::shared_ptr<MeshDevice> parent_mesh_;  // Submesh keeps the parent mesh alive
+    // Submesh keeps the parent mesh alive. Parent_mesh_ is null if the current mesh is the parent mesh.
+    std::shared_ptr<MeshDevice> parent_mesh_;
+    std::vector<std::weak_ptr<MeshDevice>> submeshes_;
     std::vector<std::unique_ptr<MeshCommandQueue>> mesh_command_queues_;
     std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
     std::unordered_map<MeshTraceId, std::shared_ptr<MeshTraceBuffer>> trace_buffer_pool_;
@@ -257,6 +259,8 @@ public:
     std::string to_string() const;
     bool is_parent_mesh() const;
 
+    std::vector<std::shared_ptr<MeshDevice>> get_submeshes() const;
+
     std::shared_ptr<MeshDevice> create_submesh(
         const MeshShape& submesh_shape, const std::optional<MeshCoordinate>& offset = std::nullopt);
 
@@ -286,14 +290,14 @@ public:
         size_t num_command_queues = 1,
         const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {});
-    static std::shared_ptr<MeshDevice> create_single_device(
+    static std::shared_ptr<MeshDevice> create_unit_mesh(
         int device_id,
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
         size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
         size_t num_command_queues = 1,
         const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {});
-    static std::map<int, std::shared_ptr<MeshDevice>> create_single_devices(
+    static std::map<int, std::shared_ptr<MeshDevice>> create_unit_meshes(
         const std::vector<int>& device_ids,
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
         size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
