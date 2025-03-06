@@ -471,7 +471,13 @@ std::string to_string(
                 TT_THROW("Cannot print a device tensor!");
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
                 std::stringstream ss;
-                apply(tensor, [&](const Tensor& device_tensor) { ss << to_string<T>(device_tensor) << std::endl; });
+                auto device_tensors = ttnn::distributed::get_tensors_from_multi_device_storage(tensor);
+                for (size_t i = 0; i < device_tensors.size(); i++) {
+                    ss << to_string<T>(device_tensors[i]);
+                    if (i + 1 != device_tensors.size()) {
+                        ss << std::endl;
+                    }
+                }
                 return ss.str();
             } else {
                 // raise_unsupported_storage<StorageType>();
