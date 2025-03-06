@@ -16,7 +16,7 @@
 namespace ttnn::operations::data_movement {
 
 // template <typename T>
-// void SliceWriteOperation::invoke(
+// ttnn::Tensor SliceWriteOperation::invoke(
 //     QueueId queue_id,
 //     const ttnn::Tensor& input_tensor,
 //     const ttnn::Tensor& output_tensor,
@@ -185,7 +185,7 @@ namespace ttnn::operations::data_movement {
 
 // Specialization for uint32_t and N=4
 template <>
-void SliceWriteOperation::invoke<uint32_t, 4>(
+ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& output_tensor,
@@ -205,7 +205,7 @@ void SliceWriteOperation::invoke<uint32_t, 4>(
 
     if (no_step && starts_zero && ends_max) {
         ttnn::copy(queue_id, input_tensor, output_tensor);
-        return;
+        return output_tensor;
     }
     bool rm_only = !no_step && input_tensor.get_layout() == Layout::TILE;
     ttnn::Tensor input = input_tensor;
@@ -238,13 +238,15 @@ void SliceWriteOperation::invoke<uint32_t, 4>(
     ttnn::Shape padded_shape(padded_shape_vec);
 
     if (empty) {
-        return;
+        tt::log_debug("Empty tensor slice, returning empty tensor");
+        return output_tensor;
     }
 
     // Early exit if slice is a no-op
     if (padded_shape == padded_output_shape && no_step) {
         ttnn::copy(queue_id, input_tensor, output_tensor);
-        return;
+        tt::log_debug("Input Tensor same shape as output tensor. Performing copy");
+        return output_tensor;
     }
 
     if (on_device) {
@@ -264,9 +266,10 @@ void SliceWriteOperation::invoke<uint32_t, 4>(
             if (in_place_unpad) {
                 tt::log_info("In-place unpad optimization via copy");
                 ttnn::copy(DefaultQueueId, input_tensor, output_tensor);
-                return;
+                return output_tensor;
             }
         }
+        tt::log_debug("Invoking SliceWriteDeviceOperation");
 
         tt::tt_metal::operation::run(
             SliceWriteDeviceOperation{ttnn::Shape(begins), ttnn::Shape(padded_ends), ttnn::Shape(step)},
@@ -274,15 +277,16 @@ void SliceWriteOperation::invoke<uint32_t, 4>(
             {},
             {output_tensor},
             queue_id)[0];
-        return;
+        return output_tensor;
     }
 
     TT_FATAL(no_step, "Host tensor slice does not support strides");
     TT_THROW("Expects Input on Device");
+    return output_tensor;
 }
 
 template <typename T, std::size_t N>
-void SliceWriteOperation::invoke(
+ttnn::Tensor SliceWriteOperation::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& output_tensor,
@@ -296,7 +300,7 @@ void SliceWriteOperation::invoke(
 }
 
 template <typename T, std::size_t N>
-void SliceWriteOperation::invoke(
+ttnn::Tensor SliceWriteOperation::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& output_tensor,
     const std::array<T, N>& output_tensor_start,
@@ -306,7 +310,7 @@ void SliceWriteOperation::invoke(
         ttnn::DefaultQueueId, input_tensor, output_tensor, output_tensor_start, output_tensor_end, step);
 }
 
-// template void SliceWriteOperation::invoke<int>(
+// template ttnn::Tensor SliceWriteOperation::invoke<int>(
 //     QueueId queue_id,
 //     const ttnn::Tensor& input_tensor,
 //     const ttnn::Tensor& output_tensor,
@@ -314,14 +318,14 @@ void SliceWriteOperation::invoke(
 //     tt::stl::Span<const int> ends,
 //     tt::stl::Span<const int> step);
 
-// template void SliceWriteOperation::invoke<int>(
+// template ttnn::Tensor SliceWriteOperation::invoke<int>(
 //     const ttnn::Tensor& input_tensor,
 //     const ttnn::Tensor& output_tensor,
 //     tt::stl::Span<const int> begins,
 //     tt::stl::Span<const int> ends,
 //     tt::stl::Span<const int> step);
 
-// template void SliceWriteOperation::invoke<uint32_t>(
+// template ttnn::Tensor SliceWriteOperation::invoke<uint32_t>(
 //     QueueId queue_id,
 //     const ttnn::Tensor& input_tensor,
 //     const ttnn::Tensor& output_tensor,
@@ -329,21 +333,21 @@ void SliceWriteOperation::invoke(
 //     tt::stl::Span<const uint32_t> ends,
 //     tt::stl::Span<const uint32_t> step);
 
-// template void SliceWriteOperation::invoke<uint32_t>(
+// template ttnn::Tensor SliceWriteOperation::invoke<uint32_t>(
 //     const ttnn::Tensor& input_tensor,
 //     const ttnn::Tensor& output_tensor,
 //     tt::stl::Span<const uint32_t> begins,
 //     tt::stl::Span<const uint32_t> ends,
 //     tt::stl::Span<const uint32_t> step);
 
-// template void SliceWriteOperation::invoke<uint32_t, 4>(
+// template ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
 //     const ttnn::Tensor& input_tensor,
 //     const ttnn::Tensor& output_tensor,
 //     const std::array<uint32_t, 4>& output_tensor_start,
 //     const std::array<uint32_t, 4>& output_tensor_end,
 //     const std::array<uint32_t, 4>& step);
 
-// template void SliceWriteOperation::invoke<uint32_t, 1>(
+// template ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 1>(
 //     QueueId queue_id,
 //     const ttnn::Tensor& input_tensor,
 //     const ttnn::Tensor& output_tensor,
@@ -351,7 +355,7 @@ void SliceWriteOperation::invoke(
 //     const std::array<uint32_t, 1>& output_tensor_end,
 //     const std::array<uint32_t, 1>& step);
 
-// template void SliceWriteOperation::invoke<uint32_t, 1>(
+// template ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 1>(
 //     const ttnn::Tensor& input_tensor,
 //     const ttnn::Tensor& output_tensor,
 //     const std::array<uint32_t, 1>& output_tensor_start,

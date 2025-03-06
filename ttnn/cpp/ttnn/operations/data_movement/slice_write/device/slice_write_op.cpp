@@ -46,65 +46,74 @@ void SliceWriteDeviceOperation::validate_with_output_tensors(
     const bool has_step = std::any_of(this->step.cbegin(), this->step.cend(), [](uint32_t s) { return s != 1; });
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& output_tensor = output_tensors.at(0).value();
+    const auto output_padded_shape = output_tensor.get_padded_shape();
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to unpad need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to unpad need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.get_layout() == Layout::TILE || input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Error");
     TT_FATAL(
         input_tensor_a.get_padded_shape().rank() == this->slice_start.rank() &&
+            output_padded_shape.rank() == this->slice_start.rank() &&
             this->slice_start.rank() == this->slice_end.rank(),
         "Error");
-    for (uint32_t i = 0; i < input_tensor_a.get_padded_shape().rank(); i++) {
-        TT_FATAL(this->slice_start[i] < input_tensor_a.get_padded_shape()[i], "Error");
+    for (uint32_t i = 0; i < output_padded_shape.rank(); i++) {
         TT_FATAL(
-            this->slice_end[i] <= input_tensor_a.get_padded_shape()[i],
+            this->slice_start[i] < output_padded_shape[i],
+            "Start is outside the bounds of the output tensor for index {}. Got {}. Size {}",
+            i,
+            this->slice_start[i],
+            output_padded_shape[i]);
+        TT_FATAL(
+            this->slice_end[i] <= output_padded_shape[i],
             "Ends {} must be less than or equal to the shape of the tensor {}",
             this->slice_end[i],
-            input_tensor_a.get_padded_shape()[i]);
+            output_padded_shape[i]);
         // Check if start shape is <= end shape
-        TT_FATAL(this->slice_start[i] <= this->slice_end[i], "Error");
+        TT_FATAL(
+            this->slice_start[i] <= this->slice_end[i],
+            "Slice start {} should be less than slice end {}",
+            this->slice_start[i],
+            this->slice_end[i]);
     }
-    TT_FATAL(!output_tensors.empty(), "Output tensor is not provided to Slice Write.");
-    auto output_tensor_shape = output_tensor.get_logical_shape();
-    if (has_step) {  // if all ones modify before passing in to function
-        TT_FATAL(
-            input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Strided slice is only supported for row major layout");
-        TT_FATAL(!input_tensor_a.is_sharded(), "Strided slice is not supported for sharded tensor");
-        TT_FATAL(input_tensor_a.get_dtype() == DataType::BFLOAT16, "Strided slice is only supported for BFLOAT16");
-        TT_FATAL(
-            step.size() == this->slice_end.rank(),
-            "Number of steps {} must match number of ends/starts {}",
-            step.size(),
-            this->slice_end.rank());
-    }
-    if (input_tensor_a.get_layout() == Layout::TILE) {
-        TT_FATAL(input_tensor_a.volume() % TILE_HW == 0, "Error");
-        TT_FATAL(
-            (output_tensor_shape[-2] % TILE_HEIGHT == 0) && (this->slice_start[-2] % TILE_HEIGHT == 0),
-            "Can only unpad tilized tensor with full tiles");
-        TT_FATAL(
-            (output_tensor_shape[-1] % TILE_WIDTH == 0) && (this->slice_start[-1] % TILE_WIDTH == 0),
-            "Can only unpad tilized tensor with full tiles");
-    } else if (input_tensor_a.get_layout() == Layout::ROW_MAJOR) {
-        if (has_step) {
-            for (uint32_t i = 0; i < input_tensor_a.get_padded_shape().rank(); i++) {
-                TT_FATAL(step[i] > 0, "Step({}) = {} should be positive", i, step[i]);
-            }
-        }
-    }
+    // TT_FATAL(!output_tensors.empty(), "Output tensor is not provided to Slice Write.");
+    // auto output_tensor_shape = output_tensor.get_logical_shape();
+    // if (has_step) {  // if all ones modify before passing in to function
+    //     TT_FATAL(
+    //         input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Strided slice is only supported for row major
+    //         layout");
+    //     TT_FATAL(!input_tensor_a.is_sharded(), "Strided slice is not supported for sharded tensor");
+    //     TT_FATAL(input_tensor_a.get_dtype() == DataType::BFLOAT16, "Strided slice is only supported for BFLOAT16");
+    //     TT_FATAL(
+    //         step.size() == this->slice_end.rank(),
+    //         "Number of steps {} must match number of ends/starts {}",
+    //         step.size(),
+    //         this->slice_end.rank());
+    // }
+    // if (input_tensor_a.get_layout() == Layout::TILE) {
+    //     TT_FATAL(input_tensor_a.volume() % TILE_HW == 0, "Error");
+    //     TT_FATAL(
+    //         (output_tensor_shape[-2] % TILE_HEIGHT == 0) && (this->slice_start[-2] % TILE_HEIGHT == 0),
+    //         "Can only unpad tilized tensor with full tiles");
+    //     TT_FATAL(
+    //         (output_tensor_shape[-1] % TILE_WIDTH == 0) && (this->slice_start[-1] % TILE_WIDTH == 0),
+    //         "Can only unpad tilized tensor with full tiles");
+    // } else if (input_tensor_a.get_layout() == Layout::ROW_MAJOR) {
+    //     if (has_step) {
+    //         for (uint32_t i = 0; i < input_tensor_a.get_padded_shape().rank(); i++) {
+    //             TT_FATAL(step[i] > 0, "Step({}) = {} should be positive", i, step[i]);
+    //         }
+    //     }
+    // }
 }
 
-std::vector<ttnn::Tensor> create_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<ttnn::Tensor>>& output_tensors) {
+std::vector<ttnn::Tensor> SliceWriteDeviceOperation::create_output_tensors(
+    const std::vector<Tensor>& input_tensors, const std::vector<ttnn::Tensor>& output_tensors) const {
     TT_FATAL(output_tensors.size() == 1, "A Single Output tensor should be provided to Slice Write.");
-    TT_FATAL(output_tensors[0].has_value(), "Output tensor is not provided to Slice Write.");
-    return {output_tensors[0].value()};
+    return output_tensors;
 }
 
-std::vector<ttnn::TensorSpec> compute_output_specs(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<ttnn::Tensor>>& output_tensors) {
-    TT_FATAL(output_tensors.size() == 1, "A Single Output tensor should be provided to Slice Write.");
-    TT_FATAL(output_tensors[0].has_value(), "Output tensor is not provided to Slice Write.");
-    return {output_tensors[0].value().get_tensor_spec()};
+std::vector<ttnn::TensorSpec> SliceWriteDeviceOperation::compute_output_specs(
+    const std::vector<Tensor>& input_tensors) const {
+    return {input_tensors[0].get_tensor_spec()};
 }
 
 operation::ProgramWithCallbacks SliceWriteDeviceOperation::create_program(

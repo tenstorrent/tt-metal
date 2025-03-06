@@ -62,6 +62,31 @@ def run_slice_rm_sharded(device, n, c, h, w):
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
 
 
+@pytest.mark.parametrize("dims", [[16, 256, 256, 64]])
+@pytest.mark.parametrize("begins", [[0, 0, 0, 0]])
+@pytest.mark.parametrize("ends", [[1, 1, 256, 64]])
+@pytest.mark.parametrize("strides", [[1, 1, 1, 1]])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
+def test_slice_write_four_dim(dims, begins, ends, strides, layout, device):
+    torch.manual_seed(2005)
+    torch_output = torch.zeros(dims)
+    slices = []
+    for i in range(len(dims)):
+        slices.append(slice(begins[i], ends[i], strides[i]))
+
+    torch_input = torch_output[slices[0], slices[1], slices[2], slices[3]]
+    print("torch_input.shape", torch_input.shape, " torch_output.shape", torch_output.shape)
+    torch_input = torch.ones(torch_input.shape)
+    torch_output[slices[0], slices[1], slices[2], slices[3]] = torch_input
+
+    ttnn_output = ttnn.from_torch(torch_output, device=device, layout=layout, dtype=ttnn.bfloat16)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=ttnn.bfloat16)
+    ttnn.slice_write(ttnn_input, ttnn_output, begins, ends, strides)
+    output = ttnn.to_torch(ttnn_output)
+
+    assert_with_pcc(torch_output, output, 0.999999)
+
+
 @pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [128])
 @pytest.mark.parametrize("h", [128])
