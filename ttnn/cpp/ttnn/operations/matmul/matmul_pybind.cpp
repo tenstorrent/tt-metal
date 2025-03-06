@@ -270,6 +270,7 @@ void py_module(py::module& module) {
         - Note: there are various additional constraints related to specific program
           configs chosen. Please look at the error messages carefully and fix
           problems appropriately.
+        - Note: if memory_config is provided, it will be compared to what matmul wants to use. The shard spec can be set to None to not compare it.
         - Note: If optional output tensor is specified, then dtype and memory config need to be checked as follows:
           - if they are default then they should be set based on optional output tensor
           - if the are not default then they should be compared and if there is a difference an error is reported
