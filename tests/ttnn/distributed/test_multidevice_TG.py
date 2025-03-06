@@ -13,7 +13,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from ttnn import (
     shard_tensor_to_mesh_mapper,
     ShardTensor2dMesh,
-    ttnn.replicate_tensor_to_mesh_mapper,
+    replicate_tensor_to_mesh_mapper,
     ConcatMeshToTensor,
     ConcatMesh2dToTensor,
     MeshToTensor,
