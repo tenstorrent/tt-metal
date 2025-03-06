@@ -18,10 +18,10 @@ import os
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
-    "is_320_res",
-    [True, False],
+    "resolution",
+    [320, 640],
 )
-def test_neck(device, reset_seeds, model_location_generator, is_320_res):
+def test_neck(device, reset_seeds, model_location_generator, resolution):
     torch.manual_seed(0)
     model_path = model_location_generator("models", model_subdir="Yolo")
 
@@ -35,7 +35,7 @@ def test_neck(device, reset_seeds, model_location_generator, is_320_res):
     else:
         weights_pth = str(model_path / "yolov4.pth")
 
-    if is_320_res:
+    if resolution == 320:
         torch_input_tensor1 = torch.randn(1, 10, 10, 1024, dtype=torch.bfloat16)
         torch_input_tensor2 = torch.randn(1, 20, 20, 512, dtype=torch.bfloat16)
         torch_input_tensor3 = torch.randn(1, 40, 40, 256, dtype=torch.bfloat16)
@@ -87,7 +87,7 @@ def test_neck(device, reset_seeds, model_location_generator, is_320_res):
     torch_model.eval()
     ref1, ref2, ref3 = torch_model(torch_input_tensor[0], torch_input_tensor[1], torch_input_tensor[2])
 
-    parameters = create_neck_model_parameters(torch_model, torch_input_tensor, is_320_res, device)
+    parameters = create_neck_model_parameters(torch_model, torch_input_tensor, resolution, device)
 
     ttnn_model = TtNeck(device, parameters, parameters.conv_args)
 
