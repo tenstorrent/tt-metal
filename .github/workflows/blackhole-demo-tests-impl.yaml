@@ -18,8 +18,6 @@ jobs:
           {
             name: "BH_performance",
             arch: blackhole,
-            # current blackhole baremetals are not tagged with bare-metal
-            # will need to be tagged if running perf tests on BH
             runs-on: ["BH", "bare-metal", "in-service"],
             cmd:
           }
