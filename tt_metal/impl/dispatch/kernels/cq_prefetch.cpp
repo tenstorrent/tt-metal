@@ -12,6 +12,7 @@
 #include <cq_commands.hpp>
 #include "dataflow_api.h"
 #include "dataflow_api_addrgen.h"
+#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
@@ -20,7 +21,7 @@
 
 constexpr uint32_t CQ_PREFETCH_CMD_BARE_MIN_SIZE = PCIE_ALIGNMENT;  // for NOC PCIe alignemnt
 struct CQPrefetchHToPrefetchDHeader_s {
-    uint32_t length;
+    tt::packet_queue::dispatch_packet_header_t packet_queue_header;
 };
 typedef union {
     struct CQPrefetchHToPrefetchDHeader_s header;
@@ -171,6 +172,12 @@ static uint32_t rd_block_idx = 0;
 static uint32_t upstream_total_acquired_page_count = 0;
 static auto client_interface =
     reinterpret_cast<volatile tt_l1_ptr fabric_pull_client_interface_t*>(client_interface_addr);
+
+#ifdef FABRIC_STAGE_BUFFER
+constexpr uint32_t fabric_stage_buffer_addr = FABRIC_STAGE_BUFFER;
+#else
+constexpr uint32_t fabric_stage_buffer_addr = 0;
+#endif
 
 // Feature to stall the prefetcher, mainly for ExecBuf impl which reuses CmdDataQ
 static enum StallState { STALL_NEXT = 2, STALLED = 1, NOT_STALLED = 0 } stall_state = NOT_STALLED;
@@ -1271,8 +1278,8 @@ bool process_cmd(
             break;
 
         default:
-            // DPRINT << "prefetch invalid command:" << (uint32_t)cmd->base.cmd_id << " " << cmd_ptr << " " <<
-            // cmddat_q_base << ENDL();
+            DPRINT << "prefetch d invalid command:" << (uint32_t)cmd->base.cmd_id << " " << cmd_ptr << " "
+                   << cmddat_q_base << ENDL();
             //  DPRINT << HEX() << *(uint32_t*)cmd_ptr << ENDL();
             //  DPRINT << HEX() << *((uint32_t*)cmd_ptr+1) << ENDL();
             //  DPRINT << HEX() << *((uint32_t*)cmd_ptr+2) << ENDL();
@@ -1285,13 +1292,32 @@ bool process_cmd(
     return done;
 }
 
+template <uint8_t noc_idx, uint32_t noc_xy, uint32_t sem_id>
+FORCE_INLINE void prefetch_release_pages(uint32_t npages) {
+    if constexpr (use_fabric_path(fabric_router_noc_xy)) {
+        fabric_atomic_inc(
+            client_interface,
+            fabric_router_noc_xy,
+            fabric_stage_buffer_addr,  // header
+            downstream_mesh_id,
+            downstream_chip_id,
+            get_noc_addr_helper(noc_xy, get_semaphore<fd_core_type>(sem_id)),
+            npages,
+            31);
+        fabric_wait_for_pull_request_flushed(client_interface);
+    } else {
+        cb_release_pages<noc_idx, noc_xy, sem_id>(npages);
+    }
+}
+
 static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool is_exec_buf) {
     uint32_t length = fence - data_ptr;
 
     // Downstream doesn't have FetchQ to tell it how much data to process
     // This packet header just contains the length
-    volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader* dptr = (volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader*)data_ptr;
-    dptr->header.length = length;
+    volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader* header_ptr =
+        (volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader*)data_ptr;
+    header_ptr->header.packet_queue_header.packet_size_bytes = length;
 
     uint32_t npages = (length + downstream_cb_page_size - 1) >> downstream_cb_log_page_size;
 
@@ -1328,7 +1354,8 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool
     }
 
     noc_async_writes_flushed();
-    cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
+
+    prefetch_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
 
     return fence;
 }
@@ -1345,9 +1372,11 @@ inline uint32_t relay_cb_get_cmds(uint32_t& fence, uint32_t& data_ptr) {
             data_ptr, fence, block_next_start_addr, rd_block_idx, upstream_total_acquired_page_count);
     }
 
+    // Legacy tunneling: cmd_ptr will contain the packet queue header
+    // Fabric tunneling: cmd_ptr will not include the packet queue header
     volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader* cmd_ptr =
         (volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader*)data_ptr;
-    uint32_t length = cmd_ptr->header.length;
+    uint32_t length = cmd_ptr->header.packet_queue_header.packet_size_bytes;
 
     uint32_t pages_ready = (fence - data_ptr) >> cmddat_q_log_page_size;
     uint32_t pages_needed = (length + cmddat_q_page_size - 1) >> cmddat_q_log_page_size;

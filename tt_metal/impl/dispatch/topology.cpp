@@ -87,22 +87,18 @@ static const std::vector<DispatchKernelNode> two_chip_arch_1cq = {
 };
 
 static const std::vector<DispatchKernelNode> two_chip_arch_1cq_fabric = {
-    {0, 0, 0, 0, PREFETCH_HD, /*up*/ {x, x, x, x}, /*down*/ {1, 2, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {1, 2, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
     {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {2, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
     {2, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
 
-    {3, 0, 1, 0, PREFETCH_H, {x, x, x, x}, {7, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {4, 0, 1, 0, DISPATCH_H, {8, x, x, x}, {3, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {3, 0, 1, 0, PREFETCH_H, {x, x, x, x}, {6, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {4, 0, 1, 0, DISPATCH_H, {7, x, x, x}, {3, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
 
-    // Sender path PREFETCH_H -> PREFETCH_D
-    {5, 0, x, 0, FABRIC_ROUTER_VC, {3, x, x, x}, {7, x, x, x}},
+    {5, 0, x, 0, FABRIC_ROUTER_VC, {3, 8, x, x}, {7, 4, x, x}},
 
-    // Return path DISPATCH_D -> DISPATCH_H
-    {6, 0, x, 0, FABRIC_ROUTER_VC, {8, x, x, x}, {4, x, x, x}},
-
-    {7, 1, 1, 0, PREFETCH_D, {3, x, x, x}, {8, 9, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {8, 1, 1, 0, DISPATCH_D, {7, x, x, x}, {9, 4, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {9, 1, 1, 0, DISPATCH_S, {7, x, x, x}, {8, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {6, 1, 1, 0, PREFETCH_D, {3, x, x, x}, {7, 8, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {7, 1, 1, 0, DISPATCH_D, {6, x, x, x}, {8, 4, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {8, 1, 1, 0, DISPATCH_S, {6, x, x, x}, {7, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
 };
 
 static const std::vector<DispatchKernelNode> two_chip_arch_2cq = {
@@ -128,7 +124,26 @@ static const std::vector<DispatchKernelNode> two_chip_arch_2cq = {
     {15, 1, x, 0, US_TUNNELER_LOCAL, {10, 16, x, x}, {10, 17, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
     {16, 1, x, 0, MUX_D, {13, 14, x, x}, {15, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
     {17, 1, x, 0, PACKET_ROUTER_DEMUX, {15, x, x, x}, {11, 12, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+};
 
+static const std::vector<DispatchKernelNode> two_chip_arch_2cq_fabric = {
+    {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {2, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {1, 0, 0, 1, PREFETCH_HD, {x, x, x, x}, {3, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {2, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {x, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {3, 0, 0, 1, DISPATCH_HD, {1, x, x, x}, {x, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+
+    {4, 0, 1, 0, PREFETCH_H, {x, x, x, x}, {9, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {5, 0, 1, 1, PREFETCH_H, {x, x, x, x}, {10, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {6, 0, 1, 0, DISPATCH_H, {11, x, x, x}, {4, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {7, 0, 1, 1, DISPATCH_H, {12, x, x, x}, {5, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+
+    {8, 0, x, 0, FABRIC_ROUTER_VC, {4, 5, 11, 12}, {9, 10, 6, 7}},
+
+    {9, 1, x, 0, PREFETCH_D, {4, x, x, x}, {11, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {10, 1, x, 1, PREFETCH_D, {5, x, x, x}, {12, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+
+    {11, 1, x, 0, DISPATCH_D, {9, x, x, x}, {6, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {12, 1, x, 1, DISPATCH_D, {10, x, x, x}, {7, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
 };
 
 static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_1cq = {
@@ -500,7 +515,7 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device
             if (llrt::RunTimeOptions::get_instance().get_fd_fabric()) {
                 TT_FATAL(num_hw_cqs == 1, "Only 1 CQ is supported at this time for FD on Fabric");
                 // Must call tt::tt_metal::detail::InitializeFabricConfig upstream
-                nodes_for_one_mmio = two_chip_arch_1cq_fabric;
+                nodes_for_one_mmio = (num_hw_cqs == 1) ? two_chip_arch_1cq_fabric : two_chip_arch_2cq_fabric;
             } else {
                 nodes_for_one_mmio = (num_hw_cqs == 1) ? two_chip_arch_1cq : two_chip_arch_2cq;
             }

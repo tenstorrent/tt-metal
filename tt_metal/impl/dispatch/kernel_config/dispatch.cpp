@@ -360,7 +360,7 @@ void DispatchKernel::CreateKernel() {
         dependent_config_.downstream_chip_id.value_or(0),
         dependent_config_.upstream_mesh_id.value_or(0),
         dependent_config_.upstream_chip_id.value_or(0),
-        dependent_config_.fabric_router_noc_xy.value_or(0),
+        dependent_config_.fabric_router_noc_xy.value_or(0xdeadbeef),
         static_config_.client_interface_addr.value_or(0),
 
         static_config_.is_d_variant.value(),
@@ -383,6 +383,8 @@ void DispatchKernel::CreateKernel() {
     auto downstream_s_virtual_noc_coords =
         device_->virtual_noc0_coordinate(noc_selection_.downstream_noc, downstream_s_virtual_core);
 
+    const auto& my_dispatch_constants = DispatchMemMap::get(GetCoreType());
+
     std::map<string, string> defines = {
         {"MY_NOC_X", std::to_string(my_virtual_noc_coords.x)},
         {"MY_NOC_Y", std::to_string(my_virtual_noc_coords.y)},
@@ -393,6 +395,9 @@ void DispatchKernel::CreateKernel() {
         {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual_noc_coords.y)},
         {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(downstream_s_virtual_noc_coords.x)},
         {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(downstream_s_virtual_noc_coords.y)},
+        {"FABRIC_STAGE_BUFFER",
+         std::to_string(
+             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_STAGE_BUFFER))},
     };
     configure_kernel_variant(dispatch_kernel_file_names[DISPATCH], compile_args, defines, false, false, false);
 }

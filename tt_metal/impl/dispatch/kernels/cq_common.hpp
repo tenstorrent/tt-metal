@@ -31,6 +31,8 @@ struct CQWriteInterface {
 
 constexpr ProgrammableCoreType fd_core_type = static_cast<ProgrammableCoreType>(FD_CORE_TYPE);
 
+constexpr bool use_fabric_path(uint64_t fabric_router_noc_xy) { return fabric_router_noc_xy != 0xdeadbeef; }
+
 FORCE_INLINE
 uint32_t round_up_pow2(uint32_t v, uint32_t pow2_size) { return (v + (pow2_size - 1)) & ~(pow2_size - 1); }
 
