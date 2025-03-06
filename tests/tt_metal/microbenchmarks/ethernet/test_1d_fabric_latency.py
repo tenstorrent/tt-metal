@@ -82,6 +82,7 @@ def run_latency_test(
     expected_mean_latency_ns,
     expected_min_latency_ns,
     expected_max_latency_ns,
+    expected_avg_hop_latency_ns,
 ):
     logger.warning("removing file profile_log_device.csv")
     os.system(f"rm -rf {os.environ['TT_METAL_HOME']}/generated/profiler/.logs/profile_log_device.csv")
@@ -116,18 +117,37 @@ def run_latency_test(
         congestion_writers_message_size,
         congestion_writers_use_mcast,
     )
+    num_hops = (line_size - 1 - latency_measurement_worker_line_index) * 2
+    avg_hop_latency = latency_avg_ns / num_hops
     logger.info("latency_ns: {} ns", latency_avg_ns)
-    allowable_delta = expected_mean_latency_ns * 0.15
+    allowable_delta = expected_mean_latency_ns * 0.05
     print(f"latency_min_ns: {latency_min_ns}")
     print(f"latency_max_ns: {latency_max_ns}")
     print(f"count: {count}")
+    print(f"avg_hop_latency: {avg_hop_latency}")
 
-    assert (
-        expected_mean_latency_ns - allowable_delta <= latency_avg_ns
-        and latency_avg_ns <= expected_mean_latency_ns + allowable_delta
-    )
-    assert latency_min_ns <= expected_min_latency_ns * 1.1
-    assert latency_max_ns <= expected_max_latency_ns * 1.05
+    lower_bound_threshold_percent = 0.95
+    upper_bound_threshold_percent = 1.05
+
+    assert latency_avg_ns <= expected_mean_latency_ns + allowable_delta
+    assert latency_min_ns <= expected_min_latency_ns * upper_bound_threshold_percent
+    assert latency_max_ns <= expected_max_latency_ns * upper_bound_threshold_percent
+    assert avg_hop_latency <= expected_avg_hop_latency_ns * upper_bound_threshold_percent
+
+    lower_bound_threshold_percent = 0.95
+    is_under_avg_lower_bound = latency_avg_ns <= expected_mean_latency_ns - allowable_delta
+    is_under_min_lower_bound = latency_min_ns <= expected_min_latency_ns * lower_bound_threshold_percent
+    is_under_max_lower_bound = latency_max_ns <= expected_max_latency_ns * lower_bound_threshold_percent
+    is_under_avg_hop_lower_bound = avg_hop_latency <= expected_avg_hop_latency_ns * lower_bound_threshold_percent
+
+    if is_under_avg_lower_bound or is_under_min_lower_bound or is_under_max_lower_bound or is_under_avg_hop_lower_bound:
+        logger.warning(
+            f"Some measured values were under (better) than the expected values (including margin). Please update targets accordingly."
+        )
+        assert expected_mean_latency_ns - allowable_delta <= latency_avg_ns
+        assert expected_min_latency_ns * lower_bound_threshold_percent <= latency_min_ns
+        assert expected_max_latency_ns * lower_bound_threshold_percent <= latency_max_ns
+        assert expected_avg_hop_latency_ns * lower_bound_threshold_percent <= avg_hop_latency
 
 
 #####################################
@@ -138,15 +158,15 @@ def run_latency_test(
 # 1D All-to-All Multicast
 @pytest.mark.parametrize("line_size", [8])
 @pytest.mark.parametrize(
-    "latency_measurement_worker_line_index,expected_mean_latency_ns,expected_min_latency_ns,expected_max_latency_ns",
+    "latency_measurement_worker_line_index,expected_mean_latency_ns,expected_min_latency_ns,expected_max_latency_ns,expected_avg_hop_latency_ns",
     [
-        (0, 20000, 20000, 23500),
-        (1, 10000, 9100, 19000),
-        (2, 8500, 7600, 20700),
-        (3, 6700, 6200, 8800),
-        (4, 5000, 4700, 5300),
-        (5, 3300, 3000, 3700),
-        (6, 1690, 1550, 1850),
+        (0, 11300, 10800, 12000, 820),
+        (1, 9800, 9200, 10300, 820),
+        (2, 8100, 7700, 8700, 820),
+        (3, 6700, 6200, 7300, 820),
+        (4, 5000, 4700, 5300, 820),
+        (5, 3300, 3000, 3700, 820),
+        (6, 1690, 1500, 1900, 820),
     ],
 )
 @pytest.mark.parametrize("latency_ping_burst_size", [1])
@@ -169,6 +189,7 @@ def test_1D_fabric_latency_on_uncongested_fabric_minimal_packet_size(
     expected_mean_latency_ns,
     expected_min_latency_ns,
     expected_max_latency_ns,
+    expected_avg_hop_latency_ns,
 ):
     run_latency_test(
         line_size,
@@ -183,6 +204,7 @@ def test_1D_fabric_latency_on_uncongested_fabric_minimal_packet_size(
         expected_mean_latency_ns,
         expected_min_latency_ns,
         expected_max_latency_ns,
+        expected_avg_hop_latency_ns,
     )
 
 
