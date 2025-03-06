@@ -24,8 +24,6 @@ from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import ModelOptimizations
 from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
-    get_rot_transformation_mat,
-    encode_prompt_instruct,
     PagedAttentionConfig,
     sample_host,
 )
