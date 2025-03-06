@@ -850,7 +850,7 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id
 
     auto& device_storage = std::get<DeviceStorage>(device_tensor.get_storage());
     if (auto mesh_buffer = device_storage.mesh_buffer; mesh_buffer != nullptr) {
-        tensor_impl::copy_to_mesh_tensor_wrapper(async_safe_tensor, device_tensor);
+        tensor_impl::copy_to_mesh_tensor_wrapper(async_safe_tensor, device_tensor, cq_id);
         return;
     }
 
