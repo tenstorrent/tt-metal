@@ -296,7 +296,7 @@ class ConcatMeshToTensor(MeshToTensor):
 
 
 @contextlib.contextmanager
-def distribute(default: Union[ttnn.TensorToMesh, ttnn.MeshToTensor, MeshToTensor]):
+def distribute(default: Union[ttnn.TensorToMesh, ttnn.CppMeshToTensor, MeshToTensor]):
     """
     Context manager to temporarily modify the behavior of ttnn.from_torch and ttnn.to_torch to use the specified
     mesh_mapper or mesh_composer for tensor distribution and composition to/from MeshDevice.
@@ -319,9 +319,9 @@ def distribute(default: Union[ttnn.TensorToMesh, ttnn.MeshToTensor, MeshToTensor
     _original_from_torch = ttnn.from_torch
 
     try:
-        if isinstance(default, ttnn.TensorToMesh) or isinstance(default, ttnn.MeshToTensor):
+        if isinstance(default, ttnn.TensorToMesh):
             ttnn.from_torch = functools.partial(_original_from_torch, mesh_mapper=default)
-        elif isinstance(default, MeshToTensor):
+        elif isinstance(default, MeshToTensor) or isinstance(default, ttnn.CppMeshToTensor):
             ttnn.to_torch = functools.partial(_original_to_torch, mesh_composer=default)
         else:
             raise ValueError("Argument must be an instance of either TensorToMesh or MeshToTensor.")

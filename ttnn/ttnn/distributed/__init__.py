@@ -18,4 +18,5 @@ from .distributed import (
     create_mesh_device,
     synchronize_devices,
     visualize_mesh_device,
+    distribute,
 )
