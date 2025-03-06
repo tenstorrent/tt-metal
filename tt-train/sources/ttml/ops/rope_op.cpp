@@ -78,8 +78,8 @@ autograd::TensorPtr rope(const autograd::TensorPtr& input, const RotaryEmbedding
 
     auto out_tensor = ttnn::experimental::rotary_embedding_llama(
         input->get_value(),
-        params.neg_cos_cache,
-        params.neg_sin_cache,
+        params.cos_cache,
+        params.sin_cache,
         params.trans_mat,
         /*is_decode_mode=*/false,
         /*memory_config=*/std::nullopt,
