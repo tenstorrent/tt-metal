@@ -164,37 +164,3 @@ jobs:
           rm -rf /__w/tt-metal/tt-metal/docker-job
           echo "post rm"
           ls -al /__w/tt-metal/tt-metal
-
-    # steps:
-    #   - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
-    #   - uses: actions/download-artifact@v4
-    #     with:
-    #       name: eager-dist-${{ matrix.os }}-any
-    #   - name: Set ttnn fast runtime if exists in config
-    #     if: ${{ matrix.test-group.fast_runtime_mode_off }}
-    #     run: |
-    #       echo "TTNN_CONFIG_OVERRIDES={\"enable_fast_runtime_mode\": false}" >> $GITHUB_ENV
-    #   - name: ${{ matrix.test-group.name }} tests
-    #     timeout-minutes: ${{ inputs.timeout }}
-    #     uses: ./.github/actions/docker-run
-    #     with:
-    #       docker_username: ${{ github.actor }}
-    #       docker_password: ${{ secrets.GITHUB_TOKEN }}
-    #       docker_opts: |
-    #         -e ARCH_NAME=${{ inputs.arch }}
-    #         -e GITHUB_ACTIONS=true
-    #       run_args: |
-    #         WHEEL_FILENAME=$(ls -1 *.whl)
-    #         pip3 install --user $WHEEL_FILENAME
-    #         ${{ matrix.test-group.cmd }}
-    #   - uses: ./.github/actions/slack-report
-    #     if: ${{ failure() }}
-    #     with:
-    #       slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-    #       owner: U06CXU895AP # Michael Chiou
-    #   - uses: ./.github/actions/upload-artifact-with-job-uuid
-    #     if: ${{ !cancelled() }}
-    #     with:
-    #       path: |
-    #         generated/test_reports/
-    #       prefix: "test_reports_"
