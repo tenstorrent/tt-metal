@@ -63,9 +63,6 @@ Tensor transform(const Tensor& tensor, std::function<Tensor(const Tensor&)> tran
 // Given a multi-device tensor, and a callable, applies the function to all per-device tensors.
 void apply(const Tensor& tensor, const std::function<void(const Tensor&)>& callable);
 
-// Given a multi-device tensor, returns all the devices it is mapped to.
-std::vector<IDevice*> get_devices(const Tensor& multi_device_tensor);
-
 uint32_t num_buffers_in_tensor(const Tensor& tensor);
 
 Tensor get_shard_for_device(

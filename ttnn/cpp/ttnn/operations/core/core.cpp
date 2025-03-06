@@ -82,7 +82,7 @@ ttnn::Tensor allocate_tensor_on_device(
     Layout layout,
     MeshDevice* mesh_device,
     const std::optional<MemoryConfig>& memory_config) {
-    return allocate_tensor_on_device(
+    return allocate_tensor_on_mesh(
         TensorSpec(
             shape,
             tt::tt_metal::TensorLayout(

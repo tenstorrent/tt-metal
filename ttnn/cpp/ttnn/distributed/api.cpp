@@ -45,20 +45,18 @@ std::vector<ttnn::Tensor> get_device_tensors(const ttnn::Tensor& tensor) {
         return tensors;
     } else if (std::holds_alternative<tt::tt_metal::DeviceStorage>(tensor.get_storage())) {
         auto& device_storage = std::get<tt::tt_metal::DeviceStorage>(tensor.get_storage());
-        if (device_storage.mesh_buffer) {
-            if (device_storage.mesh_buffer->device()->num_devices() == 1) {
-                return {tensor};
+        if (auto mesh_buffer = device_storage.mesh_buffer;
+            mesh_buffer != nullptr and mesh_buffer->device()->num_devices() > 1) {
+            std::vector<ttnn::Tensor> tensors;
+            auto devices = mesh_buffer->device()->get_devices();
+            for (auto device : devices) {
+                auto shard = tt::tt_metal::get_shard_for_device(tensor, device);
+                tensors.push_back(shard);
             }
+            return tensors;
+        } else {
+            return {tensor};
         }
-        TT_THROW("Not implemented");
-
-        std::vector<ttnn::Tensor> tensors;
-        auto devices = tt::tt_metal::get_devices(tensor);
-        for (auto device : devices) {
-            auto shard = tt::tt_metal::get_shard_for_device(tensor, device);
-            tensors.push_back(shard);
-        }
-        return tensors;
     } else {
         return {tensor};
     }
