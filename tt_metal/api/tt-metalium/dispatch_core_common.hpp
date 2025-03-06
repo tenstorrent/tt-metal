@@ -31,7 +31,8 @@ enum DispatchWorkerType : uint32_t {
     US_TUNNELER_REMOTE = 14,
     PACKET_ROUTER_MUX = 15,
     PACKET_ROUTER_DEMUX = 16,
-    COUNT = 17
+    FABRIC_ROUTER_VC = 17,
+    COUNT,
 };
 
 enum class DispatchCoreType : uint32_t { WORKER, ETH, COUNT };
