@@ -94,8 +94,6 @@ TEST_F(MeshDeviceTest, CreateSubmesh) {
     EXPECT_EQ(mesh_device_->get_device(MeshCoordinate{1, 1})->id(), submesh->get_device(MeshCoordinate{0, 0})->id());
     EXPECT_EQ(mesh_device_->get_device(MeshCoordinate{1, 2})->id(), submesh->get_device(MeshCoordinate{0, 1})->id());
     EXPECT_EQ(submesh->get_device(MeshCoordinate{1, 1}), nullptr);
-
-    EXPECT_EQ(mesh_device_->get_submeshes(), submeshes);
 }
 
 TEST_F(MeshDeviceTest, CreateSubmeshesNonDivisibleSubshape) {
@@ -112,6 +110,8 @@ TEST_F(MeshDeviceTest, CreateSubmeshes) {
         EXPECT_EQ(submesh->shape(), MeshShape(1, 2));
         EXPECT_THAT(submesh->get_devices(), SizeIs(2));
     }
+
+    EXPECT_EQ(mesh_device_->get_submeshes(), submeshes);
 }
 
 }  // namespace
