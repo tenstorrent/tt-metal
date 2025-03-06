@@ -30,7 +30,14 @@ import os
         "pretrained_weight_false",
     ],
 )
-def test_yolov4(device, reset_seeds, model_location_generator, use_pretrained_weight):
+@pytest.mark.parametrize(
+    "resolution",
+    [
+        (320, 320),
+        (640, 640),
+    ],
+)
+def test_yolov4(device, reset_seeds, model_location_generator, use_pretrained_weight, resolution):
     torch.manual_seed(0)
     model_path = model_location_generator("models", model_subdir="Yolo")
 
@@ -61,10 +68,9 @@ def test_yolov4(device, reset_seeds, model_location_generator, use_pretrained_we
         torch_model.eval()
 
     imgfile = "models/demos/yolov4/demo/giraffe_320.jpg"
-    width = 320
-    height = 320
+
     img = cv2.imread(imgfile)
-    img = cv2.resize(img, (width, height))
+    img = cv2.resize(img, resolution)
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     if type(img) == np.ndarray and len(img.shape) == 3:  # cv2 image
         img = torch.from_numpy(img.transpose(2, 0, 1)).float().div(255.0).unsqueeze(0)
@@ -77,7 +83,7 @@ def test_yolov4(device, reset_seeds, model_location_generator, use_pretrained_we
 
     torch_output_tensor = torch_model(torch_input)
 
-    parameters = create_yolov4_model_parameters(torch_model, torch_input, device)
+    parameters = create_yolov4_model_parameters(torch_model, torch_input, resolution, device)
 
     ttnn_model = TtYOLOv4(parameters, device)
 
@@ -94,12 +100,20 @@ def test_yolov4(device, reset_seeds, model_location_generator, use_pretrained_we
     # That ttnn tensor is the concat output of 3 padded tensors
     # As a perf workaround I'm doing the unpadding on the torch output here.
     # TODO: cleaner ttnn code when ttnn.untilize() is fully optimized
-    box_1_start_i = 0
-    box_1_end_i = 6100
-    box_2_start_i = 6128
-    box_2_end_i = 6228
-    box_3_start_i = 6256
-    box_3_end_i = 6356
+    if resolution[0] == 320:
+        box_1_start_i = 0
+        box_1_end_i = 6100
+        box_2_start_i = 6128
+        box_2_end_i = 6228
+        box_3_start_i = 6256
+        box_3_end_i = 6356
+    else:
+        box_1_start_i = 0
+        box_1_end_i = 24400
+        box_2_start_i = 24428
+        box_2_end_i = 24828
+        box_3_start_i = 24856
+        box_3_end_i = 25256
     result_boxes_list.append(result_boxes_padded[:, box_1_start_i:box_1_end_i])
     result_boxes_list.append(result_boxes_padded[:, box_2_start_i:box_2_end_i])
     result_boxes_list.append(result_boxes_padded[:, box_3_start_i:box_3_end_i])

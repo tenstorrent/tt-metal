@@ -197,7 +197,7 @@ class Down3:
 
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
         output_tensor_left = ttnn.to_layout(output_tensor_left, layout=ttnn.ROW_MAJOR_LAYOUT)
-        if self.parameters.is_320_res:
+        if self.parameters.resolution[0] == 320:
             output_sharded_memory_config = ttnn.create_sharded_memory_config(
                 [32, 256],
                 core_grid=output_tensor_left.memory_config().shard_spec.grid,

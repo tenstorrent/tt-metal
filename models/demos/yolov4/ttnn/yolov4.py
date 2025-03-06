@@ -26,6 +26,7 @@ from models.demos.yolov4.ttnn.genboxes import TtGenBoxes
 
 class TtYOLOv4:
     def __init__(self, parameters, device) -> None:
+        self.resolution = parameters.resolution
         self.down1 = Down1(device, parameters.downsample1, parameters.conv_args.downsample1)
         self.down2 = Down2(device, parameters.downsample2, parameters.conv_args.downsample2)
         self.down3 = Down3(device, parameters.downsample3, parameters.conv_args.downsample3)
@@ -35,9 +36,9 @@ class TtYOLOv4:
         self.neck = TtNeck(device, parameters.neck, parameters.conv_args.neck)
         self.head = TtHead(device, parameters.head, parameters.conv_args.head)
 
-        self.boxes_confs_0 = TtGenBoxes(device)
-        self.boxes_confs_1 = TtGenBoxes(device)
-        self.boxes_confs_2 = TtGenBoxes(device)
+        self.boxes_confs_0 = TtGenBoxes(device, self.resolution)
+        self.boxes_confs_1 = TtGenBoxes(device, self.resolution)
+        self.boxes_confs_2 = TtGenBoxes(device, self.resolution)
 
         self.downs = []  # [self.down1]
         self.device = device
@@ -65,10 +66,17 @@ class TtYOLOv4:
         boxes_1 = ttnn.to_layout(x4_boxes_confs[0], ttnn.ROW_MAJOR_LAYOUT)
         boxes_2 = ttnn.to_layout(x5_boxes_confs[0], ttnn.ROW_MAJOR_LAYOUT)
         boxes_3 = ttnn.to_layout(x6_boxes_confs[0], ttnn.ROW_MAJOR_LAYOUT)
-        boxes_1 = ttnn.reshape(boxes_1, (1, 4, 1, 4800))
-        boxes_2 = ttnn.reshape(boxes_2, (1, 4, 1, 1200))
-        boxes_3 = ttnn.pad(boxes_3, ((0, 0), (0, 0), (0, 0), (0, 28)), 0)
-        boxes_3 = ttnn.reshape(boxes_3, (1, 4, 1, 384))
+        if self.resolution[0] == 320:
+            boxes_1 = ttnn.reshape(boxes_1, (1, 4, 1, 4800))
+            boxes_2 = ttnn.reshape(boxes_2, (1, 4, 1, 1200))
+            boxes_3 = ttnn.pad(boxes_3, ((0, 0), (0, 0), (0, 0), (0, 28)), 0)
+            boxes_3 = ttnn.reshape(boxes_3, (1, 4, 1, 384))
+        else:
+            boxes_1 = ttnn.reshape(boxes_1, (1, 4, 1, 19200))
+            boxes_2 = ttnn.reshape(boxes_2, (1, 4, 1, 4800))
+            boxes_3 = ttnn.pad(boxes_3, ((0, 0), (0, 0), (0, 0), (0, 28)), 0)
+            boxes_3 = ttnn.reshape(boxes_3, (1, 4, 1, 1284))
+
         boxes_1 = ttnn.permute(boxes_1, (0, 2, 3, 1))
         boxes_2 = ttnn.permute(boxes_2, (0, 2, 3, 1))
         boxes_3 = ttnn.permute(boxes_3, (0, 2, 3, 1))

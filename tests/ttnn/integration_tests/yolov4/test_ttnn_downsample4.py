@@ -18,10 +18,13 @@ import os
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
-    "is_320_res",
-    [True, False],
+    "resolution",
+    [
+        (320, 320),
+        (640, 640),
+    ],
 )
-def test_down4(device, reset_seeds, model_location_generator, is_320_res):
+def test_down4(device, reset_seeds, model_location_generator, resolution):
     torch.manual_seed(0)
     model_path = model_location_generator("models", model_subdir="Yolo")
 
@@ -35,12 +38,11 @@ def test_down4(device, reset_seeds, model_location_generator, is_320_res):
     else:
         weights_pth = str(model_path / "yolov4.pth")
 
-    if is_320_res:
-        torch_input = torch.randn((1, 256, 40, 40), dtype=torch.bfloat16)
+    if resolution[0] == 320:
+        torch_input = torch.randn((1, 256, 40, 40), dtype=torch.float)
     else:
-        torch_input = torch.randn((1, 256, 80, 80), dtype=torch.bfloat16)
+        torch_input = torch.randn((1, 256, 80, 80), dtype=torch.float)
 
-    torch_input = torch_input.float()
     torch_model = DownSample4()
 
     torch_dict = torch.load(weights_pth)
@@ -50,7 +52,7 @@ def test_down4(device, reset_seeds, model_location_generator, is_320_res):
     torch_model.eval()
     ref = torch_model(torch_input)
 
-    parameters = create_ds4_model_parameters(torch_model, torch_input, is_320_res, device)
+    parameters = create_ds4_model_parameters(torch_model, torch_input, resolution, device)
     torch_input = torch_input.permute(0, 2, 3, 1)
     ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16)
 
