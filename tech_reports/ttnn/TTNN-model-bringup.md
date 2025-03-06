@@ -67,7 +67,7 @@
   - Once you have unit tests for all the ops in a module of your model, for instance, all the ops in Downsample1 module of yolov4, you may proceed with the module bring up in TTNN. At this stage, all ops might be supported on TTNN and the unit tests may pass for all which would be great. However, it might happen that an op does not have a kernel implementation for TTNN yet or it might fail with the confifurations you need. In such cases, you may proceed with creating detailed git hub issues to request support for those and fall back to torch for those ops unit the support is added in TTNN.
   - Here is an example of the downsample1 module implementation of YOLO-v4 in torch: [DS1 in torch](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/yolov4/reference/downsample1.py). And the TTNN implmentation of the same module is here: [DS1 in TTNN](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/yolov4/ttnn/downsample1.py)
 The diagram below illustrates the corresponding Downsample1 module:
-![Downsample1 Diagram](../tech_reports/YoloV4-TTNN/images/Downsample1_diagram.png)
+![Downsample1 Diagram](images/Downsample1_diagram.png)
 
 ## 3.2 PCC
   - Similar to individual ops unit tests, user is highly encouraged to check per module [PCC](https://en.wikipedia.org/wiki/Pearson_correlation_coefficient) to ensure the accueacy of per module output from the TTNN implmenetation. Here is an example of it in DS1 module implementation of yolov4. [DS1 PCC assertion](https://github.com/tenstorrent/tt-metal/blob/2c4ab4cd2e5a54f1baada4ebb7c2977c721231b2/models/experimental/yolov4/ttnn/yolov4.py#L189)
@@ -122,7 +122,7 @@ The diagram below illustrates the corresponding Downsample1 module:
     ```
 
  - Access ttnn-visualizer dashboard at 0.0.0.0:8000 (default) <br> <br>
- ![](images/ttnn-visualizer2.png)
+ ![](images/ttnn-visualizer.png)
 
  - For any issues, the repo of ttnn-visualizer is [here](https://github.com/tenstorrent/ttnn-visualizer)
 
