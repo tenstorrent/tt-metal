@@ -154,14 +154,20 @@ void Cluster::generate_cluster_descriptor() {
             }
         }
         bool all_n300 = true;
+        bool all_n150 = true;
         for (const auto& chip_id : this->cluster_desc_->get_all_chips()) {
             all_n300 &= (this->cluster_desc_->get_board_type(chip_id) == BoardType::N300);
+            all_n150 &= (this->cluster_desc_->get_board_type(chip_id) == BoardType::N150);
         }
         if (all_n300) {
             if (this->cluster_desc_->get_all_chips().size() == 2) {
                 this->cluster_type_ = ClusterType::N300;
             } else if (this->cluster_desc_->get_all_chips().size() == 8) {
                 this->cluster_type_ = ClusterType::T3K;
+            }
+        } else if (all_n150) {
+            if (this->cluster_desc_->get_all_chips().size() == 1) {
+                this->cluster_type_ = ClusterType::N150;
             }
         }
 
@@ -478,11 +484,11 @@ const std::unordered_map<int, int> Cluster::get_worker_logical_to_virtual_y(chip
     return worker_logical_to_virtual_y;
 }
 
-int Cluster::get_device_aiclk(const chip_id_t &chip_id) const {
+int Cluster::get_device_aiclk(const chip_id_t& chip_id) const {
     if (this->arch_ == tt::ARCH::BLACKHOLE) {
         // For Blackhole bring up remove AICLK query due to lack of ARC message support
-        log_info(tt::LogDevice, "For Blackhole hardcode AICLK to 800 MHz due to lack of ARC message support");
-        return 800;
+        log_info(tt::LogDevice, "For Blackhole hardcode AICLK to 1350 MHz due to lack of ARC message support");
+        return 1350;
     }
     if (this->device_to_mmio_device_.find(chip_id) != this->device_to_mmio_device_.end()) {
         // get_clocks returns MMIO device ID -> clock frequency
@@ -941,6 +947,8 @@ void Cluster::initialize_fabric_config(FabricConfig fabric_config) {
     this->fabric_config_ = fabric_config;
     if (fabric_config != FabricConfig::DISABLED) {
         this->reserve_ethernet_cores_for_fabric_routers();
+    } else {
+        this->release_ethernet_cores_for_fabric_routers();
     }
 }
 
@@ -954,6 +962,18 @@ void Cluster::reserve_ethernet_cores_for_fabric_routers() {
     }
     // Update sockets to reflect fabric routing
     this->ethernet_sockets_.clear();
+}
+
+void Cluster::release_ethernet_cores_for_fabric_routers() {
+    for (const auto& [chip_id, eth_cores] : this->device_eth_routing_info_) {
+        for (const auto& [eth_core, mode] : eth_cores) {
+            if (mode == EthRouterMode::FABRIC_ROUTER) {
+                this->device_eth_routing_info_[chip_id][eth_core] = EthRouterMode::IDLE;
+            }
+        }
+    }
+    // TODO: We should just cache restore
+    this->initialize_ethernet_sockets();
 }
 
 std::set<tt_fabric::chan_id_t> Cluster::get_fabric_ethernet_channels(chip_id_t chip_id) const {

@@ -25,14 +25,50 @@ struct MeshReadEventDescriptor {
     MeshCoordinateRange device_range;
 };
 
-MeshCommandQueue::MeshCommandQueue(MeshDevice* mesh_device, uint32_t id, std::shared_ptr<ThreadPool>& thread_pool) :
-    thread_pool_(thread_pool) {
-    this->mesh_device_ = mesh_device;
-    this->id_ = id;
+struct MeshBufferReadDescriptor {
+    std::unordered_map<IDevice*, uint32_t> num_reads_per_dev;
+};
+
+MeshCommandQueue::MeshCommandQueue(
+    MeshDevice* mesh_device,
+    uint32_t id,
+    std::shared_ptr<ThreadPool>& dispatch_thread_pool,
+    std::shared_ptr<ThreadPool>& reader_thread_pool) :
+    dispatch_thread_pool_(dispatch_thread_pool), reader_thread_pool_(reader_thread_pool) {
+    mesh_device_ = mesh_device;
+    id_ = id;
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
         config_buffer_mgr_, expected_num_workers_completed_, DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
     this->populate_virtual_program_dispatch_core();
     this->populate_dispatch_core_type();
+    this->populate_read_descriptor_queue();
+    completion_queue_reader_thread_ = std::thread(&MeshCommandQueue::read_completion_queue, this);
+}
+
+MeshCommandQueue::~MeshCommandQueue() {
+    TT_FATAL(completion_queue_reads_.empty(), "The completion reader queue must be empty when closing devices.");
+
+    for (auto& queue : read_descriptors_) {
+        TT_FATAL(queue.second->empty(), "No buffer read requests should be outstanding when closing devices.");
+    }
+
+    TT_FATAL(
+        num_outstanding_reads_ == 0,
+        "Mismatch between num_outstanding reads and number of entries in completion reader queue.");
+
+    {
+        std::lock_guard lock(reader_thread_cv_mutex_);
+        reader_thread_cv_.notify_one();
+        exit_condition_ = true;
+    }
+    completion_queue_reader_thread_.join();
+}
+
+void MeshCommandQueue::populate_read_descriptor_queue() {
+    for (auto& device : mesh_device_->get_devices()) {
+        read_descriptors_.emplace(
+            device->id(), std::make_unique<MultiProducerSingleConsumerQueue<CompletionReaderVariant>>());
+    }
 }
 
 void MeshCommandQueue::populate_virtual_program_dispatch_core() {
@@ -189,8 +225,9 @@ void MeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool b
 
 void MeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
     auto event = this->enqueue_record_event_to_host(sub_device_ids);
-    this->drain_events_from_completion_queue();
-    this->verify_reported_events_after_draining(event);
+
+    std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
+    reads_processed_cv_.wait(lock, [this] { return num_outstanding_reads_.load() == 0; });
 }
 
 void MeshCommandQueue::write_shard_to_device(
@@ -208,14 +245,10 @@ void MeshCommandQueue::read_shard_from_device(
     std::shared_ptr<Buffer>& shard_view,
     void* dst,
     const BufferRegion& region,
+    std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    this->drain_events_from_completion_queue();
     auto device = shard_view->device();
-    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
-    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
-
-    bool exit_condition = false;
 
     if (is_sharded(shard_view->buffer_layout())) {
         auto dispatch_params = buffer_dispatch::initialize_sharded_buf_read_dispatch_params(
@@ -226,10 +259,10 @@ void MeshCommandQueue::read_shard_from_device(
             buffer_dispatch::copy_sharded_buffer_from_core_to_completion_queue(
                 core_id, *shard_view, dispatch_params, sub_device_ids, cores[core_id], this->dispatch_core_type());
             if (dispatch_params.pages_per_txn > 0) {
-                auto read_descriptor = std::get<tt::tt_metal::ReadBufferDescriptor>(
-                    *buffer_dispatch::generate_sharded_buffer_read_descriptor(dst, dispatch_params, *shard_view));
-                buffer_dispatch::copy_completion_queue_data_into_user_space(
-                    read_descriptor, mmio_device_id, channel, id_, device->sysmem_manager(), exit_condition);
+                num_txns_per_device[device]++;
+                auto& read_descriptor_queue = this->get_read_descriptor_queue(device);
+                read_descriptor_queue.push(
+                    buffer_dispatch::generate_sharded_buffer_read_descriptor(dst, dispatch_params, *shard_view));
             }
         }
     } else {
@@ -238,10 +271,10 @@ void MeshCommandQueue::read_shard_from_device(
         buffer_dispatch::copy_interleaved_buffer_to_completion_queue(
             dispatch_params, *shard_view, sub_device_ids, this->dispatch_core_type());
         if (dispatch_params.pages_per_txn > 0) {
-            auto read_descriptor = std::get<tt::tt_metal::ReadBufferDescriptor>(
-                *buffer_dispatch::generate_interleaved_buffer_read_descriptor(dst, dispatch_params, *shard_view));
-            buffer_dispatch::copy_completion_queue_data_into_user_space(
-                read_descriptor, mmio_device_id, channel, id_, device->sysmem_manager(), exit_condition);
+            num_txns_per_device[device]++;
+            auto& read_descriptor_queue = this->get_read_descriptor_queue(device);
+            read_descriptor_queue.push(
+                buffer_dispatch::generate_interleaved_buffer_read_descriptor(dst, dispatch_params, *shard_view));
         }
     }
 }
@@ -353,8 +386,9 @@ void MeshCommandQueue::read_sharded_buffer(MeshBuffer& buffer, void* dst) {
         for (std::size_t shard_x = 0; shard_x < num_shards_x; shard_x++) {
             auto device_shard_view = buffer.get_device_buffer(MeshCoordinate(device_y, device_x));
             const BufferRegion region(0, device_shard_view->size());
-            this->read_shard_from_device(device_shard_view, shard_data.data(), region);
-
+            std::unordered_map<IDevice*, uint32_t> num_txns_per_device = {};
+            this->read_shard_from_device(device_shard_view, shard_data.data(), region, num_txns_per_device);
+            this->submit_memcpy_request(num_txns_per_device, true);
             uint32_t write_offset = shard_x * single_write_size + shard_y * stride_size_bytes * shard_shape.height();
             uint32_t size_to_write = total_write_size_per_shard;
             uint32_t local_offset = 0;
@@ -399,9 +433,9 @@ void MeshCommandQueue::enqueue_write_shard_to_sub_grid(
             });
 
         for (const auto& coord : device_range) {
-            thread_pool_->enqueue([&dispatch_lambda, coord]() { dispatch_lambda(std::move(coord)); });
+            dispatch_thread_pool_->enqueue([&dispatch_lambda, coord]() { dispatch_lambda(std::move(coord)); });
         }
-        thread_pool_->wait();
+        dispatch_thread_pool_->wait();
     } else {
         this->write_sharded_buffer(buffer, host_data);
     }
@@ -421,6 +455,8 @@ void MeshCommandQueue::enqueue_read_mesh_buffer(
     void* host_data, const std::shared_ptr<MeshBuffer>& buffer, bool blocking) {
     TT_FATAL(
         buffer->global_layout() == MeshBufferLayout::SHARDED, "Can only read a Sharded MeshBuffer from a MeshDevice.");
+    TT_FATAL(
+        blocking, "Non-Blocking reads are not supported through {}. Use enqueue_read_shards_instead.", __FUNCTION__);
     this->read_sharded_buffer(*buffer, host_data);
 }
 
@@ -442,9 +478,29 @@ void MeshCommandQueue::enqueue_write_shards(
         });
 
     for (std::size_t shard_idx = 0; shard_idx < shard_data_transfers.size(); shard_idx++) {
-        thread_pool_->enqueue([&dispatch_lambda, shard_idx]() { dispatch_lambda(shard_idx); });
+        dispatch_thread_pool_->enqueue([&dispatch_lambda, shard_idx]() { dispatch_lambda(shard_idx); });
     }
-    thread_pool_->wait();
+    dispatch_thread_pool_->wait();
+
+    if (blocking) {
+        this->finish();
+    }
+}
+
+void MeshCommandQueue::increment_num_entries_in_completion_queue() {
+    {
+        std::lock_guard lock(reader_thread_cv_mutex_);
+        num_outstanding_reads_++;
+        reader_thread_cv_.notify_one();
+    }
+}
+
+void MeshCommandQueue::submit_memcpy_request(
+    std::unordered_map<IDevice*, uint32_t>& num_txns_per_device, bool blocking) {
+    completion_queue_reads_.push(std::make_shared<MeshCompletionReaderVariant>(
+        std::in_place_type<MeshBufferReadDescriptor>, std::move(num_txns_per_device)));
+
+    this->increment_num_entries_in_completion_queue();
 
     if (blocking) {
         this->finish();
@@ -457,24 +513,16 @@ void MeshCommandQueue::enqueue_read_shards(
     bool blocking) {
     // TODO: #17215 - this API is used by TTNN, as it currently implements rich ND sharding API for multi-devices.
     // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
-    auto dispatch_lambda =
-        std::function<void(uint32_t)>([&shard_data_transfers, &buffer, this](uint32_t shard_idx) {
-            auto& shard_data_transfer = shard_data_transfers[shard_idx];
-            auto device_shard_view = buffer->get_device_buffer(shard_data_transfer.shard_coord);
-            read_shard_from_device(
-                device_shard_view,
-                shard_data_transfer.host_data,
-                shard_data_transfer.region.value_or(BufferRegion(0, device_shard_view->size())));
-        });
-
-    for (std::size_t shard_idx = 0; shard_idx < shard_data_transfers.size(); shard_idx++) {
-        thread_pool_->enqueue([&dispatch_lambda, shard_idx]() { dispatch_lambda(shard_idx); });
+    std::unordered_map<IDevice*, uint32_t> num_txns_per_device = {};
+    for (const auto& shard_data_transfer : shard_data_transfers) {
+        auto device_shard_view = buffer->get_device_buffer(shard_data_transfer.shard_coord);
+        this->read_shard_from_device(
+            device_shard_view,
+            shard_data_transfer.host_data,
+            shard_data_transfer.region.value_or(BufferRegion(0, device_shard_view->size())),
+            num_txns_per_device);
     }
-    thread_pool_->wait();
-
-    if (blocking) {
-        this->finish();
-    }
+    this->submit_memcpy_request(num_txns_per_device, blocking);
 }
 
 MeshEvent MeshCommandQueue::enqueue_record_event_helper(
@@ -512,8 +560,9 @@ MeshEvent MeshCommandQueue::enqueue_record_event(
 MeshEvent MeshCommandQueue::enqueue_record_event_to_host(
     tt::stl::Span<const SubDeviceId> sub_device_ids, const std::optional<MeshCoordinateRange>& device_range) {
     auto event = this->enqueue_record_event_helper(sub_device_ids, /*notify_host=*/true, device_range);
-    event_descriptors_.push(std::make_shared<MeshReadEventDescriptor>(MeshReadEventDescriptor{
-        .single_device_descriptor = ReadEventDescriptor(event.id()), .device_range = event.device_range()}));
+    completion_queue_reads_.push(std::make_shared<MeshCompletionReaderVariant>(
+        std::in_place_type<MeshReadEventDescriptor>, ReadEventDescriptor(event.id()), event.device_range()));
+    this->increment_num_entries_in_completion_queue();
     return event;
 }
 
@@ -524,34 +573,88 @@ void MeshCommandQueue::enqueue_wait_for_event(const MeshEvent& sync_event) {
     }
 }
 
-void MeshCommandQueue::drain_events_from_completion_queue() {
-    constexpr bool exit_condition = false;
-    auto num_events = event_descriptors_.size();
-    for (std::size_t event_idx = 0; event_idx < num_events; event_idx++) {
-        auto& mesh_read_descriptor = event_descriptors_.front();
-        auto& device_range = mesh_read_descriptor->device_range;
-        for (const auto& coord : device_range) {
-            auto device = mesh_device_->get_device(coord);
-            chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
-            uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
-            bool exit_condition = false;
-            device->sysmem_manager().completion_queue_wait_front(id_, exit_condition);
-
-            event_dispatch::read_events_from_completion_queue(
-                mesh_read_descriptor->single_device_descriptor, mmio_device_id, channel, id_, device->sysmem_manager());
+void MeshCommandQueue::read_completion_queue() {
+    while (true) {
+        {
+            std::unique_lock<std::mutex> lock(reader_thread_cv_mutex_);
+            reader_thread_cv_.wait(lock, [this] { return num_outstanding_reads_ or exit_condition_; });
         }
-        event_descriptors_.pop();
+        if (exit_condition_) {
+            return;
+        } else {
+            uint32_t num_reads = num_outstanding_reads_.load();
+            for (uint32_t i = 0; i < num_reads; i++) {
+                auto mesh_read_descriptor = *(completion_queue_reads_.pop());
+                std::visit(
+                    [&](auto&& mesh_read_descriptor) {
+                        using T = std::decay_t<decltype(mesh_read_descriptor)>;
+                        if constexpr (std::is_same_v<T, MeshBufferReadDescriptor>) {
+                            this->copy_buffer_data_to_user_space(mesh_read_descriptor);
+                        } else {
+                            this->read_completion_queue_event(mesh_read_descriptor);
+                        }
+                    },
+                    mesh_read_descriptor);
+            }
+            std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
+            num_outstanding_reads_.fetch_sub(num_reads);
+            if (num_outstanding_reads_ == 0) {
+                reads_processed_cv_.notify_one();
+            }
+        }
     }
 }
 
-void MeshCommandQueue::verify_reported_events_after_draining(const MeshEvent& event) {
-    auto& device_range = event.device_range();
+MultiProducerSingleConsumerQueue<CompletionReaderVariant>& MeshCommandQueue::get_read_descriptor_queue(
+    IDevice* device) {
+    return *(read_descriptors_[device->id()]);
+}
+
+void MeshCommandQueue::copy_buffer_data_to_user_space(MeshBufferReadDescriptor& read_buffer_descriptor) {
+    auto reader_lambda = [this](IDevice* device, uint32_t num_reads) {
+        auto& read_descriptor_queue = this->get_read_descriptor_queue(device);
+        chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
+        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
+
+        for (int i = 0; i < num_reads; i++) {
+            buffer_dispatch::copy_completion_queue_data_into_user_space(
+                std::get<ReadBufferDescriptor>(*(read_descriptor_queue.pop())),
+                mmio_device_id,
+                channel,
+                id_,
+                device->sysmem_manager(),
+                exit_condition_);
+        }
+    };
+
+    {
+        // The reader_thread_pool is a shared resource between command queues.
+        // It must be used inside a critical section. Performance-wise, this is
+        // okay, since workloads don't require issuing simultaneous reads on different
+        // MeshCQs. If such an access pattern is used, the reads will be serialized
+        // on host across MeshCQs. This is still better than independent reader threads
+        // per MeshCQ (since we run out of host resources with 2 reader threads per
+        // physical device).
+        std::lock_guard<std::mutex> lock(reader_thread_pool_mutex_);
+        for (auto& metadata : read_buffer_descriptor.num_reads_per_dev) {
+            reader_thread_pool_->enqueue([&reader_lambda, device = metadata.first, num_reads = metadata.second]() {
+                reader_lambda(device, num_reads);
+            });
+        }
+        reader_thread_pool_->wait();
+    }
+}
+
+void MeshCommandQueue::read_completion_queue_event(MeshReadEventDescriptor& read_event_descriptor) {
+    auto& device_range = read_event_descriptor.device_range;
     for (const auto& coord : device_range) {
-        TT_FATAL(
-            mesh_device_->get_device(coord)->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) >=
-                event.id(),
-            "Expected to see event id {} in completion queue",
-            event.id());
+        auto device = mesh_device_->get_device(coord);
+        chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
+        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
+        device->sysmem_manager().completion_queue_wait_front(id_, exit_condition_);
+
+        event_dispatch::read_events_from_completion_queue(
+            read_event_descriptor.single_device_descriptor, mmio_device_id, channel, id_, device->sysmem_manager());
     }
 }
 
