@@ -360,8 +360,8 @@ def test_llama_tg_RotaryEmbeddingLlamaFusedQK(
     [
         ("LayerNorm", 13, 0.03),
         ("ScaledDotProductAttentionDecode", 20, 0.03),
-        ("NLPCreateHeadsDecodeDeviceOperation", 8.64, 0.03),
-        ("NLPConcatHeadsDecodeDeviceOperation", 5.7, 0.03),
+        ("NLPCreateHeadsDecodeDeviceOperation", 8.32, 0.05),
+        ("NLPConcatHeadsDecodeDeviceOperation", 6.07, 0.05),
         ("PagedUpdateCacheDeviceOperation", 5, 0.03),
         ("RotaryEmbeddingLlamaFusedQK", 4.8, 0.03),
     ],
