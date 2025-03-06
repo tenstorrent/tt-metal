@@ -95,10 +95,13 @@ def assert_quality(
     if isinstance(a, ttnn.Tensor):
         a = to_torch(a, mesh_device=a.device(), dtype=a.get_dtype(), shard_dim=shard_dim)
         a = a[0 : a.shape[0] // num_devices, ...]
-        a = a.squeeze(0)
     if isinstance(b, ttnn.Tensor):
         b = to_torch(b, mesh_device=b.device(), dtype=b.get_dtype(), shard_dim=shard_dim)
         b = b[0 : b.shape[0] // num_devices, ...]
+
+    if a.dim() > b.dim():
+        a = a.squeeze(0)
+    if b.dim() > a.dim():
         b = b.squeeze(0)
 
     a = a.to(torch.float32)
