@@ -468,7 +468,7 @@ def test_demo_for_audio_classification_dataset(ttnn_model, device, use_program_c
 )
 @pytest.mark.parametrize(
     "num_inputs, expected_perf_metrics",
-    ((2, {"prefill_t/s": 3.95, "decode_t/s": 45.4, "decode_t/s/u": 45.4}),),
+    ((2, {"prefill_t/s": 3.81, "decode_t/s": 41.2, "decode_t/s/u": 41.2}),),
 )
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
