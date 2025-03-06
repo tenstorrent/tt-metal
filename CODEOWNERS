@@ -59,7 +59,7 @@ tt_metal/impl/device/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal
 tt_metal/**/requirements*.txt @tenstorrent/metalium-developers-infra
 
 # fabric
-tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT
+tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho
 
 # metal - dispatch
 tt_metal/impl/dispatch/kernels/packet_* @ubcheema @aliuTT
@@ -177,6 +177,7 @@ models/demos/t3000/llama3_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-
 models/demos/t3000/mixtral8x7b @yieldthought @mtairum @uaydonat
 models/demos/tg/llama3_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar
 models/demos/tg/falcon7b @skhorasganiTT @djordje-tt @uaydonat
+models/demos/whisper @skhorasganiTT @uaydonat
 models/demos/grayskull @uaydonat
 models/demos/yolov4 @dvartaniansTT @mbahnasTT @tenstorrent/metalium-developers-convolutions
 models/demos/wormhole/yolov4 @dvartaniansTT @mbahnasTT @tenstorrent/metalium-developers-convolutions

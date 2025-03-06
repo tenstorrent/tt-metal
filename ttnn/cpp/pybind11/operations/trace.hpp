@@ -61,6 +61,7 @@ void py_module(py::module& module) {
         py::arg("device"),
         py::arg("trace_id"));
 
+    // TODO: #18572 - Replace the implementation of this overload with the TT-distributed implementation.
     module.def(
         "begin_trace_capture",
         [](MeshDevice* device, QueueId cq_id) { return ttnn::operations::trace::begin_trace_capture(device, cq_id); },
@@ -68,6 +69,7 @@ void py_module(py::module& module) {
         py::kw_only(),
         py::arg("cq_id") = ttnn::DefaultQueueId);
 
+    // TODO: #18572 - Replace the implementation of this overload with the TT-distributed implementation.
     module.def(
         "end_trace_capture",
         [](MeshDevice* device, uint32_t trace_id, QueueId cq_id) {
@@ -78,6 +80,7 @@ void py_module(py::module& module) {
         py::kw_only(),
         py::arg("cq_id") = ttnn::DefaultQueueId);
 
+    // TODO: #18572 - Replace the implementation of this overload with the TT-distributed implementation.
     module.def(
         "execute_trace",
         [](MeshDevice* device, uint32_t trace_id, QueueId cq_id, bool blocking) {
@@ -89,6 +92,7 @@ void py_module(py::module& module) {
         py::arg("cq_id") = ttnn::DefaultQueueId,
         py::arg("blocking") = true);
 
+    // TODO: #18572 - Replace the implementation of this overload with the TT-distributed implementation.
     module.def(
         "release_trace",
         [](MeshDevice* device, uint32_t trace_id) { return ttnn::operations::trace::release_trace(device, trace_id); },

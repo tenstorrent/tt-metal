@@ -94,8 +94,7 @@ def run_with_trace(
             memory_config=output_mem_config,
             topology=all_gather_topology,
         )
-    for d in mesh_device.get_devices():
-        ttnn.synchronize_device(d)
+    ttnn.synchronize_device(mesh_device)
 
     # Capture trace
     logger.info("Capturing trace")
@@ -128,16 +127,14 @@ def run_with_trace(
                 topology=all_gather_topology,
             )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-    for d in mesh_device.get_devices():
-        ttnn.synchronize_device(d)
+    ttnn.synchronize_device(mesh_device)
 
     # Run the op
     logger.info("Starting Trace perf test...")
     profiler.start("all-gather-async-trace")
     ttnn.execute_trace(mesh_device, trace_id, blocking=False)
     ttnn.release_trace(mesh_device, trace_id)
-    for d in mesh_device.get_devices():
-        ttnn.synchronize_device(d)
+    ttnn.synchronize_device(mesh_device)
     profiler.end("all-gather-async-trace")
     logger.info(f"Time taken: {profiler.get_duration('all-gather-async-trace')} s")
     logger.info(f"Time per iter: {(profiler.get_duration('all-gather-async-trace')) / num_iter} s")
@@ -307,7 +304,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
                         memory_config=output_mem_config,
                         topology=ttnn.Topology.Linear,
                     )
-            ttnn.synchronize_devices(mesh_device, sub_device_ids=sub_device_stall_group)
+            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
 
     except Exception as e:
         logger.error(f"Exception: {e}")

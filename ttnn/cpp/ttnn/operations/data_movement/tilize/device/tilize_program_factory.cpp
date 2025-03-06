@@ -308,21 +308,21 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
     if (core_range.size() > 0) {
         auto tilize_kernel_id = CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/test_kernels/compute/tilize_wh.cpp",
+            "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp",
             core_range,
             ComputeConfig{.compile_args = {single_block_size, single_block_size, third_dim}});
     }
     if (has_cliff_col && has_cliff_row) {
         auto tilize_col_row_cliff_kernel_id = CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/test_kernels/compute/tilize_wh.cpp",
+            "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp",
             cliff_col_row_core_range,
             ComputeConfig{.compile_args = {single_block_size_cliff_col, single_block_size_cliff_row, third_dim}});
     }
     if (has_cliff_row) {
         auto tilize_row_cliff_kernel_id = CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/test_kernels/compute/tilize_wh.cpp",
+            "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp",
             cliff_row_core_range,
             ComputeConfig{.compile_args = {single_block_size, single_block_size_cliff_row, third_dim}});
     }
@@ -330,7 +330,7 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
     if (has_cliff_col) {
         auto tilize_col_cliff_kernel_id = CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/test_kernels/compute/tilize_wh.cpp",
+            "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp",
             cliff_col_core_range,
             ComputeConfig{.compile_args = {single_block_size_cliff_col, single_block_size, third_dim}});
     }

@@ -23,7 +23,6 @@ mem_configs = [
 ]
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "decimals",
     [0],

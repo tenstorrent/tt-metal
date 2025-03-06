@@ -29,6 +29,7 @@
 #include "debug/waypoint.h"
 #include "debug/dprint.h"
 #include "debug/stack_usage.h"
+
 // clang-format on
 
 uint8_t noc_index;
@@ -489,15 +490,18 @@ int main() {
             noc_mode = launch_msg_address->kernel_config.brisc_noc_mode;
 
             // re-initialize the NoCs
+            uint8_t cmd_buf;
             if (noc_mode == DM_DEDICATED_NOC) {
                 if (prev_noc_mode != noc_mode) {
                     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
                 }
+                cmd_buf = BRISC_AT_CMD_BUF;
             } else {
                 if (prev_noc_mode != noc_mode) {
                     dynamic_noc_init();
                 }
                 dynamic_noc_local_state_init();
+                cmd_buf = DYNAMIC_NOC_BRISC_AT_CMD_BUF;
             }
             prev_noc_mode = noc_mode;
 
@@ -512,11 +516,11 @@ int main() {
                 uint32_t end_cb_index = launch_msg_address->kernel_config.max_local_cb_end_index;
                 setup_local_cb_read_write_interfaces(
                     cb_l1_base, num_cbs_to_early_init, end_cb_index, true, true, false);
-
                 cb_l1_base =
                     (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.remote_cb_offset);
                 end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
-                experimental::setup_remote_cb_interfaces<true>(cb_l1_base, end_cb_index);
+                experimental::setup_remote_cb_interfaces<true>(
+                    cb_l1_base, end_cb_index, noc_index, noc_mode, post_atomic_increments, cmd_buf);
                 start_ncrisc_kernel_run(enables);
                 int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
                 void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
@@ -537,7 +541,8 @@ int main() {
                     cb_l1_base =
                         (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.remote_cb_offset);
                     uint32_t end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
-                    experimental::setup_remote_cb_interfaces<true>(cb_l1_base, end_cb_index);
+                    experimental::setup_remote_cb_interfaces<true>(
+                        cb_l1_base, end_cb_index, noc_index, noc_mode, post_atomic_increments, cmd_buf);
                 }
                 start_ncrisc_kernel_run(enables);
                 wait_for_go_message();
@@ -548,10 +553,20 @@ int main() {
 
             trigger_sync_register_init();
 
-            if (noc_mode == DM_DYNAMIC_NOC) {
-                // barrier to make sure all writes are finished
-                while (!ncrisc_dynamic_noc_nonposted_writes_flushed<proc_type>(noc_index));
-                while (!ncrisc_dynamic_noc_nonposted_writes_flushed<proc_type>(1 - noc_index));
+            if constexpr (WATCHER_ASSERT_ENABLED) {
+                if (noc_mode == DM_DYNAMIC_NOC) {
+                    WAYPOINT("NKFW");
+                    // Assert that no noc transactions are outstanding, to ensure that all reads and writes have landed
+                    // and the NOC interface is in a known idle state for the next kernel.
+                    for (int noc = 0; noc < NUM_NOCS; noc++) {
+                        ASSERT(ncrisc_dynamic_noc_reads_flushed(noc));
+                        ASSERT(ncrisc_dynamic_noc_nonposted_writes_sent(noc));
+                        ASSERT(ncrisc_dynamic_noc_nonposted_writes_flushed(noc));
+                        ASSERT(ncrisc_dynamic_noc_nonposted_atomics_flushed(noc));
+                        ASSERT(ncrisc_dynamic_noc_posted_writes_sent(noc));
+                    }
+                    WAYPOINT("NKFD");
+                }
             }
 
 #if defined(PROFILE_KERNEL)

@@ -288,7 +288,7 @@ if(WITH_PYTHON_BINDINGS)
             DESTINATION ${CMAKE_INSTALL_LIBDIR}
         LIBRARY
             DESTINATION ${CMAKE_INSTALL_LIBDIR}
-            COMPONENT dev
+            COMPONENT tar
     )
 
     install(

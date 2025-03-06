@@ -132,8 +132,8 @@ def run_test_LlamaModel_end_to_end(
         cache_path,
         read_cache=True,
     )
-    for device in mesh_device.get_devices():
-        ttnn.synchronize_device(device)
+    ttnn.synchronize_device(mesh_device)
+
     # Run prefill num_iterations times and measure time
     enable_persistent_kernel_cache()
     for iter_idx in range(num_iterations):
@@ -150,8 +150,7 @@ def run_test_LlamaModel_end_to_end(
         )
 
         profiler.end(f"prefill_iteration_{iter_idx}")
-        for device in mesh_device.get_devices():
-            ttnn.synchronize_device(device)
+        ttnn.synchronize_device(mesh_device)
 
     # Calculate average time for prefill
     profiler.print()

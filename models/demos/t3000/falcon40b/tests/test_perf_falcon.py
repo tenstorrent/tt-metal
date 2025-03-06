@@ -90,8 +90,7 @@ def run_test_FalconCausalLM_end_to_end(
 
     else:
         raise NotImplementedError(f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode.")
-    for device in devices:
-        ttnn.synchronize_device(device)
+    ttnn.synchronize_device(mesh_device)
 
     # NOTE: Passing in pytorch tensor here instead of ll buda tensor
     # since we don't yet have embedding support on device
@@ -108,8 +107,7 @@ def run_test_FalconCausalLM_end_to_end(
         tt_cache_path,
         use_global_cos_sin_cache,
     )
-    for device in devices:
-        ttnn.synchronize_device(device)
+    ttnn.synchronize_device(mesh_device)
     profiler.end("TtFalcon_model_setup")
 
     del state_dict
@@ -174,8 +172,7 @@ def run_test_FalconCausalLM_end_to_end(
         tt_out = ttnn.to_torch(tt_out, device=mesh_device, mesh_composer=ConcatMeshToTensor(mesh_device, dim=-1))
 
     profiler.end("first_model_run_with_compile", force_enable=True)
-    for device in devices:
-        ttnn.synchronize_device(device)
+    ttnn.synchronize_device(mesh_device)
 
     del tt_out
     del tt_layer_present
@@ -231,8 +228,7 @@ def run_test_FalconCausalLM_end_to_end(
             tt_outs = ttnn.to_torch(tt_out, device=mesh_device, mesh_composer=ConcatMeshToTensor(mesh_device, dim=-1))
 
     profiler.end(f"model_warmup_run_for_inference")
-    for device in devices:
-        ttnn.synchronize_device(device)
+    ttnn.synchronize_device(mesh_device)
 
     # Run for perf iteration - profiler enabled
     for device in devices:
@@ -285,8 +281,7 @@ def run_test_FalconCausalLM_end_to_end(
         # TODO: Return token id to simulate real situation in decode
         _ = ttnn.to_torch(tt_FalconCausalLM.perf_e2e_test_tile_tensor)
 
-    for device in devices:
-        ttnn.synchronize_device(device)
+    ttnn.synchronize_device(mesh_device)
 
     profiler.end(f"model_run_for_inference")
 

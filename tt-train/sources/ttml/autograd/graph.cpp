@@ -27,6 +27,7 @@ NodeId Graph::add_node(GradFunction&& grad_function, std::span<NodeId> links) {
             const std::type_info& typeInfo = grad_function.target_type();
             auto demangled_name = core::demangle(typeInfo.name());
             auto time = std::chrono::high_resolution_clock::now();
+            fmt::print("Node {} Demangled name {} start running...\n", curr_id, demangled_name);
             grad_function();
             auto duration =
                 std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now() - time);

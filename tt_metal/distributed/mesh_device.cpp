@@ -119,7 +119,8 @@ MeshDevice::MeshDevice(
     view_(std::move(mesh_device_view)),
     mesh_id_(generate_unique_mesh_id()),
     parent_mesh_(std::move(parent_mesh)),
-    thread_pool_(create_boost_thread_pool(view_->shape().mesh_size())) {}
+    dispatch_thread_pool_(create_boost_thread_pool(view_->shape().mesh_size())),
+    reader_thread_pool_(create_boost_thread_pool(view_->shape().mesh_size())) {}
 
 std::shared_ptr<MeshDevice> MeshDevice::create(
     const MeshDeviceConfig& config,
@@ -653,7 +654,8 @@ bool MeshDevice::initialize(
     mesh_command_queues_.reserve(this->num_hw_cqs());
     if (this->using_fast_dispatch()) {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
-            mesh_command_queues_.push_back(std::make_unique<MeshCommandQueue>(this, cq_id, thread_pool_));
+            mesh_command_queues_.push_back(
+                std::make_unique<MeshCommandQueue>(this, cq_id, dispatch_thread_pool_, reader_thread_pool_));
         }
     }
     return true;

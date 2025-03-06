@@ -20,20 +20,16 @@ using MeshEvent = tt::tt_metal::distributed::MeshEvent;
 namespace events {
 
 // Single Device APIs
-std::shared_ptr<tt::tt_metal::Event> create_event(tt::tt_metal::IDevice* device);
-void record_event(
-    QueueId cq_id,
-    const std::shared_ptr<tt::tt_metal::Event>& event,
-    const std::vector<tt::tt_metal::SubDeviceId>& sub_device_ids = {});
+std::shared_ptr<tt::tt_metal::Event> record_event(
+    tt::tt_metal::IDevice* device, QueueId cq_id, const std::vector<tt::tt_metal::SubDeviceId>& sub_device_ids = {});
 void wait_for_event(QueueId cq_id, const std::shared_ptr<tt::tt_metal::Event>& event);
 
 // Multi Device APIs
 struct MultiDeviceEvent {
     std::vector<std::shared_ptr<tt::tt_metal::Event>> events;
 };
-MultiDeviceEvent create_event(MeshDevice* mesh_device);
-void record_event(
-    QueueId cq_id, const MultiDeviceEvent& event, const std::vector<tt::tt_metal::SubDeviceId>& sub_device_ids = {});
+MultiDeviceEvent record_event(
+    MeshDevice* mesh_device, QueueId cq_id, const std::vector<tt::tt_metal::SubDeviceId>& sub_device_ids = {});
 void wait_for_event(QueueId cq_id, const MultiDeviceEvent& event);
 
 MeshEvent record_mesh_event(

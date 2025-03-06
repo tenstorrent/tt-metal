@@ -448,6 +448,11 @@ void noc_async_read_one_packet(
     WAYPOINT("NAOW");
     DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, src_noc_addr, dst_local_l1_addr, size);
 
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        uint32_t noc_rd_cmd_field =
+            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+        NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CTRL, noc_rd_cmd_field);
+    }
     NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_RET_ADDR_LO, dst_local_l1_addr);
     NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)src_noc_addr);
 #ifdef ARCH_BLACKHOLE
@@ -461,7 +466,11 @@ void noc_async_read_one_packet(
         (uint32_t)(src_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
     NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_AT_LEN_BE, size);
     NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-    noc_reads_num_issued[noc] += 1;
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
+    } else {
+        noc_reads_num_issued[noc] += 1;
+    }
 
     WAYPOINT("NAOD");
 }
@@ -496,7 +505,7 @@ inline void noc_async_read(
     } else {
         WAYPOINT("NARW");
         DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, src_noc_addr, dst_local_l1_addr, size);
-        ncrisc_noc_fast_read_any_len(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, size);
+        ncrisc_noc_fast_read_any_len<noc_mode>(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, size);
         WAYPOINT("NARD");
     }
 }
@@ -516,6 +525,11 @@ void noc_async_read_one_packet_set_state(std::uint64_t src_noc_addr, std::uint32
 
     WAYPOINT("NASW");
 
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        uint32_t noc_rd_cmd_field =
+            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+        NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CTRL, noc_rd_cmd_field);
+    }
 #ifdef ARCH_BLACKHOLE
     // Handles reading from PCIe
     NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(src_noc_addr >> 32) & 0x1000000F);
@@ -554,7 +568,11 @@ FORCE_INLINE void noc_async_read_one_packet_with_state(
     NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
 
     if constexpr (inc_num_issued) {
-        noc_reads_num_issued[noc] += 1;
+        if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+            inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
+        } else {
+            noc_reads_num_issued[noc] += 1;
+        }
     }
 
     WAYPOINT("NATD");
@@ -574,6 +592,11 @@ void noc_async_read_set_state(std::uint64_t src_noc_addr, uint8_t noc = noc_inde
 
     WAYPOINT("NAUW");
 
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        uint32_t noc_rd_cmd_field =
+            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+        NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CTRL, noc_rd_cmd_field);
+    }
 #ifdef ARCH_BLACKHOLE
     // Handles reading from PCIe
     NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(src_noc_addr >> 32) & 0x1000000F);
@@ -613,7 +636,11 @@ FORCE_INLINE void noc_async_read_with_state(
         src_noc_addr += NOC_MAX_BURST_SIZE;
         dst_local_l1_addr += NOC_MAX_BURST_SIZE;
         if constexpr (inc_num_issued) {
-            noc_reads_num_issued[noc] += 1;
+            if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+                inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
+            } else {
+                noc_reads_num_issued[noc] += 1;
+            }
         }
     }
 
@@ -627,7 +654,11 @@ FORCE_INLINE void noc_async_read_with_state(
     NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_AT_LEN_BE, size);
     NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     if constexpr (inc_num_issued) {
-        noc_reads_num_issued[noc] += 1;
+        if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+            inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
+        } else {
+            noc_reads_num_issued[noc] += 1;
+        }
     }
 
     WAYPOINT("NAVD");
@@ -635,7 +666,11 @@ FORCE_INLINE void noc_async_read_with_state(
 
 FORCE_INLINE
 void noc_async_read_inc_num_issued(std::uint32_t num_issued_reads_inc, uint8_t noc = noc_index) {
-    noc_reads_num_issued[noc] += num_issued_reads_inc;
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, num_issued_reads_inc);
+    } else {
+        noc_reads_num_issued[noc] += num_issued_reads_inc;
+    }
 }
 
 // TODO: write docs
@@ -668,7 +703,8 @@ void noc_async_write_one_packet(
     NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_AT_LEN_BE, size);
     NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        inc_noc_nonposted_writes_acked<proc_type>(noc);
+        inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
+        inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
     } else {
         noc_nonposted_writes_num_issued[noc] += 1;
         noc_nonposted_writes_acked[noc] += 1;  // num_dests
@@ -711,7 +747,8 @@ void noc_async_write_multicast_one_packet(
     NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_AT_LEN_BE, size);
     NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        inc_noc_nonposted_writes_acked<proc_type>(noc, num_dests);
+        inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
+        inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, num_dests);
     } else {
         noc_nonposted_writes_num_issued[noc] += 1;
         noc_nonposted_writes_acked[noc] += num_dests;
@@ -763,7 +800,8 @@ FORCE_INLINE void noc_async_write_one_packet_with_state(
 
     if constexpr (non_posted) {
         if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-            inc_noc_nonposted_writes_acked<proc_type>(noc);
+            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
+            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
         } else {
             noc_nonposted_writes_num_issued[noc] += 1;
             noc_nonposted_writes_acked[noc] += 1;  // num_dests
@@ -827,7 +865,7 @@ inline void noc_async_write(
     } else {
         WAYPOINT("NAWW");
         DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
-        ncrisc_noc_fast_write_any_len<proc_type, noc_mode>(
+        ncrisc_noc_fast_write_any_len<noc_mode>(
             noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, NOC_UNICAST_WRITE_VC, false, false, 1, true);
         WAYPOINT("NAWD");
     }
@@ -851,7 +889,7 @@ inline void noc_semaphore_set_remote(
     std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, uint8_t noc = noc_index) {
     WAYPOINT("NSSW");
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, 4);
-    ncrisc_noc_fast_write_any_len<proc_type, noc_mode>(
+    ncrisc_noc_fast_write_any_len<noc_mode>(
         noc,
         write_reg_cmd_buf,
         src_local_l1_addr,
@@ -914,7 +952,7 @@ inline void noc_async_write_multicast(
     } else {
         WAYPOINT("NMWW");
         DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
-        ncrisc_noc_fast_write_any_len<proc_type, noc_mode>(
+        ncrisc_noc_fast_write_any_len<noc_mode>(
             noc,
             write_cmd_buf,
             src_local_l1_addr,
@@ -964,7 +1002,7 @@ inline void noc_semaphore_set_multicast(
     uint8_t noc = noc_index) {
     WAYPOINT("NSNW");
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, 4);
-    ncrisc_noc_fast_write_any_len<proc_type, noc_mode>(
+    ncrisc_noc_fast_write_any_len<noc_mode>(
         noc,
         write_reg_cmd_buf,
         src_local_l1_addr,
@@ -1012,7 +1050,7 @@ inline void noc_semaphore_set_multicast_loopback_src(
     uint8_t noc = noc_index) {
     WAYPOINT("NSLW");
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, 4);
-    ncrisc_noc_fast_write_any_len_loopback_src<proc_type, noc_mode>(
+    ncrisc_noc_fast_write_any_len_loopback_src<noc_mode>(
         noc,
         write_reg_cmd_buf,
         src_local_l1_addr,
@@ -1036,7 +1074,7 @@ inline void noc_async_write_multicast_loopback_src(
     uint8_t noc = noc_index) {
     WAYPOINT("NMLW");
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
-    ncrisc_noc_fast_write_any_len_loopback_src<proc_type, noc_mode>(
+    ncrisc_noc_fast_write_any_len_loopback_src<noc_mode>(
         noc,
         write_cmd_buf,
         src_local_l1_addr,
@@ -1101,7 +1139,7 @@ inline void noc_async_write_multicast_exclude_region(
     uint8_t noc = noc_index) {
     WAYPOINT("NMEW");
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
-    ncrisc_noc_fast_write_any_len_exclude_region<proc_type, noc_mode>(
+    ncrisc_noc_fast_write_any_len_exclude_region<noc_mode>(
         noc,
         write_cmd_buf,
         src_local_l1_addr,
@@ -1127,7 +1165,13 @@ inline void noc_async_write_multicast_exclude_region(
  */
 void noc_async_read_barrier(uint8_t noc = noc_index) {
     WAYPOINT("NRBW");
-    while (!ncrisc_noc_reads_flushed(noc));
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        while (!ncrisc_dynamic_noc_reads_flushed(noc)) {
+            invalidate_l1_cache();
+        }
+    } else {
+        while (!ncrisc_noc_reads_flushed(noc));
+    }
     invalidate_l1_cache();
     WAYPOINT("NRBD");
 }
@@ -1144,10 +1188,13 @@ FORCE_INLINE
 void noc_async_write_barrier(uint8_t noc = noc_index) {
     WAYPOINT("NWBW");
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        while (!ncrisc_dynamic_noc_nonposted_writes_flushed<proc_type>(noc));
+        while (!ncrisc_dynamic_noc_nonposted_writes_flushed(noc)) {
+            invalidate_l1_cache();
+        }
     } else {
         while (!ncrisc_noc_nonposted_writes_flushed(noc));
     }
+    invalidate_l1_cache();
     WAYPOINT("NWBD");
 }
 
@@ -1159,7 +1206,14 @@ void noc_async_write_barrier(uint8_t noc = noc_index) {
 FORCE_INLINE
 void noc_async_writes_flushed(uint8_t noc = noc_index) {
     WAYPOINT("NWFW");
-    while (!ncrisc_noc_nonposted_writes_sent(noc));
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        while (!ncrisc_dynamic_noc_nonposted_writes_sent(noc)) {
+            invalidate_l1_cache();
+        }
+    } else {
+        while (!ncrisc_noc_nonposted_writes_sent(noc));
+    }
+    invalidate_l1_cache();
     WAYPOINT("NWFD");
 }
 
@@ -1171,7 +1225,14 @@ void noc_async_writes_flushed(uint8_t noc = noc_index) {
 FORCE_INLINE
 void noc_async_posted_writes_flushed(uint8_t noc = noc_index) {
     WAYPOINT("NPWW");
-    while (!ncrisc_noc_posted_writes_sent(noc));
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        while (!ncrisc_dynamic_noc_posted_writes_sent(noc)) {
+            invalidate_l1_cache();
+        }
+    } else {
+        while (!ncrisc_noc_posted_writes_sent(noc));
+    }
+    invalidate_l1_cache();
     WAYPOINT("NPWD");
 }
 
@@ -1186,7 +1247,14 @@ void noc_async_posted_writes_flushed(uint8_t noc = noc_index) {
 FORCE_INLINE
 void noc_async_atomic_barrier(uint8_t noc_idx = noc_index) {
     WAYPOINT("NABW");
-    while (!ncrisc_noc_nonposted_atomics_flushed(noc_idx));
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        while (!ncrisc_dynamic_noc_nonposted_atomics_flushed(noc_idx)) {
+            invalidate_l1_cache();
+        }
+    } else {
+        while (!ncrisc_noc_nonposted_atomics_flushed(noc_idx));
+    }
+    invalidate_l1_cache();
     WAYPOINT("NABD");
 }
 
@@ -1201,17 +1269,31 @@ void noc_async_atomic_barrier(uint8_t noc_idx = noc_index) {
 FORCE_INLINE
 void noc_async_full_barrier(uint8_t noc_idx = noc_index) {
     invalidate_l1_cache();
-    WAYPOINT("NFBW");
-    while (!ncrisc_noc_reads_flushed(noc_idx));
-    WAYPOINT("NFCW");
-    while (!ncrisc_noc_nonposted_writes_sent(noc_idx));
-    WAYPOINT("NFDW");
-    while (!ncrisc_noc_nonposted_writes_flushed(noc_idx));
-    WAYPOINT("NFEW");
-    while (!ncrisc_noc_nonposted_atomics_flushed(noc_idx));
-    WAYPOINT("NFFW");
-    while (!ncrisc_noc_posted_writes_sent(noc_idx));
-    WAYPOINT("NFBD");
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        WAYPOINT("NFBW");
+        while (!ncrisc_dynamic_noc_reads_flushed(noc_idx));
+        WAYPOINT("NFCW");
+        while (!ncrisc_dynamic_noc_nonposted_writes_sent(noc_idx));
+        WAYPOINT("NFDW");
+        while (!ncrisc_dynamic_noc_nonposted_writes_flushed(noc_idx));
+        WAYPOINT("NFEW");
+        while (!ncrisc_dynamic_noc_nonposted_atomics_flushed(noc_idx));
+        WAYPOINT("NFFW");
+        while (!ncrisc_dynamic_noc_posted_writes_sent(noc_idx));
+        WAYPOINT("NFBD");
+    } else {
+        WAYPOINT("NFBW");
+        while (!ncrisc_noc_reads_flushed(noc_idx));
+        WAYPOINT("NFCW");
+        while (!ncrisc_noc_nonposted_writes_sent(noc_idx));
+        WAYPOINT("NFDW");
+        while (!ncrisc_noc_nonposted_writes_flushed(noc_idx));
+        WAYPOINT("NFEW");
+        while (!ncrisc_noc_nonposted_atomics_flushed(noc_idx));
+        WAYPOINT("NFFW");
+        while (!ncrisc_noc_posted_writes_sent(noc_idx));
+        WAYPOINT("NFBD");
+    }
 }
 
 // clang-format off
@@ -1309,7 +1391,7 @@ FORCE_INLINE
 void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 0xF, uint8_t noc = noc_index) {
     WAYPOINT("NWIW");
     DEBUG_SANITIZE_NOC_ADDR(noc, addr, 4);
-    noc_fast_write_dw_inline<proc_type, noc_mode>(
+    noc_fast_write_dw_inline<noc_mode>(
         noc,
         write_at_cmd_buf,
         val,
@@ -1412,7 +1494,11 @@ void noc_async_read_tile_dram_sharded_with_state(
     NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_RET_ADDR_LO, dest_addr);
     NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_LO, src_addr_);  // (uint32_t)src_addr
     NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-    noc_reads_num_issued[noc] += 1;
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
+    } else {
+        noc_reads_num_issued[noc] += 1;
+    }
 }
 
 FORCE_INLINE
@@ -1420,7 +1506,7 @@ void noc_async_read_tile_dram_sharded_with_state_with_trid(
     uint32_t src_base_addr, uint32_t src_addr, uint32_t dest_addr, uint32_t trid = 0, uint8_t noc = noc_index) {
     WAYPOINT("NRDW");
 #ifndef ARCH_GRAYSKULL
-    ncrisc_noc_fast_read_with_transaction_id(noc, read_cmd_buf, src_base_addr, src_addr, dest_addr, trid);
+    ncrisc_noc_fast_read_with_transaction_id<noc_mode>(noc, read_cmd_buf, src_base_addr, src_addr, dest_addr, trid);
 #endif
     WAYPOINT("NRDD");
 }
@@ -1496,7 +1582,7 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid(
     WAYPOINT("NAWW");
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
 #ifndef ARCH_GRAYSKULL
-    ncrisc_noc_fast_write_any_len<proc_type, noc_mode, true, true>(
+    ncrisc_noc_fast_write_any_len<noc_mode, true, true>(
         noc,
         write_cmd_buf,
         src_local_l1_addr,

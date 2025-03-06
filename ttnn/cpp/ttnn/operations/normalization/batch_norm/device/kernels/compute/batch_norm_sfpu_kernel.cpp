@@ -19,7 +19,6 @@ ALWI void batchnorm_bcast_tiles(
     uint32_t cb_batch_var,
     uint32_t cb_eps,
     uint32_t cb_den,
-    uint32_t cb_num,
     uint32_t cb_weight,
     uint32_t cb_bias,
     uint32_t cb_tmp_1,
@@ -33,139 +32,125 @@ ALWI void batchnorm_bcast_tiles(
     auto cb_affine_or_out = (weight_has_value || bias_has_value) ? cb_tmp_1 : cb_output_0;
     auto cb_scaled_output = (bias_has_value) ? cb_tmp_1 : cb_output_0;
 
-    // input - batch_mean
-    cb_wait_front(cb_bcast, onetile);
+    // 1/(sqrt(batch_var + eps)) = cb_den
+    cb_reserve_back(cb_den, onetile);
+    cb_wait_front(cb_batch_var, onetile);
+
+    tile_regs_acquire();
+    tile_regs_wait();
+    copy_tile_to_dst_init_short_with_dt(cb_eps, cb_batch_var);
+    for (uint32_t i = 0; i < onetile; ++i) {
+        copy_tile(cb_batch_var, i, i * 2);
+    }
+    add_binary_tile_init();
+    copy_tile_to_dst_init_short_with_dt(cb_batch_var, cb_eps);
+    for (uint32_t i = 0; i < onetile; ++i) {
+        copy_tile(cb_eps, i, i * 2 + 1);
+
+        add_binary_tile(i * 2, i * 2 + 1);
+    }
+    rsqrt_tile_init();
+    for (uint32_t i = 0; i < onetile; ++i) {
+        rsqrt_tile(i * 2);
+
+        pack_tile(i * 2, cb_den);
+    }
+    tile_regs_commit();
+    tile_regs_release();
+    cb_push_back(cb_den, onetile);
+    cb_pop_front(cb_batch_var, onetile);
+
+    cb_wait_front(cb_bcast, onetile);  // input - batch_mean
+    cb_wait_front(cb_den, onetile);    // (input - batch_mean)/(sqrt(batch_var + eps)) = result
+    if (weight_has_value) {            // result = result * weight
+        cb_wait_front(cb_weight, onetile);
+    }
+    if (bias_has_value) {  // result = result + bias
+        cb_wait_front(cb_bias, onetile);
+    }
     for (uint32_t j = tile_start; j < freq; ++j) {
+        // input - batch_mean
         cb_wait_front(cb_other, onetile);
-
-        cb_reserve_back(cb_num, onetile);
-
-        sub_binary_tile_init();
         tile_regs_acquire();
         tile_regs_wait();
         copy_tile_to_dst_init_short_with_dt(cb_bcast, cb_other);
         for (uint32_t i = 0; i < onetile; ++i) {
             copy_tile(cb_other, i, i * 2);
         }
+        sub_binary_tile_init();
         copy_tile_to_dst_init_short_with_dt(cb_other, cb_bcast);
         for (uint32_t i = 0; i < onetile; ++i) {
             copy_tile(cb_bcast, i, i * 2 + 1);
             sub_binary_tile(i * 2, i * 2 + 1);
-            tile_regs_commit();
-            pack_tile(i * 2, cb_num);
         }
-        tile_regs_release();
-        cb_push_back(cb_num, onetile);
         cb_pop_front(cb_other, onetile);
-    }
-    cb_pop_front(cb_bcast, onetile);
 
-    // 1/(sqrt(batch_var + eps))
-    cb_reserve_back(cb_den, onetile);
-    cb_wait_front(cb_batch_var, onetile);
-
-    add_binary_tile_init();
-    rsqrt_tile_init();
-    copy_tile_to_dst_init_short_with_dt(cb_eps, cb_batch_var);
-    for (uint32_t i = 0; i < onetile; ++i) {
-        copy_tile(cb_batch_var, i, i * 2);
-    }
-    copy_tile_to_dst_init_short_with_dt(cb_batch_var, cb_eps);
-    for (uint32_t i = 0; i < onetile; ++i) {
-        copy_tile(cb_eps, i, i * 2 + 1);
-
-        add_binary_tile(i * 2, i * 2 + 1);
-        rsqrt_tile(i * 2);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile(i * 2, cb_den);
-    }
-    tile_regs_release();
-
-    cb_push_back(cb_den, onetile);
-    cb_pop_front(cb_batch_var, onetile);
-
-    // (input - batch_mean)/(sqrt(batch_var + eps)) = result
-    cb_wait_front(cb_den, onetile);
-    for (uint32_t j = tile_start; j < freq; ++j) {
-        cb_wait_front(cb_num, onetile);
-
+        //(input - batch_mean)/(sqrt(batch_var + eps))
         cb_reserve_back(cb_affine_or_out, onetile);
-
         mul_binary_tile_init();
-        tile_regs_acquire();
-        tile_regs_wait();
-        copy_tile_to_dst_init_short_with_dt(cb_den, cb_num);
-        for (uint32_t i = 0; i < onetile; ++i) {
-            copy_tile(cb_num, i, i * 2);
-        }
-        copy_tile_to_dst_init_short_with_dt(cb_num, cb_den);
+        copy_tile_to_dst_init_short_with_dt(cb_bcast, cb_den);
         for (uint32_t i = 0; i < onetile; ++i) {
             copy_tile(cb_den, i, i * 2 + 1);
             mul_binary_tile(i * 2, i * 2 + 1);
-            tile_regs_commit();
+
             pack_tile(i * 2, cb_affine_or_out);
         }
+        tile_regs_commit();
         tile_regs_release();
         cb_push_back(cb_affine_or_out, onetile);
-        cb_pop_front(cb_num, onetile);
-    }
-    cb_pop_front(cb_den, onetile);
 
-    if (weight_has_value) {  // result = result * weight
-        cb_wait_front(cb_weight, onetile);
-        for (uint32_t j = tile_start; j < freq; ++j) {
+        if (weight_has_value) {  // result = result * weight
             cb_wait_front(cb_affine_or_out, onetile);
-
             cb_reserve_back(cb_scaled_output, onetile);
-
-            mul_binary_tile_init();
             tile_regs_acquire();
             tile_regs_wait();
             copy_tile_to_dst_init_short_with_dt(cb_weight, cb_affine_or_out);
             for (uint32_t i = 0; i < onetile; ++i) {
                 copy_tile(cb_affine_or_out, i, i * 2);
             }
+            mul_binary_tile_init();
             copy_tile_to_dst_init_short_with_dt(cb_affine_or_out, cb_weight);
             for (uint32_t i = 0; i < onetile; ++i) {
                 copy_tile(cb_weight, i, i * 2 + 1);
                 mul_binary_tile(i * 2, i * 2 + 1);
-                tile_regs_commit();
+
                 pack_tile(i * 2, cb_scaled_output);
             }
+            tile_regs_commit();
             tile_regs_release();
             cb_push_back(cb_scaled_output, onetile);
             cb_pop_front(cb_affine_or_out, onetile);
         }
-        cb_pop_front(cb_weight, onetile);
-    }
 
-    if (bias_has_value) {  // result = result + bias
-        cb_wait_front(cb_bias, onetile);
-        for (uint32_t j = tile_start; j < freq; ++j) {
+        if (bias_has_value) {  // result = result + bias
             cb_wait_front(cb_tmp_1, onetile);
-
             cb_reserve_back(cb_output_0, onetile);
-
-            add_binary_tile_init();
             tile_regs_acquire();
             tile_regs_wait();
             copy_tile_to_dst_init_short_with_dt(cb_bias, cb_tmp_1);
             for (uint32_t i = 0; i < onetile; ++i) {
                 copy_tile(cb_tmp_1, i, i * 2);
             }
+            add_binary_tile_init();
             copy_tile_to_dst_init_short_with_dt(cb_tmp_1, cb_bias);
             for (uint32_t i = 0; i < onetile; ++i) {
                 copy_tile(cb_bias, i, i * 2 + 1);
                 add_binary_tile(i * 2, i * 2 + 1);
-                tile_regs_commit();
+
                 pack_tile(i * 2, cb_output_0);
             }
+            tile_regs_commit();
             tile_regs_release();
             cb_push_back(cb_output_0, onetile);
             cb_pop_front(cb_tmp_1, onetile);
         }
+    }
+    cb_pop_front(cb_bcast, onetile);
+    cb_pop_front(cb_den, onetile);
+    if (weight_has_value) {
+        cb_pop_front(cb_weight, onetile);
+    }
+    if (bias_has_value) {
         cb_pop_front(cb_bias, onetile);
     }
 }
@@ -188,7 +173,6 @@ void MAIN {
     constexpr auto cb_batch_var = get_compile_time_arg_val(5);  // batch_var
     constexpr auto cb_eps = get_compile_time_arg_val(6);        // eps
     constexpr auto cb_den = get_compile_time_arg_val(7);        // 1/(sqrt(batch_var + eps))
-    constexpr auto cb_num = get_compile_time_arg_val(8);        // input - batch_mean
     constexpr auto cb_weight = get_compile_time_arg_val(9);     // weight tensor
     constexpr auto cb_tmp_1 = get_compile_time_arg_val(10);     // (input - batch_mean)/(sqrt(batch_var + eps))
     constexpr auto cb_bias = get_compile_time_arg_val(11);      // bias tensor
@@ -213,7 +197,6 @@ void MAIN {
             cb_batch_var,
             cb_eps,
             cb_den,
-            cb_num,
             cb_weight,
             cb_bias,
             cb_tmp_1,
@@ -230,7 +213,6 @@ void MAIN {
             cb_batch_var,
             cb_eps,
             cb_den,
-            cb_num,
             cb_weight,
             cb_bias,
             cb_tmp_1,

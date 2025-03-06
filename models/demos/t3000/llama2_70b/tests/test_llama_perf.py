@@ -139,9 +139,7 @@ def run_test_LlamaModel_end_to_end(
         read_cache=False,
     )
 
-    for i in mesh_device.get_device_ids():
-        device = mesh_device.get_device(i)
-        ttnn.synchronize_device(device)
+    ttnn.synchronize_device(mesh_device)
 
     del state_dict
 
@@ -183,8 +181,7 @@ def run_test_LlamaModel_end_to_end(
     generated_ids = torch.concat((prefill_ids[..., :prefill_length], output_ids), dim=1)
     print_output_prompts(generated_ids, tokenizer)
 
-    for device in devices:
-        ttnn.synchronize_device(device)
+    ttnn.synchronize_device(mesh_device)
     logger.info("Finished 1st run prefill stage with compile!")
 
     batch, seq_len = 32, 1
@@ -232,9 +229,7 @@ def run_test_LlamaModel_end_to_end(
         del tt_inp_emb
         del rot_mat
 
-        for i in mesh_device.get_device_ids():
-            device = mesh_device.get_device(i)
-            ttnn.synchronize_device(device)
+        ttnn.synchronize_device(mesh_device)
 
         logits = ttnn.to_torch(tt_logits, device=mesh_device, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
         logits = logits[..., : configuration.vocab_size].float()  # [1, batch, vocab_size]

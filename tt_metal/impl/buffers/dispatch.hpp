@@ -45,8 +45,6 @@ struct ReadBufferDescriptor {
         starting_host_page_id(starting_host_page_id) {}
 };
 
-using CompletionReaderVariant = std::variant<std::monostate, ReadBufferDescriptor, ReadEventDescriptor>;
-
 // Contains helper functions to interface with buffers on device
 namespace buffer_dispatch {
 

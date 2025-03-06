@@ -138,6 +138,8 @@ class RunTimeOptions {
     bool simulator_enabled = false;
     std::filesystem::path simulator_path = "";
 
+    bool erisc_iram_enabled = false;
+
     RunTimeOptions();
 
 public:
@@ -316,6 +318,8 @@ public:
 
     inline bool get_simulator_enabled() { return simulator_enabled; }
     inline const std::filesystem::path& get_simulator_path() { return simulator_path; }
+
+    inline bool get_erisc_iram_enabled() { return erisc_iram_enabled; }
 
 private:
     // Helper functions to parse feature-specific environment vaiables.

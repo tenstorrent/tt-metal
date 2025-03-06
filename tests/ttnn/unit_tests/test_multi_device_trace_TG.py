@@ -41,15 +41,15 @@ def test_multi_device_single_trace(mesh_device, shape, enable_async, enable_mult
         trace_cq = 0
         data_movement_cq = 1
 
-        def event_sync(event, record_cq, wait_cq):
-            ttnn.record_event(record_cq, event)
+        def event_sync(device, record_cq, wait_cq):
+            event = ttnn.record_event(device, record_cq)
             ttnn.wait_for_event(wait_cq, event)
 
     else:
         trace_cq = 0
         data_movement_cq = 0
 
-        def event_sync(event, record_cq, wait_cq):
+        def event_sync(device, record_cq, wait_cq):
             pass
 
     # Compile program binaries
@@ -64,8 +64,6 @@ def test_multi_device_single_trace(mesh_device, shape, enable_async, enable_mult
     logger.info("Done Trace Capture")
 
     for i in range(NUM_TRACE_LOOPS):
-        write_event = ttnn.create_event(mesh_device)
-        trace_event = ttnn.create_event(mesh_device)
         # Create torch inputs
         torch_input_tensor_0 = torch.rand(
             (mesh_device.get_num_devices(), shape[1], shape[2], shape[3]), dtype=torch.bfloat16
@@ -92,11 +90,11 @@ def test_multi_device_single_trace(mesh_device, shape, enable_async, enable_mult
         logger.info("Send Inputs to Device")
         ttnn.copy_host_to_device_tensor(ttnn_input_tensor_0, input_0_dev, cq_id=data_movement_cq)
         ttnn.copy_host_to_device_tensor(ttnn_input_tensor_1, input_1_dev, cq_id=data_movement_cq)
-        event_sync(write_event, data_movement_cq, trace_cq)
+        event_sync(mesh_device, data_movement_cq, trace_cq)
         logger.info("Execute Trace")
         # Execute trace
         ttnn.execute_trace(mesh_device, tid, cq_id=trace_cq, blocking=False)
-        event_sync(trace_event, trace_cq, data_movement_cq)
+        event_sync(mesh_device, trace_cq, data_movement_cq)
         # Perform host All-Gather
         logger.info("Read Back Trace Outputs")
         ttnn_torch_output_tensor = ttnn.to_torch(
@@ -151,15 +149,15 @@ def test_multi_device_multi_trace(mesh_device, shape, enable_async, enable_multi
         trace_cq = 0
         data_movement_cq = 1
 
-        def event_sync(event, record_cq, wait_cq):
-            ttnn.record_event(record_cq, event)
+        def event_sync(device, record_cq, wait_cq):
+            event = ttnn.record_event(device, record_cq)
             ttnn.wait_for_event(wait_cq, event)
 
     else:
         trace_cq = 0
         data_movement_cq = 0
 
-        def event_sync(event, record_cq, wait_cq):
+        def event_sync(device, record_cq, wait_cq):
             pass
 
     # Compile program binaries
@@ -194,8 +192,6 @@ def test_multi_device_multi_trace(mesh_device, shape, enable_async, enable_multi
         num_trace_loops = 5
 
     for i in range(num_trace_loops):
-        write_event = ttnn.create_event(mesh_device)
-        trace_event = ttnn.create_event(mesh_device)
         # Create torch inputs
         torch_input_tensor_0 = torch.rand(
             (mesh_device.get_num_devices(), shape[1], shape[2], shape[3]), dtype=torch.bfloat16
@@ -236,7 +232,7 @@ def test_multi_device_multi_trace(mesh_device, shape, enable_async, enable_multi
         ttnn.copy_host_to_device_tensor(ttnn_input_tensor_0, input_0_dev, cq_id=data_movement_cq)
         ttnn.copy_host_to_device_tensor(ttnn_input_tensor_1, input_1_dev, cq_id=data_movement_cq)
         ttnn.copy_host_to_device_tensor(ttnn_weight, weight_dev, cq_id=data_movement_cq)
-        event_sync(write_event, data_movement_cq, trace_cq)
+        event_sync(mesh_device, data_movement_cq, trace_cq)
         # Execute trace
         logger.info("Execute Trace 0")
         ttnn.execute_trace(mesh_device, tid, cq_id=trace_cq, blocking=False)
@@ -244,7 +240,7 @@ def test_multi_device_multi_trace(mesh_device, shape, enable_async, enable_multi
         ttnn.execute_trace(mesh_device, tid_1, cq_id=trace_cq, blocking=False)
         logger.info("Execute Trace 2")
         ttnn.execute_trace(mesh_device, tid_2, cq_id=trace_cq, blocking=False)
-        event_sync(trace_event, trace_cq, data_movement_cq)
+        event_sync(mesh_device, trace_cq, data_movement_cq)
 
         # Perform host All-Gather
         logger.info("Read Back Trace 0 Outputs")

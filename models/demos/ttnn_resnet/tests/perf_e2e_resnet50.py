@@ -73,7 +73,7 @@ def run_model(device, tt_inputs, test_infra, num_warmup_iterations, num_measurem
         _ = ttnn.from_device(test_infra.run(), blocking=True)
         ttnn.dump_device_profiler(device)
 
-    ttnn.synchronize_devices(device)
+    ttnn.synchronize_device(device)
     if use_signpost:
         signpost(header="start")
     outputs = []
@@ -81,7 +81,7 @@ def run_model(device, tt_inputs, test_infra, num_warmup_iterations, num_measurem
     for iter in range(0, num_measurement_iterations):
         test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
         outputs.append(ttnn.from_device(test_infra.run(), blocking=False))
-    ttnn.synchronize_devices(device)
+    ttnn.synchronize_device(device)
     profiler.end(f"run")
     if use_signpost:
         signpost(header="stop")
@@ -91,18 +91,17 @@ def run_model(device, tt_inputs, test_infra, num_warmup_iterations, num_measurem
 def run_2cq_model(device, tt_inputs, test_infra, num_warmup_iterations, num_measurement_iterations):
     tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(device)
     tt_image_res = tt_inputs_host.to(device, sharded_mem_config_DRAM)
-    op_event = ttnn.create_event(device)
-    write_event = ttnn.create_event(device)
+
     # Initialize the op event so we can write
-    ttnn.record_event(0, op_event)
+    op_event = ttnn.record_event(device, 0)
 
     profiler.start("compile")
     ttnn.wait_for_event(1, op_event)
     ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-    ttnn.record_event(1, write_event)
+    write_event = ttnn.record_event(device, 1)
     ttnn.wait_for_event(0, write_event)
     test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
-    ttnn.record_event(0, op_event)
+    op_event = ttnn.record_event(device, 0)
     _ = ttnn.from_device(test_infra.run(), blocking=True)
     profiler.end("compile")
     ttnn.dump_device_profiler(device)
@@ -110,10 +109,10 @@ def run_2cq_model(device, tt_inputs, test_infra, num_warmup_iterations, num_meas
     profiler.start("cache")
     ttnn.wait_for_event(1, op_event)
     ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-    ttnn.record_event(1, write_event)
+    write_event = ttnn.record_event(device, 1)
     ttnn.wait_for_event(0, write_event)
     test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
-    ttnn.record_event(0, op_event)
+    op_event = ttnn.record_event(device, 0)
     _ = ttnn.from_device(test_infra.run(), blocking=True)
     profiler.end("cache")
     ttnn.dump_device_profiler(device)
@@ -121,14 +120,14 @@ def run_2cq_model(device, tt_inputs, test_infra, num_warmup_iterations, num_meas
     for iter in range(0, num_warmup_iterations):
         ttnn.wait_for_event(1, op_event)
         ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-        ttnn.record_event(1, write_event)
+        write_event = ttnn.record_event(device, 1)
         ttnn.wait_for_event(0, write_event)
         test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
-        ttnn.record_event(0, op_event)
+        op_event = ttnn.record_event(device, 0)
         _ = ttnn.from_device(test_infra.run(), blocking=True)
         ttnn.dump_device_profiler(device)
 
-    ttnn.synchronize_devices(device)
+    ttnn.synchronize_device(device)
     if use_signpost:
         signpost(header="start")
     outputs = []
@@ -136,12 +135,12 @@ def run_2cq_model(device, tt_inputs, test_infra, num_warmup_iterations, num_meas
     for iter in range(0, num_measurement_iterations):
         ttnn.wait_for_event(1, op_event)
         ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-        ttnn.record_event(1, write_event)
+        write_event = ttnn.record_event(device, 1)
         ttnn.wait_for_event(0, write_event)
         test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
-        ttnn.record_event(0, op_event)
+        op_event = ttnn.record_event(device, 0)
         outputs.append(ttnn.from_device(test_infra.run(), blocking=False))
-    ttnn.synchronize_devices(device)
+    ttnn.synchronize_device(device)
     profiler.end(f"run")
     if use_signpost:
         signpost(header="stop")
@@ -182,7 +181,7 @@ def run_trace_model(device, tt_inputs, test_infra, num_warmup_iterations, num_me
         _ = ttnn.from_device(tt_output_res, blocking=True)
         ttnn.dump_device_profiler(device)
 
-    ttnn.synchronize_devices(device)
+    ttnn.synchronize_device(device)
     if use_signpost:
         signpost(header="start")
     outputs = []
@@ -191,7 +190,7 @@ def run_trace_model(device, tt_inputs, test_infra, num_warmup_iterations, num_me
         ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
         outputs.append(ttnn.from_device(tt_output_res, blocking=False))
-    ttnn.synchronize_devices(device)
+    ttnn.synchronize_device(device)
     profiler.end(f"run")
     if use_signpost:
         signpost(header="stop")
@@ -204,19 +203,17 @@ def run_trace_2cq_model(device, tt_inputs, test_infra, num_warmup_iterations, nu
     tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(device)
     tt_image_res = tt_inputs_host.to(device, sharded_mem_config_DRAM)
 
-    op_event = ttnn.create_event(device)
-    write_event = ttnn.create_event(device)
     # Initialize the op event so we can write
-    ttnn.record_event(0, op_event)
+    op_event = ttnn.record_event(device, 0)
 
     profiler.start("compile")
     ttnn.wait_for_event(1, op_event)
     ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-    ttnn.record_event(1, write_event)
+    write_event = ttnn.record_event(device, 1)
     ttnn.wait_for_event(0, write_event)
     test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
     spec = test_infra.input_tensor.spec
-    ttnn.record_event(0, op_event)
+    op_event = ttnn.record_event(device, 0)
     _ = ttnn.from_device(test_infra.run(), blocking=True)
     profiler.end("compile")
     ttnn.dump_device_profiler(device)
@@ -224,10 +221,10 @@ def run_trace_2cq_model(device, tt_inputs, test_infra, num_warmup_iterations, nu
     profiler.start("cache")
     ttnn.wait_for_event(1, op_event)
     ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-    ttnn.record_event(1, write_event)
+    write_event = ttnn.record_event(device, 1)
     ttnn.wait_for_event(0, write_event)
     test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
-    ttnn.record_event(0, op_event)
+    op_event = ttnn.record_event(device, 0)
     # Deallocate the previous output tensor here to make allocation match capture setup
     # This allows us to allocate the input tensor after at the same address
     test_infra.output_tensor.deallocate(force=True)
@@ -238,10 +235,10 @@ def run_trace_2cq_model(device, tt_inputs, test_infra, num_warmup_iterations, nu
     # Capture
     ttnn.wait_for_event(1, op_event)
     ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-    ttnn.record_event(1, write_event)
+    write_event = ttnn.record_event(device, 1)
     ttnn.wait_for_event(0, write_event)
     test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
-    ttnn.record_event(0, op_event)
+    op_event = ttnn.record_event(device, 0)
     test_infra.output_tensor.deallocate(force=True)
     trace_input_addr = ttnn.buffer_address(test_infra.input_tensor)
 
@@ -255,14 +252,14 @@ def run_trace_2cq_model(device, tt_inputs, test_infra, num_warmup_iterations, nu
     for iter in range(0, num_warmup_iterations):
         ttnn.wait_for_event(1, op_event)
         ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-        ttnn.record_event(1, write_event)
+        write_event = ttnn.record_event(device, 1)
         ttnn.wait_for_event(0, write_event)
         input_tensor = ttnn.reshard(tt_image_res, input_mem_config, input_tensor)
-        ttnn.record_event(0, op_event)
+        op_event = ttnn.record_event(device, 0)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
         ttnn.dump_device_profiler(device)
 
-    ttnn.synchronize_devices(device)
+    ttnn.synchronize_device(device)
     if use_signpost:
         signpost(header="start")
     outputs = []
@@ -270,14 +267,14 @@ def run_trace_2cq_model(device, tt_inputs, test_infra, num_warmup_iterations, nu
     for iter in range(0, num_measurement_iterations):
         ttnn.wait_for_event(1, op_event)
         ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-        ttnn.record_event(1, write_event)
+        write_event = ttnn.record_event(device, 1)
         ttnn.wait_for_event(0, write_event)
         # TODO: Add in place support to ttnn to_memory_config
         input_tensor = ttnn.reshard(tt_image_res, input_mem_config, input_tensor)
-        ttnn.record_event(0, op_event)
+        op_event = ttnn.record_event(device, 0)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
         outputs.append(tt_output_res.cpu(blocking=False))
-    ttnn.synchronize_devices(device)
+    ttnn.synchronize_device(device)
     profiler.end(f"run")
     if use_signpost:
         signpost(header="stop")
@@ -333,7 +330,7 @@ def run_perf_resnet(
         final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
         model_location_generator=model_location_generator,
     )
-    ttnn.synchronize_devices(device)
+    ttnn.synchronize_device(device)
 
     num_warmup_iterations = 5
     num_measurement_iterations = 15

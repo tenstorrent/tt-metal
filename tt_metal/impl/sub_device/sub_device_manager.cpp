@@ -24,10 +24,9 @@
 
 namespace tt::tt_metal {
 
-// assert here to avoid the need to include command_queue_interface.hpp in header
 static_assert(
-    SubDeviceManager::MAX_NUM_SUB_DEVICES <= DispatchSettings::DISPATCH_MESSAGE_ENTRIES,
-    "MAX_NUM_SUB_DEVICES must be less than or equal to DispatchSettings::DISPATCH_MESSAGE_ENTRIES");
+    DispatchSettings::DISPATCH_MESSAGE_ENTRIES <= std::numeric_limits<SubDeviceId::value_type>::max(),
+    "Max number of sub-devices must be less than or equal to the max value of SubDeviceId::Id");
 
 std::atomic<uint64_t> SubDeviceManager::next_sub_device_manager_id_ = 0;
 
@@ -175,7 +174,11 @@ uint8_t SubDeviceManager::get_sub_device_index(SubDeviceId sub_device_id) const 
 }
 
 void SubDeviceManager::validate_sub_devices() const {
-    TT_FATAL(sub_devices_.size() <= SubDeviceManager::MAX_NUM_SUB_DEVICES, "Too many sub devices specified");
+    TT_FATAL(
+        sub_devices_.size() <= DispatchSettings::DISPATCH_MESSAGE_ENTRIES,
+        "Number of sub-devices specified {} is larger than the max number of sub-devices {}",
+        sub_devices_.size(),
+        DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
     // Validate sub device cores fit inside the device grid
     const auto& compute_grid_size = device_->compute_with_storage_grid_size();
     CoreRange device_worker_cores = CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1});

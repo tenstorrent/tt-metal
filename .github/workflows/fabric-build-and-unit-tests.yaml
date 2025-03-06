@@ -49,10 +49,7 @@ jobs:
           {name: fabric unit tests, cmd: ./tests/scripts/run_cpp_fabric_tests.sh },
         ]
     name: ${{ inputs.arch }} ${{ inputs.runner-label }} ${{ matrix.test-group.name }}
-    runs-on:
-      - ${{ inputs.runner-label }}
-      - cloud-virtual-machine
-      - in-service
+    runs-on: ${{ startsWith(inputs.runner-label, 'tt-ubuntu') && fromJSON(format('["{0}"]', inputs.runner-label)) || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label)) }}
     env:
       ARCH_NAME: ${{ inputs.arch }}
       LOGURU_LEVEL: INFO
@@ -83,6 +80,7 @@ jobs:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: U06CXU895AP # Michael Chiou
       - uses: ./.github/actions/upload-artifact-with-job-uuid
+        timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           path: |

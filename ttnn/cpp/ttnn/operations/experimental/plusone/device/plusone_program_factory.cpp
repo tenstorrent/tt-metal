@@ -14,7 +14,8 @@ namespace ttnn::operations::experimental::detail {
 
 using namespace tt::constants;
 
-tt::tt_metal::operation::ProgramWithCallbacks plusone_single_core(const Tensor& input) {
+tt::tt_metal::operation::ProgramWithCallbacks plusone_single_core(
+    const Tensor& input, const std::optional<CoreRangeSet>& sub_core_grids) {
     tt::tt_metal::Program program{};
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
@@ -22,12 +23,13 @@ tt::tt_metal::operation::ProgramWithCallbacks plusone_single_core(const Tensor& 
 
     tt::tt_metal::IDevice* device = input.device();
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    uint32_t num_units = 1;  // single-core
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_units);
+    CoreRangeSet all_cores = CoreRangeSet(std::vector{CoreRange({0, 0}, {0, 0})});
+    uint32_t num_cores = 1;  // single-core
+
+    if (sub_core_grids.has_value()) {
+        all_cores = sub_core_grids.value();
+        num_cores = all_cores.num_cores();
+    }
 
     const auto& input_shape = input.get_padded_shape();
     const uint32_t W = input_shape[0];
@@ -57,9 +59,7 @@ tt::tt_metal::operation::ProgramWithCallbacks plusone_single_core(const Tensor& 
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, kernel_defines));
 
-    uint32_t g1_numcores = core_group_1.num_cores();
-    uint32_t g2_numcores = core_group_2.num_cores();
-    auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, false);
+    auto cores = corerange_to_cores(all_cores, num_cores, true);
 
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores.at(i);

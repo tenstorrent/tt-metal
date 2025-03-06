@@ -1,8 +1,8 @@
 # Llama-like Models
 
-This code can run Llama3 family of models and other similar models including Qwen2.5 and DeepSeek-R1-Distill variants.
+This code can run Llama3 family of models and other similar models including QwQ, Qwen2.5 and DeepSeek-R1-Distill variants.
 
-The current version supports the following Llama3 models:
+The current version is known to support the following Llama3 models:
 - Llama3.2-1B
 - Llama3.2-3B
 - Llama3.1-8B
@@ -10,6 +10,7 @@ The current version supports the following Llama3 models:
 - Llama3.1-70B (T3000 and TG-only)
 - Qwen2.5-7B
 - Qwen2.5-72B
+- QwQ-32B
 - DeepSeek R1 Distill Llama 3.3 70B (T3000 and TG-only)
 
 All the above llama models (with the exception of 70B due to its large size) are compatible and tested on the following Tenstorrent hardware:
@@ -20,22 +21,6 @@ All the above llama models (with the exception of 70B due to its large size) are
 
 Qwen-7B requires N300
 Qwen-72B requires T3K
-
-**Max Context Lengths (text-only)**: All of the compatible model/device combinations support a max prefill context-length of 128k, with the exception of Llama3.1-8B and Llama3.2-11B on N150 which have a max of 64k (due to a lack of memory). To support these large max context-lengths, chunked prefill is performed with different max chunk sizes as shown in the table below.
-
-Max Prefill Chunk Sizes (text-only):
-|              |      N150     |      N300     |      T3K       |      TG     |
-|--------------|---------------|---------------|----------------|-------------|
-| Llama3.2-1B  | 128k tokens   | 128k tokens   | 128k tokens    | 128k tokens |
-| Llama3.2-3B  | 8k tokens     | 128k tokens   | 128k tokens    | 128k tokens |
-| Llama3.1-8B  | 4k tokens     | 64k tokens    | 128k tokens    | 128k tokens |
-| Llama3.2-11B | 4k tokens     | 64k tokens    | 128k tokens    | 128k tokens |
-| Llama3.1-70B | Not supported | Not supported | 32k tokens     | 128k tokens |
-| DeepSeek-R1-Distill-Llama3.3-70B | Not supported | Not supported | 32k tokens     | 128k tokens |
-
-- These max chunk sizes are specific to max context length 128k and are configured via `MAX_PREFILL_CHUNK_SIZES_DIV1024` in [model_config.py](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tt/model_config.py). If the max context length is set to a smaller value using the `max_seq_len` flag (see [Run the demo](#run-the-demo)), these chunk sizes can possibly be increased due to using a smaller KV cache.
-
-**Max Context Lengths (Llama3.2-11B multimodal)**: Llama3.2-11B multimodal is currently only supported on N300 and T3000. On N300, a max prefill context length of 8k is supported, while T3000 supports a max context length of 128k.
 
 ## How to Run
 
@@ -175,3 +160,21 @@ pytest models/demos/llama3/demo/simple_text_demo.py -k "performance and batch-1"
 ### Expected performance and accuracy
 
 See [PERF.md](PERF.md) for expected performance and accuracy across different configurations.
+
+### Implementation notes
+
+**Chunked prefill (text-only)**: All of the compatible model/device combinations support a max prefill context-length of 128k, with the exception of Llama3.1-8B and Llama3.2-11B on N150 which have a max of 64k (due to a lack of memory). To support these large max context-lengths, chunked prefill is performed with different max chunk sizes as shown in the table below.
+
+Max Prefill Chunk Sizes (text-only):
+|              |      N150     |      N300     |      T3K       |      TG     |
+|--------------|---------------|---------------|----------------|-------------|
+| Llama3.2-1B  | 128k tokens   | 128k tokens   | 128k tokens    | 128k tokens |
+| Llama3.2-3B  | 8k tokens     | 128k tokens   | 128k tokens    | 128k tokens |
+| Llama3.1-8B  | 4k tokens     | 64k tokens    | 128k tokens    | 128k tokens |
+| Llama3.2-11B | 4k tokens     | 64k tokens    | 128k tokens    | 128k tokens |
+| Llama3.1-70B | Not supported | Not supported | 32k tokens     | 128k tokens |
+| DeepSeek-R1-Distill-Llama3.3-70B | Not supported | Not supported | 32k tokens     | 128k tokens |
+
+- These max chunk sizes are specific to max context length 128k and are configured via `MAX_PREFILL_CHUNK_SIZES_DIV1024` in [model_config.py](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tt/model_config.py). If the max context length is set to a smaller value using the `max_seq_len` flag (see [Run the demo](#run-the-demo)), these chunk sizes can possibly be increased due to using a smaller KV cache.
+
+**Chunked prefill (Llama3.2-11B multimodal)**: Llama3.2-11B multimodal is currently only supported on N300 and T3000. On N300, a max prefill context length of 8k is supported, while T3000 supports a max context length of 128k.

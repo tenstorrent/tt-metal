@@ -14,6 +14,7 @@
 
 #include "hal.hpp"
 #include "wormhole/wh_hal.hpp"
+#include "hw/inc/wormhole/eth_l1_address_map.h"
 
 // Reserved DRAM addresses
 // Host writes (4B value) to and reads from DRAM_BARRIER_BASE across all channels to ensure previous writes have been
@@ -66,6 +67,15 @@ void Hal::initialize_wh() {
         }
 
         // No relocation needed
+        return addr;
+    };
+
+    this->erisc_iram_relocate_func_ = [](uint64_t addr) {
+        if (addr == static_cast<uint32_t>(eth_iram_mem::address_map::ERISC_IRAM_BASE)) {
+            // IRAM enabled program starts from ERISC_IRAM_BASE. This relocation is for where to put the program.
+            // At first the program is placed on ERISC_IRAM_BASE, then erisc.cc copies to local IRAM.
+            return (uint64_t)eth_l1_mem::address_map::KERNEL_BASE;
+        }
         return addr;
     };
 

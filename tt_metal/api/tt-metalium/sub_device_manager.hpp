@@ -25,10 +25,6 @@ class IDevice;
 
 class SubDeviceManager {
 public:
-    static constexpr uint32_t MAX_NUM_SUB_DEVICES = 16;
-    static_assert(
-        MAX_NUM_SUB_DEVICES <= std::numeric_limits<SubDeviceId::value_type>::max(),
-        "MAX_NUM_SUB_DEVICES must be less than or equal to the max value of SubDeviceId::Id");
     // Constructor used for the default/global device
     SubDeviceManager(
         IDevice* device, std::unique_ptr<Allocator>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices);

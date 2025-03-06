@@ -32,8 +32,7 @@ autograd::TensorPtr all_gather(const autograd::TensorPtr& tensor, int dim) {
 }
 
 autograd::TensorPtr all_reduce(const autograd::TensorPtr& tensor) {
-    auto out = autograd::create_tensor(ttnn::experimental::all_reduce(
-        tensor->get_value(), ttnn::operations::reduction::ReduceType::Sum, 1, std::nullopt, ttnn::ccl::Topology::Ring));
+    auto out = autograd::create_tensor(ttnn_fixed::distributed::all_reduce(tensor->get_value()));
     autograd::GradFunction grad = [tensor, out]() { tensor->add_grad(out->get_grad()); };
     auto links = autograd::get_links(tensor);
     out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
@@ -43,8 +42,7 @@ autograd::TensorPtr all_reduce(const autograd::TensorPtr& tensor) {
 autograd::TensorPtr broadcast(const autograd::TensorPtr& tensor) {
     auto out = autograd::create_tensor(tensor->get_value());
     autograd::GradFunction grad = [tensor, out]() {
-        tensor->add_grad(ttnn::experimental::all_reduce(
-            out->get_grad(), ttnn::operations::reduction::ReduceType::Sum, 1, std::nullopt, ttnn::ccl::Topology::Ring));
+        tensor->add_grad(ttnn_fixed::distributed::all_reduce(out->get_grad()));
     };
     auto links = autograd::get_links(tensor);
     out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));

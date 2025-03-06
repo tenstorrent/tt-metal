@@ -18,9 +18,6 @@
 #include "hal_asserts.hpp"
 #include "blackhole/bh_hal.hpp"
 
-// FIXME: Eventually this file will be gone
-#include "hostdevcommon/common_runtime_address_map.h"  // L1_KERNEL_CONFIG_SIZE
-
 #include "umd/device/tt_soc_descriptor.h"  // CoreType
 
 #define GET_IERISC_MAILBOX_ADDRESS_HOST(x) ((std::uint64_t)&(((mailboxes_t*)MEM_IERISC_MAILBOX_BASE)->x))
@@ -33,6 +30,7 @@ HalCoreInfoType create_idle_eth_mem_map() {
     static_assert(MEM_IERISC_MAP_END % L1_ALIGNMENT == 0);
 
     std::vector<DeviceAddr> mem_map_bases;
+    constexpr std::uint32_t L1_KERNEL_CONFIG_SIZE = 69 * 1024;
 
     mem_map_bases.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT));
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BASE)] = MEM_ETH_BASE;

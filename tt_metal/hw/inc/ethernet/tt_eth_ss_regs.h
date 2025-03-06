@@ -15,6 +15,12 @@
 #define NUM_ETH_QUEUES 2
 #endif
 
+#define ETH_CTRL_REGS_START 0xFFB94000
+// Write to start ERISC IRAM load.
+// Write value: word address for the start of binary in L1.
+// Read value:  bit 0 = status (1=ongoing, 0=complete), bits [17:1] = currend read address.
+#define ETH_CORE_IRAM_LOAD ((0x30 + NUM_ECC_SOURCES * 4) + 0x1C)
+
 //////////////////
 // RISC debug regs
 #define ETH_RISC_REGS_START 0xFFB10000

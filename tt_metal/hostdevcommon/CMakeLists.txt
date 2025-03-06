@@ -9,7 +9,6 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
             TYPE HEADERS
             BASE_DIRS api
             FILES
-                api/hostdevcommon/common_runtime_address_map.h
                 api/hostdevcommon/common_values.hpp
                 api/hostdevcommon/dprint_common.h
                 api/hostdevcommon/kernel_structs.h

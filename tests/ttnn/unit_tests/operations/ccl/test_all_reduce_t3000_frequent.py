@@ -46,8 +46,7 @@ def run_with_trace(
         num_links=num_links,
         memory_config=output_mem_config,
     )
-    for device_id in mesh_device.get_device_ids():
-        ttnn.synchronize_device(mesh_device.get_device(device_id))
+    ttnn.synchronize_device(mesh_device)
 
     # Capture trace
     logger.info("Capturing trace")
@@ -60,15 +59,13 @@ def run_with_trace(
             memory_config=output_mem_config,
         )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-    for device_id in mesh_device.get_device_ids():
-        ttnn.synchronize_device(mesh_device.get_device(device_id))
+    ttnn.synchronize_device(mesh_device)
 
     # Run the op
     logger.info("Starting Trace perf test...")
     ttnn.execute_trace(mesh_device, trace_id, blocking=False)
     ttnn.release_trace(mesh_device, trace_id)
-    for device_id in mesh_device.get_device_ids():
-        ttnn.synchronize_device(mesh_device.get_device(device_id))
+    ttnn.synchronize_device(mesh_device)
 
     return output_tensor_mesh
 
@@ -137,8 +134,7 @@ def run_all_reduce_test(
             topology=topology,
         )
 
-        for device_id in mesh_device.get_device_ids():
-            ttnn.synchronize_device(mesh_device.get_device(device_id))
+        ttnn.synchronize_device(mesh_device)
         logger.info(f"Done iteration {i}")
 
     tt_out_tensors = ttnn.get_device_tensors(output_tensor_mesh)

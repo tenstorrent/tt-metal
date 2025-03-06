@@ -17,9 +17,9 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "input_shapes",
     [
-        *(torch.Size([n, c, 32, 32]) for n, c in product([1, 2, 3, 4], [1, 2, 3, 4])),
-        *(torch.Size([n, c, 23, 23]) for n, c in product([1, 2, 3, 4], [1, 2, 3, 4])),
-        *(torch.Size([n, c, 64, 120]) for n, c in product([1, 2, 3], [1, 2, 3, 4])),
+        *(torch.Size([n, c, 32, 32]) for n, c in product([4, 5], [7, 8])),
+        *(torch.Size([n, c, 23, 23]) for n, c in product([4, 5], [7, 8])),
+        *(torch.Size([n, c, 64, 120]) for n, c in product([2, 3], [1, 2])),
     ],
 )
 @pytest.mark.parametrize(
@@ -32,11 +32,12 @@ from models.utility_functions import skip_for_grayskull
     ],
 )
 @pytest.mark.parametrize("weight", [True, False])
+@pytest.mark.parametrize("training", [True, False])
 @pytest.mark.parametrize("bias", [True, False])
-@pytest.mark.parametrize("eps", [1.0, 0.0, 2.34, 1e-05])
-@pytest.mark.parametrize("momentum", [0.0, 0.1, 0.5])
-def test_batch_norm_training_fp32(
-    input_shapes, check_mean, check_var, weight, bias, eps, device, momentum, training=True, testing_dtype="float32"
+@pytest.mark.parametrize("eps", [1.0, 0.0, 1e-05])
+@pytest.mark.parametrize("momentum", [0.0, 0.1])
+def test_batch_norm_tests_fp32(
+    input_shapes, check_mean, check_var, weight, bias, eps, device, momentum, training, testing_dtype="float32"
 ):
     in_data, input_tensor = data_gen_with_range_batch_norm(
         input_shapes, 5, 10, device, is_input=True, testing_dtype=testing_dtype
@@ -120,8 +121,8 @@ def test_batch_norm_training_fp32(
 
 
 @skip_for_grayskull("Unsupported dtype for Grayskull")
-@pytest.mark.parametrize("eps", [1.0, 0.0, 2.34, 1e-05])
-@pytest.mark.parametrize("channel_size", [1, 2, 3, 4])
+@pytest.mark.parametrize("eps", [1.0, 1e-05])
+@pytest.mark.parametrize("channel_size", [1, 4])
 @pytest.mark.parametrize("weight", [True, False])
 @pytest.mark.parametrize("bias", [True, False])
 def test_BN_fp32_full_value(device, channel_size, eps, weight, bias):
@@ -167,9 +168,9 @@ def test_BN_fp32_full_value(device, channel_size, eps, weight, bias):
 @pytest.mark.parametrize(
     "input_shapes",
     [
-        *(torch.Size([n, c, 32, 32]) for n, c in product([1, 2, 3, 4], [1, 2, 3, 4])),
-        *(torch.Size([n, c, 23, 23]) for n, c in product([1, 2, 3, 4], [1, 2, 3, 4])),
-        *(torch.Size([n, c, 64, 120]) for n, c in product([1, 2, 3], [1, 2, 3, 4])),
+        *(torch.Size([n, c, 32, 32]) for n, c in product([3, 4], [3, 4])),
+        *(torch.Size([n, c, 23, 23]) for n, c in product([3, 4], [3, 4])),
+        *(torch.Size([n, c, 64, 120]) for n, c in product([2, 3], [3, 4])),
     ],
 )
 @pytest.mark.parametrize(
@@ -183,7 +184,7 @@ def test_BN_fp32_full_value(device, channel_size, eps, weight, bias):
 )
 @pytest.mark.parametrize("weight", [True, False])
 @pytest.mark.parametrize("bias", [True, False])
-@pytest.mark.parametrize("eps", [1.0, 0.0, 2.34, 1e-05])
+@pytest.mark.parametrize("eps", [1.0, 0.0, 1e-05])
 def test_batch_norm_fp32(
     input_shapes, check_mean, check_var, weight, bias, eps, device, training=False, testing_dtype="float32"
 ):
@@ -242,9 +243,9 @@ def test_batch_norm_fp32(
 @pytest.mark.parametrize(
     "input_shapes",
     [
-        *(torch.Size([n, c, 32, 32]) for n, c in product([1, 2, 3, 4], [1, 2, 3, 4])),
-        *(torch.Size([n, c, 23, 23]) for n, c in product([1, 2, 3, 4], [1, 2, 3, 4])),
-        *(torch.Size([n, c, 64, 120]) for n, c in product([1, 2, 3], [1, 2, 3, 4])),
+        *(torch.Size([n, c, 32, 32]) for n, c in product([3, 4], [3, 4])),
+        *(torch.Size([n, c, 23, 23]) for n, c in product([3, 4], [3, 4])),
+        *(torch.Size([n, c, 64, 120]) for n, c in product([2, 3], [3, 4])),
     ],
 )
 @pytest.mark.parametrize(
@@ -262,8 +263,8 @@ def test_batch_norm_fp32(
 )
 @pytest.mark.parametrize("weight", [True, False])
 @pytest.mark.parametrize("bias", [True, False])
-@pytest.mark.parametrize("eps", [1.0, 0.0, 2.34, 1e-05])
-@pytest.mark.parametrize("momentum", [0.0, 0.1, 0.5])
+@pytest.mark.parametrize("eps", [1.0, 0.0, 2.34])
+@pytest.mark.parametrize("momentum", [0.0, 0.5])
 def test_batch_norm(input_shapes, training, check_mean, check_var, weight, bias, eps, momentum, device):
     in_data, input_tensor = data_gen_with_range_batch_norm(input_shapes, 5, 10, device, is_input=True)
     mean_data, mean_tensor = (

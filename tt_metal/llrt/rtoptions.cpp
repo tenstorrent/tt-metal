@@ -132,6 +132,10 @@ RunTimeOptions::RunTimeOptions() {
         this->simulator_enabled = true;
         this->simulator_path = std::getenv("TT_METAL_SIMULATOR");
     }
+
+    if (getenv("TT_METAL_ENABLE_ERISC_IRAM")) {
+        this->erisc_iram_enabled = true;
+    }
 }
 
 const std::string& RunTimeOptions::get_root_dir() {

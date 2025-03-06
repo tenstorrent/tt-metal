@@ -57,7 +57,6 @@ autograd::TensorPtr scaled_dot_product_attention(
     ttml::autograd::GradFunction grad = [scale, query, key, value, attention_weights, out, mask]() {
         auto grad_output = out->get_grad();
         // (B, H, S, S) x (B, H, S, E) -> (B, H, S, E)
-        auto grad_v = matmul(attention_weights, grad_output, /* transpose_a */ true, /* transpose_b */ false);
         auto grad_attention_weights =
             matmul(grad_output, value->get_value(), /* transpose_a */ false, /* transpose_b */ true);
         auto grad_scaled_dot = ttnn::moreh_softmax_backward(
@@ -69,6 +68,7 @@ autograd::TensorPtr scaled_dot_product_attention(
             ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOpParallelizationStrategy::NONE,
             /* output_mem_config */ std::nullopt,
             /* compute_kernel_config */ core::ComputeKernelConfig::precise());
+        grad_attention_weights.deallocate();
 
         grad_scaled_dot = ttnn::experimental::mul(grad_scaled_dot, scale);
         auto grad_q = matmul(
@@ -82,6 +82,7 @@ autograd::TensorPtr scaled_dot_product_attention(
             query->get_value(),
             /* transpose_a */ true,
             /* transpose_b */ false);
+        auto grad_v = matmul(attention_weights, grad_output, /* transpose_a */ true, /* transpose_b */ false);
 
         query->add_grad(grad_q);
         key->add_grad(grad_k);

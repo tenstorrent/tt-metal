@@ -27,7 +27,7 @@ uint32_t get_preferred_noc(
     const ttnn::CoreCoord src,
     const ttnn::CoreCoord dst,
     const tt_metal::IDevice* device,
-    const bool use_hop_cores = false) {
+    const bool use_dedicated_noc = false) {
     /*
         NOC0: Preferred +x -> +y
         NOC1: Preferred -y -> -x
@@ -55,7 +55,7 @@ uint32_t get_preferred_noc(
     // std::cout << "src: (" << src_x << ", " << src_y << "), dst: (" << dst_x << ", " << dst_y << "), noc: " << noc <<
     // std::endl;
 
-    return use_hop_cores ? 1 : noc;
+    return use_dedicated_noc ? 1 : noc;
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0(
@@ -1890,15 +1890,29 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
     tt_metal::NOC in0_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
     tt_metal::NOC in1_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
 
+    bool use_dedicated_noc = use_hop_cores || in1_is_dram_interleaved;
+    tt_metal::NOC_MODE noc_mode =
+        use_dedicated_noc ? tt_metal::NOC_MODE::DM_DEDICATED_NOC : tt_metal::NOC_MODE::DM_DYNAMIC_NOC;
+
     /* Create the kernels */
     auto mm_kernel_in0_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_ring_all_gather.cpp",
-        ring_cores,
+        all_cores,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = in0_noc,
-            .noc_mode = tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
+            .noc_mode = noc_mode,
+            .compile_args = in0_sender_compile_time_args});
+
+    auto mm_kernel_in0_hop_cores_id = tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_ring_all_gather.cpp",
+        hop_cores,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = in0_noc,
+            .noc_mode = noc_mode,
             .compile_args = in0_sender_compile_time_args});
 
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
@@ -1908,7 +1922,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = in1_noc,
-            .noc_mode = tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
+            .noc_mode = noc_mode,
             .compile_args = in1_sender_writer_compile_time_args,
             .defines = mm_in1_kernel_defines});
 
@@ -2033,7 +2047,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
             next_core = cores[next_i % num_cores];
         }
         const auto& next_core_noc = device->worker_core_from_logical_core(next_core);
-        uint32_t noc = get_preferred_noc(core_noc, next_core_noc, device, use_hop_cores);
+        uint32_t noc = get_preferred_noc(core_noc, next_core_noc, device, use_dedicated_noc);
 
         std::vector<uint32_t> mm_in0_args = {
             i,                // ring_index
@@ -2078,7 +2092,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
         /* in0 */
         CoreCoord next_core = end_of_hop ? cores[num_cores - 1] : hcores[i + 1];
         const auto& next_core_noc = device->worker_core_from_logical_core(next_core);
-        uint32_t noc = get_preferred_noc(core_noc, next_core_noc, device, use_hop_cores);
+        uint32_t noc = get_preferred_noc(core_noc, next_core_noc, device, use_dedicated_noc);
 
         std::vector<uint32_t> mm_in0_args = {
             0,                // ring_index
@@ -2088,11 +2102,18 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
             (std::uint32_t)true,        // is_hop_core
             (std::uint32_t)end_of_hop,  // end_of_hop
         };
-        tt_metal::SetRuntimeArgs(program, mm_kernel_in0_id, core, mm_in0_args);
+        tt_metal::SetRuntimeArgs(program, mm_kernel_in0_hop_cores_id, core, mm_in0_args);
     }
 
     auto override_runtime_arguments_callback =
-        [mm_kernel_in0_id, mm_kernel_in1_sender_writer_id, cb_src0, cb_src1, cb_output, num_cores, cores, global_cb](
+        [mm_kernel_in0_id,
+         mm_kernel_in0_hop_cores_id,
+         mm_kernel_in1_sender_writer_id,
+         cb_src0,
+         cb_src1,
+         cb_output,
+         num_cores,
+         cores](
             const void* operation,
             tt::tt_metal::Program& program,
             const std::vector<tt::tt_metal::Tensor>& input_tensors,
@@ -2100,6 +2121,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
             const std::vector<tt::tt_metal::Tensor>& output_tensors) {
             TT_ASSERT(input_tensors.size() + optional_input_tensors.size() == 3);
             TT_ASSERT(output_tensors.size() == 1);
+
+            auto& global_cb = static_cast<const ttnn::operations::matmul::Matmul*>(operation)->global_cb;
 
             auto src_buffer_a = input_tensors[0].buffer();
             auto src_buffer_b = input_tensors[1].buffer();

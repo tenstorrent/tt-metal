@@ -226,6 +226,7 @@ jobs:
 
       - name: ☁️ Upload packages
         uses: actions/upload-artifact@v4
+        timeout-minutes: 10
         with:
           name: ${{ env.ARTIFACT_NAME }}
           path: |
@@ -244,6 +245,7 @@ jobs:
       - name: ☁️ Upload wheel
         if: ${{ inputs.build-wheel }}
         uses: actions/upload-artifact@v4
+        timeout-minutes: 10
         with:
           name: ${{ env.wheel_artifact_name }}
           path: /work/dist/
@@ -263,6 +265,7 @@ jobs:
       - name: ☁️ Upload tarball
         if: ${{ inputs.publish-artifact }}
         uses: actions/upload-artifact@v4
+        timeout-minutes: 10
         with:
           name: ${{ env.build_artifact_name }}
           path: /work/ttm_any.tar

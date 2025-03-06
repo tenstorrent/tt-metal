@@ -54,7 +54,7 @@ inline void notify_master_router() {
     // semaphore notifies all other routers that this router has completed
     // startup handshake with its ethernet peer.
     uint64_t dest_addr = get_noc_addr_helper(eth_chan_to_noc_xy[noc_index][master_router_chan], FABRIC_ROUTER_SYNC_SEM);
-    noc_fast_atomic_increment<DM_DYNAMIC_NOC>(
+    noc_fast_atomic_increment<DM_DEDICATED_NOC, true>(
         noc_index,
         NCRISC_AT_CMD_BUF,
         dest_addr,

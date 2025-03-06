@@ -6,7 +6,6 @@
 #include "ckernel.h"
 #include "ckernel_globals.h"
 #include "ckernel_include.h"
-#include "hostdevcommon/common_runtime_address_map.h"
 #include "llk_unpack_common_api.h"
 #include "stream_interface.h"
 #include "stream_io_map.h"

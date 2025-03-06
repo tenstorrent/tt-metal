@@ -21,6 +21,8 @@
 #include <core_coord.hpp>
 #include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
+#include "hw/inc/wormhole/eth_l1_address_map.h"
+
 namespace tt {
 
 namespace tt_metal {
@@ -442,6 +444,17 @@ void EthernetKernel::read_binaries(IDevice* device) {
     ll_api::memory const& binary_mem = llrt::get_risc_binary(
         build_state.get_target_out_path(this->kernel_full_name_),
         load_type);
+    if (tt::llrt::RunTimeOptions::get_instance().get_erisc_iram_enabled() && this->config_.eth_mode != Eth::IDLE) {
+        // text_addr and some of span's addr point to IRAM base address.
+        // However it need to be placed L1 kernel base address for FW to copy it to IRAM then kick off
+        // The kernel can run with IRAM base address once it started.
+        const_cast<ll_api::memory&>(binary_mem)
+            .set_text_addr(tt::tt_metal::hal.erisc_iram_relocate_dev_addr((uint64_t)binary_mem.get_text_addr()));
+        std::function<void(uint64_t& addr)> update_callback = [](uint64_t& addr) {
+            addr = tt::tt_metal::hal.erisc_iram_relocate_dev_addr(addr);
+        };
+        const_cast<ll_api::memory&>(binary_mem).update_spans(update_callback);
+    }
     binaries.push_back(&binary_mem);
     uint32_t binary_size = binary_mem.get_packed_size();
     log_debug(LogLoader, "ERISC={}, name={}, size={} (bytes)", erisc_id, this->name(), binary_size);

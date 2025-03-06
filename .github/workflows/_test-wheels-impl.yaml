@@ -35,6 +35,7 @@ jobs:
         with:
           os: ${{ matrix.os }}
       - uses: actions/download-artifact@v4
+        timeout-minutes: 10
         with:
           name: eager-dist-${{ matrix.os }}-any
       - name: Set up end-to-end tests environment

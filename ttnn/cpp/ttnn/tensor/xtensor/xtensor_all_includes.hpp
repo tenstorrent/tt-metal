@@ -16,3 +16,5 @@
 #include <xtensor/xstrided_view.hpp>
 #include <xtensor/xtensor.hpp>
 #include <xtensor/xview.hpp>
+#include <xtensor/xmanipulation.hpp>
+#include <xtensor/xtensor_forward.hpp>

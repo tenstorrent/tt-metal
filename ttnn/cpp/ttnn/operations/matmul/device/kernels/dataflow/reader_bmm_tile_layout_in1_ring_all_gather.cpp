@@ -96,5 +96,6 @@ void kernel_main() {
 
 #ifdef ENABLE_GLOBAL_CB
     experimental::update_remote_cb_config_in_l1(remote_cb_id);
+    noc_async_atomic_barrier();
 #endif
 }

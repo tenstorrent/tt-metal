@@ -109,6 +109,7 @@ uint32_t get_shards_per_width(const ShardSpec& shard_spec, TensorMemoryLayout me
 class ShardShapeGenerator {
     CoreCoord end_core;
     bool row_major;
+    TensorMemoryLayout memory_layout;
     std::array<uint32_t, 2> shard_shape;
     std::array<uint32_t, 2> last_shard_shape;
 
@@ -116,8 +117,10 @@ public:
     ShardShapeGenerator() = default;
 
     ShardShapeGenerator(const ShardSpec& shard_spec, const Tensor& tensor) :
-        end_core(shard_spec.grid.ranges().begin()->end_coord),
-        row_major(shard_spec.orientation == ShardOrientation::ROW_MAJOR) {
+        // core ranges are sorted, so the last one is indeed the last core
+        end_core(shard_spec.grid.ranges().rbegin()->end_coord),
+        row_major(shard_spec.orientation == ShardOrientation::ROW_MAJOR),
+        memory_layout(tensor.memory_config().memory_layout) {
         auto tile_height = tensor.tensor_spec().tile().get_height();
         auto tile_width = tensor.tensor_spec().tile().get_width();
 
@@ -132,19 +135,26 @@ public:
             shard_shape[1] - (tt::round_up(Wt, shard_shape[1]) - Wt),
         };
     }
-
     std::array<uint32_t, 2> operator()(CoreCoord core) const {
         const unsigned majorDim = row_major ? 1 : 0;
         const unsigned minorDim = row_major ? 0 : 1;
 
         auto current_shape = shard_shape;
-        if (core.x == end_core.x) {
-            current_shape[majorDim] = last_shard_shape[majorDim];
+        // for uneven shard, HEIGHT, WIDTH, and BLOCK handling order should be all different in kernel
+        // only HEIGHT sharding works naturally
+        // for eltwise, it should be insignificant to process the padded tile although it is a waste
+        if (core == end_core) {
+            if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+                current_shape[majorDim] = last_shard_shape[majorDim];
+                current_shape[minorDim] = last_shard_shape[minorDim];
+            } else {
+                TT_FATAL(
+                    current_shape[majorDim] == last_shard_shape[majorDim] and
+                        current_shape[minorDim] == last_shard_shape[minorDim],
+                    "no un-even shard size support memory layout {}",
+                    memory_layout);
+            }
         }
-        if (core.y == end_core.y) {
-            current_shape[minorDim] = last_shard_shape[minorDim];
-        }
-
         return current_shape;
     }
 };
@@ -171,8 +181,7 @@ void set_or_update_runtime_arguments(
     const bool has_sharding = shard_specs.has_value();
     auto grid = has_sharding ? shard_specs->a_shard_spec.grid : CoreRangeSet{};
 
-    bool row_major =
-        has_sharding ? shard_specs->a_shard_spec.orientation == ShardOrientation::ROW_MAJOR ? true : false : true;
+    const auto row_major = has_sharding ? shard_specs->a_shard_spec.orientation == ShardOrientation::ROW_MAJOR : true;
 
     // zero_start_grid is a flag to indicate that we are using a single rectangular grid that starts at (0, 0)
     // as well as having the sharded tensors (if any) start at (0, 0)
@@ -293,6 +302,17 @@ void set_or_update_runtime_arguments(
             cWt};
         handle_args(program, reader_kernel_id, core, reader_runtime_args);
 
+        const bool is_quant_op = (operation_attributes.binary_op_type == BinaryOpType::QUANT) ||
+                                 (operation_attributes.binary_op_type == BinaryOpType::REQUANT) ||
+                                 (operation_attributes.binary_op_type == BinaryOpType::DEQUANT);
+        TT_FATAL(
+            is_quant_op == ((operation_attributes.post_activations.size() == 1) &&
+                            (operation_attributes.post_activations[0].op_type ==
+                             ttnn::operations::unary::UnaryOpType::ZERO_POINT)),
+            "Quantization op needs to exactly one zero-point value as a post activation");
+        const uint32_t quantization_zero_point =
+            is_quant_op ? std::bit_cast<uint32_t>(operation_attributes.post_activations[0].params[0]) : 0u;
+
         if (b.has_value()) {
             if (has_sharding) {
                 auto b_shard_shape = b_shard_shape_generator(core);
@@ -315,14 +335,11 @@ void set_or_update_runtime_arguments(
 
             auto [freq, counter] =
                 calculate_compute_kernel_args(operation_attributes.subtile_broadcast_type, c_start_id, cHt, cWt);
-            std::array compute_runtime_args = {c_num_tiles, freq, counter};
+            std::array compute_runtime_args = {c_num_tiles, freq, counter, quantization_zero_point};
             handle_args(program, compute_kernel_id, core, compute_runtime_args);
         } else {
             const auto scalar = *operation_attributes.scalar;
-            const auto packed_scalar = a.get_dtype() == DataType::FLOAT32 ? std::bit_cast<uint32_t>(scalar)
-                                       : a.get_dtype() == DataType::INT32
-                                           ? std::bit_cast<uint32_t>(static_cast<int32_t>(scalar))
-                                           : pack_two_bfloat16_into_uint32({scalar, scalar});
+            const auto packed_scalar = pack_scalar_runtime_arg(scalar, a.get_dtype(), is_quant_op);
             std::array writer_runtime_args = {
                 packed_scalar,
                 c.buffer()->address(),
@@ -338,7 +355,7 @@ void set_or_update_runtime_arguments(
                 0u};
             handle_args(program, writer_kernel_id, core, writer_runtime_args);
 
-            std::array compute_runtime_args = {c_num_tiles, 0u, 0u};
+            std::array compute_runtime_args = {c_num_tiles, 0u, 0u, quantization_zero_point};
             handle_args(program, compute_kernel_id, core, compute_runtime_args);
         }
 
@@ -418,11 +435,18 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         add_activation_defines(compute_kernel_defines, lhs_activations, "LHS");
         add_activation_defines(compute_kernel_defines, rhs_activations, "RHS");
 
-        if (lhs_activations.empty() and rhs_activations.empty() and post_activations.size() == 1 and
-            post_activations[0].op_type == unary::UnaryOpType::RELU) {
-            compute_kernel_defines["PACK_RELU"] = "1";
+        if (lhs_activations.empty() and rhs_activations.empty() and post_activations.size() == 1) {
             compute_kernel_defines["PROCESS_POST_ACTIVATIONS(i)"] = "";
-            unary::utils::update_macro_defines(unary::UnaryOpType::RELU, compute_kernel_defines);
+            if (post_activations[0].op_type == unary::UnaryOpType::RELU) {
+                compute_kernel_defines["PACK_RELU"] = "1";
+                unary::utils::update_macro_defines(unary::UnaryOpType::RELU, compute_kernel_defines);
+            } else if (post_activations[0].op_type == unary::UnaryOpType::ZERO_POINT) {
+                // Zero-point is passed as the 4th run-time kernel argument
+                compute_kernel_defines["QUANT_ZERO_POINT_RT_ARGS_IDX"] = "3";
+                unary::utils::update_macro_defines(unary::UnaryOpType::ZERO_POINT, compute_kernel_defines);
+            } else {
+                add_activation_defines(compute_kernel_defines, post_activations, "POST");
+            }
         } else {
             add_activation_defines(compute_kernel_defines, post_activations, "POST");
         }

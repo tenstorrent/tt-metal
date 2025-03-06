@@ -77,7 +77,10 @@ protected:
         }
     }
 
-    void TearDown() override { tt::tt_metal::detail::CloseDevices(devices_map_); }
+    void TearDown() override {
+        tt::tt_metal::detail::CloseDevices(devices_map_);
+        tt::tt_metal::detail::InitializeFabricConfig(tt::FabricConfig::DISABLED);
+    }
 };
 
 }  // namespace tt::tt_fabric
