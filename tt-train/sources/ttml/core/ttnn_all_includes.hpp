@@ -72,4 +72,6 @@
 #include <ttnn/tensor/xtensor/partition.hpp>                                                       // NOLINT
 #include <ttnn/tensor/xtensor/xtensor_all_includes.hpp>                                            // NOLINT
 #include <ttnn/types.hpp>                                                                          // NOLINT
+
+#include "ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama.hpp"  // NOLINT
 #pragma GCC diagnostic pop

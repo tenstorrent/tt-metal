@@ -20,4 +20,8 @@ tt::tt_metal::Tensor mean_ttnn(const tt::tt_metal::Tensor& t, int dim, bool keep
 
 tt::tt_metal::Tensor sum_moreh(const tt::tt_metal::Tensor& t, int dim, bool keep_dim);
 tt::tt_metal::Tensor sum_ttnn(const tt::tt_metal::Tensor& t, int dim, bool keep_dim);
+
+tt::tt_metal::Tensor to_l1_interleaved(const tt::tt_metal::Tensor& t);
+tt::tt_metal::Tensor to_dram_interleaved(const tt::tt_metal::Tensor& t);
+
 }  // namespace ttml::ttnn_fixed
