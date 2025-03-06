@@ -234,4 +234,111 @@ TEST_F(DeviceFixture, TensixDirectedStreamRegWriteRead) {
     }
 }
 
+// Both data movement riscs issue inline writes
+TEST_F(DeviceFixture, TensixInlineWriteDedicatedNoc) {
+    CoreCoord writer_core{0, 0};
+    CoreCoord receiver_core(0, 1);
+    uint32_t first_receiver_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
+    uint32_t second_receiver_addr = first_receiver_addr + hal.get_alignment(HalMemType::L1);
+    uint32_t value_to_write = 39;
+
+    for (tt_metal::IDevice* device : this->devices_) {
+        std::vector<uint32_t> readback(32 / sizeof(uint32_t), 0);
+        tt_metal::detail::WriteToDeviceL1(device, receiver_core, first_receiver_addr, readback);
+
+        CoreCoord virtual_receiver_core = device->worker_core_from_logical_core(receiver_core);
+
+        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::KernelHandle kernel0 = tt_metal::CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/inline_writer.cpp",
+            writer_core,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::NOC_0});
+
+        // last two args unused
+        tt_metal::SetRuntimeArgs(
+            program,
+            kernel0,
+            writer_core,
+            {virtual_receiver_core.x, virtual_receiver_core.y, first_receiver_addr, value_to_write});
+
+        tt_metal::KernelHandle kernel1 = tt_metal::CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/inline_writer.cpp",
+            writer_core,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::NOC_1});
+
+        // last two args unused
+        tt_metal::SetRuntimeArgs(
+            program,
+            kernel1,
+            writer_core,
+            {virtual_receiver_core.x, virtual_receiver_core.y, second_receiver_addr, value_to_write + 1});
+
+        tt_metal::detail::LaunchProgram(device, program);
+
+        tt_metal::detail::ReadFromDeviceL1(device, receiver_core, first_receiver_addr, 32, readback);
+        EXPECT_EQ(readback[0], value_to_write);
+        EXPECT_EQ(readback[4], value_to_write + 1);
+    }
+}
+
+// Both data movement riscs issue inline writes using the same noc
+TEST_F(DeviceFixture, TensixInlineWriteDynamicNoc) {
+    CoreCoord writer_core{0, 0};
+    CoreCoord receiver_core(0, 1);
+    uint32_t receiver_addr0 = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
+    uint32_t receiver_addr2 = receiver_addr0 + (2 * hal.get_alignment(HalMemType::L1));
+    uint32_t value_to_write = 39;
+
+    for (tt_metal::IDevice* device : this->devices_) {
+        std::vector<uint32_t> readback(80 / sizeof(uint32_t), 0);
+        tt_metal::detail::WriteToDeviceL1(device, receiver_core, receiver_addr0, readback);
+
+        CoreCoord virtual_receiver_core = device->worker_core_from_logical_core(receiver_core);
+
+        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::KernelHandle kernel0 = tt_metal::CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/inline_writer.cpp",
+            writer_core,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt_metal::NOC::NOC_0,
+                .noc_mode = tt_metal::NOC_MODE::DM_DYNAMIC_NOC});
+
+        tt_metal::SetRuntimeArgs(
+            program,
+            kernel0,
+            writer_core,
+            {virtual_receiver_core.x, virtual_receiver_core.y, receiver_addr0, value_to_write});
+
+        tt_metal::KernelHandle kernel1 = tt_metal::CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/inline_writer.cpp",
+            writer_core,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = tt_metal::NOC::NOC_1,
+                .noc_mode = tt_metal::NOC_MODE::DM_DYNAMIC_NOC});
+
+        tt_metal::SetRuntimeArgs(
+            program,
+            kernel1,
+            writer_core,
+            {virtual_receiver_core.x, virtual_receiver_core.y, receiver_addr2, value_to_write + 2});
+
+        tt_metal::detail::LaunchProgram(device, program);
+
+        tt_metal::detail::ReadFromDeviceL1(device, receiver_core, receiver_addr0, 64, readback);
+        uint32_t expected_value = value_to_write;
+        for (int i = 0; i < 4; i++) {
+            EXPECT_EQ(readback[i * 4], expected_value);
+            expected_value++;
+        }
+    }
+}
+
 }  // namespace tt::tt_metal
