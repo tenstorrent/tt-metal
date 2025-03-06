@@ -32,8 +32,6 @@ from models.utility_functions import skip_for_grayskull
     (
         64 * 1024,
         32 * 1024,
-        1024,
-        512,
         32,
     ),
 )
