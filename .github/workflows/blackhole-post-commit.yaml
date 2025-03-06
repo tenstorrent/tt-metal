@@ -99,6 +99,18 @@ jobs:
       runner-label: ${{ inputs.runner-label || 'BH' }}
       timeout: 60
       os: "ubuntu-22.04"
+  # FD Model Tests
+  models-unit-tests:
+    needs: build-artifact
+    secrets: inherit
+    strategy:
+      fail-fast: false
+    uses: ./.github/workflows/models-post-commit.yaml
+    with:
+      arch: blackhole
+      runner-label: ${{ inputs.runner-label || 'BH' }}
+      timeout: 60
+      os: "ubuntu-22.04"
 
 #   profiler-regression:
 #     needs: build-artifact-profiler
