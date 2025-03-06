@@ -16,7 +16,7 @@
 namespace ttnn::operations::experimental::conv3d {
 
 namespace detail {
-inline std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
+std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
     uint32_t T_in,
     uint32_t H_in,
     uint32_t W_in,
