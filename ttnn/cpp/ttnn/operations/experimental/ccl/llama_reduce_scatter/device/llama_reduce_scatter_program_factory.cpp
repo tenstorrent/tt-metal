@@ -19,36 +19,12 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     using namespace tt;
     using namespace tt::tt_metal;
     using namespace tt::tt_fabric;
+    uint32_t num_devices = 2;
 
     const auto& input_tensor = tensor_args.input_tensor;
     tt::tt_metal::IDevice* device = input_tensor.device();
 
     auto control_plane = tt::DevicePool::instance().get_control_plane();
-
-    // Find a device with a neighbour in the East direction
-    bool connection_found = false;
-    const auto [mesh_id, chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
-    // Get neighbours within a mesh in the East direction
-    auto eastern_devices = control_plane->get_intra_chip_neighbors(mesh_id, chip_id, RoutingDirection::E);
-    auto western_devices = control_plane->get_intra_chip_neighbors(mesh_id, chip_id, RoutingDirection::W);
-
-    auto eastern_border_chip_id = eastern_devices.size() > 0 ? eastern_devices[0] : chip_id;
-    auto western_border_chip_id = western_devices.size() > 0 ? western_devices[0] : chip_id;
-    std::cout << "chip_id: " << chip_id << " eastern_border_chip_id: " << eastern_border_chip_id
-              << " western_border_chip_id: " << western_border_chip_id << std::endl;
-
-    auto eastern_routers = control_plane->get_routers_to_chip(mesh_id, chip_id, mesh_id, eastern_border_chip_id);
-    std::cout << "eastern_routers: " << eastern_routers.size() << std::endl;
-    for (const auto& router : eastern_routers) {
-        std::cout << "eastern_router: " << router.first << " " << router.second.x << " " << router.second.y
-                  << std::endl;
-    }
-    auto western_routers = control_plane->get_routers_to_chip(mesh_id, chip_id, mesh_id, western_border_chip_id);
-    std::cout << "western_routers: " << western_routers.size() << std::endl;
-    for (const auto& router : western_routers) {
-        std::cout << "western_router: " << router.first << " " << router.second.x << " " << router.second.y
-                  << std::endl;
-    }
 
     const auto& input_shape = input_tensor.get_logical_shape();
     const auto dim = operation_attributes.dim;
@@ -70,16 +46,11 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
 
     uint32_t shard_height = shard_spec.shape[0];
     uint32_t shard_width = shard_spec.shape[1];
-    std::cout << "shard_height: " << shard_height << " shard_width: " << shard_width << std::endl;
     uint32_t tiles_per_core_width = shard_width / tile_shape[1];
-    std::cout << "tiles_per_core_width: " << tiles_per_core_width << std::endl;
 
     uint32_t shard_height_output = output_shard_spec.shape[0];
     uint32_t shard_width_output = output_shard_spec.shape[1];
-    std::cout << "shard_height_output: " << shard_height_output << " shard_width_output: " << shard_width_output
-              << std::endl;
     uint32_t tiles_per_core_width_output = shard_width_output / tile_shape[1];
-    std::cout << "tiles_per_core_width_output: " << tiles_per_core_width_output << std::endl;
 
     tt::tt_metal::Program program{};
     uint32_t element_size = input_tensor.element_size();
@@ -143,7 +114,14 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     auto cb_fabric_sender = tt::tt_metal::CreateCircularBuffer(program, all_cores, fabric_sender_cb_config);
 
     std::vector<uint32_t> reader_compile_time_args = {
-        input_page_size, src_cb_index, dst_cb_index, 0, tiles_per_core_width, (uint32_t)chip_id};
+        input_page_size,
+        src_cb_index,
+        dst_cb_index,
+        0,
+        tiles_per_core_width,
+        fabric_sender_cb_index,
+        fabric_receiver_cb_index,
+        client_interface_cb_index};
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -155,7 +133,14 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     std::vector<uint32_t> compute_kernel_args = {};
 
     std::vector<uint32_t> writer_compile_time_args = {
-        input_page_size, src_cb_index, 0, tiles_per_core_width, (uint32_t)chip_id};
+        input_page_size,
+        src_cb_index,
+        fabric_sender_cb_index,
+        fabric_receiver_cb_index,
+        client_interface_cb_index,
+        0,
+        tiles_per_core_width,
+        PACKET_HEADER_SIZE_BYTES};
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -164,18 +149,50 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    std::vector<uint32_t> reader_runtime_args = {src_buffer->address(), dst_buffer->address()};
-    std::vector<uint32_t> writer_runtime_args = {dst_buffer->address()};
+    const auto [mesh_id, chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
 
     auto cores = corerange_to_cores(all_cores, std::nullopt);
     uint32_t start_block = 0;
     uint32_t num_blocks_per_core = tiles_per_core_width;
-    for (const auto& core : cores) {
+    uint32_t num_cores = cores.size();
+    uint32_t split_size = num_cores / num_devices;
+    for (uint32_t i = 0; i < num_cores; i++) {
+        auto core = cores[i];
+        std::vector<uint32_t> reader_runtime_args = {src_buffer->address(), dst_buffer->address()};
+        std::vector<uint32_t> writer_runtime_args = {dst_buffer->address()};
+        uint32_t target_chip_id = i / split_size;  // 0 or 1 for 2 devices
+        if (target_chip_id == chip_id) {
+            // this is the target destination device
+            bool write_output = true;
+            writer_runtime_args.push_back((uint32_t)write_output);
+            // add sharded addr gen stuff here or in compile time args
+            tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
+            tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
+            continue;
+        }
+        // this is a source device
+        bool write_output = false;
+        writer_runtime_args.push_back((uint32_t)write_output);
+        // get the router to the target device
+        auto dir = target_chip_id > chip_id ? RoutingDirection::E : RoutingDirection::W;
+        auto routers = control_plane->get_routers_to_chip(mesh_id, chip_id, mesh_id, target_chip_id);
+        auto router_noc_xy = tt_metal::hal.noc_xy_encoding(routers[0].second.x, routers[0].second.y);
+        auto my_noc_xy = tt_metal::hal.noc_xy_encoding(core.x, core.y);
+        auto dst_noc_xy = tt_metal::hal.noc_xy_encoding(core.x, core.y);  // chip 0 core (x, y) -> core (x, y)
+        // on chip 0, chip 1 writes to 160 tiles from the top for LLaMA 7B
+        uint32_t offset_to_receiver = chip_id * (tiles_per_core_width * input_page_size);
+        std::cout << "chip_id: " << chip_id << " target_chip_id: " << target_chip_id
+                  << " offset_to_receiver: " << offset_to_receiver << " router_noc_xy: " << router_noc_xy << std::endl;
+
+        writer_runtime_args.push_back(router_noc_xy);
+        writer_runtime_args.push_back(offset_to_receiver);
+        writer_runtime_args.push_back(my_noc_xy);
+        writer_runtime_args.push_back(mesh_id);
+        writer_runtime_args.push_back(target_chip_id);
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
     }
 
-    std::cout << "output tensor memory config in program factory: " << output_tensor.memory_config() << std::endl;
     return {
         std::move(program),
         {.unary_reader_kernel_id = unary_reader_kernel_id,
