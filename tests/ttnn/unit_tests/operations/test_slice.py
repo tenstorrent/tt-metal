@@ -62,29 +62,85 @@ def run_slice_rm_sharded(device, n, c, h, w):
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
 
 
-@pytest.mark.parametrize("dims", [[16, 256, 256, 64]])
-@pytest.mark.parametrize("begins", [[0, 0, 0, 0]])
-@pytest.mark.parametrize("ends", [[1, 1, 256, 64]])
-@pytest.mark.parametrize("strides", [[1, 1, 1, 1]])
+@pytest.mark.parametrize(
+    "dims, begins, ends",
+    [
+        [[16, 256, 256, 64], [0, 0, 0, 0], [1, 1, 256, 64]],
+        [[1, 256, 128, 64], [0, 128, 0, 0], [1, 256, 128, 64]],
+    ],
+)
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
-def test_slice_write_four_dim(dims, begins, ends, strides, layout, device):
+def test_slice_write_four_dim(dims, begins, ends, layout, device):
+    strides = [1, 1, 1, 1]
     torch.manual_seed(2005)
     torch_output = torch.zeros(dims)
     slices = []
     for i in range(len(dims)):
         slices.append(slice(begins[i], ends[i], strides[i]))
 
+    print("Slices = ", slices)
     torch_input = torch_output[slices[0], slices[1], slices[2], slices[3]]
     print("torch_input.shape", torch_input.shape, " torch_output.shape", torch_output.shape)
-    torch_input = torch.ones(torch_input.shape)
-    torch_output[slices[0], slices[1], slices[2], slices[3]] = torch_input
+    torch_input = torch.rand(torch_input.shape)
 
     ttnn_output = ttnn.from_torch(torch_output, device=device, layout=layout, dtype=ttnn.bfloat16)
+    ttnn_output = ttnn.to_memory_config(ttnn_output, ttnn.DRAM_MEMORY_CONFIG)
     ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=ttnn.bfloat16)
+    ttnn_input = ttnn.to_memory_config(ttnn_input, ttnn.L1_MEMORY_CONFIG)
     ttnn.slice_write(ttnn_input, ttnn_output, begins, ends, strides)
     output = ttnn.to_torch(ttnn_output)
+    torch_output[slices[0], slices[1], slices[2], slices[3]] = torch_input
+    written_output = output[slices[0], slices[1], slices[2], slices[3]]
+    # assert False
+    assert_with_pcc(written_output, torch_input, 0.9999)
+    assert_with_pcc(torch_output, output, 0.9999)
 
-    assert_with_pcc(torch_output, output, 0.999999)
+
+@pytest.mark.parametrize(
+    "dims, slice_dim, slice_size",
+    [
+        [[16, 256, 256, 64], 1, 32],
+        [[1, 256, 128, 32], 2, 16],
+    ],
+)
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
+def test_slice_write_copy(device, dims, slice_dim, slice_size, layout):
+    strides = [1, 1, 1, 1]
+    torch.manual_seed(2005)
+    torch_input = torch.randn(dims)
+    ttnn_output = ttnn.zeros(dims, device=device, layout=layout, dtype=ttnn.bfloat16)
+    ttnn_output = ttnn.to_memory_config(ttnn_output, ttnn.DRAM_MEMORY_CONFIG)
+    # ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=ttnn.bfloat16)
+    # ttnn_input = ttnn.to_memory_config(ttnn_input, ttnn.L1_MEMORY_CONFIG)
+
+    for i in range(dims[slice_dim] // slice_size):
+        begins = [0, 0, 0, 0]
+        ends = [dims[0], dims[1], dims[2], dims[3]]
+        begins[slice_dim] = i * slice_size
+        ends[slice_dim] = (i + 1) * slice_size
+        print("Begins = ", begins, " Ends = ", ends)
+        this_ttnn_input = ttnn.from_torch(
+            torch_input[begins[0] : ends[0], begins[1] : ends[1], begins[2] : ends[2], begins[3] : ends[3]],
+            device=device,
+            layout=layout,
+            dtype=ttnn.bfloat16,
+        )
+        print("this_torch_input.shape", this_ttnn_input.shape)
+
+        this_ttnn_input = ttnn.to_memory_config(this_ttnn_input, ttnn.L1_MEMORY_CONFIG)
+        ttnn.slice_write(this_ttnn_input, ttnn_output, begins, ends, strides)
+
+    output = ttnn.to_torch(ttnn_output)
+    assert_with_pcc(torch_input, output, 0.9999)
+
+    # ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=ttnn.bfloat16)
+    # ttnn.slice_write(ttnn_input, ttnn_output, begins, ends, strides)
+    # output = ttnn.to_torch(ttnn_output)
+    # torch_output[slices[0], slices[1], slices[2], slices[3]] = torch_input
+    # written_output = output[slices[0], slices[1], slices[2], slices[3]]
+    # # assert False
+    # assert_with_pcc(written_output, torch_input, 0.9999)
+    # assert_with_pcc(torch_output, output, 0.9999)
 
 
 @pytest.mark.parametrize("n", [16])
