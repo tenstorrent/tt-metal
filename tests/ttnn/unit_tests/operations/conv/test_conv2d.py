@@ -7,7 +7,6 @@ from loguru import logger
 import torch
 import pytest
 from models.utility_functions import (
-    skip_for_grayskull,
     is_grayskull,
     is_wormhole_b0,
     is_blackhole,
@@ -425,7 +424,6 @@ def test_conv_features(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 2 * 16384}], indirect=True)
 @pytest.mark.parametrize("groups", [1, 2])
 @pytest.mark.parametrize("stride", [2])
@@ -505,7 +503,6 @@ def test_conv_features_multi_device(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("stride", [1])
 @pytest.mark.parametrize(
@@ -709,7 +706,6 @@ def test_conv_ws(
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 @pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
-@skip_for_grayskull()
 def test_conv_for_segformer_512x512(
     device,
     torch_tensor_map,
@@ -865,7 +861,6 @@ def test_resnet50_conv_gs(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override",
@@ -985,7 +980,6 @@ def test_resnet50_conv_wh(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override",
@@ -1047,7 +1041,6 @@ def test_conv_mem_config_wh(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override",
@@ -1306,7 +1299,6 @@ def test_sd_conv(
         )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override",
@@ -1572,7 +1564,6 @@ def test_unet_conv(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override, use_shallow_conv_variant",
@@ -1665,7 +1656,6 @@ def test_unet_conv_wh(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize(
     "batch_size",
     [1],
@@ -1765,7 +1755,6 @@ def test_unet_conv_groups_2_wh(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize(
     "batch_size",
     [1],
@@ -1862,7 +1851,6 @@ def test_unet_conv_groups_4_6_wh(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize(
     "batch_size",
     [1],
@@ -1962,7 +1950,6 @@ def test_unet_conv_groups_8_wh(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, config_override",
@@ -2024,7 +2011,6 @@ def test_halo_reshard_conv(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.skip("New API needs to be tested")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
@@ -2090,7 +2076,6 @@ def test_conv_core_nondivis(
 
 
 # The following test takes various shape sizes from resnet50, unet and stable diffusion and tests for different number of groups - all the way to num_groups = num_in_channels (depthwise conv)
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("stride", [1])
 @pytest.mark.parametrize("batch_size", [1])
@@ -2174,7 +2159,6 @@ def test_conv_dilation(
 
 
 # The following test takes various shape sizes from resnet50, unet and stable diffusion and tests for different number of groups - all the way to num_groups = num_in_channels (depthwise conv)
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, input_channels, output_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, groups, shard_layout, config_override, use_shallow_conv_variant",
@@ -2461,7 +2445,6 @@ def test_swin_s_conv(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, dilation, shard_layout",
@@ -2560,7 +2543,6 @@ def test_model_k_256x256(
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 @pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
-@skip_for_grayskull()
 def test_conv_for_vanilla_unet(
     device,
     torch_tensor_map,
@@ -2612,7 +2594,6 @@ def test_conv_for_vanilla_unet(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_shallow_conv_with_tiled_input(device):
     out_channels, in_channels, kernel_h, kernel_w = 7, 3, 3, 3
@@ -2799,8 +2780,6 @@ def test_small_in_large_out_channels_auto_shard(device, torch_tensor_map):
     padding = (0, 0)
     height = 128
     width = 128
-    if device.core_grid.y != 8 and is_wormhole_b0():
-        pytest.skip("Needs 8x8 grid for wormhole_b0")
 
     run_conv(
         device,
