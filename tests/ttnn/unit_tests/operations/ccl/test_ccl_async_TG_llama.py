@@ -6,18 +6,25 @@ import torch
 import pytest
 from loguru import logger
 import ttnn
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull
+from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
+    create_and_load_sub_device_manager_with_fabric_interface,
+    teardown_fabric_interface,
+    create_global_semaphore_with_same_address,
+)
 
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather_TG_post_commit import (
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows,
 )
-from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
-    run_all_reduce_impl,
+from tests.ttnn.unit_tests.operations.ccl.test_reduce_scatter_TG_nightly import (
+    run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows,
 )
-from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+from tests.ttnn.unit_tests.operations.ccl.test_all_reduce_async import (
+    run_all_reduce_with_mesh_tensor_along_row,
+)
+from models.perf.benchmarking_utils import BenchmarkProfiler
 
-
-NUM_ITERATIONS = 55
 
 PREFETCHER_NOC1_RING = [
     (6, 6),
@@ -67,13 +74,6 @@ def get_core_range_set(output_core_grid):
     return output_core_range_set
 
 
-CORE_RANGE_SET_1x1 = ttnn.CoreRangeSet(
-    {
-        ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
-    }
-)
-
-
 # Enumerate the post-commit cases explicitly
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
@@ -89,14 +89,14 @@ CORE_RANGE_SET_1x1 = ttnn.CoreRangeSet(
     ],
 )
 @pytest.mark.parametrize(
-    "num_iters, warmup_iters",
+    "num_iters",
     [
-        (NUM_ITERATIONS, 10),
+        5000,
     ],
 )
 @pytest.mark.parametrize("shard_grid_orientation", [ttnn.ShardOrientation.ROW_MAJOR])
 @pytest.mark.parametrize(
-    "tensor_mem_layout, output_shape, dim, input_shard_shape,input_shard_grid,output_shard_shape, output_shard_grid, layout",
+    "tensor_mem_layout, output_shape, dim, input_shard_shape,input_shard_grid,output_shard_shape, output_shard_grid, layout, perf_target_us",
     (
         (  # AllGather after SDPA
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -112,6 +112,7 @@ CORE_RANGE_SET_1x1 = ttnn.CoreRangeSet(
                 }
             ),
             ttnn.TILE_LAYOUT,
+            32,
         ),
         (  # AllGather after Binary Mult+Silu
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -122,29 +123,15 @@ CORE_RANGE_SET_1x1 = ttnn.CoreRangeSet(
             (32, 160),
             get_core_range_set(PREFETCHER_NOC1_RING),
             ttnn.TILE_LAYOUT,
-        ),
-        (  # AllGather for layernorm
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            (1, 1, 32, 128),
-            3,
-            (32, 32),
-            CORE_RANGE_SET_1x1,
-            (32, 128),
-            CORE_RANGE_SET_1x1,
-            ttnn.TILE_LAYOUT,
+            25,
         ),
     ),
-    ids=[
-        "sdpa",
-        "binary_mult",
-        "layernorm",
-    ],
 )
 @pytest.mark.parametrize("replication_factor", [8])
 @pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 17068032}], indirect=True)
-def test_all_gather_tg_llama(
+def test_line_all_gather_sharded_on_TG_rows_llama(
     mesh_device,
     num_devices,
     output_shape,
@@ -163,7 +150,7 @@ def test_all_gather_tg_llama(
     enable_async,
     replication_factor,
     num_iters,
-    warmup_iters,
+    perf_target_us,
 ):
     if len(mesh_device.get_devices()) != 32:
         pytest.skip("Not TG!")
@@ -198,7 +185,6 @@ def test_all_gather_tg_llama(
         function_level_defaults,
         enable_async=enable_async,
         num_iters=num_iters,
-        warmup_iters=warmup_iters,
         input_shard_spec=input_shard_spec,
         output_shard_spec=output_shard_spec,
         num_all_gather_instances=replication_factor,
@@ -211,78 +197,231 @@ def test_all_gather_tg_llama(
         teardown_persistent_fabric=True,
     )
 
+    latency_us = profiler.get_duration("all-gather-async-trace") / num_iters * 1e6
+    if perf_target_us is not None:
+        assert (
+            latency_us < perf_target_us
+        ), f"Measured latency {latency_us} us is greater than target {perf_target_us} us"
+
 
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
-    "output_shape, cluster_axis, num_links, input_num_cores, output_num_cores",
+    "num_devices, num_links",
     [
-        ([1, 1, 32, 2048], 0, 4, 24, 16),  # FF2/DO all reduce
-        ([1, 1, 32, 1280], 1, 3, 24, 40),  # QKV all reduce
-        ([1, 1, 32, 3584], 1, 3, 24, 24),  # FF1 all reduce
-        ([1, 1, 32, 16 * 1024], 1, 3, 32, 32),  # LM head all reduce
+        (4, 2),
     ],
-    ids=[
-        "ff2",
-        "qkv",
-        "ff1",
-        "lm_head",
+)
+@pytest.mark.parametrize(
+    "tensor_mem_layout, per_chip_input_shape, dim, input_shard_shape,shard_grid,layout",
+    (
+        (  # ReduceScatter After FF1/3  (~100 us)
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            (1, 1, 32, 3840),
+            3,
+            (32, 160),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 2))}),
+            ttnn.TILE_LAYOUT,
+        ),
+    ),
+)
+@pytest.mark.parametrize("shard_grid_orientation", [ttnn.ShardOrientation.ROW_MAJOR])
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+        # ttnn.bfloat8_b,
+    ],
+)
+@pytest.mark.parametrize(
+    "buffer_type",
+    [
+        ttnn.BufferType.L1,
+    ],
+)
+@pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("replication_factor", [8])
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+@pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
+def test_line_reduce_scatter_sharded_on_TG_rows_llama(
+    mesh_device,
+    num_devices,
+    per_chip_input_shape,
+    tensor_mem_layout,
+    input_shard_shape,
+    shard_grid,
+    shard_grid_orientation,
+    dim,
+    num_links,
+    math_op,
+    input_dtype,
+    layout,
+    buffer_type,
+    use_program_cache,
+    function_level_defaults,
+    enable_async,
+    replication_factor,
+    num_iters=10,
+):
+    if len(mesh_device.get_devices()) != 32:
+        pytest.skip("Not TG!")
+    input_shard_spec = ttnn.ShardSpec(
+        shard_grid,
+        input_shard_shape,
+        shard_grid_orientation,
+    )
+
+    logger.warning("sharding not used due to issue #16699")
+
+    run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
+        mesh_device,
+        num_devices,
+        per_chip_input_shape,
+        ttnn.TensorMemoryLayout.INTERLEAVED,  # tensor_mem_layout,
+        dim,
+        num_links,
+        math_op,
+        input_dtype,
+        layout,
+        buffer_type,
+        use_program_cache,
+        function_level_defaults,
+        enable_async=enable_async,
+        # input_shard_spec=input_shard_spec,
+        num_iters=num_iters,
+        num_reduce_scatter_instances=replication_factor,
+        cluster_axis=1,
+        use_reduce_scatter_async=True,
+        enable_persistent_fabric=True,
+        create_persistent_fabric=True,
+        teardown_persistent_fabric=True,
+    )
+
+
+# Enumerate the post-commit cases explicitly
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "num_devices, num_links, per_chip_output_shape, layout",
+    [
+        (4, 1, [1, 1, 32, 1280], ttnn.TILE_LAYOUT),  # AllReduce after QKV (~110 us)
     ],
 )
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        ttnn.bfloat8_b,
+        ttnn.bfloat16,
     ],
 )
 @pytest.mark.parametrize(
-    "num_iters, warmup_iters",
+    "buffer_type",
     [
-        (NUM_ITERATIONS, 10),
+        ttnn.BufferType.L1,
+    ],
+)
+@pytest.mark.parametrize("replication_factor", [8])  # 1, 8])
+@pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+@pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
+def test_line_all_reduce_on_TG_rows_llama(
+    mesh_device,
+    num_devices,
+    per_chip_output_shape,
+    num_links,
+    math_op,
+    input_dtype,
+    layout,
+    buffer_type,
+    use_program_cache,
+    function_level_defaults,
+    enable_async,
+    replication_factor,
+    num_iters=10,
+):
+    if len(mesh_device.get_devices()) != 32:
+        pytest.skip("Not TG!")
+
+    logger.warning("sharding not used due to issue #16699")
+
+    run_all_reduce_with_mesh_tensor_along_row(
+        mesh_device,
+        num_devices,
+        per_chip_output_shape,
+        num_links,
+        math_op,
+        input_dtype,
+        layout,
+        buffer_type,
+        use_program_cache,
+        function_level_defaults,
+        enable_async=enable_async,
+        num_iters=num_iters,
+        num_all_reduce_instances=replication_factor,
+        cluster_axis=1,
+        enable_persistent_fabric=True,
+        create_persistent_fabric=True,
+        teardown_persistent_fabric=True,
+    )
+
+
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "num_devices, num_links, per_chip_output_shape, layout",
+    [
+        (8, 1, [1, 1, 32, 2048], ttnn.TILE_LAYOUT),  # AllReduce after DO and AllReduce after FF2 (~240 us)
+        # multi-links fail https://github.com/tenstorrent/tt-metal/issues/16699
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+    ],
+)
+@pytest.mark.parametrize(
+    "buffer_type",
+    [
+        ttnn.BufferType.L1,
     ],
 )
 @pytest.mark.parametrize("enable_async", [True])
-@pytest.mark.parametrize("trace_mode", [True])
-@pytest.mark.parametrize(
-    "device_params",
-    [{"trace_region_size": 23887872}],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        (8, 4),
-    ],
-    indirect=True,
-)
-def test_all_reduce_tg_llama(
+@pytest.mark.parametrize("replication_factor", [4])
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+@pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
+def test_line_all_reduce_on_TG_cols_llama(
     mesh_device,
-    output_shape,
-    cluster_axis,
-    input_dtype,
+    num_devices,
+    per_chip_output_shape,
     num_links,
-    input_num_cores,
-    output_num_cores,
-    num_iters,
-    warmup_iters,
-    enable_async,
-    trace_mode,
+    math_op,
+    input_dtype,
+    layout,
+    buffer_type,
     use_program_cache,
     function_level_defaults,
+    enable_async,
+    replication_factor,
+    num_iters=10,
 ):
-    profiler = BenchmarkProfiler()
+    if len(mesh_device.get_devices()) != 32:
+        pytest.skip("Not TG!")
 
-    run_all_reduce_impl(
+    logger.warning("sharding not used due to issue #16699")
+
+    run_all_reduce_with_mesh_tensor_along_row(
         mesh_device,
-        output_shape,
-        cluster_axis,
-        input_dtype,
+        num_devices,
+        per_chip_output_shape,
         num_links,
-        input_num_cores,
-        output_num_cores,
-        num_iters=num_iters,
-        warmup_iters=warmup_iters,
+        math_op,
+        input_dtype,
+        layout,
+        buffer_type,
+        use_program_cache,
+        function_level_defaults,
         enable_async=enable_async,
-        trace_mode=trace_mode,
-        validate_all=False,
-        profiler=profiler,
+        num_iters=num_iters,
+        num_all_reduce_instances=replication_factor,
+        cluster_axis=0,
+        enable_persistent_fabric=True,
+        create_persistent_fabric=True,
+        teardown_persistent_fabric=True,
     )
