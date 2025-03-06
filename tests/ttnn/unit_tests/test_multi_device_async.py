@@ -31,7 +31,10 @@ def test_ttnn_to_and_from_multi_device_shard(pcie_mesh_device, layout, memory_co
     for i in range(100):
         torch_tensor = torch.rand((1, 1, 256, 512), dtype=torch.bfloat16)
         ttnn_tensor = ttnn.from_torch(
-            torch_tensor, dtype=dtype, layout=layout, mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(pcie_mesh_device, dim=3)
+            torch_tensor,
+            dtype=dtype,
+            layout=layout,
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(pcie_mesh_device, dim=3),
         )
         ttnn_tensor = ttnn.to_device(ttnn_tensor, pcie_mesh_device, memory_config=memory_config)
         ttnn_loop_back_tensor = ttnn.from_device(ttnn_tensor)
@@ -63,7 +66,10 @@ def test_multi_device_check_per_device_shard(pcie_mesh_device, layout, memory_co
         torch_tensor = torch.rand((8, 1, 1024, 1024), dtype=torch.bfloat16)
 
         ttnn_tensor = ttnn.from_torch(
-            torch_tensor, dtype=dtype, layout=layout, mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(pcie_mesh_device, dim=3)
+            torch_tensor,
+            dtype=dtype,
+            layout=layout,
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(pcie_mesh_device, dim=3),
         )
         ttnn_tensor = ttnn.to_device(ttnn_tensor, pcie_mesh_device, memory_config=memory_config)
         ttnn_loop_back_tensor = ttnn.from_device(ttnn_tensor)

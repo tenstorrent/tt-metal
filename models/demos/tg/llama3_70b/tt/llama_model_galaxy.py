@@ -26,6 +26,7 @@ from models.demos.tg.llama3_70b.tt.llama_common import (
 )
 from ttnn import shard_tensor_to_2d_mesh_mapper
 
+
 def is_power_of_two(n):
     if n <= 0:
         return False
