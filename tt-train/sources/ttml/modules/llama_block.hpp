@@ -34,7 +34,11 @@ private:
     std::shared_ptr<MultiHeadAttention> m_attention;
 
 public:
-    explicit LlamaBlock(uint32_t embedding_size, uint32_t num_heads, float dropout_prob = 0.0F);
+    explicit LlamaBlock(
+        uint32_t embedding_size,
+        uint32_t num_heads,
+        float dropout_prob = 0.0F,
+        const ops::RotaryEmbeddingParams* rope_params = nullptr);
 
     autograd::TensorPtr operator()(const autograd::TensorPtr& input, const autograd::TensorPtr& mask);
 };

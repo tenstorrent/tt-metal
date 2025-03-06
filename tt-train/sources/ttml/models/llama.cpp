@@ -118,10 +118,10 @@ Llama::Llama(const LlamaConfig& config) {
     }
 
     m_rope_params = ops::build_rope_params(max_sequence_length, embedding_dim / num_heads);
-    pos_emb = std::make_shared<ttml::modules::RotaryEmbedding>(m_rope_params);
     blocks.reserve(num_blocks);
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
-        blocks.push_back(std::make_shared<ttml::modules::LlamaBlock>(embedding_dim, num_heads, dropout_prob));
+        blocks.push_back(
+            std::make_shared<ttml::modules::LlamaBlock>(embedding_dim, num_heads, dropout_prob, &m_rope_params));
     }
     ln_fc = std::make_shared<ttml::modules::RMSNormLayer>(embedding_dim);
     fc = last_fc;
