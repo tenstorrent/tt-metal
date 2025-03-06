@@ -18,6 +18,13 @@ class VisionModelArgs:
             logger.info(f"padding hidden dim from {self.unpadded_hidden_dim} to {self.hidden_dim}")
 
     # Device and optimization settings - forwarded from model_args
+    def is_distributed_norm(self, mode):
+        return False
+
+    @property
+    def is_multichip(self):
+        return self.model_args.is_multichip
+
     @property
     def cluster_shape(self):
         return self.model_args.cluster_shape
