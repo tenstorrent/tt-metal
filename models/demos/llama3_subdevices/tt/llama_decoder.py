@@ -152,7 +152,7 @@ class TtTransformerBlock(LightweightModule):
 
         # Norms take fractured inputs and output replicated across devices
         h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg)  # , dtype=ttnn.bfloat16)
-        x.deallocate(True)
+        # x.deallocate(True)
         attn_out.deallocate(True)
         ff_in, _ = self.ff_norm(h, None, mode)
         # if TG and mode == "decode":
