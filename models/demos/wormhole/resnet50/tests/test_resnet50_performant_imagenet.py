@@ -58,8 +58,6 @@ def test_run_resnet50_trace_2cqs_inference(
         correct = 0
 
         profiler.start(f"run")
-        # inputs, labels = get_batch(data_loader, image_processor)
-        # tt_inputs_host = ttnn.from_torch(inputs, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
         for iter in range(iterations):
             predictions = []
             ### TODO optimize input streamer for better e2e performance
