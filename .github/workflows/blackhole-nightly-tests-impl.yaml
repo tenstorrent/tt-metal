@@ -33,12 +33,7 @@ jobs:
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
-          if [[ "${{ matrix.model }}" == *"llama3"* ]]; then
-            pytest -n auto tests/nightly/single_card/llama3 -k ${{ matrix.model }}
-          fi
-            if [[ "${{ matrix.model }}" != *"llama3"* ]]; then
-            pytest -n auto tests/nightly/single_card/${{ matrix.model }}
-          fi
+          pytest -n auto tests/nightly/single_card/${{ matrix.model }}
       - uses: ./.github/actions/upload-artifact-with-job-uuid
         timeout-minutes: 10
         if: ${{ !cancelled() }}
