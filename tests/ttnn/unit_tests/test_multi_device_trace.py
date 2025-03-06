@@ -10,7 +10,7 @@ import tempfile
 from loguru import logger
 import os
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
+from ttnn import ShardTensorToMesh, replicate_tensor_to_mesh_mapper, ConcatMeshToTensor
 
 NUM_TRACE_LOOPS = int(os.getenv("NUM_TRACE_LOOPS", 15))
 
@@ -246,7 +246,7 @@ def test_multi_device_multi_trace(t3k_mesh_device, shape, use_all_gather, enable
             torch_input_tensor_1, layout=ttnn.TILE_LAYOUT, mesh_mapper=ShardTensorToMesh(t3k_mesh_device, dim=0)
         )
         ttnn_weight = ttnn.from_torch(
-            torch_weight, layout=ttnn.TILE_LAYOUT, mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device)
+            torch_weight, layout=ttnn.TILE_LAYOUT, ttnn.replicate_tensor_to_mesh_mapper(t3k_mesh_device)
         )
 
         # Copy TTNN host tensors into preallocated Mult-Device tensors

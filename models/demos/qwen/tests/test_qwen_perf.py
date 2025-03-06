@@ -151,7 +151,7 @@ def run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos
             encoded_prompts_tensor[:, 0].unsqueeze(0).unsqueeze(0).unsqueeze(0), (0, 31), "constant", 0
         ),
         device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         dtype=ttnn.uint32,
     )
 
@@ -167,7 +167,7 @@ def run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos
     current_pos = ttnn.from_torch(
         torch.tensor([generation_start_pos] * batch),
         device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         dtype=ttnn.int32,
     )
 

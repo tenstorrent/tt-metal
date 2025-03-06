@@ -6,7 +6,7 @@ from loguru import logger
 from typing import List
 import torch
 import ttnn
-from ttnn import ReplicateTensorToMesh, ShardTensorToMesh
+from ttnn import replicate_tensor_to_mesh_mapper, ShardTensorToMesh
 
 from models.demos.t3000.llama2_70b.tt.llama_attention_optimized import TtLlamaAttention_optimized
 from models.demos.t3000.llama2_70b.tt.llama_mlp_optimized import TtLlamaMLP_optimized
@@ -106,7 +106,7 @@ class TtLlamaDecoder_optimized:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+            ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
             cache_file_name=self.cache_path / attn_norm_str,
         )
         self.attn_norm = ttnn.to_device(attn_norm_ttnn, self.mesh_device)
@@ -128,7 +128,7 @@ class TtLlamaDecoder_optimized:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+            ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
             cache_file_name=self.cache_path / ffn_norm_str,
         )
         self.ffn_norm = ttnn.to_device(ffn_norm_ttnn, self.mesh_device)

@@ -7,7 +7,7 @@ from models.demos.t3000.mixtral8x7b.tt.mixtral_decoder import TtTransformerBlock
 from models.common.rmsnorm import RMSNorm
 from models.common.lightweightmodule import LightweightModule
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import get_single_rot_mat_multi_pos, get_single_rot_mat_torch
-from ttnn import ReplicateTensorToMesh
+from ttnn import replicate_tensor_to_mesh_mapper
 import torch
 
 
@@ -55,7 +55,7 @@ class TtTransformer(LightweightModule):
             dtype=dtype,
             memory_config=self.model_config["OUTPUT_WEIGHTS_MEMCFG"],
             cache_file_name=output_cache_name,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
 
         self.compute_kernel = self.args.get_compute_kernel_config()
@@ -86,7 +86,7 @@ class TtTransformer(LightweightModule):
                         device=self.mesh_device,
                         dtype=ttnn.bfloat16,
                         layout=ttnn.TILE_LAYOUT,
-                        mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
                     )
                 else:
                     rot_mats = self.current_rot_mat

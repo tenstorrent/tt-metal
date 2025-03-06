@@ -46,7 +46,7 @@ def test_data_parallel_falcon_mlp(mesh_device):
         )
 
     # Replicate model parameters to devices in the mesh
-    with ttnn.distribute(mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)):
+    with ttnn.distribute(mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device)):
         parameters = preprocess_model_parameters(
             initialize_model=lambda: model,
             device=mesh_device,

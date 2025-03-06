@@ -8,7 +8,7 @@ import ttnn
 from typing import List
 from models.demos.t3000.falcon40b.tt.model_utils import falcon_prefill_matmul, determine_tensor_deallocation
 
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
+from ttnn import ShardTensorToMesh, replicate_tensor_to_mesh_mapper
 
 
 class TtFalconMLP:
@@ -84,7 +84,7 @@ class TtFalconMLP:
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=self.model_config["DEFAULT_MEMCFG"],
-                mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+                ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
             )
 
     def __call__(self, x: List[ttnn.Tensor], llm_mode: str) -> List[ttnn.Tensor]:

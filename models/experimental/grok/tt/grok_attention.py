@@ -5,7 +5,7 @@
 import torch
 import ttnn
 from models.utility_functions import nearest_32
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
+from ttnn import ShardTensorToMesh, replicate_tensor_to_mesh_mapper, ConcatMeshToTensor
 from models.experimental.grok.tt.grok_common import LightweightModule
 
 
@@ -91,7 +91,7 @@ class TtGrokAttention(LightweightModule):
             .unsqueeze(0)
             .unsqueeze(0),
             device=self.mesh_device,
-            mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+            ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
             dtype=self.dtype,
             memory_config=self.model_config["ATTN_WEIGHTS_MEMCFG"],
             layout=self.model_config["ATTN_W_LAYOUT_TILE"],

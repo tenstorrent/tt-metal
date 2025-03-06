@@ -6,7 +6,7 @@ from typing import Optional, Tuple
 
 import torch
 import ttnn
-from ttnn import ReplicateTensorToMesh
+from ttnn import replicate_tensor_to_mesh_mapper
 from models.demos.falcon7b_common.tt.falcon_lm_head import falcon_lm_head_matmul_2d
 from models.demos.falcon7b_common.tt.falcon_model import TtFalconModelShared
 from models.demos.falcon7b_common.tt.model_utils import (
@@ -123,7 +123,7 @@ class TtFalconCausalLM(TtFalconModelShared):
                 device=self.mesh_device,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=self.model_config["LM_HEAD_MM_INPUT_MEMCFG"],
-                mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+                mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
             )
 
         self.lm_head_weights = get_weights_cached(

@@ -283,7 +283,7 @@ def run_qwen_demo(
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         profiler.end(f"prepare_rot_mat_for_prefill", iteration=batch_idx)
@@ -371,7 +371,7 @@ def run_qwen_demo(
                     torch.tensor([start_pos]),
                     device=mesh_device,
                     dtype=ttnn.int32,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                    mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
                 )
                 tt_out = tt_model(pt_decode_input, current_pos_tensor, rot_mat=current_rot_mat)
 
@@ -389,7 +389,7 @@ def run_qwen_demo(
         tt_out_tok = ttnn.from_torch(
             torch.nn.functional.pad(pt_out_batched.unsqueeze(0).unsqueeze(0).unsqueeze(0), (0, 31), "constant", 0),
             device=mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
             dtype=ttnn.uint32,
         )
         profiler.end(f"prepare_first_decode_token_{batch_idx}")
@@ -419,7 +419,7 @@ def run_qwen_demo(
         current_pos = ttnn.from_torch(
             torch.tensor(decoding_pos, dtype=torch.int32),
             device=mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
             dtype=ttnn.int32,
         )
 
@@ -467,12 +467,12 @@ def run_qwen_demo(
         current_pos_reset = ttnn.from_torch(
             torch.tensor(decoding_pos, dtype=torch.int32),
             dtype=ttnn.int32,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if tt_model.args.num_devices > 1 else None,
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device) if tt_model.args.num_devices > 1 else None,
         )
         tt_out_tok_reset = ttnn.from_torch(
             torch.nn.functional.pad(pt_out_batched.unsqueeze(0).unsqueeze(0).unsqueeze(0), (0, 31), "constant", 0),
             dtype=ttnn.uint32,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if tt_model.args.num_devices > 1 else None,
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device) if tt_model.args.num_devices > 1 else None,
         )
 
         ttnn.copy_host_to_device_tensor(current_pos_reset, current_pos)
