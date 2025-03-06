@@ -31,8 +31,7 @@ enum DispatchWorkerType : uint32_t {
     US_TUNNELER_REMOTE = 14,
     PACKET_ROUTER_MUX = 15,
     PACKET_ROUTER_DEMUX = 16,
-    FABRIC_ROUTER_VC = 17,
-    COUNT,
+    COUNT = 17
 };
 
 // NOC ID used by dispatch kernels to communicate with downstream cores. This parameter
