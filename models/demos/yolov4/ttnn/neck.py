@@ -6,6 +6,41 @@ import torch
 import ttnn
 from models.demos.yolov4.ttnn.common import Conv
 from tt_lib.fallback_ops import fallback_ops
+import math
+
+
+def determine_num_cores_for_upsample(nhw: int, width: int, max_cores=64) -> int:
+    gcd_nhw_width = math.gcd(nhw, width)
+    cores = nhw // gcd_nhw_width
+    if cores <= max_cores:
+        return cores
+    for divisor in range(max_cores, 0, -1):
+        if nhw % divisor == 0 and (nhw // divisor) % width == 0:
+            return divisor
+    return cores
+
+
+def get_core_grid_from_num_cores(num_cores: int, grid_rows: int = 8, grid_cols: int = 8):
+    rows = num_cores // grid_cols
+    assert rows <= grid_rows, "Not enough cores for specified core grid"
+    ranges = []
+    if rows != 0:
+        ranges.append(
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(grid_rows - 1, rows - 1),
+            )
+        )
+    remainder = num_cores % grid_rows
+    if remainder != 0:
+        assert rows + 1 <= grid_rows, "Not enough cores for specified core grid"
+        ranges.append(
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, rows),
+                ttnn.CoreCoord(remainder - 1, rows),
+            )
+        )
+    return ttnn.CoreRangeSet({*ranges})
 
 
 class TtNeck:
@@ -125,11 +160,7 @@ class TtNeck:
         output_tensor = self.conv3(output_tensor)[0]
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
-        if not self.parameters.is_320_res:
-            output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
-            output_tensor_pool_in = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
-        else:
-            output_tensor_pool_in = output_tensor
+        output_tensor_pool_in = output_tensor
 
         pool_1 = ttnn.max_pool2d(
             input_tensor=output_tensor_pool_in,
@@ -211,7 +242,7 @@ class TtNeck:
                 self.conv_args.c7.out_channels,
             ),
         )
-        if self.parameters.is_320_res:
+        if self.parameters.resolution[0] == 320:
             shard_grid = ttnn.CoreRangeSet(
                 {
                     ttnn.CoreRange(
@@ -233,7 +264,22 @@ class TtNeck:
             output_tensor_upsample_1 = ttnn.upsample(output_tensor, (2, 2), memory_config=out_sharded_mem_config)
             output_tensor_upsample_1 = ttnn.sharded_to_interleaved(output_tensor_upsample_1, ttnn.L1_MEMORY_CONFIG)
         else:
-            output_tensor_upsample_1 = ttnn.upsample(output_tensor, (2, 2), memory_config=ttnn.L1_MEMORY_CONFIG)
+            nhw = output_tensor.shape[0] * output_tensor.shape[1] * output_tensor.shape[2]
+            num_cores = determine_num_cores_for_upsample(nhw, output_tensor.shape[2])
+            core_grid = get_core_grid_from_num_cores(num_cores)
+            shardspec = ttnn.create_sharded_memory_config_(
+                output_tensor.shape, core_grid, ttnn.ShardStrategy.HEIGHT, orientation=ttnn.ShardOrientation.ROW_MAJOR
+            )
+
+            if output_tensor.is_sharded():
+                output_tensor = ttnn.reshard(output_tensor, shardspec)
+            else:
+                output_tensor = ttnn.interleaved_to_sharded(output_tensor, shardspec)
+
+            output_tensor_upsample_1 = ttnn.upsample(
+                output_tensor, scale_factor=2, memory_config=output_tensor.memory_config()
+            )
+            output_tensor_upsample_1 = ttnn.sharded_to_interleaved(output_tensor_upsample_1, ttnn.L1_MEMORY_CONFIG)
 
         output_tensor_upsample_1 = ttnn.reshape(
             output_tensor_upsample_1,
@@ -247,10 +293,6 @@ class TtNeck:
         output_tensor_upsample_1 = ttnn.to_layout(output_tensor_upsample_1, layout=ttnn.TILE_LAYOUT)
 
         outDowSample5 = input_tensor[1]
-
-        if not self.parameters.is_320_res:
-            if outDowSample5.is_sharded():
-                outDowSample5 = ttnn.sharded_to_interleaved(outDowSample5, ttnn.L1_MEMORY_CONFIG)
 
         output_tensor = self.conv7_2(outDowSample5)[0]
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
@@ -277,7 +319,7 @@ class TtNeck:
         output_tensor = self.conv7_5(output_tensor)[0]
         output_tensor_left_2 = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
-        if self.parameters.is_320_res:
+        if self.parameters.resolution[0] == 320:
             shard_grid = ttnn.CoreRangeSet(
                 {
                     ttnn.CoreRange(
@@ -291,9 +333,6 @@ class TtNeck:
                 ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec
             )
             output_tensor_left_2 = ttnn.to_memory_config(output_tensor_left_2, memory_config=in_sharded_mem_config)
-        else:
-            if output_tensor_left_2.is_sharded():
-                output_tensor_left_2 = ttnn.sharded_to_interleaved(output_tensor_left_2, ttnn.L1_MEMORY_CONFIG)
 
         output_tensor = self.conv9(output_tensor_left_2)[0]
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
@@ -320,7 +359,7 @@ class TtNeck:
             ),
         )
 
-        if self.parameters.is_320_res:
+        if self.parameters.resolution[0] == 320:
             shard_grid = ttnn.CoreRangeSet(
                 {
                     ttnn.CoreRange(
@@ -342,7 +381,22 @@ class TtNeck:
             output_tensor_upsample_2 = ttnn.upsample(output_tensor, (2, 2), memory_config=out_sharded_mem_config)
             output_tensor_upsample_2 = ttnn.sharded_to_interleaved(output_tensor_upsample_2, ttnn.L1_MEMORY_CONFIG)
         else:
-            output_tensor_upsample_2 = ttnn.upsample(output_tensor, (2, 2), memory_config=ttnn.L1_MEMORY_CONFIG)
+            nhw = output_tensor.shape[0] * output_tensor.shape[1] * output_tensor.shape[2]
+            num_cores = determine_num_cores_for_upsample(nhw, output_tensor.shape[2])
+            core_grid = get_core_grid_from_num_cores(num_cores)
+            shardspec = ttnn.create_sharded_memory_config_(
+                output_tensor.shape, core_grid, ttnn.ShardStrategy.HEIGHT, orientation=ttnn.ShardOrientation.ROW_MAJOR
+            )
+
+            if output_tensor.is_sharded():
+                output_tensor = ttnn.reshard(output_tensor, shardspec)
+            else:
+                output_tensor = ttnn.interleaved_to_sharded(output_tensor, shardspec)
+
+            output_tensor_upsample_2 = ttnn.upsample(
+                output_tensor, scale_factor=2, memory_config=output_tensor.memory_config()
+            )
+            output_tensor_upsample_2 = ttnn.sharded_to_interleaved(output_tensor_upsample_2, ttnn.L1_MEMORY_CONFIG)
 
         output_tensor_upsample_2 = ttnn.reshape(
             output_tensor_upsample_2,
