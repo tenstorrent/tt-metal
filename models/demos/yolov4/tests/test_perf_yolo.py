@@ -63,6 +63,11 @@ def test_yolov4(
     else:
         weights_pth = str(model_path / "yolov4.pth")
 
+    if input_shape[1] == 320:
+        is_320_res = True
+    else:
+        is_320_res = False
+
     torch_model = Yolov4()
     torch_dict = torch.load(weights_pth)
     new_state_dict = dict(zip(torch_model.state_dict().keys(), torch_dict.values()))
@@ -70,7 +75,7 @@ def test_yolov4(
     torch_model.eval()
     torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
     torch_input = torch_input_tensor.permute(0, 3, 1, 2).float()
-    parameters = create_yolov4_model_parameters(torch_model, torch_input, device)
+    parameters = create_yolov4_model_parameters(torch_model, torch_input, is_320_res, device)
 
     ttnn_input = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
 
