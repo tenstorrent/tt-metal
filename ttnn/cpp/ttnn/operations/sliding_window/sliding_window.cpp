@@ -346,14 +346,7 @@ uint32_t generate_max_out_nsticks_per_core(const std::vector<ShardBoundary>& sha
     return max_out_nsticks_per_core;
 }
 
-std::tuple<
-    std::vector<std::vector<uint16_t>>,
-    std::vector<std::vector<uint16_t>>,
-    std::vector<std::vector<uint16_t>>,
-    std::vector<std::vector<uint16_t>>,
-    std::vector<std::vector<uint16_t>>,
-    std::vector<std::vector<uint16_t>>>
-generate_halo_kernel_config_tensors(
+std::vector<std::vector<std::vector<uint16_t>>> generate_halo_kernel_config_tensors(
     const std::vector<PixelMetadata>& tensor_metadata,
     const std::vector<ShardBoundary>& shard_boundaries,
     bool is_block_sharded,
