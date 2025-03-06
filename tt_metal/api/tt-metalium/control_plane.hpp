@@ -54,6 +54,9 @@ class ControlPlane {
 
        size_t get_num_active_fabric_routers(mesh_id_t mesh_id, chip_id_t chip_id) const;
 
+       std::vector<chan_id_t> get_active_fabric_eth_channels_in_direction(
+           mesh_id_t mesh_id, chip_id_t chip_id, RoutingDirection routing_direction) const;
+
    private:
        std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
        std::vector<std::vector<chip_id_t>> logical_mesh_chip_id_to_physical_chip_id_mapping_;
