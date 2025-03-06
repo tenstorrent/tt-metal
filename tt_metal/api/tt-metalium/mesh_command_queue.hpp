@@ -136,7 +136,7 @@ private:
     MultiProducerSingleConsumerQueue<MeshCompletionReaderVariant> completion_queue_reads_;
     // Main thread pushes to a queue per physical device, specifying the buffer read configuration that
     // must be used by the completion queue reader. Only used for reading buffer data from the Mesh.
-    std::unordered_map<IDevice*, std::unique_ptr<MultiProducerSingleConsumerQueue<CompletionReaderVariant>>>
+    std::unordered_map<uint32_t, std::unique_ptr<MultiProducerSingleConsumerQueue<CompletionReaderVariant>>>
         read_descriptors_;
     // CV used by main thread to notify completion queue reader of work
     std::condition_variable reader_thread_cv_;
