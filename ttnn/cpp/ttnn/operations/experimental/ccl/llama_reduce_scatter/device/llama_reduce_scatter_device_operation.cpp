@@ -58,7 +58,6 @@ LlamaReduceScatterDeviceOperation::tensor_return_value_t LlamaReduceScatterDevic
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_spec = compute_output_specs(operation_attributes, tensor_args);
     auto tensor = create_device_tensor(output_spec, tensor_args.input_tensor.device());
-    std::cout << "output tensor memory config: " << tensor.memory_config() << std::endl;
     return tensor;
 }
 

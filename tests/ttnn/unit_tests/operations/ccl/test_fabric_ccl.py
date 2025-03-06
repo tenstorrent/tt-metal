@@ -21,7 +21,10 @@ def test_fabric_sanity(mesh_device):
 def test_fabric_reduce_scatter(n300_mesh_device):
     torch.manual_seed(2005)
     dim = 3
-    input = torch.rand((1, 1, 32, 128), dtype=torch.bfloat16)
+    input = torch.ones((1, 1, 32, 128), dtype=torch.bfloat16)
+    input[:, :, :, :64] = 2
+    torch.set_printoptions(threshold=10000)
+    print(input)
     sharded_mem_config = ttnn.create_sharded_memory_config(
         (32, 32),
         core_grid=ttnn.CoreRangeSet(
@@ -33,7 +36,6 @@ def test_fabric_reduce_scatter(n300_mesh_device):
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-    print(sharded_mem_config)
     tt_input = ttnn.from_torch(
         input,
         mesh_mapper=ttnn.ShardTensorToMesh(n300_mesh_device, dim),
@@ -42,8 +44,10 @@ def test_fabric_reduce_scatter(n300_mesh_device):
         memory_config=sharded_mem_config,
         dtype=ttnn.bfloat8_b,
     )
-    print(tt_input)
+    # print(tt_input)
     output = ttnn.experimental.llama_reduce_scatter(tt_input, dim, memory_config=sharded_mem_config)
-    print(output.memory_config())
-    print(output)
-    print(output.memory_config())
+    # print(tt_input)
+    jank_input = ttnn.to_torch(tt_input, mesh_composer=ttnn.ConcatMeshToTensor(n300_mesh_device, dim=dim))
+    print(jank_input)
+    print(jank_input.sum())
+    print(input.sum())

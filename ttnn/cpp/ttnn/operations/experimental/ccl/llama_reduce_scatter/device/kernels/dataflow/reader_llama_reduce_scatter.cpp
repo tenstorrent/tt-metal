@@ -32,7 +32,6 @@ void kernel_main() {
     constexpr uint32_t cb_id_next = get_compile_time_arg_val(2);
     const uint32_t start_tile = get_compile_time_arg_val(3);
     const uint32_t end_tile = get_compile_time_arg_val(4);
-    const uint32_t device_id = get_compile_time_arg_val(5);
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t dst_addr = get_arg_val<uint32_t>(1);
@@ -48,9 +47,5 @@ void kernel_main() {
     DPRINT << "input_noc_addr: " << input_noc_addr << " cb_next_addr: " << cb_next_addr << ENDL();
     DPRINT << "start_tile: " << start_tile << " end_tile: " << end_tile << ENDL();
     for (uint32_t tile = start_tile; tile < end_tile; ++tile) {
-        print_full_tile(cb_id_in, tile, true);
-        noc_async_read(input_noc_addr + tile * tile_bytes, cb_next_addr + tile * tile_bytes, tile_bytes);
-        noc_async_read_barrier();
-        cb_push_back(cb_id_next, 1);
     }
 }
