@@ -51,7 +51,7 @@ jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     with:
-      build-type: ${{ inputs.build-type }}
+      build-type: true
       tracy: ${{ inputs.build-with-tracy }}
     secrets: inherit
   t3000-unit-tests:
