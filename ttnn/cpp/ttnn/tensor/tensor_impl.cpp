@@ -9,6 +9,7 @@
 #include "tt-metalium/mesh_device.hpp"
 #include "tt-metalium/mesh_command_queue.hpp"
 #include "tt-metalium/overloaded.hpp"
+#include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
@@ -574,26 +575,22 @@ Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking, ttnn::QueueId cq
     specs.reserve(num_buffers);
     buffers.reserve(num_buffers);
     shard_data_transfers.reserve(num_buffers);
-    distributed::MeshCoordinateRange coord_range(device->shape());
-    auto shard_coord = coord_range.begin();
-    for (int id = 0; id < device->num_devices(); ++id) {
+    for (const auto& [coord, shard_tensor_spec] : storage.specs) {
         std::vector<T> host_buffer;
-        const auto& shard_tensor_spec = tensor.get_tensor_spec();
         const auto tensor_size_bytes = shard_tensor_spec.compute_packed_buffer_size_bytes();
         host_buffer.resize(tensor_size_bytes / sizeof(T));
         specs.push_back(shard_tensor_spec);
         buffers.push_back(owned_buffer::create<T>(std::move(host_buffer)));
 
         shard_data_transfers.push_back(distributed::MeshCommandQueue::ShardDataTransfer{
-            .shard_coord = *shard_coord,
+            .shard_coord = coord,
             .host_data = std::visit([](auto& b) { return b.data(); }, buffers.back()),
             .region = BufferRegion(0, tensor_size_bytes)});
-        ++shard_coord;
     }
 
     mesh_cq.enqueue_read_shards(shard_data_transfers, mesh_buffer, blocking);
 
-    MultiDeviceHostStorage host_storage(AllGatherTensor{}, std::move(buffers), std::move(specs));
+    MultiDeviceHostStorage host_storage(storage.strategy, std::move(buffers), std::move(specs));
     return Tensor(std::move(host_storage), tensor.get_tensor_spec());
 }
 
@@ -741,7 +738,14 @@ DeviceStorage replicate_to_mesh_buffer(
 
     mesh_device->mesh_command_queue(*cq_id).enqueue_write_mesh_buffer(
         mesh_buffer, data_to_write.data(), /*blocking=*/false);
-    return DeviceStorage(mesh_buffer);
+
+    DeviceStorage device_storage(mesh_buffer);
+    std::map<distributed::MeshCoordinate, TensorSpec> specs;
+    for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
+        specs.emplace(coord, tensor_spec);
+    }
+    device_storage.specs = specs;
+    return device_storage;
 }
 
 template <typename T>
@@ -761,12 +765,22 @@ DeviceStorage shard_to_mesh_buffer(
     std::vector<distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfers;
     shard_data_transfers.reserve(storage.buffers.size());
 
-    distributed::MeshCoordinateRange coord_range(mesh_shape);
+    const auto coord_range = [&storage, &mesh_shape]() {
+        if (auto* shard2d_strategy = std::get_if<ShardTensor2D>(&storage.strategy)) {
+            distributed::MeshShape distribution_shape(shard2d_strategy->shard_mesh.y, shard2d_strategy->shard_mesh.x);
+            return distributed::MeshCoordinateRange(distribution_shape);
+        } else {
+            return distributed::MeshCoordinateRange(mesh_shape);
+        }
+    }();
+
+    std::map<distributed::MeshCoordinate, TensorSpec> specs;
     auto shard_coord = coord_range.begin();
     for (int i = 0; i < storage.buffers.size(); ++shard_coord, i++) {
         TensorSpec shard_tensor_spec(
             storage.specs[i].logical_shape(),
             storage.specs[i].tensor_layout().with_memory_config(tensor_spec.memory_config()));
+        specs.emplace(*shard_coord, shard_tensor_spec);
         const auto& shard_host_buffer = storage.buffers[i];
 
         const auto& shard_buffer = mesh_buffer->get_device_buffer(*shard_coord);
@@ -790,7 +804,10 @@ DeviceStorage shard_to_mesh_buffer(
 
     mesh_device->mesh_command_queue(*cq_id).enqueue_write_shards(mesh_buffer, shard_data_transfers, /*blocking=*/false);
 
-    return DeviceStorage(mesh_buffer);
+    DeviceStorage device_storage(mesh_buffer);
+    device_storage.specs = specs;
+    device_storage.strategy = storage.strategy;
+    return device_storage;
 }
 
 template <typename T>
@@ -834,11 +851,15 @@ void copy_to_mesh_tensor(const Tensor& host_tensor, const Tensor& mesh_tensor, t
     TT_FATAL(mesh_tensor.storage_type() == StorageType::DEVICE, "Mesh tensor is not on device.");
     TT_FATAL(tt::tt_metal::detail::InMainThread(), "copy_to_mesh_tensor must be called from the main thread");
     TT_FATAL(mesh_tensor.is_allocated(), "Need data to exist in order to move it to device");
+
     TT_FATAL(host_tensor.get_logical_shape() == mesh_tensor.get_logical_shape(), "Host tensor has different shape");
     TT_FATAL(host_tensor.get_dtype() == mesh_tensor.get_dtype(), "Host tensor has different dtype");
     TT_FATAL(
         host_tensor.get_tensor_spec().page_config() == mesh_tensor.get_tensor_spec().page_config(),
         "Host tensor has different page config");
+
+    // TODO: when copying from multi-device host storage, verify that tensor spec on each piece matches.
+    // Or should we verify that the tensor simply fits into pre-allocated device tensor?
 
     const auto& tensor_spec = mesh_tensor.get_tensor_spec();
     auto mesh_buffer = std::get<DeviceStorage>(mesh_tensor.get_storage()).mesh_buffer;

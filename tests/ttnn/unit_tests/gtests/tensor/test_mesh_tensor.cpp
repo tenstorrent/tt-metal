@@ -5,8 +5,10 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 
+#include "gmock/gmock.h"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
+#include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
@@ -17,6 +19,8 @@
 namespace ttnn::distributed::test {
 namespace {
 
+using ::testing::ElementsAre;
+using ::testing::Eq;
 using ::testing::FloatEq;
 using ::testing::Pointwise;
 
@@ -86,6 +90,9 @@ TEST_F(MeshTensorDeviceTest, ReplicateHostTensor) {
     auto* device_storage = std::get_if<tt::tt_metal::DeviceStorage>(&device_tensor.get_storage());
     ASSERT_NE(device_storage, nullptr);
     EXPECT_NE(device_storage->mesh_buffer, nullptr);
+    for (const auto& [coord, spec] : device_storage->specs) {
+        EXPECT_THAT(spec.logical_shape(), Eq(ttnn::Shape{1, 1, 32, 32}));
+    }
 
     // Read the tensor back, and compare it with input data.
     Tensor output_host_tensor = tensor_impl::to_host_mesh_tensor_wrapper(device_tensor);
@@ -98,12 +105,19 @@ TEST_F(MeshTensorDeviceTest, ReplicateHostTensor) {
     }
 }
 
-// TODO(jchu): Re-enable this test when we have handling for uneven shard shapes.
-TEST_F(MeshTensorDeviceTest, DISABLED_WriteMultiDeviceHostTensor) {
+TEST_F(MeshTensorDeviceTest, WriteMultiDeviceHostTensor) {
     const int num_devices = mesh_device_->num_devices();
     ASSERT_EQ(num_devices, 8);
+
     // Test uneven shard shapes.
     const ttnn::Shape shape{1, 9, 32, 32};
+    const auto expected_shapes_matcher = ElementsAre(
+        Eq(ttnn::Shape{1, 2, 32, 32}),
+        Eq(ttnn::Shape{1, 2, 32, 32}),
+        Eq(ttnn::Shape{1, 2, 32, 32}),
+        Eq(ttnn::Shape{1, 2, 32, 32}),
+        Eq(ttnn::Shape{1, 1, 32, 32}));
+
     const TensorSpec tensor_spec =
         TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
 
@@ -111,8 +125,8 @@ TEST_F(MeshTensorDeviceTest, DISABLED_WriteMultiDeviceHostTensor) {
     std::iota(host_data.begin(), host_data.end(), 0);
 
     // Prepare multi-device host tensor to offload on device.
-    Tensor input_host_tensor_sharded = distribute_tensor(
-        Tensor::from_vector(host_data, tensor_spec), *shard_tensor_to_mesh_mapper(*mesh_device_, 1));
+    Tensor input_host_tensor_sharded =
+        distribute_tensor(Tensor::from_vector(host_data, tensor_spec), *shard_tensor_to_mesh_mapper(*mesh_device_, 1));
     EXPECT_TRUE(input_host_tensor_sharded.storage_type() == StorageType::MULTI_DEVICE_HOST);
 
     auto* multi_device_host_storage =
@@ -129,14 +143,40 @@ TEST_F(MeshTensorDeviceTest, DISABLED_WriteMultiDeviceHostTensor) {
 
     auto* device_storage = std::get_if<tt::tt_metal::DeviceStorage>(&device_tensor.get_storage());
     ASSERT_NE(device_storage, nullptr);
+    std::vector<distributed::MeshCoordinate> coords;
+    std::vector<ttnn::Shape> shapes;
+    for (const auto& [coord, spec] : device_storage->specs) {
+        coords.push_back(coord);
+        shapes.push_back(spec.logical_shape());
+    }
+    EXPECT_THAT(shapes, expected_shapes_matcher);
+    EXPECT_THAT(
+        coords,
+        ElementsAre(
+            Eq(distributed::MeshCoordinate{0, 0}),
+            Eq(distributed::MeshCoordinate{0, 1}),
+            Eq(distributed::MeshCoordinate{0, 2}),
+            Eq(distributed::MeshCoordinate{0, 3}),
+            Eq(distributed::MeshCoordinate{1, 0})));
 
     // Read the tensor back, and compare it with input data.
-    Tensor output_host_tensor = aggregate_tensor(
-        tensor_impl::to_host_mesh_tensor_wrapper(device_tensor), *concat_mesh_to_tensor_composer(1));
-    EXPECT_TRUE(output_host_tensor.storage_type() == StorageType::OWNED);
-    EXPECT_EQ(output_host_tensor.get_tensor_spec().logical_shape(), shape);
+    auto host_tensor = tensor_impl::to_host_mesh_tensor_wrapper(device_tensor);
+    auto* owned_storage = std::get_if<tt::tt_metal::MultiDeviceHostStorage>(&host_tensor.get_storage());
+    ASSERT_NE(owned_storage, nullptr);
+    std::vector<ttnn::Shape> host_shapes;
+    for (const auto& spec : owned_storage->specs) {
+        host_shapes.push_back(spec.logical_shape());
+    }
+    EXPECT_THAT(host_shapes, expected_shapes_matcher);
 
-    EXPECT_THAT(output_host_tensor.to_vector<float>(), Pointwise(FloatEq(), host_data));
+    Tensor aggregated_host_tensor = aggregate_tensor(host_tensor, *concat_mesh_to_tensor_composer(1));
+    EXPECT_TRUE(aggregated_host_tensor.storage_type() == StorageType::OWNED);
+    EXPECT_EQ(aggregated_host_tensor.get_tensor_spec().logical_shape(), shape);
+
+    EXPECT_THAT(aggregated_host_tensor.to_vector<float>(), Pointwise(FloatEq(), host_data));
 }
+
+// TODO: add tests for copying to mesh tensor
+
 }  // namespace
 }  // namespace ttnn::distributed::test
