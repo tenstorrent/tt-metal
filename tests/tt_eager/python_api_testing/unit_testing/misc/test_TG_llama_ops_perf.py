@@ -35,6 +35,7 @@ from tests.ttnn.unit_tests.operations.test_paged_fused_update_cache import run_t
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_rotary_embedding_llama import (
     run_test_rotary_embedding_llama,
 )
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 
 @skip_for_grayskull()
@@ -355,32 +356,53 @@ def test_llama_tg_RotaryEmbeddingLlamaFusedQK(
 
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
-    ("op_name", "expected_kernel_duration_us"),
+    ("op_name", "expected_kernel_duration_us", "perf_margin"),
     [
-        ("LayerNorm", 13),
-        ("ScaledDotProductAttentionDecode", 20),
-        ("NLPCreateHeadsDecodeDeviceOperation", 8.64),
-        ("NLPConcatHeadsDecodeDeviceOperation", 5.7),
-        ("PagedUpdateCacheDeviceOperation", 5),
-        ("RotaryEmbeddingLlamaFusedQK", 4.8),
+        ("LayerNorm", 13, 0.03),
+        ("ScaledDotProductAttentionDecode", 20, 0.03),
+        ("NLPCreateHeadsDecodeDeviceOperation", 8.64, 0.03),
+        ("NLPConcatHeadsDecodeDeviceOperation", 5.7, 0.03),
+        ("PagedUpdateCacheDeviceOperation", 5, 0.03),
+        ("RotaryEmbeddingLlamaFusedQK", 4.8, 0.03),
     ],
 )
-def test_llama_tg_ops_perf_device(op_name, expected_kernel_duration_us):
+def test_llama_tg_ops_perf_device(op_name, expected_kernel_duration_us, perf_margin):
     batch = 32
     test = "llama-distributed-ln"
     subdir = "llama-unit-tests"
-    margin = 0.03
-    num_iterations = 1
+    num_iterations = 6
+
+    profiler = BenchmarkProfiler()
+    benchmark_data = BenchmarkData()
+    step_name = f"Llama_TG_{op_name}"
 
     command = (
         f"pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_TG_llama_ops_perf.py::test_llama_tg_{op_name}"
     )
     cols = ["DEVICE KERNEL"]
-    inference_time_key = "AVG DEVICE KERNEL DURATION [ns]"
-    expected_perf_cols = {inference_time_key: expected_kernel_duration_us * 1e3}
+    inference_time_key = "DEVICE KERNEL DURATION [ns]"
+    expected_perf_cols = {f"AVG {inference_time_key}": expected_kernel_duration_us * 1e3}
 
+    profiler.start("run")
+    profiler.start(step_name)
     post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch, op_name, has_signposts=False)
-    expected_results = check_device_perf(post_processed_results, margin, expected_perf_cols, assert_on_fail=True)
+    profiler.end(step_name)
+    profiler.end("run")
+
+    # Save the measurement
+    measured_avg_us = post_processed_results[f"AVG {inference_time_key}"] / 1e3
+    measured_max_us = post_processed_results[f"MAX {inference_time_key}"] / 1e3
+    measured_min_us = post_processed_results[f"MIN {inference_time_key}"] / 1e3
+    benchmark_data.add_measurement(profiler, 0, step_name, f"Llama-TG-{op_name}-avg-µs", measured_avg_us)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"Llama-TG-{op_name}-max-µs", measured_max_us)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"Llama-TG-{op_name}-min-µs", measured_min_us)
+    benchmark_data.save_partial_run_json(
+        profiler,
+        run_type=f"llama-tg-ops",
+        ml_model_name="llama70b-tg",
+    )
+    expected_results = check_device_perf(post_processed_results, perf_margin, expected_perf_cols, assert_on_fail=True)
+
     prep_device_perf_report(
         model_name=f"llama-tg-{op_name}",
         batch_size=batch,
