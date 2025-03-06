@@ -205,6 +205,7 @@ class TtModelArgs:
                 "Qwen2.5-7B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128},
                 "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 32, "TG": 128},
                 "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128},
+                "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128},
             }
             try:
                 max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.base_model_name][self.device_name]
@@ -1034,6 +1035,7 @@ class TtModelArgs:
             default_padded_cores = {
                 "Qwen2.5-72B": 32,
                 "Qwen2.5-7B": 16,
+                "QwQ-32B": 16,
             }.get(self.base_model_name, 0)
 
             # Override MLP padding cores from env var
