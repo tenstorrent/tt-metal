@@ -10,14 +10,14 @@ namespace tt::tt_metal {
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& data_type) {
     switch (data_type) {
-        case DataType::BFLOAT16: return os << "BFLOAT16";
-        case DataType::FLOAT32: return os << "FLOAT32";
-        case DataType::UINT32: return os << "UINT32";
-        case DataType::BFLOAT8_B: return os << "BFLOAT8_B";
-        case DataType::BFLOAT4_B: return os << "BFLOAT4_B";
-        case DataType::UINT8: return os << "UINT8";
-        case DataType::UINT16: return os << "UINT16";
-        case DataType::INT32: return os << "INT32";
+        case DataType::BFLOAT16: return os << "DataType::BFLOAT16";
+        case DataType::FLOAT32: return os << "DataType::FLOAT32";
+        case DataType::UINT32: return os << "DataType::UINT32";
+        case DataType::BFLOAT8_B: return os << "DataType::BFLOAT8_B";
+        case DataType::BFLOAT4_B: return os << "DataType::BFLOAT4_B";
+        case DataType::UINT8: return os << "DataType::UINT8";
+        case DataType::UINT16: return os << "DataType::UINT16";
+        case DataType::INT32: return os << "DataType::INT32";
         case DataType::INVALID:
         default: return os << "Invalid";
     }

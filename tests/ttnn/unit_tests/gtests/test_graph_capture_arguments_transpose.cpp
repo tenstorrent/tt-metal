@@ -31,7 +31,8 @@ TEST_P(TestGraphCaptureArgumentsTranspose, Transpose) {
         operation0.arguments[0],
         "Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_"
         "type=BufferType::L1,shard_spec=std::nullopt)),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 2048, "
-        "512]),tensor_layout=TensorLayout(dtype=BFLOAT16,page_config=PageConfig(config=RowMajorPageConfig(tile=Tile("
+        "512]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=RowMajorPageConfig("
+        "tile=Tile("
         "tile_shape={32, 32},face_shape={16, "
         "16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type="
         "BufferType::L1,shard_spec=std::nullopt),alignment=Alignment([1]))))");
@@ -45,7 +46,8 @@ TEST_P(TestGraphCaptureArgumentsTranspose, Transpose) {
         operation1.arguments[0],
         "Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_"
         "type=BufferType::L1,shard_spec=std::nullopt)),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 2048, "
-        "512]),tensor_layout=TensorLayout(dtype=BFLOAT16,page_config=PageConfig(config=RowMajorPageConfig(tile=Tile("
+        "512]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=RowMajorPageConfig("
+        "tile=Tile("
         "tile_shape={32, 32},face_shape={16, "
         "16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type="
         "BufferType::L1,shard_spec=std::nullopt),alignment=Alignment([1]))))");
@@ -74,7 +76,7 @@ TEST_P(TestGraphCaptureArgumentsTranspose, Transpose) {
     EXPECT_EQ(operation3.operation_name, "tt::tt_metal::create_device_tensor");
     EXPECT_EQ(operation3.arguments.size(), 5);
     EXPECT_EQ(operation3.arguments[0], "Shape([1, 2048, 1, 512])");
-    EXPECT_EQ(operation3.arguments[1], "BFLOAT16");
+    EXPECT_EQ(operation3.arguments[1], "DataType::BFLOAT16");
     EXPECT_EQ(operation3.arguments[2], "Row Major");
     EXPECT_EQ(operation3.arguments[3], "[ unsupported type , std::__1::reference_wrapper<tt::tt_metal::v0::IDevice*>]");
     EXPECT_EQ(
