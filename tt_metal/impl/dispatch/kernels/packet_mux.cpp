@@ -13,19 +13,19 @@ constexpr uint32_t reserved = get_compile_time_arg_val(0);
 // starting at rx_queue_start_addr
 constexpr uint32_t rx_queue_start_addr_words = get_compile_time_arg_val(1);
 constexpr uint32_t rx_queue_size_words = get_compile_time_arg_val(2);
-constexpr uint32_t rx_queue_size_bytes = rx_queue_size_words*PACKET_WORD_SIZE_BYTES;
+constexpr uint32_t rx_queue_size_bytes = rx_queue_size_words * tt::packet_queue::PACKET_WORD_SIZE_BYTES;
 
 static_assert(is_power_of_2(rx_queue_size_words), "rx_queue_size_words must be a power of 2");
 
 constexpr uint32_t mux_fan_in = get_compile_time_arg_val(3);
 
 // FIXME imatosevic - is there a way to do this without explicit indexes?
-static_assert(mux_fan_in > 0 && mux_fan_in <= MAX_SWITCH_FAN_IN,
-    "mux fan-in 0 or higher than MAX_SWITCH_FAN_IN");
-static_assert(MAX_SWITCH_FAN_IN == 4,
-    "MAX_SWITCH_FAN_IN must be 4 for the initialization below to work");
+static_assert(mux_fan_in > 0 && mux_fan_in <= tt::packet_queue::MAX_SWITCH_FAN_IN,
+    "mux fan-in 0 or higher than tt::packet_queue::MAX_SWITCH_FAN_IN");
+static_assert(tt::packet_queue::MAX_SWITCH_FAN_IN == 4,
+    "tt::packet_queue::MAX_SWITCH_FAN_IN must be 4 for the initialization below to work");
 
-constexpr uint32_t remote_rx_x[MAX_SWITCH_FAN_IN] =
+constexpr uint32_t remote_rx_x[tt::packet_queue::MAX_SWITCH_FAN_IN] =
     {
         (get_compile_time_arg_val(4) & 0xFF),
         (get_compile_time_arg_val(5) & 0xFF),
@@ -33,7 +33,7 @@ constexpr uint32_t remote_rx_x[MAX_SWITCH_FAN_IN] =
         (get_compile_time_arg_val(7) & 0xFF)
     };
 
-constexpr uint32_t remote_rx_y[MAX_SWITCH_FAN_IN] =
+constexpr uint32_t remote_rx_y[tt::packet_queue::MAX_SWITCH_FAN_IN] =
     {
         (get_compile_time_arg_val(4) >> 8) & 0xFF,
         (get_compile_time_arg_val(5) >> 8) & 0xFF,
@@ -41,7 +41,7 @@ constexpr uint32_t remote_rx_y[MAX_SWITCH_FAN_IN] =
         (get_compile_time_arg_val(7) >> 8) & 0xFF
     };
 
-constexpr uint32_t remote_rx_queue_id[MAX_SWITCH_FAN_IN] =
+constexpr uint32_t remote_rx_queue_id[tt::packet_queue::MAX_SWITCH_FAN_IN] =
     {
         (get_compile_time_arg_val(4) >> 16) & 0xFF,
         (get_compile_time_arg_val(5) >> 16) & 0xFF,
@@ -49,12 +49,12 @@ constexpr uint32_t remote_rx_queue_id[MAX_SWITCH_FAN_IN] =
         (get_compile_time_arg_val(7) >> 16) & 0xFF
     };
 
-constexpr DispatchRemoteNetworkType remote_rx_network_type[MAX_SWITCH_FAN_IN] =
+constexpr tt::packet_queue::DispatchRemoteNetworkType remote_rx_network_type[tt::packet_queue::MAX_SWITCH_FAN_IN] =
     {
-        static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(4) >> 24) & 0xFF),
-        static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(5) >> 24) & 0xFF),
-        static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(6) >> 24) & 0xFF),
-        static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(7) >> 24) & 0xFF)
+        static_cast<tt::packet_queue::DispatchRemoteNetworkType>((get_compile_time_arg_val(4) >> 24) & 0xFF),
+        static_cast<tt::packet_queue::DispatchRemoteNetworkType>((get_compile_time_arg_val(5) >> 24) & 0xFF),
+        static_cast<tt::packet_queue::DispatchRemoteNetworkType>((get_compile_time_arg_val(6) >> 24) & 0xFF),
+        static_cast<tt::packet_queue::DispatchRemoteNetworkType>((get_compile_time_arg_val(7) >> 24) & 0xFF)
     };
 
 constexpr uint32_t remote_tx_queue_start_addr_words = get_compile_time_arg_val(8);
@@ -65,9 +65,9 @@ static_assert(is_power_of_2(remote_tx_queue_size_words), "remote_tx_queue_size_w
 constexpr uint32_t remote_tx_x = get_compile_time_arg_val(10);
 constexpr uint32_t remote_tx_y = get_compile_time_arg_val(11);
 constexpr uint32_t remote_tx_queue_id = get_compile_time_arg_val(12);
-constexpr DispatchRemoteNetworkType
+constexpr tt::packet_queue::DispatchRemoteNetworkType
     tx_network_type =
-        static_cast<DispatchRemoteNetworkType>(get_compile_time_arg_val(13));
+        static_cast<tt::packet_queue::DispatchRemoteNetworkType>(get_compile_time_arg_val(13));
 
 constexpr uint32_t test_results_buf_addr_arg = get_compile_time_arg_val(14);
 constexpr uint32_t test_results_buf_size_bytes = get_compile_time_arg_val(15);
@@ -86,7 +86,7 @@ constexpr uint32_t output_depacketize_downstream_sem = (output_depacketize_info 
 constexpr uint32_t output_depacketize_local_sem = (output_depacketize_info >> 16) & 0xFF;
 constexpr bool output_depacketize_remove_header = (output_depacketize_info >> 24) & 0x1;
 
-constexpr uint32_t input_packetize[MAX_SWITCH_FAN_IN] =
+constexpr uint32_t input_packetize[tt::packet_queue::MAX_SWITCH_FAN_IN] =
     {
         (get_compile_time_arg_val(19) >> 0) & 0x1,
         (get_compile_time_arg_val(20) >> 0) & 0x1,
@@ -94,7 +94,7 @@ constexpr uint32_t input_packetize[MAX_SWITCH_FAN_IN] =
         (get_compile_time_arg_val(22) >> 0) & 0x1
     };
 
-constexpr uint32_t input_packetize_log_page_size[MAX_SWITCH_FAN_IN] =
+constexpr uint32_t input_packetize_log_page_size[tt::packet_queue::MAX_SWITCH_FAN_IN] =
     {
         (get_compile_time_arg_val(19) >> 8) & 0xFF,
         (get_compile_time_arg_val(20) >> 8) & 0xFF,
@@ -102,7 +102,7 @@ constexpr uint32_t input_packetize_log_page_size[MAX_SWITCH_FAN_IN] =
         (get_compile_time_arg_val(22) >> 8) & 0xFF
     };
 
-constexpr uint32_t input_packetize_upstream_sem[MAX_SWITCH_FAN_IN] =
+constexpr uint32_t input_packetize_upstream_sem[tt::packet_queue::MAX_SWITCH_FAN_IN] =
     {
         (get_compile_time_arg_val(19) >> 16) & 0xFF,
         (get_compile_time_arg_val(20) >> 16) & 0xFF,
@@ -110,7 +110,7 @@ constexpr uint32_t input_packetize_upstream_sem[MAX_SWITCH_FAN_IN] =
         (get_compile_time_arg_val(22) >> 16) & 0xFF
     };
 
-constexpr uint32_t input_packetize_local_sem[MAX_SWITCH_FAN_IN] =
+constexpr uint32_t input_packetize_local_sem[tt::packet_queue::MAX_SWITCH_FAN_IN] =
     {
         (get_compile_time_arg_val(19) >> 24) & 0xFF,
         (get_compile_time_arg_val(20) >> 24) & 0xFF,
@@ -118,7 +118,7 @@ constexpr uint32_t input_packetize_local_sem[MAX_SWITCH_FAN_IN] =
         (get_compile_time_arg_val(22) >> 24) & 0xFF
     };
 
-constexpr uint32_t input_packetize_src_endpoint[MAX_SWITCH_FAN_IN] =
+constexpr uint32_t input_packetize_src_endpoint[tt::packet_queue::MAX_SWITCH_FAN_IN] =
     {
         (get_compile_time_arg_val(23) >> 0) & 0xFF,
         (get_compile_time_arg_val(23) >> 8) & 0xFF,
@@ -126,7 +126,7 @@ constexpr uint32_t input_packetize_src_endpoint[MAX_SWITCH_FAN_IN] =
         (get_compile_time_arg_val(23) >> 24) & 0xFF
     };
 
-constexpr uint32_t input_packetize_dest_endpoint[MAX_SWITCH_FAN_IN] =
+constexpr uint32_t input_packetize_dest_endpoint[tt::packet_queue::MAX_SWITCH_FAN_IN] =
     {
         (get_compile_time_arg_val(24) >> 0) & 0xFF,
         (get_compile_time_arg_val(24) >> 8) & 0xFF,
@@ -134,15 +134,27 @@ constexpr uint32_t input_packetize_dest_endpoint[MAX_SWITCH_FAN_IN] =
         (get_compile_time_arg_val(24) >> 24) & 0xFF
     };
 
-packet_input_queue_state_t input_queues[MAX_SWITCH_FAN_IN];
-using input_queue_network_sequence = NetworkTypeSequence<remote_rx_network_type[0], remote_rx_network_type[1], remote_rx_network_type[2], remote_rx_network_type[3]>;
-using input_queue_cb_mode_sequence = CBModeTypeSequence<input_packetize[0], input_packetize[1], input_packetize[2], input_packetize[3]>;
+tt::packet_queue::packet_input_queue_state_t input_queues[tt::packet_queue::MAX_SWITCH_FAN_IN];
+using input_queue_network_sequence = tt::packet_queue::NetworkTypeSequence<remote_rx_network_type[0], remote_rx_network_type[1], remote_rx_network_type[2], remote_rx_network_type[3]>;
+using input_queue_cb_mode_sequence = tt::packet_queue::CBModeTypeSequence<input_packetize[0], input_packetize[1], input_packetize[2], input_packetize[3]>;
 
-packet_output_queue_state_t output_queue;
-using output_queue_network_sequence = NetworkTypeSequence<tx_network_type>;
-using output_queue_cb_mode_sequence = CBModeTypeSequence<output_depacketize>;
+tt::packet_queue::packet_output_queue_state_t output_queue;
+using output_queue_network_sequence = tt::packet_queue::NetworkTypeSequence<tx_network_type>;
+using output_queue_cb_mode_sequence = tt::packet_queue::CBModeTypeSequence<output_depacketize>;
 
 void kernel_main() {
+    using tt::packet_queue::PACKET_QUEUE_TEST_STARTED;
+    using tt::packet_queue::PQ_TEST_STATUS_INDEX;
+    using tt::packet_queue::PQ_TEST_MISC_INDEX;
+    using tt::packet_queue::PQ_TEST_WORD_CNT_INDEX;
+    using tt::packet_queue::PQ_TEST_CYCLES_INDEX;
+    using tt::packet_queue::PQ_TEST_ITER_INDEX;
+    using tt::packet_queue::PACKET_QUEUE_TEST_TIMEOUT;
+    using tt::packet_queue::write_test_results;
+    using tt::packet_queue::get_timestamp;
+    using tt::packet_queue::get_timestamp_32b;
+    using tt::packet_queue::set_64b_result;
+
     write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_STARTED);
     write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff000000);
     write_test_results(test_results, PQ_TEST_MISC_INDEX+1, 0xaa000000 | mux_fan_in);
@@ -162,7 +174,7 @@ void kernel_main() {
                       output_depacketize_downstream_sem, output_depacketize_local_sem,
                       output_depacketize_remove_header);
 
-    if (!wait_all_input_output_ready<
+    if (!tt::packet_queue::wait_all_input_output_ready<
             input_queue_network_sequence,
             input_queue_cb_mode_sequence,
             output_queue_network_sequence,
@@ -195,7 +207,7 @@ void kernel_main() {
             }
         }
 
-        process_queues<input_queue_network_sequence, input_queue_cb_mode_sequence>([&]<auto input_network_type, auto input_cb_mode, auto sequence_i>(auto) -> bool {
+        tt::packet_queue::process_queues<input_queue_network_sequence, input_queue_cb_mode_sequence>([&]<auto input_network_type, auto input_cb_mode, auto sequence_i>(auto) -> bool {
             if (curr_input_partial_packet_sent && partial_packet_sent_index != sequence_i) return true;
 
             if (input_queues[sequence_i].template get_curr_packet_valid<input_cb_mode>()) {
@@ -236,7 +248,7 @@ void kernel_main() {
     if (!timeout) {
         write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff000003);
 
-        process_queues<input_queue_network_sequence, input_queue_cb_mode_sequence>([&]<auto network_type, auto cbmode, auto sequence_i>(auto) -> bool {
+        tt::packet_queue::process_queues<input_queue_network_sequence, input_queue_cb_mode_sequence>([&]<auto network_type, auto cbmode, auto sequence_i>(auto) -> bool {
             input_queues[sequence_i].template send_remote_finished_notification<network_type, cbmode>();
             return true;
         });
@@ -249,7 +261,7 @@ void kernel_main() {
     if (timeout) {
         write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_TIMEOUT);
     } else {
-        write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_PASS);
+        write_test_results(test_results, PQ_TEST_STATUS_INDEX, tt::packet_queue::PACKET_QUEUE_TEST_PASS);
         write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff00005);
     }
 

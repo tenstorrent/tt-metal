@@ -80,7 +80,8 @@ void EthTunnelerKernel::GenerateDependentConfigs() {
                 // kernels
                 dependent_config_.remote_sender_queue_id[remote_idx] =
                     router_vc_count + idx + router_vc_count - router_fwd_vc_count;
-                dependent_config_.remote_sender_network_type[remote_idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
+                dependent_config_.remote_sender_network_type[remote_idx] =
+                    (uint32_t)tt::packet_queue::DispatchRemoteNetworkType::NOC0;
                 remote_idx++;
             }
         }
@@ -90,7 +91,7 @@ void EthTunnelerKernel::GenerateDependentConfigs() {
         dependent_config_.remote_sender_queue_id[this->static_config_.vc_count.value() - 1] =
             this->static_config_.vc_count.value() * 2 - 1;
         dependent_config_.remote_sender_network_type[this->static_config_.vc_count.value() - 1] =
-            (uint32_t)DispatchRemoteNetworkType::ETH;
+            (uint32_t)tt::packet_queue::DispatchRemoteNetworkType::ETH;
         dependent_config_.inner_stop_mux_d_bypass = 0;
 
         // Downstream, we expect the same US_TUNNELER_LOCAL and a DEMUX (tunnel start)/MUX_D (non-tunnel start)
@@ -107,7 +108,8 @@ void EthTunnelerKernel::GenerateDependentConfigs() {
                 // Last VC is the return VC, driving a DEMUX or MUX_D
                 dependent_config_.remote_receiver_x[idx] = other_ds_kernel->GetVirtualCore().x;
                 dependent_config_.remote_receiver_y[idx] = other_ds_kernel->GetVirtualCore().y;
-                dependent_config_.remote_receiver_network_type[idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
+                dependent_config_.remote_receiver_network_type[idx] =
+                    (uint32_t)tt::packet_queue::DispatchRemoteNetworkType::NOC0;
                 if (auto demux_kernel = dynamic_cast<DemuxKernel*>(other_ds_kernel)) {
                     dependent_config_.remote_receiver_queue_start[idx] =
                         demux_kernel->GetStaticConfig().rx_queue_start_addr_words;
@@ -132,7 +134,8 @@ void EthTunnelerKernel::GenerateDependentConfigs() {
                 dependent_config_.remote_receiver_y[idx] = paired_physical_coord.y;
                 // Tunneler upstream queue ids start counting up from 0
                 dependent_config_.remote_receiver_queue_id[idx] = idx;
-                dependent_config_.remote_receiver_network_type[idx] = (uint32_t)DispatchRemoteNetworkType::ETH;
+                dependent_config_.remote_receiver_network_type[idx] =
+                    (uint32_t)tt::packet_queue::DispatchRemoteNetworkType::ETH;
                 dependent_config_.remote_receiver_queue_start[idx] =
                     static_config_.in_queue_start_addr_words.value() +
                     idx * this->static_config_.in_queue_size_words.value();
@@ -165,13 +168,15 @@ void EthTunnelerKernel::GenerateDependentConfigs() {
                 dependent_config_.remote_sender_y[idx] = mux_kernel->GetVirtualCore().y;
                 // MUX output queue id is counted after all of it's inputs
                 dependent_config_.remote_sender_queue_id[idx] = mux_kernel->GetStaticConfig().mux_fan_in.value();
-                dependent_config_.remote_sender_network_type[idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
+                dependent_config_.remote_sender_network_type[idx] =
+                    (uint32_t)tt::packet_queue::DispatchRemoteNetworkType::NOC0;
             } else {
                 dependent_config_.remote_sender_x[idx] = paired_physical_coord.x;
                 dependent_config_.remote_sender_y[idx] = paired_physical_coord.y;
                 // Tunneler downstream queue ids start counting after the upstream ones
                 dependent_config_.remote_sender_queue_id[idx] = this->static_config_.vc_count.value() + idx;
-                dependent_config_.remote_sender_network_type[idx] = (uint32_t)DispatchRemoteNetworkType::ETH;
+                dependent_config_.remote_sender_network_type[idx] =
+                    (uint32_t)tt::packet_queue::DispatchRemoteNetworkType::ETH;
             }
         }
 
@@ -197,7 +202,8 @@ void EthTunnelerKernel::GenerateDependentConfigs() {
                 dependent_config_.remote_receiver_y[remote_idx] = router_kernel->GetVirtualCore().y;
                 dependent_config_.remote_receiver_queue_id[remote_idx] =
                     idx;  // Queue ids start counting from 0 at input
-                dependent_config_.remote_receiver_network_type[remote_idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
+                dependent_config_.remote_receiver_network_type[remote_idx] =
+                    (uint32_t)tt::packet_queue::DispatchRemoteNetworkType::NOC0;
                 dependent_config_.remote_receiver_queue_start[remote_idx] =
                     router_kernel->GetStaticConfig().rx_queue_start_addr_words.value() +
                     idx * router_kernel->GetStaticConfig().rx_queue_size_words.value();
@@ -211,7 +217,8 @@ void EthTunnelerKernel::GenerateDependentConfigs() {
         dependent_config_.remote_receiver_x[return_vc_id] = paired_physical_coord.x;
         dependent_config_.remote_receiver_y[return_vc_id] = paired_physical_coord.y;
         dependent_config_.remote_receiver_queue_id[return_vc_id] = return_vc_id;
-        dependent_config_.remote_receiver_network_type[return_vc_id] = (uint32_t)DispatchRemoteNetworkType::ETH;
+        dependent_config_.remote_receiver_network_type[return_vc_id] =
+            (uint32_t)tt::packet_queue::DispatchRemoteNetworkType::ETH;
         dependent_config_.remote_receiver_queue_start[return_vc_id] =
             static_config_.in_queue_start_addr_words.value() +
             (return_vc_id) * this->static_config_.in_queue_size_words.value();
@@ -278,7 +285,7 @@ void EthTunnelerKernel::CreateKernel() {
         static_config_.kernel_status_buf_size_bytes.value(),
         static_config_.timeout_cycles.value(),
         dependent_config_.inner_stop_mux_d_bypass.value()};
-    for (int idx = 0; idx < MAX_TUNNEL_LANES; idx++) {
+    for (int idx = 0; idx < tt::packet_queue::MAX_TUNNEL_LANES; idx++) {
         if (dependent_config_.remote_receiver_x[idx]) {
             compile_args[4 + idx] |= (dependent_config_.remote_receiver_x[idx].value() & 0xFF);
             compile_args[4 + idx] |= (dependent_config_.remote_receiver_y[idx].value() & 0xFF) << 8;

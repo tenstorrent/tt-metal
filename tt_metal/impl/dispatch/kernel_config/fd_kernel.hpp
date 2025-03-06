@@ -5,6 +5,8 @@
 
 #include <device_impl.hpp>
 #include <program_impl.hpp>
+#include "core_coord.hpp"
+#include "mesh_graph.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "tt_cluster.hpp"
 
@@ -35,6 +37,7 @@ static std::vector<string> dispatch_kernel_file_names = {
     "tt_metal/impl/dispatch/kernels/vc_eth_tunneler.cpp",    // US_TUNNELER_REMOTE
     "tt_metal/impl/dispatch/kernels/vc_packet_router.cpp",   // PACKET_ROUTER_MUX
     "tt_metal/impl/dispatch/kernels/vc_packet_router.cpp",   // PACKET_ROUTER_DEMUX
+    "",                                                      // FABRIC_ROUTER_VC
     ""                                                       // COUNT
 };
 
@@ -48,7 +51,7 @@ public:
         device_id_(device_id),
         servicing_device_id_(servicing_device_id),
         cq_id_(cq_id),
-        noc_selection_(noc_selection) {};
+        noc_selection_(noc_selection) {}
     virtual ~FDKernel() = default;
 
     // Populate the static configs for this kernel (ones that do not depend on configs from other kernels), including
@@ -59,12 +62,21 @@ public:
     // after GenerateStaticConfigs for all upstream/downstream kernels.
     virtual void GenerateDependentConfigs() = 0;
 
-    // Use all configs and add this kernel to its Program. Called agter GenerateStaticConfigs/GenerateDependentConfigs.
+    // Use all configs and add this kernel to its Program. Called after GenerateStaticConfigs/GenerateDependentConfigs.
     virtual void CreateKernel() = 0;
 
     // Override for specific kernels that need host-side configureation (special values written to l1, etc.). Is called
     // after above functions and before FD kernels are launched.
-    virtual void ConfigureCore() {};
+    virtual void ConfigureCore() {}
+
+    // Override for specific kernels that can be configured for fabric. Will be called by the FABRIC_ROUTER_VC, which is
+    // an intermediary FDKernel for indicating a fabric router path needs to be found.
+    virtual void UpdateArgsForFabric(
+        const CoreCoord& fabric_router_virtual,
+        tt::tt_fabric::mesh_id_t upstream_mesh_id,
+        chip_id_t upstream_chip_id,
+        tt::tt_fabric::mesh_id_t downstream_mesh_id,
+        chip_id_t downstream_chip_id) {}
 
     // Generator function to create a kernel of a given type. New kernels need to be added here.
     static FDKernel* Generate(
@@ -91,10 +103,8 @@ public:
     // Get the port index for which a given kernel is upstream/downstream of this one
     int GetUpstreamPort(FDKernel* other) { return GetPort(other, this->upstream_kernels_); }
     int GetDownstreamPort(FDKernel* other) { return GetPort(other, this->downstream_kernels_); }
-    void AddDeviceAndProgram(tt::tt_metal::IDevice* device, tt::tt_metal::Program* program) {
-        device_ = device;
-        program_ = program;
-    };
+    void AddDevice(tt::tt_metal::IDevice* device) { device_ = device; }
+    void AddProgram(tt::tt_metal::Program* program) { program_ = program; }
 
 protected:
     void configure_kernel_variant(

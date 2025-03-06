@@ -43,7 +43,7 @@ class ControlPlane {
            chip_id_t dst_chip_id,
            chan_id_t src_chan_id) const;
 
-       // Return routers to get to the destination chip, avoid local eth to eth routing
+       // Return routers to get to the destination chip, avoid local eth to eth routing. CoreCoord is a virtual coord.
        std::vector<std::pair<routing_plane_id_t, CoreCoord>> get_routers_to_chip(
            mesh_id_t src_mesh_id, chip_id_t src_chip_id, mesh_id_t dst_mesh_id, chip_id_t dst_chip_id) const;
 
