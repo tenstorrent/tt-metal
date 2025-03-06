@@ -440,10 +440,12 @@ FlattenedBlockingConfig flatten_blocking_config(const BlockingConfig& blocking, 
     result.local.resize(num_cores_nhw);
     result.remote.resize(num_cores_nhw);
 
+    const uint32_t max_num_blocks = max_block_id + 1;
+
     for (uint32_t core_id = 0; core_id < num_cores_nhw; ++core_id) {
         // local
         {
-            result.local[core_id].resize(max_block_id + 1, 0);
+            result.local[core_id].resize(max_num_blocks, 0);
             const auto& core_map = blocking.local[core_id];
             for (const auto& kv : core_map) {
                 auto block_id = kv.first;
@@ -452,10 +454,11 @@ FlattenedBlockingConfig flatten_blocking_config(const BlockingConfig& blocking, 
                     result.local[core_id][block_id] = transfers;
                 }
             }
+            result.local[core_id].insert(result.local[core_id].begin(), max_num_blocks);  // add a header
         }
         // remote
         {
-            result.remote[core_id].resize(max_block_id + 1, 0);
+            result.remote[core_id].resize(max_num_blocks, 0);  // include
             const auto& core_map = blocking.remote[core_id];
             for (const auto& kv : core_map) {
                 auto block_id = kv.first;
@@ -464,6 +467,7 @@ FlattenedBlockingConfig flatten_blocking_config(const BlockingConfig& blocking, 
                     result.remote[core_id][block_id] = transfers;
                 }
             }
+            result.remote[core_id].insert(result.remote[core_id].begin(), max_num_blocks);  // add a header
         }
     }
 
