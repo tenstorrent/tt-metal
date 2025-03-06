@@ -34,7 +34,7 @@ After setting up the environment correctly, run a demo to test the environment.
 > [!NOTE]
 > In the llama3 demo implementation the decode stage supports batch=32. Each row is a separate user in 32x32 tiles used by the TT-Metalium stack. The prefill stage supports batch=1 where rows map to different iput tokens. Because prefill in compute-bound, multiple batches do not benefit performance. See [Converting Torch Model to TT-NN](https://docs.tenstorrent.com/docs-test/ttnn/latest/ttnn/converting_torch_model_to_ttnn.html) for model conversion.
 
-## Systematic Component-wise Model Bring-Up
+## Systematic Component-wise Large Language Model (LLM) Bring-Up
 
 1. Bring-up decode stage modules first.
 2. Bring-up each individual decode module separately.
@@ -72,7 +72,7 @@ After setting up the environment correctly, run a demo to test the environment.
 
 ## Model Performance Optimization
 
-Optimization tools like Metal Trace, async mode, and multiple command queues improve model performance. See [Advanced Performance Optimizations for Models](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md#1-metal-trace) for information on performance optimization.
+Optimization techniques like Metal Trace, async mode, and multiple command queues improve model performance. See [Advanced Performance Optimizations for Models](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md#1-metal-trace) for information on performance optimization.
 
 ## Data Parallel Implementation
 
