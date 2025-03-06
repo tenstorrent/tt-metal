@@ -58,6 +58,8 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     float eps,
     DeviceComputeKernelConfig compute_kernel_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
+    const uint32_t no_weights_max_size = 200;
+    const uint32_t with_weights_max_size = 120;
     bool rms_norm = norm_type == LayerNormType::RMSNORM;
     const auto shape = a.get_padded_shape();
     uint32_t W = shape[-1], H = shape[-2];
@@ -144,13 +146,13 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     // TODO(AP): can also add support for block_size=7 -> 63, 28
     uint32_t WtB = tt::div_up(Wt, block_size) * block_size;  // Wt padded to be divisible by block size
     bool three_pass_needed = false;
-    if (gamma.has_value() and beta.has_value() and WtB > 120) {
+    if (gamma.has_value() and beta.has_value() and WtB > with_weights_max_size) {
         // In the case that the required space is larger than what can be handeled by the single pass
         three_pass_needed = true;
-        WtB = 120;
-    } else if (WtB > 200) {
+        WtB = with_weights_max_size;
+    } else if (WtB > with_weights_max_size) {
         three_pass_needed = true;
-        WtB = 200;
+        WtB = no_weights_max_size;
     }
     uint32_t in0_t = WtB;  // cb_x for no pre-add variant, x=a+b for fused pre-add, extra space for some buffering
     uint32_t in1_t = block_size * 2;  // buffer for fused pre-add b tensor
@@ -172,10 +174,6 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     uint32_t in3_t = 2;  // epsilon coming from reader
     uint32_t im2_t = 2;  //
 
-    /*    TT_ASSERT(
-            W <= TILE_WIDTH * im0_t &&
-            "W exceeds the maximum supported size of tile buffer (kernel limitation right now).");
-        */
     TT_ASSERT(
         in0_t % block_size == 0 &&
         "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
@@ -278,7 +276,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     auto use_row_major_kernel = (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) or
                                 (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR);
 
-    TT_ASSERT(!use_row_major_kernel or !three_pass_needed, "ROW_MAJOR layout not supported for tensors this large");
+    TT_FATAL(!use_row_major_kernel or !three_pass_needed, "ROW_MAJOR layout not supported for tensors this large");
     auto reader_kernel_path = use_row_major_kernel
                                   ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
                                     "reader_unary_interleaved_ln_rm_gb.cpp"
@@ -302,7 +300,6 @@ operation::ProgramWithCallbacks layernorm_multi_core(
 
     std::vector<uint32_t> compute_args = {Wt, block_size, gamma.has_value(), beta.has_value(), fp32_dest_acc_en};
 
-    // grep
     auto compute_kernels_id = CreateKernel(
         program,
         three_pass_needed
