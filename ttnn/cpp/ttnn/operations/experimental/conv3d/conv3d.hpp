@@ -24,14 +24,6 @@ struct ExecuteConv3d {
         const Conv3dConfig& config,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
-
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
-        const ttnn::Tensor& weight_tensor,
-        const std::optional<ttnn::Tensor>& bias_tensor,
-        const Conv3dConfig& config,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::conv3d

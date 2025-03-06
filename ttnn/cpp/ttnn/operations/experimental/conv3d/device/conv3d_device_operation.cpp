@@ -13,6 +13,20 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::experimental::conv3d {
 
+namespace detail {
+inline std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
+    uint32_t T_in,
+    uint32_t H_in,
+    uint32_t W_in,
+    const std::array<uint32_t, 3>& padding,
+    const std::array<uint32_t, 3>& kernel_size) {
+    uint32_t T_out = T_in + 2 * padding[0] - (kernel_size[0] - 1);
+    uint32_t H_out = H_in + 2 * padding[1] - (kernel_size[1] - 1);
+    uint32_t W_out = W_in + 2 * padding[2] - (kernel_size[2] - 1);
+    return {T_out, H_out, W_out};
+}
+}  // namespace detail
+
 void Conv3dOp::validate(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {

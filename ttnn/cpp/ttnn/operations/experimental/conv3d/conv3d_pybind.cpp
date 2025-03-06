@@ -60,6 +60,7 @@ void py_bind_conv3d(pybind11::module& module) {
                                                             const std::string&,
                                                             uint32_t,
                                                             CoreCoord>(),
+                                                        py::kw_only(),
                                                         py::arg("dtype") = DataType::BFLOAT16,
                                                         py::arg("weights_dtype") = DataType::BFLOAT16,
                                                         py::arg("output_layout") = Layout::ROW_MAJOR,

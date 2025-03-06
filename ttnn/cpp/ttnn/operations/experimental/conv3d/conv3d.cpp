@@ -43,15 +43,4 @@ ttnn::Tensor ExecuteConv3d::invoke(
         .at(0);
 }
 
-ttnn::Tensor ExecuteConv3d::invoke(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
-    const std::optional<ttnn::Tensor>& bias_tensor,
-    const Conv3dConfig& config,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    return invoke(
-        DefaultQueueId, input_tensor, weight_tensor, bias_tensor, config, memory_config, compute_kernel_config);
-}
-
 }  // namespace ttnn::operations::experimental::conv3d
