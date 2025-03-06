@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "tt-metalium/mesh_coord.hpp"
+
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/types.hpp"
 
@@ -14,7 +16,7 @@ class TensorToMesh {
 public:
     virtual ~TensorToMesh() = default;
     virtual std::vector<Tensor> map(const Tensor& tensor) const = 0;
-    virtual tt::tt_metal::DistributedTensorConfig config() const = 0;
+    virtual std::optional<MeshShape> distribution_shape() const = 0;
 };
 
 // Composer interface that aggregates a multi-device tensor into a host tensor.

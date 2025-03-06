@@ -189,13 +189,13 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, distri
             validate_worker_modes(workers),
             "All device threads/workers must be running in the same mode (ASYNC or SYNC)");
 
-        std::optional<DistributedTensorConfig> distributed_config = std::nullopt;
+        std::optional<distributed::MeshShape> distribution_shape = std::nullopt;
         if (auto* host_storage = std::get_if<MultiDeviceHostStorage>(&input_tensor.get_storage());
             host_storage != nullptr) {
-            distributed_config = host_storage->strategy;
+            distribution_shape = host_storage->distribution_shape;
         }
 
-        Tensor tensor_modified_layout = Tensor(workers.size(), distributed_config);
+        Tensor tensor_modified_layout = Tensor(workers.size(), distribution_shape);
         for (int worker_index = 0; worker_index < workers.size(); ++worker_index) {
             auto& worker = workers[worker_index];
             worker->push_work([input_tensor, tensor_modified_layout, target_layout, worker, worker_index]() mutable {

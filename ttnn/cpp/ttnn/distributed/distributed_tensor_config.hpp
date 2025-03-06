@@ -6,6 +6,9 @@
 
 #include <unordered_map>
 #include <variant>
+#include <optional>
+
+#include "tt-metalium/mesh_coord.hpp"
 
 namespace tt::tt_metal {
 
@@ -37,5 +40,8 @@ bool operator==(const AllGatherTensor&, const AllGatherTensor&);
 // DistributedTensorConfig is a variant of different ways in which a tensor can be distributed across devices.
 using DistributedTensorConfig = std::variant<ReplicateTensor, ShardTensor, ShardTensor2D, AllGatherTensor>;
 DistributedTensorConfig get_distributed_tensor_config(const std::unordered_map<std::string, std::string>& metadata);
+
+std::optional<distributed::MeshShape> get_distribution_shape(
+    const std::unordered_map<std::string, std::string>& metadata);
 
 }  // namespace tt::tt_metal

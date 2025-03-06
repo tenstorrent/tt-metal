@@ -41,8 +41,8 @@ TEST_P(MultiDeviceTensorCreationTest, Empty) {
     EXPECT_EQ(mesh_replicated_tensor.storage_type(), StorageType::MULTI_DEVICE);
     EXPECT_EQ(mesh_replicated_tensor.get_workers().size(), mesh_device->num_devices());
 
-    const auto distributed_tensor_config = get_distributed_tensor_config_from_tensor(mesh_replicated_tensor);
-    EXPECT_TRUE(std::holds_alternative<ReplicateTensor>(distributed_tensor_config));
+    const auto distribution_shape = get_distribution_shape_from_tensor(mesh_replicated_tensor);
+    EXPECT_FALSE(distribution_shape.has_value());
 }
 
 TEST_P(MultiDeviceTensorCreationTest, EmptyLike) {
@@ -71,8 +71,8 @@ TEST_P(MultiDeviceTensorCreationTest, EmptyLike) {
     EXPECT_EQ(mesh_replicated_tensor.storage_type(), StorageType::MULTI_DEVICE);
     EXPECT_THAT(mesh_replicated_tensor.get_workers(), SizeIs(mesh_device->num_devices()));
 
-    const auto distributed_tensor_config = get_distributed_tensor_config_from_tensor(mesh_replicated_tensor);
-    EXPECT_TRUE(std::holds_alternative<ReplicateTensor>(distributed_tensor_config));
+    const auto distribution_shape = get_distribution_shape_from_tensor(mesh_replicated_tensor);
+    EXPECT_FALSE(distribution_shape.has_value());
 }
 
 TEST_P(MultiDeviceTensorCreationTest, Full) {
@@ -93,8 +93,8 @@ TEST_P(MultiDeviceTensorCreationTest, Full) {
     EXPECT_EQ(mesh_replicated_tensor.dtype(), DataType::BFLOAT16);
     EXPECT_EQ(mesh_replicated_tensor.layout(), Layout::ROW_MAJOR);
 
-    const auto distributed_tensor_config = get_distributed_tensor_config_from_tensor(mesh_replicated_tensor);
-    EXPECT_TRUE(std::holds_alternative<ReplicateTensor>(distributed_tensor_config));
+    const auto distribution_shape = get_distribution_shape_from_tensor(mesh_replicated_tensor);
+    EXPECT_FALSE(distribution_shape.has_value());
 }
 
 TEST_P(MultiDeviceTensorCreationTest, FullLike) {
@@ -127,8 +127,8 @@ TEST_P(MultiDeviceTensorCreationTest, FullLike) {
     EXPECT_EQ(mesh_replicated_tensor.dtype(), tensor.dtype());
     EXPECT_EQ(mesh_replicated_tensor.layout(), tensor.layout());
 
-    const auto distributed_tensor_config = get_distributed_tensor_config_from_tensor(mesh_replicated_tensor);
-    EXPECT_TRUE(std::holds_alternative<ReplicateTensor>(distributed_tensor_config));
+    const auto distribution_shape = get_distribution_shape_from_tensor(mesh_replicated_tensor);
+    EXPECT_FALSE(distribution_shape.has_value());
 }
 
 TEST_P(MultiDeviceTensorCreationTest, FullLikeWithOptTensor) {
@@ -170,8 +170,8 @@ TEST_P(MultiDeviceTensorCreationTest, FullLikeWithOptTensor) {
     EXPECT_EQ(mesh_replicated_tensor.dtype(), tensor.dtype());
     EXPECT_EQ(mesh_replicated_tensor.layout(), tensor.layout());
 
-    const auto distributed_tensor_config = get_distributed_tensor_config_from_tensor(mesh_replicated_tensor);
-    EXPECT_TRUE(std::holds_alternative<ReplicateTensor>(distributed_tensor_config));
+    const auto distribution_shape = get_distribution_shape_from_tensor(mesh_replicated_tensor);
+    EXPECT_FALSE(distribution_shape.has_value());
 }
 
 TEST_P(MultiDeviceTensorCreationTest, Arange) {
@@ -189,8 +189,8 @@ TEST_P(MultiDeviceTensorCreationTest, Arange) {
     EXPECT_EQ(tensor.get_workers().size(), mesh_device->num_devices());
     EXPECT_EQ(tensor.logical_shape(), ttnn::Shape({1, 1, 1, 1024}));
 
-    const auto distributed_tensor_config = get_distributed_tensor_config_from_tensor(tensor);
-    EXPECT_TRUE(std::holds_alternative<ReplicateTensor>(distributed_tensor_config));
+    const auto distribution_shape = get_distribution_shape_from_tensor(tensor);
+    EXPECT_FALSE(distribution_shape.has_value());
 }
 
 INSTANTIATE_TEST_SUITE_P(AllTests, MultiDeviceTensorCreationTest, ::testing::Bool());

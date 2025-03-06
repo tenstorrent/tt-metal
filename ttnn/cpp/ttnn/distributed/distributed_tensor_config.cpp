@@ -55,4 +55,14 @@ bool operator==(const ShardTensor2D& lhs, const ShardTensor2D& rhs) {
            lhs.shard_mesh.y == rhs.shard_mesh.y;
 }
 
+std::optional<distributed::MeshShape> get_distribution_shape(
+    const std::unordered_map<std::string, std::string>& metadata) {
+    auto config = get_distributed_tensor_config(metadata);
+    if (std::holds_alternative<ShardTensor2D>(config)) {
+        auto shard_mesh = std::get<ShardTensor2D>(config);
+        return distributed::MeshShape(shard_mesh.shard_mesh.y, shard_mesh.shard_mesh.x);
+    }
+    return std::nullopt;
+}
+
 }  // namespace tt::tt_metal
