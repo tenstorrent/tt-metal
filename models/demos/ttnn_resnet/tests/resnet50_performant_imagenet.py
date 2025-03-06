@@ -58,7 +58,6 @@ class ResNet50Trace2CQ:
         )
         self.tt_image_res = self.tt_inputs_host.to(device, sharded_mem_config_DRAM)
         self.op_event = ttnn.record_event(device, 0)
-        self.write_event = ttnn.record_event(device, 1)
 
         # First run configures convs JIT
         ttnn.wait_for_event(1, self.op_event)

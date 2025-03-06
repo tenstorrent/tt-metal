@@ -1,4 +1,4 @@
-t s---
+---
 
 # ResNet50 Demo
 
