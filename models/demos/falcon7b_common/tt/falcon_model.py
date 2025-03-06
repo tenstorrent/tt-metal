@@ -7,7 +7,7 @@ from typing import Optional, Tuple
 
 import torch
 import ttnn
-from ttnn import ReplicateTensorToMesh, ShardTensorToMesh
+from ttnn import replicate_tensor_to_mesh_mapper, ShardTensorToMesh
 
 from models.demos.falcon7b_common.tt.falcon_decoder import TtFalconDecoderLayer
 from models.demos.falcon7b_common.tt.model_utils import get_weights_cached, layernorm
@@ -134,7 +134,7 @@ class TtFalconModelShared(torch.nn.Module):
                         device=self.mesh_device,
                         layout=ttnn.ROW_MAJOR_LAYOUT,
                         memory_config=self.model_config["ATTN_MASK_MEMCFG"],
-                        mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+                        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
                     )
                     for attention_mask_slice in attention_mask_
                 ]
@@ -156,7 +156,7 @@ class TtFalconModelShared(torch.nn.Module):
                     device=self.mesh_device,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     memory_config=self.model_config["ATTN_MASK_MEMCFG"],
-                    mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+                    mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
                 )
                 # Repeat attn masks for all heads
                 tt_attention_mask = ttnn.repeat(
@@ -210,7 +210,7 @@ class TtFalconModelShared(torch.nn.Module):
                 device=self.mesh_device,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=self.model_config["ATTN_MASK_MEMCFG"],
-                mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+                mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
             )
             if not self.model_config["l1_sharded"]:
                 # Tilize attn masks

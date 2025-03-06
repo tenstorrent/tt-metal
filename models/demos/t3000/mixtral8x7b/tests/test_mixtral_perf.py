@@ -6,7 +6,7 @@ import torch
 import pytest
 
 import ttnn
-from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
+from ttnn import ConcatMeshToTensor, replicate_tensor_to_mesh_mapper
 
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
     preprocess_inputs_prefill,
@@ -327,7 +327,7 @@ def run_inference_prefill(tt_model, model_args, prefill_seqlen, mesh_device, pt_
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
     profiler.end("prefill_prepare_rot_matrices")
 

@@ -36,7 +36,7 @@ def test_bert_attention_inference(
     inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
-    with ttnn.distribute(ttnn.ReplicateTensorToMesh(mesh_device)):
+    with ttnn.distribute(ttnn.replicate_tensor_to_mesh_mapper(mesh_device)):
         parameters = preprocess_model_parameters(
             initialize_model=lambda: pytorch_attention_model,
             device=mesh_device,
@@ -93,7 +93,7 @@ def test_bert_intermediate_inference(
     inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
-    with ttnn.distribute(ttnn.ReplicateTensorToMesh(mesh_device)):
+    with ttnn.distribute(ttnn.replicate_tensor_to_mesh_mapper(mesh_device)):
         parameters = preprocess_model_parameters(
             initialize_model=lambda: pytorch_intermediate_model,
             device=mesh_device,
@@ -140,7 +140,7 @@ def test_bert_output_inference(
     inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
-    with ttnn.distribute(ttnn.ReplicateTensorToMesh(mesh_device)):
+    with ttnn.distribute(ttnn.replicate_tensor_to_mesh_mapper(mesh_device)):
         parameters = preprocess_model_parameters(
             initialize_model=lambda: pytorch_output_model,
             device=mesh_device,
@@ -197,7 +197,7 @@ def test_bert_layer_inference(
     inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
-    with ttnn.distribute(ttnn.ReplicateTensorToMesh(mesh_device)):
+    with ttnn.distribute(ttnn.replicate_tensor_to_mesh_mapper(mesh_device)):
         parameters = preprocess_model_parameters(
             initialize_model=lambda: pytorch_layer_model,
             device=mesh_device,
@@ -247,7 +247,7 @@ def test_bert_for_question_answering(mesh_device, model_name, sequence_size, num
     inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
-    with ttnn.distribute(ttnn.ReplicateTensorToMesh(mesh_device)):
+    with ttnn.distribute(ttnn.replicate_tensor_to_mesh_mapper(mesh_device)):
         parameters = preprocess_model_parameters(
             initialize_model=lambda: model,
             device=mesh_device,
@@ -277,7 +277,7 @@ def test_bert_for_question_answering(mesh_device, model_name, sequence_size, num
     ttnn_attention_mask = ttnn.from_torch(
         torch_attention_mask,
         dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         device=mesh_device,
     )
 

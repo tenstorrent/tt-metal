@@ -170,7 +170,7 @@ def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds
                     dtype=ttnn.bfloat4_b,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                    mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
                 )
                 tt_full_text_mask = ttnn.from_torch(
                     full_text_mask_expand[b : b + 1],
@@ -178,7 +178,7 @@ def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds
                     dtype=ttnn.bfloat4_b,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                    mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
                 )
                 tt_out = tt_model(
                     tt_tensor_x,
@@ -209,7 +209,7 @@ def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds
                 dtype=ttnn.bfloat4_b,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
             )
             tt_xattn_mask = ttnn.reshape(
                 tt_xattn_mask,
@@ -224,7 +224,7 @@ def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds
                 dtype=ttnn.bfloat4_b,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
             )
             tt_full_text_mask = ttnn.reshape(
                 tt_full_text_mask,

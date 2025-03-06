@@ -85,7 +85,7 @@ def run_test_FalconMLP_inference(
         device=mesh_device,
         memory_config=model_config["LN_MLP_OUTPUT_MEMCFG"],
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
 
     tt_out = tt_FalconMLP_model(tt_mlp_input, llm_mode)

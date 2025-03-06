@@ -76,7 +76,7 @@ class TtLlamaCrossAttentionTransformerVision(LightweightModule):
             mesh_mapper=(
                 ttnn.ShardTensorToMesh(self.mesh_device, dim=dim)
                 if dim is not None
-                else ttnn.ReplicateTensorToMesh(self.mesh_device)
+                else ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device)
             ),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,

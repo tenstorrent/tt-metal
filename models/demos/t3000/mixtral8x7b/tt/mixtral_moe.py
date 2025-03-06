@@ -4,7 +4,7 @@
 
 import torch
 import ttnn
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
+from ttnn import ShardTensorToMesh, replicate_tensor_to_mesh_mapper
 from models.common.lightweightmodule import LightweightModule
 
 
@@ -58,7 +58,7 @@ class TtMoeLayer(LightweightModule):
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
-            mesh_mapper=ReplicateTensorToMesh(mesh_device),
+            ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
         self.top8_mask_11B_64 = ttnn.sum(self.top8_mask_11B_64, dim=2)
 
@@ -69,7 +69,7 @@ class TtMoeLayer(LightweightModule):
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
-            mesh_mapper=ReplicateTensorToMesh(mesh_device),
+            ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
         self.top2_mask_11BB = ttnn.sum(self.top2_mask_11BB, dim=2)
 
@@ -81,7 +81,7 @@ class TtMoeLayer(LightweightModule):
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
-            mesh_mapper=ReplicateTensorToMesh(mesh_device),
+            ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
 
     def forward(self, inputs, mode="decode"):

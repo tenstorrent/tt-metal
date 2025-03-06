@@ -83,8 +83,8 @@ def test_multi_device_check_per_device_shard(pcie_mesh_device, layout, memory_co
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
 def test_multi_device_replicate(pcie_mesh_device, shape, layout, memory_config):
-    """Test ReplicateTensorToMesh to broadcast a tensor across multiple devices"""
-    from ttnn import ReplicateTensorToMesh
+    """Test ttnn.replicate_tensor_to_mesh_mapper to broadcast a tensor across multiple devices"""
+    from ttnn import replicate_tensor_to_mesh_mapper
 
     pcie_mesh_device.enable_async(True)
 
@@ -93,7 +93,7 @@ def test_multi_device_replicate(pcie_mesh_device, shape, layout, memory_config):
 
         ttnn_tensor = ttnn.from_torch(
             full_tensor,
-            mesh_mapper=ReplicateTensorToMesh(pcie_mesh_device),
+            ttnn.replicate_tensor_to_mesh_mapper(pcie_mesh_device),
             layout=layout,
             memory_config=memory_config,
             device=pcie_mesh_device,
@@ -184,7 +184,7 @@ def test_multi_device_unary_binary_op_chain(pcie_mesh_device, program_cache, sha
 @pytest.mark.parametrize("input_a_shape", [(4, 1, 512, 512), (16, 1, 512, 512)])
 def test_multi_device_data_parallel_op_chain(pcie_mesh_device, program_cache, input_a_shape):
     """Multidevice API: Running data-parallel chain of ops with matmul"""
-    from ttnn import ShardTensorToMesh, ConcatMeshToTensor, ReplicateTensorToMesh
+    from ttnn import ShardTensorToMesh, ConcatMeshToTensor, replicate_tensor_to_mesh_mapper
 
     pcie_mesh_device.enable_async(True)
     if program_cache:
@@ -212,7 +212,7 @@ def test_multi_device_data_parallel_op_chain(pcie_mesh_device, program_cache, in
             torch_input_b_tensor,
             layout=ttnn.TILE_LAYOUT,
             device=pcie_mesh_device,
-            mesh_mapper=ReplicateTensorToMesh(pcie_mesh_device),
+            ttnn.replicate_tensor_to_mesh_mapper(pcie_mesh_device),
         )
         ttnn_output_tensor = ttnn.from_device(
             ttnn.mish(
@@ -249,7 +249,7 @@ def test_multi_device_argmax(pcie_mesh_device, layout, mem_config):
         layout=layout,
         device=pcie_mesh_device,
         memory_config=mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(pcie_mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(pcie_mesh_device),
     )
 
     tt_out_11BH = ttnn.argmax(tt_out_11BH, dim=-1)
@@ -264,7 +264,7 @@ def test_multi_device_argmax(pcie_mesh_device, layout, mem_config):
 @pytest.mark.parametrize("pcie_mesh_device", [2], indirect=True)
 def test_multi_device_explicit_dealloc(pcie_mesh_device):
     """Multidevice API: Ensure that deallocating multi-device tensors works as expected"""
-    from ttnn import ShardTensorToMesh, ConcatMeshToTensor, ReplicateTensorToMesh
+    from ttnn import ShardTensorToMesh, ConcatMeshToTensor, replicate_tensor_to_mesh_mapper
 
     if pcie_mesh_device.get_num_devices() <= 1:
         pytest.skip("Requires multiple devices to run")
@@ -284,7 +284,7 @@ def test_multi_device_explicit_dealloc(pcie_mesh_device):
         torch_input_b_tensor,
         layout=ttnn.TILE_LAYOUT,
         device=pcie_mesh_device,
-        mesh_mapper=ReplicateTensorToMesh(pcie_mesh_device),
+        ttnn.replicate_tensor_to_mesh_mapper(pcie_mesh_device),
     )
     ttnn_output_tensor_1 = ttnn_input_a_tensor @ ttnn_input_b_tensor
     ttnn_output_tensor_2 = ttnn.gelu(ttnn_output_tensor_1)
@@ -315,7 +315,7 @@ def test_add_1D_tensor_and_scalar(pcie_mesh_device, scalar, size):
         torch_input_tensor,
         layout=ttnn.TILE_LAYOUT,
         device=pcie_mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(pcie_mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(pcie_mesh_device),
     )
     output_tensor = input_tensor + scalar
     output_tensors = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(output_tensor.cpu())]

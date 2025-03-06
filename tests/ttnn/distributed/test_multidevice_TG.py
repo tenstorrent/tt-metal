@@ -13,7 +13,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from ttnn import (
     ShardTensorToMesh,
     ShardTensor2dMesh,
-    ReplicateTensorToMesh,
+    ttnn.replicate_tensor_to_mesh_mapper,
     ConcatMeshToTensor,
     ConcatMesh2dToTensor,
     MeshToTensor,
@@ -39,7 +39,7 @@ def test_galaxy_matmul_1d_fracture(mesh_device):
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
-        mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
     weights = ttnn.from_torch(
         weights_pt,
@@ -362,7 +362,7 @@ def test_galaxy_eltwise_add(M, N, mesh_device):
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         memory_config=LN_OUTPUT_MEMCFG,
-        mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
 
     attn_output = ttnn.from_torch(
@@ -371,7 +371,7 @@ def test_galaxy_eltwise_add(M, N, mesh_device):
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         memory_config=LN_OUTPUT_MEMCFG,
-        mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
 
     gt = residual_pt + attn_output_pt
@@ -420,7 +420,7 @@ def test_galaxy_attn_matmul(M, N, head_dim, num_heads, mesh_shape, mesh_device):
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
-        mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
 
     weights = ttnn.from_torch(
@@ -536,7 +536,7 @@ def test_galaxy_nlp_create_heads_decode(
         layout=ttnn.TILE_LAYOUT,
         memory_config=CREATE_HEAD_INPUT_MEMCFG,
         device=mesh_device,
-        mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
 
     # tt operation
@@ -636,7 +636,7 @@ def test_galaxy_rotary_matmul(batch, seq_len, head_dim, n_local_heads, n_local_k
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         memory_config=ROTARY_INPUT_MEMCFG,
-        mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
 
     key_layer = ttnn.from_torch(
@@ -645,7 +645,7 @@ def test_galaxy_rotary_matmul(batch, seq_len, head_dim, n_local_heads, n_local_k
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         memory_config=ROTARY_INPUT_MEMCFG,
-        mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
 
     rot_mats = ttnn.from_torch(
@@ -654,7 +654,7 @@ def test_galaxy_rotary_matmul(batch, seq_len, head_dim, n_local_heads, n_local_k
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         memory_config=ROT_MAT_MEMCFG,
-        mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
 
     compute_kernel_rotary = ttnn.WormholeComputeKernelConfig(
@@ -725,7 +725,7 @@ class TestUpdateCache:
             dtype=cache_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
-            mesh_mapper=ReplicateTensorToMesh(mesh_device),
+            ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
         for i in range(num_users):
             x = torch.randn(input_shape).bfloat16().float()
@@ -753,7 +753,7 @@ class TestUpdateCache:
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
                 memory_config=input_mem_config,
-                mesh_mapper=ReplicateTensorToMesh(mesh_device),
+                ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
             )
 
             cachett = ttnn.fill_cache(cachett, xt, i)
@@ -794,7 +794,7 @@ class TestUpdateCache:
             dtype=cache_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
-            mesh_mapper=ReplicateTensorToMesh(mesh_device),
+            ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
 
         x = torch.randn(input_shape).bfloat16().float()
@@ -828,7 +828,7 @@ class TestUpdateCache:
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=input_mem_config,
-            mesh_mapper=ReplicateTensorToMesh(mesh_device),
+            ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
 
         cachett = ttnn.update_cache(cachett, xt, cache_idx, batch_offset=batch_offset)
@@ -924,7 +924,7 @@ def run_test_sdpa_decode_single_iter(
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=dram_memcfg,
-        mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
 
     tt_V = ttnn.from_torch(
@@ -933,7 +933,7 @@ def run_test_sdpa_decode_single_iter(
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=dram_memcfg,
-        mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
     start_idx = s // 2
     scale = d**-0.5
@@ -965,7 +965,7 @@ def run_test_sdpa_decode_single_iter(
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=dram_memcfg,
-        mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
 
     tt_back = ttnn.transformer.scaled_dot_product_attention_decode(
@@ -1064,7 +1064,7 @@ def test_galaxy_nlp_concat_heads_decode(
         layout=ttnn.TILE_LAYOUT,
         memory_config=CONCAT_HEADS_INPUT_MEMCFG,
         device=mesh_device,
-        mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
 
     concat_head_output = ttnn.experimental.nlp_concat_heads_decode(
@@ -1151,7 +1151,7 @@ def test_galaxy_layernorm(M, N, mesh_device):
         layout=ttnn.TILE_LAYOUT,
         memory_config=LN_OUTPUT_MEMCFG,
         device=mesh_device,
-        mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
 
     norm_weights_tt = ttnn.from_torch(
@@ -1159,7 +1159,7 @@ def test_galaxy_layernorm(M, N, mesh_device):
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
-        mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
 
     norm_output = ttnn.rms_norm(

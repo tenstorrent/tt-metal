@@ -42,7 +42,7 @@ class TtLayerNorm(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             memory_config=weight_memory_config,
             cache_file_name=cache_name / "weight",
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(device) if is_mesh_device else None,
         )
 
         self.bias = ttnn.as_tensor(
@@ -52,7 +52,7 @@ class TtLayerNorm(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             memory_config=weight_memory_config,
             cache_file_name=cache_name / "bias",
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(device) if is_mesh_device else None,
         )
 
         if model_config:

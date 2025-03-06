@@ -4,7 +4,7 @@
 
 import torch
 import ttnn
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
+from ttnn import replicate_tensor_to_mesh_mapper, ConcatMeshToTensor
 from models.common.lightweightmodule import LightweightModule
 from models.demos.t3000.llama2_70b.tt.llama_common import precompute_freqs, get_rot_transformation_mat, gather_cos_sin
 from loguru import logger
@@ -48,14 +48,14 @@ class TtLlamaRotarySetup(LightweightModule):
             device=device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=datatype,
-            mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
+            ttnn.replicate_tensor_to_mesh_mapper(device) if self.is_mesh_device else None,
         )
         self.sin_matrix = ttnn.from_torch(
             sin_matrix,
             device=device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=datatype,
-            mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
+            ttnn.replicate_tensor_to_mesh_mapper(device) if self.is_mesh_device else None,
         )
 
         # Generate the transformation matrix
@@ -74,7 +74,7 @@ class TtLlamaRotarySetup(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             dtype=datatype,
             memory_config=trans_mat_mem_config,
-            mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
+            ttnn.replicate_tensor_to_mesh_mapper(device) if self.is_mesh_device else None,
         )
 
     def get_trans_mats(self):
@@ -93,7 +93,7 @@ class TtLlamaRotarySetup(LightweightModule):
             position_idxs,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ReplicateTensorToMesh(self.device) if self.is_mesh_device else None,
+            ttnn.replicate_tensor_to_mesh_mapper(self.device) if self.is_mesh_device else None,
         )
 
         return rot_idxs

@@ -21,7 +21,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 import transformers
 
 from loguru import logger
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
+from ttnn import ShardTensorToMesh, replicate_tensor_to_mesh_mapper, ConcatMeshToTensor
 
 
 PRETRAINED_MODEL_NAME = f"tiiuae/falcon-7b-instruct"
@@ -144,7 +144,7 @@ def test_falcon_attention(
             tt_cache_path=get_tt_cache_path(f"{model_name}"),
             device=mesh_device,
             base_file_name=get_model_prefix(),
-            weights_mesh_mapper=ReplicateTensorToMesh(mesh_device),
+            weights_ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         ),
     )
     tt_FalconAttention_model = TtFalconAttention(

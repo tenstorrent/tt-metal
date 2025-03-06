@@ -7,7 +7,7 @@ import pytest
 from loguru import logger
 
 import ttnn
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
+from ttnn import replicate_tensor_to_mesh_mapper, ConcatMeshToTensor
 
 from models.common.rmsnorm import RMSNorm as TtRMSNorm
 from models.demos.t3000.mixtral8x7b.reference.model import RMSNorm as RefRMSNorm
@@ -50,7 +50,7 @@ def test_mixtral_rms_norm_inference(t3k_mesh_device, use_program_cache, reset_se
         device=t3k_mesh_device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
+        ttnn.replicate_tensor_to_mesh_mapper(t3k_mesh_device),
     )
 
     tt_output = tt_model(tt_input, mode="decode")

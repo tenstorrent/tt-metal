@@ -15,7 +15,7 @@ import torch.nn as nn
 ##### TTNN imports #####
 import ttnn
 from ttnn import experimental as ttl
-from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
+from ttnn import ConcatMeshToTensor, ttnn.replicate_tensor_to_mesh_mapper
 from models.utility_functions import skip_for_grayskull
 from models.utility_functions import (
     comp_pcc,
@@ -108,7 +108,7 @@ def test_class_embedding_inference(
         layout=layout,
         device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
     logger.info(f"TT Input tensor shape: {tt_input_tensor.shape}")
 

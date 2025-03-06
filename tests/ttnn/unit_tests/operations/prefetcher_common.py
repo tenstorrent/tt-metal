@@ -8,7 +8,7 @@ import ttnn
 import math
 from loguru import logger
 
-from ttnn import ReplicateTensorToMesh, ShardTensor2dMesh, ConcatMeshToTensor, ConcatMesh2dToTensor
+from ttnn import replicate_tensor_to_mesh_mapper, ShardTensor2dMesh, ConcatMeshToTensor, ConcatMesh2dToTensor
 from models.common.lightweightmodule import LightweightModule
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -228,7 +228,7 @@ def run_prefetcher_mm(
     mesh_composer = None
     if isinstance(device, ttnn._ttnn.multi_device.MeshDevice):
         cluster_shape = device.shape
-        mesh_mapper = ReplicateTensorToMesh(device)
+        mesh_mapper = ttnn.replicate_tensor_to_mesh_mapper(device)
         mesh_composer = ConcatMesh2dToTensor(device, dims=(0, 1), mesh_shape=cluster_shape)
 
     pt_tensors = []

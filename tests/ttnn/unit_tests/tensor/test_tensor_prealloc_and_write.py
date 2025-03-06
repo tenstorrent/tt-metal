@@ -74,7 +74,7 @@ def test_tensor_preallocation_and_write_apis(
             input_tensor_a,
             dtype=in_dtype,
             layout=tensor_layout,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
         ttnn.copy_host_to_device_tensor(tt_input_tensor_a, preallocated_tensor)
         readback_tensors = [

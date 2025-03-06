@@ -13,7 +13,7 @@ if os.getenv("CI") == "true":
     os.environ["GROK_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Grok/Grok-1/"
 
 import ttnn
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
+from ttnn import replicate_tensor_to_mesh_mapper, ConcatMeshToTensor
 
 from models.experimental.grok.tt.grok_rms_norm import TtRMSNorm, TtRMSNormSharded
 from models.experimental.grok.reference.model import RMSNorm
@@ -55,7 +55,7 @@ def test_grok_rms_norm_inference(t3k_mesh_device, use_program_cache, reset_seeds
         device=t3k_mesh_device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
+        ttnn.replicate_tensor_to_mesh_mapper(t3k_mesh_device),
     )
 
     tt_output = tt_model(tt_input)
@@ -104,7 +104,7 @@ def test_grok_rms_norm_sharded_inference(t3k_mesh_device, use_program_cache, res
         device=t3k_mesh_device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
+        ttnn.replicate_tensor_to_mesh_mapper(t3k_mesh_device),
     )
 
     tt_output = tt_model(tt_input)

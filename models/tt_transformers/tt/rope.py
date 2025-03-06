@@ -4,7 +4,7 @@
 
 import torch
 import ttnn
-from ttnn import ReplicateTensorToMesh, ShardTensor2dMesh
+from ttnn import replicate_tensor_to_mesh_mapper, ShardTensor2dMesh
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.common import precompute_freqs, get_rot_transformation_mat, gather_cos_sin
 from models.utility_functions import nearest_32
@@ -56,14 +56,14 @@ class RotarySetup(LightweightModule):
             device=device,
             layout=ttnn.TILE_LAYOUT,
             dtype=datatype,
-            mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
+            ttnn.replicate_tensor_to_mesh_mapper(device) if self.is_mesh_device else None,
         )
         self.sin_matrix = ttnn.from_torch(
             sin_matrix,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             dtype=datatype,
-            mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
+            ttnn.replicate_tensor_to_mesh_mapper(device) if self.is_mesh_device else None,
         )
 
         batch_grid = ttnn.num_cores_to_corerangeset(batch_size, self.core_grid, row_wise=True)
@@ -107,7 +107,7 @@ class RotarySetup(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             dtype=datatype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
+            ttnn.replicate_tensor_to_mesh_mapper(device) if self.is_mesh_device else None,
         )
 
     def get_both_trans_mats(self):
@@ -133,7 +133,7 @@ class RotarySetup(LightweightModule):
                 position_idxs,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ReplicateTensorToMesh(self.device) if self.is_mesh_device else None,
+                ttnn.replicate_tensor_to_mesh_mapper(self.device) if self.is_mesh_device else None,
             )
         else:  # On device
             rot_idxs = ttnn.as_tensor(
@@ -142,7 +142,7 @@ class RotarySetup(LightweightModule):
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ReplicateTensorToMesh(self.device) if self.is_mesh_device else None,
+                ttnn.replicate_tensor_to_mesh_mapper(self.device) if self.is_mesh_device else None,
             )
 
         return rot_idxs

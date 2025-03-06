@@ -5,7 +5,7 @@
 from loguru import logger
 import torch
 import ttnn
-from ttnn import ShardTensorToMesh, ConcatMeshToTensor, ReplicateTensorToMesh
+from ttnn import ShardTensorToMesh, ConcatMeshToTensor, replicate_tensor_to_mesh_mapper
 from models.utility_functions import nearest_32
 
 
@@ -78,7 +78,7 @@ def prepare_inputs_ttnn(x_bsh, hidden_size, current_pos, mesh_device):
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.L1_MEMORY_CONFIG,
-        mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
 
     # Attention mask
@@ -94,7 +94,7 @@ def prepare_inputs_ttnn(x_bsh, hidden_size, current_pos, mesh_device):
         dtype=ttnn.bfloat4_b,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
 
     ATTN_MASK_MEMCFG = ttnn.create_sharded_memory_config(
@@ -121,7 +121,7 @@ def prepare_rotation_mat_ttnn(head_dim, max_seq_len, mesh_device):
             device=mesh_device,
             dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ReplicateTensorToMesh(mesh_device),
+            ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
         for rot_mat_i in rot_mat
     ]
@@ -163,7 +163,7 @@ def cache_attention(mesh_device, state_dict, model_args, rot_emb_matrix_list, se
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
-        mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
 
     tt_attn = TtGrokAttention(
@@ -185,7 +185,7 @@ def cache_attention(mesh_device, state_dict, model_args, rot_emb_matrix_list, se
             dtype=ttnn.bfloat4_b,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ReplicateTensorToMesh(mesh_device),
+            ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
 
         ATTN_MASK_MEMCFG = ttnn.create_sharded_memory_config(

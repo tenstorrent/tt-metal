@@ -4,7 +4,7 @@
 
 import torch
 import ttnn
-from ttnn import ReplicateTensorToMesh
+from ttnn import replicate_tensor_to_mesh_mapper
 
 from models.utility_functions import is_wormhole_b0
 
@@ -50,7 +50,7 @@ def get_weights_cached(
             layout=tt_layout,
             device=mesh_device,
             memory_config=model_config[f"{weight_config_str}_MEMCFG"],
-            mesh_mapper=ReplicateTensorToMesh(mesh_device) if type(mesh_device) == ttnn.MeshDevice else None,
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device) if type(mesh_device) == ttnn.MeshDevice else None,
             cache_file_name=str(path),
             preprocess=preprocess_weights,
         )

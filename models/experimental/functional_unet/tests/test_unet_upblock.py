@@ -99,7 +99,7 @@ def test_unet_upblock_multi_device(
         pytest.skip("Test is only valid for N300")
 
     inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
-    weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    weights_mesh_mapper = ttnn.replicate_tensor_to_mesh_mapper(mesh_device)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
     torch_input, ttnn_input = create_unet_input_tensors(batch, groups)

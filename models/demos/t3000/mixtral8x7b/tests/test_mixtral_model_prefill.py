@@ -7,7 +7,7 @@ import pytest
 from loguru import logger
 
 import ttnn
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
+from ttnn import replicate_tensor_to_mesh_mapper, ConcatMeshToTensor
 
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
     prepare_inputs_ttnn_prefill,
@@ -89,7 +89,7 @@ def test_mixtral_model_inference_CI(t3k_mesh_device, use_program_cache, reset_se
         layout=ttnn.TILE_LAYOUT,
         device=t3k_mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
+        ttnn.replicate_tensor_to_mesh_mapper(t3k_mesh_device),
     )
     # Load TTNN model
     tt_model = TtTransformer(

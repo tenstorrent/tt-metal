@@ -8,7 +8,7 @@ from torch import nn
 from typing import Optional, Tuple
 
 import ttnn
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
+from ttnn import ShardTensorToMesh, replicate_tensor_to_mesh_mapper
 
 from models.utility_functions import nearest_32
 from models.demos.t3000.falcon40b.tt.model_utils import convert_to_layout
@@ -46,7 +46,7 @@ def generate_cos_sin_cache(
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         memory_config=model_config["COS_CACHED_WEIGHTS_MEMCFG"],
-        mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         cache_file_name=cos_cached_path,
     )
 
@@ -58,7 +58,7 @@ def generate_cos_sin_cache(
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         memory_config=model_config["SIN_CACHED_WEIGHTS_MEMCFG"],
-        mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         cache_file_name=sin_cached_path,
     )
 
@@ -219,7 +219,7 @@ class TtFalconAttention:
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=self.model_config["DRAM_MEMCFG"],
-                mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+                ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
                 cache_file_name=kv_cache_path,
             )
 
@@ -229,7 +229,7 @@ class TtFalconAttention:
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=self.model_config["DRAM_MEMCFG"],
-                mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+                ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
                 cache_file_name=kv_cache_path,
             )
 

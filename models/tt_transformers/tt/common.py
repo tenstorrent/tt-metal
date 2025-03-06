@@ -219,14 +219,14 @@ def get_prefill_rot_mat(head_dim, mesh_device, seq_len, theta, scale_factor, ori
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
     sin_gathereds = ttnn.from_torch(
         sin_gathered,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
 
     rot_mats = [cos_gathereds, sin_gathereds]
@@ -280,13 +280,13 @@ def get_single_rot_mat(
         device=mesh_device if not on_host else None,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if num_devices > 1 or not on_host else None,
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device) if num_devices > 1 or not on_host else None,
     ), ttnn.from_torch(
         rot_matrix.unsqueeze(0).unsqueeze(0),  # 1,1,head_dim,head_dim
         device=mesh_device if not on_host else None,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if num_devices > 1 or not on_host else None,
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device) if num_devices > 1 or not on_host else None,
     )
 
 
@@ -402,7 +402,7 @@ def sample_host(tt_input, mesh_device, temperature=0.6, top_p=0.08, on_host=True
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 dtype=ttnn.uint32,
                 device=None,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if mesh_device.get_num_devices() > 1 else None,
+                mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device) if mesh_device.get_num_devices() > 1 else None,
             ),
             pt_out,
         )
@@ -413,7 +413,7 @@ def sample_host(tt_input, mesh_device, temperature=0.6, top_p=0.08, on_host=True
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 dtype=ttnn.uint32,
                 device=mesh_device,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
             ),
             pt_out,
         )

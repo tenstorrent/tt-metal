@@ -508,7 +508,7 @@ def test_conv_features_multi_device(
         output_layout=output_layout,
         has_bias=True,
         input_mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
-        weight_mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        weight_mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         output_mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
         groups=groups,
     )

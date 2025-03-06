@@ -74,7 +74,7 @@ class Attention(LightweightModule):
                 dtype=ttnn.bfloat4_b,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
             )
 
         self.dtype = dtype
@@ -277,7 +277,7 @@ class Attention(LightweightModule):
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
                 cache_file_name=(
                     f"{weight_cache_path}/kvcache_{k_or_v.shape}"
                     if weight_cache_path and not configuration.dummy_weights
