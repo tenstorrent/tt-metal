@@ -706,8 +706,8 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
                     add_io_data(opData["output_tensors"], "OUTPUT")
 
                 if "performance_model" in opData.keys():
-                    rowDict["PM IDEAL [ns]"] = opData["performance_model"]["compute_ns"]
-                    rowDict["PM COMPUTE [ns]"] = opData["performance_model"]["ideal_ns"]
+                    rowDict["PM IDEAL [ns]"] = opData["performance_model"]["ideal_ns"]
+                    rowDict["PM COMPUTE [ns]"] = opData["performance_model"]["compute_ns"]
                     rowDict["PM BANDWIDTH [ns]"] = opData["performance_model"]["bandwidth_ns"]
                     rowDict["PM REQ I BW"] = opData["performance_model"]["input_bws"]
                     rowDict["PM REQ O BW"] = opData["performance_model"]["output_bws"]
