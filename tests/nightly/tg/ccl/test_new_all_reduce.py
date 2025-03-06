@@ -1,1 +1,1 @@
-tests/ttnn/unit_tests/operations/ccl/test_new_all_reduce.py
+../../../ttnn/unit_tests/operations/ccl/test_new_all_reduce.py
