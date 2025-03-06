@@ -7,7 +7,15 @@ on:
         required: false
         type: string
         default: latest
-
+      docker-image:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
 concurrency:
   # Note that people may spam the post-commit pipeline on their branch, and
   # we have this docs pipeline in the post-commit pipeline, then people
@@ -22,26 +30,46 @@ jobs:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
       fail-fast: false
-    env:
-      LOGURU_LEVEL: INFO
-      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-    runs-on:
-      - build
-      - in-service
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ inputs.docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        LOGURU_LEVEL: INFO
+        ARCH_NAME: ${{ matrix.test-group.arch }}
+        GITHUB_ACTIONS: true
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - uses: actions/checkout@v4
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
         with:
           submodules: recursive
-          lfs: false
-      - name: Set up dynamic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
       - uses: actions/download-artifact@v4
         with:
-          name: TTMetal_build_any
+          name: ${{ inputs.build-artifact-name }}
+          path: /work
       - name: Extract files
         run: tar -xvf ttm_any.tar
-      - uses: ./.github/actions/install-python-deps
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.wheel-artifact-name }}
+          path: /work
+      - name: Install Wheel
+        run: |
+          WHEEL_FILENAME=$(ls -1 *.whl)
+          pip3 install $WHEEL_FILENAME
       - name: Build Docs
         timeout-minutes: 15
         env:
