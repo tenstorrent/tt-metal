@@ -1088,24 +1088,26 @@ void kernel_main() {
     // TODO: CONVERT TO SEMAPHORE
     volatile auto termination_signal_ptr =
         reinterpret_cast<volatile tt::fabric::TerminationSignal*>(get_compile_time_arg_val(14));
+    volatile auto edm_status_ptr =
+        reinterpret_cast<volatile tt_l1_ptr tt::fabric::EDMStatus*>(get_compile_time_arg_val(15));
     // In persistent mode, we must rely on static addresses for our local semaphores that are locally
     // initialized, rather than metal device APIs. This way different subdevice programs can reliably
     // resolve the semaphore addresses on the EDM core
-    static constexpr bool persistent_mode = get_compile_time_arg_val(15) != 0;
+    static constexpr bool persistent_mode = get_compile_time_arg_val(16) != 0;
 
     // Per-channel counters
-    static constexpr bool enable_fabric_counters = get_compile_time_arg_val(16) != 0;
-    static constexpr size_t receiver_channel_counters_address = get_compile_time_arg_val(17);
-    static constexpr size_t sender_channel_0_counters_address = get_compile_time_arg_val(18);
-    static constexpr size_t sender_channel_1_counters_address = get_compile_time_arg_val(19);
+    static constexpr bool enable_fabric_counters = get_compile_time_arg_val(17) != 0;
+    static constexpr size_t receiver_channel_counters_address = get_compile_time_arg_val(18);
+    static constexpr size_t sender_channel_0_counters_address = get_compile_time_arg_val(19);
+    static constexpr size_t sender_channel_1_counters_address = get_compile_time_arg_val(20);
 
-    static constexpr bool enable_packet_header_recording = false;  // get_compile_time_arg_val(20) != 0;
-    static constexpr size_t receiver_completed_packet_header_cb_address = get_compile_time_arg_val(21);
-    static constexpr size_t receiver_completed_packet_header_cb_size_headers = get_compile_time_arg_val(22);
-    static constexpr size_t sender_0_completed_packet_header_cb_address = get_compile_time_arg_val(23);
-    static constexpr size_t sender_0_completed_packet_header_cb_size_headers = get_compile_time_arg_val(24);
-    static constexpr size_t sender_1_completed_packet_header_cb_address = get_compile_time_arg_val(25);
-    static constexpr size_t sender_1_completed_packet_header_cb_size_headers = get_compile_time_arg_val(26);
+    static constexpr bool enable_packet_header_recording = false;  // get_compile_time_arg_val(21) != 0;
+    static constexpr size_t receiver_completed_packet_header_cb_address = get_compile_time_arg_val(22);
+    static constexpr size_t receiver_completed_packet_header_cb_size_headers = get_compile_time_arg_val(23);
+    static constexpr size_t sender_0_completed_packet_header_cb_address = get_compile_time_arg_val(24);
+    static constexpr size_t sender_0_completed_packet_header_cb_size_headers = get_compile_time_arg_val(25);
+    static constexpr size_t sender_1_completed_packet_header_cb_address = get_compile_time_arg_val(26);
+    static constexpr size_t sender_1_completed_packet_header_cb_size_headers = get_compile_time_arg_val(27);
 
     std::array<PacketHeaderRecorder, NUM_SENDER_CHANNELS> sender_channel_packet_recorders{
         PacketHeaderRecorder(
@@ -1187,6 +1189,9 @@ void kernel_main() {
         *reinterpret_cast<volatile uint32_t*>(local_sender_channel_0_connection_buffer_index_addr) = 0;
         *sender0_worker_semaphore_ptr = 0;
     }
+
+    *edm_status_ptr = tt::fabric::EDMStatus::STARTED;
+
     //////////////////////////////
     //////////////////////////////
     //        Object Setup
@@ -1288,6 +1293,8 @@ void kernel_main() {
         erisc::datamover::handshake::receiver_side_finish(handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
     }
 
+    *edm_status_ptr = tt::fabric::EDMStatus::HANDSHAKE_COMPLETE;
+
     //////////////////////////////
     //////////////////////////////
     //        MAIN LOOP
@@ -1324,6 +1331,8 @@ void kernel_main() {
     receiver_channel_trid_tracker.all_buffer_slot_transactions_acked();
     // re-init the noc counters as the noc api used is not incrementing them
     ncrisc_noc_counters_init();
+
+    *edm_status_ptr = tt::fabric::EDMStatus::TERMINATED;
 
     DPRINT << "EDM DONE\n";
     WAYPOINT("DONE");
