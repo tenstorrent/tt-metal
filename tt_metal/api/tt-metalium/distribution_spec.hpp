@@ -61,13 +61,15 @@ private:
     struct ReplicateCount {
         size_t count = 0;
     };
-    using DistributionType = std::variant<ShardSize, ReplicateCount>;
+    using DistributionType = std::variant<std::monostate, ShardSize, ReplicateCount>;
 
     DistributionSpec(
-        const tt::tt_metal::Shape& tensor_shape, const std::vector<DistributionType>& spec, size_t num_targets);
+        const tt::tt_metal::Shape& tensor_shape,
+        const tt::stl::SmallVector<DistributionType>& spec,
+        size_t num_targets);
 
     tt::tt_metal::Shape tensor_shape_;
-    std::vector<DistributionType> spec_;
+    tt::stl::SmallVector<DistributionType> spec_;
     tt::tt_metal::Shape shard_shape_;  // Determined based on spec_
     size_t num_targets_ = 0;
 };
