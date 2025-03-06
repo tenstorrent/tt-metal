@@ -500,11 +500,11 @@ enum PacketLocalForwardType : uint8_t {
 };
 
 static constexpr uint32_t SWITCH_INTERVAL =
-// #ifndef DEBUG_PRINT_ENABLED
-// get_compile_time_arg_val(0);
-// #else
+#ifndef DEBUG_PRINT_ENABLED
+get_compile_time_arg_val(0);
+#else
 0;
-// #endif
+#endif
 
 static constexpr size_t ETH_BYTES_TO_WORDS_SHIFT = 4;
 static constexpr size_t NUM_SENDER_CHANNELS = 2;
