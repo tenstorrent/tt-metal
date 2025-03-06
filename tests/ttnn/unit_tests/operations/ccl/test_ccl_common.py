@@ -39,7 +39,6 @@ def teardown_fabric_interface(mesh_device):
 def create_global_semaphore_with_same_address(mesh_device, cores, initial_value):
     semaphore_handles = ttnn.create_global_semaphore_with_same_address(mesh_device, cores, initial_value)
     addrs = ttnn.get_global_semaphore_address(semaphore_handles)
-    logger.debug(f"from remote semaphore handle addresses: {addrs}")
     # assert all addresses are the same
     assert len(set(addrs)) == 1
     return semaphore_handles
