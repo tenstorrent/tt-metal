@@ -1,0 +1,54 @@
+name: "[internal] Blackhole nightly tests impl"
+
+on:
+  workflow_call:
+
+jobs:
+  nightly-bh-models:
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      matrix:
+        card: [BH]
+        model: [whisper]
+    name: Nightly ${{ matrix.card }} ${{ matrix.model }}
+    env:
+      ARCH_NAME: blackhole
+      LOGURU_LEVEL: INFO
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+    runs-on: ["cloud-virtual-machine", "in-service", "${{ matrix.card }}"]
+    steps:
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
+      - uses: ./.github/actions/retry-command
+        with:
+          timeout-seconds: 100
+          max-retries: 10
+          backoff-seconds: 60
+          command: ./.github/scripts/cloud_utils/mount_weka.sh
+      - name: Set up dyanmic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - uses: ./.github/actions/prepare-metal-run
+      - uses: ./.github/actions/install-python-deps
+      - name: Run frequent reg tests scripts
+        timeout-minutes: 30
+        # Llama3 has a single pytest for multiple llama models, hence it requires calling it multiple times.
+        # Due to host OOM issues in CI vm, we currently only run llama-1B in the model matrix.
+        run: |
+          source ${{ github.workspace }}/python_env/bin/activate
+          cd $TT_METAL_HOME
+          export PYTHONPATH=$TT_METAL_HOME
+          if [[ "${{ matrix.model }}" == *"llama3"* ]]; then
+            pytest -n auto tests/nightly/single_card/llama3 -k ${{ matrix.model }}
+          fi
+            if [[ "${{ matrix.model }}" != *"llama3"* ]]; then
+            pytest -n auto tests/nightly/single_card/${{ matrix.model }}
+          fi
+      - uses: ./.github/actions/upload-artifact-with-job-uuid
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          path: |
+            generated/test_reports/
+          prefix: "test_reports_"
