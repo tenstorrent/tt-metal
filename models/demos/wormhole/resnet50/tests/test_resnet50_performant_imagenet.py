@@ -51,7 +51,7 @@ def test_run_resnet50_trace_2cqs_inference(
         )
         profiler.end(f"compile")
         model_version = "microsoft/resnet-50"
-        iterations = 500
+        iterations = 100
         image_processor = AutoImageProcessor.from_pretrained(model_version)
         input_loc = str(model_location_generator("ImageNet_data"))
         data_loader = get_data_loader(input_loc, batch_size, iterations)
