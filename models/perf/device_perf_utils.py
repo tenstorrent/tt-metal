@@ -4,11 +4,14 @@
 
 import json
 import time
+import pandas as pd
+
 from loguru import logger
 from collections import defaultdict
 
 from tt_metal.tools.profiler.common import clear_profiler_runtime_artifacts
 from tt_metal.tools.profiler.process_model_log import (
+    get_latest_ops_log_filename,
     post_process_ops_log,
     run_device_profiler,
     get_samples_per_s,
@@ -50,6 +53,42 @@ def run_device_perf(command, subdir, num_iterations, cols, batch_size, has_signp
     return post_processed_results
 
 
+# TODO: Move into process_model_log.py (#18698)
+def post_process_ops_log_detailed(
+    output_logs_subdir, columns, sum_vals=True, op_name="", has_signposts=False, detailed=False, warmup_iters=0
+):
+    filename = get_latest_ops_log_filename(output_logs_subdir)
+    df = pd.read_csv(filename)
+
+    if has_signposts:
+        # there are explicit start and stop points in the model we want to measure between
+        markers = df[df["OP TYPE"] == "signpost"]["OP CODE"]
+        start = markers[markers == "start"].index[0]
+        stop = markers[markers == "stop"].index[0]
+        df = df.iloc[start + 1 : stop]
+    if op_name != "":
+        df = df[df["OP CODE"] == op_name]
+
+    if warmup_iters > 0:
+        df = df.iloc[warmup_iters:]
+
+    results = {}
+    for col in columns:
+        df_filtered = df[df[col] != "-"]
+        if sum_vals:
+            results[col] = df_filtered[col].astype(float).sum()
+        else:
+            results[col] = df_filtered[col].astype(float).to_numpy()
+
+        if detailed:
+            results[f"AVG {col}"] = df_filtered[col].astype(float).mean()
+            results[f"MIN {col}"] = df_filtered[col].astype(float).min()
+            results[f"MAX {col}"] = df_filtered[col].astype(float).max()
+            results[f"STD {col}"] = df_filtered[col].astype(float).std()
+
+    return results
+
+
 def run_device_perf_detailed(command, subdir, cols, op_name="", has_signposts=False, warmup_iters=0):
     duration_cols = [col + " DURATION [ns]" for col in cols]
 
@@ -63,7 +102,7 @@ def run_device_perf_detailed(command, subdir, cols, op_name="", has_signposts=Fa
         results[f"STD {d_col}"] = 0
 
     run_device_profiler(command, subdir)
-    r = post_process_ops_log(
+    r = post_process_ops_log_detailed(
         subdir, duration_cols, op_name=op_name, has_signposts=has_signposts, detailed=True, warmup_iters=warmup_iters
     )
     for d_col in duration_cols:
