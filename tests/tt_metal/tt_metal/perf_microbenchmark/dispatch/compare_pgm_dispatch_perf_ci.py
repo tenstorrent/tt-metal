@@ -63,14 +63,22 @@ for name, benchmark in golden_benchmarks.items():
     golden_time = benchmark["IterationTime"] * 1000000
     result_time = result["IterationTime"] * 1000000
     result_diff_pct = result_time / golden_time * 100 - 100
+
+    golden_clock = benchmark.get("Clock", "?")
+    result_clock = result.get("Clock", "?")
+
+    clock_string = (
+        f"(Clock now {result_clock}MHz but golden was {golden_clock}MHz)" if result_clock != golden_clock else ""
+    )
+
     if result_diff_pct > THRESHOLD_PCT:
         print(
-            f"Error:Test {name} expected value {golden_time:.2f}us but got {result_time:.2f}us ({result_diff_pct:.2f}% worse)"
+            f"Error:Test {name} expected value {golden_time:.2f}us but got {result_time:.2f}us ({result_diff_pct:.2f}% worse) {clock_string}"
         )
         exit_code = 1
     if result_diff_pct < -THRESHOLD_PCT:
         print(
-            f"Consider adjusting baselines. Test {name} got value {result_time:.2f}us but expected {golden_time:.2f}us ({-result_diff_pct:.2f}% better)."
+            f"Consider adjusting baselines. Test {name} got value {result_time:.2f}us but expected {golden_time:.2f}us ({-result_diff_pct:.2f}% better) {clock_string}."
         )
 
 for name in result_benchmarks:
