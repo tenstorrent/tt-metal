@@ -1,13 +1,15 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+import ttnn
 import os, json
 import torch
 import torchvision.transforms as transforms
+import numpy as np
 from PIL import Image
-import numpy as np
 from tqdm import tqdm
-import numpy as np
 from sklearn.linear_model import LinearRegression
-import json
-import ttnn
 
 
 def loader_func(path):
@@ -69,10 +71,7 @@ class LaneEval(object):
 
     @staticmethod
     def bench_one_submit(pred_file, gt_file):
-        # try:
         json_pred = [json.loads(line) for line in open(pred_file, "r").readlines()]
-        # except BaseException as e:
-        #     raise Exception('Fail to load json file of the prediction.')
         json_gt = [json.loads(line) for line in open(gt_file).readlines()]
         if len(json_gt) != len(json_pred):
             raise Exception("We do not get the predictions of all the test tasks")
@@ -122,7 +121,7 @@ class LaneTestDataset(torch.utils.data.Dataset):
         self.crop_size = crop_size
         with open(list_path, "r") as f:
             self.list = f.readlines()
-        self.list = [l[1:] if l[0] == "/" else l for l in self.list]  # exclude the incorrect path prefix '/' of CULane
+        self.list = [l[1:] if l[0] == "/" else l for l in self.list]
 
     def __getitem__(self, index):
         name = self.list[index].split()[0]
@@ -256,7 +255,6 @@ def generate_tusimple_lines(row_out, row_ext, col_out, col_ext, row_anchor=None,
             lanes_on_tusimple[tusimple_h_sample > bot_lim] = -2
             all_lanes.append(lanes_on_tusimple.tolist())
         else:
-            # all_lanes.append([-2]*56)
             pass
     return all_lanes
 
@@ -286,7 +284,7 @@ def run_test_tusimple(
         else:
             imgs = imgs.permute(0, 2, 3, 1)
             imgs = ttnn.from_torch(imgs, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-            out, pred = net(imgs)
+            out, pred = net(imgs, batch_size=batch_size)
             out = ttnn.to_torch(out)
             pred["loc_row"] = ttnn.to_torch(pred["loc_row"])
             pred["loc_col"] = ttnn.to_torch(pred["loc_col"])

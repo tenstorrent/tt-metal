@@ -4,7 +4,6 @@
 
 import torch
 import torch.nn.modules
-import numpy as np
 import torch.nn as nn
 from typing import Callable, Optional, List
 
@@ -98,8 +97,6 @@ class Custom_ResNet(nn.Module):
         self.layer2 = self._make_layer(block, 128, layers[1], stride=2, dilate=replace_stride_with_dilation[0])
         self.layer3 = self._make_layer(block, 256, layers[2], stride=2, dilate=replace_stride_with_dilation[1])
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2, dilate=replace_stride_with_dilation[2])
-        # self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        # self.fc = nn.Linear(512 * block.expansion, num_classes)
 
     def _make_layer(
         self,
@@ -175,7 +172,6 @@ class Tu_Simple(nn.Module):
         self.input_dim = input_height // 32 * input_width // 32 * 8
         self.fc_norm = False
         self.res_model = Custom_ResNet(BasicBlock, [3, 4, 6, 3])
-        # resnet(layers=34, pretrained=True)
 
         self.cls = torch.nn.Sequential(
             torch.nn.Identity(),

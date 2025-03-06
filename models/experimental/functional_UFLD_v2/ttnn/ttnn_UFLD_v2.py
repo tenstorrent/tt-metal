@@ -5,25 +5,16 @@
 import ttnn
 
 
-def p(x, b="x"):
-    print(f"{b}'s shape is {x.shape}")
-    print(f"{b}'s layout is {x.layout}")
-    print(f"{b}'s dtype is {x.dtype}")
-    print(f"{b}'s config is {x.memory_config()}")
-
-
 class ttnn_UFLD_V2_Conv2D:
     def __init__(
         self,
         conv,
         conv_pth,
-        bn=None,
         device=None,
         cache={},
         activation="",
         activation_dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat8_b,
-        use_1d_systolic_array=True,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
     ):
         self.conv = conv
@@ -34,7 +25,6 @@ class ttnn_UFLD_V2_Conv2D:
         self.padding = conv.padding
         self.stride = conv.stride
         self.groups = conv.groups
-        self.use_1d_systolic_array = use_1d_systolic_array
         self.deallocate_activation = False
         self.cache = cache
         self.compute_config = ttnn.init_device_compute_kernel_config(
@@ -52,13 +42,10 @@ class ttnn_UFLD_V2_Conv2D:
             enable_act_double_buffer=False,
             enable_split_reader=False,
             enable_subblock_padding=False,
-            reshard_if_not_optimal=False,
+            reshard_if_not_optimal=True,
             activation=activation,
-            input_channels_alignment=8,
+            input_channels_alignment=16 if self.conv.batch_size == 1 else 8,
         )
-        config_override = None
-        if config_override and "act_block_h" in config_override:
-            self.conv_config.act_block_h_override = config_override["act_block_h"]
         if conv_pth.bias is not None:
             bias = ttnn.from_device(conv_pth.bias)
             self.bias = bias
@@ -114,7 +101,7 @@ class ttnn_Basic_Block:
             x_identity, out_ht, out_wdth = self.downsample(input)
         x = ttnn.add(x, x_identity, memory_config=x.memory_config())
         x = ttnn.relu(x)
-
+        ttnn.deallocate(x_identity)
         return x
 
 
@@ -170,10 +157,13 @@ class ttnn_Resnet_34:
             conv_args.layer4[2], conv_pth.layer4_2, device=self.device, is_downsample=False
         )
 
-    def __call__(self, x, batch_size=1):  # [1, 320, 800, 3]
-        x, out_ht, out_wdth = self.conv1(x)
-        x = ttnn.max_pool2d(
-            x,
+    def __call__(self, x, batch_size=1):
+        x1, out_ht, out_wdth = self.conv1(x)
+        if x.is_sharded():
+            ttnn.deallocate(x)
+            x1 = ttnn.reallocate(x1)
+        x1 = ttnn.max_pool2d(
+            x1,
             batch_size=batch_size,
             input_h=out_ht,
             input_w=out_wdth,
@@ -183,13 +173,13 @@ class ttnn_Resnet_34:
             padding=[self.maxpool_args.padding, self.maxpool_args.padding],
             dilation=[self.maxpool_args.dilation, self.maxpool_args.dilation],
         )
-        if x.is_sharded():
-            x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.sharded_to_interleaved(x1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(x1)
+        x = ttnn.reallocate(x)
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x = self.layer1_0(x)
         x = self.layer1_1(x)
         x = self.layer1_2(x)
-
         x = self.layer2_0(x)
         x = self.layer2_1(x)
         x = self.layer2_2(x)
@@ -201,7 +191,6 @@ class ttnn_Resnet_34:
         x = self.layer3_3(x)
         x = self.layer3_4(x)
         x = self.layer3_5(x)
-
         x = self.layer4_0(input=x)
         x = self.layer4_1(input=x)
         x = self.layer4_2(input=x)
@@ -234,8 +223,7 @@ class ttnn_UFLD_V2:
         self.res_model = ttnn_Resnet_34(conv_args, conv_pth.res_model, device=self.device)
         self.pool = ttnn_UFLD_V2_Conv2D(conv_args.pool, conv_pth.pool, activation="", device=self.device)
 
-    def __call__(self, input):
-        batch_size = input.shape[0]
+    def __call__(self, input, batch_size=1):
         fea = self.res_model(input, batch_size=batch_size)
         fea, out_h, out_w = self.pool(fea)
         if fea.is_sharded():
@@ -254,9 +242,7 @@ class ttnn_UFLD_V2:
                 )
             }
         )
-        shard_shape = [32, 32]
-        print("shard shape is", shard_shape)
-        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+        shard_spec = ttnn.ShardSpec(shard_grid, [32, 32], ttnn.ShardOrientation.ROW_MAJOR)
         width_sharded_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec
         )
