@@ -63,7 +63,7 @@ std::pair<tt::tt_metal::Shape, tt::tt_metal::Shape> maybe_convert_shapes_for_map
 }  // namespace
 
 DistributionSpec::DistributionSpec(
-    const tt::tt_metal::Shape& tensor_shape, const std::vector<DistributionType>& spec, size_t num_targets) :
+    const tt::tt_metal::Shape& tensor_shape, const tt::stl::SmallVector<DistributionType>& spec, size_t num_targets) :
     tensor_shape_(tensor_shape), spec_(spec) {
     auto rank = tensor_shape.rank();
     TT_FATAL(spec.size() == rank, "Spec rank ({}) must be same as tensor shape rank ({})!", spec.size(), rank);
@@ -101,7 +101,7 @@ DistributionSpec DistributionSpec::from_shard_shape(
         shard_shape.rank(),
         rank);
     // Create spec with ShardSize only
-    std::vector<DistributionType> spec(rank);
+    tt::stl::SmallVector<DistributionType> spec(rank);
     for (size_t i = 0; i < rank; i++) {
         spec[i] = ShardSize{shard_shape[i]};
     }
