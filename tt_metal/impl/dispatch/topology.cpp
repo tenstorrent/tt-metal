@@ -941,6 +941,7 @@ std::unique_ptr<Program> create_and_compile_fabric_program(IDevice* device) {
     } else if (tt::Cluster::instance().get_fabric_config() == FabricConfig::FABRIC_2D) {
         return create_and_compile_2d_fabric_program(device);
     }
+    return nullptr;
 }
 
 void configure_fabric_cores(IDevice* device) {

@@ -20,6 +20,17 @@ enum TerminationSignal : uint32_t {
     IMMEDIATELY_TERMINATE = 2
 };
 
+enum EDMStatus : uint32_t {
+    // EDM kernel has started running
+    STARTED = 0xA0B0C0D0,
+
+    // Handshake complete with remote
+    HANDSHAKE_COMPLETE = 0xA0B1C2D3,
+
+    // EDM exiting
+    TERMINATED = 0xA1B2C3D4
+};
+
 // 3 bits
 enum NocSendType : uint8_t {
     NOC_UNICAST_WRITE = 0,

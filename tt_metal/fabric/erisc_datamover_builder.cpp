@@ -257,6 +257,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     local_receiver_channel_buffer_address(config.receiver_channel_base_address),
 
     termination_signal_ptr(config.termination_signal_address),
+    edm_status_ptr(config.edm_status_address),
     enable_persistent_mode(enable_persistent_mode),
     build_in_worker_connection_mode(build_in_worker_connection_mode) {}
 
@@ -293,6 +294,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const
         config.sender_1_channel_base_address,
 
         this->termination_signal_ptr,
+        this->edm_status_ptr,
         this->enable_persistent_mode,
 
         // fabric counters

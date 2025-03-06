@@ -38,6 +38,7 @@ struct FabricEriscDatamoverConfig {
     std::size_t termination_signal_address =
         edm_channel_ack_addr +
         (4 * eth_channel_sync_size);  // pad extra bytes to match old EDM so handshake logic will still work
+    std::size_t edm_status_address = termination_signal_address + field_size;
 
     // Debug and Counters
     static constexpr std::size_t receiver_channel_counters_size_bytes =
@@ -45,7 +46,7 @@ struct FabricEriscDatamoverConfig {
     static constexpr std::size_t sender_channel_counters_size_bytes =
         (((tt::fabric::sender_channel_counters_l1_size - 1) / field_size) + 1) * field_size;
 
-    std::size_t receiver_channel_counters_address = termination_signal_address + field_size;
+    std::size_t receiver_channel_counters_address = edm_status_address + field_size;
     std::size_t sender_channel_0_counters_address =
         receiver_channel_counters_address + receiver_channel_counters_size_bytes;
     std::size_t sender_channel_1_counters_address =
@@ -250,6 +251,7 @@ public:
     size_t local_receiver_channel_buffer_address = 0;
 
     size_t termination_signal_ptr = 0;
+    size_t edm_status_ptr = 0;
 
     // Semaphore IDs
     // this is the receiver channel's local sem for flow controlling with downstream fabric sender

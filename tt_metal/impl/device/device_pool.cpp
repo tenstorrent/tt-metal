@@ -17,6 +17,7 @@
 #include "dprint_server.hpp"
 #include "host_api.hpp"
 #include "control_plane.hpp"
+#include "erisc_datamover_builder.hpp"
 #include <tt_metal.hpp>
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
@@ -253,7 +254,7 @@ void DevicePool::initialize(
     _inst->init_firmware_on_active_devices();
 
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true, target_mmio_ids);
-    _inst->wait_for_fabric_master_router_sync();
+    _inst->wait_for_fabric_router_sync();
     _inst->init_profiler_devices();
 }
 
@@ -415,8 +416,22 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
     }
 }
 
-void DevicePool::wait_for_fabric_master_router_sync() const {
-    if (tt::Cluster::instance().get_fabric_config() == FabricConfig::FABRIC_2D) {
+void DevicePool::wait_for_fabric_router_sync() const {
+    if (tt::Cluster::instance().get_fabric_config() == FabricConfig::FABRIC_1D) {
+        const auto edm_config = tt::fabric::FabricEriscDatamoverConfig(0, 0, 0);
+        for (const auto& dev : this->get_all_active_devices()) {
+            auto fabric_eth_chans = tt::Cluster::instance().get_fabric_ethernet_channels(dev->id());
+            for (const auto& eth_chan : fabric_eth_chans) {
+                std::vector<std::uint32_t> router_status{0};
+                auto eth_logical_core = tt::Cluster::instance().get_soc_desc(dev->id()).get_eth_core_for_channel(
+                    eth_chan, CoordSystem::LOGICAL);
+                while (router_status[0] != tt::fabric::EDMStatus::HANDSHAKE_COMPLETE) {
+                    tt_metal::detail::ReadFromDeviceL1(
+                        dev, eth_logical_core, edm_config.edm_status_address, 4, router_status, CoreType::ETH);
+                }
+            }
+        }
+    } else if (tt::Cluster::instance().get_fabric_config() == FabricConfig::FABRIC_2D) {
         auto fabric_router_sync_sem_addr =
             hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
@@ -646,7 +661,19 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
     }
 
     // Terminate fabric routers
-    if (tt::Cluster::instance().get_fabric_config() == FabricConfig::FABRIC_2D) {
+    if (tt::Cluster::instance().get_fabric_config() == FabricConfig::FABRIC_1D) {
+        std::vector<uint32_t> signal(1, tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE);
+        const auto edm_config = tt::fabric::FabricEriscDatamoverConfig(0, 0, 0);
+        for (const auto& dev : this->get_all_active_devices()) {
+            auto fabric_eth_chans = tt::Cluster::instance().get_fabric_ethernet_channels(dev->id());
+            for (const auto& eth_chan : fabric_eth_chans) {
+                auto eth_logical_core = tt::Cluster::instance().get_soc_desc(dev->id()).get_eth_core_for_channel(
+                    eth_chan, CoordSystem::LOGICAL);
+                tt_metal::detail::WriteToDeviceL1(
+                    dev, eth_logical_core, edm_config.termination_signal_address, signal, CoreType::ETH);
+            }
+        }
+    } else if (tt::Cluster::instance().get_fabric_config() == FabricConfig::FABRIC_2D) {
         std::vector<uint32_t> master_router_terminate(1, 0);
         auto fabric_router_sync_sem_addr =
             hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
@@ -660,6 +687,7 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
                 dev, fabric_master_router_core, fabric_router_sync_sem_addr, master_router_terminate, CoreType::ETH);
         }
     }
+
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
     for (const auto& dev_id : devices_to_close) {
         auto dev = tt::DevicePool::instance().get_active_device(dev_id);

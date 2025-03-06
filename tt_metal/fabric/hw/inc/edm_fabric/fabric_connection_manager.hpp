@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
+#include "edm_fabric_worker_adapters.hpp"
 
 class FabricConnectionManager final {
 public:
