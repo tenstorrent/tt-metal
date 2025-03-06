@@ -31,6 +31,7 @@ from ttnn import (
     MeshToTensor,
 )
 
+
 class ConcatMesh2DToTensor(MeshToTensor):
     def __init__(self, mesh_device, dims, cluster_shape):
         self.dims = dims

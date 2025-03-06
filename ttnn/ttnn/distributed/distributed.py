@@ -189,7 +189,8 @@ def create_mesh_device(*args, **kwargs):
         yield mesh_device
     finally:
         close_mesh_device(mesh_device)
-        
+
+
 def synchronize_devices(
     devices: Union["ttnn.Device", "ttnn.MeshDevice"],
     queue_id: Optional[int] = ttnn.DefaultQueueId,
@@ -293,6 +294,7 @@ class ConcatMeshToTensor(MeshToTensor):
         ]
         return torch.cat(device_shards_converted_to_torch, dim=self.concat_dim)
 
+
 @contextlib.contextmanager
 def distribute(default: Union[ttnn.TensorToMesh, ttnn.MeshToTensor, MeshToTensor]):
     """
@@ -329,5 +331,6 @@ def distribute(default: Union[ttnn.TensorToMesh, ttnn.MeshToTensor, MeshToTensor
         # Restore the original functions
         ttnn.from_torch = _original_from_torch
         ttnn.to_torch = _original_to_torch
+
 
 __all__ = []

@@ -12,6 +12,7 @@ from models.demos.t3000.falcon40b.tt.model_utils import (
 )
 from ttnn import shard_tensor_to_2d_mesh_mapper
 
+
 class TtLlamaMLP_galaxy:
     def __init__(
         self,
