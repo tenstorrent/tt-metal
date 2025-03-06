@@ -1636,3 +1636,19 @@ def test_conv2d_localrun_fail_only(device, input_spec):
         device,
     )[0]
     assert pcc, messsage
+
+
+@pytest.mark.parametrize("input_spec", parameters["short_sweep_suite_conv1d"]["input_specs"])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_conv2d_localrun_conv1d(device, input_spec):
+    pcc, messsage = run_conv1d_short_sweep(
+        input_spec,
+        device,
+    )[0]
+    assert pcc, messsage
+
+
+failing_parameters_conv1d = [
+    # [batch_size, output_channels, input_channels, input_length, kernel_size, stride, pad, groups, dilation, bias]
+    [1, 768, 768, 3000, 3, 2, 1, 1, 1, True],
+]
