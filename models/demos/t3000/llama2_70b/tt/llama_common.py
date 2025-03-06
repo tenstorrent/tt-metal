@@ -28,41 +28,8 @@ UNIT_TEST_LAYER_NUM = 0
 UNIT_TEST_START_POS = 0
 UNIT_TEST_GENERATION_LENGTH = 20
 from ttnn import (
-    TensorToMesh,
     MeshToTensor,
 )
-
-
-class ShardTensor2dMesh(TensorToMesh):
-    def __init__(self, mesh_device, dims, cluster_shape):
-        super().__init__(mesh_device)
-        self.dims = dims
-        self.cluster_shape = cluster_shape
-
-    def map(self, tensor: torch.tensor):
-        # Returns list of tensors to map to row-major ordering of chips in cluster
-        tensors_grid_y = None
-        if self.dims[1] == None:
-            tensors_grid_y = [tensor.clone() for _ in range(self.cluster_shape[1])]
-        else:
-            tensors_grid_y = torch.chunk(tensor, self.cluster_shape[1], dim=self.dims[1])
-
-        tensors_grid_all = None
-        if self.dims[0] == None:
-            tensors_grid_all = [t.clone() for t in tensors_grid_y for _ in range(self.cluster_shape[0])]
-        else:
-            tensors_grid_all = [
-                tt for t in tensors_grid_y for tt in torch.chunk(t, self.cluster_shape[0], dim=self.dims[0])
-            ]
-
-        return list(tensors_grid_all)
-
-    def config(self):
-        return {
-            "strategy": "shard",
-            "shard_dim": f"{self.dims[0] if self.dims[0] else self.dims[1]}",
-        }
-
 
 class ConcatMesh2DToTensor(MeshToTensor):
     def __init__(self, mesh_device, dims, cluster_shape):

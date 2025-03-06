@@ -7,7 +7,7 @@ from typing import List
 from tqdm import tqdm
 import torch
 import ttnn
-from ttnn import ReplicateTensorToMesh
+from ttnn import replicate_tensor_to_mesh_mapper, shard_tensor_to_2d_mesh_mapper
 from models.demos.tg.llama3_70b.tt.llama_decoder_galaxy import TtLlamaDecoder_galaxy
 from models.demos.tg.llama3_70b.tt.llama_embedding_galaxy import TtLlamaEmbedding_galaxy
 from models.demos.t3000.llama2_70b.tt.llama_common import (
@@ -17,7 +17,6 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     get_rot_transformation_mat,
     num_to_corerange,
     gather_cos_sin,
-    ShardTensor2dMesh,
 )
 from models.demos.tg.llama3_70b.tt.llama_common import (
     tt_all_reduce,
@@ -25,7 +24,7 @@ from models.demos.tg.llama3_70b.tt.llama_common import (
     tt_sharded_distributed_rmsnorm,
     tt_distributed_rmsnorm,
 )
-
+from ttnn import shard_tensor_to_2d_mesh_mapper
 
 def is_power_of_two(n):
     if n <= 0:
@@ -74,7 +73,7 @@ class TtLlamaModel_galaxy:
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=replicate_tensor_to_mesh_mapper(mesh_device),
         )
 
         logger.info("Creating Layers")
@@ -142,7 +141,7 @@ class TtLlamaModel_galaxy:
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensor2dMesh(self.mesh_device, dims=(2, 3), cluster_shape=self.cluster_shape),
+            mesh_mapper=shard_tensor_to_2d_mesh_mapper(self.mesh_device, mesh_shape=self.cluster_shape, dims=(3, 2)),
             cache_file_name=self.cache_path / lm_head_cache_str,
         )
 
@@ -152,7 +151,7 @@ class TtLlamaModel_galaxy:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensor2dMesh(self.mesh_device, (2, None), self.cluster_shape),
+            mesh_mapper=shard_tensor_to_2d_mesh_mapper(self.mesh_device, mesh_shape=self.cluster_shape, dims=(None, 2)),
             cache_file_name=self.cache_path / norm_sharded_cache_str,
         )
 
@@ -173,7 +172,7 @@ class TtLlamaModel_galaxy:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=replicate_tensor_to_mesh_mapper(self.mesh_device),
         )
 
         xs = self.tt_embd(x)
@@ -226,7 +225,7 @@ class TtLlamaModel_galaxy:
                 device=self.mesh_device,
                 cache_file_name=cache_name(f"rot_mat_decode_galaxy_{start_pos}"),
                 memory_config=ROT_MAT_MEMCFG,
-                mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+                mesh_mapper=replicate_tensor_to_mesh_mapper(self.mesh_device),
             )
 
             attn_masks = None
@@ -247,7 +246,7 @@ class TtLlamaModel_galaxy:
                 # cache_file_name=cache_name(f"cos_gathered_prefill_galaxy_{start_pos}"),
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+                mesh_mapper=replicate_tensor_to_mesh_mapper(self.mesh_device),
             )
             sin_gathereds = ttnn.as_tensor(
                 sin_gathered,
@@ -256,7 +255,7 @@ class TtLlamaModel_galaxy:
                 # cache_file_name=cache_name(f"sin_gathered_prefill_galaxy_{start_pos}"),
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+                mesh_mapper=replicate_tensor_to_mesh_mapper(self.mesh_device),
             )
 
             rot_mats = [cos_gathereds, sin_gathereds]
@@ -269,7 +268,7 @@ class TtLlamaModel_galaxy:
                     dtype=ttnn.bfloat16,
                     layout=ttnn.TILE_LAYOUT,
                     # cache_file_name=cache_name(f"attn_mask_prefill_{seq_len}"),
-                    mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+                    mesh_mapper=replicate_tensor_to_mesh_mapper(self.mesh_device),
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     device=self.mesh_device,
                 )
