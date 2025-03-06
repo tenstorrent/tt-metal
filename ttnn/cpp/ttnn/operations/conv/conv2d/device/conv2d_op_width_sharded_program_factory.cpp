@@ -44,6 +44,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     bool enable_act_double_buffer,
     bool enable_split_reader,
     bool enable_subblock_padding) {
+    using tt::tt_metal::CBHandle;
+    using tt::tt_metal::CircularBuffer;
+    using tt::tt_metal::CircularBufferConfig;
+
     CBIndices cb_indices = CBIndices();
     bool pass = true;
     enable_split_reader = false;
