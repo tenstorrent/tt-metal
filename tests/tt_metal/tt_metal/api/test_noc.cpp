@@ -321,7 +321,7 @@ TEST_F(DeviceFixture, TensixInlineWriteDynamicNoc) {
             writer_core,
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                .noc = tt_metal::NOC::NOC_0,
+                .noc = tt_metal::NOC::NOC_1,
                 .noc_mode = tt_metal::NOC_MODE::DM_DYNAMIC_NOC});
 
         tt_metal::SetRuntimeArgs(
@@ -333,10 +333,6 @@ TEST_F(DeviceFixture, TensixInlineWriteDynamicNoc) {
         tt_metal::detail::LaunchProgram(device, program);
 
         tt_metal::detail::ReadFromDeviceL1(device, receiver_core, receiver_addr0, 64, readback);
-        for (auto x : readback) {
-            std::cout << x << "\t";
-        }
-        std::cout << "\n";
         uint32_t expected_value = value_to_write;
         for (int i = 0; i < 4; i++) {
             EXPECT_EQ(readback[i * 4], expected_value);
