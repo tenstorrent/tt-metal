@@ -10,6 +10,7 @@
 #include "autograd/graph.hpp"
 #include "autograd/graph_utils.hpp"
 #include "autograd/tensor.hpp"
+#include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "core/ttnn_all_includes.hpp"
 #include "core/xtensor_utils.hpp"
@@ -76,7 +77,13 @@ autograd::TensorPtr rope(const autograd::TensorPtr& input, const RotaryEmbedding
     validate_rope_input_and_params(input, params);
 
     auto out_tensor = ttnn::experimental::rotary_embedding_llama(
-        input->get_value(), params.cos_cache, params.sin_cache, params.trans_mat);
+        input->get_value(),
+        params.neg_cos_cache,
+        params.neg_sin_cache,
+        params.trans_mat,
+        /*is_decode_mode=*/false,
+        /*memory_config=*/std::nullopt,
+        /*compute_kernel_config=*/core::ComputeKernelConfig::precise());
     auto out = autograd::create_tensor(out_tensor);
 
     // In the backward pass we rotate by -θ, so we need negated cos and sin
@@ -87,7 +94,13 @@ autograd::TensorPtr rope(const autograd::TensorPtr& input, const RotaryEmbedding
         auto dL_dout = out->get_grad();
 
         auto dL_dinput = ttnn::experimental::rotary_embedding_llama(
-            dL_dout, params.neg_cos_cache, params.neg_sin_cache, params.trans_mat);
+            dL_dout,
+            params.neg_cos_cache,
+            params.neg_sin_cache,
+            params.trans_mat,
+            /*is_decode_mode=*/false,
+            /*memory_config=*/std::nullopt,
+            /*compute_kernel_config=*/core::ComputeKernelConfig::precise());
         input->add_grad(dL_dinput);
     };
 
