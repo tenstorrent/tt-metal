@@ -59,6 +59,7 @@ jobs:
     steps:
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - uses: actions/download-artifact@v4
+        timeout-minutes: 10
         with:
           name: eager-dist-${{ matrix.os }}-any
       - name: ${{ matrix.test-group.name }} tests
@@ -75,6 +76,7 @@ jobs:
             pip3 install --user $WHEEL_FILENAME
             ${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/upload-artifact-with-job-uuid
+        timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           path: |

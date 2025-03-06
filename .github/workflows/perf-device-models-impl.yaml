@@ -109,6 +109,7 @@ jobs:
           echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
       - name: Upload device perf report
+        timeout-minutes: 5
         if: ${{ !cancelled() && steps.check-device-perf-report.conclusion == 'success' }}
         uses: actions/upload-artifact@v4
         with:
@@ -116,6 +117,7 @@ jobs:
           path: /work/${{ steps.check-device-perf-report.outputs.device_perf_report_filename }}
 
       - uses: ./.github/actions/upload-artifact-with-job-uuid
+        timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           path: |
