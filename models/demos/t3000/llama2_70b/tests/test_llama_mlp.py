@@ -6,7 +6,7 @@ import pytest
 from loguru import logger
 import torch
 import ttnn
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
+from ttnn import replicate_tensor_to_mesh_mapper, ConcatMeshToTensor
 
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 from models.demos.t3000.llama2_70b.tt.llama_mlp_optimized import TtLlamaMLP_optimized
@@ -42,7 +42,7 @@ def tt_llama_mlp_prepare_inputs(llama_mlp_model, x, mode):
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
         device=llama_mlp_model.mesh_device,
-        mesh_mapper=ReplicateTensorToMesh(llama_mlp_model.mesh_device),
+        mesh_mapper=replicate_tensor_to_mesh_mapper(llama_mlp_model.mesh_device),
     )
 
     if mode == "decode":

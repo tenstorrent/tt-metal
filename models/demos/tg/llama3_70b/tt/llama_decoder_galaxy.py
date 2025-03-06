@@ -7,13 +7,11 @@ import ttnn
 
 from models.demos.tg.llama3_70b.tt.llama_attention_galaxy import TtLlamaAttention_galaxy
 from models.demos.tg.llama3_70b.tt.llama_mlp_galaxy import TtLlamaMLP_galaxy
-from models.demos.t3000.llama2_70b.tt.llama_common import (
-    ShardTensor2dMesh,
-)
 from models.demos.tg.llama3_70b.tt.llama_common import (
     tt_sharded_distributed_rmsnorm,
     tt_distributed_rmsnorm,
 )
+from ttnn import shard_tensor_to_2d_mesh_mapper
 
 
 class TtLlamaDecoder_galaxy:
@@ -112,7 +110,8 @@ class TtLlamaDecoder_galaxy:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensor2dMesh(self.mesh_device, (2, None), self.cluster_shape),
+            mesh_mapper=shard_tensor_to_2d_mesh_mapper
+(self.mesh_device, self.cluster_shape, (None, 2)),
             cache_file_name=self.cache_path / attn_norm_sharded_str,
         )
 
@@ -122,7 +121,8 @@ class TtLlamaDecoder_galaxy:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensor2dMesh(self.mesh_device, (2, None), self.cluster_shape),
+            mesh_mapper=shard_tensor_to_2d_mesh_mapper
+(self.mesh_device, self.cluster_shape, (None, 2)),
             cache_file_name=self.cache_path / ffn_norm_sharded_str,
         )
 

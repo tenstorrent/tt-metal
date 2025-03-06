@@ -6,7 +6,7 @@ import pytest
 from loguru import logger
 import torch
 import ttnn
-from ttnn import ReplicateTensorToMesh
+from ttnn import replicate_tensor_to_mesh_mapper, shard_tensor_to_2d_mesh_mapper
 
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 from models.demos.tg.llama3_70b.tt.llama_decoder_galaxy import TtLlamaDecoder_galaxy
@@ -33,7 +33,6 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     check_kv_cache,
     num_to_corerange,
     ConcatMesh2DToTensor,
-    ShardTensor2dMesh,
 )
 import gc
 
@@ -129,8 +128,8 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos, mode):
             layout=ttnn.TILE_LAYOUT,
             device=llama_decoder_model.mesh_device,
             memory_config=ACT_MEMCFG,
-            mesh_mapper=ShardTensor2dMesh(
-                llama_decoder_model.mesh_device, dims=(3, None), cluster_shape=llama_decoder_model.cluster_shape
+            mesh_mapper=shard_tensor_to_2d_mesh_mapper(
+                llama_decoder_model.mesh_device, mesh_shape=llama_decoder_model.cluster_shape, dims=(None, 3)
             ),
         )
 
@@ -159,7 +158,7 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos, mode):
             layout=ttnn.TILE_LAYOUT,
             memory_config=ROT_MAT_MEMCFG,
             device=llama_decoder_model.mesh_device,
-            mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.mesh_device),
+            mesh_mapper=replicate_tensor_to_mesh_mapper(llama_decoder_model.mesh_device),
         )
 
         attn_masks = None
@@ -173,8 +172,8 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos, mode):
             layout=ttnn.TILE_LAYOUT,
             device=llama_decoder_model.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensor2dMesh(
-                llama_decoder_model.mesh_device, dims=(3, None), cluster_shape=llama_decoder_model.cluster_shape
+            mesh_mapper=shard_tensor_to_2d_mesh_mapper(
+                llama_decoder_model.mesh_device, cluster_shape=llama_decoder_model.cluster_shape, dims=(None, 3)
             ),
         )
 
@@ -196,7 +195,7 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos, mode):
             # cache_file_name=cache_name(f"cos_gathered_prefill_{seq_len}"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             device=llama_decoder_model.mesh_device,
-            mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.mesh_device),
+            mesh_mapper=replicate_tensor_to_mesh_mapper(llama_decoder_model.mesh_device),
         )
         sin_gathereds = ttnn.as_tensor(
             sin_gathered,
@@ -205,7 +204,7 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos, mode):
             # cache_file_name=cache_name(f"sin_gathered_prefill_{seq_len}"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             device=llama_decoder_model.mesh_device,
-            mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.mesh_device),
+            mesh_mapper=replicate_tensor_to_mesh_mapper(llama_decoder_model.mesh_device),
         )
 
         rot_mats = [cos_gathereds, sin_gathereds]
@@ -218,7 +217,7 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos, mode):
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             # cache_file_name=cache_name(f"attn_mask_prefill_{seq_len}"),
-            mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.mesh_device),
+            mesh_mapper=replicate_tensor_to_mesh_mapper(llama_decoder_model.mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             device=llama_decoder_model.mesh_device,
         )
@@ -273,7 +272,7 @@ def run_test_LlamaDecoder_inference(
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=replicate_tensor_to_mesh_mapper(mesh_device),
     )
 
     tt_LlamaDecoder_model = TtLlamaDecoder_galaxy(
