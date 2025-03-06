@@ -134,7 +134,6 @@ FORCE_INLINE static void copy_sticks_async(
 
         // TODO: Remove branch here by always providing a blocking config - even if there's only one block
         if constexpr (blocking) {
-            constexpr size_t num_blocks = 4;
             uint16_t block_j_start = 0;
             for (size_t b = 0; b < num_blocks && block_j_start < length; b++) {
                 uint16_t steps_in_block = blocking_config_data[b];
