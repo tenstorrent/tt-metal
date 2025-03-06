@@ -70,7 +70,7 @@ def run_bert_question_and_answering_inference(
     profiler.start(f"preprocessing_parameter")
     mesh_device_flag = is_wormhole_b0() and ttnn.GetNumAvailableDevices() == 2
     batch_size = 16 if mesh_device_flag else 8
-    inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+    inputs_mesh_mapper = ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
     with ttnn.distribute(ttnn.replicate_tensor_to_mesh_mapper(mesh_device)):
@@ -189,7 +189,7 @@ def run_bert_question_and_answering_inference_squad_v2(
     mesh_device_flag = is_wormhole_b0() and ttnn.GetNumAvailableDevices() == 2
     batch_size = 16 if mesh_device_flag else 8
 
-    inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+    inputs_mesh_mapper = ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
     with ttnn.distribute(ttnn.replicate_tensor_to_mesh_mapper(mesh_device)):
         parameters = preprocess_model_parameters(

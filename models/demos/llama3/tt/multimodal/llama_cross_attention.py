@@ -72,7 +72,7 @@ class TtLlamaCrossAttention(LightweightModule):
         self.wq = ttnn.as_tensor(
             self.state_dict[wq_str].transpose(-2, -1),
             device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=-1),
             dtype=self.dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
@@ -82,7 +82,7 @@ class TtLlamaCrossAttention(LightweightModule):
         self.wk = ttnn.as_tensor(
             self.state_dict[wk_str].transpose(-2, -1),
             device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=-1),
             dtype=self.dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
@@ -92,7 +92,7 @@ class TtLlamaCrossAttention(LightweightModule):
         self.wv = ttnn.as_tensor(
             self.state_dict[wv_str].transpose(-2, -1),
             device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=-1),
             dtype=self.dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
@@ -102,7 +102,7 @@ class TtLlamaCrossAttention(LightweightModule):
         self.wo = ttnn.as_tensor(
             self.state_dict[wo_str].transpose(-2, -1),
             device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-2),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=-2),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,

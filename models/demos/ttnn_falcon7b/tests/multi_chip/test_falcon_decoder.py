@@ -21,7 +21,7 @@ from models.demos.ttnn_falcon7b.tt.common import (
 )
 
 from loguru import logger
-from ttnn import ShardTensorToMesh, replicate_tensor_to_mesh_mapper, ConcatMeshToTensor
+from ttnn import shard_tensor_to_mesh_mapper, replicate_tensor_to_mesh_mapper, ConcatMeshToTensor
 
 
 PRETRAINED_MODEL_NAME = f"tiiuae/falcon-7b-instruct"
@@ -102,7 +102,7 @@ def test_falcon_decoder(
         seq_len,
         configuration.hidden_size,
         mesh_device,
-        mesh_mapper=ShardTensorToMesh(mesh_device, dim=shard_dim),
+        mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=shard_dim),
     )
     position_ids = create_position_ids(llm_mode, kv_cache_len)
     attention_mask, tt_attention_mask = create_attention_mask(
@@ -114,7 +114,7 @@ def test_falcon_decoder(
         configuration.num_attention_heads,
         kv_cache_len,
         mesh_device,
-        mesh_mapper=ShardTensorToMesh(mesh_device, dim=shard_dim),
+        mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=shard_dim),
     )
     layer_past, tt_layer_past = create_kv_cache(
         llm_mode,
@@ -123,7 +123,7 @@ def test_falcon_decoder(
         kv_cache_len,
         configuration,
         mesh_device,
-        mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
+        mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0),
     )
 
     pytorch_out, pytorch_layer_present = torch_model(

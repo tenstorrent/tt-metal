@@ -28,7 +28,7 @@ def test_distilbert_for_question_answering(mesh_device, model_name, batch_size, 
 
     tt_model_name = f"ttnn_{model_name}_optimized"
 
-    inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+    inputs_mesh_mapper = ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0)
     weights_mesh_mapper = ttnn.replicate_tensor_to_mesh_mapper(mesh_device)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 

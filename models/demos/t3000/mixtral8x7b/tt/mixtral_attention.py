@@ -5,7 +5,7 @@
 import torch
 import ttnn
 from models.utility_functions import nearest_32
-from ttnn import ShardTensorToMesh, replicate_tensor_to_mesh_mapper, ConcatMeshToTensor
+from ttnn import shard_tensor_to_mesh_mapper, replicate_tensor_to_mesh_mapper, ConcatMeshToTensor
 from models.common.lightweightmodule import LightweightModule
 
 
@@ -74,7 +74,7 @@ class TtMixtralAttention(LightweightModule):
             .unsqueeze(0)
             .unsqueeze(0),
             device=self.mesh_device,
-            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=-1),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=-1),
             dtype=self.dtype,
             memory_config=self.model_config["ATTN_WEIGHTS_MEMCFG"],
             layout=self.model_config["ATTN_W_LAYOUT_TILE"],
@@ -90,7 +90,7 @@ class TtMixtralAttention(LightweightModule):
             .unsqueeze(0)
             .unsqueeze(0),
             device=self.mesh_device,
-            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=-2),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=-2),
             dtype=self.dtype,
             memory_config=self.model_config["ATTN_WEIGHTS_MEMCFG"],
             layout=self.model_config["ATTN_W_LAYOUT_TILE"],
@@ -118,7 +118,7 @@ class TtMixtralAttention(LightweightModule):
             ttnn.as_tensor(
                 lp,
                 device=self.mesh_device,
-                mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=1),
+                mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=1),
                 dtype=ttnn.bfloat8_b,
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
                 memory_config=self.model_config["ATTN_CACHE_WEIGHTS_MEMCFG"],

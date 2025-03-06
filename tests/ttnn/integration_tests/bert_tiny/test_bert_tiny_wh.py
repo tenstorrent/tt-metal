@@ -33,7 +33,7 @@ def test_bert_attention_inference(
     config = hugging_face_reference_model.config
     mesh_device_flag = is_wormhole_b0() and ttnn.GetNumAvailableDevices() == 2
     batch_size = 16 if mesh_device_flag else 8
-    inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+    inputs_mesh_mapper = ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
     with ttnn.distribute(ttnn.replicate_tensor_to_mesh_mapper(mesh_device)):
@@ -90,7 +90,7 @@ def test_bert_intermediate_inference(
 
     mesh_device_flag = is_wormhole_b0() and ttnn.GetNumAvailableDevices() == 2
     batch_size = 16 if mesh_device_flag else 8
-    inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+    inputs_mesh_mapper = ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
     with ttnn.distribute(ttnn.replicate_tensor_to_mesh_mapper(mesh_device)):
@@ -137,7 +137,7 @@ def test_bert_output_inference(
 
     mesh_device_flag = is_wormhole_b0() and ttnn.GetNumAvailableDevices() == 2
     batch_size = 16 if mesh_device_flag else 8
-    inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+    inputs_mesh_mapper = ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
     with ttnn.distribute(ttnn.replicate_tensor_to_mesh_mapper(mesh_device)):
@@ -194,7 +194,7 @@ def test_bert_layer_inference(
 
     mesh_device_flag = is_wormhole_b0() and ttnn.GetNumAvailableDevices() == 2
     batch_size = 16 if mesh_device_flag else 8
-    inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+    inputs_mesh_mapper = ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
     with ttnn.distribute(ttnn.replicate_tensor_to_mesh_mapper(mesh_device)):
@@ -244,7 +244,7 @@ def test_bert_for_question_answering(mesh_device, model_name, sequence_size, num
 
     mesh_device_flag = is_wormhole_b0() and ttnn.GetNumAvailableDevices() == 2
     batch_size = 16 if mesh_device_flag else 8
-    inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+    inputs_mesh_mapper = ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
     with ttnn.distribute(ttnn.replicate_tensor_to_mesh_mapper(mesh_device)):
