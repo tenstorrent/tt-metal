@@ -35,7 +35,7 @@ namespace detail {
 void ttnn_device(py::module& module) {
     module.def(
         "open_device",
-        &ttnn::open_device,
+        &ttnn::open_mesh_device,
         py::kw_only(),
         py::arg("device_id"),
         py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
@@ -61,13 +61,18 @@ void ttnn_device(py::module& module) {
                 <ttnn._ttnn.device.Device object at 0x7fbac5bfc1b0>
         )doc");
 
-    module.def("close_device", &ttnn::close_device, py::arg("device"));
+    module.def("close_device", [](MeshDevice& device) { ttnn::close_device(device); }, py::arg("device"));
 
-    module.def("enable_program_cache", &ttnn::enable_program_cache, py::arg("device"));
+    module.def(
+        "enable_program_cache", [](MeshDevice& device) { ttnn::enable_program_cache(device); }, py::arg("device"));
 
-    module.def("disable_and_clear_program_cache", &ttnn::disable_and_clear_program_cache, py::arg("device"));
+    module.def(
+        "disable_and_clear_program_cache",
+        [](MeshDevice& device) { ttnn::disable_and_clear_program_cache(device); },
+        py::arg("device"));
 
-    module.def("deallocate_buffers", &ttnn::deallocate_buffers, py::arg("device"), R"doc(
+    module.def(
+        "deallocate_buffers", [](MeshDevice* device) { ttnn::deallocate_buffers(device); }, py::arg("device"), R"doc(
         Deallocate all buffers associated with Device handle
     )doc");
 }

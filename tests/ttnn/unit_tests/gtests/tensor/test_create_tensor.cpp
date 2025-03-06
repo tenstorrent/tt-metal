@@ -18,7 +18,7 @@
 
 namespace {
 
-void run_create_tensor_test(const std::shared_ptr<ttnn::MeshDevice> device, const ttnn::Shape& input_shape) {
+void run_create_tensor_test(tt::tt_metal::IDevice* device, const ttnn::Shape& input_shape) {
     MemoryConfig mem_cfg = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
         .buffer_type = tt::tt_metal::BufferType::DRAM,
@@ -39,13 +39,14 @@ void run_create_tensor_test(const std::shared_ptr<ttnn::MeshDevice> device, cons
 
     TensorSpec tensor_spec(input_shape, TensorLayout(dtype, PageConfig(Layout::TILE), mem_cfg));
     ASSERT_EQ(input_buf_size_datums * datum_size_bytes, tensor_spec.compute_packed_buffer_size_bytes());
-    auto input_buffer = tt::tt_metal::tensor_impl::allocate_mesh_buffer_on_device(device.get(), tensor_spec);
+    auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, tensor_spec);
 
     auto input_storage = tt::tt_metal::DeviceStorage{input_buffer};
 
     Tensor input_tensor = Tensor(input_storage, input_shape, dtype, Layout::TILE);
 
     ttnn::write_buffer(io_cq, input_tensor, {host_data});
+
     ttnn::read_buffer(io_cq, input_tensor, {readback_data});
 
     for (int i = 0; i < input_buf_size_datums; i++) {
@@ -112,10 +113,10 @@ TEST_P(EmptyTensorTest, Combinations) {
         }
     }
 
-    auto tensor = tt::tt_metal::create_device_tensor(shape, dtype, layout, device_.get(), memory_config);
+    auto tensor = tt::tt_metal::create_device_tensor(shape, dtype, layout, device_, memory_config);
     EXPECT_EQ(tensor.get_logical_shape(), shape);
 
-    test_utils::test_tensor_on_device(shape, tensor_layout, device_.get());
+    test_utils::test_tensor_on_device(shape, tensor_layout, device_);
 }
 
 INSTANTIATE_TEST_SUITE_P(

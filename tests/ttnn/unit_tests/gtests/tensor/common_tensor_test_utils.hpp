@@ -9,8 +9,6 @@
 
 namespace test_utils {
 void test_tensor_on_device(
-    const ttnn::Shape& input_shape,
-    const tt::tt_metal::TensorLayout& layout,
-    tt::tt_metal::distributed::MeshDevice* device);
+    const ttnn::Shape& input_shape, const tt::tt_metal::TensorLayout& layout, tt::tt_metal::IDevice* device);
 void test_tensor_on_device(const ttnn::Shape& input_shape, const tt::tt_metal::TensorLayout& layout);
 }  // namespace test_utils

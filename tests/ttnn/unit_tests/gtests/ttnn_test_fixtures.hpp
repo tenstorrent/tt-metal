@@ -38,19 +38,19 @@ protected:
 
 class TTNNFixtureWithDevice : public TTNNFixture {
 protected:
-    std::shared_ptr<MeshDevice> device_ = nullptr;
+    tt::tt_metal::IDevice* device_ = nullptr;
 
     void SetUp() override {
         TTNNFixture::SetUp();
-        device_ = MeshDevice::create_single_device(0);
+        device_ = tt::tt_metal::CreateDevice(0);
     }
 
     void TearDown() override {
         TTNNFixture::TearDown();
-        device_->close();
+        tt::tt_metal::CloseDevice(device_);
     }
 
-    MeshDevice& getDevice() { return *device_; }
+    tt::tt_metal::IDevice& getDevice() { return *device_; }
 };
 
 }  // namespace ttnn

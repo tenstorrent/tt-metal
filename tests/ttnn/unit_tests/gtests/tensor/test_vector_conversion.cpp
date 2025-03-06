@@ -324,7 +324,7 @@ TEST_F(DeviceVectorConversionTest, RoundtripWithMemoryConfig) {
 
     TensorSpec spec(
         shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{.buffer_type = BufferType::L1}));
-    auto output = Tensor::from_vector(input, spec, device_.get());
+    auto output = Tensor::from_vector(input, spec, device_);
 
     EXPECT_TRUE(is_device_tensor(output));
     EXPECT_TRUE(output.memory_config().is_l1());
