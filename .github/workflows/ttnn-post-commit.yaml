@@ -134,11 +134,6 @@ jobs:
         with:
           name: eager-dist-${{ matrix.os }}-any
           path: docker-job
-      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
-      - name: Set ttnn fast runtime if exists in config
-        if: ${{ matrix.test-group.fast_runtime_mode_off }}
-        run: |
-          echo "TTNN_CONFIG_OVERRIDES={\"enable_fast_runtime_mode\": false}" >> $GITHUB_ENV
       - name: Extract files
         run: tar -xvf ttm_any.tar
       - name: ⬇️ Download Wheel
