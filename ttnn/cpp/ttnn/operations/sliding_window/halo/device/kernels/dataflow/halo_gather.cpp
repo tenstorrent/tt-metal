@@ -32,11 +32,11 @@ template <
     bool is_read,
     bool is_col_major>
 void copy_sticks_async(
-    tt_l1_ptr uint16_t const* config_data,
+    const tt_l1_ptr uint16_t* config_data,
     const uint16_t my_noc_x,
     const uint16_t my_noc_y,
-    uint32_t const in_base_l1_addr,
-    uint32_t const out_base_l1_addr) {
+    const uint32_t in_base_l1_addr,
+    const uint32_t out_base_l1_addr) {
     int i = 0;
     int length = config_data[i + 2];
 
@@ -145,7 +145,7 @@ void kernel_main() {
     cb_wait_front(in_cb_id, in_nsticks);  // make sure untilized data is available
     if constexpr (remote_config_cb_id) {
         uint32_t config_data_l1_addr = get_read_ptr(remote_config_cb_id);
-        tt_l1_ptr uint16_t const* config_data = reinterpret_cast<tt_l1_ptr uint16_t const*>(config_data_l1_addr);
+        const tt_l1_ptr uint16_t* config_data = reinterpret_cast<const tt_l1_ptr uint16_t*>(config_data_l1_addr);
         copy_sticks_async<
             stick_nbytes,
             input_aligned_page_size,
@@ -157,7 +157,7 @@ void kernel_main() {
 
     if constexpr (local_config_cb_id) {
         uint32_t config_data_l1_addr = get_read_ptr(local_config_cb_id);
-        tt_l1_ptr uint16_t const* config_data = reinterpret_cast<tt_l1_ptr uint16_t const*>(config_data_l1_addr);
+        const tt_l1_ptr uint16_t* config_data = reinterpret_cast<const tt_l1_ptr uint16_t*>(config_data_l1_addr);
         copy_sticks_async<
             stick_nbytes,
             input_aligned_page_size,
