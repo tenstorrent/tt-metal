@@ -67,9 +67,9 @@ def test_run_resnet50_trace_2cqs_inference(
             prediction = output[:, 0, 0, :].argmax(dim=-1)
             for i in range(batch_size):
                 predictions.append(imagenet_label_dict[prediction[i].item()])
-                # logger.info(
-                #    f"Iter: {iter} Sample: {i} - Expected Label: {imagenet_label_dict[labels[i]]} -- Predicted Label: {predictions[-1]}"
-                # )
+                logger.info(
+                    f"Iter: {iter} Sample: {i} - Expected Label: {imagenet_label_dict[labels[i]]} -- Predicted Label: {predictions[-1]}"
+                )
                 if imagenet_label_dict[labels[i]] == predictions[-1]:
                     correct += 1
         profiler.end(f"run")
