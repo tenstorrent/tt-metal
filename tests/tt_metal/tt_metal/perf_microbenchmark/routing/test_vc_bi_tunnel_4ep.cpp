@@ -11,11 +11,12 @@
 #include "test_common.hpp"
 #include "routing_test_common.hpp"
 
-using std::vector;
-using namespace tt;
-using json = nlohmann::json;
-
 int main(int argc, char** argv) {
+    using std::vector;
+    using namespace tt;
+    using namespace tt::packet_queue;
+    using json = nlohmann::json;
+
     constexpr uint32_t default_tx_x = 0;
     constexpr uint32_t default_tx_y = 0;
     constexpr uint32_t default_rx_x = 0;

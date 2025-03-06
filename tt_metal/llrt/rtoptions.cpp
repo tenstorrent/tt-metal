@@ -109,6 +109,9 @@ RunTimeOptions::RunTimeOptions() {
         }
     }
 
+    const char* fb_fabric = getenv("TT_METAL_FD_FABRIC");
+    fb_fabric_en = fb_fabric != nullptr;
+
     const char* dispatch_data_collection_str = std::getenv("TT_METAL_DISPATCH_DATA_COLLECTION");
     if (dispatch_data_collection_str != nullptr) {
         enable_dispatch_data_collection = true;
@@ -398,7 +401,7 @@ void RunTimeOptions::ParseFeaturePrependDeviceCoreRisc(RunTimeDebugFeatures feat
 
 // Can't create a DispatchCoreConfig as part of the RTOptions constructor because the DispatchCoreConfig constructor
 // depends on RTOptions settings.
-tt_metal::DispatchCoreConfig RunTimeOptions::get_dispatch_core_config() {
+tt_metal::DispatchCoreConfig RunTimeOptions::get_dispatch_core_config() const {
     tt_metal::DispatchCoreConfig dispatch_core_config = tt_metal::DispatchCoreConfig{};
     dispatch_core_config.set_dispatch_core_type(this->dispatch_core_type);
     return dispatch_core_config;
