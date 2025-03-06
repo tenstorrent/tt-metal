@@ -69,3 +69,21 @@ run_python_model_tests_slow_runtime_mode_wormhole_b0() {
     }'
     WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/experimental/functional_unet/tests/test_unet_model.py
 }
+
+run_python_model_tests_blackhole() {
+    # Llama3.2-1B
+    llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
+    # Llama3.2-3B
+    llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
+    # Llama3.1-8B
+    llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
+    # Llama3.2-11B
+    llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
+
+    # Run all Llama3 tests for 1B, 3B, 8B, 11B weights - dummy weights with tight PCC check
+    # for llama_dir in  "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
+    for llama_dir in  "$llama8b"; do
+        LLAMA_DIR=$llama_dir pytest -n auto models/demos/llama3/tests/test_llama_model.py -k "quick" ; fail+=$?
+        echo "LOG_METAL: Llama3 tests for $llama_dir completed"
+    done
+}
