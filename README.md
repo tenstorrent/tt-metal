@@ -41,8 +41,9 @@
 | [Qwen 2.5 72B (TP=8)](./models/demos/llama3)                  | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 333       | 14.5  | 20              | 464.0  | [v0.56.0-rc33](https://github.com/tenstorrent/tt-metal/tree/v0.56.0-rc33) | [9ac3783](https://github.com/tenstorrent/vllm/tree/9ac3783d5e3a4547f879f2cdadaab8571047a0a8)      |
 | [DeepSeek R1 Distill Llama 3.3 70B (TP=8)](./models/demos/llama3)       | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 180       | 15.2  | 20    | 486.4  | [v0.56.0-rc33](https://github.com/tenstorrent/tt-metal/tree/v0.56.0-rc33) | [9ac3783](https://github.com/tenstorrent/vllm/tree/9ac3783d5e3a4547f879f2cdadaab8571047a0a8)      |
 | [Falcon 7B (DP=32)](./models/demos/tg/falcon7b)               | 1024  | [Galaxy](https://tenstorrent.com/hardware/galaxy)        | 223       | 4.8   | 26              | 4915.2 | [v0.56.0-rc6](https://github.com/tenstorrent/tt-metal/tree/v0.56.0-rc6) |                                                                                                   |
+| [QwQ 32B (TP=8)](./models/demos/llama3)                       | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 133       | 25.2  |                 | 464.0  | [main](https://github.com/tenstorrent/tt-metal/) | [9ac3783](https://github.com/tenstorrent/vllm/tree/9ac3783d5e3a4547f879f2cdadaab8571047a0a8)      |
 
-> **Last Update:** March 5, 2025
+> **Last Update:** March 6, 2025
 >
 > **Notes:**
 >
