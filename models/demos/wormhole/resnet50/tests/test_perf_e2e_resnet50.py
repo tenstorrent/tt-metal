@@ -6,10 +6,6 @@ import pytest
 
 from models.utility_functions import run_for_wormhole_b0
 from models.demos.ttnn_resnet.tests.perf_e2e_resnet50 import run_perf_resnet
-from models.demos.wormhole.resnet50.tests.test_resnet50_performant_imagenet import (
-    test_run_resnet50_trace_2cqs_inference,
-)
-import ttnn
 
 
 @run_for_wormhole_b0()
