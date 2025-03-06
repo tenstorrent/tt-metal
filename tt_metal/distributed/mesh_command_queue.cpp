@@ -67,7 +67,7 @@ MeshCommandQueue::~MeshCommandQueue() {
 void MeshCommandQueue::populate_read_descriptor_queue() {
     for (auto& device : mesh_device_->get_devices()) {
         read_descriptors_.emplace(
-            device, std::make_unique<MultiProducerSingleConsumerQueue<CompletionReaderVariant>>());
+            device->id(), std::make_unique<MultiProducerSingleConsumerQueue<CompletionReaderVariant>>());
     }
 }
 
@@ -607,7 +607,7 @@ void MeshCommandQueue::read_completion_queue() {
 
 MultiProducerSingleConsumerQueue<CompletionReaderVariant>& MeshCommandQueue::get_read_descriptor_queue(
     IDevice* device) {
-    return *(read_descriptors_[device]);
+    return *(read_descriptors_[device->id()]);
 }
 
 void MeshCommandQueue::copy_buffer_data_to_user_space(MeshBufferReadDescriptor& read_buffer_descriptor) {

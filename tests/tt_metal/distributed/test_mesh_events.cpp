@@ -250,8 +250,7 @@ TEST_F(MeshEventsTestSuite, MultiCQNonBlockingReads) {
         .buffer_layout = TensorMemoryLayout::INTERLEAVED,
         .bottom_up = true};
     ReplicatedBufferConfig global_buffer_config{.size = dram_buffer_size};
-    MeshCoordinateRange devices_0(
-        MeshCoordinate{0, 0}, MeshCoordinate{mesh_device_->num_rows() - 1, mesh_device_->num_cols() - 1});
+    MeshCoordinateRange devices_0(mesh_device_->shape());
 
     uint32_t num_devices = mesh_device_->num_devices();
 
