@@ -7,7 +7,7 @@
 
 #include "dataflow_api.h"
 
-#define ENABLE_DEBUG 0
+#define ENABLE_DEBUG 1
 
 #if ENABLE_DEBUG
 #include "debug/dprint.h"
@@ -30,7 +30,58 @@ template <
     bool is_block_sharded,
     bool is_width_sharded,
     bool is_read,
-    bool is_col_major>
+    bool is_col_major,
+    bool blocking = false>
+inline void copy_stick(
+    uint32_t i,
+    uint32_t j,
+    uint32_t length,
+    const tt_l1_ptr uint16_t* config_data,
+    const uint64_t base_addr,
+    const uint32_t in_base_l1_addr,
+    const uint32_t out_base_l1_addr) {
+    uint16_t src_local_idx = config_data[i + j + 0];
+    uint16_t dst_local_idx = config_data[i + j + 1];
+    uint16_t nsticks = config_data[i + j + 2];
+    uint32_t size = nsticks * stick_nbytes;
+    uint32_t dst_offset = dst_local_idx * stick_nbytes;
+    uint32_t src_offset = src_local_idx * input_aligned_page_size;
+
+    if constexpr (is_read) {
+        uint32_t dst_addr = out_base_l1_addr + dst_offset;
+        uint64_t src_addr = base_addr + src_offset;
+        if constexpr (stick_nbytes == input_aligned_page_size) {
+            noc_async_read(src_addr, dst_addr, size);
+        } else {
+            for (uint16_t k = 0; k < nsticks; k++) {
+                noc_async_read(src_addr, dst_addr, stick_nbytes);
+                dst_addr += stick_nbytes;
+                src_addr += input_aligned_page_size;
+            }
+        }
+    } else {
+        uint64_t dst_addr = base_addr + dst_offset;
+        uint32_t src_addr = in_base_l1_addr + src_offset;
+        if constexpr (stick_nbytes == input_aligned_page_size) {
+            noc_async_write(src_addr, dst_addr, size);
+        } else {
+            for (uint16_t k = 0; k < nsticks; k++) {
+                noc_async_write(src_addr, dst_addr, stick_nbytes);
+                dst_addr += stick_nbytes;
+                src_addr += input_aligned_page_size;
+            }
+        }
+    }
+}
+
+template <
+    uint32_t stick_nbytes,
+    uint32_t input_aligned_page_size,
+    bool is_block_sharded,
+    bool is_width_sharded,
+    bool is_read,
+    bool is_col_major,
+    bool blocking = false>
 void copy_sticks_async(
     const tt_l1_ptr uint16_t* config_data,
     const uint16_t my_noc_x,
@@ -38,50 +89,57 @@ void copy_sticks_async(
     const uint32_t in_base_l1_addr,
     const uint32_t out_base_l1_addr) {
     int i = 0;
-    int length = config_data[i + 2];
+    int length = config_data[i + 2];  // # of instructions * 3 ?
 
     while (length) {
+        // Each iteration processes one "command" block from config_data
         uint16_t noc_x = ((is_block_sharded && !is_col_major) || is_width_sharded) ? my_noc_x : config_data[i + 0];
         uint16_t noc_y = ((is_block_sharded && is_col_major) || is_width_sharded) ? my_noc_y : config_data[i + 1];
-        length = config_data[i + 2];
-        i += 3;
+
+        length = config_data[i + 2];  // # of j-units for instructions
+        i += 3;                       // Advance past (noc_x, noc_y, length)
 
         const uint64_t base_addr = get_noc_addr(noc_x, noc_y, is_read ? in_base_l1_addr : out_base_l1_addr);
-        for (uint16_t j = 0; j < length; j += 3) {
-            uint16_t src_local_idx = config_data[i + j + 0];
-            uint16_t dst_local_idx = config_data[i + j + 1];
-            uint16_t nsticks = config_data[i + j + 2];
-            uint32_t size = nsticks * stick_nbytes;
-            uint32_t dst_offset = dst_local_idx * stick_nbytes;
-            uint32_t src_offset = src_local_idx * input_aligned_page_size;
-            if constexpr (is_read) {
-                uint32_t dst_addr = out_base_l1_addr + dst_offset;
-                uint64_t src_addr = base_addr + src_offset;
-                if constexpr (stick_nbytes == input_aligned_page_size) {
-                    noc_async_read(src_addr, dst_addr, size);
-                } else {
-                    for (uint16_t k = 0; k < nsticks; k++) {
-                        noc_async_read(src_addr, dst_addr, stick_nbytes);
-                        dst_addr += stick_nbytes;
-                        src_addr += input_aligned_page_size;
-                    }
+
+        if constexpr (blocking) {
+            static constexpr uint16_t BLOCK_SIZES[] = {2, 2, 2, 2};
+            constexpr size_t num_blocks = sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
+            uint16_t block_j_start = 0;
+            for (uint32_t b = 0; b < num_blocks && block_j_start < length; b++) {
+                uint16_t instructions_in_block = BLOCK_SIZES[b];
+                uint16_t block_stride = instructions_in_block * 3;
+                uint16_t block_end_j = block_j_start + block_stride;
+                for (uint16_t j = block_j_start; j < block_end_j; j += 3) {
+                    copy_stick<
+                        stick_nbytes,
+                        input_aligned_page_size,
+                        is_block_sharded,
+                        is_width_sharded,
+                        is_read,
+                        is_col_major,
+                        blocking>(i, j, length, config_data, base_addr, in_base_l1_addr, out_base_l1_addr);
                 }
-            } else {
-                uint64_t dst_addr = base_addr + dst_offset;
-                uint32_t src_addr = in_base_l1_addr + src_offset;
-                if constexpr (stick_nbytes == input_aligned_page_size) {
-                    noc_async_write(src_addr, dst_addr, size);
-                } else {
-                    for (uint16_t k = 0; k < nsticks; k++) {
-                        noc_async_write(src_addr, dst_addr, stick_nbytes);
-                        dst_addr += stick_nbytes;
-                        src_addr += input_aligned_page_size;
-                    }
-                }
+                block_j_start += block_stride;
             }
+            i += length;
+        } else {
+            // Non-blocking path (unchanged)
+            for (uint16_t j = 0; j < length; j += 3) {
+                DPRINT << "  i=" << i << "  j=" << j << ENDL();
+                copy_stick<
+                    stick_nbytes,
+                    input_aligned_page_size,
+                    is_block_sharded,
+                    is_width_sharded,
+                    is_read,
+                    is_col_major,
+                    blocking>(i, j, length, config_data, base_addr, in_base_l1_addr, out_base_l1_addr);
+            }
+            i += length;
         }
 
-        i += length;
+        // Grab the next 'length' for the next iteration; if zero, loop ends.
+        length = config_data[i + 2];
     }
 }
 
@@ -105,12 +163,21 @@ void kernel_main() {
     constexpr uint32_t input_aligned_page_size = get_compile_time_arg_val(16);
 
     constexpr uint32_t elem_nbytes = sizeof(uint16_t);
-    constexpr uint16_t pad_core_id = 0xFFFF;
 
     const uint16_t my_noc_x = NOC_X(my_x[noc_index]);
     const uint16_t my_noc_y = NOC_Y(my_y[noc_index]);
     const uint32_t in_base_l1_addr = get_read_ptr(in_cb_id);
     const uint32_t out_base_l1_addr = get_write_ptr(out_cb_id);
+
+    if constexpr (local_config_cb_id) {
+        uint32_t num_blocks = 4;
+        uint32_t blocking_local_config_data_l1_addr = get_read_ptr(blocking_local_config_cb_id);
+        const tt_l1_ptr uint16_t* blocking_local_config_data =
+            reinterpret_cast<const tt_l1_ptr uint16_t*>(blocking_local_config_data_l1_addr);
+        for (uint32_t i = 0; i < num_blocks; i++) {
+            DPRINT << i << "  " << (int)blocking_local_config_data[i] << ENDL();
+        }
+    }
 
     if constexpr (padding_config_cb_id) {
         // construct the pad stick in its buffer
@@ -166,7 +233,8 @@ void kernel_main() {
             is_block_sharded,
             is_width_sharded,
             false,
-            is_col_major>(config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr);
+            is_col_major,
+            true>(config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr);
     }
 
     noc_async_read_barrier();
