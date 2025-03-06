@@ -4,8 +4,9 @@
 
 from typing import Optional, Tuple
 from loguru import logger
-import enum
 
+import enum
+import pytest
 import torch
 
 import ttnn
@@ -434,7 +435,8 @@ def is_expected_to_fail(**_) -> Tuple[bool, Optional[str]]:
     return False, None
 
 
-def run(
+def run_matmul(
+    device,
     input_shapes,
     program_config,
     input_a_custom_memory_config,
@@ -449,8 +451,6 @@ def run(
     output_dtype,
     input_layout,
     compute_kernel_config,
-    *,
-    device,
 ) -> list:
     # Override program_config.in0_block_w with value from in0_block_w (this is safe to do)
     program_config.in0_block_w = in0_block_w
@@ -502,3 +502,865 @@ def run(
 
     expected_pcc = 0.99
     return [check_with_pcc(torch_output_tensor, output_tensor, expected_pcc), e2e_perf]
+
+
+@pytest.mark.parametrize("input_shapes", parameters["in0_grid_eq_output_grid"]["input_shapes"])
+@pytest.mark.parametrize("program_config", parameters["in0_grid_eq_output_grid"]["program_config"])
+@pytest.mark.parametrize(
+    "input_a_custom_memory_config", parameters["in0_grid_eq_output_grid"]["input_a_custom_memory_config"]
+)
+@pytest.mark.parametrize("batch_matrix_multiply", parameters["in0_grid_eq_output_grid"]["batch_matrix_multiply"])
+@pytest.mark.parametrize("in0_block_w", parameters["in0_grid_eq_output_grid"]["in0_block_w"])
+@pytest.mark.parametrize("batch_sizes", parameters["in0_grid_eq_output_grid"]["batch_sizes"])
+@pytest.mark.parametrize("input_a_memory_config", parameters["in0_grid_eq_output_grid"]["input_a_memory_config"])
+@pytest.mark.parametrize("input_b_memory_config", parameters["in0_grid_eq_output_grid"]["input_b_memory_config"])
+@pytest.mark.parametrize("output_memory_config", parameters["in0_grid_eq_output_grid"]["output_memory_config"])
+@pytest.mark.parametrize("input_a_dtype", parameters["in0_grid_eq_output_grid"]["input_a_dtype"])
+@pytest.mark.parametrize("input_b_dtype", parameters["in0_grid_eq_output_grid"]["input_b_dtype"])
+@pytest.mark.parametrize("output_dtype", parameters["in0_grid_eq_output_grid"]["output_dtype"])
+def test_in0_grid_eq_output_grid(
+    device,
+    input_shapes,
+    program_config,
+    input_a_custom_memory_config,
+    batch_matrix_multiply,
+    in0_block_w,
+    batch_sizes,
+    input_a_memory_config,
+    input_b_memory_config,
+    output_memory_config,
+    input_a_dtype,
+    input_b_dtype,
+    output_dtype,
+    input_layout,
+    compute_kernel_config,
+) -> None:
+    result = run_matmul(
+        device,
+        input_shapes,
+        program_config,
+        input_a_custom_memory_config,
+        batch_matrix_multiply,
+        in0_block_w,
+        batch_sizes,
+        input_a_memory_config,
+        input_b_memory_config,
+        output_memory_config,
+        input_a_dtype,
+        input_b_dtype,
+        output_dtype,
+        input_layout,
+        compute_kernel_config,
+    )
+
+
+@pytest.mark.parametrize("input_shapes", parameters["in0_grid_eq_output_grid_transpose"]["input_shapes"])
+@pytest.mark.parametrize("program_config", parameters["in0_grid_eq_output_grid_transpose"]["program_config"])
+@pytest.mark.parametrize(
+    "input_a_custom_memory_config", parameters["in0_grid_eq_output_grid_transpose"]["input_a_custom_memory_config"]
+)
+@pytest.mark.parametrize(
+    "batch_matrix_multiply", parameters["in0_grid_eq_output_grid_transpose"]["batch_matrix_multiply"]
+)
+@pytest.mark.parametrize("in0_block_w", parameters["in0_grid_eq_output_grid_transpose"]["in0_block_w"])
+@pytest.mark.parametrize("batch_sizes", parameters["in0_grid_eq_output_grid_transpose"]["batch_sizes"])
+@pytest.mark.parametrize(
+    "input_a_memory_config", parameters["in0_grid_eq_output_grid_transpose"]["input_a_memory_config"]
+)
+@pytest.mark.parametrize(
+    "input_b_memory_config", parameters["in0_grid_eq_output_grid_transpose"]["input_b_memory_config"]
+)
+@pytest.mark.parametrize(
+    "output_memory_config", parameters["in0_grid_eq_output_grid_transpose"]["output_memory_config"]
+)
+@pytest.mark.parametrize("input_a_dtype", parameters["in0_grid_eq_output_grid_transpose"]["input_a_dtype"])
+@pytest.mark.parametrize("input_b_dtype", parameters["in0_grid_eq_output_grid_transpose"]["input_b_dtype"])
+@pytest.mark.parametrize("output_dtype", parameters["in0_grid_eq_output_grid_transpose"]["output_dtype"])
+def test_in0_grid_eq_output_grid_transpose(
+    device,
+    input_shapes,
+    program_config,
+    input_a_custom_memory_config,
+    batch_matrix_multiply,
+    in0_block_w,
+    batch_sizes,
+    input_a_memory_config,
+    input_b_memory_config,
+    output_memory_config,
+    input_a_dtype,
+    input_b_dtype,
+    output_dtype,
+    input_layout,
+    compute_kernel_config,
+) -> None:
+    result = run_matmul(
+        device,
+        input_shapes,
+        program_config,
+        input_a_custom_memory_config,
+        batch_matrix_multiply,
+        in0_block_w,
+        batch_sizes,
+        input_a_memory_config,
+        input_b_memory_config,
+        output_memory_config,
+        input_a_dtype,
+        input_b_dtype,
+        output_dtype,
+        input_layout,
+        compute_kernel_config,
+    )
+
+
+@pytest.mark.parametrize("input_shapes", parameters["in0_grid_lt_output_grid"]["input_shapes"])
+@pytest.mark.parametrize("program_config", parameters["in0_grid_lt_output_grid"]["program_config"])
+@pytest.mark.parametrize(
+    "input_a_custom_memory_config", parameters["in0_grid_lt_output_grid"]["input_a_custom_memory_config"]
+)
+@pytest.mark.parametrize("batch_matrix_multiply", parameters["in0_grid_lt_output_grid"]["batch_matrix_multiply"])
+@pytest.mark.parametrize("in0_block_w", parameters["in0_grid_lt_output_grid"]["in0_block_w"])
+@pytest.mark.parametrize("batch_sizes", parameters["in0_grid_lt_output_grid"]["batch_sizes"])
+@pytest.mark.parametrize("input_a_memory_config", parameters["in0_grid_lt_output_grid"]["input_a_memory_config"])
+@pytest.mark.parametrize("input_b_memory_config", parameters["in0_grid_lt_output_grid"]["input_b_memory_config"])
+@pytest.mark.parametrize("output_memory_config", parameters["in0_grid_lt_output_grid"]["output_memory_config"])
+@pytest.mark.parametrize("input_a_dtype", parameters["in0_grid_lt_output_grid"]["input_a_dtype"])
+@pytest.mark.parametrize("input_b_dtype", parameters["in0_grid_lt_output_grid"]["input_b_dtype"])
+@pytest.mark.parametrize("output_dtype", parameters["in0_grid_lt_output_grid"]["output_dtype"])
+def test_in0_grid_lt_output_grid(
+    device,
+    input_shapes,
+    program_config,
+    input_a_custom_memory_config,
+    batch_matrix_multiply,
+    in0_block_w,
+    batch_sizes,
+    input_a_memory_config,
+    input_b_memory_config,
+    output_memory_config,
+    input_a_dtype,
+    input_b_dtype,
+    output_dtype,
+    input_layout,
+    compute_kernel_config,
+) -> None:
+    result = run_matmul(
+        device,
+        input_shapes,
+        program_config,
+        input_a_custom_memory_config,
+        batch_matrix_multiply,
+        in0_block_w,
+        batch_sizes,
+        input_a_memory_config,
+        input_b_memory_config,
+        output_memory_config,
+        input_a_dtype,
+        input_b_dtype,
+        output_dtype,
+        input_layout,
+        compute_kernel_config,
+    )
+
+
+@pytest.mark.parametrize("input_shapes", parameters["in0_grid_lt_output_grid_transpose"]["input_shapes"])
+@pytest.mark.parametrize("program_config", parameters["in0_grid_lt_output_grid_transpose"]["program_config"])
+@pytest.mark.parametrize(
+    "input_a_custom_memory_config", parameters["in0_grid_lt_output_grid_transpose"]["input_a_custom_memory_config"]
+)
+@pytest.mark.parametrize(
+    "batch_matrix_multiply", parameters["in0_grid_lt_output_grid_transpose"]["batch_matrix_multiply"]
+)
+@pytest.mark.parametrize("in0_block_w", parameters["in0_grid_lt_output_grid_transpose"]["in0_block_w"])
+@pytest.mark.parametrize("batch_sizes", parameters["in0_grid_lt_output_grid_transpose"]["batch_sizes"])
+@pytest.mark.parametrize(
+    "input_a_memory_config", parameters["in0_grid_lt_output_grid_transpose"]["input_a_memory_config"]
+)
+@pytest.mark.parametrize(
+    "input_b_memory_config", parameters["in0_grid_lt_output_grid_transpose"]["input_b_memory_config"]
+)
+@pytest.mark.parametrize(
+    "output_memory_config", parameters["in0_grid_lt_output_grid_transpose"]["output_memory_config"]
+)
+@pytest.mark.parametrize("input_a_dtype", parameters["in0_grid_lt_output_grid_transpose"]["input_a_dtype"])
+@pytest.mark.parametrize("input_b_dtype", parameters["in0_grid_lt_output_grid_transpose"]["input_b_dtype"])
+@pytest.mark.parametrize("output_dtype", parameters["in0_grid_lt_output_grid_transpose"]["output_dtype"])
+def test_in0_grid_lt_output_grid_transpose(
+    device,
+    input_shapes,
+    program_config,
+    input_a_custom_memory_config,
+    batch_matrix_multiply,
+    in0_block_w,
+    batch_sizes,
+    input_a_memory_config,
+    input_b_memory_config,
+    output_memory_config,
+    input_a_dtype,
+    input_b_dtype,
+    output_dtype,
+    input_layout,
+    compute_kernel_config,
+) -> None:
+    result = run_matmul(
+        device,
+        input_shapes,
+        program_config,
+        input_a_custom_memory_config,
+        batch_matrix_multiply,
+        in0_block_w,
+        batch_sizes,
+        input_a_memory_config,
+        input_b_memory_config,
+        output_memory_config,
+        input_a_dtype,
+        input_b_dtype,
+        output_dtype,
+        input_layout,
+        compute_kernel_config,
+    )
+
+
+@pytest.mark.parametrize("input_shapes", parameters["in0_grid_gt_output_grid"]["input_shapes"])
+@pytest.mark.parametrize("program_config", parameters["in0_grid_gt_output_grid"]["program_config"])
+@pytest.mark.parametrize(
+    "input_a_custom_memory_config", parameters["in0_grid_gt_output_grid"]["input_a_custom_memory_config"]
+)
+@pytest.mark.parametrize("batch_matrix_multiply", parameters["in0_grid_gt_output_grid"]["batch_matrix_multiply"])
+@pytest.mark.parametrize("in0_block_w", parameters["in0_grid_gt_output_grid"]["in0_block_w"])
+@pytest.mark.parametrize("batch_sizes", parameters["in0_grid_gt_output_grid"]["batch_sizes"])
+@pytest.mark.parametrize("input_a_memory_config", parameters["in0_grid_gt_output_grid"]["input_a_memory_config"])
+@pytest.mark.parametrize("input_b_memory_config", parameters["in0_grid_gt_output_grid"]["input_b_memory_config"])
+@pytest.mark.parametrize("output_memory_config", parameters["in0_grid_gt_output_grid"]["output_memory_config"])
+@pytest.mark.parametrize("input_a_dtype", parameters["in0_grid_gt_output_grid"]["input_a_dtype"])
+@pytest.mark.parametrize("input_b_dtype", parameters["in0_grid_gt_output_grid"]["input_b_dtype"])
+@pytest.mark.parametrize("output_dtype", parameters["in0_grid_gt_output_grid"]["output_dtype"])
+def test_in0_grid_gt_output_grid(
+    device,
+    input_shapes,
+    program_config,
+    input_a_custom_memory_config,
+    batch_matrix_multiply,
+    in0_block_w,
+    batch_sizes,
+    input_a_memory_config,
+    input_b_memory_config,
+    output_memory_config,
+    input_a_dtype,
+    input_b_dtype,
+    output_dtype,
+    input_layout,
+    compute_kernel_config,
+) -> None:
+    result = run_matmul(
+        device,
+        input_shapes,
+        program_config,
+        input_a_custom_memory_config,
+        batch_matrix_multiply,
+        in0_block_w,
+        batch_sizes,
+        input_a_memory_config,
+        input_b_memory_config,
+        output_memory_config,
+        input_a_dtype,
+        input_b_dtype,
+        output_dtype,
+        input_layout,
+        compute_kernel_config,
+    )
+
+
+@pytest.mark.parametrize("input_shapes", parameters["in0_grid_gt_output_grid_transpose"]["input_shapes"])
+@pytest.mark.parametrize("program_config", parameters["in0_grid_gt_output_grid_transpose"]["program_config"])
+@pytest.mark.parametrize(
+    "input_a_custom_memory_config", parameters["in0_grid_gt_output_grid_transpose"]["input_a_custom_memory_config"]
+)
+@pytest.mark.parametrize(
+    "batch_matrix_multiply", parameters["in0_grid_gt_output_grid_transpose"]["batch_matrix_multiply"]
+)
+@pytest.mark.parametrize("in0_block_w", parameters["in0_grid_gt_output_grid_transpose"]["in0_block_w"])
+@pytest.mark.parametrize("batch_sizes", parameters["in0_grid_gt_output_grid_transpose"]["batch_sizes"])
+@pytest.mark.parametrize(
+    "input_a_memory_config", parameters["in0_grid_gt_output_grid_transpose"]["input_a_memory_config"]
+)
+@pytest.mark.parametrize(
+    "input_b_memory_config", parameters["in0_grid_gt_output_grid_transpose"]["input_b_memory_config"]
+)
+@pytest.mark.parametrize(
+    "output_memory_config", parameters["in0_grid_gt_output_grid_transpose"]["output_memory_config"]
+)
+@pytest.mark.parametrize("input_a_dtype", parameters["in0_grid_gt_output_grid_transpose"]["input_a_dtype"])
+@pytest.mark.parametrize("input_b_dtype", parameters["in0_grid_gt_output_grid_transpose"]["input_b_dtype"])
+@pytest.mark.parametrize("output_dtype", parameters["in0_grid_gt_output_grid_transpose"]["output_dtype"])
+def test_in0_grid_gt_output_grid_transpose(
+    device,
+    input_shapes,
+    program_config,
+    input_a_custom_memory_config,
+    batch_matrix_multiply,
+    in0_block_w,
+    batch_sizes,
+    input_a_memory_config,
+    input_b_memory_config,
+    output_memory_config,
+    input_a_dtype,
+    input_b_dtype,
+    output_dtype,
+    input_layout,
+    compute_kernel_config,
+) -> None:
+    result = run_matmul(
+        device,
+        input_shapes,
+        program_config,
+        input_a_custom_memory_config,
+        batch_matrix_multiply,
+        in0_block_w,
+        batch_sizes,
+        input_a_memory_config,
+        input_b_memory_config,
+        output_memory_config,
+        input_a_dtype,
+        input_b_dtype,
+        output_dtype,
+        input_layout,
+        compute_kernel_config,
+    )
+
+
+@pytest.mark.parametrize("input_shapes", parameters["in1_only_output_grid_along_width_is_1"]["input_shapes"])
+@pytest.mark.parametrize("program_config", parameters["in1_only_output_grid_along_width_is_1"]["program_config"])
+@pytest.mark.parametrize(
+    "input_a_custom_memory_config", parameters["in1_only_output_grid_along_width_is_1"]["input_a_custom_memory_config"]
+)
+@pytest.mark.parametrize(
+    "batch_matrix_multiply", parameters["in1_only_output_grid_along_width_is_1"]["batch_matrix_multiply"]
+)
+@pytest.mark.parametrize("in0_block_w", parameters["in1_only_output_grid_along_width_is_1"]["in0_block_w"])
+@pytest.mark.parametrize("batch_sizes", parameters["in1_only_output_grid_along_width_is_1"]["batch_sizes"])
+@pytest.mark.parametrize(
+    "input_a_memory_config", parameters["in1_only_output_grid_along_width_is_1"]["input_a_memory_config"]
+)
+@pytest.mark.parametrize(
+    "input_b_memory_config", parameters["in1_only_output_grid_along_width_is_1"]["input_b_memory_config"]
+)
+@pytest.mark.parametrize(
+    "output_memory_config", parameters["in1_only_output_grid_along_width_is_1"]["output_memory_config"]
+)
+@pytest.mark.parametrize("input_a_dtype", parameters["in1_only_output_grid_along_width_is_1"]["input_a_dtype"])
+@pytest.mark.parametrize("input_b_dtype", parameters["in1_only_output_grid_along_width_is_1"]["input_b_dtype"])
+@pytest.mark.parametrize("output_dtype", parameters["in1_only_output_grid_along_width_is_1"]["output_dtype"])
+def test_in1_only_output_grid_along_width_is_1(
+    device,
+    input_shapes,
+    program_config,
+    input_a_custom_memory_config,
+    batch_matrix_multiply,
+    in0_block_w,
+    batch_sizes,
+    input_a_memory_config,
+    input_b_memory_config,
+    output_memory_config,
+    input_a_dtype,
+    input_b_dtype,
+    output_dtype,
+    input_layout,
+    compute_kernel_config,
+) -> None:
+    result = run_matmul(
+        device,
+        input_shapes,
+        program_config,
+        input_a_custom_memory_config,
+        batch_matrix_multiply,
+        in0_block_w,
+        batch_sizes,
+        input_a_memory_config,
+        input_b_memory_config,
+        output_memory_config,
+        input_a_dtype,
+        input_b_dtype,
+        output_dtype,
+        input_layout,
+        compute_kernel_config,
+    )
+
+
+@pytest.mark.parametrize("input_shapes", parameters["in1_only_output_grid_along_width_is_1_transpose"]["input_shapes"])
+@pytest.mark.parametrize(
+    "program_config", parameters["in1_only_output_grid_along_width_is_1_transpose"]["program_config"]
+)
+@pytest.mark.parametrize(
+    "input_a_custom_memory_config",
+    parameters["in1_only_output_grid_along_width_is_1_transpose"]["input_a_custom_memory_config"],
+)
+@pytest.mark.parametrize(
+    "batch_matrix_multiply", parameters["in1_only_output_grid_along_width_is_1_transpose"]["batch_matrix_multiply"]
+)
+@pytest.mark.parametrize("in0_block_w", parameters["in1_only_output_grid_along_width_is_1_transpose"]["in0_block_w"])
+@pytest.mark.parametrize("batch_sizes", parameters["in1_only_output_grid_along_width_is_1_transpose"]["batch_sizes"])
+@pytest.mark.parametrize(
+    "input_a_memory_config", parameters["in1_only_output_grid_along_width_is_1_transpose"]["input_a_memory_config"]
+)
+@pytest.mark.parametrize(
+    "input_b_memory_config", parameters["in1_only_output_grid_along_width_is_1_transpose"]["input_b_memory_config"]
+)
+@pytest.mark.parametrize(
+    "output_memory_config", parameters["in1_only_output_grid_along_width_is_1_transpose"]["output_memory_config"]
+)
+@pytest.mark.parametrize(
+    "input_a_dtype", parameters["in1_only_output_grid_along_width_is_1_transpose"]["input_a_dtype"]
+)
+@pytest.mark.parametrize(
+    "input_b_dtype", parameters["in1_only_output_grid_along_width_is_1_transpose"]["input_b_dtype"]
+)
+@pytest.mark.parametrize("output_dtype", parameters["in1_only_output_grid_along_width_is_1_transpose"]["output_dtype"])
+def test_in1_only_output_grid_along_width_is_1_transpose(
+    device,
+    input_shapes,
+    program_config,
+    input_a_custom_memory_config,
+    batch_matrix_multiply,
+    in0_block_w,
+    batch_sizes,
+    input_a_memory_config,
+    input_b_memory_config,
+    output_memory_config,
+    input_a_dtype,
+    input_b_dtype,
+    output_dtype,
+    input_layout,
+    compute_kernel_config,
+) -> None:
+    result = run_matmul(
+        device,
+        input_shapes,
+        program_config,
+        input_a_custom_memory_config,
+        batch_matrix_multiply,
+        in0_block_w,
+        batch_sizes,
+        input_a_memory_config,
+        input_b_memory_config,
+        output_memory_config,
+        input_a_dtype,
+        input_b_dtype,
+        output_dtype,
+        input_layout,
+        compute_kernel_config,
+    )
+
+
+@pytest.mark.parametrize("input_shapes", parameters["in0_only_output_grid_along_height_is_1"]["input_shapes"])
+@pytest.mark.parametrize("program_config", parameters["in0_only_output_grid_along_height_is_1"]["program_config"])
+@pytest.mark.parametrize(
+    "input_a_custom_memory_config", parameters["in0_only_output_grid_along_height_is_1"]["input_a_custom_memory_config"]
+)
+@pytest.mark.parametrize(
+    "batch_matrix_multiply", parameters["in0_only_output_grid_along_height_is_1"]["batch_matrix_multiply"]
+)
+@pytest.mark.parametrize("in0_block_w", parameters["in0_only_output_grid_along_height_is_1"]["in0_block_w"])
+@pytest.mark.parametrize("batch_sizes", parameters["in0_only_output_grid_along_height_is_1"]["batch_sizes"])
+@pytest.mark.parametrize(
+    "input_a_memory_config", parameters["in0_only_output_grid_along_height_is_1"]["input_a_memory_config"]
+)
+@pytest.mark.parametrize(
+    "input_b_memory_config", parameters["in0_only_output_grid_along_height_is_1"]["input_b_memory_config"]
+)
+@pytest.mark.parametrize(
+    "output_memory_config", parameters["in0_only_output_grid_along_height_is_1"]["output_memory_config"]
+)
+@pytest.mark.parametrize("input_a_dtype", parameters["in0_only_output_grid_along_height_is_1"]["input_a_dtype"])
+@pytest.mark.parametrize("input_b_dtype", parameters["in0_only_output_grid_along_height_is_1"]["input_b_dtype"])
+@pytest.mark.parametrize("output_dtype", parameters["in0_only_output_grid_along_height_is_1"]["output_dtype"])
+def test_in0_only_output_grid_along_height_is_1(
+    device,
+    input_shapes,
+    program_config,
+    input_a_custom_memory_config,
+    batch_matrix_multiply,
+    in0_block_w,
+    batch_sizes,
+    input_a_memory_config,
+    input_b_memory_config,
+    output_memory_config,
+    input_a_dtype,
+    input_b_dtype,
+    output_dtype,
+    input_layout,
+    compute_kernel_config,
+) -> None:
+    result = run_matmul(
+        device,
+        input_shapes,
+        program_config,
+        input_a_custom_memory_config,
+        batch_matrix_multiply,
+        in0_block_w,
+        batch_sizes,
+        input_a_memory_config,
+        input_b_memory_config,
+        output_memory_config,
+        input_a_dtype,
+        input_b_dtype,
+        output_dtype,
+        input_layout,
+        compute_kernel_config,
+    )
+
+
+@pytest.mark.parametrize("input_shapes", parameters["in0_only_output_grid_along_height_is_1_transpose"]["input_shapes"])
+@pytest.mark.parametrize(
+    "program_config", parameters["in0_only_output_grid_along_height_is_1_transpose"]["program_config"]
+)
+@pytest.mark.parametrize(
+    "input_a_custom_memory_config",
+    parameters["in0_only_output_grid_along_height_is_1_transpose"]["input_a_custom_memory_config"],
+)
+@pytest.mark.parametrize(
+    "batch_matrix_multiply", parameters["in0_only_output_grid_along_height_is_1_transpose"]["batch_matrix_multiply"]
+)
+@pytest.mark.parametrize("in0_block_w", parameters["in0_only_output_grid_along_height_is_1_transpose"]["in0_block_w"])
+@pytest.mark.parametrize("batch_sizes", parameters["in0_only_output_grid_along_height_is_1_transpose"]["batch_sizes"])
+@pytest.mark.parametrize(
+    "input_a_memory_config", parameters["in0_only_output_grid_along_height_is_1_transpose"]["input_a_memory_config"]
+)
+@pytest.mark.parametrize(
+    "input_b_memory_config", parameters["in0_only_output_grid_along_height_is_1_transpose"]["input_b_memory_config"]
+)
+@pytest.mark.parametrize(
+    "output_memory_config", parameters["in0_only_output_grid_along_height_is_1_transpose"]["output_memory_config"]
+)
+@pytest.mark.parametrize(
+    "input_a_dtype", parameters["in0_only_output_grid_along_height_is_1_transpose"]["input_a_dtype"]
+)
+@pytest.mark.parametrize(
+    "input_b_dtype", parameters["in0_only_output_grid_along_height_is_1_transpose"]["input_b_dtype"]
+)
+@pytest.mark.parametrize("output_dtype", parameters["in0_only_output_grid_along_height_is_1_transpose"]["output_dtype"])
+def test_in0_only_output_grid_along_height_is_1_transpose(
+    device,
+    input_shapes,
+    program_config,
+    input_a_custom_memory_config,
+    batch_matrix_multiply,
+    in0_block_w,
+    batch_sizes,
+    input_a_memory_config,
+    input_b_memory_config,
+    output_memory_config,
+    input_a_dtype,
+    input_b_dtype,
+    output_dtype,
+    input_layout,
+    compute_kernel_config,
+) -> None:
+    result = run_matmul(
+        device,
+        input_shapes,
+        program_config,
+        input_a_custom_memory_config,
+        batch_matrix_multiply,
+        in0_block_w,
+        batch_sizes,
+        input_a_memory_config,
+        input_b_memory_config,
+        output_memory_config,
+        input_a_dtype,
+        input_b_dtype,
+        output_dtype,
+        input_layout,
+        compute_kernel_config,
+    )
+
+
+@pytest.mark.parametrize("input_shapes", parameters["no_mcast_output_grid_is_1_by_1"]["input_shapes"])
+@pytest.mark.parametrize("program_config", parameters["no_mcast_output_grid_is_1_by_1"]["program_config"])
+@pytest.mark.parametrize(
+    "input_a_custom_memory_config", parameters["no_mcast_output_grid_is_1_by_1"]["input_a_custom_memory_config"]
+)
+@pytest.mark.parametrize("batch_matrix_multiply", parameters["no_mcast_output_grid_is_1_by_1"]["batch_matrix_multiply"])
+@pytest.mark.parametrize("in0_block_w", parameters["no_mcast_output_grid_is_1_by_1"]["in0_block_w"])
+@pytest.mark.parametrize("batch_sizes", parameters["no_mcast_output_grid_is_1_by_1"]["batch_sizes"])
+@pytest.mark.parametrize("input_a_memory_config", parameters["no_mcast_output_grid_is_1_by_1"]["input_a_memory_config"])
+@pytest.mark.parametrize("input_b_memory_config", parameters["no_mcast_output_grid_is_1_by_1"]["input_b_memory_config"])
+@pytest.mark.parametrize("output_memory_config", parameters["no_mcast_output_grid_is_1_by_1"]["output_memory_config"])
+@pytest.mark.parametrize("input_a_dtype", parameters["no_mcast_output_grid_is_1_by_1"]["input_a_dtype"])
+@pytest.mark.parametrize("input_b_dtype", parameters["no_mcast_output_grid_is_1_by_1"]["input_b_dtype"])
+@pytest.mark.parametrize("output_dtype", parameters["no_mcast_output_grid_is_1_by_1"]["output_dtype"])
+def test_no_mcast_output_grid_is_1_by_1(
+    device,
+    input_shapes,
+    program_config,
+    input_a_custom_memory_config,
+    batch_matrix_multiply,
+    in0_block_w,
+    batch_sizes,
+    input_a_memory_config,
+    input_b_memory_config,
+    output_memory_config,
+    input_a_dtype,
+    input_b_dtype,
+    output_dtype,
+    input_layout,
+    compute_kernel_config,
+) -> None:
+    result = run_matmul(
+        device,
+        input_shapes,
+        program_config,
+        input_a_custom_memory_config,
+        batch_matrix_multiply,
+        in0_block_w,
+        batch_sizes,
+        input_a_memory_config,
+        input_b_memory_config,
+        output_memory_config,
+        input_a_dtype,
+        input_b_dtype,
+        output_dtype,
+        input_layout,
+        compute_kernel_config,
+    )
+
+
+@pytest.mark.parametrize("input_shapes", parameters["no_mcast_output_grid_is_1_by_1_transpose"]["input_shapes"])
+@pytest.mark.parametrize("program_config", parameters["no_mcast_output_grid_is_1_by_1_transpose"]["program_config"])
+@pytest.mark.parametrize(
+    "input_a_custom_memory_config",
+    parameters["no_mcast_output_grid_is_1_by_1_transpose"]["input_a_custom_memory_config"],
+)
+@pytest.mark.parametrize(
+    "batch_matrix_multiply", parameters["no_mcast_output_grid_is_1_by_1_transpose"]["batch_matrix_multiply"]
+)
+@pytest.mark.parametrize("in0_block_w", parameters["no_mcast_output_grid_is_1_by_1_transpose"]["in0_block_w"])
+@pytest.mark.parametrize("batch_sizes", parameters["no_mcast_output_grid_is_1_by_1_transpose"]["batch_sizes"])
+@pytest.mark.parametrize(
+    "input_a_memory_config", parameters["no_mcast_output_grid_is_1_by_1_transpose"]["input_a_memory_config"]
+)
+@pytest.mark.parametrize(
+    "input_b_memory_config", parameters["no_mcast_output_grid_is_1_by_1_transpose"]["input_b_memory_config"]
+)
+@pytest.mark.parametrize(
+    "output_memory_config", parameters["no_mcast_output_grid_is_1_by_1_transpose"]["output_memory_config"]
+)
+@pytest.mark.parametrize("input_a_dtype", parameters["no_mcast_output_grid_is_1_by_1_transpose"]["input_a_dtype"])
+@pytest.mark.parametrize("input_b_dtype", parameters["no_mcast_output_grid_is_1_by_1_transpose"]["input_b_dtype"])
+@pytest.mark.parametrize("output_dtype", parameters["no_mcast_output_grid_is_1_by_1_transpose"]["output_dtype"])
+def test_no_mcast_output_grid_is_1_by_1_transpose(
+    device,
+    input_shapes,
+    program_config,
+    input_a_custom_memory_config,
+    batch_matrix_multiply,
+    in0_block_w,
+    batch_sizes,
+    input_a_memory_config,
+    input_b_memory_config,
+    output_memory_config,
+    input_a_dtype,
+    input_b_dtype,
+    output_dtype,
+    input_layout,
+    compute_kernel_config,
+) -> None:
+    result = run_matmul(
+        device,
+        input_shapes,
+        program_config,
+        input_a_custom_memory_config,
+        batch_matrix_multiply,
+        in0_block_w,
+        batch_sizes,
+        input_a_memory_config,
+        input_b_memory_config,
+        output_memory_config,
+        input_a_dtype,
+        input_b_dtype,
+        output_dtype,
+        input_layout,
+        compute_kernel_config,
+    )
+
+
+@pytest.mark.parametrize(
+    "input_shapes", parameters["in1_only_output_grid_width_1_in0_shard_width_gt_1"]["input_shapes"]
+)
+@pytest.mark.parametrize(
+    "program_config", parameters["in1_only_output_grid_width_1_in0_shard_width_gt_1"]["program_config"]
+)
+@pytest.mark.parametrize(
+    "input_a_custom_memory_config",
+    parameters["in1_only_output_grid_width_1_in0_shard_width_gt_1"]["input_a_custom_memory_config"],
+)
+@pytest.mark.parametrize(
+    "batch_matrix_multiply", parameters["in1_only_output_grid_width_1_in0_shard_width_gt_1"]["batch_matrix_multiply"]
+)
+@pytest.mark.parametrize("in0_block_w", parameters["in1_only_output_grid_width_1_in0_shard_width_gt_1"]["in0_block_w"])
+@pytest.mark.parametrize("batch_sizes", parameters["in1_only_output_grid_width_1_in0_shard_width_gt_1"]["batch_sizes"])
+@pytest.mark.parametrize(
+    "input_a_memory_config", parameters["in1_only_output_grid_width_1_in0_shard_width_gt_1"]["input_a_memory_config"]
+)
+@pytest.mark.parametrize(
+    "input_b_memory_config", parameters["in1_only_output_grid_width_1_in0_shard_width_gt_1"]["input_b_memory_config"]
+)
+@pytest.mark.parametrize(
+    "output_memory_config", parameters["in1_only_output_grid_width_1_in0_shard_width_gt_1"]["output_memory_config"]
+)
+@pytest.mark.parametrize(
+    "input_a_dtype", parameters["in1_only_output_grid_width_1_in0_shard_width_gt_1"]["input_a_dtype"]
+)
+@pytest.mark.parametrize(
+    "input_b_dtype", parameters["in1_only_output_grid_width_1_in0_shard_width_gt_1"]["input_b_dtype"]
+)
+@pytest.mark.parametrize(
+    "output_dtype", parameters["in1_only_output_grid_width_1_in0_shard_width_gt_1"]["output_dtype"]
+)
+def test_in1_only_output_grid_width_1_in0_shard_width_gt_1(
+    device,
+    input_shapes,
+    program_config,
+    input_a_custom_memory_config,
+    batch_matrix_multiply,
+    in0_block_w,
+    batch_sizes,
+    input_a_memory_config,
+    input_b_memory_config,
+    output_memory_config,
+    input_a_dtype,
+    input_b_dtype,
+    output_dtype,
+    input_layout,
+    compute_kernel_config,
+) -> None:
+    result = run_matmul(
+        device,
+        input_shapes,
+        program_config,
+        input_a_custom_memory_config,
+        batch_matrix_multiply,
+        in0_block_w,
+        batch_sizes,
+        input_a_memory_config,
+        input_b_memory_config,
+        output_memory_config,
+        input_a_dtype,
+        input_b_dtype,
+        output_dtype,
+        input_layout,
+        compute_kernel_config,
+    )
+
+
+@pytest.mark.parametrize(
+    "input_shapes", parameters["in1_only_output_grid_width_1_in0_shard_width_gt_1_transpose"]["input_shapes"]
+)
+@pytest.mark.parametrize(
+    "program_config", parameters["in1_only_output_grid_width_1_in0_shard_width_gt_1_transpose"]["program_config"]
+)
+@pytest.mark.parametrize(
+    "input_a_custom_memory_config",
+    parameters["in1_only_output_grid_width_1_in0_shard_width_gt_1_transpose"]["input_a_custom_memory_config"],
+)
+@pytest.mark.parametrize(
+    "batch_matrix_multiply",
+    parameters["in1_only_output_grid_width_1_in0_shard_width_gt_1_transpose"]["batch_matrix_multiply"],
+)
+@pytest.mark.parametrize(
+    "in0_block_w", parameters["in1_only_output_grid_width_1_in0_shard_width_gt_1_transpose"]["in0_block_w"]
+)
+@pytest.mark.parametrize(
+    "batch_sizes", parameters["in1_only_output_grid_width_1_in0_shard_width_gt_1_transpose"]["batch_sizes"]
+)
+@pytest.mark.parametrize(
+    "input_a_memory_config",
+    parameters["in1_only_output_grid_width_1_in0_shard_width_gt_1_transpose"]["input_a_memory_config"],
+)
+@pytest.mark.parametrize(
+    "input_b_memory_config",
+    parameters["in1_only_output_grid_width_1_in0_shard_width_gt_1_transpose"]["input_b_memory_config"],
+)
+@pytest.mark.parametrize(
+    "output_memory_config",
+    parameters["in1_only_output_grid_width_1_in0_shard_width_gt_1_transpose"]["output_memory_config"],
+)
+@pytest.mark.parametrize(
+    "input_a_dtype", parameters["in1_only_output_grid_width_1_in0_shard_width_gt_1_transpose"]["input_a_dtype"]
+)
+@pytest.mark.parametrize(
+    "input_b_dtype", parameters["in1_only_output_grid_width_1_in0_shard_width_gt_1_transpose"]["input_b_dtype"]
+)
+@pytest.mark.parametrize(
+    "output_dtype", parameters["in1_only_output_grid_width_1_in0_shard_width_gt_1_transpose"]["output_dtype"]
+)
+def test_in1_only_output_grid_width_1_in0_shard_width_gt_1_transpose(
+    device,
+    input_shapes,
+    program_config,
+    input_a_custom_memory_config,
+    batch_matrix_multiply,
+    in0_block_w,
+    batch_sizes,
+    input_a_memory_config,
+    input_b_memory_config,
+    output_memory_config,
+    input_a_dtype,
+    input_b_dtype,
+    output_dtype,
+    input_layout,
+    compute_kernel_config,
+) -> None:
+    result = run_matmul(
+        device,
+        input_shapes,
+        program_config,
+        input_a_custom_memory_config,
+        batch_matrix_multiply,
+        in0_block_w,
+        batch_sizes,
+        input_a_memory_config,
+        input_b_memory_config,
+        output_memory_config,
+        input_a_dtype,
+        input_b_dtype,
+        output_dtype,
+        input_layout,
+        compute_kernel_config,
+    )
+
+
+def run(
+    input_shapes,
+    program_config,
+    input_a_custom_memory_config,
+    batch_matrix_multiply,
+    in0_block_w,
+    batch_sizes,
+    input_a_memory_config,
+    input_b_memory_config,
+    output_memory_config,
+    input_a_dtype,
+    input_b_dtype,
+    output_dtype,
+    input_layout,
+    compute_kernel_config,
+    *,
+    device,
+) -> list:
+    return run_matmul(
+        device,
+        input_shapes,
+        program_config,
+        input_a_custom_memory_config,
+        batch_matrix_multiply,
+        in0_block_w,
+        batch_sizes,
+        input_a_memory_config,
+        input_b_memory_config,
+        output_memory_config,
+        input_a_dtype,
+        input_b_dtype,
+        output_dtype,
+        input_layout,
+        compute_kernel_config,
+    )

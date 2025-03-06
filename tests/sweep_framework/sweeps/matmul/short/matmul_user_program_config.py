@@ -4,8 +4,8 @@
 
 from typing import Optional, Tuple
 from loguru import logger
-import enum
 
+import pytest
 import torch
 
 import ttnn

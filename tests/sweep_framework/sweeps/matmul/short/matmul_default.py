@@ -4,6 +4,7 @@
 
 from typing import Optional, Tuple
 
+import pytest
 import torch
 
 import ttnn
@@ -16,10 +17,10 @@ TIMEOUT = 15
 
 # TODO: Missing coverage for mixed precision; passed in dtype does nothing in current matmul path
 parameters = {
-    "default": {
+    "pytorch": {
         "batch_sizes": [(2,)],
         "m_n_sizes": [
-            # TODO: Review which cases get triggered for default
+            # TODO: Review which cases get triggered for pytorch
             # Single core (won't be hit after padding is added for multicast)
             (32, 32),
             # Multi core (2% math util)
@@ -55,7 +56,8 @@ parameters = {
 }
 
 
-def run(
+def run_matmul(
+    device,
     batch_sizes,
     m_n_sizes,
     k_size,
@@ -65,8 +67,6 @@ def run(
     input_a_memory_config,
     input_b_memory_config,
     output_memory_config,
-    *,
-    device,
 ) -> list:
     (m_size, n_size) = m_n_sizes
     input_a_dtype = dtype
@@ -105,3 +105,65 @@ def run(
 
     expected_pcc = 0.99
     return [check_with_pcc(torch_output_tensor, output_tensor, expected_pcc), e2e_perf]
+
+
+@pytest.mark.parametrize("batch_sizes", parameters["pytorch"]["batch_sizes"])
+@pytest.mark.parametrize("m_n_sizes", parameters["pytorch"]["m_n_sizes"])
+@pytest.mark.parametrize("k_size", parameters["pytorch"]["k_size"])
+@pytest.mark.parametrize("batch_matrix_multiply", parameters["pytorch"]["batch_matrix_multiply"])
+@pytest.mark.parametrize("dtype", parameters["pytorch"]["dtype"])
+@pytest.mark.parametrize("input_layout", parameters["pytorch"]["input_layout"])
+@pytest.mark.parametrize("input_a_memory_config", parameters["pytorch"]["input_a_memory_config"])
+@pytest.mark.parametrize("input_b_memory_config", parameters["pytorch"]["input_b_memory_config"])
+@pytest.mark.parametrize("output_memory_config", parameters["pytorch"]["output_memory_config"])
+def test_pytorch(
+    device,
+    batch_sizes,
+    m_n_sizes,
+    k_size,
+    batch_matrix_multiply,
+    dtype,
+    input_layout,
+    input_a_memory_config,
+    input_b_memory_config,
+    output_memory_config,
+):
+    run_matmul(
+        device,
+        batch_sizes,
+        m_n_sizes,
+        k_size,
+        batch_matrix_multiply,
+        dtype,
+        input_layout,
+        input_a_memory_config,
+        input_b_memory_config,
+        output_memory_config,
+    )
+
+
+def run(
+    batch_sizes,
+    m_n_sizes,
+    k_size,
+    batch_matrix_multiply,
+    dtype,
+    input_layout,
+    input_a_memory_config,
+    input_b_memory_config,
+    output_memory_config,
+    *,
+    device,
+) -> list:
+    return run_matmul(
+        device,
+        batch_sizes,
+        m_n_sizes,
+        k_size,
+        batch_matrix_multiply,
+        dtype,
+        input_layout,
+        input_a_memory_config,
+        input_b_memory_config,
+        output_memory_config,
+    )
