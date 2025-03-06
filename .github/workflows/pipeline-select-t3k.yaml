@@ -48,10 +48,17 @@ on:
 
 run-name: ${{ inputs.description }}
 jobs:
+  build-artifact-wheel:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+    with:
+      build-type: ${{ inputs.build-type || 'Release' }}
+      build-wheel: true
   build-artifact:
+    needs: build-artifact-wheel
     uses: ./.github/workflows/build-artifact.yaml
     with:
-      build-type: true
+      build-type: ${{ inputs.build-type }}
       tracy: ${{ inputs.build-with-tracy }}
     secrets: inherit
   t3000-unit-tests:
