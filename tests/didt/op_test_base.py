@@ -183,7 +183,8 @@ class OpTestBase:
 
             # Check if the output matches the first run output
             if self.determinism_check_enabled and i % self.determinism_check_iterations == 0:
-                outputs = ttnn.to_torch(out, mesh_composer=self.to_torch_mesh_mapper)
+                # outputs = ttnn.to_torch(out, mesh_composer=self.to_torch_mesh_mapper)
+                outputs = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(out.cpu())]
 
                 for output_id in range(num_devices):
                     device_idx = self.device_ids[output_id]
