@@ -98,12 +98,12 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
     auto kernel_config = sliding_window::generate_halo_kernel_config_tensors(
         tensor_metadata, shard_boundaries, is_block_sharded, transpose_mcast_, remote_read_, device);
 
-    const auto& pad_config1 = std::get<0>(kernel_config);
-    const auto& pad_config2 = std::get<1>(kernel_config);
-    const auto& local_config1 = std::get<2>(kernel_config);
-    const auto& local_config2 = std::get<3>(kernel_config);
-    const auto& remote_config1 = std::get<4>(kernel_config);
-    const auto& remote_config2 = std::get<5>(kernel_config);
+    const auto& pad_config1 = kernel_config[0];
+    const auto& pad_config2 = kernel_config[1];
+    const auto& local_config1 = kernel_config[2];
+    const auto& local_config2 = kernel_config[3];
+    const auto& remote_config1 = kernel_config[4];
+    const auto& remote_config2 = kernel_config[5];
 
     auto pad_config_tensor1 =
         sliding_window::construct_on_host_config_tensor(pad_config1, this->config_, this->parallel_config_);
