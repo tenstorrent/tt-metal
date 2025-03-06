@@ -192,7 +192,7 @@ def run_test_FalconDecoder_inference(
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=attention_mask_memconfig,
-            mesh_mapper=(mesh_device, dim=1),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=1),
             preprocess=lambda x: (x.transpose(0, 2) * -1e5).expand(-1, configuration.num_attention_heads, -1, -1),
         )
 
