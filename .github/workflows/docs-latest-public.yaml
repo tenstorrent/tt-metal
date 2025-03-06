@@ -28,7 +28,7 @@ jobs:
       ARCH_NAME: ${{ matrix.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,10 +39,10 @@ jobs:
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - uses: ./.github/actions/install-metal-deps
         with:
-          os: ubuntu-20.04
+          os: ubuntu-22.04
       - uses: ./.github/actions/install-metal-dev-deps
         with:
-          os: ubuntu-20.04
+          os: ubuntu-22.04
       - uses: actions/download-artifact@v4
         with:
           name: TTMetal_build_any
