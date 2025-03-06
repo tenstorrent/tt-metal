@@ -474,7 +474,6 @@ def test_multi_device_permute(mesh_device, layout, memory_config, dtype):
     indirect=True,
 )
 def test_max(mesh_device):
-    pytest.skip("TT-Mesh: Skipping because there's an issue in reshape which needs to be fixed")
     gate_logits_1SB8 = ttnn.from_torch(
         torch.randn(1, 1, 32, 8),
         dtype=ttnn.bfloat16,
@@ -605,7 +604,6 @@ def test_4b_tensor(mesh_device):
 
 
 def test_slicing(mesh_device):
-    pytest.skip("TT-Mesh: logic in slicing needs to be fixed")
     tensor = ttnn.from_torch(
         torch.randn(1, 32, 32, 32),
         dtype=ttnn.bfloat16,
