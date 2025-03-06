@@ -132,7 +132,7 @@ jobs:
       - name: ⬇️ Download Build
         uses: actions/download-artifact@v4
         with:
-          name: eager-dist-${{ matrix.os }}-any
+          name: ${{ inputs.build-artifact-name }}
           path: docker-job
       - name: Extract files
         run: tar -xvf ttm_any.tar
@@ -145,7 +145,7 @@ jobs:
         run: |
           WHEEL_FILENAME=$(ls -1 *.whl)
           pip3 install $WHEEL_FILENAME
-      - name: ${{ matrix.test-group.name }} tests
+      - name: Run cpp post commit tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
           ${{ matrix.test-group.cmd }}
@@ -154,12 +154,6 @@ jobs:
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: U06CXU895AP # Michael Chiou
-      - uses: ./.github/actions/upload-artifact-with-job-uuid
-        if: ${{ !cancelled() }}
-        with:
-          path: |
-            generated/test_reports/
-          prefix: "test_reports_"
       - name: Cleanup
         if: always()
         run: |
