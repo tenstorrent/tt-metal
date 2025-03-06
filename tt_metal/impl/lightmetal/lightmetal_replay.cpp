@@ -12,7 +12,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device_impl.hpp>
-#include "lightmetal/lightmetal_replay.hpp"
+#include <tt-metalium/lightmetal_replay.hpp>
 #include "flatbuffer/base_types_from_flatbuffer.hpp"
 #include "flatbuffer/program_types_from_flatbuffer.hpp"
 #include "flatbuffer/buffer_types_from_flatbuffer.hpp"
@@ -104,7 +104,8 @@ std::shared_ptr<RuntimeArgs> LightMetalReplay::rt_args_from_flatbuffer(
 // LightMetalReplay Class           //
 //////////////////////////////////////
 
-LightMetalReplay::LightMetalReplay(LightMetalBinary&& binary) : binary_(std::move(binary)), fb_binary_(nullptr) {
+LightMetalReplay::LightMetalReplay(LightMetalBinary&& binary, IDevice* device) :
+    binary_(std::move(binary)), fb_binary_(nullptr), device_(device) {
     if (binary_.is_empty()) {
         log_warning(tt::LogMetalTrace, "Empty LightMetalBinary provided to LightMetalReplay.");
     }
@@ -227,8 +228,10 @@ void LightMetalReplay::remove_cb_handle_from_map(uint32_t global_id) { cb_handle
 //////////////////////////////////////
 
 // TODO (kmabee) - Hardcode for now, eventually capture/replay "systemdesc" from binary.
+// Alternatively, user can manage device open/close and pass to replay library.
 void LightMetalReplay::setup_devices() {
     log_debug(tt::LogMetalTrace, "LightMetalReplay(setup_devices) - Using hardcoded CreateDevices() as temp hack.");
+    TT_FATAL(!device_, "Device already setup in LightMetalReplay, no need to call setup_devices()");
     const size_t trace_region_size = 4096;  // Default is 0
     const int device_id = 0;
     const auto dispatch_core_type = tt_metal::DispatchCoreType::WORKER;
@@ -240,6 +243,36 @@ void LightMetalReplay::setup_devices() {
 
 // TODO (kmabee) - Hardcode for now, eventually capture/replay "systemdesc" from binary or let user call.
 void LightMetalReplay::close_devices() { CloseDevice(this->device_); }
+
+// Clear object maps for items not deallocated/destroyed naturally during replay.
+// Later can update these to be asserts once all paths covered properly.
+void LightMetalReplay::clear_object_maps() {
+    // Later can update these to be asserts.
+    if (buffer_map_.size()) {
+        log_debug(tt::LogMetalTrace, "Cleared LightMetalReplay BufferMap: {} entries", buffer_map_.size());
+        buffer_map_.clear();
+    }
+
+    if (program_map_.size()) {
+        log_debug(tt::LogMetalTrace, "Cleared LightMetalReplay ProgramMap: {} entries", program_map_.size());
+        program_map_.clear();
+    }
+
+    if (kernel_handle_map_.size()) {
+        log_debug(tt::LogMetalTrace, "Cleared LightMetalReplay KernelHandleMap: {} entries", kernel_handle_map_.size());
+        kernel_handle_map_.clear();
+    }
+
+    if (kernel_map_.size()) {
+        log_debug(tt::LogMetalTrace, "Cleared LightMetalReplay KernelMap: {} entries", kernel_map_.size());
+        kernel_map_.clear();
+    }
+
+    if (cb_handle_map_.size()) {
+        log_debug(tt::LogMetalTrace, "Cleared LightMetalReplay CBHandleMap: {} entries", cb_handle_map_.size());
+        cb_handle_map_.clear();
+    }
+}
 
 //////////////////////////////////////
 // Executor                         //
@@ -264,8 +297,8 @@ void LightMetalReplay::execute(const tt::tt_metal::flatbuffer::Command* command)
             execute(command->cmd_as_ReleaseTraceCommand());
             break;
         }
-        case ::tt::tt_metal::flatbuffer::CommandType::CreateBufferCommand: {
-            execute(command->cmd_as_CreateBufferCommand());
+        case ::tt::tt_metal::flatbuffer::CommandType::BufferCreateCommand: {
+            execute(command->cmd_as_BufferCreateCommand());
             break;
         }
         case ::tt::tt_metal::flatbuffer::CommandType::DeallocateBufferCommand: {
@@ -284,8 +317,8 @@ void LightMetalReplay::execute(const tt::tt_metal::flatbuffer::Command* command)
             execute(command->cmd_as_FinishCommand());
             break;
         }
-        case ::tt::tt_metal::flatbuffer::CommandType::CreateProgramCommand: {
-            execute(command->cmd_as_CreateProgramCommand());
+        case ::tt::tt_metal::flatbuffer::CommandType::ProgramConstructorCommand: {
+            execute(command->cmd_as_ProgramConstructorCommand());
             break;
         }
         case ::tt::tt_metal::flatbuffer::CommandType::EnqueueProgramCommand: {
@@ -356,33 +389,47 @@ void LightMetalReplay::execute(const tt::tt_metal::flatbuffer::ReleaseTraceComma
     ReleaseTrace(this->device_, cmd->tid());
 }
 
-void LightMetalReplay::execute(const tt::tt_metal::flatbuffer::CreateBufferCommand* cmd) {
+void LightMetalReplay::execute(const tt::tt_metal::flatbuffer::BufferCreateCommand* cmd) {
     log_debug(
         tt::LogMetalTrace,
-        "LightMetalReplay(CreateBuffer) global_id: {} size: {} page_size: {} layout: {} buffer_type: {}",
+        "LightMetalReplay(BufferCreate) global_id: {} size: {} page_size: {} layout: {} buffer_type: {}",
         cmd->global_id(),
-        cmd->config()->size(),
-        cmd->config()->page_size(),
-        EnumNameTensorMemoryLayout(cmd->config()->buffer_layout()),
-        EnumNameBufferType(cmd->config()->buffer_type()));
+        cmd->size(),
+        cmd->page_size(),
+        EnumNameTensorMemoryLayout(cmd->buffer_layout()),
+        EnumNameBufferType(cmd->buffer_type()));
 
-    switch (cmd->config()->buffer_layout()) {
-        case tt::tt_metal::flatbuffer::TensorMemoryLayout::Interleaved: {
-            tt::tt_metal::InterleavedBufferConfig config{
-                .device = this->device_,
-                .size = cmd->config()->size(),
-                .page_size = cmd->config()->page_size(),
-                .buffer_type = from_flatbuffer(cmd->config()->buffer_type())};
+    // Handle optionals
+    const auto shard_parameters = from_flatbuffer(cmd->shard_parameters());
+    const auto bottom_up = cmd->bottom_up() ? std::optional<bool>{cmd->bottom_up()->value()} : std::nullopt;
+    const auto sub_device_id =
+        cmd->sub_device_id() ? std::optional<SubDeviceId>{cmd->sub_device_id()->value()} : std::nullopt;
 
-            auto buffer = CreateBuffer(config);
-            add_buffer_to_map(cmd->global_id(), buffer);
-            break;
-        }
-        default:
-            // TODO (kmabee) - Add support for other buffer_layouts.
-            TT_THROW(
-                "Unsupported buffer_layout: {}",
-                std::string(EnumNameTensorMemoryLayout(cmd->config()->buffer_layout())));
+    // This API is overloaded with and without address field.
+    if (cmd->address()) {
+        auto buffer = Buffer::create(
+            this->device_,
+            cmd->address()->value(),
+            cmd->size(),
+            cmd->page_size(),
+            from_flatbuffer(cmd->buffer_type()),
+            from_flatbuffer(cmd->buffer_layout()),
+            shard_parameters,
+            bottom_up,
+            sub_device_id);
+        add_buffer_to_map(cmd->global_id(), buffer);
+
+    } else {
+        auto buffer = Buffer::create(
+            this->device_,
+            cmd->size(),
+            cmd->page_size(),
+            from_flatbuffer(cmd->buffer_type()),
+            from_flatbuffer(cmd->buffer_layout()),
+            shard_parameters,
+            bottom_up,
+            sub_device_id);
+        add_buffer_to_map(cmd->global_id(), buffer);
     }
 }
 
@@ -453,10 +500,9 @@ void LightMetalReplay::execute(const tt::tt_metal::flatbuffer::FinishCommand* cm
     Finish(cq, sub_device_ids);
 }
 
-void LightMetalReplay::execute(const tt::tt_metal::flatbuffer::CreateProgramCommand* cmd) {
-    log_debug(tt::LogMetalTrace, "LightMetalReplay(CreateProgram) global_id: {} ", cmd->global_id());
-    auto program = CreateProgram();
-    add_program_to_map(cmd->global_id(), std::make_shared<Program>(std::move(program)));
+void LightMetalReplay::execute(const tt::tt_metal::flatbuffer::ProgramConstructorCommand* cmd) {
+    log_debug(tt::LogMetalTrace, "LightMetalReplay(ProgramConstructor) global_id: {} ", cmd->global_id());
+    add_program_to_map(cmd->global_id(), std::make_shared<Program>());
 }
 
 void LightMetalReplay::execute(const tt::tt_metal::flatbuffer::EnqueueProgramCommand* cmd) {
@@ -576,13 +622,14 @@ void LightMetalReplay::execute(const tt::tt_metal::flatbuffer::CreateCircularBuf
     ::tt::tt_metal::Buffer* shadow_global_buffer = nullptr;
     auto shadow_buf_global_id = cmd->config()->shadow_buf_global_id();
 
-    if (shadow_buf_global_id != 0) {
-        auto shadow_buf = get_buffer_from_map(shadow_buf_global_id);
+    if (shadow_buf_global_id) {
+        auto global_id = shadow_buf_global_id->value();
+        auto shadow_buf = get_buffer_from_map(global_id);
         TT_FATAL(
             shadow_buf,
             "Attempted to CreateCircularBuffer() using a shadow Buffer w/ global_id: {} that was not previously "
             "created.",
-            shadow_buf_global_id);
+            global_id);
         shadow_global_buffer = shadow_buf.get();  // Set the raw pointer
     }
 
@@ -644,11 +691,13 @@ void LightMetalReplay::execute(const ::tt::tt_metal::flatbuffer::LightMetalCompa
 }
 
 // Main entry point to execute a light metal binary blob, return true if pass.
-bool LightMetalReplay::execute_binary() {
+bool LightMetalReplay::run() {
     if (!fb_binary_) {
         std::cerr << "Cannot Replay empty/uninitialized Light Metal Binary." << std::endl;
         return false;
     }
+
+    const bool replay_manages_device = device_ == nullptr;
 
     try {
         const auto* trace_descs = fb_binary_->trace_descriptors();
@@ -658,12 +707,16 @@ bool LightMetalReplay::execute_binary() {
             return false;
         }
 
-        setup_devices();
         log_info(
             tt::LogMetalTrace,
-            "Running LightMetal Binary with {} cmds, {} traces.",
+            "Running LightMetal Binary with {} cmds, {} traces. ManageDevice: {}",
             commands->size(),
-            trace_descs->size());
+            trace_descs->size(),
+            replay_manages_device);
+
+        if (replay_manages_device) {
+            setup_devices();
+        }
 
         // Just loop over all commands, and execute. This is purposely kept simple for prototyping v0.
         // TODO (kmabee) - should expand to cover, multiple devices, cqs, etc.
@@ -674,12 +727,19 @@ bool LightMetalReplay::execute_binary() {
             execute(cmd);
         }
 
-        close_devices();
+        clear_object_maps();
+
+        if (replay_manages_device) {
+            close_devices();
+        }
 
         return true;
     } catch (const std::exception& e) {
-        close_devices();
         log_fatal(e.what());
+        clear_object_maps();
+        if (replay_manages_device) {
+            close_devices();
+        }
         return false;
     }
 }

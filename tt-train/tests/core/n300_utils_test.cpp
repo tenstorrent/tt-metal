@@ -13,6 +13,8 @@
 #include "core/distributed_mapping.hpp"
 #include "core/tt_tensor_utils.hpp"
 
+using namespace ttml;
+
 auto check_board_is_n300() {
     return tt_ClusterDescriptor::create()->get_board_type(0) == BoardType::N300;
 }
@@ -23,7 +25,7 @@ protected:
         if (!check_board_is_n300()) {
             GTEST_SKIP() << "Skipping N300 specific tests";
         }
-        ttml::autograd::ctx().set_mesh_shape({1, 2});
+        ttml::autograd::ctx().set_mesh_shape(tt::tt_metal::distributed::MeshShape(1, 2));
         ttml::autograd::ctx().open_device();
     }
 
@@ -39,7 +41,7 @@ TEST_F(N300UtilsTest, TestXTensorReplicateInt32) {
     xt::xarray<int32_t> xtensor = test_data.reshape({1, 1, 1, 3});
     ttml::core::XTensorToMeshVariant<int32_t> replicate_composer =
         ttml::core::ReplicateXTensorToMesh<int32_t>(mesh_shape);
-    auto tensor = ttml::core::from_xtensor<int32_t, DataType::INT32>(xtensor, device, replicate_composer);
+    auto tensor = ttml::core::from_xtensor<int32_t, ttnn::DataType::INT32>(xtensor, device, replicate_composer);
     ttml::core::MeshToXTensorVariant<int32_t> identity_composer = ttml::core::VectorMeshToXTensor<int32_t>(mesh_shape);
     auto xtensors_back = ttml::core::to_xtensor<int32_t>(tensor, identity_composer);
 
@@ -54,7 +56,7 @@ TEST_F(N300UtilsTest, TestXTensorReplicateUInt32) {
     xt::xarray<uint32_t> xtensor = test_data.reshape({1, 1, 1, 3});
     ttml::core::XTensorToMeshVariant<uint32_t> replicate_composer =
         ttml::core::ReplicateXTensorToMesh<uint32_t>(mesh_shape);
-    auto tensor = ttml::core::from_xtensor<uint32_t, DataType::UINT32>(xtensor, device, replicate_composer);
+    auto tensor = ttml::core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(xtensor, device, replicate_composer);
     ttml::core::MeshToXTensorVariant<uint32_t> identity_composer =
         ttml::core::VectorMeshToXTensor<uint32_t>(mesh_shape);
     auto xtensors_back = ttml::core::to_xtensor<uint32_t>(tensor, identity_composer);
@@ -143,7 +145,7 @@ TEST_F(N300UtilsTest, TestXTensorReplicateAllReduceBadTiles) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
 
-    xt::xarray<float> xtensor = xt::random::rand({32}, -0.05, 0.05).reshape({1, 1, 1, 32});
+    xt::xarray<float> xtensor = xt::random::rand({32}, -1.F, 1.F).reshape({1, 1, 4, 8});
 
     ttml::core::XTensorToMeshVariant<float> replicate_composer = ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
     auto tensor = ttml::core::from_xtensor(xtensor, device, replicate_composer);

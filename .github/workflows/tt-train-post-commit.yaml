@@ -54,6 +54,7 @@ jobs:
           submodules: recursive
           path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
       - uses: actions/download-artifact@v4
+        timeout-minutes: 10
         with:
           name: TTMetal_build_any
           path: docker-job
@@ -63,7 +64,6 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         run: |
           cp ./build/tt-train/3rd_party/wandb-cpp/libwandbcpp.so build/lib/
-          find ./build -type f -name "*.tcl" -o -name "*.cmake" -exec sed -i "s|/work/build_Release|/work/build|g" {} +
           cd /work/build/tt-train
           ldd tests/ttml_tests || true
           ${{ matrix.test-group.cmd }}

@@ -222,13 +222,13 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
     // LN and RMS shared intermediates //
     // c_intermed0 -> xˆ2
     CircularBufferConfig cb_intermed0_config =
-        CircularBufferConfig(intermed0_tiles * single_tile_size, {{tt::CBIndex::c_24, cb_data_format}})
-            .set_page_size(tt::CBIndex::c_24, single_tile_size);
+        CircularBufferConfig(intermed0_tiles * single_tile_size, {{tt::CBIndex::c_6, cb_data_format}})
+            .set_page_size(tt::CBIndex::c_6, single_tile_size);
     CreateCircularBuffer(program, all_cores, cb_intermed0_config);
 
     CircularBufferConfig cb_out0_config =
-        CircularBufferConfig(out0_tiles * out_single_tile_size, {{tt::CBIndex::c_16, out_data_format}})
-            .set_page_size(tt::CBIndex::c_16, out_single_tile_size);
+        CircularBufferConfig(out0_tiles * out_single_tile_size, {{tt::CBIndex::c_14, out_data_format}})
+            .set_page_size(tt::CBIndex::c_14, out_single_tile_size);
     CreateCircularBuffer(program, all_cores, cb_out0_config);
 
     // Log all circular buffers with program.circular_buffers_on_corerange(all_cores), which returns

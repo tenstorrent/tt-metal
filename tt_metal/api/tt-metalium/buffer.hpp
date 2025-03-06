@@ -196,7 +196,6 @@ class Buffer final {
     Buffer &operator=(Buffer &&other) = delete;
 
     IDevice* device() const { return device_; }
-    Allocator *allocator() const { return allocator_; }
     DeviceAddr size() const { return size_; }
     bool is_allocated() const;
 
@@ -248,9 +247,11 @@ class Buffer final {
     const std::shared_ptr<const BufferPageMapping>& get_buffer_page_mapping();
 
     std::optional<SubDeviceId> sub_device_id() const { return sub_device_id_; }
-    std::optional<SubDeviceManagerId> sub_device_manager_id() const { return sub_device_manager_id_; }
 
     size_t unique_id() const { return unique_id_; }
+
+    // Mark the buffer as deallocated, without releasing underlying device memory
+    void mark_as_deallocated();
 
     Buffer(
         IDevice* device,

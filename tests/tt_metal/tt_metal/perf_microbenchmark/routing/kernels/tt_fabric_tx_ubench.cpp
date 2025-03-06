@@ -63,8 +63,8 @@ constexpr uint32_t w_depth = get_compile_time_arg_val(25);
 constexpr uint32_t n_depth = get_compile_time_arg_val(26);
 constexpr uint32_t s_depth = get_compile_time_arg_val(27);
 
-volatile tt_l1_ptr fabric_client_interface_t* client_interface =
-    (volatile tt_l1_ptr fabric_client_interface_t*)client_interface_addr;
+volatile tt_l1_ptr fabric_pull_client_interface_t* client_interface =
+    (volatile tt_l1_ptr fabric_pull_client_interface_t*)client_interface_addr;
 
 uint32_t target_address;
 uint32_t noc_offset;
@@ -74,7 +74,7 @@ uint32_t time_seed;
 inline void notify_traffic_controller() {
     // send semaphore increment to traffic controller kernel on this device.
     uint64_t dest_addr = get_noc_addr_helper(controller_noc_offset, signal_address);
-    noc_fast_atomic_increment<DM_DYNAMIC_NOC>(
+    noc_fast_atomic_increment<DM_DEDICATED_NOC, true>(
         noc_index,
         NCRISC_AT_CMD_BUF,
         dest_addr,
@@ -157,7 +157,7 @@ void kernel_main() {
     while (true) {
         client_interface->local_pull_request.pull_request.words_read = 0;
         if constexpr (mcast_data) {
-            fabric_async_write_multicast<AsyncWriteMode::SEND, RoutingType::ROUTING_TABLE>(
+            fabric_async_write_multicast<AsyncWriteMode::SEND_PR, RoutingType::ROUTING_TABLE>(
                 client_interface,
                 0,                       // the network plane to use for this transaction
                 data_buffer_start_addr,  // source address in sender’s memory
@@ -170,7 +170,7 @@ void kernel_main() {
                 n_depth,
                 s_depth);
         } else {
-            fabric_async_write<AsyncWriteMode::SEND, RoutingType::ROUTING_TABLE>(
+            fabric_async_write<AsyncWriteMode::SEND_PR, RoutingType::ROUTING_TABLE>(
                 client_interface,
                 0,                       // the network plane to use for this transaction
                 data_buffer_start_addr,  // source address in sender’s memory

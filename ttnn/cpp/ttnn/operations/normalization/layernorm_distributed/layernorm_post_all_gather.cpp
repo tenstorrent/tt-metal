@@ -7,6 +7,7 @@
 #include "device/layernorm_post_all_gather_op.hpp"
 
 #include "ttnn/operations/normalization/layernorm/device/layernorm_op.hpp"
+
 namespace ttnn::operations::normalization {
 
 ttnn::Tensor ExecuteLayerNormPostAllGather::invoke(
@@ -25,7 +26,7 @@ ttnn::Tensor ExecuteLayerNormPostAllGather::invoke(
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
     if (input_tensor.is_sharded()) {
-        return operation::run(
+        return tt::tt_metal::operation::run(
                    LayerNorm{
                        .norm_type = LayerNormType::LAYERNORM,
                        .distributed_norm_stage = DistributedLayerNormStage::POST_ALL_GATHER,
@@ -38,7 +39,7 @@ ttnn::Tensor ExecuteLayerNormPostAllGather::invoke(
                    {std::nullopt, weight, bias, stats})
             .at(0);
     } else {
-        return operation::run(
+        return tt::tt_metal::operation::run(
                    LayerNormPostAllGather{
                        .norm_type = LayerNormDistributedType::LAYERNORM,
                        .eps = epsilon,

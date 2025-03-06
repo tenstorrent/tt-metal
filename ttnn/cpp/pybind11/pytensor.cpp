@@ -78,30 +78,29 @@ Tensor create_typed_tt_tensor_from_py_data(
     const std::function<void()>& on_creation_callback,
     const std::function<void()>& on_destruction_callback,
     const bool force_disable_borrow) {
-    auto layout = tensor_spec.layout();
-
-    const bool requires_padding = tensor_spec.logical_2d_shape() != tensor_spec.physical_shape();
-    const bool requires_tilization = layout != Layout::ROW_MAJOR;
-    const bool enable_borrow = !requires_padding and !requires_tilization and !force_disable_borrow;
-
     TT_FATAL(
         !tensor_spec.memory_config().is_sharded() or tensor_spec.memory_config().shard_spec.has_value(),
         "Sharded tensors must have a shard spec when converting to tt tensors!");
 
-    auto* data_ptr = reinterpret_cast<T*>(py_data_ptr);
+    const bool pydata_borrowable = tensor_spec.layout() == Layout::ROW_MAJOR &&
+                                   tensor_spec.physical_shape() == tensor_spec.logical_2d_shape() &&
+                                   tensor_spec.data_type() == convert_to_data_type<T>();
 
-    auto data_type = tensor_spec.data_type();
-    std::size_t num_elements = tensor_spec.logical_shape().volume();
-
-    if (enable_borrow and !(data_type == DataType::BFLOAT8_B || data_type == DataType::BFLOAT4_B)) {
-        auto storage = BorrowedStorage(
-            borrowed_buffer::Buffer(data_ptr, num_elements), on_creation_callback, on_destruction_callback);
-        return Tensor(std::move(storage), tensor_spec);
+    tt::stl::Span<T> pydata_span(reinterpret_cast<T*>(py_data_ptr), tensor_spec.logical_shape().volume());
+    if (pydata_borrowable && !force_disable_borrow) {
+        auto output = Tensor::from_borrowed_data(
+            pydata_span,
+            tensor_spec.logical_shape(),
+            on_creation_callback,
+            on_destruction_callback,
+            tensor_spec.tile());
+        if (device != nullptr) {
+            output = output.to_device(device, tensor_spec.memory_config());
+        }
+        return output;
     } else {
-        auto logical_data = std::vector<T>(data_ptr, data_ptr + num_elements);
-
-        return Tensor::from_vector(
-            std::move(logical_data),
+        return Tensor::from_span(
+            tt::stl::Span<const T>(pydata_span),
             tensor_spec,
             device == nullptr ? std::nullopt : std::optional<ttnn::AnyDevice>(device));
     }
@@ -114,47 +113,29 @@ Tensor create_tt_tensor_from_py_data(
     const bool force_disable_borrow,
     const std::function<void()>& on_creation_callback,
     const std::function<void()>& on_destruction_callback) {
-    auto layout = tensor_spec.layout();
-
-    auto data_type = tensor_spec.data_type();
-    std::size_t num_elements = tensor_spec.logical_shape().volume();
-    switch (data_type) {
-        case DataType::UINT8: {
-            return create_typed_tt_tensor_from_py_data<uint8_t>(
-                py_data_ptr, tensor_spec, device, on_creation_callback, on_destruction_callback, force_disable_borrow);
-        }
-        case DataType::UINT16: {
-            return create_typed_tt_tensor_from_py_data<uint16_t>(
-                py_data_ptr, tensor_spec, device, on_creation_callback, on_destruction_callback, force_disable_borrow);
-        }
-        case DataType::INT32: {
-            return create_typed_tt_tensor_from_py_data<int32_t>(
-                py_data_ptr, tensor_spec, device, on_creation_callback, on_destruction_callback, force_disable_borrow);
-        }
-        case DataType::UINT32: {
-            return create_typed_tt_tensor_from_py_data<uint32_t>(
-                py_data_ptr, tensor_spec, device, on_creation_callback, on_destruction_callback, force_disable_borrow);
-        }
-        case DataType::FLOAT32: {
-            return create_typed_tt_tensor_from_py_data<float>(
-                py_data_ptr, tensor_spec, device, on_creation_callback, on_destruction_callback, force_disable_borrow);
-        }
+    auto create_concrete = [&]<typename T>() {
+        return create_typed_tt_tensor_from_py_data<T>(
+            py_data_ptr, tensor_spec, device, on_creation_callback, on_destruction_callback, force_disable_borrow);
+    };
+    switch (tensor_spec.data_type()) {
+        case DataType::UINT8: return create_concrete.operator()<uint8_t>();
+        case DataType::UINT16: return create_concrete.operator()<uint16_t>();
+        case DataType::INT32: return create_concrete.operator()<int32_t>();
+        case DataType::UINT32: return create_concrete.operator()<uint32_t>();
+        case DataType::FLOAT32: return create_concrete.operator()<float>();
         // TODO: This is not supported for numpy
-        case DataType::BFLOAT16: {
-            return create_typed_tt_tensor_from_py_data<bfloat16>(
-                py_data_ptr, tensor_spec, device, on_creation_callback, on_destruction_callback, force_disable_borrow);
-        }
+        case DataType::BFLOAT16: return create_concrete.operator()<bfloat16>();
+
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: {
-            return create_typed_tt_tensor_from_py_data<float>(
-                py_data_ptr, tensor_spec, device, on_creation_callback, on_destruction_callback, force_disable_borrow);
+            return create_concrete.operator()<float>();
         }
         case DataType::INVALID: {
-            TT_THROW("Unsupported DataType: {}", data_type);
+            TT_THROW("Unsupported DataType: {}", tensor_spec.data_type());
         }
     }
 
-    TT_THROW("Unsupported DataType: {}", data_type);
+    TT_THROW("Unsupported DataType: {}", tensor_spec.data_type());
 }
 
 Tensor convert_python_tensor_to_tt_tensor(
@@ -340,9 +321,6 @@ Tensor convert_python_tensor_to_tt_tensor(
     auto output = create_tt_tensor_from_py_data(
         py_data_ptr, tensor_spec, device, force_disable_borrow, on_creation_callback, on_destruction_callback);
 
-    if (device) {
-        output = output.to_device(device, memory_config);
-    }
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
@@ -401,6 +379,12 @@ owned_buffer::Buffer<T> create_row_major_owned_buffer(
         return owned_buffer;
     }
 
+    // No modifications needed; direclty return buffer
+    if (tensor_spec.layout() == Layout::ROW_MAJOR and tensor_spec.logical_2d_shape() == tensor_spec.physical_shape()) {
+        return owned_buffer;
+    }
+
+    // TODO: Switch to use span in decode_tensor_data and avoid data copy here
     auto physical_data = owned_buffer.get();
 
     // See implementation for documentation
@@ -411,57 +395,64 @@ owned_buffer::Buffer<T> create_row_major_owned_buffer(
 
 std::variant<OwnedBuffer, BorrowedBuffer> get_host_buffer_from_tensor(
     const Tensor& tt_tensor, const bool padded_output) {
-    TT_ASSERT(tt_tensor.storage_type() == StorageType::OWNED or tt_tensor.storage_type() == StorageType::BORROWED);
+    TT_ASSERT(tt_tensor.is_host_tensor());
 
     using RetType = std::variant<OwnedBuffer, BorrowedBuffer>;
+    const auto& tensor_spec = tt_tensor.get_tensor_spec();
+    auto process_owned_buffer = [&tensor_spec, padded_output](const OwnedBuffer& buffer) -> RetType {
+        const auto tt_dtype = tensor_spec.data_type();
+        switch (tt_dtype) {
+            case DataType::UINT8: {
+                return create_row_major_owned_buffer(
+                    std::move(owned_buffer::get_as<uint8_t>(buffer)), tensor_spec, padded_output);
+            }
+            case DataType::UINT16: {
+                return create_row_major_owned_buffer(
+                    std::move(owned_buffer::get_as<uint16_t>(buffer)), tensor_spec, padded_output);
+            }
+            case DataType::INT32: {
+                return create_row_major_owned_buffer(
+                    std::move(owned_buffer::get_as<int32_t>(buffer)), tensor_spec, padded_output);
+            }
+            case DataType::UINT32: {
+                return create_row_major_owned_buffer(
+                    std::move(owned_buffer::get_as<uint32_t>(buffer)), tensor_spec, padded_output);
+            }
+            case DataType::FLOAT32: {
+                return create_row_major_owned_buffer(
+                    std::move(owned_buffer::get_as<float>(buffer)), tensor_spec, padded_output);
+            }
+            case DataType::BFLOAT16: {
+                return create_row_major_owned_buffer(
+                    std::move(owned_buffer::get_as<::bfloat16>(buffer)), tensor_spec, padded_output);
+            }
+            case DataType::BFLOAT8_B:
+            case DataType::BFLOAT4_B: {
+                const auto& tile = tensor_spec.tile();
+                auto uint32_data = owned_buffer::get_as<std::uint32_t>(buffer).get();
+                auto float_unpacked_data = tt_dtype == DataType::BFLOAT8_B
+                                               ? unpack_bfp8_tiles_into_float_vec(
+                                                     uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
+                                               : unpack_bfp4_tiles_into_float_vec(
+                                                     uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+                auto input_float_buffer = owned_buffer::create<float>(std::move(float_unpacked_data));
+                return create_row_major_owned_buffer(std::move(input_float_buffer), tensor_spec, padded_output);
+            }
+            default: {
+                TT_THROW("Unsupported DataType: {}", tt_dtype);
+                break;
+            }
+        }
+    };
+
     return std::visit(
         tt::stl::overloaded{
-            [&tt_tensor, padded_output](const OwnedStorage& storage) -> RetType {
-                const auto& tensor_spec = tt_tensor.get_tensor_spec();
-                const auto tt_dtype = tensor_spec.data_type();
-                switch (tt_dtype) {
-                    case DataType::UINT8: {
-                        return create_row_major_owned_buffer(
-                            std::move(owned_buffer::get_as<uint8_t>(storage.buffer)), tensor_spec, padded_output);
-                    }
-                    case DataType::UINT16: {
-                        return create_row_major_owned_buffer(
-                            std::move(owned_buffer::get_as<uint16_t>(storage.buffer)), tensor_spec, padded_output);
-                    }
-                    case DataType::INT32: {
-                        return create_row_major_owned_buffer(
-                            std::move(owned_buffer::get_as<int32_t>(storage.buffer)), tensor_spec, padded_output);
-                    }
-                    case DataType::UINT32: {
-                        return create_row_major_owned_buffer(
-                            std::move(owned_buffer::get_as<uint32_t>(storage.buffer)), tensor_spec, padded_output);
-                    }
-                    case DataType::FLOAT32: {
-                        return create_row_major_owned_buffer(
-                            std::move(owned_buffer::get_as<float>(storage.buffer)), tensor_spec, padded_output);
-                    }
-                    case DataType::BFLOAT16: {
-                        return create_row_major_owned_buffer(
-                            std::move(owned_buffer::get_as<::bfloat16>(storage.buffer)), tensor_spec, padded_output);
-                    }
-                    case DataType::BFLOAT8_B:
-                    case DataType::BFLOAT4_B: {
-                        const auto& tile = tensor_spec.tile();
-                        auto uint32_data = owned_buffer::get_as<std::uint32_t>(storage.buffer).get();
-                        auto float_unpacked_data =
-                            tt_dtype == DataType::BFLOAT8_B
-                                ? unpack_bfp8_tiles_into_float_vec(
-                                      uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
-                                : unpack_bfp4_tiles_into_float_vec(
-                                      uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
-                        auto input_float_buffer = owned_buffer::create<float>(std::move(float_unpacked_data));
-                        return create_row_major_owned_buffer(std::move(input_float_buffer), tensor_spec, padded_output);
-                    }
-                    default: {
-                        TT_THROW("Unsupported DataType: {}", tt_dtype);
-                        break;
-                    }
-                }
+            [&process_owned_buffer](const OwnedStorage& storage) -> RetType {
+                return process_owned_buffer(storage.buffer);
+            },
+            [&process_owned_buffer](const MultiDeviceHostStorage& storage) -> RetType {
+                TT_FATAL(storage.buffers.size() == 1, "Can't get a single buffer from multi device host storage");
+                return process_owned_buffer(storage.buffers[0]);
             },
             [](const BorrowedStorage& borrowed_storage) -> RetType { return borrowed_storage.buffer; },
             [&tt_tensor](auto&&) -> RetType {

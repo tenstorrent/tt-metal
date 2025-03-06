@@ -71,8 +71,8 @@ uint32_t max_packet_size_mask;
 auto input_queue_state = select_input_queue<pkt_dest_size_choice>();
 volatile local_pull_request_t *local_pull_request = (volatile local_pull_request_t *)(data_buffer_start_addr - 1024);
 volatile tt_l1_ptr fabric_router_l1_config_t* routing_table;
-volatile tt_l1_ptr fabric_client_interface_t* client_interface =
-    (volatile tt_l1_ptr fabric_client_interface_t*)client_interface_addr;
+volatile tt_l1_ptr fabric_pull_client_interface_t* client_interface =
+    (volatile tt_l1_ptr fabric_pull_client_interface_t*)client_interface_addr;
 
 fvc_producer_state_t test_producer __attribute__((aligned(16)));
 fvcc_inbound_state_t fvcc_test_producer __attribute__((aligned(16)));
@@ -94,7 +94,7 @@ uint32_t time_seed;
 inline void notify_traffic_controller() {
     // send semaphore increment to traffic controller kernel on this device.
     uint64_t dest_addr = get_noc_addr_helper(controller_noc_offset, signal_address);
-    noc_fast_atomic_increment<DM_DYNAMIC_NOC>(
+    noc_fast_atomic_increment<DM_DEDICATED_NOC, true>(
         noc_index,
         NCRISC_AT_CMD_BUF,
         dest_addr,

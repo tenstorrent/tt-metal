@@ -75,6 +75,7 @@ jobs:
           export PYTHONPATH=$TT_METAL_HOME
           ${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/upload-artifact-with-job-uuid
+        timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           path: |
@@ -87,7 +88,7 @@ jobs:
       fail-fast: false
       matrix:
         card: [N150, N300]
-        model: [common_models, functional_unet, llama3.2-1B, qwen, mistral7b, mistral7b_eth, resnet50, yolov4]
+        model: [common_models, functional_unet, llama3.2-1B, qwen, mistral7b, mistral7b_eth, resnet50, yolov4, whisper]
     name: Nightly ${{ matrix.card }} ${{ matrix.model }}
     env:
       ARCH_NAME: wormhole_b0
@@ -126,6 +127,7 @@ jobs:
             pytest -n auto tests/nightly/single_card/${{ matrix.model }}
           fi
       - uses: ./.github/actions/upload-artifact-with-job-uuid
+        timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           path: |
@@ -139,7 +141,7 @@ jobs:
       matrix:
         test-config:
           - model: "stable_diffusion"
-            cmd: pytest --timeout 900 -n auto tests/nightly/single_card/stable_diffusion
+            cmd: SLOW_MATMULS=1 pytest --timeout 1000 -n auto tests/nightly/single_card/stable_diffusion
               # Skipping due to issue #15932
               # - model: "mamba 1"
               # cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 1
@@ -184,6 +186,7 @@ jobs:
           export PYTHONPATH=$TT_METAL_HOME
           ${{ matrix.test-config.cmd }}
       - uses: ./.github/actions/upload-artifact-with-job-uuid
+        timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           path: |

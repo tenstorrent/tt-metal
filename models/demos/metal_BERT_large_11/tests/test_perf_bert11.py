@@ -151,7 +151,7 @@ def run_perf_bert11(
     logger.info(f"bert11 compile time: {compile_time}")
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Didn't test on WH yet")
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="May hang, need to check functional tests")
 @run_for_wormhole_b0(reason_str="WH specific batch size")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(

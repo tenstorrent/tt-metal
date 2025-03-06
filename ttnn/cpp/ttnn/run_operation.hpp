@@ -125,8 +125,7 @@ __attribute__((noinline)) void launch_op_func(
     const Tensors input_tensors,
     OutputType& output_tensors,
     const OptionalConstTensors optional_input_tensors = {},
-    const OptionalTensors optional_output_tensors = {},
-    bool enable_autoformat_device = true);
+    const OptionalTensors optional_output_tensors = {});
 
 /*
  */
@@ -136,16 +135,14 @@ void launch_op(
     const Tensors input_tensors,
     OutputType& output_tensors,
     const OptionalConstTensors optional_input_tensors = {},
-    const OptionalTensors optional_output_tensors = {},
-    bool enable_autoformat_device = true) {
+    const OptionalTensors optional_output_tensors = {}) {
     using FuncType = std::function<OutputType(const Tensors&, const OptionalConstTensors&, const OptionalTensors&)>;
     launch_op_func(
         FuncType(std::forward<F>(op_func)),
         input_tensors,
         output_tensors,
         optional_input_tensors,
-        optional_output_tensors,
-        enable_autoformat_device);
+        optional_output_tensors);
 }
 
 void launch_with_autoformat(

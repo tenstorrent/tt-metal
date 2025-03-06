@@ -25,7 +25,7 @@ private:
 public:
     explicit MultiLayerPerceptron(const MultiLayerPerceptronParameters& params);
 
-    [[nodiscard]] autograd::TensorPtr operator()(autograd::TensorPtr tensor);
+    [[nodiscard]] autograd::TensorPtr operator()(const autograd::TensorPtr& tensor) override;
 };
 
 }  // namespace ttml::modules

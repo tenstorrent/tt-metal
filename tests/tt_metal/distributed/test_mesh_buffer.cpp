@@ -126,6 +126,44 @@ TEST_F(MeshBufferTestT3000, Deallocation) {
     EXPECT_FALSE(buffer_view->is_allocated());
 }
 
+TEST(MeshBufferTest, DeallocationWithoutMeshDevice) {
+    for (int i = 0; i < 100; i++) {
+        auto config =
+            MeshDeviceConfig{.mesh_shape = MeshShape(1, 1), .offset = std::nullopt, .physical_device_ids = {}};
+        auto mesh_device =
+            MeshDevice::create(config, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreType::WORKER);
+
+        const DeviceLocalBufferConfig device_local_config{
+            .page_size = 2048,
+            .buffer_type = BufferType::DRAM,
+            .buffer_layout = TensorMemoryLayout::INTERLEAVED,
+            .bottom_up = false};
+        const ReplicatedBufferConfig buffer_config{.size = 2048};
+        auto buffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
+
+        mesh_device.reset();
+    }
+}
+
+TEST(MeshBufferTest, DeallocationWithMeshDeviceClosed) {
+    for (int i = 0; i < 100; i++) {
+        auto config =
+            MeshDeviceConfig{.mesh_shape = MeshShape(1, 1), .offset = std::nullopt, .physical_device_ids = {}};
+        auto mesh_device =
+            MeshDevice::create(config, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreType::WORKER);
+
+        const DeviceLocalBufferConfig device_local_config{
+            .page_size = 2048,
+            .buffer_type = BufferType::DRAM,
+            .buffer_layout = TensorMemoryLayout::INTERLEAVED,
+            .bottom_up = false};
+        const ReplicatedBufferConfig buffer_config{.size = 2048};
+        auto buffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
+
+        mesh_device->close();
+    }
+}
+
 TEST_F(MeshBufferTestT3000, GetDeviceBuffer) {
     const DeviceLocalBufferConfig device_local_config{
         .page_size = 1024,
@@ -424,6 +462,66 @@ TEST_F(MeshBufferTestSuite, ColMajorShardingAndReplication) {
             EXPECT_EQ(
                 (i / global_buffer_read_shape.width()) * global_buffer_shape.width() + i % global_buffer_shape.width(),
                 dst_vec[i]);
+        }
+    }
+}
+
+TEST_F(MeshBufferTestSuite, MultiShardReadWrite) {
+    constexpr uint32_t NUM_ITERS = 50;
+    uint32_t seed = tt::parse_env("TT_METAL_SEED", 0);
+    uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
+
+    std::uniform_int_distribution<int> gen_num_datums(32, 128);
+    std::mt19937 rng(seed);
+
+    DeviceLocalBufferConfig per_device_buffer_config{
+        .page_size = single_tile_size,
+        .buffer_type = BufferType::DRAM,
+        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
+        .bottom_up = true};
+
+    distributed::MeshCoordinateRange coord_range(mesh_device_->shape());
+
+    uint32_t rows = mesh_device_->num_rows();
+    uint32_t cols = mesh_device_->num_cols();
+    uint32_t num_devices = rows * cols;
+
+    for (auto shard_orientation : {ShardOrientation::COL_MAJOR, ShardOrientation::ROW_MAJOR}) {
+        for (int i = 0; i < NUM_ITERS; i++) {
+            Shape2D global_buffer_shape = {
+                gen_num_datums(rng) * constants::TILE_HEIGHT * rows,
+                gen_num_datums(rng) * constants::TILE_WIDTH * cols};
+            Shape2D shard_shape = {global_buffer_shape.height() / rows, global_buffer_shape.width() / cols};
+            uint32_t global_buffer_size = global_buffer_shape.height() * global_buffer_shape.width() * sizeof(uint32_t);
+            ShardedBufferConfig sharded_config{
+                .global_size = global_buffer_size,
+                .global_buffer_shape = global_buffer_shape,
+                .shard_shape = shard_shape,
+                .shard_orientation = shard_orientation,
+            };
+            auto mesh_buffer = MeshBuffer::create(sharded_config, per_device_buffer_config, mesh_device_.get());
+
+            std::vector<uint32_t> src_vec =
+                std::vector<uint32_t>(global_buffer_size / num_devices / sizeof(uint32_t), 0);
+            std::iota(src_vec.begin(), src_vec.end(), i);
+            std::unordered_map<distributed::MeshCoordinate, std::vector<uint32_t>> dst_vec = {};
+            std::vector<MeshCommandQueue::ShardDataTransfer> input_shards = {};
+            std::vector<MeshCommandQueue::ShardDataTransfer> output_shards = {};
+
+            for (auto& coord : coord_range) {
+                input_shards.push_back({coord, src_vec.data()});
+            }
+            for (auto& coord : coord_range) {
+                dst_vec[coord] = std::vector<uint32_t>(global_buffer_size / num_devices / sizeof(uint32_t), 0);
+                output_shards.push_back({coord, dst_vec[coord].data()});
+            }
+
+            mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, input_shards, false);
+            mesh_device_->mesh_command_queue().enqueue_read_shards(output_shards, mesh_buffer, true);
+
+            for (auto& dst : dst_vec) {
+                EXPECT_EQ(dst.second, src_vec);
+            }
         }
     }
 }

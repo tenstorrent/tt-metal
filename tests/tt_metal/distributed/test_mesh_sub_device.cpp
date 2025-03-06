@@ -12,6 +12,7 @@
 namespace tt::tt_metal::distributed::test {
 namespace {
 
+namespace tt::tt_metal {
 using MeshSubDeviceTestSuite = GenericMeshDeviceFixture;
 
 TEST_F(MeshSubDeviceTestSuite, SyncWorkloadsOnSubDevice) {
@@ -25,14 +26,13 @@ TEST_F(MeshSubDeviceTestSuite, SyncWorkloadsOnSubDevice) {
     auto [waiter_program, syncer_program, incrementer_program, global_sem] =
         create_basic_sync_program(mesh_device_.get(), sub_device_1, sub_device_2);
 
-    LogicalDeviceRange devices =
-        LogicalDeviceRange({0, 0}, {mesh_device_->num_cols() - 1, mesh_device_->num_rows() - 1});
+    MeshCoordinateRange devices(mesh_device_->shape());
     auto waiter_mesh_workload = CreateMeshWorkload();
     auto syncer_mesh_workload = CreateMeshWorkload();
     auto incrementer_mesh_workload = CreateMeshWorkload();
-    AddProgramToMeshWorkload(waiter_mesh_workload, waiter_program, devices);
-    AddProgramToMeshWorkload(syncer_mesh_workload, syncer_program, devices);
-    AddProgramToMeshWorkload(incrementer_mesh_workload, incrementer_program, devices);
+    AddProgramToMeshWorkload(waiter_mesh_workload, std::move(waiter_program), devices);
+    AddProgramToMeshWorkload(syncer_mesh_workload, std::move(syncer_program), devices);
+    AddProgramToMeshWorkload(incrementer_mesh_workload, std::move(incrementer_program), devices);
     for (uint32_t i = 0; i < num_iters; i++) {
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_mesh_workload, false);
         mesh_device_->set_sub_device_stall_group({SubDeviceId{0}});
@@ -52,7 +52,7 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
     uint32_t num_tiles = 32;
     DeviceLocalBufferConfig per_device_buffer_config{
         .page_size = single_tile_size * num_tiles,
-        .buffer_type = tt_metal::BufferType::DRAM,
+        .buffer_type = BufferType::DRAM,
         .buffer_layout = TensorMemoryLayout::INTERLEAVED,
         .bottom_up = true};
 
@@ -103,11 +103,10 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
 
     auto syncer_mesh_workload = CreateMeshWorkload();
     auto datacopy_mesh_workload = CreateMeshWorkload();
-    LogicalDeviceRange devices =
-        LogicalDeviceRange({0, 0}, {mesh_device_->num_cols() - 1, mesh_device_->num_rows() - 1});
+    MeshCoordinateRange devices(mesh_device_->shape());
 
-    AddProgramToMeshWorkload(syncer_mesh_workload, sync_and_incr_program, devices);
-    AddProgramToMeshWorkload(datacopy_mesh_workload, datacopy_program, devices);
+    AddProgramToMeshWorkload(syncer_mesh_workload, std::move(sync_and_incr_program), devices);
+    AddProgramToMeshWorkload(datacopy_mesh_workload, std::move(datacopy_program), devices);
 
     for (int i = 0; i < 50; i++) {
         mesh_device_->set_sub_device_stall_group({SubDeviceId{2}});
@@ -122,7 +121,7 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
         EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), input_buf, src_vec, true);
 
         for (auto device : mesh_device_->get_devices()) {
-            tt::llrt::write_hex_vec_to_core(
+            llrt::write_hex_vec_to_core(
                 device->id(), syncer_core_phys, std::vector<uint32_t>{1}, global_sem.address());
         }
         mesh_device_->reset_sub_device_stall_group();
@@ -158,21 +157,20 @@ TEST_F(MeshSubDeviceTestSuite, SubDeviceSwitching) {
     uint32_t num_iters = 100;
     // Create MeshWorkloads corresponding to different SubDevice configs,
     // so we can single-shot dispatch to the entire Mesh
-    LogicalDeviceRange devices =
-        LogicalDeviceRange({0, 0}, {mesh_device_->num_cols() - 1, mesh_device_->num_rows() - 1});
+    MeshCoordinateRange devices(mesh_device_->shape());
     auto waiter_mesh_workload = CreateMeshWorkload();
     auto syncer_mesh_workload = CreateMeshWorkload();
     auto incrementer_mesh_workload = CreateMeshWorkload();
-    AddProgramToMeshWorkload(waiter_mesh_workload, waiter_program, devices);
-    AddProgramToMeshWorkload(syncer_mesh_workload, syncer_program, devices);
-    AddProgramToMeshWorkload(incrementer_mesh_workload, incrementer_program, devices);
+    AddProgramToMeshWorkload(waiter_mesh_workload, std::move(waiter_program), devices);
+    AddProgramToMeshWorkload(syncer_mesh_workload, std::move(syncer_program), devices);
+    AddProgramToMeshWorkload(incrementer_mesh_workload, std::move(incrementer_program), devices);
 
     auto waiter_mesh_workload_1 = CreateMeshWorkload();
     auto syncer_mesh_workload_1 = CreateMeshWorkload();
     auto incrementer_mesh_workload_1 = CreateMeshWorkload();
-    AddProgramToMeshWorkload(waiter_mesh_workload_1, waiter_program_1, devices);
-    AddProgramToMeshWorkload(syncer_mesh_workload_1, syncer_program_1, devices);
-    AddProgramToMeshWorkload(incrementer_mesh_workload_1, incrementer_program_1, devices);
+    AddProgramToMeshWorkload(waiter_mesh_workload_1, std::move(waiter_program_1), devices);
+    AddProgramToMeshWorkload(syncer_mesh_workload_1, std::move(syncer_program_1), devices);
+    AddProgramToMeshWorkload(incrementer_mesh_workload_1, std::move(incrementer_program_1), devices);
 
     // Load SubDevice configs, run corresponding workloads, reset ... repeat
     for (uint32_t i = 0; i < num_iters; i++) {
@@ -191,6 +189,7 @@ TEST_F(MeshSubDeviceTestSuite, SubDeviceSwitching) {
         mesh_device_->reset_sub_device_stall_group();
     }
     Finish(mesh_device_->mesh_command_queue());
+}
 }
 }  // namespace
 }  // namespace tt::tt_metal::distributed::test

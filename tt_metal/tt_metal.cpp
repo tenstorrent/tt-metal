@@ -351,8 +351,8 @@ bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t 
     return true;
 }
 
-void InitializeFabricSetting(detail::FabricSetting fabric_setting) {
-    tt::DevicePool::initialize_fabric_setting(detail::FabricSetting::FABRIC);
+void InitializeFabricConfig(FabricConfig fabric_config) {
+    tt::Cluster::instance().initialize_fabric_config(fabric_config);
 }
 
 std::map<chip_id_t, IDevice*> CreateDevices(
@@ -803,10 +803,10 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool fd_bootl
     return pass;
 }
 
-void WriteRuntimeArgsToDevice(IDevice* device, Program& program) {
+void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool fd_bootloader_mode) {
     ZoneScoped;
     auto device_id = device->id();
-    detail::DispatchStateCheck(false);
+    detail::DispatchStateCheck(fd_bootloader_mode);
 
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         CoreType core_type = hal.get_core_type(index);
@@ -934,12 +934,7 @@ bool CloseDevice(IDevice* device) {
     return tt::DevicePool::instance().close_device(device_id);
 }
 
-Program CreateProgram() {
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    auto program = Program();
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureCreateProgram, program);
-    return program;
-}
+Program CreateProgram() { return Program(); }
 
 KernelHandle CreateDataMovementKernel(
     Program& program,
@@ -1154,8 +1149,7 @@ GlobalSemaphore CreateGlobalSemaphore(
 }
 
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config) {
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    auto buffer = Buffer::create(
+    return Buffer::create(
         config.device,
         config.size,
         config.page_size,
@@ -1164,9 +1158,6 @@ std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config) {
         std::nullopt,
         std::nullopt,
         std::nullopt);
-
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureCreateBuffer, buffer, config);
-    return buffer;
 }
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config, DeviceAddr address) {
     return Buffer::create(

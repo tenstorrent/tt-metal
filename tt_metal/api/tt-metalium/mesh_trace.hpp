@@ -5,8 +5,8 @@
 #pragma once
 
 #include "mesh_buffer.hpp"
+#include "mesh_trace_id.hpp"
 #include "trace_buffer.hpp"
-#include "mesh_common.hpp"
 
 namespace tt::tt_metal::distributed {
 
@@ -27,8 +27,8 @@ namespace tt::tt_metal::distributed {
 //   - The offset and size of the dispatch commands in the sysmem_manager
 //     staging vector
 struct MeshTraceStagingMetadata {
-    LogicalDeviceRange device_range = LogicalDeviceRange({0, 0});
-    DeviceCoord sysmem_manager_coord = DeviceCoord(0, 0);
+    MeshCoordinateRange device_range = MeshCoordinateRange(MeshShape(0, 0));
+    MeshCoordinate sysmem_manager_coord = MeshCoordinate(0, 0);
     std::size_t offset = 0;
     std::size_t size = 0;
 };
@@ -36,8 +36,8 @@ struct MeshTraceStagingMetadata {
 // Finalized/Consolidated dispatch commands on a device_range, corresponding
 // to a trace
 struct MeshTraceData {
-    LogicalDeviceRange device_range = LogicalDeviceRange({0, 0});
-    std::vector<uint32_t> data = {};
+    MeshCoordinateRange device_range = MeshCoordinateRange(MeshShape(0, 0));
+    std::vector<uint32_t> data;
 };
 
 // Wrapper around the MeshTraceData. Captures the complete state of a MeshTrace

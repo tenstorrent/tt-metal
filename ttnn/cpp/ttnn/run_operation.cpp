@@ -606,18 +606,18 @@ void launch_op_func(
     const Tensors input_tensors,
     OutputType& output_tensors,
     const OptionalConstTensors optional_input_tensors,
-    const OptionalTensors optional_output_tensors,
-    bool enable_autoformat_device) {
+    const OptionalTensors optional_output_tensors) {
     // Send host side op compile and run to the worker queue
     // Assert to ensure that worker threads are specified.
     ZoneScopedN("LaunchOp");
     auto& workers = detail::get_workers(output_tensors);
     std::size_t workers_size = workers.size();
-    if (not enable_autoformat_device and workers.empty() or tt::tt_metal::detail::InWorkerThread()) {
+    if (workers.size() <= 1 || tt::tt_metal::detail::InWorkerThread()) {
         // Run in main thread or immediately in worker thread
         output_tensors = op_func(input_tensors, optional_input_tensors, optional_output_tensors);
         return;
     }
+
     detail::check_output(output_tensors, workers);
     validate_worker_modes(workers);
     // Record ref counts for all tensors before pushing to worker queue.
@@ -666,27 +666,6 @@ void launch_op_func(
     // If so, mark them in use by current worker. Tensors shared across workers
     // are only supported when each tensor is tied to a single device/worker
     // (example all-gather).
-    if (workers_size == 1) {
-        // Single worker per tensor and.
-        for (int i = 0; i < async_safe_input_tensors.size(); i++) {
-            if (async_safe_input_tensors[i].get_workers().size() and
-                async_safe_input_tensors[i].get_workers()[0] != workers[0]) {
-                // This input has a worker assigned that doesn't match the worker of the output being created (its
-                // shared).
-                async_safe_input_tensors[i].tensor_attributes->num_sibling_workers_sharing_tensor++;
-                cross_worker_input_tensor_idx.insert(i);
-            }
-        }
-        for (int i = 0; i < async_safe_optional_input_tensors.size(); i++) {
-            if (async_safe_optional_input_tensors[i].has_value() and
-                async_safe_optional_input_tensors[i].value().get_workers().size() and
-                async_safe_optional_input_tensors[i].value().get_workers()[0] != workers[0]) {
-                async_safe_optional_input_tensors[i].value().tensor_attributes->num_sibling_workers_sharing_tensor++;
-                cross_worker_optional_input_tensor_idx.insert(i);
-            }
-        }
-    }
-
     {
         ZoneScopedN("PushOpToWorkers");
         auto work_lambda = std::make_shared<std::function<void(IDevice*)>>(
@@ -809,14 +788,12 @@ template void launch_op_func<Tensors>(
     const Tensors input_tensors,
     Tensors& output_tensors,
     const OptionalConstTensors optional_input_tensors,
-    const OptionalTensors optional_output_tensors,
-    bool enable_autoformat_device);
+    const OptionalTensors optional_output_tensors);
 template void launch_op_func<OptionalTensors>(
     const std::function<OptionalTensors(const Tensors&, const OptionalConstTensors&, const OptionalTensors&)>& op_func,
     const Tensors input_tensors,
     OptionalTensors& output_tensors,
     const OptionalConstTensors optional_input_tensors,
-    const OptionalTensors optional_output_tensors,
-    bool enable_autoformat_device);
+    const OptionalTensors optional_output_tensors);
 
 }  // namespace tt::tt_metal::operation

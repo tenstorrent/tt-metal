@@ -19,9 +19,6 @@
 
 #include "hal_asserts.hpp"
 
-// FIXME: Eventually this file will be gone
-#include "hostdevcommon/common_runtime_address_map.h"  // L1_KERNEL_CONFIG_BASE
-
 #include "umd/device/tt_soc_descriptor.h"  // CoreType
 
 #define GET_MAILBOX_ADDRESS_HOST(x) ((uint64_t)&(((mailboxes_t*)MEM_MAILBOX_BASE)->x))
@@ -46,6 +43,7 @@ void Hal::initialize_gs() {
 
     uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
     std::vector<DeviceAddr> mem_map_bases;
+    constexpr std::uint32_t DEFAULT_L1_KERNEL_CONFIG_SIZE = 69 * 1024;
 
     mem_map_bases.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT));
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BASE)] = MEM_L1_BASE;
@@ -55,9 +53,9 @@ void Hal::initialize_gs() {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::WATCHER)] = GET_MAILBOX_ADDRESS_HOST(watcher);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DPRINT)] = GET_MAILBOX_ADDRESS_HOST(dprint_buf);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::PROFILER)] = GET_MAILBOX_ADDRESS_HOST(profiler);
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] = L1_KERNEL_CONFIG_BASE;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] = MEM_MAP_END;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)] =
-        ((L1_KERNEL_CONFIG_BASE + L1_KERNEL_CONFIG_SIZE - 1) | (max_alignment - 1)) + 1;
+        ((MEM_MAP_END + DEFAULT_L1_KERNEL_CONFIG_SIZE - 1) | (max_alignment - 1)) + 1;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::CORE_INFO)] = GET_MAILBOX_ADDRESS_HOST(core_info);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = GET_MAILBOX_ADDRESS_HOST(go_message);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = GET_MAILBOX_ADDRESS_HOST(launch_msg_rd_ptr);
@@ -76,7 +74,7 @@ void Hal::initialize_gs() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::WATCHER)] = sizeof(watcher_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DPRINT)] = sizeof(dprint_buf_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::PROFILER)] = sizeof(profiler_msg_t);
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] = L1_KERNEL_CONFIG_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] = DEFAULT_L1_KERNEL_CONFIG_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)] =
         MEM_L1_SIZE - mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)];
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = sizeof(go_msg_t);
@@ -171,6 +169,8 @@ void Hal::initialize_gs() {
         return addr;
     };
 
+    this->erisc_iram_relocate_func_ = [](uint64_t addr) { return addr; };
+
     this->valid_reg_addr_func_ = [](uint32_t addr) {
         return (
             ((addr >= NOC_OVERLAY_START_ADDR) &&
@@ -216,6 +216,7 @@ void Hal::initialize_gs() {
     this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
+    this->eth_fw_is_cooperative_ = false;
 
     this->eps_ = EPS_GS;
     this->nan_ = NAN_GS;

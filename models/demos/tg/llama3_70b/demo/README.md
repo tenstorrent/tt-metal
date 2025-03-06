@@ -1,5 +1,8 @@
 # Llama3-70B Demo on Galaxy
 
+> [!IMPORTANT]
+> This model for Galaxy is set for deprecation and will be replaced with a newer one.
+
 ## How to Run
 
 1. **Download the Llama3-70B weights from Meta (https://llama.meta.com/):**

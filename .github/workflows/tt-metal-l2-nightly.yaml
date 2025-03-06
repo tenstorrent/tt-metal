@@ -1,4 +1,4 @@
-name: "[internal] tt-metal l2 nightly tests"
+name: "Nightly tt-metal L2 tests"
 
 on:
   workflow_call:
@@ -59,6 +59,7 @@ jobs:
     steps:
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - uses: actions/download-artifact@v4
+        timeout-minutes: 10
         with:
           name: eager-dist-${{ matrix.os }}-any
       - name: ${{ matrix.test-group.name }} tests
@@ -69,13 +70,20 @@ jobs:
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e ARCH_NAME=${{ inputs.arch || 'wormhole_b0' }}
+            -e GITHUB_ACTIONS=true
           run_args: |
             WHEEL_FILENAME=$(ls -1 *.whl)
             pip3 install --user $WHEEL_FILENAME
             ${{ matrix.test-group.cmd }}
-
+      - uses: ./.github/actions/upload-artifact-with-job-uuid
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          path: |
+            generated/test_reports/
+          prefix: "test_reports_"
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          owner: U07HTBQPHFG # Bryan Keith
+          owner: U06Q7ESTFEV # Borys Bradel

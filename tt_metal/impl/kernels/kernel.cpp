@@ -1,16 +1,19 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <kernel.hpp>
+#include <kernel_types.hpp>
 
 #include <fmt/core.h>
 #include <fmt/ranges.h>
 
+#include <magic_enum/magic_enum.hpp>
 #include <set>
 
 #include <build.hpp>
 #include "llrt.hpp"
+#include <string_view>
 #include <tt_metal.hpp>
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/kernel.hpp"
@@ -18,6 +21,8 @@
 #include <core_coord.hpp>
 #include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
+#include "hw/inc/wormhole/eth_l1_address_map.h"
+
 namespace tt {
 
 namespace tt_metal {
@@ -105,7 +110,7 @@ CoreType Kernel::get_kernel_core_type() const {
     return CoreType::WORKER;
 }
 
-const string &Kernel::get_full_kernel_name() const { return this->kernel_full_name_; }
+const std::string& Kernel::get_full_kernel_name() const { return this->kernel_full_name_; }
 
 void Kernel::add_defines(const std::map<std::string, std::string>& defines) {
     this->defines_.insert(defines.begin(), defines.end());
@@ -140,6 +145,24 @@ void EthernetKernel::process_defines(
     // pass default noc mode as eth does not need it, just for compile to pass
     callback("NOC_MODE", std::to_string(NOC_MODE::DM_DEDICATED_NOC));
 }
+
+std::string_view DataMovementKernel::get_compiler_opt_level() const {
+    return magic_enum::enum_name(this->config_.opt_level);
+}
+
+std::string_view DataMovementKernel::get_linker_opt_level() const { return this->get_compiler_opt_level(); }
+
+std::string_view ComputeKernel::get_compiler_opt_level() const {
+    return magic_enum::enum_name(this->config_.opt_level);
+}
+
+std::string_view ComputeKernel::get_linker_opt_level() const { return this->get_compiler_opt_level(); }
+
+std::string_view EthernetKernel::get_compiler_opt_level() const {
+    return magic_enum::enum_name(this->config_.opt_level);
+}
+
+std::string_view EthernetKernel::get_linker_opt_level() const { return this->get_compiler_opt_level(); }
 
 void Kernel::process_compile_time_args(const std::function<void(int i, uint32_t value)> callback) const {
     for (int i = 0; i < this->compile_time_args_.size(); i++) {
@@ -401,7 +424,7 @@ void DataMovementKernel::read_binaries(IDevice* device) {
         load_type);
     binaries.push_back(&binary_mem);
     uint32_t binary_size = binary_mem.get_packed_size();
-    log_debug(LogLoader, "RISC {} kernel binary size: {} in bytes", riscv_id, binary_size);
+    log_debug(LogLoader, "RISC={}, name={}, size={} (bytes)", riscv_id, this->name(), binary_size);
     this->set_binaries(
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key, std::move(binaries));
 }
@@ -415,16 +438,26 @@ void EthernetKernel::read_binaries(IDevice* device) {
     int erisc_id = magic_enum::enum_integer(this->config_.processor);
     const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
         device->build_id(), erisc_core_type, dm_class_idx, erisc_id);
-    int risc_id = erisc_id + (this->config_.eth_mode == Eth::IDLE ? 6 : 5); // TODO (abhullar): clean this up when llrt helpers use HAL
     // TODO: fix when active eth supports relo
     auto load_type = (this->config_.eth_mode == Eth::IDLE) ?
         ll_api::memory::Loading::CONTIGUOUS_XIP : ll_api::memory::Loading::DISCRETE;
     ll_api::memory const& binary_mem = llrt::get_risc_binary(
         build_state.get_target_out_path(this->kernel_full_name_),
         load_type);
+    if (tt::llrt::RunTimeOptions::get_instance().get_erisc_iram_enabled() && this->config_.eth_mode != Eth::IDLE) {
+        // text_addr and some of span's addr point to IRAM base address.
+        // However it need to be placed L1 kernel base address for FW to copy it to IRAM then kick off
+        // The kernel can run with IRAM base address once it started.
+        const_cast<ll_api::memory&>(binary_mem)
+            .set_text_addr(tt::tt_metal::hal.erisc_iram_relocate_dev_addr((uint64_t)binary_mem.get_text_addr()));
+        std::function<void(uint64_t& addr)> update_callback = [](uint64_t& addr) {
+            addr = tt::tt_metal::hal.erisc_iram_relocate_dev_addr(addr);
+        };
+        const_cast<ll_api::memory&>(binary_mem).update_spans(update_callback);
+    }
     binaries.push_back(&binary_mem);
     uint32_t binary_size = binary_mem.get_packed_size();
-    log_debug(LogLoader, "ERISC {} kernel binary size: {} in bytes", erisc_id, binary_size);
+    log_debug(LogLoader, "ERISC={}, name={}, size={} (bytes)", erisc_id, this->name(), binary_size);
     this->set_binaries(
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key, std::move(binaries));
 }
@@ -442,7 +475,7 @@ void ComputeKernel::read_binaries(IDevice* device) {
             ll_api::memory::Loading::CONTIGUOUS_XIP);
         binaries.push_back(&binary_mem);
         uint32_t binary_size = binary_mem.get_packed_size();
-        log_debug(LogLoader, "RISC {} kernel binary size: {} in bytes", trisc_id + 2, binary_size);
+        log_debug(LogLoader, "RISC={}, name={}, size={} (bytes)", trisc_id + 2, this->name(), binary_size);
     }
     this->set_binaries(
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key, std::move(binaries));
