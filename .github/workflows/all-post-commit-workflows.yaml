@@ -43,7 +43,6 @@ jobs:
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
-      with:
       tracy: true
       build-wheel: true
   build-artifact-profiler:
