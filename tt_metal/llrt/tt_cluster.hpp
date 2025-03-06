@@ -35,10 +35,11 @@ enum class TargetDevice : std::uint8_t {
 
 enum class ClusterType : std::uint8_t {
     INVALID = 0,
-    N300 = 1,    // Production N300
-    T3K = 2,     // Production T3K, built with 4 N300s
-    GALAXY = 3,  // Production Galaxy, all chips with mmio
-    TG = 4,      // Will be deprecated
+    N150 = 1,    // Production N150
+    N300 = 2,    // Production N300
+    T3K = 3,     // Production T3K, built with 4 N300s
+    GALAXY = 4,  // Production Galaxy, all chips with mmio
+    TG = 5,      // Will be deprecated
 };
 
 enum class EthRouterMode : uint32_t {
@@ -336,6 +337,9 @@ private:
 
     // Reserves all free ethernet cores for fabric routers
     void reserve_ethernet_cores_for_fabric_routers();
+
+    // Releases all reserved ethernet cores for fabric routers
+    void release_ethernet_cores_for_fabric_routers();
 
     FabricConfig fabric_config_ = FabricConfig::DISABLED;
 

@@ -41,6 +41,7 @@ jobs:
           git config --global --add safe.directory /__w/tt-metal/tt-metal
 
       - uses: actions/download-artifact@v4
+        timeout-minutes: 10
         with:
           name: ${{ inputs.package-artifact-name || 'packages artifact unresolved!' }}
           path: /work/pkgs/
@@ -67,6 +68,7 @@ jobs:
           path: /work/test-reports/*.xml
           reporter: jest-junit
       - uses: ./.github/actions/upload-artifact-with-job-uuid
+        timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           path: |

@@ -105,6 +105,7 @@ jobs:
         run: cat CHANGELOG.txt
       - name: Upload changelog as artifact
         uses: actions/upload-artifact@v4
+        timeout-minutes: 10
         with:
           name: changelog
           path: CHANGELOG.txt

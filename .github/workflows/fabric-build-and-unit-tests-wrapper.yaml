@@ -2,6 +2,8 @@ name: "[post-commit] Fabric unit tests"
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "0 * * * *" # Run every hour
 
 jobs:
   build-artifact:
@@ -15,7 +17,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: wormhole_b0, runner-label: N300 },
+          { arch: wormhole_b0, runner-label: tt-ubuntu-2204-n300-large-stable },
         ]
     uses: ./.github/workflows/fabric-build-and-unit-tests.yaml
     with:
