@@ -81,9 +81,9 @@ def get_device():
     total_devices = count_devices(smi_ls_output)
 
     if total_devices == 1:
-        device = "N150"
+        device = "N150" if "Wormhole" in smi_ls_output else "P150"  # Blackhole
     elif total_devices == 2:
-        device = "N150"
+        device = "N300" if "Wormhole" in smi_ls_output else "P300"  # Blackhole
     elif total_devices == 8:
         device = "T3K"
     else:  # TG has 36 devices
@@ -106,7 +106,11 @@ def list_supported_devices(device):
         return "n150, n300, t3k"
     elif device == "N300":
         return "n150, n300"
-    else:  # N150
+    elif device == "P300":
+        return "p150, p300"
+    elif device == "P150":
+        return "p150"
+    else:
         return "n150"
 
 
@@ -118,7 +122,11 @@ def count_devices(output):
 
     # Count total PCI devices (ignoring N/A)
     total_pci_devices = len(
-        [line for line in available_boards.split("\n") if ("Wormhole" or "Grayskull" or "Blackhole") in line]
+        [
+            line
+            for line in available_boards.split("\n")
+            if any(word in line for word in ["Blackhole", "Wormhole", "Grayskull"])
+        ]
     )
 
     return total_pci_devices
@@ -484,10 +492,10 @@ def main(stdscr):
 
                         # Generate combinations (reordered)
                         # Ignore invalid combinations:
-                        # - 11b and 11b-b models on n150 device
-                        # - 70b and 70b-r1 model on n150 and n300 devices
-                        # - 72b model on n150 and n300 devices
-                        # - q7b on anything other than N300
+                        # - 11b and 11b-b models on n150/p150 device
+                        # - 70b and 70b-r1 model on n150/n300 & p150/p300 devices
+                        # - 72b model on n150/n300 and p150/p300 devices
+                        # - q7b on anything other than n300/p300
                         # - Vision commands on non-vision (11b) models
                         combinations = [
                             (c, m, d)
@@ -495,11 +503,11 @@ def main(stdscr):
                             for m in models
                             for d in devices
                             if not (
-                                (m in ["11b", "11b-b"] and d == "n150")
-                                or (m == "70b" and d in ["n150", "n300"])
-                                or (m == "70b-r1" and d in ["n150", "n300"])
-                                or (m == "q72b" and d in ["n150", "n300"])
-                                or (m == "q7b" and d != "n300")
+                                (m in ["11b", "11b-b"] and d in ["n150", "p150"])
+                                or (m == "70b" and d in ["n150", "n300", "p150", "p300"])
+                                or (m == "70b-r1" and d in ["n150", "n300", "p150", "p300"])
+                                or (m == "q72b" and d in ["n150", "n300", "p150", "p300"])
+                                or (m == "q7b" and d in ["n300", "p300"])
                                 or ("vision" in c and m not in ["11b", "11b-b"])
                             )
                         ]
