@@ -423,15 +423,14 @@ void MeshCommandQueue::enqueue_write_shard_to_sub_grid(
         // Multi-Threaded writes supported for Replicated buffers.
         // Currently not supported when doing TT-Mesh Native sharding, since we
         // rely on TTNN to perform sharding and call enqueue_write_shards
-        auto dispatch_lambda =
-            std::function<void(MeshCoordinate)>([this, &buffer, host_data, &region](MeshCoordinate&& coord) {
-                auto device_shard_view = buffer.get_device_buffer(coord);
-                const BufferRegion buffer_region = region.value_or(BufferRegion(0, device_shard_view->size()));
-                this->write_shard_to_device(device_shard_view, host_data, buffer_region);
-            });
-
+        auto dispatch_lambda = [this, &buffer, host_data, &region](const MeshCoordinate& coord) {
+            auto device_shard_view = buffer.get_device_buffer(coord);
+            const BufferRegion buffer_region = region.value_or(BufferRegion(0, device_shard_view->size()));
+            this->write_shard_to_device(device_shard_view, host_data, buffer_region);
+        };
         for (const auto& coord : device_range) {
-            dispatch_thread_pool_->enqueue([&dispatch_lambda, coord]() { dispatch_lambda(std::move(coord)); });
+            dispatch_thread_pool_->enqueue(
+                [&dispatch_lambda, coord]() { dispatch_lambda(coord); }, mesh_device_->get_device(coord)->id());
         }
         dispatch_thread_pool_->wait();
     } else {
@@ -464,18 +463,19 @@ void MeshCommandQueue::enqueue_write_shards(
     bool blocking) {
     // TODO: #17215 - this API is used by TTNN, as it currently implements rich ND sharding API for multi-devices.
     // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
-
-    auto dispatch_lambda = std::function<void(uint32_t)>([&shard_data_transfers, &buffer, this](uint32_t shard_idx) {
+    auto dispatch_lambda = [&shard_data_transfers, &buffer, this](uint32_t shard_idx) {
         auto& shard_data_transfer = shard_data_transfers[shard_idx];
         auto device_shard_view = buffer->get_device_buffer(shard_data_transfer.shard_coord);
         this->write_shard_to_device(
             device_shard_view,
             shard_data_transfer.host_data,
             shard_data_transfer.region.value_or(BufferRegion(0, device_shard_view->size())));
-    });
+    };
 
     for (std::size_t shard_idx = 0; shard_idx < shard_data_transfers.size(); shard_idx++) {
-        dispatch_thread_pool_->enqueue([&dispatch_lambda, shard_idx]() { dispatch_lambda(shard_idx); });
+        dispatch_thread_pool_->enqueue(
+            [&dispatch_lambda, shard_idx]() { dispatch_lambda(shard_idx); },
+            mesh_device_->get_device(shard_data_transfers[shard_idx].shard_coord)->id());
     }
     dispatch_thread_pool_->wait();
 
@@ -634,9 +634,11 @@ void MeshCommandQueue::copy_buffer_data_to_user_space(MeshBufferReadDescriptor& 
         // physical device).
         std::lock_guard<std::mutex> lock(reader_thread_pool_mutex_);
         for (auto& metadata : read_buffer_descriptor.num_reads_per_dev) {
-            reader_thread_pool_->enqueue([&reader_lambda, device = metadata.first, num_reads = metadata.second]() {
-                reader_lambda(device, num_reads);
-            });
+            reader_thread_pool_->enqueue(
+                [&reader_lambda, device = metadata.first, num_reads = metadata.second]() {
+                    reader_lambda(device, num_reads);
+                },
+                metadata.first->id());
         }
         reader_thread_pool_->wait();
     }
