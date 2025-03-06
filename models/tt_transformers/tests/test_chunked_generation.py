@@ -15,7 +15,7 @@ from models.tt_transformers.tt.common import (
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import ModelArgs, ModelOptimizations
 from models.tt_transformers.tt.generator import Generator
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
+from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer as ReferenceTransformer
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -99,7 +99,7 @@ def test_chunked_prefill_single_user(
     }
     logger.info("Finished loading weights...")
 
-    reference_model = Transformer(model_args)
+    reference_model = ReferenceTransformer(model_args)
     reference_model.load_state_dict(reference_state_dict)
     embd = model_args.reference_embedding()
     embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})

@@ -142,7 +142,9 @@ class ModelArgs:
             self.model_name = HF_MODEL  # May be overridden by config
             self.from_hf_url = True
         else:
-            assert "Please set HF_MODEL to a HuggingFace name e.g. meta-llama/Llama-3.1-8B-Instruct or LLAMA_DIR to a Meta-style checkpoint directory"
+            assert (
+                False
+            ), "Please set HF_MODEL to a HuggingFace name e.g. meta-llama/Llama-3.1-8B-Instruct or LLAMA_DIR to a Meta-style checkpoint directory"
 
         if not dummy_weights and not HF_MODEL:
             # Assert if all folders and files exist
