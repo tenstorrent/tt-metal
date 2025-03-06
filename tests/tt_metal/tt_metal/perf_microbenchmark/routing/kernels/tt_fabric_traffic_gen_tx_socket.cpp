@@ -72,7 +72,7 @@ volatile tt_l1_ptr fabric_pull_client_interface_t* client_interface =
 volatile tt_l1_ptr chan_req_buf* client_pull_req_buf =
     reinterpret_cast<tt_l1_ptr chan_req_buf*>(client_pull_req_buf_addr);
 
-fvc_producer_state_t test_producer __attribute__((aligned(16)));
+fvc_inbound_pull_state_t test_producer __attribute__((aligned(16)));
 fvcc_inbound_state_t fvcc_test_producer __attribute__((aligned(16)));
 
 uint64_t xy_local_addr;
