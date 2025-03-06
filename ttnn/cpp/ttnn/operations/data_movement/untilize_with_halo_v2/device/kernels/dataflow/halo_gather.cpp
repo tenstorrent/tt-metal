@@ -135,11 +135,17 @@ FORCE_INLINE static void copy_sticks_async(
         if constexpr (blocking) {
             GatherStep step;
             uint16_t block_offset = 0;
-            for (uint16_t block_id = 0; block_id < num_blocks && block_offset < length; block_id++) {
+
+            for (uint16_t block_id = 0; block_id < num_blocks; block_id++) {
                 const uint16_t num_steps_in_block = blocking_config_data[block_id];
                 const uint16_t block_stride = num_steps_in_block * GATHER_CONFIG_HEADER_NUM_ELEMENTS;
                 const uint16_t block_end_offset = block_offset + block_stride;
-                for (uint16_t step_offset = block_offset; step_offset < block_end_offset;
+
+                if (block_offset >= length) {
+                    break;  // Avoid executing beyond valid steps
+                }
+
+                for (uint16_t step_offset = block_offset; step_offset < block_end_offset && step_offset < length;
                      step_offset += GATHER_CONFIG_HEADER_NUM_ELEMENTS) {
                     decode_gather_config_step(config_data, config_data_offset + step_offset, step);
                     copy_stick<
@@ -151,8 +157,9 @@ FORCE_INLINE static void copy_sticks_async(
                         is_col_major,
                         blocking>(step, base_addr, in_base_l1_addr, out_base_l1_addr);
                 }
-                block_offset += block_stride;
+                block_offset += block_stride;  // Increment AFTER executing block
             }
+
             config_data_offset += length;
         } else {
             GatherStep step;
@@ -170,7 +177,7 @@ FORCE_INLINE static void copy_sticks_async(
             config_data_offset += length;
         }
 
-        // Get next command’s length; if 0 => done
+        // Get next command length; if 0 we are done
         length = config_data[config_data_offset + 2];
     }
 }
