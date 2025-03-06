@@ -177,7 +177,7 @@ class TtFalconModelShared(torch.nn.Module):
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.mesh_device,
                 memory_config=self.model_config["INPUT_MEMCFG"],
-                ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=0),
+                mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=0),
             )
         elif llm_mode == "decode":
             assert batch_size % 32 == 0, "For decode, batch_size must be multiple of 32!"
@@ -226,7 +226,7 @@ class TtFalconModelShared(torch.nn.Module):
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.mesh_device,
                 memory_config=self.model_config["INPUT_MEMCFG"],
-                ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=1),
+                mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=1),
             )
         else:
             raise NotImplementedError(f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode.")
