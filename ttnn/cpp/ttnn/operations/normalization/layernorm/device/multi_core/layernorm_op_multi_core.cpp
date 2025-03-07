@@ -145,13 +145,13 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     // TODO(AP): this will not work for all Wts possibly, but should work for Wt=8, 12, 16, 32
     // TODO(AP): can also add support for block_size=7 -> 63, 28
     uint32_t WtB = tt::div_up(Wt, block_size) * block_size;  // Wt padded to be divisible by block size
-    bool three_pass_needed = false;
+    bool large_tensor_needed = false;
     if (gamma.has_value() and beta.has_value() and WtB > with_weights_max_size) {
         // In the case that the required space is larger than what can be handeled by the single pass
-        three_pass_needed = true;
+        large_tensor_needed = true;
         WtB = with_weights_max_size;
     } else if (WtB > with_weights_max_size) {
-        three_pass_needed = true;
+        large_tensor_needed = true;
         WtB = no_weights_max_size;
     }
     uint32_t in0_t = WtB;  // cb_x for no pre-add variant, x=a+b for fused pre-add, extra space for some buffering
@@ -276,15 +276,16 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     auto use_row_major_kernel = (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) or
                                 (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR);
 
-    TT_FATAL(!use_row_major_kernel or !three_pass_needed, "ROW_MAJOR layout not supported for tensors this large");
+    TT_FATAL(!use_row_major_kernel or !large_tensor_needed, "ROW_MAJOR layout not supported for tensors this large");
     auto reader_kernel_path = use_row_major_kernel
                                   ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
                                     "reader_unary_interleaved_ln_rm_gb.cpp"
                                   : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
                                     "reader_unary_interleaved_ln.cpp";
-    reader_kernel_path = three_pass_needed ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                                             "reader_unary_interleaved_ln_three_pass.cpp"
-                                           : reader_kernel_path;
+    reader_kernel_path = large_tensor_needed
+                             ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                               "reader_unary_interleaved_ln_large_tensor.cpp"
+                             : reader_kernel_path;
     auto reader_kernels_id = CreateKernel(
         program,
         reader_kernel_path,
@@ -302,8 +303,8 @@ operation::ProgramWithCallbacks layernorm_multi_core(
 
     auto compute_kernels_id = CreateKernel(
         program,
-        three_pass_needed
-            ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_three_pass.cpp"
+        large_tensor_needed
+            ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_large_tensor.cpp"
             : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{

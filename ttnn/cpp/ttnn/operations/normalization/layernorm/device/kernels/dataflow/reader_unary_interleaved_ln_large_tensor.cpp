@@ -8,7 +8,7 @@
 #include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 
 template <bool DRAM, uint32_t tile_hw = 1024>
-void read_row_from_cb(
+void read_row_to_cb(
     const uint32_t cb_id,
     const InterleavedAddrGenFast<DRAM, tile_hw>& addr,
     const uint32_t tile_bytes,
@@ -82,38 +82,38 @@ void kernel_main() {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // Data for Calculating E[X]
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            read_row_from_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
+            read_row_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
         }  // wt loop
 #ifdef FUSE_PRE_ADD
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            read_row_from_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
+            read_row_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
         }
 #endif
 
         // Data for Calculating Variance
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            read_row_from_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
+            read_row_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
 #ifdef FUSE_PRE_ADD
-            read_row_from_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
+            read_row_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
 #endif
         }  // wt loop
 
         // Data for calculating the final value
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            read_row_from_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
+            read_row_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
 #ifdef FUSE_PRE_ADD
-            read_row_from_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
+            read_row_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
 #endif
             if (ncht == 0) {
 #ifdef FUSE_GAMMA
                 {
-                    read_row_from_cb(cb_id_gamma, addrg, gamma_tile_bytes, wt, blk);
+                    read_row_to_cb(cb_id_gamma, addrg, gamma_tile_bytes, wt, blk);
                 }
 #endif
 
 #ifdef FUSE_BETA
                 {
-                    read_row_from_cb(cb_id_beta, addrb, beta_tile_bytes, wt, blk);
+                    read_row_to_cb(cb_id_beta, addrb, beta_tile_bytes, wt, blk);
                 }
 #endif
             }
