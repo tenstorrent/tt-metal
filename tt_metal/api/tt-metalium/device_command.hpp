@@ -485,6 +485,7 @@ public:
         auto initialize_write_offset_cmd = [&](CQDispatchCmd* write_offset_cmd) {
             *write_offset_cmd = {};
             write_offset_cmd->base.cmd_id = CQ_DISPATCH_CMD_SET_WRITE_OFFSET;
+            write_offset_cmd->set_write_offset.program_host_id = 0;
             write_offset_cmd->set_write_offset.offset0 = write_offset0;
             write_offset_cmd->set_write_offset.offset1 = write_offset1;
             write_offset_cmd->set_write_offset.offset2 = write_offset2;
