@@ -99,8 +99,8 @@ def test_slice_write_four_dim(dims, begins, ends, layout, device):
 @pytest.mark.parametrize(
     "dims, slice_dim, slice_size",
     [
-        [[16, 256, 256, 64], 1, 32],
-        [[1, 256, 128, 32], 2, 16],
+        [[2, 256, 256, 64], 1, 128],
+        [[2, 256, 128, 32], 2, 16],
     ],
 )
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
@@ -112,23 +112,24 @@ def test_slice_write_copy(device, dims, slice_dim, slice_size, layout):
     ttnn_output = ttnn.to_memory_config(ttnn_output, ttnn.DRAM_MEMORY_CONFIG)
     # ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=ttnn.bfloat16)
     # ttnn_input = ttnn.to_memory_config(ttnn_input, ttnn.L1_MEMORY_CONFIG)
+    for b in range(dims[0]):
+        for i in range(dims[slice_dim] // slice_size):
+            begins = [b, 0, 0, 0]
+            ends = [b + 1, dims[1], dims[2], dims[3]]
+            begins[slice_dim] = i * slice_size
+            ends[slice_dim] = (i + 1) * slice_size
+            print("Begins = ", begins, " Ends = ", ends)
+            this_ttnn_input = ttnn.from_torch(
+                torch_input[begins[0] : ends[0], begins[1] : ends[1], begins[2] : ends[2], begins[3] : ends[3]],
+                device=device,
+                layout=layout,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            print("this_torch_input.shape", this_ttnn_input.shape)
 
-    for i in range(dims[slice_dim] // slice_size):
-        begins = [0, 0, 0, 0]
-        ends = [dims[0], dims[1], dims[2], dims[3]]
-        begins[slice_dim] = i * slice_size
-        ends[slice_dim] = (i + 1) * slice_size
-        print("Begins = ", begins, " Ends = ", ends)
-        this_ttnn_input = ttnn.from_torch(
-            torch_input[begins[0] : ends[0], begins[1] : ends[1], begins[2] : ends[2], begins[3] : ends[3]],
-            device=device,
-            layout=layout,
-            dtype=ttnn.bfloat16,
-        )
-        print("this_torch_input.shape", this_ttnn_input.shape)
-
-        this_ttnn_input = ttnn.to_memory_config(this_ttnn_input, ttnn.L1_MEMORY_CONFIG)
-        ttnn.slice_write(this_ttnn_input, ttnn_output, begins, ends, strides)
+            this_ttnn_input = ttnn.to_memory_config(this_ttnn_input, ttnn.L1_MEMORY_CONFIG)
+            ttnn.slice_write(this_ttnn_input, ttnn_output, begins, ends, strides)
 
     output = ttnn.to_torch(ttnn_output)
     assert_with_pcc(torch_input, output, 0.9999)

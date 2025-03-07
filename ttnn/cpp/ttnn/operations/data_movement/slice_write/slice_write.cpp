@@ -4,6 +4,7 @@
 
 #include "slice_write.hpp"
 #include "device/slice_write_op.hpp"
+#include "tt-metalium/assert.hpp"
 #include "tt-metalium/logger.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
@@ -212,7 +213,8 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
     if (rm_only) {
         input = ttnn::to_layout(input_tensor, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (IDevice*)nullptr);
     }
-
+    TT_FATAL(!input_tensor.is_sharded(), "Slice Write currently doesn't support sharded input tensors.");
+    TT_FATAL(!output_tensor.is_sharded(), "Slice Write currently doesn't support sharded output tensors.");
     const bool tiled = input.get_layout() == Layout::TILE;
     bool on_device = input.storage_type() == StorageType::DEVICE;
 
@@ -238,7 +240,7 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
     ttnn::Shape padded_shape(padded_shape_vec);
 
     if (empty) {
-        tt::log_debug("Empty tensor slice, returning empty tensor");
+        tt::log_debug("Empty tensor slice, returning unchanged output tensor");
         return output_tensor;
     }
 
@@ -247,6 +249,19 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
         ttnn::copy(queue_id, input_tensor, output_tensor);
         tt::log_debug("Input Tensor same shape as output tensor. Performing copy");
         return output_tensor;
+    }
+
+    for (int i = 0; i < 4; i++) {
+        TT_FATAL(
+            actual_shape[i] == input.get_logical_shape()[i],
+            "Size of the slice being written {} should match the size of the input tensor {} at dim {}. Got {}, "
+            "expected {} , {}",
+            actual_shape[i],
+            input.get_logical_shape()[i],
+            i,
+            actual_shape,
+            input.get_logical_shape(),
+            padded_shape);
     }
 
     if (on_device) {
