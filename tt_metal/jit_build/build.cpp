@@ -172,20 +172,36 @@ void JitBuildEnv::init(
 
     // Includes
     // TODO(pgk) this list is insane
-    this->includes_ = string("") + "-I. " + "-I.. " + "-I" + this->root_ + " " + "-I" + this->root_ + "ttnn " + "-I" +
-                      this->root_ + "tt_metal " + "-I" + this->root_ + "tt_metal/include " + "-I" + this->root_ +
-                      "tt_metal/hw/inc " + "-I" + this->root_ + "tt_metal/hostdevcommon/api " + "-I" + this->root_ +
-                      "tt_metal/hw/inc/debug " + "-I" + this->root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ +
-                      " " + "-I" + this->root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/" +
-                      this->arch_name_ + "_defines " + "-I" + this->root_ + "tt_metal/hw/inc/" +
-                      this->aliased_arch_name_ + "/noc " + "-I" + this->root_ + "tt_metal/hw/ckernels/" +
-                      this->arch_name_ + "/metal/common " + "-I" + this->root_ + "tt_metal/hw/ckernels/" +
-                      this->arch_name_ + "/metal/llk_io " + "-I" + this->root_ + "tt_metal/third_party/tt_llk/tt_llk_" +
-                      this->arch_name_ + "/common/inc " +  // TODO(fixme) datamovement fw shouldn't read this
-                      "-I" + this->root_ + "tt_metal/api/" + this->aliased_arch_name_ + " " + "-I" + this->root_ +
-                      "tt_metal/api/" + this->aliased_arch_name_ + "/tt-metalium " + "-I" + this->root_ +
-                      "tt_metal/api/tt-metalium/ " + "-I" + this->root_ + "tt_metal/api/ " + "-I" + this->root_ +
-                      "tt_metal/third_party/tt_llk/tt_llk_" + this->arch_name_ + "/llk_lib ";
+    std::vector<std::string> includeDirs = {
+        ".", 
+        "..", 
+        this->root_,
+        this->root_ + "ttnn",
+        this->root_ + "tt_metal",
+        this->root_ + "tt_metal/include",
+        this->root_ + "tt_metal/hw/inc",
+        this->root_ + "tt_metal/hostdevcommon/api",
+        this->root_ + "tt_metal/hw/inc/debug",
+        this->root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_,
+        this->root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/" + this->arch_name_ + "_defines",
+        this->root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/noc",
+        this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/metal/common",
+        this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/metal/llk_io",
+        // TODO: datamovement fw shouldn't read this
+        this->root_ + "tt_metal/third_party/tt_llk/tt_llk_" + this->arch_name_ + "/common/inc",
+        this->root_ + "tt_metal/api/",
+        this->root_ + "tt_metal/api/tt-metalium/",
+        this->root_ + "tt_metal/third_party/tt_llk/tt_llk_" + this->arch_name_ + "/llk_lib"
+    };
+    
+    std::ostringstream oss;
+    for (size_t i = 0; i < includeDirs.size(); ++i) {
+        oss << "-I" << includeDirs[i];
+        if (i != includeDirs.size() - 1) {
+            oss << " "; // add delimiter only between paths
+        }
+    }
+    this->includes_ = oss.str();
 
     this->lflags_ = common_flags;
     this->lflags_ += "-fno-exceptions -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
