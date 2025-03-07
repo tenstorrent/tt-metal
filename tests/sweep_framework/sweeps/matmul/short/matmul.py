@@ -9,13 +9,14 @@ import torch
 
 import ttnn
 
+from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
 TIMEOUT = 5
 
 parameters = {
-    "pytorch": {
+    "default": {
         "batch_sizes": [(1,)],
         "m_size": [384, 1024],  # [1, 16, 128, 1024]
         "k_size": [1024, 4096],  # [16, 128, 1024, 4096]
@@ -86,21 +87,8 @@ def run_matmul(
     return [check_with_pcc(torch_output_tensor, output_tensor, expected_pcc), e2e_perf]
 
 
-@pytest.mark.parametrize("batch_sizes", parameters["pytorch"]["batch_sizes"])
-@pytest.mark.parametrize("m_size", parameters["pytorch"]["m_size"])
-@pytest.mark.parametrize("k_size", parameters["pytorch"]["k_size"])
-@pytest.mark.parametrize("n_size", parameters["pytorch"]["n_size"])
-@pytest.mark.parametrize("batch_matrix_multiply", parameters["pytorch"]["batch_matrix_multiply"])
-@pytest.mark.parametrize("input_a_dtype", parameters["pytorch"]["input_a_dtype"])
-@pytest.mark.parametrize("input_b_dtype", parameters["pytorch"]["input_b_dtype"])
-@pytest.mark.parametrize("output_dtype", parameters["pytorch"]["output_dtype"])
-@pytest.mark.parametrize("input_a_layout", parameters["pytorch"]["input_a_layout"])
-@pytest.mark.parametrize("input_b_layout", parameters["pytorch"]["input_b_layout"])
-@pytest.mark.parametrize("input_b_memory_config", parameters["pytorch"]["input_b_memory_config"])
-@pytest.mark.parametrize("input_a_memory_config", parameters["pytorch"]["input_a_memory_config"])
-@pytest.mark.parametrize("output_memory_config", parameters["pytorch"]["output_memory_config"])
-@pytest.mark.parametrize("core_grid", parameters["pytorch"]["core_grid"])
-def test_pytorch(
+@pytest.mark.parametrize(**gen_pytest_parametrize_args(parameters))
+def test_matmul(
     device,
     batch_sizes,
     m_size,
