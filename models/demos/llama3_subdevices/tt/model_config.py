@@ -25,13 +25,65 @@ from dataclasses import dataclass
 
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_in0 import (
     PREFETCHER_NOC1_GRID,
-    LM_HEAD_16_GRID,
-    LM_HEAD_32_GRID,
     num_cores_to_rectangle_grid,
     get_physical_to_logical_core_mapping,
 )
 
 from tests.ttnn.unit_tests.operations.prefetcher_common import get_core_ranges
+
+LM_HEAD_16_GRID = [
+    (1, 0),
+    (1, 1),
+    (1, 2),
+    (1, 3),
+    (1, 4),
+    (1, 5),
+    (1, 6),
+    (1, 7),
+    (1, 8),
+    (1, 9),
+    (2, 0),
+    (2, 1),
+    (2, 2),
+    (2, 3),
+    (2, 4),
+    (2, 5),
+]
+
+LM_HEAD_32_GRID = [
+    (1, 0),
+    (1, 1),
+    (1, 2),
+    (1, 3),
+    (1, 4),
+    (1, 5),
+    (1, 6),
+    (1, 7),
+    (1, 8),
+    (1, 9),
+    (2, 0),
+    (2, 1),
+    (2, 2),
+    (2, 3),
+    (2, 4),
+    (2, 5),
+    (2, 6),
+    (2, 7),
+    (2, 8),
+    (2, 9),
+    (3, 0),
+    (3, 1),
+    (3, 2),
+    (3, 3),
+    (3, 4),
+    (3, 5),
+    (3, 6),
+    (3, 7),
+    (3, 8),
+    (3, 9),
+    (5, 0),
+    (5, 1),
+]
 
 
 @dataclass

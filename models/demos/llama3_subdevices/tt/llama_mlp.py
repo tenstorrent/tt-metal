@@ -157,75 +157,24 @@ class TtLlamaMLP(LightweightModule):
         )
         ttnn.deallocate(x)
         # print("linear", w3_out)
+        try:
+            w1_out_reduced = self.tt_ccl.line_all_reduce(
+                w1_out,
+                cluster_axis=1,
+                num_links=3,
+                memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
+            )
+            w3_out_reduced = self.tt_ccl.line_all_reduce(
+                w3_out,
+                cluster_axis=1,
+                num_links=3,
+                memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
+            )
 
-        if False:
-            # if mode == "decode" and self.dim!=8192:
-            #     w1_out = ttnn.to_memory_config(w1_out, ttnn.DRAM_MEMORY_CONFIG)
-            #     w3_out = ttnn.to_memory_config(w3_out, ttnn.DRAM_MEMORY_CONFIG)
-            if self.dim == 8192 or mode == "prefill":
-                # input_mem_cfg = w1_out.memory_config()
-                # w1_out = ttnn.reduce_scatter(
-                #     w1_out,
-                #     dim=3,
-                #     math_op=ttnn.ReduceType.Sum,
-                #     num_links=self.args.num_reduce_scatter_links,
-                #     cluster_axis=1,
-                #     mesh_device=self.mesh_device,
-                #     topology=ttnn.Topology.Linear,
-                #     memory_config=self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] if mode == "decode" else None,
-                # )
-                # w3_out = ttnn.reduce_scatter(
-                #     w3_out,
-                #     dim=3,
-                #     math_op=ttnn.ReduceType.Sum,
-                #     num_links=1,
-                #     cluster_axis=1,
-                #     mesh_device=self.mesh_device,
-                #     topology=ttnn.Topology.Linear,
-                #     memory_config=self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] if mode == "decode" else None,
-                # )
-                # #print(w1_out.shape, w3_out.shape)
-                # All reduce W1
-                w1_out = ttnn.to_memory_config(w1_out, ttnn.DRAM_MEMORY_CONFIG)
-                w1_out_reduced = self.tt_ccl.line_reduce_scatter(
-                    w1_out, dim=3, cluster_axis=1, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG
-                )
-
-                ttnn.deallocate(w1_out)
-                w1_out_reduced = ttnn.to_memory_config(
-                    w1_out_reduced, self.model_config["SHARDED_FF12_PRE_MUL_RING_REDUCE_MEMCFG"]
-                )
-
-                # All reduce W3
-                w3_out = ttnn.to_memory_config(w3_out, ttnn.DRAM_MEMORY_CONFIG)
-                w3_out_reduced = self.tt_ccl.line_reduce_scatter(
-                    w3_out, dim=3, cluster_axis=1, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG
-                )
-
-                ttnn.deallocate(w3_out)
-                w3_out_reduced = ttnn.to_memory_config(
-                    w3_out_reduced, self.model_config["SHARDED_FF12_PRE_MUL_RING_REDUCE_MEMCFG"]
-                )
-
-        else:
-            try:
-                w1_out_reduced = self.tt_ccl.line_all_reduce(
-                    w1_out,
-                    cluster_axis=1,
-                    num_links=3,
-                    memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
-                )
-                w3_out_reduced = self.tt_ccl.line_all_reduce(
-                    w3_out,
-                    cluster_axis=1,
-                    num_links=3,
-                    memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
-                )
-
-                # print("reduced", w1_out_reduced)
-            except Exception as e:
-                # print(e)
-                self.tt_ccl.close()
+            # print("reduced", w1_out_reduced)
+        except Exception as e:
+            # print(e)
+            self.tt_ccl.close()
 
         w2_in = ttnn.mul(
             w1_out_reduced,

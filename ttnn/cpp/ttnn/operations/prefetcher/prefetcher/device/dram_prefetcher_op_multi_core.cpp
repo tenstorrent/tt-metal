@@ -257,21 +257,16 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     }
 
     auto override_runtime_arguments_callback =
-        [reader_cb, tensor_addrs_cb](
+        [tensor_addrs_cb](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
             TT_ASSERT(output_tensors.size() == 1);
-            auto& global_cb = static_cast<const DramPrefetcher*>(operation)->global_cb;
 
             auto tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
             auto tensor_addrs_buffer = tensor_addrs.buffer();
-            UpdateDynamicCircularBufferAddress(
-                program,
-                reader_cb,
-                get_global_circular_buffer(*global_cb, input_tensors[0].device()->id()).cb_buffer());
             UpdateDynamicCircularBufferAddress(program, tensor_addrs_cb, *tensor_addrs_buffer);
         };
 

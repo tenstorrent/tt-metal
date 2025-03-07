@@ -15,7 +15,7 @@ from models.utility_functions import (
 )
 from models.utility_functions import skip_for_grayskull
 from models.demos.llama3_subdevices.tt.distributed_norm import DistributedNorm
-from tests.ttnn.unit_tests.operations.prefetcher_common import TtLlamaPrefetcherSetup
+from models.demos.llama3_subdevices.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
 
 

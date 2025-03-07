@@ -18,7 +18,7 @@ from models.demos.llama3_subdevices.tt.lm_head import LMHead
 from models.demos.llama3_subdevices.tt.llama_common import copy_host_to_device, get_prefill_rot_mat, HostEmbedding
 from models.demos.llama3_subdevices.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.llama3_subdevices.tt.llama_embedding import TtLlamaEmbedding
-from tests.ttnn.unit_tests.operations.prefetcher_common import TtLlamaPrefetcherSetup
+from models.demos.llama3_subdevices.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
 
 
