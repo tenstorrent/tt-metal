@@ -166,7 +166,7 @@ void kernel_main() {
             sender);
         ASSERT(num_pages_per_full_chunk == 0 || num_pages_per_full_chunk > rem_num_pages);
         ASSERT(half_cb_n_pages > rem_num_pages);
-        pop_filler_pages_from_cb(cb_id_in0, half_cb_n_pages - rem_num_pages);
+        tt::tt_fabric::pop_filler_pages_from_cb(cb_id_in0, half_cb_n_pages - rem_num_pages);
     }
 
     if (fuse_op) {
@@ -187,7 +187,7 @@ void kernel_main() {
             sender.send_payload_blocking(cb_id_in0, rem_num_pages, page_size);
             ASSERT(num_pages_per_full_chunk == 0 || num_pages_per_full_chunk > rem_num_pages);
             ASSERT(half_cb_n_pages > rem_num_pages);
-            pop_filler_pages_from_cb(cb_id_in0, half_cb_n_pages - rem_num_pages);
+            tt::tt_fabric::pop_filler_pages_from_cb(cb_id_in0, half_cb_n_pages - rem_num_pages);
         }
     }
 

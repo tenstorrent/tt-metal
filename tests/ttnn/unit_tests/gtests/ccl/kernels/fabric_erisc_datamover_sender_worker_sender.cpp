@@ -5,10 +5,11 @@
 #include <cstdint>
 
 #include "dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/edm_fabric_worker_adapters.hpp"
+#include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tests/ttnn/unit_tests/gtests/ccl/kernels/test_kernels.common.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
+
 struct unicast_mode {
     uint8_t distance;
 };
@@ -86,7 +87,7 @@ void kernel_main() {
         .bank_base_address = dest_addr, .page_size = page_size};
 
     ASSERT(num_buffers_per_channel > 0);
-    auto sender = tt::fabric::WorkerToFabricEdmSender(
+    auto sender = tt::tt_fabric::WorkerToFabricEdmSender(
         connected_to_persistent_fabric,
         eth_sender_noc_x,
         eth_sender_noc_y,
@@ -128,13 +129,13 @@ void kernel_main() {
         if constexpr (mcast_mode) {
             packet_header
                 ->to_chip_multicast(
-                    tt::fabric::MulticastRoutingCommandHeader{config.mcast.distance, config.mcast.range})
+                    tt::tt_fabric::MulticastRoutingCommandHeader{config.mcast.distance, config.mcast.range})
                 ->to_noc_unicast_write(
-                    tt::fabric::NocUnicastCommandHeader{dest_noc_address}, (pages_to_send * page_size));
+                    tt::tt_fabric::NocUnicastCommandHeader{dest_noc_address}, (pages_to_send * page_size));
         } else {
             packet_header->to_chip_unicast(config.unicast.distance)
                 ->to_noc_unicast_write(
-                    tt::fabric::NocUnicastCommandHeader{dest_noc_address}, (pages_to_send * page_size));
+                    tt::tt_fabric::NocUnicastCommandHeader{dest_noc_address}, (pages_to_send * page_size));
         }
 
         sender.send_payload_blocking_from_address(packet_addr, packet_size);
@@ -151,7 +152,7 @@ void kernel_main() {
             safe_get_noc_addr(my_x[0], my_y[0], (uint32_t)last_message_semaphore_address, 0);
         packet_header.to_chip_unicast(2);
         packet_header.to_noc_unicast_atomic_inc(
-            tt::fabric::NocUnicastAtomicIncCommandHeader(last_message_semaphore_noc0_addr, 1, 32));
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader(last_message_semaphore_noc0_addr, 1, 32));
 
         sender.send_payload_blocking_from_address(
             a_packet_header_addr, packet_header.get_payload_size_including_header());

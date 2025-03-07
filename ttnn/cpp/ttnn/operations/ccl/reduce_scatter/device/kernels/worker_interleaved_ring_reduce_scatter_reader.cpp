@@ -10,7 +10,7 @@
 #include "debug/assert.h"
 #include <tt-metalium/buffer_constants.hpp>
 #include "cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
-#include "cpp/ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/worker_edm_utils.hpp"
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 
 #include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
@@ -466,7 +466,7 @@ void kernel_main() {
                 total_cb_pages_pushed += n_pages;
                 if (n_pages < args.half_cb_n_pages) {
                     uint32_t num_filler_pages = args.half_cb_n_pages - n_pages;
-                    push_filler_pages_to_cb(to_dm_sender_short_circuit_cb, num_filler_pages);
+                    tt::tt_fabric::push_filler_pages_to_cb(to_dm_sender_short_circuit_cb, num_filler_pages);
                     ASSERT(args.half_cb_n_pages > n_pages);
                     ASSERT(p + n_pages == worker_slice_n_pages);
                     total_cb_pages_pushed += num_filler_pages;
@@ -556,8 +556,8 @@ void kernel_main() {
 
                 if (n_pages < args.half_cb_n_pages) {
                     uint32_t num_filler_pages = args.half_cb_n_pages - n_pages;
-                    push_filler_pages_to_cb(cb_id_in0, num_filler_pages);
-                    push_filler_pages_to_cb(cb_id_in1, num_filler_pages);
+                    tt::tt_fabric::push_filler_pages_to_cb(cb_id_in0, num_filler_pages);
+                    tt::tt_fabric::push_filler_pages_to_cb(cb_id_in1, num_filler_pages);
                     total_cb_pages_pushed_to_math += num_filler_pages;
                     total_cb_pages_pushed += num_filler_pages;
                 }
@@ -575,8 +575,8 @@ void kernel_main() {
     // op. It passes this number to sender and receiver, who will push/pop junk pages to/from the math op to ensure
     // it will complete
     for (; total_cb_pages_pushed_to_math < args.total_eltwise_kernel_num_pages; total_cb_pages_pushed_to_math++) {
-        push_filler_pages_to_cb(cb_id_in0, 1);
-        push_filler_pages_to_cb(cb_id_in1, 1);
+        tt::tt_fabric::push_filler_pages_to_cb(cb_id_in0, 1);
+        tt::tt_fabric::push_filler_pages_to_cb(cb_id_in1, 1);
     }
 
     reader.close();

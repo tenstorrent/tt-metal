@@ -48,7 +48,7 @@ void kernel_main() {
             reader.fetch_payload_blocking(cb_id_in0, rem_num_pages, page_size, false);
             ASSERT(num_pages_per_full_chunk == 0 || num_pages_per_full_chunk > rem_num_pages);
             ASSERT(half_cb_n_pages > rem_num_pages);
-            push_filler_pages_to_cb(cb_id_in0, half_cb_n_pages - rem_num_pages);
+            tt::tt_fabric::push_filler_pages_to_cb(cb_id_in0, half_cb_n_pages - rem_num_pages);
         }
     }
 
