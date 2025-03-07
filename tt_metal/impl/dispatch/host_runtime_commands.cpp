@@ -20,7 +20,7 @@
 #include <math.hpp>
 #include <dev_msgs.h>
 #include <hal.hpp>
-#include "program_command_sequence.hpp"
+#include "tt_metal/impl/program/program_command_sequence.hpp"
 #include "tt_metal/command_queue.hpp"
 #include <assert.hpp>
 #include <logger.hpp>
