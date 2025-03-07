@@ -88,8 +88,11 @@ class Generator:
                 out_list.append(logits)
 
         # We gather data back to how at the end of prefill
-        for user_id, out in enumerate(out_list):
-            model_id = user_id % self.data_parallel
+        for idx, out in enumerate(out_list):
+            model_id = idx % self.data_parallel
+            group_user_id = idx // self.data_parallel
+            user_id = group_user_id + model_id * batch_per_device
+
             seq_len = prompt_lens[user_id]
             last_token_idx = seq_len - 1
 

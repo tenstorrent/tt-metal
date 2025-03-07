@@ -148,7 +148,7 @@ def create_tt_model(
     return tt_model_args, model, tt_kv_cache, state_dict
 
 
-def create_tt_page_table(max_batch_size, page_params, use_paged_kv_cache):
+def create_tt_page_table(max_batch_size, data_parallel, page_params, use_paged_kv_cache):
     page_table = None
     paged_attention_config = None
 
@@ -160,9 +160,9 @@ def create_tt_page_table(max_batch_size, page_params, use_paged_kv_cache):
         # Implied shuffling of blocks
         permutation = torch.randperm(paged_attention_config.max_num_blocks)
         # Page table which maps virtual blocks to physical
-        reverse_permutation = torch.argsort(permutation)
+        reverse_permutation = torch.argsort(permutation).repeat(data_parallel)
         page_table = reverse_permutation.reshape(
-            max_batch_size, paged_attention_config.max_num_blocks // max_batch_size
+            max_batch_size, paged_attention_config.max_num_blocks // (max_batch_size // data_parallel)
         )
         paged_attention_config = PagedAttentionConfig(
             block_size=page_params["page_block_size"],
@@ -213,7 +213,10 @@ def prepare_generator_args(
         tt_kv_cache.append(tt_kv_cache_i)
 
     page_table = create_tt_page_table(
-        max_batch_size=batch_size, page_params=page_params, use_paged_kv_cache=paged_attention
+        max_batch_size=batch_size,
+        data_parallel=data_parallel,
+        page_params=page_params,
+        use_paged_kv_cache=paged_attention,
     )
     # Host code, safe to reuse tokenizer from the 1st model
     tokenizer = model_args[0].tokenizer
