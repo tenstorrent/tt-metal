@@ -7,15 +7,7 @@ on:
         required: false
         type: string
         default: latest
-      docker-image:
-        required: true
-        type: string
-      wheel-artifact-name:
-        required: true
-        type: string
-      build-artifact-name:
-        required: true
-        type: string
+
 concurrency:
   # Note that people may spam the post-commit pipeline on their branch, and
   # we have this docs pipeline in the post-commit pipeline, then people
@@ -30,48 +22,40 @@ jobs:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
       fail-fast: false
-    runs-on: ubuntu-latest
-    container:
-      image: ${{ inputs.docker-image }}
-      env:
-        TT_METAL_HOME: /work
-        PYTHONPATH: /work
-        LD_LIBRARY_PATH: /work/build/lib
-        LOGURU_LEVEL: INFO
-        GITHUB_ACTIONS: true
-      volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-    defaults:
-      run:
-        shell: bash
-        working-directory: /work # https://github.com/actions/runner/issues/878
+      matrix:
+        arch: [grayskull]
+    env:
+      ARCH_NAME: ${{ matrix.arch }}
+      LOGURU_LEVEL: INFO
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+    runs-on: ubuntu-20.04
     steps:
-      - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           submodules: recursive
-          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
+          lfs: false
+      - name: Set up dynamic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - uses: ./.github/actions/install-metal-deps
+        with:
+          os: ubuntu-20.04
+      - uses: ./.github/actions/install-metal-dev-deps
+        with:
+          os: ubuntu-20.04
       - uses: actions/download-artifact@v4
         timeout-minutes: 10
         with:
-          name: ${{ inputs.build-artifact-name }}
-          path: /work
+          name: TTMetal_build_any
       - name: Extract files
         run: tar -xvf ttm_any.tar
-      - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ inputs.wheel-artifact-name }}
-          path: /work
-      - name: Install Wheel
-        run: |
-          WHEEL_FILENAME=$(ls -1 *.whl)
-          pip3 install $WHEEL_FILENAME
+      - uses: ./.github/actions/install-python-deps
       - name: Build Docs
         timeout-minutes: 15
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
+          source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           ./tests/scripts/run_build_docs.sh
