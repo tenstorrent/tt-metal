@@ -120,9 +120,14 @@ private:
     LightMetalBinary binary_;                                      // Stored binary blob
     const tt::tt_metal::flatbuffer::LightMetalBinary* fb_binary_;  // Parsed FlatBuffer binary
     bool show_reads_ = false;                                      // Flag to show read buffer contents
+    bool debug_mode_ = false;                                      // Flag to enable debug mode checks
     bool disable_checking_ = false;  // Optionally disable equality checking in Compare command.
 
     void clear_object_maps();
+
+    // Debug Features ------------------------------
+    void set_golden_buffer_global_ids();
+    void init_buffer_if_required(std::shared_ptr<Buffer>& buffer, uint32_t global_id);
 
     // System related members ----------------------
     void setup_devices();
@@ -136,6 +141,10 @@ private:
     std::unordered_map<uint32_t, tt::tt_metal::KernelHandle> kernel_handle_map_;
     std::unordered_map<uint32_t, std::shared_ptr<::tt::tt_metal::Kernel>> kernel_map_;
     std::unordered_map<uint32_t, tt::tt_metal::CBHandle> cb_handle_map_;
+
+    // Store the set of buffer global ids that will undergo comparison with golden data
+    // so they can be initialized on creation to avoid false passes.
+    std::set<uint32_t> golden_buffer_global_ids_;
 };
 
 }  // namespace v0

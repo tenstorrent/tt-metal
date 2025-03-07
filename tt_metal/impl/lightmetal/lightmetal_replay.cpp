@@ -113,6 +113,7 @@ LightMetalReplay::LightMetalReplay(LightMetalBinary&& binary, IDevice* device) :
 
     log_info(tt::LogMetalTrace, "LightMetalReplay created.");
     show_reads_ = parse_env("TT_LIGHT_METAL_SHOW_READS", false);
+    debug_mode_ = parse_env("TT_LIGHT_METAL_DEBUG", false);
     disable_checking_ = parse_env("TT_LIGHT_METAL_DISABLE_CHECKING", false);
     fb_binary_ = parse_flatbuffer_binary();  // Parse and store the FlatBuffer binary
 }
@@ -416,9 +417,11 @@ void LightMetalReplay::execute(const tt::tt_metal::flatbuffer::BufferCreateComma
     const auto sub_device_id =
         cmd->sub_device_id() ? std::optional<SubDeviceId>{cmd->sub_device_id()->value()} : std::nullopt;
 
+    std::shared_ptr<Buffer> buffer;
+
     // This API is overloaded with and without address field.
     if (cmd->address()) {
-        auto buffer = Buffer::create(
+        buffer = Buffer::create(
             this->device_,
             cmd->address()->value(),
             cmd->size(),
@@ -428,10 +431,8 @@ void LightMetalReplay::execute(const tt::tt_metal::flatbuffer::BufferCreateComma
             shard_parameters,
             bottom_up,
             sub_device_id);
-        add_buffer_to_map(cmd->global_id(), buffer);
-
     } else {
-        auto buffer = Buffer::create(
+        buffer = Buffer::create(
             this->device_,
             cmd->size(),
             cmd->page_size(),
@@ -440,8 +441,10 @@ void LightMetalReplay::execute(const tt::tt_metal::flatbuffer::BufferCreateComma
             shard_parameters,
             bottom_up,
             sub_device_id);
-        add_buffer_to_map(cmd->global_id(), buffer);
     }
+
+    add_buffer_to_map(cmd->global_id(), buffer);
+    init_buffer_if_required(buffer, cmd->global_id());
 }
 
 void LightMetalReplay::execute(const tt::tt_metal::flatbuffer::BufferDeallocateCommand* cmd) {
@@ -730,6 +733,32 @@ void LightMetalReplay::execute(const ::tt::tt_metal::flatbuffer::LightMetalCompa
         if (!std::equal(rd_data.begin(), rd_data.end(), cmd->golden_data()->begin())) {
             TT_THROW("Golden vs rd_data mismatch for buffer_global_id: {}", cmd->buffer_global_id());
         }
+        auto global_id = cmd->cmd_as_LightMetalCompareCommand()->buffer_global_id();
+        golden_buffer_global_ids_.insert(global_id);
+    }
+}
+
+// Debug Feature - For buffers that are compared against golden data, identify them for later usage.
+void LightMetalReplay::set_golden_buffer_global_ids() {
+    if (!debug_mode_) {
+        return;
+    }
+    for (const auto* cmd : *fb_binary_->commands()) {
+        if (cmd->cmd_type() != ::tt::tt_metal::flatbuffer::CommandType::LightMetalCompareCommand) {
+            continue;
+        }
+        auto global_id = cmd->cmd_as_LightMetalCompareCommand()->buffer_global_id();
+        golden_buffer_global_ids_.insert(global_id);
+    }
+}
+
+// Debug Feature - If a given buffer is in set of golden buffers, init to patten for debug purposes.
+void LightMetalReplay::init_buffer_if_required(std::shared_ptr<Buffer>& buffer, uint32_t global_id) {
+    if (golden_buffer_global_ids_.erase(global_id) != 0) {
+        std::vector<uint32_t> debug_pattern(buffer->size() / sizeof(uint32_t), 0xDEADBEEF);
+        log_info(tt::LogMetalTrace, "Initializing Buffer w/ global_id: {} to debug pattern", global_id);
+        detail::WriteToBuffer(
+            *buffer, {reinterpret_cast<const uint8_t*>(debug_pattern.data()), debug_pattern.size() * sizeof(uint32_t)});
     }
 }
 
@@ -750,6 +779,8 @@ bool LightMetalReplay::run() {
             std::cerr << "Nothing to run, no commands in binary." << std::endl;
             return false;
         }
+
+        set_golden_buffer_global_ids();
 
         log_info(
             tt::LogMetalTrace,
