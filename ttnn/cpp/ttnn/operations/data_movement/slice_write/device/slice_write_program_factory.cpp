@@ -101,6 +101,12 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         0,
         0,
         0};
+    tt::log_debug(tt::LogOp, "output address: {}", common_writer_kernel_args[0]);
+    tt::log_debug(tt::LogOp, "padded_row_size_bytes: {}", common_writer_kernel_args[1]);
+tt:
+    log_debug(tt::LogOp, "unpadded_row_size_bytes: {}", common_writer_kernel_args[2]);
+    tt::log_debug(tt::LogOp, "unpadded_row_size_bytes_offset: {}", common_writer_kernel_args[3]);
+    tt::log_debug(tt::LogOp, "num_dims: {}", common_writer_kernel_args[4]);
     common_writer_kernel_args.insert(
         common_writer_kernel_args.end(), num_unpadded_sticks_per_dim.begin(), num_unpadded_sticks_per_dim.end());
     common_writer_kernel_args.insert(
@@ -108,7 +114,8 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores_total);
 
-    uint32_t start_offset = ttnn::operations::data_movement::get_rm_start_offset(input_tensor, output_tensor_start);
+    uint32_t start_offset = ttnn::operations::data_movement::get_rm_start_offset(output_tensor, output_tensor_start);
+
     for (uint32_t i = 0, num_sticks_read = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t num_sticks_per_core;
@@ -142,6 +149,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         std::vector<uint32_t> writer_kernel_args = common_writer_kernel_args;
 
         //
+        tt::log_debug(tt::LogOp, "For Core {}, start_id: {}", core, start_id);
         uint32_t addr_offset = 5;  // output buffer addr, padded_row_size_bytes, unpadded_row_size_bytes, num_dims
         writer_kernel_args[addr_offset++] = start_id;
         writer_kernel_args[addr_offset++] = num_sticks_per_core;
@@ -149,16 +157,16 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         writer_kernel_args[addr_offset] = num_read_per_barrier;
         writer_kernel_args.insert(writer_kernel_args.end(), id_per_dim.begin(), id_per_dim.end());
 
-        tt::log_debug(
-            tt::LogOp,
-            "Slice Write Reader args: unpadded_row_size_bytes: {}, unpadded_row_size_bytes_offset: {}, "
-            "num_sticks_per_core: {}, num_sticks_per_core_read: {}, num_read_per_barrier: {}, num_sticks_read: {}",
-            unpadded_row_size_bytes,
-            unpadded_row_size_bytes_offset,
-            num_sticks_per_core,
-            num_sticks_per_core_read,
-            num_read_per_barrier,
-            num_sticks_read);
+        // tt::log_debug(
+        //     tt::LogOp,
+        //     "Slice Write Reader args: unpadded_row_size_bytes: {}, unpadded_row_size_bytes_offset: {}, "
+        //     "num_sticks_per_core: {}, num_sticks_per_core_read: {}, num_read_per_barrier: {}, num_sticks_read: {}",
+        //     unpadded_row_size_bytes,
+        //     unpadded_row_size_bytes_offset,
+        //     num_sticks_per_core,
+        //     num_sticks_per_core_read,
+        //     num_read_per_barrier,
+        //     num_sticks_read);
         std::vector<uint32_t> reader_kernel_args = {
             input_buffer->address(),
             unpadded_row_size_bytes,

@@ -22,6 +22,7 @@ using Result = std::tuple<ttnn::Tensor, OutputHeight, OutputWidth, ttnn::Tensor,
 
 template <typename T>
 Result conv2d(
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     T* device,
@@ -43,6 +44,7 @@ Result conv2d(
 
 template <typename T>
 Result conv2d_L1(
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     T* device,
@@ -63,6 +65,7 @@ Result conv2d_L1(
 
 template <typename T>
 Result conv2d_DRAM(
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     T* device,
