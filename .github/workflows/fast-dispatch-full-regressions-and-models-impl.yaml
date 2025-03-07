@@ -163,7 +163,7 @@ jobs:
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on: ["cloud-virtual-machine", "in-service", "${{ matrix.card }}"]
     steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - uses: ./.github/actions/retry-command
         with:
           timeout-seconds: 100
