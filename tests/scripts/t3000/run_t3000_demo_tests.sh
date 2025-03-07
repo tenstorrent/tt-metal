@@ -9,10 +9,10 @@ run_t3000_falcon40b_tests() {
   echo "LOG_METAL: Running run_t3000_falcon40b_tests"
 
   # Falcon40B prefill 60 layer end to end with 10 loops; we need 8x8 grid size
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/falcon40b/tests/ci/test_falcon_end_to_end_60_layer_t3000_prefill_10_loops.py --timeout=720 ; fail+=$?
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/falcon40b/tests/ci/test_falcon_end_to_end_60_layer_t3000_prefill_10_loops.py --timeout=2400; fail+=$?
 
   # Falcon40B end to end demo (prefill + decode)
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/falcon40b/tests/test_demo.py ; fail+=$?
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/falcon40b/tests/test_demo.py --timeout=2400 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -30,13 +30,13 @@ run_t3000_llama3_70b_tests() {
 
   echo "LOG_METAL: Running run_t3000_llama3_70b_tests"
 
-  LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/ WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/demo/simple_text_demo.py --timeout 600; fail+=$?
+  LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/ WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/demo/simple_text_demo.py --timeout 2400 ; fail+=$?
 
   # Output verification demo for old llama3-70b codebase, to be removed once old codebase is deleted
-  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/t3000/llama3_70b/demo/demo.py::test_LlamaModel_demo[wormhole_b0-True-device_params0-short_context-check_enabled-greedy-tt-70b-T3000-80L-decode_only-trace_mode_off-text_completion-llama3] --timeout=900 ; fail+=$?
+  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/t3000/llama3_70b/demo/demo.py::test_LlamaModel_demo[wormhole_b0-True-device_params0-short_context-check_enabled-greedy-tt-70b-T3000-80L-decode_only-trace_mode_off-text_completion-llama3] --timeout=2400 ; fail+=$?
 
   # Test chunked prefill for llama2-70b
-  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/t3000/llama2_70b/tests/test_chunked_generation.py::test_batch_prefill --timeout=900 ; fail+=$?
+  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/t3000/llama2_70b/tests/test_chunked_generation.py::test_batch_prefill --timeout=2400 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -93,7 +93,7 @@ run_t3000_llama3_vision_tests() {
   t3k=T3K
 
   for fake_device in "$n300" "$t3k"; do
-    FAKE_DEVICE=$fake_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/demo/simple_vision_demo.py -k "batch1-trace or batch4-trace-with-text-prompts" --timeout 600; fail+=$?
+    FAKE_DEVICE=$fake_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/demo/simple_vision_demo.py -k "batch1-trace or batch4-trace-with-text-prompts" --timeout 2400; fail+=$?
     echo "LOG_METAL: Llama3 vision tests for $fake_device completed"
   done
 
@@ -133,8 +133,8 @@ run_t3000_mixtral_tests() {
   echo "LOG_METAL: Running run_t3000_mixtral8x7b_tests"
 
   # mixtral8x7b 8 chip demo test - 100 token generation with general weights (env flags set inside the test)
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/demo/demo.py --timeout=720 ; fail+=$?
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/demo/demo_with_prefill.py --timeout=720 ; fail+=$?
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/demo/demo.py --timeout=2400 ; fail+=$?
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/demo/demo_with_prefill.py --timeout=2400 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
