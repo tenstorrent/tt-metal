@@ -57,13 +57,17 @@ uint32_t compare_conv_out_with_golden(
 uint32_t validate_generate_halo_kernel_config(
     tt::tt_metal::IDevice* device,
     const std::vector<ShardBoundary>& shard_boundaries,
-    const std::tuple<vector<vector<uint16_t>>, std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>>&
-        halo_kernel_config,
+    const std::vector<std::vector<std::vector<uint16_t>>>& halo_kernel_config,
     const vector<bool>& pad_metadata,
     bool remote_read = false,
     bool is_block_sharded = false,
     bool transpose_mcast = false) {
-    auto [flattened_pad_config, flattened_local_config, flattened_remote_config] = halo_kernel_config;
+    auto flattened_pad_config1 = halo_kernel_config[0];
+    auto flattened_pad_config2 = halo_kernel_config[1];
+    auto flattened_local_config1 = halo_kernel_config[2];
+    auto flattened_local_config2 = halo_kernel_config[3];
+    auto flattened_remote_config1 = halo_kernel_config[4];
+    auto flattened_remote_config2 = halo_kernel_config[5];
 
     uint32_t padded_input_tensor_buf_idx = 0;
     uint32_t invalid_pads = 0, invalid_indices = 0;
@@ -85,7 +89,7 @@ uint32_t validate_generate_halo_kernel_config(
         return invalids;
     };
 
-    auto pad_indices = pad_indices_from_flattened_pad_config(flattened_pad_config, shard_boundaries);
+    auto pad_indices = pad_indices_from_flattened_pad_config(flattened_pad_config1, shard_boundaries);
     invalid_pads = find_invalids(pad_indices, true);
     if (invalid_pads != 0) {
         log_error(
@@ -95,7 +99,26 @@ uint32_t validate_generate_halo_kernel_config(
         failed_tests++;
     }
 
-    auto local_indices = input_indices_from_flattened_local_config(flattened_local_config, shard_boundaries);
+    pad_indices = pad_indices_from_flattened_pad_config(flattened_pad_config2, shard_boundaries);
+    invalid_pads = find_invalids(pad_indices, true);
+    if (invalid_pads != 0) {
+        log_error(
+            tt::LogTest,
+            "Failed to validate flattened_pad_config of halo_kernel_config, invalid pads = {}",
+            invalid_pads);
+        failed_tests++;
+    }
+
+    auto local_indices = input_indices_from_flattened_local_config(flattened_local_config1, shard_boundaries);
+    invalid_indices = find_invalids(local_indices, false);
+    if (invalid_indices != 0) {
+        log_error(
+            tt::LogTest,
+            "Failed to validate flattened_local_config of halo_kernel_config, invalid indices = {}",
+            invalid_indices);
+        failed_tests++;
+    }
+    local_indices = input_indices_from_flattened_local_config(flattened_local_config2, shard_boundaries);
     invalid_indices = find_invalids(local_indices, false);
     if (invalid_indices != 0) {
         log_error(
@@ -105,7 +128,18 @@ uint32_t validate_generate_halo_kernel_config(
         failed_tests++;
     }
     auto remote_indices = input_indices_from_flattened_remote_config(
-        device, flattened_remote_config, shard_boundaries, remote_read, is_block_sharded, transpose_mcast);
+        device, flattened_remote_config1, shard_boundaries, remote_read, is_block_sharded, transpose_mcast);
+    invalid_indices = find_invalids(remote_indices, false);
+    if (invalid_indices != 0) {
+        log_error(
+            tt::LogTest,
+            "Failed to validate flattened_remote_config of halo_kernel_config, invalid indices = {}",
+            invalid_indices);
+        failed_tests++;
+    }
+
+    remote_indices = input_indices_from_flattened_remote_config(
+        device, flattened_remote_config2, shard_boundaries, remote_read, is_block_sharded, transpose_mcast);
     invalid_indices = find_invalids(remote_indices, false);
     if (invalid_indices != 0) {
         log_error(
