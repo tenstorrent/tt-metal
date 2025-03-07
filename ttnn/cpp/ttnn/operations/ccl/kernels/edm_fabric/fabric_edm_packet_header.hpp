@@ -131,13 +131,13 @@ struct PacketHeaderBase {
     inline void set_noc_send_type(NocSendType &type) { this->noc_send_type = type; }
     inline void set_command_fields(NocCommandFields &fields) { this->command_fields = fields; }
 
-    inline Derived &to_chip_unicast(uint8_t distance_in_hops) {
-        static_cast<Derived*>(this)->to_chip_unicast_impl(distance_in_hops);
+    inline Derived &to_chip_unicast(uint8_t distance_in_hops, uint8_t distance_to_high_vc = Derived::default_high_vc_distance) {
+        static_cast<Derived*>(this)->to_chip_unicast_impl(distance_in_hops, distance_to_high_vc);
         return *static_cast<Derived*>(this);
     }
 
-    inline Derived &to_chip_multicast(MulticastRoutingCommandHeader const &mcast_routing_command_header) {
-        static_cast<Derived*>(this)->to_chip_multicast_impl(mcast_routing_command_header);
+    inline Derived &to_chip_multicast(MulticastRoutingCommandHeader const &mcast_routing_command_header, uint8_t distance_to_high_vc = Derived::default_high_vc_distance) {
+        static_cast<Derived*>(this)->to_chip_multicast_impl(mcast_routing_command_header, distance_to_high_vc);
         return *static_cast<Derived*>(this);
     }
 
@@ -177,13 +177,13 @@ struct PacketHeaderBase {
         return *static_cast<Derived*>(this);
     }
 
-    inline volatile Derived* to_chip_unicast(uint8_t distance_in_hops) volatile {
-        static_cast<volatile Derived*>(this)->to_chip_unicast_impl(distance_in_hops);
+    inline volatile Derived* to_chip_unicast(uint8_t distance_in_hops, uint8_t distance_to_high_vc = Derived::default_high_vc_distance) volatile {
+        static_cast<volatile Derived*>(this)->to_chip_unicast_impl(distance_in_hops, distance_to_high_vc);
         return static_cast<volatile Derived*>(this);
     }
 
-    inline volatile Derived* to_chip_multicast(MulticastRoutingCommandHeader const &mcast_routing_command_header) volatile {
-        static_cast<volatile Derived*>(this)->to_chip_multicast_impl(mcast_routing_command_header);
+    inline volatile Derived* to_chip_multicast(MulticastRoutingCommandHeader const &mcast_routing_command_header, uint8_t distance_to_high_vc = Derived::default_high_vc_distance) volatile {
+        static_cast<volatile Derived*>(this)->to_chip_multicast_impl(mcast_routing_command_header, distance_to_high_vc);
         return static_cast<volatile Derived*>(this);
     }
 
@@ -242,6 +242,7 @@ struct PacketHeaderBase {
 };
 
 struct PacketHeader : public PacketHeaderBase<PacketHeader> {
+    static constexpr uint8_t default_high_vc_distance = 0;
     ChipSendType chip_send_type;
     RoutingFields routing_fields;
     // Sort of hack to work-around DRAM read alignment issues that must be 32B aligned
@@ -255,11 +256,11 @@ struct PacketHeader : public PacketHeaderBase<PacketHeader> {
     uint8_t padding0[10];
     private:
 
-    inline static uint32_t calculate_chip_unicast_routing_fields_value(uint8_t distance_in_hops) {
+    inline static uint32_t calculate_chip_unicast_routing_fields_value(uint8_t distance_in_hops, uint8_t distance_to_high_vc) {
         return RoutingFields::LAST_CHIP_IN_MCAST_VAL | distance_in_hops;
     }
     inline static uint32_t calculate_chip_multicast_routing_fields_value(
-        const MulticastRoutingCommandHeader& chip_multicast_command_header) {
+        const MulticastRoutingCommandHeader& chip_multicast_command_header, uint8_t distance_to_high_vc) {
         return ((static_cast<uint8_t>(chip_multicast_command_header.range_hops) << RoutingFields::START_DISTANCE_FIELD_BIT_WIDTH)) | static_cast<uint8_t>(chip_multicast_command_header.start_distance_in_hops);
     }
 
@@ -270,22 +271,22 @@ struct PacketHeader : public PacketHeaderBase<PacketHeader> {
 
     inline void set_routing_fields(RoutingFields &fields) { this->routing_fields = fields; }
 
-    inline void to_chip_unicast_impl(uint8_t distance_in_hops) {
+    inline void to_chip_unicast_impl(uint8_t distance_in_hops, uint8_t distance_to_high_vc) {
         this->chip_send_type = CHIP_UNICAST;
-        this->routing_fields.value = PacketHeader::calculate_chip_unicast_routing_fields_value(distance_in_hops);
+        this->routing_fields.value = PacketHeader::calculate_chip_unicast_routing_fields_value(distance_in_hops, distance_to_high_vc);
     }
-    inline void to_chip_multicast_impl(MulticastRoutingCommandHeader const &chip_multicast_command_header) {
+    inline void to_chip_multicast_impl(MulticastRoutingCommandHeader const &chip_multicast_command_header, uint8_t distance_to_high_vc) {
         this->chip_send_type = CHIP_MULTICAST;
-        this->routing_fields.value = PacketHeader::calculate_chip_multicast_routing_fields_value(chip_multicast_command_header);
+        this->routing_fields.value = PacketHeader::calculate_chip_multicast_routing_fields_value(chip_multicast_command_header, distance_to_high_vc);
     }
 
-    inline void to_chip_unicast_impl(uint8_t distance_in_hops) volatile {
+    inline void to_chip_unicast_impl(uint8_t distance_in_hops, uint8_t distance_to_high_vc) volatile {
         this->chip_send_type = CHIP_UNICAST;
-        this->routing_fields.value = PacketHeader::calculate_chip_unicast_routing_fields_value(distance_in_hops);
+        this->routing_fields.value = PacketHeader::calculate_chip_unicast_routing_fields_value(distance_in_hops, distance_to_high_vc);
     }
-    inline void to_chip_multicast_impl(MulticastRoutingCommandHeader const &chip_multicast_command_header) volatile{
+    inline void to_chip_multicast_impl(MulticastRoutingCommandHeader const &chip_multicast_command_header, uint8_t distance_to_high_vc) volatile{
         this->chip_send_type = CHIP_MULTICAST;
-        this->routing_fields.value = PacketHeader::calculate_chip_multicast_routing_fields_value(chip_multicast_command_header);
+        this->routing_fields.value = PacketHeader::calculate_chip_multicast_routing_fields_value(chip_multicast_command_header, distance_to_high_vc);
     }
 };
 
@@ -306,12 +307,13 @@ struct LowLatencyRoutingFields {
 };
 
 struct LowLatencyPacketHeader : public PacketHeaderBase<LowLatencyPacketHeader> {
+    static constexpr uint8_t default_high_vc_distance = LowLatencyRoutingFields::MAX_NUM_ENCODINGS;
     LowLatencyRoutingFields routing_fields;
     uint8_t padding0[8];
 
     private:
 
-    inline static uint32_t calculate_chip_unicast_routing_fields_value(uint8_t distance_in_hops, uint8_t distance_to_high_vc = LowLatencyRoutingFields::MAX_NUM_ENCODINGS) {
+    inline static uint32_t calculate_chip_unicast_routing_fields_value(uint8_t distance_in_hops, uint8_t distance_to_high_vc) {
         // Example of unicast 3 hops away
         // First line will do 0xAAAAAAAA & 0b1111 = 0b1010. This means starting from our neighbor, we will forward twice (forward to neighbor is not encoded in the field)
         // Last line will do 0b01 << 4 = 0b010000. This means that on the 3rd chip, we will write only
@@ -322,7 +324,7 @@ struct LowLatencyPacketHeader : public PacketHeaderBase<LowLatencyPacketHeader> 
             (LowLatencyRoutingFields::HIGH_VC_FIELD << (distance_to_high_vc - 1) * LowLatencyRoutingFields::FIELD_WIDTH);
     }
     inline static uint32_t calculate_chip_multicast_routing_fields_value(
-        const MulticastRoutingCommandHeader& chip_multicast_command_header, uint8_t distance_to_high_vc = LowLatencyRoutingFields::MAX_NUM_ENCODINGS) {
+        const MulticastRoutingCommandHeader& chip_multicast_command_header, uint8_t distance_to_high_vc) {
         // Example of starting 3 hops away mcasting to 2 chips
         // First line will do 0xAAAAAAAA & 0b1111 = 0b1010. This means starting from our neighbor, we will forward twice (forward to neighbor is not encoded in the field)
         // Second line will do 0xFFFFFFFF & 0b11 = 0b11. 0b11 << 4 = 0b110000. This means starting from the 3rd chip, we will write and forward once
@@ -343,20 +345,20 @@ struct LowLatencyPacketHeader : public PacketHeaderBase<LowLatencyPacketHeader> 
         this->routing_fields = fields;
     }
 
-    inline void to_chip_unicast_impl(uint8_t distance_in_hops) {
-        this->routing_fields.value = LowLatencyPacketHeader::calculate_chip_unicast_routing_fields_value(distance_in_hops);
+    inline void to_chip_unicast_impl(uint8_t distance_in_hops, uint8_t distance_to_high_vc) {
+        this->routing_fields.value = LowLatencyPacketHeader::calculate_chip_unicast_routing_fields_value(distance_in_hops, distance_to_high_vc);
     }
     inline void to_chip_multicast_impl(
-        const MulticastRoutingCommandHeader& chip_multicast_command_header) {
-        this->routing_fields.value = LowLatencyPacketHeader::calculate_chip_multicast_routing_fields_value(chip_multicast_command_header);
+        const MulticastRoutingCommandHeader& chip_multicast_command_header, uint8_t distance_to_high_vc) {
+        this->routing_fields.value = LowLatencyPacketHeader::calculate_chip_multicast_routing_fields_value(chip_multicast_command_header, distance_to_high_vc);
     }
 
-    inline void to_chip_unicast_impl(uint8_t distance_in_hops) volatile {
-        this->routing_fields.value = LowLatencyPacketHeader::calculate_chip_unicast_routing_fields_value(distance_in_hops);
+    inline void to_chip_unicast_impl(uint8_t distance_in_hops, uint8_t distance_to_high_vc) volatile {
+        this->routing_fields.value = LowLatencyPacketHeader::calculate_chip_unicast_routing_fields_value(distance_in_hops, distance_to_high_vc);
     }
     inline void to_chip_multicast_impl(
-        const MulticastRoutingCommandHeader& chip_multicast_command_header) volatile {
-        this->routing_fields.value = LowLatencyPacketHeader::calculate_chip_multicast_routing_fields_value(chip_multicast_command_header);
+        const MulticastRoutingCommandHeader& chip_multicast_command_header, uint8_t distance_to_high_vc) volatile {
+        this->routing_fields.value = LowLatencyPacketHeader::calculate_chip_multicast_routing_fields_value(chip_multicast_command_header, distance_to_high_vc);
     }
 };
 
@@ -367,6 +369,7 @@ static_assert(sizeof(LowLatencyPacketHeader) == sizeof(PacketHeader), "sizeof(Lo
 
 static constexpr size_t header_size_bytes = sizeof(PacketHeader);
 
+// TODO: Should be piped from host to determine which packet header to use
 #define FABRIC_LOW_LATENCY_MODE 1
 
 #if defined FABRIC_LOW_LATENCY_MODE and FABRIC_LOW_LATENCY_MODE == 1
