@@ -298,7 +298,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
         "worker_reader.cpp",
         sender_worker_core_range,
         tt::tt_metal::DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1, .noc = reader_noc, .compile_args = reader_compile_args});
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = reader_noc,
+            .compile_args = reader_compile_args});
 
     // Writer
     std::vector<uint32_t> writer_compile_args = {
@@ -318,7 +320,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
         "worker_writer.cpp",
         sender_worker_core_range,
         tt::tt_metal::DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0, .noc = writer_noc, .compile_args = writer_compile_args});
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = writer_noc,
+            .compile_args = writer_compile_args});
 
     // Kernel Runtime Args
     for (uint32_t link = 0; link < num_links; link++) {
