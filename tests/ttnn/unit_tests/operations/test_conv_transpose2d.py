@@ -103,7 +103,7 @@ def run_conv_transpose2d(
         enable_act_double_buffer=False,
         enable_split_reader=False,
         enable_subblock_padding=False,
-        output_layout=ttnn.ROW_MAJOR_LAYOUT,
+        output_layout=output_layout,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -187,12 +187,14 @@ def run_conv_transpose2d(
     "weights_dtype",
     [
         ttnn.bfloat16,
+        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
     "activations_dtype",
     [
         ttnn.bfloat16,
+        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize("mirror_kernel", [True, False])
