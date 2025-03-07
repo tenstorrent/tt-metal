@@ -1195,14 +1195,14 @@ def test_transpose_high_rank(*, device: ttnn.Device, rank: int, indices, layout)
 
 @pytest.mark.parametrize(
     "n, c, h, w, dim0, dim1",
-    [
-        #  (16, 4, 256, 224, 2, 3),
-        #  (16, 4, 256, 256, 1, 2),
-        # (16, 128, 8, 256, 2, 3),
-        (16, 128, 128, 16, 1, 2),  ## dispatch error
-    ],
+    [(16, 128, 128, 16, 1, 2)],
 )
 def test_resnet50_fold(device, n, c, h, w, dim0, dim1):
+    core_grid = ttnn.CoreGrid(y=8, x=8)
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if core_grid.x > compute_grid_size.x or core_grid.y > compute_grid_size.y:
+        pytest.skip(f"Need {core_grid} grid size to run this test but core grid is {compute_grid_size}")
+
     torch.manual_seed(0)
     input_shape = (n, c, h, w)
     torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
@@ -1210,7 +1210,6 @@ def test_resnet50_fold(device, n, c, h, w, dim0, dim1):
     ## WH -> HW
     torch_output = torch_input.transpose(dim0, dim1)
 
-    core_grid = ttnn.CoreGrid(y=8, x=8)
     mem_config = ttnn.create_sharded_memory_config(
         input_shape,
         core_grid=core_grid,
