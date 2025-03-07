@@ -614,7 +614,6 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
 
         TT_FATAL(edm_builders.size() == 0, "EDM builders already exist for this device");
         edm_builders.clear();
-        // for (const auto& core : local_device->get_ethernet_sockets(remote_device->id())) {
         for (const auto& core : reordered_connected_sockets) {
             if (!local_device->is_active_ethernet_core(core, true)) {
                 continue;
