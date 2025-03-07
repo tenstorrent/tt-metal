@@ -5,7 +5,7 @@
 #pragma once
 
 #include <cstdint>
-#include "tt-metalium/circular_buffer_types.hpp"
+#include "hostdevcommon/kernel_structs.h"
 
 namespace ttnn::operations::conv {
 namespace conv2d {
