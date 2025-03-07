@@ -12,6 +12,8 @@
 #include <set>
 #include <utility>
 
+#include <tt-metalium/env_lib.hpp>
+
 #include "dispatch_core_manager.hpp"
 #include "dispatch_settings.hpp"
 #include "dprint_server.hpp"
