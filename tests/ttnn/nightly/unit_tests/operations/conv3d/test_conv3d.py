@@ -8,7 +8,6 @@ import pytest
 import ttnn
 import torch.nn as nn
 from tests.ttnn.utils_for_testing import check_with_pcc
-from models.utility_functions import skip_for_blackhole
 
 from tests.ttnn.unit_tests.operations.test_conv3d import (
     setup_conv3d_test,
@@ -42,7 +41,6 @@ def test_conv3d_sweep_shapes(device, B, C_in, C_out, T, H, W, kernel_size, strid
     run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size=grid_size)
 
 
-@skip_for_blackhole("Hanging on BH")
 @pytest.mark.parametrize(
     "input_shape, out_channels, kernel_size, stride, padding, padding_mode",
     [
