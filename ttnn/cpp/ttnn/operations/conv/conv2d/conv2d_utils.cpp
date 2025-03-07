@@ -81,6 +81,16 @@ uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num1, uint32_t n
     return divisor;
 }
 
+// If shard width is tile width, and it is allowed to have half tile shard width, and we have enough cores to do it,
+// double number of cores
+static void set_shard_width_to_half_tile_if_possible(
+    uint32_t& num_cores, uint32_t channels_ntiles, uint32_t max_num_cores, bool width_shard_half_tile_possible) {
+    if (width_shard_half_tile_possible && (div_up(channels_ntiles, num_cores) == 1) &&
+        (2 * num_cores <= max_num_cores)) {
+        num_cores *= 2;
+    }
+}
+
 ParallelConfig determine_parallel_config(
     const TensorMemoryLayout shard_layout,
     uint32_t batch_size,
@@ -91,12 +101,16 @@ ParallelConfig determine_parallel_config(
     const CoreCoord& compute_grid_size,
     ShardOrientation block_shard_orientation,
     bool enable_channels_padding,
-    bool is_out_tiled,
+    bool is_shard_height_tile_multiple,
+    bool is_shard_width_tile_multiple,
     uint32_t act_block_h_override) {
-    uint32_t effective_tile_height = is_out_tiled ? tt::constants::TILE_HEIGHT : 1;
+    tt::log_info("flags: {} {}", is_shard_height_tile_multiple, is_shard_width_tile_multiple);
+    // Currently, convolution requires multiples of the tile size for both shard height and width,
+    // while pooling can accept any height and either a tile multiple or half a tile for width.
+    // This approach needs to be modified when other shard dimensions are supported.
+    uint32_t effective_tile_height = is_shard_height_tile_multiple ? tt::constants::TILE_HEIGHT : 1;
     uint32_t effective_tile_width = tt::constants::TILE_WIDTH;
-    uint32_t out_nhw_ntiles =
-        tt::round_up(batch_size * output_height * output_width, tt::constants::TILE_HEIGHT) / effective_tile_height;
+    uint32_t out_nhw_ntiles = tt::div_up(batch_size * output_height * output_width, effective_tile_height);
     uint32_t input_channles_ntiles = tt::div_up(input_channels, effective_tile_width);
     uint32_t out_channels_ntiles = tt::div_up(output_channels, effective_tile_width);
     // In case non native activation block height is used, we need to ensure that the amount
@@ -123,6 +137,8 @@ ParallelConfig determine_parallel_config(
                 ? find_closest_largest_divisor_with_num_padding(
                       out_channels_ntiles, input_channles_ntiles, start_divisor_c)
                 : find_closest_largest_divisor(out_channels_ntiles, input_channles_ntiles, start_divisor_c);
+        set_shard_width_to_half_tile_if_possible(
+            num_cores_c, input_channles_ntiles, start_divisor_c, !is_shard_width_tile_multiple);
         uint32_t cores_x = block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_nhw : num_cores_c;
         uint32_t cores_y = block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_c : num_cores_nhw;
         CoreRange core_range = CoreRange(CoreCoord({0, 0}), CoreCoord({cores_x - 1, cores_y - 1}));
@@ -131,6 +147,8 @@ ParallelConfig determine_parallel_config(
         uint32_t num_cores_c = enable_channels_padding
                                    ? find_closest_largest_divisor_with_num_padding(input_channles_ntiles, max_num_cores)
                                    : find_closest_largest_divisor(input_channles_ntiles, max_num_cores);
+        set_shard_width_to_half_tile_if_possible(
+            num_cores_c, input_channles_ntiles, max_num_cores, !is_shard_width_tile_multiple);
         grid = tt::tt_metal::num_cores_to_corerangeset(num_cores_c, compute_grid_size, true);
     } else {
         TT_THROW("Conv2d supports Height, Block or Width Sharded Layouts but got {}", shard_layout);
@@ -476,6 +494,7 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_s
             block_shard_orientation,
             !is_mm_conv,
             true,
+            true,
             conv_config.act_block_h_override);
 
         if (conv_config.override_sharding_config) {
@@ -704,7 +723,6 @@ Conv2dConfig determine_conv_config_for_auto_shard(
 
     ShardOrientation shard_orientation =
         conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
-    const bool is_out_tiled = conv_config.output_layout == Layout::TILE;
 
     struct core_count_and_size {
         uint32_t core_count;
@@ -755,6 +773,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             compute_grid_size,
             shard_orientation,
             !is_mm_conv,
+            true,
             true,
             conv_config.act_block_h_override);
 
