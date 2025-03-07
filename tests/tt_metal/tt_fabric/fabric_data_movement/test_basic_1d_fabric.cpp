@@ -108,7 +108,7 @@ TEST_F(Fabric1DFixture, TestUnicast) {
     tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
         .edm_noc_x = edm_eth_core.x,
         .edm_noc_y = edm_eth_core.y,
-        .edm_buffer_base_addr = edm_config.sender_0_channel_base_address,
+        .edm_buffer_base_addr = edm_config.sender_channel_base_addresses[0],
         .num_buffers_per_channel = edm_config.sender_0_num_buffers,
         .edm_l1_sem_addr = edm_config.sender_channel_0_local_flow_control_semaphore_address,
         .edm_connection_handshake_addr = edm_config.sender_channel_0_connection_semaphore_address,

@@ -22,6 +22,8 @@
 namespace tt::tt_fabric {
 
 struct FabricEriscDatamoverConfig {
+    static constexpr uint32_t num_sender_channels = 3;
+    static constexpr uint32_t num_receiver_channels = 2;
     static constexpr bool constrain_to_power_of_2_buffer_slot_counts = true;
 
     static constexpr std::size_t field_size = 16;
@@ -46,11 +48,15 @@ struct FabricEriscDatamoverConfig {
     static constexpr std::size_t sender_channel_counters_size_bytes =
         (((tt::tt_fabric::sender_channel_counters_l1_size - 1) / field_size) + 1) * field_size;
 
-    std::size_t receiver_channel_counters_address = edm_status_address + field_size;
+    std::size_t receiver_channel_0_counters_address = edm_status_address + field_size;
+    std::size_t receiver_channel_1_counters_address =
+        receiver_channel_0_counters_address + receiver_channel_counters_size_bytes;
     std::size_t sender_channel_0_counters_address =
-        receiver_channel_counters_address + receiver_channel_counters_size_bytes;
+        receiver_channel_1_counters_address + receiver_channel_counters_size_bytes;
     std::size_t sender_channel_1_counters_address =
         sender_channel_0_counters_address + sender_channel_counters_size_bytes;
+    std::size_t sender_channel_2_counters_address =
+        sender_channel_1_counters_address + sender_channel_counters_size_bytes;
 
     // Packet header history buffer(s)
     static constexpr std::size_t receiver_completed_packet_header_cb_size_headers = 32;
@@ -59,16 +65,20 @@ struct FabricEriscDatamoverConfig {
     static constexpr std::size_t sender_completed_packet_header_cb_size_headers = 32;
     static constexpr std::size_t sender_completed_packet_header_cb_size_bytes =
         sizeof(tt::tt_fabric::PacketHeader) * sender_completed_packet_header_cb_size_headers;
-    std::size_t receiver_completed_packet_header_cb_address =
-        sender_channel_1_counters_address + sender_channel_counters_size_bytes;
+    std::size_t receiver_0_completed_packet_header_cb_address =
+        sender_channel_2_counters_address + sender_channel_counters_size_bytes;
+    std::size_t receiver_1_completed_packet_header_cb_address =
+        receiver_0_completed_packet_header_cb_address + receiver_completed_packet_header_cb_size_bytes;
     std::size_t sender_0_completed_packet_header_cb_address =
-        receiver_completed_packet_header_cb_address + receiver_completed_packet_header_cb_size_bytes;
+        receiver_1_completed_packet_header_cb_address + receiver_completed_packet_header_cb_size_bytes;
     std::size_t sender_1_completed_packet_header_cb_address =
         sender_0_completed_packet_header_cb_address + sender_completed_packet_header_cb_size_bytes;
+    std::size_t sender_2_completed_packet_header_cb_address =
+        sender_1_completed_packet_header_cb_address + sender_completed_packet_header_cb_size_bytes;
 
     // ----------- Sender Channel 0
     std::size_t sender_channel_0_buffer_index_address =
-        sender_1_completed_packet_header_cb_address + sender_completed_packet_header_cb_size_bytes;
+        sender_2_completed_packet_header_cb_address + sender_completed_packet_header_cb_size_bytes;
     // Connection info layout:
     // 0: buffer_index_rdptr -> Tells EDM the address in worker L1 to update EDM's copy of channel rdptr
     // 1: worker_teardown_semaphore_address -> Tells EDM where to signal connection teardown completion in worker's L1
@@ -110,18 +120,46 @@ struct FabricEriscDatamoverConfig {
     std::size_t sender_channel_1_buffer_index_semaphore_address =
         sender_channel_1_connection_semaphore_address + field_size;
 
-    // ----------- Receiver Channel
-    std::size_t receiver_channel_local_buffer_index_address =
-        sender_channel_1_buffer_index_semaphore_address + field_size;
+    // ----------- Sender Channel 2
+    std::size_t sender_channel_2_buffer_index_address = sender_channel_1_buffer_index_semaphore_address + field_size;
+    // Connection info layout:
+    // 0: buffer_index_rdptr -> Tells EDM the address in worker L1 to update EDM's copy of channel rdptr
+    // 1: worker_teardown_semaphore_address -> Tells EDM where to signal connection teardown completion in worker's L1
+    // 2: WorkerXY (as uint32_t)
+    // 3: Hold's EDM's rdptr for the buffer index in the channel
+    std::size_t sender_channel_2_worker_conn_info_base_address = sender_channel_2_buffer_index_address + field_size;
+    std::size_t sender_channel_2_local_flow_control_semaphore_address =
+        sender_channel_2_worker_conn_info_base_address + sizeof(tt::tt_fabric::EDMChannelWorkerLocationInfo);
+    // sender_channel_2_conn_info_edm_rdptr_address_address + field_size;
+    std::size_t sender_channel_2_producer_terminate_connection_address =
+        sender_channel_2_local_flow_control_semaphore_address + field_size;
+
     // persistent mode field
-    std::size_t receiver_channel_downstream_flow_control_semaphore_address =
-        receiver_channel_local_buffer_index_address + field_size;
+    std::size_t sender_channel_2_connection_semaphore_address =
+        sender_channel_2_producer_terminate_connection_address + field_size;
+    // persistent mode field
+    std::size_t sender_channel_2_buffer_index_semaphore_address =
+        sender_channel_2_connection_semaphore_address + field_size;
+
+    // ----------- Receiver 0 Channel
+    std::size_t receiver_channel_0_local_buffer_index_address =
+        sender_channel_2_buffer_index_semaphore_address + field_size;
+    // persistent mode field
+    std::size_t receiver_channel_0_downstream_flow_control_semaphore_address =
+        receiver_channel_0_local_buffer_index_address + field_size;
+
+    // ----------- Receiver 1 Channel
+    std::size_t receiver_channel_1_local_buffer_index_address =
+        receiver_channel_0_downstream_flow_control_semaphore_address + field_size;
+    // persistent mode field
+    std::size_t receiver_channel_1_downstream_flow_control_semaphore_address =
+        receiver_channel_1_local_buffer_index_address + field_size;
 
     // Channel Allocations
     std::size_t max_l1_loading_size = tt::tt_metal::experimental::hal::get_erisc_l1_unreserved_size() +
                                       tt::tt_metal::experimental::hal::get_erisc_l1_unreserved_base();
     std::size_t buffer_region_start =
-        (receiver_channel_downstream_flow_control_semaphore_address + field_size + buffer_alignment) &
+        (receiver_channel_1_downstream_flow_control_semaphore_address + field_size + buffer_alignment) &
         ~(buffer_alignment - 1);  // Align
     std::size_t available_channel_buffering_space = max_l1_loading_size - buffer_region_start;
 
@@ -134,12 +172,15 @@ struct FabricEriscDatamoverConfig {
     std::size_t sender_0_num_buffers = 0;
     std::size_t sender_1_channel_size_bytes = 0;
     std::size_t sender_1_num_buffers = 0;
-    std::size_t receiver_channel_size_bytes = 0;
-    std::size_t receiver_num_buffers = 0;
+    std::size_t sender_2_channel_size_bytes = 0;
+    std::size_t sender_2_num_buffers = 0;
+    std::size_t receiver_0_channel_size_bytes = 0;
+    std::size_t receiver_0_num_buffers = 0;
+    std::size_t receiver_1_channel_size_bytes = 0;
+    std::size_t receiver_1_num_buffers = 0;
 
-    std::size_t sender_0_channel_base_address = 0;
-    std::size_t sender_1_channel_base_address = 0;
-    std::size_t receiver_channel_base_address = 0;
+    std::array<std::size_t, num_sender_channels> sender_channel_base_addresses = {0, 0, 0};
+    std::array<std::size_t, num_receiver_channels> receiver_channel_base_addresses = {0, 0};
 };
 
 struct SenderWorkerAdapterSpec {
@@ -185,14 +226,19 @@ public:
         size_t my_chip_id,
         size_t peer_chip_id,
 
-        std::optional<size_t> receiver_channel_downstream_flow_control_semaphore_id,
-        std::optional<size_t> receiver_channel_downstream_teardown_semaphore_id,
+        std::optional<size_t> receiver_channel_0_downstream_flow_control_semaphore_id,
+        std::optional<size_t> receiver_channel_1_downstream_flow_control_semaphore_id,
+        std::optional<size_t> receiver_channel_0_downstream_teardown_semaphore_id,
+        std::optional<size_t> receiver_channel_1_downstream_teardown_semaphore_id,
         size_t sender_channel_0_flow_control_semaphore_id,
         size_t sender_channel_1_flow_control_semaphore_id,
+        size_t sender_channel_2_flow_control_semaphore_id,
         size_t sender_channel_0_connection_semaphore_id,
         size_t sender_channel_1_connection_semaphore_id,
+        size_t sender_channel_2_connection_semaphore_id,
         size_t sender_channel_0_buffer_index_semaphore_id,
         size_t sender_channel_1_buffer_index_semaphore_id,
+        size_t sender_channel_2_buffer_index_semaphore_id,
 
         const FabricEriscDatamoverConfig& config,
         bool enable_persistent_mode,
@@ -209,7 +255,7 @@ public:
         bool build_in_worker_connection_mode = false);
 
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_worker_channel() const;
-    [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel() const;
+    [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc) const;
 
     [[nodiscard]] std::vector<uint32_t> get_compile_time_args() const;
 
@@ -223,8 +269,7 @@ public:
 
     void teardown_from_host(
         tt::tt_metal::IDevice* d,
-        tt::tt_fabric::TerminationSignal termination_signal =
-            tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE) const;
+        tt::tt_fabric::TerminationSignal termination_signal = tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE) const;
 
     void set_firmware_context_switch_interval(size_t interval);
 
@@ -243,36 +288,52 @@ public:
 
     size_t sender_0_num_buffers = 0;
     size_t sender_1_num_buffers = 0;
-    size_t receiver_num_buffers = 0;
+    size_t sender_2_num_buffers = 0;
+    size_t receiver_0_num_buffers = 0;
+    size_t receiver_1_num_buffers = 0;
 
-    size_t local_sender_channel_0_buffer_address = 0;
-    size_t local_sender_channel_0_connection_info_addr = 0;
-    size_t local_sender_channel_1_buffer_address = 0;
-    size_t local_sender_channel_1_connection_info_addr = 0;
-    size_t local_receiver_channel_buffer_address = 0;
+    std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> local_sender_channel_buffer_addresses;
+    std::array<size_t, FabricEriscDatamoverConfig::num_receiver_channels> local_receiver_channel_buffer_addresses;
+
+    size_t local_sender_channel_0_connection_info_addr;
+    size_t local_sender_channel_1_connection_info_addr;
+    size_t local_sender_channel_2_connection_info_addr;
 
     size_t termination_signal_ptr = 0;
     size_t edm_status_ptr = 0;
 
     // Semaphore IDs
     // this is the receiver channel's local sem for flow controlling with downstream fabric sender
-    std::optional<size_t> receiver_channel_downstream_flow_control_semaphore_id;
-    std::optional<size_t> receiver_channel_downstream_teardown_semaphore_id;
+    std::optional<size_t> receiver_channel_0_downstream_flow_control_semaphore_id;
+    std::optional<size_t> receiver_channel_1_downstream_flow_control_semaphore_id;
+    std::optional<size_t> receiver_channel_0_downstream_teardown_semaphore_id;
+    std::optional<size_t> receiver_channel_1_downstream_teardown_semaphore_id;
     size_t sender_channel_0_flow_control_semaphore_id = 0;
     size_t sender_channel_1_flow_control_semaphore_id = 0;
+    size_t sender_channel_2_flow_control_semaphore_id = 0;
     size_t sender_channel_0_connection_semaphore_id = 0;
     size_t sender_channel_1_connection_semaphore_id = 0;
+    size_t sender_channel_2_connection_semaphore_id = 0;
     size_t sender_channel_0_buffer_index_semaphore_id = 0;
     size_t sender_channel_1_buffer_index_semaphore_id = 0;
-    size_t receiver_channel_local_buffer_index_address = 0;
+    size_t sender_channel_2_buffer_index_semaphore_id = 0;
+    size_t receiver_channel_0_local_buffer_index_address = 0;
+    size_t receiver_channel_1_local_buffer_index_address = 0;
 
-    std::optional<size_t> downstream_edm_noc_x;
-    std::optional<size_t> downstream_edm_noc_y;
-    std::optional<size_t> downstream_edm_buffer_base_address;
-    std::optional<size_t> downstream_edm_semaphore_address;
-    std::optional<size_t> downstream_edm_worker_registration_address;
-    std::optional<size_t> downstream_edm_worker_location_info_address;
-    std::optional<size_t> downstream_sender_channel_buffer_index_semaphore_id;
+    std::optional<size_t> downstream_edm_vc0_noc_x;
+    std::optional<size_t> downstream_edm_vc1_noc_x;
+    std::optional<size_t> downstream_edm_vc0_noc_y;
+    std::optional<size_t> downstream_edm_vc1_noc_y;
+    std::optional<size_t> downstream_edm_vc0_buffer_base_address;
+    std::optional<size_t> downstream_edm_vc1_buffer_base_address;
+    std::optional<size_t> downstream_edm_vc0_semaphore_address;
+    std::optional<size_t> downstream_edm_vc1_semaphore_address;
+    std::optional<size_t> downstream_edm_vc0_worker_registration_address;
+    std::optional<size_t> downstream_edm_vc1_worker_registration_address;
+    std::optional<size_t> downstream_edm_vc0_worker_location_info_address;
+    std::optional<size_t> downstream_edm_vc1_worker_location_info_address;
+    std::optional<size_t> downstream_vc0_sender_channel_buffer_index_semaphore_id;
+    std::optional<size_t> downstream_vc1_sender_channel_buffer_index_semaphore_id;
     bool enable_persistent_mode = false;
     bool build_in_worker_connection_mode = false;
     size_t firmware_context_switch_interval = default_firmware_context_switch_interval;
