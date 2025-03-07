@@ -1447,24 +1447,23 @@ void Matmul::validate(
             "tensor {}",
             optional_output_tensor_c->memory_config(),
             this->output_mem_config);
-    } else if (this->output_mem_config.shard_spec.has_value()) {
-        TT_FATAL(
-            output_tensor_spec.memory_config() == this->output_mem_config,
-            "Mismatch between computed {} and provided {} mem config",
-            output_tensor_spec.memory_config(),
-            this->output_mem_config);
     } else {
-        // TODO: try to change these to fatals and fix test_llama_model.py in APC
-        TT_ASSERT(
+        TT_FATAL(
             output_tensor_spec.memory_config().memory_layout == this->output_mem_config.memory_layout,
             "Mismatch between computed {} and provided {} mem config memory layout",
             output_tensor_spec.memory_config().memory_layout,
             this->output_mem_config.memory_layout);
-        TT_ASSERT(
+        TT_FATAL(
             output_tensor_spec.memory_config().buffer_type == this->output_mem_config.buffer_type,
             "Mismatch between computed {} and provided {} mem config buffer type",
             output_tensor_spec.memory_config().buffer_type,
             this->output_mem_config.buffer_type);
+        // Needs to be an assert, there are too many existing models not specifying shard spec correctly.
+        TT_ASSERT(
+            output_tensor_spec.memory_config() == this->output_mem_config,
+            "Mismatch between computed {} and provided {} mem config",
+            output_tensor_spec.memory_config(),
+            this->output_mem_config);
     }
 
     TT_FATAL(this->bcast_batch.has_value(), "Error: bcast_batch field should have been automatically populated");
