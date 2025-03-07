@@ -1216,11 +1216,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, SubDevic
         sub_device_id);
 }
 
-void DeallocateBuffer(Buffer& buffer) {
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureDeallocateBuffer, buffer);
-    buffer.deallocate();
-}
+void DeallocateBuffer(Buffer& buffer) { buffer.deallocate(); }
 
 void AssignGlobalBufferToProgram(const std::shared_ptr<Buffer>& buffer, Program& program) {
     detail::DispatchStateCheck(not buffer->device()->using_slow_dispatch());
