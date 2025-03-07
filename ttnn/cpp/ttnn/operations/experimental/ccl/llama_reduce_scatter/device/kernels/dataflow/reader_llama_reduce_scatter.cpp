@@ -40,6 +40,7 @@ void kernel_main() {
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t dst_addr = get_arg_val<uint32_t>(1);
+    const uint32_t semaphore_addr = get_arg_val<uint32_t>(2);
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
@@ -49,6 +50,7 @@ void kernel_main() {
     uint64_t input_noc_addr = get_noc_addr(get_read_ptr(cb_id_in));
     DPRINT << "src_addr: " << get_noc_addr(src_addr) << " dst_addr: " << dst_addr << ENDL();
     DPRINT << "start_tile: " << start_tile << " end_tile: " << end_tile << ENDL();
+    DPRINT << "semaphore_addr: " << semaphore_addr << ENDL();
     for (uint32_t tile = start_tile; tile < end_tile; ++tile) {
     }
 }

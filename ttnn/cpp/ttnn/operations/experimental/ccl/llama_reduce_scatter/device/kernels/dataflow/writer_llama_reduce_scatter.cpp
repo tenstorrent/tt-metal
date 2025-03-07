@@ -45,13 +45,15 @@ void kernel_main() {
 
     const uint32_t output_addr = get_arg_val<uint32_t>(0);
     const uint32_t write_output = get_arg_val<uint32_t>(1);
-    uint32_t router_noc_xy = 0, offset_to_receiver = 0, my_noc_xy = 0, dst_mesh_id = 0, dst_device_id = 0;
+    uint32_t router_noc_xy = 0, offset_to_receiver = 0, my_noc_xy = 0, dst_mesh_id = 0, dst_device_id = 0,
+             semaphore_addr = 0;
     if (!write_output) {
         router_noc_xy = get_arg_val<uint32_t>(2);
         offset_to_receiver = get_arg_val<uint32_t>(3);
         my_noc_xy = get_arg_val<uint32_t>(4);
         dst_mesh_id = get_arg_val<uint32_t>(5);
         dst_device_id = get_arg_val<uint32_t>(6);
+        semaphore_addr = get_arg_val<uint32_t>(7);
     }
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
@@ -67,7 +69,7 @@ void kernel_main() {
             DPRINT << "This core's writer is writing to the fabric sender buffer" << " start_tile: " << start_tile
                    << " end_tile: " << end_tile << " my_noc_xy: " << my_noc_xy << " router_noc_xy: " << router_noc_xy
                    << " offset_to_receiver: " << offset_to_receiver << " packet_size_bytes: " << packet_size_bytes
-                   << ENDL();
+                   << " semaphore_addr: " << semaphore_addr << ENDL();
             // write to fabric sender buffer
             uint32_t cb_out_read_ptr = get_read_ptr(cb_id_in);
             uint32_t fabric_sender_cb_read_ptr = get_write_ptr(fabric_sender_cb_index);
@@ -88,6 +90,7 @@ void kernel_main() {
             reinterpret_cast<volatile tt_l1_ptr fabric_pull_client_interface_t*>(client_interface_addr);
         fabric_endpoint_init(client_interface, 0 /* unused */);
         DPRINT << "dest_noc_addr: " << dst_noc_addr << ENDL();
+
         fabric_async_write(
             client_interface,
             router_noc_xy,

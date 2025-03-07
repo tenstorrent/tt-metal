@@ -63,9 +63,15 @@ LlamaReduceScatterDeviceOperation::tensor_return_value_t LlamaReduceScatterDevic
 
 std::tuple<LlamaReduceScatterDeviceOperation::operation_attributes_t, LlamaReduceScatterDeviceOperation::tensor_args_t>
 LlamaReduceScatterDeviceOperation::invoke(
-    const ttnn::Tensor& input_tensor, const int32_t dim, const std::optional<ttnn::MemoryConfig>& memory_config) {
+    const ttnn::Tensor& input_tensor,
+    const int32_t dim,
+    const global_semaphore::MultiDeviceGlobalSemaphore& cross_device_semaphore,
+    const std::optional<ttnn::MemoryConfig>& memory_config) {
     return {
-        operation_attributes_t{.dim = dim, .output_mem_config = memory_config.value_or(input_tensor.memory_config())},
+        operation_attributes_t{
+            .dim = (dim < 0 ? uint32_t(input_tensor.get_logical_shape().rank() + dim) : (uint32_t)dim),
+            .cross_device_semaphore = cross_device_semaphore,
+            .output_mem_config = memory_config.value_or(input_tensor.memory_config())},
         tensor_args_t{.input_tensor = input_tensor}};
 }
 
