@@ -148,6 +148,34 @@ private:
 
 inline thread_safe_runtime_id_to_ops_map runtime_id_to_opname{};
 
+class thread_safe_device_program_hash_to_opname_map {
+    using DEVICE_ID = uint32_t;
+    using PROGRAM_HASH = tt::stl::hash::hash_t;
+    using KEY_TYPE = std::pair<DEVICE_ID, PROGRAM_HASH>;
+    using VAL_TYPE = std::string;
+
+public:
+    VAL_TYPE find_if_exists(const KEY_TYPE& key) {
+        std::scoped_lock<std::mutex> lock(map_mutex);
+        auto it = map.find(key);
+        if (it != map.end()) {
+            return it->second;
+        } else {
+            return "";
+        }
+    }
+    void emplace(const KEY_TYPE& key, VAL_TYPE&& opname) {
+        std::scoped_lock<std::mutex> lock(map_mutex);
+        map.emplace(key, opname);
+    }
+
+private:
+    std::mutex map_mutex;
+    std::map<KEY_TYPE, VAL_TYPE> map;
+};
+
+inline thread_safe_device_program_hash_to_opname_map device_and_program_hash_to_opname{};
+
 static void start_tracy_zone(const string& source, const string& functName, uint32_t lineNum, uint32_t color = 0) {
 #if defined(TRACY_ENABLE)
     auto tracySrcLoc =
@@ -415,13 +443,6 @@ inline std::string op_meta_data_serialized_json(
     const bool useCachedOps = std::getenv("TT_METAL_PROFILER_NO_CACHE_OP_INFO") == nullptr;
     auto program_hash = compute_program_hash<device_operation_t>(operation_attributes, tensor_args);
 
-    auto as_string = [](std::string_view v) -> std::string { return {v.data(), v.size()}; };
-    std::string opName = as_string(tt::stl::get_type_name<device_operation_t>());
-    if constexpr (requires { device_operation_t::get_type_name(operation_attributes); }) {
-        opName = device_operation_t::get_type_name(operation_attributes);
-    }
-    runtime_id_to_opname.emplace({device_id, program.get_runtime_id()}, opName);
-
     if (!useCachedOps || (cached_ops.find(device_id) == cached_ops.end()) ||
         (cached_ops.at(device_id).find(program_hash) == cached_ops.at(device_id).end())) {
         auto j =
@@ -430,6 +451,10 @@ inline std::string op_meta_data_serialized_json(
         j["device_id"] = device_id;
         j["op_hash"] = program_hash;
         j["kernel_info"] = get_kernels_json(device_id, program);
+
+        auto opname = j["op_code"].template get<std::string>();
+        runtime_id_to_opname.emplace({device_id, program.get_runtime_id()}, opname);
+        device_and_program_hash_to_opname.emplace({device_id, program_hash}, std::move(opname));
 
         j["optional_input_tensors"] = std::vector<json>{};
 
@@ -459,6 +484,8 @@ inline std::string op_meta_data_serialized_json(
         std::string ser = j.dump(4);
         return fmt::format("{}{} ->\n{}`", short_str, operation_id, ser);
     } else {
+        auto opname = device_and_program_hash_to_opname.find_if_exists({device_id, program_hash});
+        runtime_id_to_opname.emplace({device_id, program.get_runtime_id()}, std::move(opname));
         return fmt::format("{}{}`", cached_ops.at(device_id).at(program_hash), operation_id);
     }
 }
