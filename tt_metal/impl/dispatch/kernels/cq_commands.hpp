@@ -254,7 +254,7 @@ struct CQDispatchDelayCmd {
 
 struct CQDispatchSetWriteOffsetCmd {
     uint8_t pad1;
-    uint16_t pad2;
+    uint16_t program_host_id;  // Program Host ID for upcoming commands. Used for profiling.
     uint32_t offset0;
     uint32_t offset1;
     uint32_t offset2;

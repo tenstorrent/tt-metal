@@ -421,7 +421,12 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
     kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
 
-#define DeviceTimestampedData(data_id, data) kernel_profiler::timeStampedData<data_id>(data);
+#define DeviceTimestampedData(name, data)                                          \
+    {                                                                              \
+        DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+        auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
+        kernel_profiler::timeStampedData<hash>(data);                              \
+    }
 
 #define DeviceRecordEvent(event_id) kernel_profiler::recordEvent(event_id);
 
@@ -437,9 +442,14 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
     kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH> zone = \
         kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH>();
 
-#define DeviceTimestampedData(data_id, data) kernel_profiler::timeStampedData<data_id, true>(data);
+#define DeviceTimestampedData(name, data)                                                       \
+    {                                                                                           \
+        DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                                            \
+        auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name));              \
+        kernel_profiler::timeStampedData<hash, kernel_profiler::DoingDispatch::DISPATCH>(data); \
+    }
 
-#define DeviceRecordEvent(event_id) kernel_profiler::recordEvent<true>(event_id);
+#define DeviceRecordEvent(event_id) kernel_profiler::recordEvent<kernel_profiler::DoingDispatch::DISPATCH>(event_id);
 
 // Dispatch but disabled
 #else
