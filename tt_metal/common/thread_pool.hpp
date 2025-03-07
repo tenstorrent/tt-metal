@@ -17,6 +17,7 @@ public:
 };
 
 std::shared_ptr<ThreadPool> create_boost_thread_pool(int num_threads);
+std::shared_ptr<ThreadPool> create_distributed_boost_thread_pool(int num_threads);
 std::shared_ptr<ThreadPool> create_device_bound_thread_pool(int num_threads, uint32_t logical_cpu_offset = 0);
 
 }  // namespace tt::tt_metal

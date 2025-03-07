@@ -28,12 +28,16 @@ std::unordered_map<int, std::vector<uint32_t>> get_cpu_cores_per_numa_node() {
 
 uint32_t get_cpu_core_for_physical_device(uint32_t physical_device_id, uint32_t logical_cpu_offset) {
     static std::unordered_map<int, std::vector<uint32_t>> cpu_cores_per_numa_node = get_cpu_cores_per_numa_node();
-    auto numa_node = tt::Cluster::instance().get_numa_node_for_device(physical_device_id);
+    // Initialize to an invalid value. Determine the NUMA Node based on the physical device id.
+    // If a NUMA Node is not found, use a round robin policy.
+    int numa_node = -1;
+    if (physical_device_id < tt::Cluster::instance().number_of_user_devices()) {
+        numa_node = tt::Cluster::instance().get_numa_node_for_device(physical_device_id);
+    }
     if (cpu_cores_per_numa_node.find(numa_node) != cpu_cores_per_numa_node.end()) {
         auto& cpu_cores_on_node = cpu_cores_per_numa_node[numa_node];
         return cpu_cores_on_node[(physical_device_id + logical_cpu_offset) % cpu_cores_on_node.size()];
     } else {
-        log_warning(tt::LogMetal, "Unable to bind worker thread to a NUMA node.");
         uint32_t num_threads = std::thread::hardware_concurrency();
         TT_FATAL(num_threads, "Could not detect the number of CPU cores on host.");
         return physical_device_id % num_threads;
@@ -112,7 +116,7 @@ private:
     // Statically allocated ring buffer containing
     // node objects, which contain handles to data
     // and another node object to traverse ring buffer.
-    const static uint32_t ring_buffer_size_ = 8192;
+    const static uint32_t ring_buffer_size_ = 65536;
     Node ring_buffer_[ring_buffer_size_];
 };
 // NUMA + CPU Affinity aware executor, used by custom thread-pool implementations.
@@ -199,18 +203,102 @@ using threading_primitives::NumaAwareExecutor;
 // Boost backed thread-pool.
 class BoostThreadPool : public ThreadPool {
 public:
-    BoostThreadPool(size_t thread_count) : pool_(thread_count) {}
+    BoostThreadPool(size_t thread_count) : pool_(thread_count) {
+        // Given the current use case, we don't expect to
+        // enqueue more tasks than the number of threads.
+        // Add a factor of safety and modify as needed.
+        futures_.reserve(thread_count * 4);
+        // Bind threads to CPU cores.
+        for (int i = 0; i < thread_count; i++) {
+            auto cpu_id = thread_binding::get_cpu_core_for_physical_device(i, 0);
+            auto task = [cpu_id]() {
+                pthread_t thread = pthread_self();
+                cpu_set_t cpuset;
+                CPU_ZERO(&cpuset);
+                CPU_SET(cpu_id, &cpuset);
+
+                int rc = pthread_setaffinity_np(thread, sizeof(cpu_set_t), &cpuset);
+                if (rc) {
+                    log_warning(
+                        tt::LogMetal,
+                        "Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: {}",
+                        rc);
+                }
+            };
+            this->enqueue(task, i);
+        }
+        this->wait();
+    }
 
     ~BoostThreadPool() noexcept override = default;
 
     void enqueue(std::function<void()>&& f, std::optional<uint32_t> device_idx = std::nullopt) override {
-        boost::asio::post(pool_, f);
+        std::packaged_task<void()> task(std::move(f));
+        futures_.push_back(task.get_future());
+        boost::asio::post(pool_, [executor = std::move(task)]() mutable { executor(); });
     }
 
-    void wait() override { pool_.wait(); }
+    void wait() override {
+        for (auto& future : futures_) {
+            future.get();
+        }
+        futures_.clear();
+    }
 
 private:
     boost::asio::thread_pool pool_;
+    std::vector<std::future<void>> futures_;
+};
+
+// Uses the BoostThreadPool implementation. Maintains a vector of single thread
+// BoostThreadPool objects. This allows submitting tasks to specific workers,
+// allowing an even distribution of work.
+class DistributedBoostThreadPool : public ThreadPool {
+public:
+    DistributedBoostThreadPool(uint32_t thread_count) {
+        workers_.reserve(thread_count);
+        num_workers_ = thread_count;
+        for (uint32_t i = 0; i < thread_count; i++) {
+            workers_.emplace_back(std::make_unique<BoostThreadPool>(1));
+        }
+        // Bind threads to CPU cores.
+        for (int i = 0; i < thread_count; i++) {
+            auto cpu_id = thread_binding::get_cpu_core_for_physical_device(i, 0);
+            auto task = [cpu_id]() {
+                pthread_t thread = pthread_self();
+                cpu_set_t cpuset;
+                CPU_ZERO(&cpuset);
+                CPU_SET(cpu_id, &cpuset);
+                int rc = pthread_setaffinity_np(thread, sizeof(cpu_set_t), &cpuset);
+                if (rc) {
+                    log_warning(
+                        tt::LogMetal,
+                        "Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: {}",
+                        rc);
+                }
+            };
+            this->enqueue(task, i);
+        }
+        this->wait();
+    }
+
+    void enqueue(std::function<void()>&& f, std::optional<uint32_t> device_idx = 0) override {
+        workers_[device_idx.value_or(thread_idx_ % num_workers_)]->enqueue(std::move(f));
+        ++thread_idx_;
+    }
+
+    void wait() override {
+        for (auto& worker : workers_) {
+            worker->wait();
+        }
+    }
+
+private:
+    std::vector<std::unique_ptr<BoostThreadPool>> workers_;
+    // Used to pick threads when device_idx is not specified in the enqueue API
+    uint32_t thread_idx_ = 0;
+    // Store the number of workers to repeated lookups
+    uint32_t num_workers_ = 0;
 };
 
 // Custom Thread-Pool using the threading::Executor class.
@@ -253,6 +341,10 @@ private:
 
 std::shared_ptr<ThreadPool> create_boost_thread_pool(int num_threads) {
     return std::make_shared<thread_pool_impls::BoostThreadPool>(num_threads);
+}
+
+std::shared_ptr<ThreadPool> create_distributed_boost_thread_pool(int num_threads) {
+    return std::make_shared<thread_pool_impls::DistributedBoostThreadPool>(num_threads);
 }
 
 std::shared_ptr<ThreadPool> create_device_bound_thread_pool(int num_threads, uint32_t logical_cpu_offset) {
