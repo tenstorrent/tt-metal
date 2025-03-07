@@ -60,11 +60,11 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     uint32_t client_interface_cb_index = tt::CBIndex::c_2;
     uint32_t fabric_sender_cb_index = tt::CBIndex::c_3;
     uint32_t fabric_receiver_cb_index = tt::CBIndex::c_4;
-
-    uint32_t output_cb_index = src_cb_index;
+    uint32_t output_cb_index = tt::CBIndex::c_5;
 
     uint32_t num_input_pages_to_read = tiles_per_core_width;
-    uint32_t num_output_pages_to_write = tiles_per_core_width_output;
+    uint32_t num_output_pages_per_core = tiles_per_core_width_output;
+    uint32_t num_double_buffer = 2;
 
     auto all_cores = shard_spec.grid;
     uint32_t ncores = shard_spec.num_cores();
@@ -79,8 +79,9 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
             .set_page_size(src_cb_index, input_page_size)
             .set_globally_allocated_address(*src_buffer);
 
+    // CB to represent the output sharded buffer
     tt::tt_metal::CircularBufferConfig cb_dst_config =
-        tt::tt_metal::CircularBufferConfig(num_input_pages_to_read * input_page_size, {{dst_cb_index, cb_data_format}})
+        tt::tt_metal::CircularBufferConfig(tiles_per_core_width * input_page_size, {{dst_cb_index, cb_data_format}})
             .set_page_size(dst_cb_index, input_page_size)
             .set_globally_allocated_address(*dst_buffer);
 
@@ -99,8 +100,13 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     // Add buffer for reduced shards from the other device(s)
     tt::tt_metal::CircularBufferConfig fabric_receiver_cb_config =
         tt::tt_metal::CircularBufferConfig(
-            num_input_pages_to_read * input_page_size, {{fabric_receiver_cb_index, cb_data_format}})
-            .set_page_size(fabric_receiver_cb_index, num_input_pages_to_read * input_page_size);
+            num_input_pages_to_read * input_page_size * num_devices, {{fabric_receiver_cb_index, cb_data_format}})
+            .set_page_size(fabric_receiver_cb_index, input_page_size);
+
+    // The buffer we pack into after we reduce the shards from the other device(s)
+    tt::tt_metal::CircularBufferConfig output_cb_config =
+        tt::tt_metal::CircularBufferConfig(num_double_buffer * output_page_size, {{output_cb_index, cb_data_format}})
+            .set_page_size(output_cb_index, output_page_size);
 
     auto cb_src = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src_config);  // input buffer
     auto cb_dst = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_dst_config);  // output buffer
@@ -112,16 +118,23 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     // fabric sender - we put the payload and packet header here after we apply the reduction, and then send it to the
     // next device, or if it's the last device, we write it to the output buffer
     auto cb_fabric_sender = tt::tt_metal::CreateCircularBuffer(program, all_cores, fabric_sender_cb_config);
+    // output buffer - we write the final reduced shard here after we receive the last shard from the other device
+    auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
+
+    const auto [mesh_id, chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
 
     std::vector<uint32_t> reader_compile_time_args = {
         input_page_size,
         src_cb_index,
-        dst_cb_index,
-        0,
-        tiles_per_core_width,
         fabric_sender_cb_index,
         fabric_receiver_cb_index,
-        client_interface_cb_index};
+        client_interface_cb_index,
+        0,
+        tiles_per_core_width,
+        output_cb_index,
+        (uint32_t)chip_id,
+        dst_cb_index,
+    };
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -140,7 +153,9 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         client_interface_cb_index,
         0,
         tiles_per_core_width,
-        PACKET_HEADER_SIZE_BYTES};
+        output_cb_index,
+        dst_cb_index,
+        (uint32_t)chip_id};
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -148,8 +163,6 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         "writer_llama_reduce_scatter.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
-
-    const auto [mesh_id, chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
 
     auto cores = corerange_to_cores(all_cores, std::nullopt);
     uint32_t start_block = 0;
