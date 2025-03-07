@@ -76,7 +76,7 @@ private:
     // Object maps for associating each object (or identifier) with a global_id
     // TODO (kmabee) - upgrade all global_id to be uint64_t for capture + replay.
     uint32_t next_global_id_ = 0;  // Shared across all object types.
-    std::unordered_map<const Buffer*, uint32_t> buffer_to_global_id_map_;
+    std::unordered_map<uint64_t, uint32_t> buffer_id_to_global_id_map_;
     std::unordered_map<uint64_t, uint32_t> program_id_to_global_id_map_;
     std::unordered_map<const Kernel*, uint32_t> kernel_to_global_id_map_;
     std::unordered_map<CBHandle, uint32_t> cb_handle_to_global_id_map_;

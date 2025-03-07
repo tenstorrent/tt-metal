@@ -194,6 +194,7 @@ class Buffer final {
     Buffer &operator=(const Buffer &other) = delete;
     Buffer(Buffer &&other) = delete;
     Buffer &operator=(Buffer &&other) = delete;
+    ~Buffer();
 
     IDevice* device() const { return device_; }
     DeviceAddr size() const { return size_; }
