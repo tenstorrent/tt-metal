@@ -55,10 +55,18 @@ jobs:
 
   smoke-tests:
     needs: build-artifact
-    uses: ./.github/workflows/zzz_smoke.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [
+          "N150",
+          "N300",
+        ]
+    uses: ./.github/workflows/smoke.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
       package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
+      runner: ${{ matrix.platform }}
 
   # Slow Dispatch Unit Tests
   sd-unit-tests:
