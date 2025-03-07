@@ -54,6 +54,7 @@ jobs:
     steps:
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - uses: ./.github/actions/retry-command
+        if: ${{ inputs.runner-label != 'BH' }} # Don't mount weka for BH
         with:
           timeout-seconds: 100
           max-retries: 10
@@ -88,7 +89,7 @@ jobs:
           prefix: "test_reports_"
 
   models-tests-slow-runtime-mode:
-    if: ${{ inputs.runner-label != 'E150' }} # Currently no tests for GS so skip it
+    if: ${{ inputs.runner-label != 'E150' && inputs.runner-label != 'BH' }} # Currently no tests for GS & BH so skip it
     strategy:
       fail-fast: false
       matrix:
