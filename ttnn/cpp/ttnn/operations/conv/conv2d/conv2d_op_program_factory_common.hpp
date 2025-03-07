@@ -5,8 +5,12 @@
 #pragma once
 
 #include <cstdint>
+#include "tt-metalium/circular_buffer_types.hpp"
+
 namespace ttnn::operations::conv {
 namespace conv2d {
+
+using namespace tt;
 
 // In order to make circular buffer indicies sequential, we use variable to keep track of the next available index.
 // Circular buffer indices should be assigned right before their creation.
