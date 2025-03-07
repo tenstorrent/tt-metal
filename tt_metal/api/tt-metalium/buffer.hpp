@@ -8,7 +8,6 @@
 #include <atomic>
 #include <cstdint>
 #include <condition_variable>
-#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -21,9 +20,6 @@
 #include "core_coord.hpp"
 #include "buffer_constants.hpp"
 #include "sub_device_types.hpp"
-#include "umd/device/tt_soc_descriptor.h"
-#include "umd/device/types/xy_pair.h"
-#include "concepts.hpp"
 #include "assert.hpp"
 #include <nlohmann/json.hpp>
 

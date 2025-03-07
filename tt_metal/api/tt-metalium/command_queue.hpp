@@ -4,15 +4,15 @@
 
 #pragma once
 
-#include <condition_variable>
 #include <cstdint>
 #include <memory>
-#include <thread>
 
 #include "worker_config_buffer.hpp"
 #include "trace_buffer.hpp"
 #include "memcpy.hpp"
 #include "command_queue_interface.hpp"
+#include "device.hpp"
+#include "buffer.hpp"
 
 namespace tt::tt_metal {
 
@@ -49,7 +49,7 @@ public:
 
     virtual void terminate() = 0;
 
-    virtual IDevice* device() = 0;
+    virtual tt::tt_metal::IDevice* device() = 0;
 
     // This function is temporarily needed since MeshCommandQueue relies on the CommandQueue object
     virtual WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) = 0;
