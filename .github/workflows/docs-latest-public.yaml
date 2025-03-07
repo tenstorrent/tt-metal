@@ -93,7 +93,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           branch: gh-pages
           target-folder: ${{ inputs.version }}
-          folder: ./gh_pages/${{ inputs.version }}
+          folder: ${{ github.workspace }}/docker-job/gh_pages/${{ inputs.version }}
           force: false
       - name: Delete artifact if deployment failed
         # When the deployment API call fails, the artifacts are not cleaned up correctly
