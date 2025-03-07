@@ -22,6 +22,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/debug_tools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/device_command.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/host_runtime_commands.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/device_command_calculator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_query_manager.cpp
