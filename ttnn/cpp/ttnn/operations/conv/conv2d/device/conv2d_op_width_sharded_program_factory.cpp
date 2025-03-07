@@ -570,6 +570,33 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     std::map<string, string> writer_mcast_sender_defines;
     std::map<string, string> compute_defines;
 
+    compute_defines["WIDTH_SHARDED"] = "1";
+
+    if (output.memory_config().is_sharded()) {
+        writer_defines["SHARDED_OUT"] = "1";
+        writer_mcast_sender_defines["SHARDED_OUT"] = "1";
+    }
+    if (output_num_cores == 1) {
+        writer_mcast_sender_defines["SKIP_MCAST"] = "1";
+    }
+    if (has_bias) {
+        writer_defines["FUSE_BIAS"] = "1";
+        writer_mcast_sender_defines["FUSE_BIAS"] = "1";
+        compute_defines["FUSE_BIAS"] = "1";
+    }
+
+    if (fuse_relu) {
+        compute_defines["PACK_RELU"] = "1";
+    }
+
+    if (split_reader) {
+        reader_defines["SPLIT_READER"] = "1";
+        compute_defines["SPLIT_READER"] = "1";
+    }
+
+    if (packer_l1_acc) {
+        compute_defines["PACKER_L1_ACC"] = "1";
+    }
     uint32_t num_output_tiles = per_core_out_matrix_height_ntiles * p_config.per_core_out_matrix_width_ntile;
     uint32_t act_tile_size = tt_metal::detail::TileSize(act_df);
     uint32_t tilized_act_tile_size = tt_metal::detail::TileSize(tilized_act_df);
@@ -716,6 +743,16 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
             cb_output_config = cb_output_config.set_globally_allocated_address(*output.buffer());
         }
         cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+    }
+
+    CircularBufferConfig cb_config_output = GetCircularBufferConfig(program, cb_output);
+    CircularBufferConfig cb_config_matmul_partials = GetCircularBufferConfig(program, cb_matmul_partials);
+
+    bool partials_cb_uses_output = false;
+    if (cb_config_matmul_partials.globally_allocated_address().has_value() &&
+        cb_config_output.globally_allocated_address().has_value()) {
+        partials_cb_uses_output = cb_config_matmul_partials.globally_allocated_address().value() ==
+                                  cb_config_output.globally_allocated_address().value();
     }
 
     compute_kernel_args = {
