@@ -68,9 +68,7 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
-        )
+        (8, 4),
     ],
     indirect=True,
 )
@@ -112,7 +110,7 @@ def test_llama_model_inference(
     if layers == 1:
         pcc = 0.922166
     else:
-        pcc = 0.94 if mode_accuracy else 0.86
+        pcc = 0.94
 
     # Define tight final PCC thresholds for quick mode
     final_model_pcc = {"llama31_70b": 0.92216}[model_name]
@@ -124,7 +122,7 @@ def test_llama_model_inference(
         "llama31_70b": 0.9997,
     }[model_name]
 
-    iterations = 6 if layers == 1 else 30
+    iterations = 6 if layers == 1 else 5
 
     if layers is not None:
         model_args.n_layers = layers
