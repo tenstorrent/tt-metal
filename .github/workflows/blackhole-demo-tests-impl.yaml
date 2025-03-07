@@ -13,13 +13,13 @@ jobs:
             name: "BH_functionality",
             arch: blackhole,
             runs-on: ["cloud-virtual-machine", "BH", "in-service"],
-            cmd:
+            cmd: echo addme
           },
           {
             name: "BH_performance",
             arch: blackhole,
-            runs-on: ["BH", "bare-metal", "in-service"],
-            cmd:
+            runs-on: ["BH", "pipeline-perf", "in-service"],
+            cmd: echo addme
           }
         ]
     name: ${{ matrix.test-group.name }}
@@ -58,3 +58,8 @@ jobs:
         if: ${{ matrix.test-group.name == 'BH_performance' }}
         run: |
           sudo cpupower frequency-set -g ondemand
+      - uses: ./.github/actions/slack-report
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: U0883RN6CRE  #William Ly
