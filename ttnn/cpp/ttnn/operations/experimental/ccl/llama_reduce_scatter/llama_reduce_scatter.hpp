@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ttnn/decorators.hpp"
-
+#include "cpp/ttnn/global_semaphore.hpp"
 namespace ttnn {
 namespace operations::experimental::ccl {
 
@@ -14,6 +14,7 @@ struct ExecuteLlamaReduceScatter {
         QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const int32_t dim,
+        const global_semaphore::MultiDeviceGlobalSemaphore& cross_device_semaphore,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
 };
 

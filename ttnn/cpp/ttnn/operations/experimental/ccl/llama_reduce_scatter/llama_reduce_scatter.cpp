@@ -17,8 +17,9 @@ ttnn::Tensor ExecuteLlamaReduceScatter::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const int32_t dim,
+    const global_semaphore::MultiDeviceGlobalSemaphore& cross_device_semaphore,
     const std::optional<ttnn::MemoryConfig>& memory_config) {
-    auto output = ttnn::prim::llama_reduce_scatter(input_tensor, dim, memory_config);
+    auto output = ttnn::prim::llama_reduce_scatter(input_tensor, dim, cross_device_semaphore, memory_config);
     return output;
 }
 
