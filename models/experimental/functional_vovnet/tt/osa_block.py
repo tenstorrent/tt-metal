@@ -54,11 +54,12 @@ class TtOsaBlock:
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         output = [ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)]
+        # output = [x]
         if self.conv_reduction is not None:
             x = self.conv_reduction.forward(x)
         x = self.conv_mid.forward(x[0], output)
         x = self.conv_concat.forward(x)[0]
         if self.attn is not None:
             x = self.attn.forward(x)
-
+        del output
         return x

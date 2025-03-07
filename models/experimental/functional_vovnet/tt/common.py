@@ -14,15 +14,12 @@ class Conv:
         conv_params,
         *,
         act_block_h=None,
-        reshard=False,
-        deallocate=True,
         activation="",
+        split_conv=False,
+        seperable_conv_norm_act=False,
         fused_op=True,
         debug=False,
         groups=1,
-        bias=False,
-        split_conv=False,
-        seperable_conv_norm_act=False,
         effective_se=False,
         parameters=None,
         pw=False,
@@ -47,7 +44,6 @@ class Conv:
                 self.bias = parameters[f"{path}.conv_dw.bias"]
                 self.groups = self.weights.shape[0]
 
-        self.split_conv = split_conv
         self.conv_params = conv_params
 
         self.debug = debug
@@ -57,6 +53,17 @@ class Conv:
 
         if fused_op:
             activation = ""
+        self.shard_layout = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        if (
+            self.weights.shape[0] == 768
+            or self.weights.shape[0] == 224
+            or self.weights.shape[0] == 1024
+            or (self.weights.shape[0] == 256 and self.weights.shape[1] == 256)
+            or (self.weights.shape[0] == 512 and self.weights.shape[1] == 512)
+        ):
+            self.shard_layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
+        if self.weights.shape[0] == 192 or (self.weights.shape[0] == 512 and self.weights.shape[1] == 736):
+            self.shard_layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
 
         self.kernel_size = (self.weights.shape[2], self.weights.shape[3])
         self.out_channels = self.weights.shape[0]
@@ -65,15 +72,14 @@ class Conv:
             dtype=ttnn.bfloat16,
             weights_dtype=ttnn.bfloat8_b,
             activation=activation,
-            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            # shard_layout = None,
+            # shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            shard_layout=self.shard_layout,
             input_channels_alignment=16,  # if self.input_params[-1] < 16 else 32,
             reshard_if_not_optimal=True,
             deallocate_activation=True,
             reallocate_halo_output=True,
             enable_act_double_buffer=True,
             act_block_w_div=1,
-            # enable_split_reader = True,
             enable_weights_double_buffer=True,
         )
         if self.act_block_h is not None:
@@ -94,8 +100,6 @@ class Conv:
     def __call__(self, input_tensor):
         N, C, H, W = input_tensor.shape
         input_tensor = ttnn.permute(input_tensor, (0, 2, 3, 1))
-        if C >= 1440:
-            self.conv_config.shard_layout = None
         compute_config = ttnn.init_device_compute_kernel_config(
             self.device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
@@ -137,5 +141,5 @@ class Conv:
             output_tensor = ttnn.from_torch(
                 output_tensor, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
             )
-            output_tensor = ttnn.relu(output_tensor)
+            output_tensor = ttnn.relu(output_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
         return output_tensor, _out_height, _out_width
