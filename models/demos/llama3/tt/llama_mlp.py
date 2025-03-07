@@ -81,9 +81,10 @@ class TtLlamaMLP(LightweightModule):
                 pc_2 = self.model_config["DECODE_MLP_W2_PRG_CONFIG"]
                 pc_3 = self.model_config["DECODE_MLP_W1_W3_PRG_CONFIG"]
         else:  # Update the program configs based for prefill
-            if seq_len >= 1024:
+            prefill_len_cutoff = 512 if self.args.arch_name == "blackhole" else 1024
+            if seq_len >= prefill_len_cutoff:
                 # Reshape input to to fit on device and parallelize computation
-                x = ttnn.reshape(x, [1, seq_len // 1024, 1024, -1])
+                x = ttnn.reshape(x, [1, seq_len // prefill_len_cutoff, prefill_len_cutoff, -1])
             pc_1 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len)
             pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"](seq_len)
             pc_3 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len)
@@ -172,6 +173,7 @@ class TtLlamaMLP(LightweightModule):
             dtype=ttnn.bfloat8_b,
             memory_config=w1_out.memory_config(),
         )
+
         if mode == "decode" and not TG:
             # w2 may use a different core grid, this is a no-op if they already match
             w2_in = ttnn.to_memory_config(w2_in, self.model_config["SHARDED_MLP2_INPUT_MEMCFG"])
