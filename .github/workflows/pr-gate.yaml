@@ -20,6 +20,7 @@ on:
       - ready_for_review
     branches:
       - "main"
+  merge_group:
 
 concurrency:
   # Use github.run_id on main branch (or any protected branch)
