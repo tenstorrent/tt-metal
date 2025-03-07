@@ -145,6 +145,7 @@ jobs:
       - name: Upload workflow run data, even on failure
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
+        timeout-minutes: 10
         with:
           name: workflow-run-data
           path: |

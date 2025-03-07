@@ -80,4 +80,9 @@ public:
     virtual void finish(tt::stl::Span<const SubDeviceId> sub_device_ids) = 0;
 };
 
+struct ReadBufferDescriptor;
+struct ReadEventDescriptor;
+
+using CompletionReaderVariant = std::variant<std::monostate, ReadBufferDescriptor, ReadEventDescriptor>;
+
 }  // namespace tt::tt_metal

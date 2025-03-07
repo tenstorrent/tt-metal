@@ -10,7 +10,6 @@
 #include "kernel_types.hpp"
 #include "circular_buffer_types.hpp"
 #include "semaphore.hpp"
-#include "program_command_sequence.hpp"
 #include "program_device_map.hpp"
 #include "worker_config_buffer.hpp"
 #include "dev_msgs.h"
@@ -30,6 +29,8 @@ class Program;
 class CircularBufferConfig;
 
 }  // namespace v0
+
+struct ProgramCommandSequence;
 
 namespace v1 {
 namespace experimental {
