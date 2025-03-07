@@ -6,7 +6,7 @@ jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
-    build-wheel:
+    with:
       build-wheel: true
       version: "20.04"
   publish-release-image:
