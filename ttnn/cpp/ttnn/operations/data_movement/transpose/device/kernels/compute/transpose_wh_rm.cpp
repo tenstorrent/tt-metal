@@ -9,8 +9,6 @@
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/untilize.h"
 #include "compute_kernel_api/pack_untilize.h"
-#include "debug/dprint_tensix.h"
-#include "debug/dprint_pages.h"
 
 template <uint32_t Wt, uint32_t Ht, uint32_t HtWt>
 ALWI void transpose_with_untilize(uint32_t cb_tilize, uint32_t cb_untilize, uint32_t cb_out) {
@@ -58,11 +56,10 @@ ALWI void transpose_with_pack_untilize_narrow_row(uint32_t cb_tilize, uint32_t c
     for (uint32_t w = 0; w < Wt; ++w) {
         tile_regs_acquire();
         for (uint32_t h = 0; h < Ht; ++h) {
-            // UNPACK(tt::compute::common::print_full_tile(cb_tilize, 0));
             transpose_wh_tile(cb_tilize, tile_idx, h);
             tile_idx += Wt;
         }
-        // dprint_tensix_dest_reg(0);
+
         tile_regs_commit();
 
         if (w == Wt - 1) {  // last row
