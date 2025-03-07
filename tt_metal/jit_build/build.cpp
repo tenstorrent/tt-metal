@@ -173,25 +173,25 @@ void JitBuildEnv::init(
     // Includes
     // TODO(pgk) this list is insane
     std::vector<std::string> includeDirs = {
-        ".", 
-        "..", 
-        this->root_,
-        this->root_ + "ttnn",
-        this->root_ + "tt_metal",
-        this->root_ + "tt_metal/include",
-        this->root_ + "tt_metal/hw/inc",
-        this->root_ + "tt_metal/hostdevcommon/api",
-        this->root_ + "tt_metal/hw/inc/debug",
-        this->root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_,
-        this->root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/" + this->arch_name_ + "_defines",
-        this->root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/noc",
-        this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/metal/common",
-        this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/metal/llk_io",
+        ".",
+        "..",
+        root_,
+        root_ + "ttnn",
+        root_ + "tt_metal",
+        root_ + "tt_metal/include",
+        root_ + "tt_metal/hw/inc",
+        root_ + "tt_metal/hostdevcommon/api",
+        root_ + "tt_metal/hw/inc/debug",
+        root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_,
+        root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/" + this->arch_name_ + "_defines",
+        root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/noc",
+        root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/metal/common",
+        root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/metal/llk_io",
         // TODO: datamovement fw shouldn't read this
-        this->root_ + "tt_metal/third_party/tt_llk/tt_llk_" + this->arch_name_ + "/common/inc",
-        this->root_ + "tt_metal/api/",
-        this->root_ + "tt_metal/api/tt-metalium/",
-        this->root_ + "tt_metal/third_party/tt_llk/tt_llk_" + this->arch_name_ + "/llk_lib"
+        root_ + "tt_metal/third_party/tt_llk/tt_llk_" + this->arch_name_ + "/common/inc",
+        root_ + "tt_metal/api/",
+        root_ + "tt_metal/api/tt-metalium/",
+        root_ + "tt_metal/third_party/tt_llk/tt_llk_" + this->arch_name_ + "/llk_lib"
     };
     
     std::ostringstream oss;
