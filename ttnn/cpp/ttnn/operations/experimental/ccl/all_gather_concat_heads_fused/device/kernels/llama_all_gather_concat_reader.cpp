@@ -67,6 +67,7 @@ void kernel_main() {
         uint32_t num_tiles_to_read_this_core =
             std::min(num_tiles_per_core - shard_tile_id, num_tiles_to_read - tiles_read);
         cb_reserve_back(cb0_id, num_tiles_to_read_this_core);
+        DPRINT << "num_tiles_to_read_this_core: " << num_tiles_to_read_this_core << ENDL();
         const uint32_t l1_write_addr = get_write_ptr(cb0_id);
         uint64_t read_addr = get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], tensor_address0);
         read_addr += shard_tile_id * tensor0_page_size;

@@ -139,7 +139,7 @@ std::vector<ttnn::TensorSpec> AllGatherConcat::compute_output_specs(const std::v
 }
 
 AllGatherConcatVersion AllGatherConcat::select_version(const Tensor& input_tensor) const {
-    return AllGatherConcatVersion::LLAMA_POST_BINARY_MATMUL;
+    return AllGatherConcatVersion::LLAMA_MINIMAL_SHARDED;
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks AllGatherConcat::create_program(
@@ -150,15 +150,22 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherConcat::create_program(
 
     log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
 
-    log_trace(tt::LogOp, "Detected all gather specialized shape. all_gather_concat_llama_post_binary_matmul is called");
+    log_trace(tt::LogOp, "Detected all gather specialized shape. all_gather_concat_llama_sharded is called");
     printf("in create program before calling concat\n");
     CoreCoord compute_with_storage_grid_size = input_tensors[0].device()->compute_with_storage_grid_size();
+    const auto& input_tensor = input_tensors[0];
+    auto shape = input_tensor.get_padded_shape();  // TODO: Replace with get_logical_shape()
+    shape[this->dim] *= this->ring_size;
+    auto output_intermediate_tensor_spec = TensorSpec(
+        shape, TensorLayout(input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config));
+
     if (this->on_subcoregrids) {
-        return all_gather_concat_llama_post_binary_matmul_subgrids(
+        return all_gather_concat_llama_sharded_subgrids(
             input_tensors[0],
             this->forward_device,
             this->backward_device,
             output_tensors[0],
+            output_intermediate_tensor_spec,
             this->dim,
             this->num_links,
             this->ring_size,
@@ -169,11 +176,12 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherConcat::create_program(
             this->enable_persistent_fabric_mode,
             this->num_heads);
     }
-    return all_gather_concat_llama_post_binary_matmul(
+    return all_gather_concat_llama_sharded(
         input_tensors[0],
         this->forward_device,
         this->backward_device,
         output_tensors[0],
+        output_intermediate_tensor_spec,
         this->dim,
         this->num_links,
         this->ring_size,

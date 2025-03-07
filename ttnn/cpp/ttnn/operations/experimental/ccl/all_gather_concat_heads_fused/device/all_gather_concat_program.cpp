@@ -53,11 +53,12 @@ void append_fabric_connection_rt_arguments(
     }
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_post_binary_matmul(
+tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     const Tensor& input_tensor,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
+    TensorSpec output_intermediate_tensor_spec,
     const uint32_t dim,
     const uint32_t num_links,
     const uint32_t ring_size,
@@ -113,9 +114,13 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_post_binar
     const auto input_tensor_cores = input_tensor.memory_config().shard_spec->grid;
     const auto input_tensor_shard_shape = input_tensor.memory_config().shard_spec->shape;
     const auto input_tensor_shard_num_pages = input_tensor_shard_shape[0] * input_tensor_shard_shape[1] / TILE_HW;
-    const auto output_tensor_cores = output_tensor.memory_config().shard_spec->grid;
+    // const auto output_tensor_cores = output_tensor.memory_config().shard_spec->grid;
+    const auto output_tensor_cores = output_intermediate_tensor_spec.memory_config().shard_spec->grid;
     const auto output_tensor_shard_shape = output_tensor.memory_config().shard_spec->shape;
     const auto output_tensor_shard_num_pages = output_tensor_shard_shape[0] * output_tensor_shard_shape[1] / TILE_HW;
+    printf("output_tensor_cores: %u\n", output_tensor_cores.num_cores());
+    printf("output_tensor_shard_shape: %u, %u\n", output_tensor_shard_shape[0], output_tensor_shard_shape[1]);
+    printf("output_tensor_shard_num_pages: %u\n", output_tensor_shard_num_pages);
 
     tt::log_debug(tt::LogOp, "input_tensor_num_pages: {}", input_tensor_num_pages);
     tt::log_debug(tt::LogOp, "input_tensor_cores: {}", input_tensor_cores);
@@ -125,13 +130,46 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_post_binar
     tt::log_debug(tt::LogOp, "output_tensor_shard_shape: {}", output_tensor_shard_shape);
     tt::log_debug(tt::LogOp, "output_tensor_shard_num_pages: {}", output_tensor_shard_num_pages);
 
+    /*
+    //concat info
+    uint32_t single_tile_size =
+    tt::tt_metal::detail::TileSize(tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype()));
+
+    uint32_t head_dim = 128;
+    uint32_t head_tiles = head_dim / TILE_WIDTH;
+    uint32_t head_size = head_tiles * single_tile_size;
+
+    uint32_t element_size = output_tensor.element_size();
+    uint32_t sub_tile_line_bytes = 16 * element_size;
+    auto q_shard_spec = output_tensor.shard_spec().value();
+    auto q_cores = q_shard_spec.grid;
+    auto q_num_tiles = q_shard_spec.shape[0] * q_shard_spec.shape[1] / TILE_HW;
+    auto in_shard_spec = output_intermediate_tensor_spec.memory_config().shard_spec;
+    auto in_cores = in_shard_spec->grid;
+    auto in_num_tiles = in_shard_spec->shape[0] * in_shard_spec->shape[1] / TILE_HW;
+
+    printf("single_tile_size: %u\n", single_tile_size);
+    printf("head_tiles: %u\n", head_tiles);
+    printf("head_size: %u\n", head_size);
+    printf("element_size: %u\n", element_size);
+    printf("sub_tile_line_bytes: %u\n", sub_tile_line_bytes);
+    printf("q_cores: %u\n", q_cores.num_cores());
+    printf("q_num_tiles: %u\n", q_num_tiles);
+    printf("in_cores: %u\n", in_cores.num_cores());
+    printf("in_num_tiles: %u\n", in_num_tiles);
+    */
+
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = local_fabric_handle->get_edm_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
+    printf("packet_size_bytes: %zu\n", packet_size_bytes);
+    printf("l1_scratch_cb_page_size_bytes: %u\n", l1_scratch_cb_page_size_bytes);
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
+    printf("num_pages_per_packet: %u\n", num_pages_per_packet);
     uint32_t cb_num_pages =
         input_tensor_num_pages / num_links +
         1;  // We are dealing with small shapes, so assuming all pages for a worker can be fit into the CB
+    printf("cb_num_pages: %u\n", cb_num_pages);
     uint32_t src0_cb_index = tt::CB::c_in0;
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     tt::tt_metal::CircularBufferConfig cb_src0_config =
@@ -150,6 +188,35 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_post_binar
     auto reserved_packet_header_CB_handle =
         CreateCircularBuffer(program, sender_worker_core_range, cb_reserved_packet_header_config);
 
+    CoreRange concat_cores({1, 0}, {1, 0});
+
+    uint32_t tmp_cb_index = tt::CB::c_in2;
+    tt::tt_metal::CircularBufferConfig tmp_cb_config =
+        tt::tt_metal::CircularBufferConfig(2, {{tmp_cb_index, df}}).set_page_size(tmp_cb_index, 2);
+    auto tmp_cb_handle = CreateCircularBuffer(program, concat_cores, tmp_cb_config);
+
+    CoreRange all_cores({0, 0}, {1, 0});
+
+    /*
+    uint32_t interm_out_cb_index = tt::CBIndex::c_16;
+    tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
+    tt::tt_metal::CircularBufferConfig interm_out_cb_config =
+        tt::tt_metal::CircularBufferConfig(128 * single_tile_size, {{interm_out_cb_index, out_df}})
+            .set_page_size(interm_out_cb_index, single_tile_size);
+    tt::tt_metal::CBHandle interm_out_cb_workers = CreateCircularBuffer(program, all_cores, interm_out_cb_config);
+    */
+    // WAIT KERNEL
+
+    auto concat_reader_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
+    concat_reader_kernel_config.compile_args = {
+        tmp_cb_index,
+    };
+    auto concat_reader_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/kernels/"
+        "llama_concat_reader.cpp",
+        concat_cores,
+        concat_reader_kernel_config);
     // KERNEL CREATION
     // Reader
     auto reader_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
@@ -305,10 +372,27 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_post_binar
         append_fabric_connection_rt_arguments(forward_fabric_connection, core, program, writer_rt_args);
         append_fabric_connection_rt_arguments(backward_fabric_connection, core, program, writer_rt_args);
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
+
+        std::vector<uint32_t> concat_reader_rt_args = {
+            semaphore.address(),
+            out_ready_sem_wait_value,
+            drain_sync_core.x,
+            drain_sync_core.y,
+            output_tensor_cores_x.size()};
+        concat_reader_rt_args.insert(
+            concat_reader_rt_args.end(), output_tensor_cores_x.begin(), output_tensor_cores_x.end());
+        concat_reader_rt_args.insert(
+            concat_reader_rt_args.end(), output_tensor_cores_y.begin(), output_tensor_cores_y.end());
+        tt::tt_metal::SetRuntimeArgs(program, concat_reader_kernel_id, {concat_cores}, concat_reader_rt_args);
     }
 
     auto override_runtime_arguments_callback =
-        [worker_sender_reader_kernel_id, worker_sender_writer_kernel_id, semaphore, sender_worker_cores](
+        [worker_sender_reader_kernel_id,
+         worker_sender_writer_kernel_id,
+         concat_reader_kernel_id,
+         semaphore,
+         sender_worker_cores,
+         concat_cores](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -324,6 +408,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_post_binar
             // update senders
             auto& worker_reader_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_reader_kernel_id);
             auto& worker_writer_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_writer_kernel_id);
+            auto& concat_reader_kernel_runtime_args_by_core = GetRuntimeArgs(program, concat_reader_kernel_id);
             for (const auto& core : sender_worker_cores) {
                 // reader
                 auto& worker_reader_sender_runtime_args = worker_reader_sender_runtime_args_by_core[core.x][core.y];
@@ -333,16 +418,22 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_post_binar
                 worker_writer_sender_runtime_args[0] = output.buffer()->address();
                 worker_writer_sender_runtime_args[1] = semaphore.address();
             }
+            for (const auto& concat_core : concat_cores) {
+                auto& concat_reader_runtime_args =
+                    concat_reader_kernel_runtime_args_by_core[concat_core.x][concat_core.y];
+                concat_reader_runtime_args[0] = semaphore.address();
+            }
         };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_post_binary_matmul_subgrids(
+tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded_subgrids(
     const Tensor& input_tensor,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
+    TensorSpec output_intermediate_tensor_spec,
     const uint32_t dim,
     const uint32_t num_links,
     const uint32_t ring_size,

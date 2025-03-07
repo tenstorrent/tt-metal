@@ -338,6 +338,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_post_binary
     const auto output_tensor_shard_shape = output_tensor.memory_config().shard_spec->shape;
     const auto output_tensor_shard_num_pages = output_tensor_shard_shape[0] * output_tensor_shard_shape[1] / TILE_HW;
 
+    printf("output_tensor_cores: %u\n", output_tensor_cores.num_cores());
+    printf("output_tensor_shard_shape: %u, %u\n", output_tensor_shard_shape[0], output_tensor_shard_shape[1]);
+    printf("output_tensor_shard_num_pages: %u\n", output_tensor_shard_num_pages);
+
     tt::log_debug(tt::LogOp, "input_tensor_num_pages: {}", input_tensor_num_pages);
     tt::log_debug(tt::LogOp, "input_tensor_cores: {}", input_tensor_cores);
     tt::log_debug(tt::LogOp, "input_tensor_shard_shape: {}", input_tensor_shard_shape);
@@ -458,6 +462,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_post_binary
             output_tensor_cores_x.push_back(this_core.x);
             output_tensor_cores_y.push_back(this_core.y);
         }
+        printf("output_tensor_cores_x: %zu\n", output_tensor_cores_x.size());
+        printf("output_tensor_cores_y: %zu\n", output_tensor_cores_y.size());
 
         tt::log_debug(tt::LogOp, "input_tile_id_start: {}", input_tile_id_start);
         tt::log_debug(tt::LogOp, "input_tile_id_end: {}", input_tile_id_end);

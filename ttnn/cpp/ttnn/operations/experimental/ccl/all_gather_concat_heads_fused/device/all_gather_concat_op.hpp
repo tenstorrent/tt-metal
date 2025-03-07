@@ -26,7 +26,7 @@ namespace ttnn {
 using ccl::EriscDatamoverBuilder;
 
 enum class AllGatherConcatVersion {
-    LLAMA_POST_BINARY_MATMUL = 2,
+    LLAMA_MINIMAL_SHARDED = 2,
 };
 
 struct AllGatherConcat {
@@ -124,11 +124,12 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     IDevice* device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
 
-tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_post_binary_matmul(
+tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     const Tensor& input_tensor,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
+    TensorSpec output_intermediate_tensor_spec,
     const uint32_t dim,
     const uint32_t num_links,
     const uint32_t ring_size,
@@ -139,11 +140,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_post_binar
     bool enable_persistent_fabric_mode,
     const uint32_t num_heads);
 
-tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_post_binary_matmul_subgrids(
+tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded_subgrids(
     const Tensor& input_tensor,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
+    TensorSpec output_intermediate_tensor_spec,
     const uint32_t dim,
     const uint32_t num_links,
     const uint32_t ring_size,

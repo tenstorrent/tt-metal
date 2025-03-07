@@ -205,5 +205,16 @@ void kernel_main() {
     }
 
     noc_async_write_barrier();
+    /*
+    cb_push_back(interm_cb_address0, 128);
+    uint32_t l1_read_addr = get_read_ptr(interm_cb_address0);
+    volatile tt_l1_ptr uint16_t* dst_noc2 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_read_addr);
+    for (uint32_t i =31; i<128; i++) {
+        DPRINT << "printing tile: " << i << ENDL();
+        for (uint32_t j =0; j<1024; j++) {
+            DPRINT << "value at index: " << j << " is " << BF16((uint16_t)dst_noc2[j + i*1024])<< ENDL();
+        }
+    }
+    */
     DPRINT << "DONE \n";
 }

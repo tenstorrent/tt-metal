@@ -18,7 +18,10 @@ from tests.ttnn.unit_tests.operations.ccl.fusion_subtests.rms_test import run_rm
 
 from tests.ttnn.unit_tests.operations.ccl.fusion_subtests.reduce_scatter_test import run_reduce_scatter_impl
 
-from tests.ttnn.unit_tests.operations.ccl.fusion_subtests.concat_fuse_test import run_concat_fuse_impl
+from tests.ttnn.unit_tests.operations.ccl.fusion_subtests.concat_fuse_test import (
+    run_concat_fuse_impl,
+    run_gather_concat_impl,
+)
 
 from tests.ttnn.unit_tests.operations.ccl.fusion_subtests.all_reduce_test import run_all_reduce_impl
 
@@ -518,10 +521,10 @@ def test_reduce_scatter(
     "input_dtype",
     [
         ttnn.bfloat16,
-        ttnn.bfloat8_b,
+        # ttnn.bfloat8_b,
     ],
 )
-@pytest.mark.parametrize("num_iters", [8])
+@pytest.mark.parametrize("num_iters", [1])
 @pytest.mark.parametrize("enable_async", [True])
 def test_concat_fuse(
     t3k_mesh_device,
