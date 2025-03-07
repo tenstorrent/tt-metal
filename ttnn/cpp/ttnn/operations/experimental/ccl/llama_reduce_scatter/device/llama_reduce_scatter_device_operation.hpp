@@ -13,12 +13,14 @@
 #include "ttnn/types.hpp"
 #include "ttnn/decorators.hpp"
 #include <tt-metalium/span.hpp>
+#include "cpp/ttnn/global_semaphore.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
 struct LlamaReduceScatterDeviceOperation {
     struct operation_attributes_t {
         const uint32_t dim;
+        const global_semaphore::MultiDeviceGlobalSemaphore cross_device_semaphore;
         const MemoryConfig output_mem_config;
     };
     struct tensor_args_t {
@@ -80,6 +82,7 @@ struct LlamaReduceScatterDeviceOperation {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const ttnn::Tensor& input_tensor,
         const int32_t dim,
+        const global_semaphore::MultiDeviceGlobalSemaphore& cross_device_semaphore,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
 };
 }  // namespace ttnn::operations::experimental::ccl

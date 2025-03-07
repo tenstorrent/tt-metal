@@ -37,6 +37,11 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     TT_FATAL(input_tensor.shard_spec().has_value(), "Shard spec is not present");
     auto shard_spec = input_tensor.shard_spec().value();
     auto output_shard_spec = output_tensor.shard_spec().value();
+    const auto& cross_device_semaphore = operation_attributes.cross_device_semaphore;
+    std::vector<GlobalSemaphore> semaphores = cross_device_semaphore.global_semaphores;
+    // All of them should have the same address, noticed that the address value is uint64_t though, which we can't pass
+    // into NOC
+    uint32_t semaphore_address = semaphores.at(0).address();
 
     auto src_buffer = input_tensor.buffer();
     auto dst_buffer = output_tensor.buffer();
@@ -171,7 +176,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     uint32_t split_size = num_cores / num_devices;
     for (uint32_t i = 0; i < num_cores; i++) {
         auto core = cores[i];
-        std::vector<uint32_t> reader_runtime_args = {src_buffer->address(), dst_buffer->address()};
+        std::vector<uint32_t> reader_runtime_args = {src_buffer->address(), dst_buffer->address(), semaphore_address};
         std::vector<uint32_t> writer_runtime_args = {dst_buffer->address()};
         uint32_t target_chip_id = i / split_size;  // 0 or 1 for 2 devices
         if (target_chip_id == chip_id) {
@@ -202,6 +207,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         writer_runtime_args.push_back(my_noc_xy);
         writer_runtime_args.push_back(mesh_id);
         writer_runtime_args.push_back(target_chip_id);
+        writer_runtime_args.push_back(semaphore_address);
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
     }
