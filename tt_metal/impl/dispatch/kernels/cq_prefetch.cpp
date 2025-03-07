@@ -12,6 +12,7 @@
 #include <cq_commands.hpp>
 #include "dataflow_api.h"
 #include "dataflow_api_addrgen.h"
+#include "tt_metal/impl/dispatch/kernels/packet_queue.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
@@ -20,7 +21,11 @@
 
 constexpr uint32_t CQ_PREFETCH_CMD_BARE_MIN_SIZE = PCIE_ALIGNMENT;  // for NOC PCIe alignemnt
 struct CQPrefetchHToPrefetchDHeader_s {
+    tt::packet_queue::dispatch_packet_header_t packet_queue_header;
     uint32_t length;
+    uint32_t check0;
+    uint32_t check1;
+    uint32_t check2;
 };
 typedef union {
     struct CQPrefetchHToPrefetchDHeader_s header;
@@ -1290,8 +1295,13 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool
 
     // Downstream doesn't have FetchQ to tell it how much data to process
     // This packet header just contains the length
-    volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader* dptr = (volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader*)data_ptr;
-    dptr->header.length = length;
+    volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader* header =
+        (volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader*)data_ptr;
+    header->header.packet_queue_header.packet_size_bytes = length;
+    header->header.length = length;
+    header->header.check0 = 100;
+    header->header.check1 = 200;
+    header->header.check2 = 300;
 
     uint32_t npages = (length + downstream_cb_page_size - 1) >> downstream_cb_log_page_size;
 
@@ -1345,9 +1355,12 @@ inline uint32_t relay_cb_get_cmds(uint32_t& fence, uint32_t& data_ptr) {
             data_ptr, fence, block_next_start_addr, rd_block_idx, upstream_total_acquired_page_count);
     }
 
-    volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader* cmd_ptr =
-        (volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader*)data_ptr;
-    uint32_t length = cmd_ptr->header.length;
+    // Move back by the header as it has been removed by the packet queue
+    data_ptr -= sizeof(tt::packet_queue::dispatch_packet_header_t);
+
+    volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader* header =
+        (volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader*)(data_ptr);
+    uint32_t length = header->header.length;
 
     uint32_t pages_ready = (fence - data_ptr) >> cmddat_q_log_page_size;
     uint32_t pages_needed = (length + cmddat_q_page_size - 1) >> cmddat_q_log_page_size;
@@ -1479,6 +1492,9 @@ void kernel_main_hd() {
 
 void kernel_main() {
     DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": start" << ENDL();
+    if constexpr (fabric_enabled(fabric_router_noc_xy)) {
+        tt::tt_fabric::fabric_endpoint_init(client_interface, 0);
+    }
 
     if (is_h_variant and is_d_variant) {
         kernel_main_hd();
