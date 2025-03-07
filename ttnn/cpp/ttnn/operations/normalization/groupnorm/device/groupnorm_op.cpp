@@ -112,20 +112,40 @@ operation::ProgramWithCallbacks GroupNorm::create_program(
     bool inplace = this->program_config.inplace;
     CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
     uint32_t batch = a.get_padded_shape()[0];
-
-    return groupnorm_multi_core_sharded(
-        a,
-        gamma,
-        beta,
-        input_mask,
-        output_tensor,
-        this->eps,
-        this->num_groups,
-        batch,
-        fidelity,
-        program_config.im_data_format,
-        program_config.compute_with_storage_grid_size,
-        inplace);
+    return std::visit(
+        [&](const auto& program_config) -> operation::ProgramWithCallbacks {
+            using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            if constexpr (std::is_same_v<ProgramConfigType, GroupNormShardedMultiCoreProgramConfig>) {
+                return groupnorm_multi_core_sharded(
+                    a,
+                    gamma,
+                    beta,
+                    input_mask,
+                    output_tensor,
+                    this->eps,
+                    this->num_groups,
+                    batch,
+                    fidelity,
+                    program_config.im_data_format,
+                    program_config.compute_with_storage_grid_size,
+                    inplace);
+            } else {
+                return groupnorm_multi_core(
+                    a,
+                    gamma,
+                    beta,
+                    input_mask,
+                    output_tensor,
+                    this->eps,
+                    this->num_groups,
+                    batch,
+                    fidelity,
+                    program_config.im_data_format,
+                    program_config.compute_with_storage_grid_size,
+                    inplace);
+            }
+        },
+        this->program_config);
 }
 
 }  // namespace ttnn::operations::normalization

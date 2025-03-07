@@ -75,7 +75,7 @@ def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_group
     input_tensor = ttnn.from_torch(
         input_tensor,
         dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -128,6 +128,7 @@ def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_group
         bias=beta_t,
         memory_config=sharded_mem_config,
         core_grid=grid_size,
+        inplace=False,
     )
 
     # output tensor
