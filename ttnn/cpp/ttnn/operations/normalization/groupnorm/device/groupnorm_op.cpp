@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "groupnorm_op.hpp"
+#include "groupnorm_types.hpp"
 
 #include <optional>
 
@@ -80,22 +81,43 @@ void GroupNorm::validate(
 }
 std::vector<TensorSpec> GroupNorm::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    if (this->program_config.inplace) {
-        return {input_tensor.get_tensor_spec()};
-    }
-    auto mem_config = this->output_mem_config;
-    mem_config.shard_spec = input_tensor.shard_spec();
-    return {TensorSpec(
-        input_tensor.get_logical_shape(),
-        TensorLayout(program_config.out_data_format, PageConfig(program_config.output_layout), mem_config))};
+
+    return std::visit(
+        [&](const auto& program_config) -> std::vector<TensorSpec> {
+            using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            if (program_config.inplace) {
+                if constexpr (std::is_same_v<ProgramConfigType, GroupNormShardedMultiCoreProgramConfig>) {
+                    return {input_tensor.get_tensor_spec()};
+                } else {
+                    TT_FATAL(false, "inplace groupnorm not supported for unsharded tensors");
+                }
+            }
+
+            auto mem_config = this->output_mem_config;
+            return {TensorSpec(
+                input_tensor.get_logical_shape(),
+                TensorLayout(program_config.out_data_format, PageConfig(program_config.output_layout), mem_config))};
+        },
+        this->program_config);
 }
 std::vector<Tensor> GroupNorm::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    if (this->program_config.inplace) {
-        return {input_tensor};
-    }
-    return {create_device_tensor(this->compute_output_specs(input_tensors).at(0), input_tensor.device())};
+
+    return std::visit(
+        [&](const auto& program_config) -> std::vector<Tensor> {
+            using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            if (program_config.inplace) {
+                if constexpr (std::is_same_v<ProgramConfigType, GroupNormShardedMultiCoreProgramConfig>) {
+                    return {input_tensor};
+                } else {
+                    TT_FATAL(false, "inplace groupnorm not supported for unsharded tensors");
+                }
+            }
+            return {create_device_tensor(this->compute_output_specs(input_tensors).at(0), input_tensor.device())};
+        },
+        this->program_config);
 }
+
 operation::ProgramWithCallbacks GroupNorm::create_program(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -106,26 +128,56 @@ operation::ProgramWithCallbacks GroupNorm::create_program(
     const auto& input_mask = optional_input_tensors.at(2);
     auto& output_tensor = output_tensors.at(0);
 
-    MathFidelity fidelity = this->program_config.math_fidelity;
-    uint32_t num_cores_x = this->program_config.compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = this->program_config.compute_with_storage_grid_size.y;
-    bool inplace = this->program_config.inplace;
-    CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
-    uint32_t batch = a.get_padded_shape()[0];
+    return std::visit(
+        [&](const auto& program_config) -> operation::ProgramWithCallbacks {
+            using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            if constexpr (std::is_same_v<ProgramConfigType, GroupNormShardedMultiCoreProgramConfig>) {
+                MathFidelity fidelity = program_config.math_fidelity;
+                uint32_t num_cores_x = program_config.compute_with_storage_grid_size.x;
+                uint32_t num_cores_y = program_config.compute_with_storage_grid_size.y;
+                bool inplace = program_config.inplace;
+                CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
+                uint32_t batch = a.get_padded_shape()[0];
 
-    return groupnorm_multi_core_sharded(
-        a,
-        gamma,
-        beta,
-        input_mask,
-        output_tensor,
-        this->eps,
-        this->num_groups,
-        batch,
-        fidelity,
-        program_config.im_data_format,
-        program_config.compute_with_storage_grid_size,
-        inplace);
+                return groupnorm_multi_core_sharded(
+                    a,
+                    gamma,
+                    beta,
+                    input_mask,
+                    output_tensor,
+                    this->eps,
+                    this->num_groups,
+                    batch,
+                    fidelity,
+                    program_config.im_data_format,
+                    program_config.compute_with_storage_grid_size,
+                    inplace);
+            } else {
+                MathFidelity fidelity = program_config.math_fidelity;
+                uint32_t num_cores_x = program_config.compute_with_storage_grid_size.x;
+                uint32_t num_cores_y = program_config.compute_with_storage_grid_size.y;
+                bool inplace = program_config.inplace;
+                uint32_t num_out_blocks = program_config.num_out_blocks;
+                CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
+                uint32_t batch = a.get_padded_shape()[0];
+
+                return groupnorm_multi_core(
+                    a,
+                    gamma,
+                    beta,
+                    input_mask,
+                    output_tensor,
+                    this->eps,
+                    this->num_groups,
+                    batch,
+                    fidelity,
+                    program_config.im_data_format,
+                    program_config.compute_with_storage_grid_size,
+                    inplace,
+                    num_out_blocks);
+            }
+        },
+        this->program_config);
 }
 
 }  // namespace ttnn::operations::normalization
