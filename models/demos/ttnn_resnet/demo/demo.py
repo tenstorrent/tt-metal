@@ -84,6 +84,9 @@ def run_resnet_imagenet_inference(
         prediction = tt_output[:, 0, 0, :].argmax(dim=-1)
         for i in range(batch_size):
             predictions.append(imagenet_label_dict[prediction[i].item()])
+            logger.info(
+                f"Iter: {iter} Sample: {i} - Expected Label: {imagenet_label_dict[labels[i]]} -- Predicted Label: {predictions[-1]}"
+            )
             if imagenet_label_dict[labels[i]] == predictions[-1]:
                 correct += 1
         del tt_output, inputs, labels, predictions

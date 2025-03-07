@@ -91,17 +91,7 @@ def test_run_resnet50_trace_2cqs_inference(
         inference_time_avg = profiler.get("run") / (iterations)
 
         compile_time = first_iter_time - 2 * inference_time_avg
-        prep_perf_report(
-            model_name=f"ttnn_{model_version}_batch_size{batch_size}",
-            batch_size=batch_size,
-            inference_and_compile_time=first_iter_time,
-            inference_time=inference_time_avg,
-            expected_compile_time=30,
-            expected_inference_time=0.004,
-            comments="tests",
-        )
-
-    # logger.info(
-    #   f"ttnn_{model_version}_batch_size{batch_size} tests inference time (avg): {inference_time_avg}, FPS: {batch_size/inference_time_avg}"
-    # )
-    # logger.info(f"ttnn_{model_version}_batch_size{batch_size} compile time: {compile_time}")
+    logger.info(
+        f"ttnn_{model_version}_batch_size{batch_size} tests inference time (avg): {inference_time_avg}, FPS: {batch_size/inference_time_avg}"
+    )
+    logger.info(f"ttnn_{model_version}_batch_size{batch_size} compile time: {compile_time}")
