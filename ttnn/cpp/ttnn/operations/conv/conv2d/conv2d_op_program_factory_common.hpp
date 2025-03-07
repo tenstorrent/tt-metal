@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 namespace ttnn::operations::conv {
 namespace conv2d {
 
