@@ -1,11 +1,11 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 import torch
-from models.experimental.mochi.common import matmul_2d_config
+from models.experimental.mochi.tt.common import matmul_2d_config
 from functools import partial
 
 
-class TtFeedForward(LightweightModule):
+class FeedForward(LightweightModule):
     def __init__(
         self,
         mesh_device,

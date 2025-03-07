@@ -2,30 +2,26 @@ import os
 import pytest
 import torch
 import ttnn
-import logging
+from loguru import logger
 
 from genmo.mochi_preview.dit.joint_model.asymm_models_joint import AsymmetricJointBlock
-from models.experimental.mochi.block import TtAsymmetricJointBlock
-from models.experimental.mochi.common import (
-    get_mochi_dir,
+from models.experimental.mochi.tt.dit.model import AsymmetricJointBlock as TtAsymmetricJointBlock
+from models.experimental.mochi.tt.common import (
     get_cache_path,
     compute_metrics,
     to_tt_tensor,
     to_torch_tensor,
-    replicate_attn_mask,
     stack_cos_sin,
 )
 from models.demos.llama3.tt.llama_common import get_rot_transformation_mat
-from models.experimental.mochi.tests.test_tt_attn import (
+from models.experimental.mochi.tests.dit.common import (
     load_model_weights,
-    PCC_REQUIRED,
     NUM_HEADS,
 )
-from models.utility_functions import nearest_32
-
-logger = logging.getLogger(__name__)
 
 MAX_T5_TOKEN_LENGTH = 256
+
+PCC_REQUIRED = 0.99
 
 block_kwargs = {
     "qk_norm": True,

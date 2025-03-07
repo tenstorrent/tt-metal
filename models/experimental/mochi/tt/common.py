@@ -1,5 +1,6 @@
 import os
 import math
+import torch
 from pathlib import Path
 from models.demos.llama3.tt.llama_common import get_out_subblock_w
 from typing import Tuple, Optional
@@ -18,9 +19,6 @@ def get_cache_path(device_name):
     cache_path = Path(mochi_dir) / device_name
     cache_path.mkdir(parents=True, exist_ok=True)
     return cache_path
-
-
-import torch
 
 
 def compute_metrics(reference_output, test_output):
@@ -144,22 +142,6 @@ def unsqueeze_to_4d(x):
     while x.ndim < 4:
         x = x.unsqueeze(0)
     return x
-
-
-def replicate_attn_mask(mask, mesh_device, dtype):
-    if mesh_device.get_num_devices() > 1:
-        dist_mask = ttnn.as_tensor(
-            mask,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
-            dtype=dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        rep_mask = ttnn.all_gather(dist_mask, dim=-1)
-    else:
-        rep_mask = to_tt_tensor(mask, mesh_device, dtype=dtype)
-    return rep_mask
 
 
 def as_sharded_tensor(tensor, mesh_device, dim, cache_file_name=None):

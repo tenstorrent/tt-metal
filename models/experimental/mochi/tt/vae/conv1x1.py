@@ -4,7 +4,7 @@ from models.common.lightweightmodule import LightweightModule
 from typing import Callable
 
 
-class TtConv1x1(LightweightModule):
+class Conv1x1(LightweightModule):
     def __init__(
         self,
         mesh_device: ttnn.MeshDevice,

@@ -1,11 +1,11 @@
 import pytest
 import torch
 import ttnn
-from models.experimental.mochi.common import compute_metrics
+from models.experimental.mochi.tt.common import compute_metrics
 
 from genmo.mochi_preview.dit.joint_model.temporal_rope import apply_rotary_emb_qk_real
 from models.demos.llama3.tt.llama_common import get_rot_transformation_mat
-from models.experimental.mochi.common import stack_cos_sin
+from models.experimental.mochi.tt.common import stack_cos_sin
 
 
 @pytest.mark.parametrize("batch, seq_len", [(1, 256), (1, 45056)])

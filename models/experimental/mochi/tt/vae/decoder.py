@@ -2,14 +2,14 @@ import ttnn
 import torch
 from typing import List, Optional
 from models.common.lightweightmodule import LightweightModule
-from .conv1x1 import TtConv1x1
-from .resblock import TtResBlock
-from .upsample import TtCausalUpsampleBlock
+from .conv1x1 import Conv1x1
+from .resblock import ResBlock
+from .upsample import CausalUpsampleBlock
 from .common import load_decoder_weights
 from loguru import logger
 
 
-class TtDecoder(LightweightModule):
+class Decoder(LightweightModule):
     def __init__(
         self,
         mesh_device: ttnn.MeshDevice,
@@ -49,7 +49,7 @@ class TtDecoder(LightweightModule):
         assert len(num_res_blocks) == len(has_attention) == self.num_up_blocks + 2
 
         # Create the initial projection from latent space
-        self.input_proj = TtConv1x1(
+        self.input_proj = Conv1x1(
             mesh_device=mesh_device,
             state_dict=state_dict,
             state_dict_prefix=f"{state_dict_prefix}blocks.0.0.",
@@ -61,7 +61,7 @@ class TtDecoder(LightweightModule):
         self.first_blocks = []
         for i in range(num_res_blocks[-1]):
             self.first_blocks.append(
-                TtResBlock(
+                ResBlock(
                     mesh_device=mesh_device,
                     state_dict=state_dict,
                     state_dict_prefix=f"{state_dict_prefix}blocks.0.{i+1}.",
@@ -76,7 +76,7 @@ class TtDecoder(LightweightModule):
         self.up_blocks = []
         for i in range(self.num_up_blocks):
             self.up_blocks.append(
-                TtCausalUpsampleBlock(
+                CausalUpsampleBlock(
                     mesh_device=mesh_device,
                     state_dict=state_dict,
                     state_dict_prefix=f"{state_dict_prefix}blocks.{i+1}.",
@@ -95,7 +95,7 @@ class TtDecoder(LightweightModule):
         self.last_blocks = []
         for i in range(num_res_blocks[0]):
             self.last_blocks.append(
-                TtResBlock(
+                ResBlock(
                     mesh_device=mesh_device,
                     state_dict=state_dict,
                     state_dict_prefix=f"{state_dict_prefix}blocks.{self.num_up_blocks+1}.{i}.",
@@ -107,7 +107,7 @@ class TtDecoder(LightweightModule):
             )
 
         # Final output projection
-        self.output_proj = TtConv1x1(
+        self.output_proj = Conv1x1(
             mesh_device=mesh_device,
             state_dict=state_dict,
             state_dict_prefix=f"{state_dict_prefix}output_proj.",

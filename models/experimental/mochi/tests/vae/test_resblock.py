@@ -3,12 +3,11 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-from models.experimental.mochi.vae.resblock import TtResBlock
+from models.experimental.mochi.tt.vae.resblock import ResBlock as TtResBlock
 from genmo.mochi_preview.vae.models import ResBlock as RefResBlock
 
-from models.experimental.mochi.common import (
+from models.experimental.mochi.tt.common import (
     compute_metrics,
-    to_tt_tensor,
     to_torch_tensor,
 )
 

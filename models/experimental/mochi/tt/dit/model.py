@@ -1,18 +1,17 @@
 import torch
 import torch.nn as nn
-from einops import rearrange
 import ttnn
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 
-from models.utility_functions import nearest_32
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.mochi.block import TtAsymmetricJointBlock
-from models.experimental.mochi.final_layer import TtFinalLayer
-from models.experimental.mochi.common import to_tt_tensor, unsqueeze_to_4d, replicate_attn_mask, stack_cos_sin
+from models.experimental.mochi.tt.dit.block import AsymmetricJointBlock
+from models.experimental.mochi.tt.dit.final_layer import FinalLayer
+from models.experimental.mochi.tt.dit.embed import PatchEmbed
+from models.experimental.mochi.tt.common import to_tt_tensor, unsqueeze_to_4d, stack_cos_sin
 from models.demos.llama3.tt.llama_common import get_rot_transformation_mat
+
 from genmo.mochi_preview.dit.joint_model.layers import (
-    PatchEmbed,
     TimestepEmbedder,
 )
 from genmo.mochi_preview.dit.joint_model.utils import AttentionPool
@@ -20,10 +19,9 @@ from genmo.mochi_preview.dit.joint_model.rope_mixed import (
     compute_mixed_rotation,
     create_position_matrix,
 )
-from models.experimental.mochi.embed import TtPatchEmbed
 
 
-class TtAsymmDiTJoint(LightweightModule):
+class AsymmDiTJoint(LightweightModule):
     """DiT model implemented for TensorTorch with asymmetric attention."""
 
     def __init__(
@@ -69,7 +67,7 @@ class TtAsymmDiTJoint(LightweightModule):
         self.rope_theta = rope_theta
 
         # Create PyTorch embedders (these run on CPU) and load their weights
-        self.x_embedder = TtPatchEmbed(
+        self.x_embedder = PatchEmbed(
             mesh_device=mesh_device,
             state_dict=state_dict,
             weight_cache_path=weight_cache_path,
@@ -105,7 +103,7 @@ class TtAsymmDiTJoint(LightweightModule):
         self.blocks = []
         for b in range(depth):
             update_y = b < MAX_DEPTH - 1
-            block = TtAsymmetricJointBlock(
+            block = AsymmetricJointBlock(
                 mesh_device=mesh_device,
                 state_dict=state_dict,
                 state_dict_prefix=f"blocks.{b}",
@@ -123,7 +121,7 @@ class TtAsymmDiTJoint(LightweightModule):
             self.blocks.append(block)
 
         # Create final layer
-        self.final_layer = TtFinalLayer(
+        self.final_layer = FinalLayer(
             mesh_device=mesh_device,
             state_dict=state_dict,
             state_dict_prefix="final_layer",

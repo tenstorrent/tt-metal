@@ -5,9 +5,9 @@ import os
 import ttnn
 import numpy as np
 from models.utility_functions import skip_for_grayskull
-from models.experimental.mochi.common import compute_metrics
+from models.experimental.mochi.tt.common import compute_metrics
 from genmo.mochi_preview.pipelines import sample_model as reference_sample_model
-from models.experimental.mochi.pipelines_tt import sample_model_tt
+from models.experimental.mochi.pipelines import sample_model as sample_model_tt
 from genmo.mochi_preview.pipelines import (
     linear_quadratic_schedule,
     get_conditioning,
@@ -15,7 +15,7 @@ from genmo.mochi_preview.pipelines import (
     T5_MODEL,
 )
 from transformers import T5EncoderModel
-from models.experimental.mochi.tests.test_tt_asymm_dit_joint import create_models
+from models.experimental.mochi.tests.dit.test_model import create_models
 
 
 @torch.no_grad()

@@ -1,7 +1,5 @@
 import torch
-import pytest
 from genmo.mochi_preview.vae.models import Decoder, decode_latents
-from safetensors.torch import load_file
 
 
 class ShapeTracker:
@@ -94,52 +92,7 @@ def test_decoder():
     decoder.eval()
     decoder = decoder.to(device="meta")
 
-    # def create_shape_hooks(model, prefix='', depth=0):
-    #     def shape_hook(name):
-    #         def hook(module, input, output):
-    #             indent = '  ' * depth
-    #             input_shapes = [tuple(x.shape) for x in input if isinstance(x, torch.Tensor)]
-    #             print(f"{indent}{name} ({module.__class__.__name__}):")
-    #             for i, shape in enumerate(input_shapes):
-    #                 print(f"{indent}  Input {i}: {shape}")
-    #         return hook
-
-    #     # Register hooks for all modules recursively
-    #     for name, module in model.named_children():
-    #         # Full path to current module
-    #         full_name = f"{prefix}.{name}" if prefix else name
-
-    #         # Register hook for current module
-    #         module.register_forward_hook(shape_hook(full_name))
-
-    #         # Recursively register hooks for children
-    #         if list(module.children()):  # If has children
-    #             create_shape_hooks(module, prefix=full_name, depth=depth+1)
-
     # Usage
-    # create_shape_hooks(decoder)
     register_shape_hooks(decoder)
-    # output = model(input_tensor)
     # Run a forward pass to trigger hooks
     output = decode_latents(decoder, z)
-    # output = model(input_tensor)
-
-    # scripted_model = torch.jit.script(decoder, example_inputs=[z])
-    # # traced_model.save("vae_decoder_script.pt")
-    # torch.jit.save(scripted_model, "vae_decoder_script.pt")
-
-    # Verify output shape
-    # Output should be [B, C=3, T, H, W] where:
-    # T = (latent_t - 1) * 4 (based on docstring in Decoder.forward)
-    # H = latent_h * 16 (based on docstring)
-    # W = latent_w * 16 (based on docstring)
-    # expected_t = (latent_t - 1) * 4
-    # expected_h = latent_h * 16
-    # expected_w = latent_w * 16
-
-    # assert output.shape == (batch_size, 3, expected_t, expected_h, expected_w), \
-    #     f"Expected shape {(batch_size, 3, expected_t, expected_h, expected_w)}, got {output.shape}"
-
-    # # Verify output range (should be scaled to [-1, 1] per docstring)
-    # assert output.min() >= -1.0 and output.max() <= 1.0, \
-    #     f"Output should be in range [-1, 1], got [{output.min()}, {output.max()}]"

@@ -2,7 +2,7 @@ import torch
 import ttnn
 import pytest
 from loguru import logger
-from models.experimental.mochi.common import compute_metrics
+from models.experimental.mochi.tt.common import compute_metrics
 from genmo.mochi_preview.vae.models import DepthToSpaceTime
 
 import math

@@ -1,10 +1,9 @@
-from typing import Optional, Dict, Any
-from pathlib import Path
 import os
+from typing import Optional, Dict, Any
 
 from genmo.mochi_preview.pipelines import ModelFactory, load_to_cpu
-from models.experimental.mochi.asymm_dit_joint import TtAsymmDiTJoint
-from models.experimental.mochi.common import get_cache_path, get_mochi_dir
+from models.experimental.mochi.tt.dit.model import AsymmDiTJoint
+from models.experimental.mochi.tt.common import get_cache_path, get_mochi_dir
 
 
 class TtDiTModelFactory(ModelFactory):
@@ -51,7 +50,7 @@ class TtDiTModelFactory(ModelFactory):
         strict_load: bool = True,
         load_checkpoint: bool = True,
         fast_init: bool = True,
-    ) -> TtAsymmDiTJoint:
+    ) -> AsymmDiTJoint:
         """Create and initialize a TT DiT model.
 
         Args:
@@ -76,7 +75,7 @@ class TtDiTModelFactory(ModelFactory):
         state_dict = load_to_cpu(self.weights_path)
 
         # Create model with standard arguments
-        model = TtAsymmDiTJoint(
+        model = AsymmDiTJoint(
             mesh_device=self.mesh_device,
             state_dict=state_dict,
             weight_cache_path=self.weight_cache_path,

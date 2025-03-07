@@ -5,7 +5,6 @@ import time
 
 import click
 import numpy as np
-import torch
 import ttnn
 import pytest
 
@@ -16,7 +15,7 @@ from genmo.mochi_preview.pipelines import (
     T5ModelFactory,
     linear_quadratic_schedule,
 )
-from models.experimental.mochi.pipelines_tt import TTPipeline
+from models.experimental.mochi.pipelines import TTPipeline
 from models.experimental.mochi.factory import TtDiTModelFactory
 
 pipeline = None

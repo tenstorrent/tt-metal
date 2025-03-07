@@ -6,15 +6,14 @@ import os
 import ttnn
 import pickle
 from pathlib import Path
-from models.experimental.mochi.vae.conv1x1 import TtConv1x1
+from models.experimental.mochi.tt.vae.conv1x1 import Conv1x1 as TtConv1x1
 from genmo.mochi_preview.vae.models import Conv1x1 as RefConv1x1, Decoder
 
-from models.experimental.mochi.common import (
+from models.experimental.mochi.tests.common import (
     compute_metrics,
-    to_tt_tensor,
     to_torch_tensor,
 )
-from models.experimental.mochi.vae.common import load_decoder_weights
+from models.experimental.mochi.tt.vae.common import load_decoder_weights
 
 # Common test configurations
 PCC_REQUIRED = 0.99

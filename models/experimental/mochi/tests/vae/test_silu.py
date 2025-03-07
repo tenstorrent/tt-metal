@@ -4,7 +4,7 @@ import torch.nn as nn
 import ttnn
 import pytest
 from loguru import logger
-from models.experimental.mochi.common import compute_metrics
+from models.experimental.mochi.tt.common import compute_metrics
 import math
 
 

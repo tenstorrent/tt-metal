@@ -3,12 +3,11 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-from models.experimental.mochi.vae.conv3d import TtContextParallelConv3d
+from models.experimental.mochi.tt.vae.conv3d import ContextParallelConv3d as TtContextParallelConv3d
 from genmo.mochi_preview.vae.models import ContextParallelConv3d as RefContextParallelConv3d
 from models.utility_functions import skip_for_grayskull
-from models.experimental.mochi.common import (
+from models.experimental.mochi.tests.common import (
     compute_metrics,
-    to_tt_tensor,
     to_torch_tensor,
 )
 

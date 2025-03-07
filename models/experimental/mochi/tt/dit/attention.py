@@ -1,21 +1,20 @@
+import torch
+from typing import Tuple
+from functools import partial
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
-import torch
-from typing import Tuple, Optional
-import math
 
-from models.experimental.mochi.mod_rmsnorm import modulated_rmsnorm
-from models.experimental.mochi.common import (
-    matmul_config,
+from models.experimental.mochi.tt.dit.norms import modulated_rmsnorm
+from models.experimental.mochi.tt.common import (
     as_sharded_tensor,
     col_parallel_linear,
     matmul_2d_config,
 )
-from functools import partial
 
 
-class TtAsymmetricAttention(LightweightModule):
+class AsymmetricAttention(LightweightModule):
     def __init__(
         self,
         mesh_device,

@@ -3,14 +3,13 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-from models.experimental.mochi.asymm_dit_joint import TtAsymmDiTJoint
+from models.experimental.mochi.tt.dit.model import AsymmDiTJoint as TtAsymmDiTJoint
 from models.utility_functions import (
-    comp_pcc,
     comp_allclose,
 )
 from models.utility_functions import skip_for_grayskull
 from genmo.mochi_preview.dit.joint_model.asymm_models_joint import AsymmDiTJoint as RefAsymmDiTJoint
-from models.experimental.mochi.common import get_mochi_dir, get_cache_path, compute_metrics
+from models.experimental.mochi.tt.common import get_mochi_dir, get_cache_path, compute_metrics
 from genmo.mochi_preview.pipelines import (
     get_conditioning,
     compute_packed_indices,

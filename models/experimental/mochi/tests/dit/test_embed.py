@@ -3,15 +3,12 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-from models.experimental.mochi.embed import TtPatchEmbed
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
+from models.experimental.mochi.tt.dit.embed import PatchEmbed as TtPatchEmbed
+
 from models.utility_functions import skip_for_grayskull
 from genmo.mochi_preview.dit.joint_model.layers import PatchEmbed
-from models.experimental.mochi.common import get_mochi_dir, get_cache_path, compute_metrics
-from models.experimental.mochi.tests.test_tt_attn import load_model_weights
+from models.experimental.mochi.tt.common import get_cache_path, compute_metrics
+from models.experimental.mochi.tests.dit.common import load_model_weights
 
 
 @torch.no_grad()
