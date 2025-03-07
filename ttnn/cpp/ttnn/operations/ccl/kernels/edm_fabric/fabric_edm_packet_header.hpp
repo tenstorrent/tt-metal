@@ -367,6 +367,7 @@ static_assert(sizeof(LowLatencyPacketHeader) == sizeof(PacketHeader), "sizeof(Lo
 
 static constexpr size_t header_size_bytes = sizeof(PacketHeader);
 
+// TODO: Should be piped from host to determine which packet header to use
 #define FABRIC_LOW_LATENCY_MODE 1
 
 #if defined FABRIC_LOW_LATENCY_MODE and FABRIC_LOW_LATENCY_MODE == 1
