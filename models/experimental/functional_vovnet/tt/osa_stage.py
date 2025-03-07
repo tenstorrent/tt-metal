@@ -54,6 +54,7 @@ class TtOsaStage:
             x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
             x = ttnn.permute(x, (0, 2, 3, 1))
             x = ttnn.reshape(x, (1, 1, N * H * W, C))
+
             parallel_config = ttnn._ttnn.operations.conv.determine_parallel_config(
                 shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                 batch_size=N,
