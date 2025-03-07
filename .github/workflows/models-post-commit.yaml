@@ -61,6 +61,7 @@ jobs:
           backoff-seconds: 60
           command: ./.github/scripts/cloud_utils/mount_weka.sh
       - uses: actions/download-artifact@v4
+        if: ${{ inputs.runner-label != 'BH' }} # Don't download artifacts for BH
         timeout-minutes: 10
         with:
           name: eager-dist-${{ matrix.os }}-any
