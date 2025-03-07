@@ -31,6 +31,10 @@ uint32_t get_bf16_pool_scalar(Pool2DType pool_type, uint32_t kernel_size_hw) {
         case Pool2DType::MAX_POOL2D: value = 1.; break;
         case Pool2DType::AVG_POOL2D: value = 1. / (float)kernel_size_hw; break;
     }
+    // std::cout << "get_bf16_pool_scalar() - value: " << value << std::endl;
+    // std::cout << "get_bf16_pool_scalar() - bfloat16(value): " << bfloat16(value) << std::endl;
+    // std::cout << "get_bf16_pool_scalar() - bfloat16(value).to_packed(): " << bfloat16(value).to_packed() <<
+    // std::endl;
     return bfloat16(value).to_packed();
 }
 
@@ -43,6 +47,10 @@ uint32_t get_bf16_pool_init_value(Pool2DType pool_type) {
         case Pool2DType::MAX_POOL2D: value = -std::numeric_limits<float>::infinity(); break;
         case Pool2DType::AVG_POOL2D: value = 0.; break;
     }
+    // std::cout << "get_bf16_pool_init_value() - value: " << value << std::endl;
+    // std::cout << "get_bf16_pool_init_value() - bfloat16(value): " << bfloat16(value) << std::endl;
+    // std::cout << "get_bf16_pool_init_value() - bfloat16(value).to_packed(): " << bfloat16(value).to_packed() <<
+    // std::endl;
     return bfloat16(value).to_packed();
 }
 
@@ -138,9 +146,14 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         nblocks);
 
     // CBs
-    uint32_t multi_buffering_factor = 2;
+    // TODO(jongbinlimTT): There is an unidentifiable synchronization bug among BRISC, TRSIC's, and NCRISC for avgpool
+    // (not maxpool). Thus, double buffering and split reading are not diabled for avgpool for now. Eventually, we need
+    // to enable this feature to enhance performance. The following were hard-coded variables, and the solution is also
+    // a workaround hack.
+    uint32_t multi_buffering_factor =
+        (pool_type == Pool2DType::MAX_POOL2D) ? 2 : (pool_type == Pool2DType::AVG_POOL2D ? 1 : 1);
 
-    uint32_t split_reader = 1;
+    uint32_t split_reader = (pool_type == Pool2DType::MAX_POOL2D) ? 1 : (pool_type == Pool2DType::AVG_POOL2D ? 0 : 0);
 
     // scalar CB as coefficient of reduce
     uint32_t in_scalar_cb_id = tt::CBIndex::c_4;
@@ -151,6 +164,15 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             .set_page_size(in_scalar_cb_id, in_scalar_cb_pagesize);
     auto in_scalar_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, in_scalar_cb_config);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_scalar_cb_id, in_scalar_cb_pagesize, in_scalar_cb_npages);
+
+    // // Conditionally only for avgpool, we instantiate and use this CB. TODO(jongbinlimTT): Need to implement this
+    // conditional feature. uint32_t in_one_cb_id = tt::CBIndex::c_5; uint32_t in_one_cb_pagesize = tile_size(in_df);
+    // uint32_t in_one_cb_npages = 1;
+    // CircularBufferConfig in_one_cb_config =
+    //     CircularBufferConfig(in_one_cb_npages * in_one_cb_pagesize, {{in_one_cb_id, in_df}})
+    //         .set_page_size(in_one_cb_id, in_one_cb_pagesize);
+    // auto in_one_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, in_one_cb_config);
+    // log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_one_cb_id, in_one_cb_pagesize, in_one_cb_npages);
 
     // incoming data is the input cb instead of raw l1/dram addr
     // this input shard has halo and padding inserted.
@@ -307,8 +329,13 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
      */
     // TODO(jongbinlimTT): 1.0 for max pool, 1.0 / kernel_size for avg pool.
     uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_size_hw) << 16;  // << 16 is needed for maxpool.
+    // std::cout << "bf16_scalar: " << bf16_scalar << std::endl;
+    // std::cout << "bf16_scalar >> 16: " << (bf16_scalar >> 16) << std::endl;
+    // std::cout << "bf16_scalar & 0xFFFF: " << (bf16_scalar & 0xFFFF) << std::endl;
+    // std::cout << "bf16_scalar & 0xFFFF0000: " << (bf16_scalar & 0xFFFF0000) << std::endl;
     uint32_t bf16_init_value =
         get_bf16_pool_init_value(pool_type);  // TODO(jongbinlimTT): -inf for max pool, 0 for avg pool.
+    // std::cout << "bf16_init_value: " << bf16_init_value << std::endl;
 
     std::vector<uint32_t> reader0_ct_args = {
         out_nhw_per_core,

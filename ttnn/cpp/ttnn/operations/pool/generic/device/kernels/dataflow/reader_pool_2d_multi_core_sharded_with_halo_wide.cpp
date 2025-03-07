@@ -6,7 +6,7 @@
 #include <cstring>
 #include "dataflow_api.h"
 
-#define ENABLE_DEBUG_PRINT 0
+#define ENABLE_DEBUG_PRINT 1
 
 #if ENABLE_DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -53,6 +53,9 @@ void kernel_main() {
     // constexpr uint32_t bf16_one_u32 = get_compile_time_arg_val(11);
     constexpr uint32_t bf16_scalar = get_compile_time_arg_val(11);  // This scalar is bf16_one_u32 for maxpool.
 
+    // DPRINT << "Wide reader kernel - bf16_scalar : " << bf16_scalar << ENDL();
+    // DPRINT << "Wide reader kernel - bf16_scalar >> 16 : " << (bf16_scalar >> 16) << ENDL();
+
     constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(13);
 
     constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(16);
@@ -77,6 +80,8 @@ void kernel_main() {
         // fill 1 row w/ scalar
         // fill_with_val(get_write_ptr(in_scalar_cb_id), ROW_HW, bf16_one_u16);
         fill_with_val(get_write_ptr(in_scalar_cb_id), ROW_HW, bf16_scalar >> 16);  // >> 16 is needed for maxpool?
+        // noc_async_read_barrier();
+        // noc_async_write_barrier();
         cb_push_back(in_scalar_cb_id, 1);
     }
 
@@ -90,7 +95,7 @@ void kernel_main() {
     uint32_t npages_to_reserve = 1;
     uint32_t counter = reader_id;
     uint32_t read_bytes = MAX_ELE_PER_REDUCTION;
-    while (counter < reader_nindices) {
+    while (counter < reader_nindices) {  // how many window positions I have?
         uint16_t top_left_local_index = reader_indices_ptr[counter++];
         for (uint32_t c_i = 0; c_i < in_nblocks_c; ++c_i) {
             cb_reserve_back(in_cb_id, npages_to_reserve);
@@ -106,7 +111,13 @@ void kernel_main() {
                     out_l1_write_addr += MAX_ELE_PER_REDUCTION;
                 }
             }
-            noc_async_read_barrier();
+            noc_async_read_barrier();  // At this line, read is complete.
+
+            // tt::data_movement::common::print_bf16_pages(/*l1_addr=*/in_l1_read_base_addr, /*elts_per_page=*/256,
+            // /*npages=*/4, /*start=*/0);
+            // tt::data_movement::common::print_bf16_pages(/*l1_addr=*/out_l1_write_addr_base, /*elts_per_page=*/256,
+            // /*npages=*/4, /*start=*/0);
+
             cb_push_back(in_cb_id, npages_to_reserve);
         }
         if (split_reader) {
