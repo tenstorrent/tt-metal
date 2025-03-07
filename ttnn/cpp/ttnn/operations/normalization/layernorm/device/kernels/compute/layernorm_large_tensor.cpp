@@ -69,8 +69,6 @@ void MAIN {
     cb_wait_front(cb_scaler, 1);  // comes from the reader
     cb_wait_front(cb_eps, 1);     // comes from the reader
 
-    constexpr int cb_im_or_out = (do_gamma | do_beta) ? cb_fusion : cb_out;
-
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         constexpr int onetile = 1;
         constexpr int dst0 = 0;
@@ -263,7 +261,7 @@ void MAIN {
                 binary_dest_reuse_tiles<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex2pe, 0, j);
             }
             tile_regs_commit();
-            if (!(do_gamma or do_beta)) {
+            if constexpr (!(do_gamma or do_beta)) {
                 cb_xmm = cb_out;
             }
             for (uint32_t j = 0; j < blk; j++) {
@@ -271,20 +269,16 @@ void MAIN {
             }
             cb_push_back(cb_xmm, blk);
             tile_regs_release();
-            if (do_gamma) {
+            if constexpr (do_gamma) {
                 tile_regs_acquire();
                 tile_regs_wait();
                 cb_wait_front(cb_gamma, blk);
                 cb_wait_front(cb_xmm, blk);
-                unary_bcast_init<BroadcastType::ROW>(cb_gamma, cb_out);
+                mul_bcast_rows_init_short(cb_xmm, cb_gamma);
                 for (uint32_t j = 0; j < blk; j++) {
-                    unary_bcast<BroadcastType::ROW>(cb_gamma, j, j);
+                    mul_tiles_bcast_rows(cb_xmm, cb_gamma, j, j, j);
                 }
                 cb_pop_front(cb_gamma, blk);
-                binary_dest_reuse_tiles_init<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_xmm);
-                for (uint32_t j = 0; j < blk; j++) {
-                    binary_dest_reuse_tiles<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_xmm, j, j);
-                }
                 tile_regs_commit();
                 if (!do_beta) {
                     cb_xmm = cb_out;
@@ -298,20 +292,16 @@ void MAIN {
                 cb_push_back(cb_xmm, blk);
                 tile_regs_release();
             }
-            if (do_beta) {
+            if constexpr (do_beta) {
                 tile_regs_acquire();
                 tile_regs_wait();
                 cb_wait_front(cb_beta, blk);
                 cb_wait_front(cb_xmm, blk);
-                unary_bcast_init<BroadcastType::ROW>(cb_beta, cb_out);
+                add_bcast_rows_init_short(cb_xmm, cb_beta);
                 for (uint32_t j = 0; j < blk; j++) {
-                    unary_bcast<BroadcastType::ROW>(cb_beta, j, j);
+                    add_tiles_bcast_rows(cb_xmm, cb_beta, j, j, j);
                 }
                 cb_pop_front(cb_beta, blk);
-                binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_xmm);
-                for (uint32_t j = 0; j < blk; j++) {
-                    binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_xmm, j, j);
-                }
                 cb_pop_front(cb_xmm, blk);
                 tile_regs_commit();
                 for (uint32_t j = 0; j < blk; j++) {
