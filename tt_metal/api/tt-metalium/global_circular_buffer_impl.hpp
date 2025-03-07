@@ -6,10 +6,12 @@
 
 #include <cstdint>
 #include <memory>
+#include <variant>
 
 #include "core_coord.hpp"
 #include "buffer_constants.hpp"
 #include "hal.hpp"
+#include "distributed.hpp"
 
 namespace tt::tt_metal {
 
@@ -57,8 +59,8 @@ private:
 
     // GlobalCircularBuffer is implemented as a wrapper around a sharded buffer
     // This can be updated in the future to be its own container with optimized dispatch functions
-    std::shared_ptr<Buffer> cb_buffer_;
-    std::shared_ptr<Buffer> cb_config_buffer_;
+    std::variant<std::shared_ptr<Buffer>, std::shared_ptr<distributed::MeshBuffer>> cb_buffer_;
+    std::variant<std::shared_ptr<Buffer>, std::shared_ptr<distributed::MeshBuffer>> cb_config_buffer_;
     IDevice* device_;
     std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping_;
     CoreRangeSet sender_cores_;
