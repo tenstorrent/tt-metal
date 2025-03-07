@@ -11,6 +11,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/rtoptions.hpp>
 #include <benchmark/benchmark.h>
+#include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 100;
@@ -344,12 +345,14 @@ static int pgm_dispatch(T& state, TestInfo info) {
             if constexpr (std::is_same_v<T, benchmark::State>) {
                 state.SkipWithError("Program creation failed");
             }
+            tt_metal::CloseDevice(device);
             return 1;
         }
         if (!initialize_program(info, device, program[1], info.fast_kernel_cycles)) {
             if constexpr (std::is_same_v<T, benchmark::State>) {
                 state.SkipWithError("Program creation failed");
             }
+            tt_metal::CloseDevice(device);
             return 1;
         }
 
@@ -403,6 +406,7 @@ static int pgm_dispatch(T& state, TestInfo info) {
         if constexpr (std::is_same_v<T, benchmark::State>) {
             state.counters["IterationTime"] = benchmark::Counter(
                 info.iterations, benchmark::Counter::kIsIterationInvariantRate | benchmark::Counter::kInvert);
+            state.counters["Clock"] = benchmark::Counter(get_tt_npu_clock(device), benchmark::Counter::kDefaults);
         }
 
         pass &= tt_metal::CloseDevice(device);
