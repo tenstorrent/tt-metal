@@ -10,6 +10,7 @@ import torch
 
 import ttnn
 
+from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
@@ -18,7 +19,7 @@ TIMEOUT = 5
 # TODO: Consolidate tests for duplicate use cases into sweep with shapes
 # TODO: Missing coverage for Stable Diffusion matmul in: tests/ttnn/unit_tests/operations/test_matmul.py
 parameters = {
-    "pytorch": {
+    "default": {
         "matmul_specs": [
             # Create program config from core_grid
             (
@@ -143,16 +144,8 @@ def run_matmul(
     return [check_with_pcc(torch_output_tensor, output_tensor, expected_pcc), e2e_perf]
 
 
-@pytest.mark.parametrize("matmul_specs", parameters["pytorch"]["matmul_specs"])
-@pytest.mark.parametrize("compute_kernel_config", parameters["pytorch"]["compute_kernel_config"])
-@pytest.mark.parametrize("input_a_memory_config", parameters["pytorch"]["input_a_memory_config"])
-@pytest.mark.parametrize("input_b_memory_config", parameters["pytorch"]["input_b_memory_config"])
-@pytest.mark.parametrize("output_memory_config", parameters["pytorch"]["output_memory_config"])
-@pytest.mark.parametrize("input_a_dtype", parameters["pytorch"]["input_a_dtype"])
-@pytest.mark.parametrize("input_b_dtype", parameters["pytorch"]["input_b_dtype"])
-@pytest.mark.parametrize("output_dtype", parameters["pytorch"]["output_dtype"])
-@pytest.mark.parametrize("input_layout", parameters["pytorch"]["input_layout"])
-def test_pytorch(
+@pytest.mark.parametrize(**gen_pytest_parametrize_args(parameters))
+def test_matmul(
     device,
     matmul_specs,
     compute_kernel_config,
