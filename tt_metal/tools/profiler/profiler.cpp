@@ -77,7 +77,7 @@ void DeviceProfiler::readRiscProfilerResults(
     };
 
     // translate worker core virtual coord to phys coordinates
-    auto phys_coord = getPhysicalAddressFromVirtual(device, worker_core);
+    auto phys_coord = getPhysicalAddressFromVirtual(device_id, worker_core);
 
     int riscNum = 0;
     for (int riscEndIndex = 0; riscEndIndex < riscCount; riscEndIndex++) {
@@ -166,7 +166,6 @@ void DeviceProfiler::readRiscProfilerResults(
                                     runCounterRead);
 
                                 logPacketData(
-                                    device,
                                     log_file_ofs,
                                     noc_trace_json_log,
                                     runCounterRead,
@@ -187,7 +186,6 @@ void DeviceProfiler::readRiscProfilerResults(
                             uint32_t time_H = opTime_H;
                             uint32_t time_L = opTime_L;
                             logPacketData(
-                                device,
                                 log_file_ofs,
                                 noc_trace_json_log,
                                 runCounterRead,
@@ -210,7 +208,6 @@ void DeviceProfiler::readRiscProfilerResults(
                             uint32_t data_H = profile_buffer[index];
                             uint32_t data_L = profile_buffer[index + 1];
                             logPacketData(
-                                device,
                                 log_file_ofs,
                                 noc_trace_json_log,
                                 runCounterRead,
@@ -229,7 +226,6 @@ void DeviceProfiler::readRiscProfilerResults(
                             uint32_t time_H = profile_buffer[index] & 0xFFF;
                             uint32_t time_L = profile_buffer[index + 1];
                             logPacketData(
-                                device,
                                 log_file_ofs,
                                 noc_trace_json_log,
                                 runCounterRead,
@@ -267,7 +263,6 @@ void DeviceProfiler::firstTimestamp(uint64_t timestamp) {
 }
 
 void DeviceProfiler::logPacketData(
-    const IDevice* device,
     std::ofstream& log_file_ofs,
     nlohmann::ordered_json& noc_trace_json_log,
     uint32_t run_id,
@@ -325,7 +320,6 @@ void DeviceProfiler::logPacketData(
     firstTimestamp(timestamp);
 
     logPacketDataToCSV(
-        device,
         log_file_ofs,
         device_id,
         core.x,
@@ -343,7 +337,6 @@ void DeviceProfiler::logPacketData(
         source_file);
 
     logNocTracePacketDataToJson(
-        device,
         noc_trace_json_log,
         device_id,
         core.x,
@@ -362,7 +355,6 @@ void DeviceProfiler::logPacketData(
 }
 
 void DeviceProfiler::logPacketDataToCSV(
-    const IDevice* device,
     std::ofstream& log_file_ofs,
     int device_id,
     int core_x,
@@ -397,7 +389,6 @@ void DeviceProfiler::logPacketDataToCSV(
 }
 
 void DeviceProfiler::logNocTracePacketDataToJson(
-    const IDevice* device,
     nlohmann::ordered_json& noc_trace_json_log,
     int device_id,
     int core_x,
@@ -456,14 +447,15 @@ void DeviceProfiler::logNocTracePacketDataToJson(
             // DO NOT emit destination coord; it isn't meaningful
 
         } else if (ev_md.noc_xfer_type == KernelProfilerNocEventMetadata::NocEventType::WRITE_MULTICAST) {
-            auto phys_start_coord = getPhysicalAddressFromVirtual(device, {ev_md.dst_x, ev_md.dst_y});
+            auto phys_start_coord = getPhysicalAddressFromVirtual(device_id, {ev_md.dst_x, ev_md.dst_y});
             data["mcast_start_x"] = phys_start_coord.x;
             data["mcast_start_y"] = phys_start_coord.y;
-            auto phys_end_coord = getPhysicalAddressFromVirtual(device, {ev_md.mcast_end_dst_x, ev_md.mcast_end_dst_y});
+            auto phys_end_coord =
+                getPhysicalAddressFromVirtual(device_id, {ev_md.mcast_end_dst_x, ev_md.mcast_end_dst_y});
             data["mcast_end_x"] = phys_end_coord.x;
             data["mcast_end_y"] = phys_end_coord.y;
         } else {
-            auto phys_coord = getPhysicalAddressFromVirtual(device, {ev_md.dst_x, ev_md.dst_y});
+            auto phys_coord = getPhysicalAddressFromVirtual(device_id, {ev_md.dst_x, ev_md.dst_y});
             data["dx"] = phys_coord.x;
             data["dy"] = phys_coord.y;
         }
@@ -553,12 +545,12 @@ void DeviceProfiler::serializeJsonNocTraces(
     }
 }
 
-CoreCoord DeviceProfiler::getPhysicalAddressFromVirtual(const IDevice* device, const CoreCoord& c) const {
+CoreCoord DeviceProfiler::getPhysicalAddressFromVirtual(int device_id, const CoreCoord& c) const {
     if (c.x >= hal.get_virtual_worker_start_x() && c.y >= hal.get_virtual_worker_start_y()) {
         auto logical_x = c.x - hal.get_virtual_worker_start_x();
         auto logical_y = c.y - hal.get_virtual_worker_start_y();
 
-        const metal_SocDescriptor& soc_desc = tt::Cluster::instance().get_soc_desc(device->id());
+        const metal_SocDescriptor& soc_desc = tt::Cluster::instance().get_soc_desc(device_id);
         // if the core has an address in the 'virtual' space, it must be CoreType::WORKER
         return soc_desc.get_physical_core_from_logical_core({logical_x, logical_y}, CoreType::WORKER);
     } else {

@@ -72,11 +72,10 @@ private:
         std::ofstream& log_file_ofs, const tt::ARCH& device_architecture, int device_core_frequency) const;
 
     // translates potentially-virtual coordinates recorded on Device into physical coordinates
-    CoreCoord getPhysicalAddressFromVirtual(const IDevice* device, const CoreCoord& c) const;
+    CoreCoord getPhysicalAddressFromVirtual(int device_id, const CoreCoord& c) const;
 
     // Dumping profile result to file
     void logPacketData(
-        const IDevice* device,
         std::ofstream& log_file_ofs,
         nlohmann::ordered_json& noc_trace_json_log,
         uint32_t runID,
@@ -92,7 +91,6 @@ private:
 
     // logs packet data to CSV file
     void logPacketDataToCSV(
-        const IDevice* device,
         std::ofstream& log_file_ofs,
         int device_id,
         int core_x,
@@ -111,7 +109,6 @@ private:
 
     // dump noc trace related profile data to json file
     void logNocTracePacketDataToJson(
-        const IDevice* device,
         nlohmann::ordered_json& noc_trace_json_log,
         int device_id,
         int core_x,
