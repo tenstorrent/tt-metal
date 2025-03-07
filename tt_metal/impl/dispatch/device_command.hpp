@@ -28,9 +28,9 @@ public:
     DeviceCommand(uint32_t cmd_sequence_sizeB);
 
     DeviceCommand& operator=(const DeviceCommand& other);
-    DeviceCommand& operator=(DeviceCommand&& other);
+    DeviceCommand& operator=(DeviceCommand&& other) noexcept;
     DeviceCommand(const DeviceCommand& other);
-    DeviceCommand(DeviceCommand&& other);
+    DeviceCommand(DeviceCommand&& other) noexcept;
 
     // Constants
     static constexpr uint32_t PROGRAM_PAGE_SIZE = 2048;  // TODO: Move this somewhere else

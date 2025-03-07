@@ -39,7 +39,7 @@ DeviceCommand<hugepage_write>& DeviceCommand<hugepage_write>::operator=(const De
 }
 
 template <bool hugepage_write>
-DeviceCommand<hugepage_write>& DeviceCommand<hugepage_write>::operator=(DeviceCommand&& other) {
+DeviceCommand<hugepage_write>& DeviceCommand<hugepage_write>::operator=(DeviceCommand&& other) noexcept {
     this->cmd_sequence_sizeB = other.cmd_sequence_sizeB;
     this->cmd_write_offsetB = other.cmd_write_offsetB;
     this->cmd_region_vector = std::move(other.cmd_region_vector);
@@ -61,7 +61,7 @@ DeviceCommand<hugepage_write>::DeviceCommand(const DeviceCommand& other) :
 }
 
 template <bool hugepage_write>
-DeviceCommand<hugepage_write>::DeviceCommand(DeviceCommand&& other) :
+DeviceCommand<hugepage_write>::DeviceCommand(DeviceCommand&& other) noexcept :
     cmd_sequence_sizeB(other.cmd_sequence_sizeB),
     cmd_write_offsetB(other.cmd_write_offsetB),
     cmd_region_vector(std::move(other.cmd_region_vector)) {
