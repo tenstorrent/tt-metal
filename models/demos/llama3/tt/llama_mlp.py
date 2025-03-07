@@ -153,6 +153,7 @@ class TtLlamaMLP(LightweightModule):
                     num_all_gather_links=2,
                     sharded=True if mode == "decode" else False,
                     topology=self.args.ccl_topology(),
+                    dim=3,
                     memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == "decode" else None,
                 )
                 w3_out = tt_all_reduce(
@@ -162,6 +163,7 @@ class TtLlamaMLP(LightweightModule):
                     num_all_gather_links=2,
                     sharded=True if mode == "decode" else False,
                     topology=self.args.ccl_topology(),
+                    dim=3,
                     memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == "decode" else None,
                 )
 
