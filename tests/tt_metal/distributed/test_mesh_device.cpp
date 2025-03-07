@@ -81,14 +81,11 @@ TEST_F(MeshDeviceTest, CreateSubmesh) {
     EXPECT_EQ(mesh_device_->shape(), MeshShape(2, 4));
     EXPECT_THAT(mesh_device_->get_devices(), SizeIs(8));
     EXPECT_TRUE(mesh_device_->is_parent_mesh());
-    EXPECT_THAT(mesh_device_->get_submeshes(), IsEmpty());
 
     auto submesh = mesh_device_->create_submesh(MeshShape{1, 2}, MeshCoordinate{1, 1});
-    EXPECT_THAT(mesh_device_->get_submeshes(), SizeIs(1));
     EXPECT_EQ(submesh->shape(), MeshShape(1, 2));
     EXPECT_THAT(submesh->get_devices(), SizeIs(2));
     EXPECT_FALSE(submesh->is_parent_mesh());
-    EXPECT_THAT(submesh->get_submeshes(), IsEmpty());
 
     // Verify coordinates are correct.
     EXPECT_EQ(mesh_device_->get_device(MeshCoordinate{1, 1})->id(), submesh->get_device(MeshCoordinate{0, 0})->id());
@@ -110,8 +107,6 @@ TEST_F(MeshDeviceTest, CreateSubmeshes) {
         EXPECT_EQ(submesh->shape(), MeshShape(1, 2));
         EXPECT_THAT(submesh->get_devices(), SizeIs(2));
     }
-
-    EXPECT_EQ(mesh_device_->get_submeshes(), submeshes);
 }
 
 }  // namespace

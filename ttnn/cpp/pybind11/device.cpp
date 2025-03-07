@@ -35,7 +35,7 @@ namespace detail {
 void ttnn_device(py::module& module) {
     module.def(
         "open_device",
-        &ttnn::open_device,
+        &ttnn::open_mesh_device,
         py::kw_only(),
         py::arg("device_id"),
         py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
@@ -61,13 +61,18 @@ void ttnn_device(py::module& module) {
                 <ttnn._ttnn.device.Device object at 0x7fbac5bfc1b0>
         )doc");
 
-    module.def("close_device", &ttnn::close_device, py::arg("device"));
+    module.def("close_device", [](MeshDevice& device) { ttnn::close_device(device); }, py::arg("device"));
 
-    module.def("enable_program_cache", &ttnn::enable_program_cache, py::arg("device"));
+    module.def(
+        "enable_program_cache", [](MeshDevice& device) { ttnn::enable_program_cache(device); }, py::arg("device"));
 
-    module.def("disable_and_clear_program_cache", &ttnn::disable_and_clear_program_cache, py::arg("device"));
+    module.def(
+        "disable_and_clear_program_cache",
+        [](MeshDevice& device) { ttnn::disable_and_clear_program_cache(device); },
+        py::arg("device"));
 
-    module.def("deallocate_buffers", &ttnn::deallocate_buffers, py::arg("device"), R"doc(
+    module.def(
+        "deallocate_buffers", [](MeshDevice* device) { ttnn::deallocate_buffers(device); }, py::arg("device"), R"doc(
         Deallocate all buffers associated with Device handle
     )doc");
 }
@@ -318,8 +323,8 @@ void device_module(py::module& m_device) {
            size_t l1_small_size,
            size_t trace_region_size,
            const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
-            return tt::tt_metal::CreateDevice(
-                device_id, num_command_queues, l1_small_size, trace_region_size, dispatch_core_config);
+            return MeshDevice::create_single_device(
+                device_id, l1_small_size, trace_region_size, num_command_queues, dispatch_core_config);
         },
         R"doc(
         Creates an instance of TT device.
@@ -342,8 +347,8 @@ void device_module(py::module& m_device) {
            size_t l1_small_size,
            size_t trace_region_size,
            const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
-            return tt::tt_metal::detail::CreateDevices(
-                device_ids, num_command_queues, l1_small_size, trace_region_size, dispatch_core_config);
+            return MeshDevice::create_single_devices(
+                device_ids, l1_small_size, trace_region_size, num_command_queues, dispatch_core_config);
         },
         R"doc(
         Creates an instance of TT device.
@@ -359,7 +364,7 @@ void device_module(py::module& m_device) {
         py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
         py::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
         py::arg("DispatchCoreConfig") = tt::tt_metal::DispatchCoreConfig{});
-    m_device.def("CloseDevice", &tt::tt_metal::CloseDevice, R"doc(
+    m_device.def("CloseDevice", [](MeshDevice* device) { device->close(); }, R"doc(
         Reset an instance of TT accelerator device to default state and relinquish connection to device.
 
         +------------------+------------------------+-----------------------+-------------+----------+
@@ -368,7 +373,14 @@ void device_module(py::module& m_device) {
         | device           | TT Device to close     | ttnn.Device           |             | Yes      |
         +------------------+------------------------+-----------------------+-------------+----------+
     )doc");
-    m_device.def("CloseDevices", &tt::tt_metal::detail::CloseDevices, R"doc(
+    m_device.def(
+        "CloseDevices",
+        [](const std::map<chip_id_t, MeshDevice*>& devices) {
+            for (const auto& device_entry : devices) {
+                device_entry.second->close();
+            }
+        },
+        R"doc(
         Reset an instance of TT accelerator device to default state and relinquish connection to device.
 
         +------------------+------------------------+-----------------------+-------------+----------+
@@ -392,7 +404,7 @@ void device_module(py::module& m_device) {
 
     m_device.def(
         "SetDefaultDevice",
-        &ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice,
+        [](MeshDevice* device) { ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice(device); },
         R"doc(
             Sets the default device to use for operations when inputs are not on the device.
 
@@ -410,7 +422,10 @@ void device_module(py::module& m_device) {
 
     m_device.def(
         "GetDefaultDevice",
-        &ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice,
+        []() {
+            return dynamic_cast<MeshDevice*>(
+                ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice());
+        },
         R"doc(
             Gets the default device to use for ops when inputs aren't on device.
 
@@ -426,7 +441,15 @@ void device_module(py::module& m_device) {
 
     m_device.def(
         "format_input_tensor",
-        &ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor,
+        [](const Tensor& input,
+           MeshDevice* device,
+           const ttnn::Shape& padded_shape,
+           float pad_value,
+           Layout target_layout,
+           std::optional<MemoryConfig> target_mem_config) {
+            return ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
+                input, device, padded_shape, pad_value, target_layout, target_mem_config);
+        },
         py::arg("input").noconvert(),
         py::arg("device").noconvert(),
         py::arg("padded_shape"),
@@ -459,7 +482,7 @@ void device_module(py::module& m_device) {
         "format_output_tensor",
         [](const Tensor& output,
            const ttnn::SmallVector<uint32_t>& shape,
-           IDevice* device,
+           MeshDevice* device,
            Layout target_layout,
            std::optional<MemoryConfig> target_mem_config) {
             return operations::experimental::auto_format::AutoFormat::format_output_tensor(
@@ -629,7 +652,16 @@ void device_module(py::module& m_device) {
         py::arg("device"),
         py::arg("cq_id") = std::nullopt,
         py::arg("sub_device_ids") = std::vector<SubDeviceId>());
-    m_device.def("DumpDeviceProfiler", DumpDeviceProfiler, py::arg("device"), R"doc(
+    m_device.def("DumpDeviceProfiler", [](MeshDevice* device) { DumpDeviceProfiler(device); }, py::arg("device"), R"doc(
+        Dump device side profiling data.
+
+        +------------------+----------------------------------+-----------------------+-------------+----------+
+        | Argument         | Description                      | Data type             | Valid range | Required |
+        +==================+==================================+=======================+=============+==========+
+        | device           | Device to dump profiling data of | ttnn.Device           |             | Yes      |
+        +------------------+----------------------------------+-----------------------+-------------+----------+
+    )doc");
+    m_device.def("DumpDeviceProfiler", &DumpDeviceProfiler, py::arg("device"), R"doc(
         Dump device side profiling data.
 
         +------------------+----------------------------------+-----------------------+-------------+----------+
