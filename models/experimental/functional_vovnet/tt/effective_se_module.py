@@ -32,8 +32,9 @@ class TtEffectiveSEModule:
         self.activation = ttnn.hardsigmoid
 
     def forward(self, input: ttnn.Tensor) -> ttnn.Tensor:
-        out = ttnn.mean(input, dim=[2, 3], keepdim=True)  # , memory_config = ttnn.L1_MEMORY_CONFIG)
+        out = ttnn.mean(input, dim=[2, 3], keepdim=True, memory_config=ttnn.L1_MEMORY_CONFIG)
         out = self.fc(out)[0]
-        out = self.activation(out)
-        out = ttnn.multiply(input, out)  # , memory_config = ttnn.L1_MEMORY_CONFIG)
+        out = self.activation(out, memory_config=ttnn.L1_MEMORY_CONFIG)
+        out = ttnn.multiply(input, out, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(input)
         return out
