@@ -35,5 +35,6 @@ class TtSequentialAppendList:
             else:
                 concat_list.append(ttnn.to_layout(module.forward(concat_list[-1])[0], layout=ttnn.TILE_LAYOUT))
 
-        x = ttnn.concat(concat_list, dim=1)
+        x = ttnn.concat(concat_list, dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        del concat_list
         return x
