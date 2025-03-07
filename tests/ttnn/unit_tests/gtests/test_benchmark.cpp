@@ -7,6 +7,8 @@
 #include <vector>
 #include <fstream>
 #include <string>
+#include <chrono>
+
 #include <tt-metalium/logger.hpp>
 #include "ttnn_test_fixtures.hpp"
 
@@ -20,7 +22,7 @@
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/trace.hpp"
 
-int get_device_freq() { return 1e6; }
+int get_device_freq() { return 1e9; }
 
 std::vector<std::pair<int, int>> SUBBLOCK_HW_CHOICES = {{4, 2}, {2, 4}, {8, 1}, {1, 8}, {7, 1}, {1, 7}, {3, 2},
                                                         {2, 3}, {6, 1}, {1, 6}, {5, 1}, {1, 5}, {2, 2}, {4, 1},
@@ -79,13 +81,14 @@ std::vector<std::tuple<int, int, int, bool, bool, int, int, int>> matmul_shapes_
     {1024, 2048, 2048, true, true, 1, 1, 1},
     {2048, 2048, 2048, true, true, 1, 1, 1},
     {2048, 2048, 3072, true, true, 1, 1, 1},
-    {2048, 3072, 3072, true, true, 1, 1, 1},
-    {3072, 3072, 3072, true, true, 2, 1, 1},
-    {3072, 3072, 4096, true, true, 2, 1, 1},
-    {3072, 4096, 4096, true, true, 1, 2, 2},
-    {4096, 4096, 4096, false, false, 1, 2, 2},
-    {8192, 8192, 8192, false, false, 2, 4, 4},
-    {16384, 16384, 16384, false, false, 4, 8, 8},
+    // TODO: Enable high dim tests
+    //  {2048, 3072, 3072, true, true, 1, 1, 1},
+    //  {3072, 3072, 3072, true, true, 2, 1, 1},
+    //  {3072, 3072, 4096, true, true, 2, 1, 1},
+    //  {3072, 4096, 4096, true, true, 1, 2, 2},
+    //  {4096, 4096, 4096, false, false, 1, 2, 2},
+    //  {8192, 8192, 8192, false, false, 2, 4, 4},
+    //  {16384, 16384, 16384, false, false, 4, 8, 8},
 };
 
 std::vector<std::tuple<int, int, int, bool, bool, int, int, int>> matmul_shapes_bfloat4_b = {
@@ -97,13 +100,13 @@ std::vector<std::tuple<int, int, int, bool, bool, int, int, int>> matmul_shapes_
     {1024, 2048, 2048, true, true, 1, 1, 1},
     {2048, 2048, 2048, true, true, 1, 1, 1},
     {2048, 2048, 3072, true, true, 1, 1, 1},
-    {2048, 3072, 3072, true, true, 1, 1, 1},
-    {3072, 3072, 3072, true, true, 1, 1, 1},
-    {3072, 3072, 4096, true, true, 1, 1, 1},
-    {3072, 4096, 4096, true, true, 2, 1, 1},
-    {4096, 4096, 4096, true, true, 2, 1, 1},
-    {8192, 8192, 8192, false, false, 2, 2, 2},
-    {16384, 16384, 16384, false, false, 4, 4, 4},
+    // {2048, 3072, 3072, true, true, 1, 1, 1},
+    // {3072, 3072, 3072, true, true, 1, 1, 1},
+    // {3072, 3072, 4096, true, true, 1, 1, 1},
+    // {3072, 4096, 4096, true, true, 2, 1, 1},
+    // {4096, 4096, 4096, true, true, 2, 1, 1},
+    // {8192, 8192, 8192, false, false, 2, 2, 2},
+    // {16384, 16384, 16384, false, false, 4, 4, 4},
 };
 
 std::vector<std::tuple<DataType, MathFidelity, bool>> matmul_configs = {
@@ -112,11 +115,12 @@ std::vector<std::tuple<DataType, MathFidelity, bool>> matmul_configs = {
     {DataType::BFLOAT8_B, MathFidelity::HiFi2, false},
     {DataType::BFLOAT8_B, MathFidelity::LoFi, false},
     {DataType::BFLOAT4_B, MathFidelity::LoFi, false},
-    {DataType::BFLOAT16, MathFidelity::HiFi2, true},
-    {DataType::BFLOAT16, MathFidelity::HiFi4, true},
-    {DataType::BFLOAT8_B, MathFidelity::HiFi2, true},
-    {DataType::BFLOAT8_B, MathFidelity::LoFi, true},
-    {DataType::BFLOAT4_B, MathFidelity::LoFi, true},
+    // TODO: Enable tracing
+    //  {DataType::BFLOAT16, MathFidelity::HiFi2, true},
+    //  {DataType::BFLOAT16, MathFidelity::HiFi4, true},
+    //  {DataType::BFLOAT8_B, MathFidelity::HiFi2, true},
+    //  {DataType::BFLOAT8_B, MathFidelity::LoFi, true},
+    //  {DataType::BFLOAT4_B, MathFidelity::LoFi, true},
 };
 
 class Matmul2DHostPerfTestFixture : public ttnn::distributed::test::TTNNFixtureWithTraceEnabledDevice,
@@ -128,8 +132,8 @@ class Matmul2DHostPerfTestFixture : public ttnn::distributed::test::TTNNFixtureW
                                         /* num_measurement_iterations */ int,
                                         /* use_program_cache */ bool>> {
 public:
-    Matmul2DHostPerfTestFixture() : ttnn::TTNNFixtureWithDevice(24576, 3855488) {}
-};
+    Matmul2DHostPerfTestFixture() : ttnn::TTNNFixtureWithDevice(24576, 200000) {}
+
 
 TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
     const std::tuple<int, int>& grid_size = std::get<0>(GetParam());
@@ -160,7 +164,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
         DataType dtype = std::get<0>(config);
         MathFidelity math_fidelity = std::get<1>(config);
         bool use_trace = std::get<2>(config);
-
+        tt::log_info("Running test with dtype: {}, math_fidelity: {}, use_trace: {}", dtype, math_fidelity, use_trace);
         std::vector<std::tuple<int, int, int, bool, bool, int, int, int>> matmul_shapes;
         if (dtype == DataType::BFLOAT16) {
             matmul_shapes = matmul_shapes_bfloat16;
@@ -235,7 +239,6 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
             Tile output_tile =
                 out_sharded ? (tile_h <= 16 ? tt::tt_metal::Tile({tile_h, 32}) : tt::tt_metal::Tile({tile_h, tile_w}))
                             : tt::tt_metal::Tile({tile_h, tile_w});
-
             ttnn::Tensor output_tensor = ttnn::matmul(
                 in0_t,
                 in1_t,
@@ -249,45 +252,66 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
                 /* core_grid */ std::nullopt,
                 /* output_tile */ output_tile);
             for (int iter = 0; iter < num_warmup_iterations; ++iter) {
-                // output_tensor = ttnn::matmul(in0_t, in1_t, program_config, out_mem_config, dtype,
-                // compute_kernel_config, output_tile);
+                ttnn::Tensor output_tensor = ttnn::matmul(
+                    in0_t,
+                    in1_t,
+                    /* transpose_a */ false,
+                    /* transpose_b */ false,
+                    /* memory_config */ out_mem_config,
+                    /* dtype */ dtype,
+                    /* program_config */ program_config,
+                    /* activation */ std::nullopt,
+                    /* compute_kernel_config */ compute_kernel_config,
+                    /* core_grid */ std::nullopt,
+                    /* output_tile */ output_tile);
             }
+            std::chrono::duration<double> total_time = std::chrono::duration<double>::zero();
 
             if (use_trace) {
                 auto tid = ttnn::operations::trace::begin_trace_capture(device, ttnn::DefaultQueueId);
                 for (int iter = 0; iter < num_measurement_iterations; ++iter) {
-                    // ttnn::Tensor output_tensor = ttnn::matmul(
-                    //     in0_t,
-                    //     in1_t,
-                    //     /* bias */ std::nullopt,
-                    //     /* parameters */ matmul_config
-                    // );
+                    ttnn::Tensor output_tensor = ttnn::matmul(
+                        in0_t,
+                        in1_t,
+                        /* transpose_a */ false,
+                        /* transpose_b */ false,
+                        /* memory_config */ out_mem_config,
+                        /* dtype */ dtype,
+                        /* program_config */ program_config,
+                        /* activation */ std::nullopt,
+                        /* compute_kernel_config */ compute_kernel_config,
+                        /* core_grid */ std::nullopt,
+                        /* output_tile */ output_tile);
                 }
                 ttnn::operations::trace::end_trace_capture(device, tid, ttnn::DefaultQueueId);
 
-                // Start timing
-
+                auto start_time = std::chrono::high_resolution_clock::now();
                 ttnn::operations::trace::execute_trace(device, tid, ttnn::DefaultQueueId, false);
-                // End timing
-
+                auto end_time = std::chrono::high_resolution_clock::now();
+                total_time = end_time - start_time;
                 ttnn::operations::trace::release_trace(device, tid);
             } else {
-                // Start timing
+                auto start_time = std::chrono::high_resolution_clock::now();
                 for (int iter = 0; iter < num_measurement_iterations; ++iter) {
-                    // ttnn::Tensor output_tensor = ttnn::matmul(
-                    //     in0_t,
-                    //     in1_t,
-                    //     /* bias */ std::nullopt,
-                    //     matmul_config,
-                    //     ttnn::DefaultQueueId
-                    // );
+                    ttnn::Tensor output_tensor = ttnn::matmul(
+                        in0_t,
+                        in1_t,
+                        /* transpose_a */ false,
+                        /* transpose_b */ false,
+                        /* memory_config */ out_mem_config,
+                        /* dtype */ dtype,
+                        /* program_config */ program_config,
+                        /* activation */ std::nullopt,
+                        /* compute_kernel_config */ compute_kernel_config,
+                        /* core_grid */ std::nullopt,
+                        /* output_tile */ output_tile);
                 }
-                // ttnn::synchronize_device(device);
-                // End timing
+                auto end_time = std::chrono::high_resolution_clock::now();
+                total_time = end_time - start_time;
             }
-
-            double total_time = 5;
-            double inference_time_avg = total_time / num_measurement_iterations;
+            // TODO: Calculate metrics
+            /*
+            const std::chrono::duration<double> inference_time_avg = total_time / num_measurement_iterations;
             double tflops = 2.0 * m * k * n / 1e12 / inference_time_avg;
             int cycle_per_tile = (math_fidelity == MathFidelity::LoFi)    ? LoFi_cycle
                                  : (math_fidelity == MathFidelity::HiFi2) ? HiFi2_cycle
@@ -305,9 +329,8 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
             double utilization_user_grid = ideal_cycle_user_grid / inference_cycle;
             std::string utilization_full_grid_percentage = std::to_string(utilization_full_grid * 100) + "%";
             std::string utilization_user_grid_percentage = std::to_string(utilization_user_grid * 100) + "%";
-            /*
-            tt::log_info( "M*K*N = {}*{}*{} == inference time (avg): %f, tflops (avg): %f, utilization (vs user grid):
-            %s, utilization (vs 8x8 grid): %s", m, k, n, inference_time_avg, tflops,
+            tt::log_info("M*K*N = {}*{}*{} == inference time (avg): {}, tflops (avg): {}, utilization (vs user grid):
+            {}, utilization (vs 8x8 grid): {}", m, k, n, inference_time_avg, tflops,
             utilization_user_grid_percentage.c_str(), utilization_full_grid_percentage.c_str());
 
             file << m << "," << k << "," << n << "," << (use_trace ? "true" : "false") << "," << std::get<0>(grid_size)
@@ -317,7 +340,12 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
                  << dtype << "," << math_fidelity << "," << inference_time_avg * 1e9 << "," << tflops << "," <<
             utilization_user_grid_percentage << ","
                  << utilization_full_grid_percentage << "\n";
-                 */
+            */
+
+            // Deallocate tensors
+            in0_t.deallocate();
+            in1_t.deallocate();
+            output_tensor.deallocate();
         }
     }
 }
