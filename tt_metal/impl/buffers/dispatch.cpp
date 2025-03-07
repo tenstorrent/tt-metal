@@ -2,12 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <device_command.hpp>
 #include <device.hpp>
 #include "assert.hpp"
 #include "dispatch.hpp"
+#include "tt_metal/impl/dispatch/device_command.hpp"
+
 #include <tt-metalium/command_queue_interface.hpp>
-#include <tt-metalium/device_command.hpp>
+#include "tt_metal/impl/dispatch/device_command.hpp"
 #include <tt-metalium/dispatch_settings.hpp>
 #include <tt-metalium/program_impl.hpp>
 

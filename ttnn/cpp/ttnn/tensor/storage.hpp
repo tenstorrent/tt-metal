@@ -193,19 +193,19 @@ struct MultiDeviceHostStorage {
 
     OwnedBuffer get_buffer(int buffer_index) const {
         std::lock_guard<std::mutex> lock(mtx);
-        TT_ASSERT(buffer_index < buffers.size(), "Buffer not found for buffer_index {}", buffer_index);
+        TT_FATAL(buffer_index < buffers.size(), "Buffer not found for buffer_index {}", buffer_index);
         return buffers[buffer_index];
     }
 
     OwnedBuffer& get_buffer(int buffer_index) {
         std::lock_guard<std::mutex> lock(mtx);
-        TT_ASSERT(buffer_index < buffers.size(), "Buffer not found for buffer_index {}", buffer_index);
+        TT_FATAL(buffer_index < buffers.size(), "Buffer not found for buffer_index {}", buffer_index);
         return buffers[buffer_index];
     }
 
     TensorSpec get_tensor_spec(int spec_index) const {
         std::lock_guard<std::mutex> lock(mtx);
-        TT_ASSERT(spec_index < specs.size(), "Buffer not found for device {}", spec_index);
+        TT_FATAL(spec_index < specs.size(), "Spec for device {} not found in spec list", spec_index);
         return specs[spec_index];
     }
 

@@ -173,9 +173,9 @@ void MAIN {
     constexpr auto cb_batch_var = get_compile_time_arg_val(5);  // batch_var
     constexpr auto cb_eps = get_compile_time_arg_val(6);        // eps
     constexpr auto cb_den = get_compile_time_arg_val(7);        // 1/(sqrt(batch_var + eps))
-    constexpr auto cb_weight = get_compile_time_arg_val(9);     // weight tensor
-    constexpr auto cb_tmp_1 = get_compile_time_arg_val(10);     // (input - batch_mean)/(sqrt(batch_var + eps))
-    constexpr auto cb_bias = get_compile_time_arg_val(11);      // bias tensor
+    constexpr auto cb_weight = get_compile_time_arg_val(8);     // weight tensor
+    constexpr auto cb_tmp_1 = get_compile_time_arg_val(9);      // (input - batch_mean)/(sqrt(batch_var + eps))
+    constexpr auto cb_bias = get_compile_time_arg_val(10);      // bias tensor
 
     auto cb_bcast = cb_batch_mean;
     auto cb_other = cb_input;
