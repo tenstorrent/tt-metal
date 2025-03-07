@@ -72,7 +72,7 @@ BufferDispatchConstants generate_buffer_dispatch_constants(
     return buf_dispatch_constants;
 }
 
-void update_byte_offset_in_cq(uint32_t& byte_offset, bool issue_wait, uint32_t num_sub_devices) {
+void update_offset_on_issue_wait_cmd(uint32_t& byte_offset, bool issue_wait, uint32_t num_sub_devices) {
     if (issue_wait) {
         // commands prefixed with CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
         byte_offset += (hal.get_alignment(HalMemType::HOST) * num_sub_devices);
@@ -321,7 +321,7 @@ void write_interleaved_buffer_to_device(
             (dispatch_params.dst_page_index == starting_dst_page_index and
              dispatch_params.address == buffer.address());  // only stall for the first write of the buffer
 
-        update_byte_offset_in_cq(data_offsetB, dispatch_params.issue_wait, sub_device_ids.size());
+        update_offset_on_issue_wait_cmd(data_offsetB, dispatch_params.issue_wait, sub_device_ids.size());
 
         uint32_t space_availableB = std::min(
             buf_dispatch_constants.issue_queue_cmd_limit -
@@ -481,7 +481,7 @@ void write_sharded_buffer_to_core(
         dispatch_params.issue_wait =
             dispatch_params.total_pages_written == 0;  // only stall for the first write of the buffer
 
-        update_byte_offset_in_cq(data_offset_bytes, dispatch_params.issue_wait, sub_device_ids.size());
+        update_offset_on_issue_wait_cmd(data_offset_bytes, dispatch_params.issue_wait, sub_device_ids.size());
 
         uint32_t space_available_bytes = std::min(
             buf_dispatch_constants.issue_queue_cmd_limit -
