@@ -368,6 +368,21 @@ inline void wait_ncrisc_trisc() {
 
 inline void trigger_sync_register_init() { mailboxes->slave_sync.trisc0 = RUN_SYNC_MSG_INIT_SYNC_REGISTERS; }
 
+template <uint8_t noc_mode = DM_DEDICATED_NOC>
+inline __attribute__((always_inline)) void signal_dispatch_done(
+    uint8_t noc, uint8_t cmd_buf, uint64_t dispatch_addr, uint32_t atomic_ret_val, bool posted) {
+    noc_fast_atomic_increment<noc_mode>(
+        noc,
+        cmd_buf,
+        dispatch_addr,
+        NOC_UNICAST_WRITE_VC,
+        1,
+        31 /*wrap*/,
+        false /*linked*/,
+        posted /*posted*/,
+        atomic_ret_val);
+}
+
 int main() {
     configure_l1_data_cache();
     DIRTY_STACK_MEMORY();
@@ -451,6 +466,9 @@ int main() {
                     31 /*wrap*/,
                     false /*linked*/,
                     post_atomic_increments /*posted*/);
+#if defined(ARCH_BLACKHOLE)
+                while (!ncrisc_noc_nonposted_atomics_flushed(noc_index));
+#endif
             }
         }
 
@@ -592,15 +610,18 @@ int main() {
                 // messages in the ring buffer. Must be executed before the atomic increment, as after that the launch
                 // message is no longer owned by us.
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
-                noc_fast_atomic_increment(
-                    noc_index,
-                    NCRISC_AT_CMD_BUF,
-                    dispatch_addr,
-                    NOC_UNICAST_WRITE_VC,
-                    1,
-                    31 /*wrap*/,
-                    false /*linked*/,
-                    post_atomic_increments /*posted*/);
+#if defined(ARCH_BLACKHOLE)
+                if (noc_mode == DM_DEDICATED_NOC) {
+                    signal_dispatch_done(noc_index, cmd_buf, dispatch_addr, 0, post_atomic_increments);
+                    while (!ncrisc_noc_nonposted_atomics_flushed(noc_index));
+                } else {
+                    signal_dispatch_done<DM_DYNAMIC_NOC>(
+                        noc_index, cmd_buf, dispatch_addr, MEM_NOC_ATOMIC_RET_VAL_ADDR, post_atomic_increments);
+                    while (!ncrisc_dynamic_noc_nonposted_atomics_flushed(noc_index));
+                }
+#else
+                signal_dispatch_done(noc_index, cmd_buf, dispatch_addr, 0, post_atomic_increments);
+#endif
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
             }
         }
