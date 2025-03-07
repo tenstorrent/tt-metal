@@ -30,9 +30,9 @@ CoreRangeSet get_worker_grid(
 
 void validate_sharding(
     TensorMemoryLayout memory_layout_x,
-    const ShardSpec& shard_spec_x,
+    const tt::tt_metal::ShardSpec& shard_spec_x,
     TensorMemoryLayout memory_layout_y,
-    const ShardSpec& shard_spec_y,
+    const tt::tt_metal::ShardSpec& shard_spec_y,
     SubtileBroadcastType subtile_broadcast_type);
 
 struct BinaryNgDeviceOperation {
