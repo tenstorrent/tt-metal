@@ -8,7 +8,6 @@ from loguru import logger
 from transformers import AutoImageProcessor
 import pytest
 import ttnn
-from models.perf.perf_utils import prep_perf_report
 
 from models.utility_functions import (
     disable_compilation_reports,
@@ -97,15 +96,6 @@ def run_resnet_imagenet_inference(
     inference_time_avg = profiler.get("run") / (iterations)
 
     compile_time = first_iter_time - 2 * inference_time_avg
-    prep_perf_report(
-        model_name=f"ttnn_{model_version}_batch_size{batch_size}",
-        batch_size=batch_size,
-        inference_and_compile_time=first_iter_time,
-        inference_time=inference_time_avg,
-        expected_compile_time=30,
-        expected_inference_time=0.004,
-        comments="tests",
-    )
     logger.info(
         f"ttnn_{model_version}_batch_size{batch_size} tests inference time (avg): {inference_time_avg}, FPS: {batch_size/inference_time_avg}"
     )
