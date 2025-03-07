@@ -49,8 +49,6 @@ static std::string get_string_aliased_arch_lowercase(tt::ARCH arch) {
     }
 }
 
-const bool JitBuildEnv::USE_CCACHE = std::getenv("CCACHE_KERNEL_SUPPORT") != nullptr;
-
 JitBuildEnv::JitBuildEnv() {}
 
 void check_built_dir(const std::filesystem::path& dir_path, const std::filesystem::path& git_hash_path)
@@ -91,7 +89,8 @@ void JitBuildEnv::init(
     this->out_firmware_root_ = this->out_root_ + to_string(build_key) + "/firmware/";
     this->out_kernel_root_ = this->out_root_ + to_string(build_key) + "/kernels/";
 
-    if (USE_CCACHE) {
+    const static bool use_ccache = std::getenv("CCACHE_KERNEL_SUPPORT") != nullptr;
+    if (use_ccache) {
         this->gpp_ = "ccache ";
     } else {
         this->gpp_ = "";
