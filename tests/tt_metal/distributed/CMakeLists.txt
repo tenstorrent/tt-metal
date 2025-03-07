@@ -8,6 +8,7 @@ set(UNIT_TESTS_DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_events.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_trace.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_thread_pool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/utils.cpp
 )
 

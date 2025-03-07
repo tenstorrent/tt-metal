@@ -12,7 +12,7 @@ namespace tt::tt_metal {
 class ThreadPool {
 public:
     virtual ~ThreadPool() = default;
-    virtual void enqueue(std::function<void()>&& f, uint32_t thread_idx = 0) = 0;
+    virtual void enqueue(std::function<void()>&& f, std::optional<uint32_t> device_idx = std::nullopt) = 0;
     virtual void wait() = 0;
 };
 

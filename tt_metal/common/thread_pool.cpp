@@ -13,14 +13,47 @@
 
 namespace tt::tt_metal {
 
+namespace thread_binding {
+
 std::unordered_map<int, std::vector<uint32_t>> get_cpu_cores_per_numa_node() {
     std::unordered_map<int, std::vector<uint32_t>> cpu_cores_per_numa_node = {};
-    for (int cpu = 0; cpu < numa_num_configured_cpus(); ++cpu) {
-        int node = numa_node_of_cpu(cpu);
-        cpu_cores_per_numa_node[node].push_back(cpu);
+    if (numa_available() != -1) {
+        for (int cpu = 0; cpu < numa_num_configured_cpus(); ++cpu) {
+            int node = numa_node_of_cpu(cpu);
+            cpu_cores_per_numa_node[node].push_back(cpu);
+        }
     }
     return cpu_cores_per_numa_node;
 }
+
+uint32_t get_cpu_core_for_physical_device(uint32_t physical_device_id, uint32_t logical_cpu_offset) {
+    static std::unordered_map<int, std::vector<uint32_t>> cpu_cores_per_numa_node = get_cpu_cores_per_numa_node();
+    auto numa_node = tt::Cluster::instance().get_numa_node_for_device(physical_device_id);
+    if (cpu_cores_per_numa_node.find(numa_node) != cpu_cores_per_numa_node.end()) {
+        auto& cpu_cores_on_node = cpu_cores_per_numa_node[numa_node];
+        return cpu_cores_on_node[(physical_device_id + logical_cpu_offset) % cpu_cores_on_node.size()];
+    } else {
+        log_warning(tt::LogMetal, "Unable to bind worker thread to a NUMA node.");
+        uint32_t num_threads = std::thread::hardware_concurrency();
+        TT_FATAL(num_threads, "Could not detect the number of CPU cores on host.");
+        return physical_device_id % num_threads;
+    }
+}
+
+void set_worker_affinity(std::thread& worker, uint32_t cpu_core) {
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(cpu_core, &cpuset);
+    int rc = pthread_setaffinity_np(worker.native_handle(), sizeof(cpu_set_t), &cpuset);
+    if (rc) {
+        log_warning(
+            tt::LogMetal,
+            "Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: {}",
+            rc);
+    }
+}
+
+}  // namespace thread_binding
 
 namespace threading_primitives {
 
@@ -94,12 +127,10 @@ private:
 // to its physical device. The logical_cpu_offset constructor argument can be used to specify the
 // logical base offset within a NUMA node when binding the worker thread.
 // The CPU selection algorithm is:
-// CPUs[numa_node][(physical_device_id + logical_cpu_offset) / num_cores_on_numa_node]
+// CPUs[numa_node][(physical_device_id + logical_cpu_offset) % num_cores_on_numa_node]
 class NumaAwareExecutor {
 public:
     NumaAwareExecutor(uint32_t physical_device_id, uint32_t logical_cpu_offset) : tasks_() {
-        static std::unordered_map<int, std::vector<uint32_t>> cpu_cores_per_numa_node = get_cpu_cores_per_numa_node();
-
         worker = std::thread([this]() {
             std::function<void()> task;  // Task container for this thread
             while (true) {
@@ -118,20 +149,10 @@ public:
                 }
             }
         });
-        auto numa_node = tt::Cluster::instance().get_numa_node_for_device(physical_device_id);
-        auto& cpu_cores_on_node = cpu_cores_per_numa_node[numa_node];
+
         auto cpu_core_for_worker =
-            cpu_cores_on_node[(physical_device_id + logical_cpu_offset) % cpu_cores_on_node.size()];
-        cpu_set_t cpuset;
-        CPU_ZERO(&cpuset);
-        CPU_SET(cpu_core_for_worker, &cpuset);
-        int rc = pthread_setaffinity_np(worker.native_handle(), sizeof(cpu_set_t), &cpuset);
-        if (rc) {
-            log_warning(
-                tt::LogMetal,
-                "Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: {}",
-                rc);
-        }
+            thread_binding::get_cpu_core_for_physical_device(physical_device_id, logical_cpu_offset);
+        thread_binding::set_worker_affinity(worker, cpu_core_for_worker);
     }
 
     ~NumaAwareExecutor() {
@@ -178,31 +199,18 @@ using threading_primitives::NumaAwareExecutor;
 // Boost backed thread-pool.
 class BoostThreadPool : public ThreadPool {
 public:
-    BoostThreadPool(size_t thread_count) : pool_(thread_count) {
-        // Given the current use case, we don't expect to
-        // enqueue more tasks than the number of threads.
-        // Add a factor of safety and modify as needed.
-        futures_.reserve(thread_count * 4);
-    }
+    BoostThreadPool(size_t thread_count) : pool_(thread_count) {}
 
     ~BoostThreadPool() noexcept override = default;
 
-    void enqueue(std::function<void()>&& f, uint32_t thread_idx) override {
-        std::packaged_task<void()> task(std::move(f));
-        futures_.push_back(task.get_future());
-        boost::asio::post(pool_, [executor = std::move(task)]() mutable { executor(); });
+    void enqueue(std::function<void()>&& f, std::optional<uint32_t> device_idx = std::nullopt) override {
+        boost::asio::post(pool_, f);
     }
 
-    void wait() override {
-        for (auto& future : futures_) {
-            future.get();
-        }
-        futures_.clear();
-    }
+    void wait() override { pool_.wait(); }
 
 private:
     boost::asio::thread_pool pool_;
-    std::vector<std::future<void>> futures_;
 };
 
 // Custom Thread-Pool using the threading::Executor class.
@@ -211,23 +219,34 @@ class DeviceBoundThreadPool : public ThreadPool {
 public:
     DeviceBoundThreadPool(uint32_t thread_count, uint32_t logical_cpu_offset) {
         workers_.reserve(thread_count);
+        num_workers_ = thread_count;
         for (uint32_t i = 0; i < thread_count; i++) {
             workers_.emplace_back(std::make_unique<NumaAwareExecutor>(i, logical_cpu_offset));
         }
     }
 
-    void enqueue(std::function<void()>&& f, uint32_t thread_idx) override {
-        workers_[thread_idx]->enqueue(std::move(f));
+    void enqueue(std::function<void()>&& f, std::optional<uint32_t> device_idx = std::nullopt) override {
+        // If the user does not provide the Device ID tied to this task, determine the thread to use
+        // based on the internally stored thread_idx. Tasks will get round-robined across threads,
+        // when relying on the thread_idx.
+        workers_[device_idx.value_or(thread_idx_ % num_workers_)]->enqueue(std::move(f));
+        ++thread_idx_;
     }
 
     void wait() override {
+        thread_idx_ = 0;  // Reset thread_idx for next call without Device ID specified.
         for (auto& worker : workers_) {
             worker->wait();
         }
     }
 
 private:
+    // Executors backing this pool.
     std::vector<std::unique_ptr<NumaAwareExecutor>> workers_;
+    // Used to pick threads when device_idx is not specified in the enqueue API
+    uint32_t thread_idx_ = 0;
+    // Store the number of workers to repeated lookups
+    uint32_t num_workers_ = 0;
 };
 
 }  // namespace thread_pool_impls
