@@ -307,7 +307,7 @@ tt::tt_metal::KernelHandle generate_edm_kernel_impl(
 tt::tt_metal::KernelHandle generate_edm_kernel(
     Program& program,
     const IDevice* device,
-    const FabricEriscDatamoverBuilder& edm_builder,
+    const tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder,
     const CoreCoord& eth_core,
     tt::tt_metal::NOC noc_id) {
     return generate_edm_kernel_impl(

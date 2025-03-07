@@ -24,7 +24,7 @@ FORCE_INLINE void line_sync(
     size_t sync_noc_x,
     size_t sync_noc_y,
     size_t sync_val) {
-    using namespace tt::fabric;
+    using namespace tt::tt_fabric;
 
     auto dest_noc_addr =
         safe_get_noc_addr(static_cast<uint8_t>(sync_noc_x), static_cast<uint8_t>(sync_noc_y), sync_bank_addr, 0);
@@ -50,7 +50,7 @@ FORCE_INLINE void line_sync(
 }
 
 void kernel_main() {
-    using namespace tt::fabric;
+    using namespace tt::tt_fabric;
     size_t arg_idx = 0;
 
     const size_t dest_bank_addr = get_arg_val<uint32_t>(arg_idx++);

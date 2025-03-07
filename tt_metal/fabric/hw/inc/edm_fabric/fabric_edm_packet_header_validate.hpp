@@ -7,7 +7,7 @@
 #include "fabric_edm_packet_header.hpp"
 #include "debug/assert.h"
 
-namespace tt::fabric {
+namespace tt::tt_fabric {
 
 FORCE_INLINE void validate(const PacketHeader& packet_header) {
     ASSERT(packet_header.chip_send_type <= CHIP_SEND_TYPE_LAST);
@@ -21,4 +21,4 @@ FORCE_INLINE bool is_valid(const LowLatencyPacketHeader& packet_header) {
     return (packet_header.noc_send_type <= NOC_SEND_TYPE_LAST);
 }
 
-}  // namespace tt::fabric
+}  // namespace tt::tt_fabric

@@ -20,7 +20,7 @@
 
 using namespace tt::tt_metal::experimental;
 
-namespace tt::fabric {
+namespace tt::tt_fabric {
 
 // The channel structure is as follows:
 //              &header->  |----------------| channel_base_address
@@ -68,7 +68,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         sender_channel_1_buffer_index_address != sender_channel_0_buffer_index_address,
         "FabricEriscDatamoverConfig was constructed with illegal buffer index address");
     const size_t min_buffer_size =
-        sizeof(tt::fabric::PacketHeader) + 2 * FabricEriscDatamoverConfig::eth_channel_sync_size;
+        sizeof(tt::tt_fabric::PacketHeader) + 2 * FabricEriscDatamoverConfig::eth_channel_sync_size;
     TT_FATAL(
         channel_buffer_size_bytes >= min_buffer_size,
         "FabricEriscDatamoverConfig was constructed with `channel_buffer_size_bytes` argument set smaller than minimum "
@@ -79,7 +79,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     constexpr size_t default_pow2_num_receiver_buffer_slots = 16;
 
     const std::size_t channel_buffer_size_with_channel_sync =
-        channel_buffer_size_bytes + sizeof(tt::fabric::PacketHeader);  // + 16 // sizeof(tt::fabric::PacketHeader);
+        channel_buffer_size_bytes +
+        sizeof(tt::tt_fabric::PacketHeader);  // + 16 // sizeof(tt::tt_fabric::PacketHeader);
 
     const size_t next_lowest_power_of_2_buffer_slot_count =
 
@@ -123,7 +124,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     static constexpr size_t total_num_channels = 3;  // sender0, sender1, receiver
     const size_t max_channel_buffer_size = (available_channel_buffering_space / total_num_channels) -
                                            FabricEriscDatamoverConfig::eth_channel_sync_size -
-                                           sizeof(tt::fabric::PacketHeader);
+                                           sizeof(tt::tt_fabric::PacketHeader);
     TT_FATAL(
         channel_buffer_size_bytes <= max_channel_buffer_size,
         "Specified size of `channel_buffer_size_bytes` was too large. Maximum allowable size is {} B",
@@ -171,7 +172,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
     size_t sender_worker_terminate_semaphore_id,
     size_t sender_worker_buffer_index_semaphore_id,
     std::vector<uint32_t>& args_out) {
-    auto edm_noc_xy = tt::fabric::WorkerXY(connection.edm_noc_x, connection.edm_noc_y);
+    auto edm_noc_xy = tt::tt_fabric::WorkerXY(connection.edm_noc_x, connection.edm_noc_y);
     const std::vector<uint32_t> values = {
         connection.persistent_fabric,
         edm_noc_xy.to_uint32(),
@@ -480,7 +481,7 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm(const FabricEriscDat
 }
 
 void FabricEriscDatamoverBuilder::teardown_from_host(
-    tt::tt_metal::IDevice* d, tt::fabric::TerminationSignal termination_signal) const {
+    tt::tt_metal::IDevice* d, tt::tt_fabric::TerminationSignal termination_signal) const {
     std::vector<uint32_t> val(1, termination_signal);
     d->push_work(
         [&]() {
@@ -498,4 +499,4 @@ void FabricEriscDatamoverBuilder::set_firmware_context_switch_interval(size_t in
     this->firmware_context_switch_interval = interval;
 }
 
-}  // namespace tt::fabric
+}  // namespace tt::tt_fabric

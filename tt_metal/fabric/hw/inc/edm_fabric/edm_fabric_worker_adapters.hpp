@@ -16,7 +16,7 @@
 #include "debug/dprint.h"
 #include <cstdint>
 
-namespace tt::fabric {
+namespace tt::tt_fabric {
 
 /*
  * The WorkerToFabricEdmSenderImpl acts as an adapter between the worker and the EDM, it hides details
@@ -136,7 +136,6 @@ struct WorkerToFabricEdmSenderImpl {
     }
 
     FORCE_INLINE bool edm_has_space_for_packet() const {
-        using namespace tt::fabric;
         if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
             auto slots_used = distance_behind<EDM_NUM_BUFFER_SLOTS>(
                 BufferPtr{static_cast<uint8_t>(*this->from_remote_buffer_slot_rdptr_ptr)},
@@ -153,7 +152,6 @@ struct WorkerToFabricEdmSenderImpl {
     }
 
     FORCE_INLINE void wait_for_empty_write_slot() const {
-        using namespace tt::fabric;
         if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
             while (distance_behind<EDM_NUM_BUFFER_SLOTS>(
                        BufferPtr{static_cast<uint8_t>(*this->from_remote_buffer_slot_rdptr_ptr)},
@@ -222,12 +220,12 @@ struct WorkerToFabricEdmSenderImpl {
         noc_async_read(
             remote_buffer_index_addr, reinterpret_cast<size_t>(this->buffer_slot_wrptr_ptr), sizeof(uint32_t));
 
-        tt::fabric::EDMChannelWorkerLocationInfo* worker_location_info_ptr =
-            reinterpret_cast<tt::fabric::EDMChannelWorkerLocationInfo*>(edm_worker_location_info_addr);
+        tt::tt_fabric::EDMChannelWorkerLocationInfo* worker_location_info_ptr =
+            reinterpret_cast<tt::tt_fabric::EDMChannelWorkerLocationInfo*>(edm_worker_location_info_addr);
         const uint64_t edm_rdptr_addr =
             dest_noc_addr_coord_only |
             reinterpret_cast<size_t>(
-                edm_worker_location_info_addr + offsetof(tt::fabric::EDMChannelWorkerLocationInfo, edm_rdptr));
+                edm_worker_location_info_addr + offsetof(tt::tt_fabric::EDMChannelWorkerLocationInfo, edm_rdptr));
         noc_async_read(
             edm_rdptr_addr, reinterpret_cast<size_t>(this->from_remote_buffer_slot_rdptr_ptr), sizeof(uint32_t));
         // TODO: Need to change byte enable to be word enable
@@ -356,7 +354,7 @@ private:
         uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr();
 
         ASSERT(size_bytes <= this->buffer_size_bytes);
-        ASSERT(tt::fabric::is_valid(
+        ASSERT(tt::tt_fabric::is_valid(
             *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
         send_chunk_from_address<blocking_mode>(source_address, 1, size_bytes, buffer_address);
         post_send_payload_increment_pointers();
@@ -365,7 +363,7 @@ private:
     FORCE_INLINE void send_payload_from_address_with_trid_impl(
         uint32_t source_address, size_t size_bytes, uint8_t trid) {
         ASSERT(size_bytes <= this->buffer_size_bytes);
-        ASSERT(tt::fabric::is_valid(
+        ASSERT(tt::tt_fabric::is_valid(
             *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
         send_chunk_from_address_with_trid<blocking_mode>(
             source_address, 1, size_bytes, this->edm_buffer_addr, trid, this->edm_noc_cmd_buf);
@@ -386,4 +384,4 @@ using WorkerToFabricEdmSender = WorkerToFabricEdmSenderImpl<0>;
 template <uint8_t EDM_SENDER_CHANNEL_NUM_BUFFERS>
 using EdmToEdmSender = WorkerToFabricEdmSenderImpl<EDM_SENDER_CHANNEL_NUM_BUFFERS>;
 
-}  // namespace tt::fabric
+}  // namespace tt::tt_fabric

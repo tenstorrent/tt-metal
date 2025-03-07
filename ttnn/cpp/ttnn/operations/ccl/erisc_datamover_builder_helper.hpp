@@ -8,9 +8,6 @@
 
 #include "ttnn/distributed/types.hpp"
 
-// TODO: remove this
-using namespace tt::fabric;
-
 namespace ttnn {
 namespace ccl {
 
@@ -59,7 +56,7 @@ public:
     // Will create a connection adapter for a worker which can be used to pass args to the worker kernel talking to the
     // corresponding fabric endpoint. This interface will guarantee unique connections only so requesting more unique
     // connections than available will result in an error.
-    SenderWorkerAdapterSpec uniquely_connect_worker(tt::tt_metal::IDevice* device, Direction direction);
+    tt::tt_fabric::SenderWorkerAdapterSpec uniquely_connect_worker(tt::tt_metal::IDevice* device, Direction direction);
 
     // builds the ethernet kernels for all EDMs in the "fabric"
     void build_kernels() const;
@@ -71,10 +68,10 @@ public:
     // who will be sending the termination signals (and which link(s) they are connected to)
     // and so a termination signal may be sent to our link first before the other eth core links
     // on the chip so multi-link isn't officially supported yet
-    std::vector<edm_termination_info_t> generate_ordered_termination_info_farthest_to_nearest() const;
+    std::vector<tt::tt_fabric::edm_termination_info_t> generate_ordered_termination_info_farthest_to_nearest() const;
 
     // Generates a list of termination infos for the local chip's EDMs
-    std::vector<edm_termination_info_t> generate_local_chip_fabric_termination_infos(
+    std::vector<tt::tt_fabric::edm_termination_info_t> generate_local_chip_fabric_termination_infos(
         tt::tt_metal::IDevice* device) const;
 
     // Accessors
@@ -95,7 +92,8 @@ public:
     size_t get_edm_buffer_size_bytes() const { return buffer_size_bytes; }
 
     void teardown_from_host(
-        tt::fabric::TerminationSignal termination_signal = tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE) const;
+        tt::tt_fabric::TerminationSignal termination_signal =
+            tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE) const;
 
     static void launch_mesh_fabric(MeshDevice* mesh_device);
     static void teardown_edm_fabric(MeshDevice* mesh_device);
@@ -103,8 +101,8 @@ public:
     void set_firmware_context_switch_interval(size_t interval);
 
     // Device ID -> EDM Builders
-    std::unordered_map<size_t, std::vector<FabricEriscDatamoverBuilder>> edm_builders_forward_direction;
-    std::unordered_map<size_t, std::vector<FabricEriscDatamoverBuilder>> edm_builders_backward_direction;
+    std::unordered_map<size_t, std::vector<tt::tt_fabric::FabricEriscDatamoverBuilder>> edm_builders_forward_direction;
+    std::unordered_map<size_t, std::vector<tt::tt_fabric::FabricEriscDatamoverBuilder>> edm_builders_backward_direction;
 
 private:
     // Device ID -> link index
@@ -116,7 +114,8 @@ private:
 
     size_t num_links;
     size_t buffer_size_bytes;
-    size_t firmware_context_switch_interval = FabricEriscDatamoverBuilder::default_firmware_context_switch_interval;
+    size_t firmware_context_switch_interval =
+        tt::tt_fabric::FabricEriscDatamoverBuilder::default_firmware_context_switch_interval;
 };
 
 void initialize_edm_fabric(

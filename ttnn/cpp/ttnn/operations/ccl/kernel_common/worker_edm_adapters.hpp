@@ -11,9 +11,6 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/worker_edm_utils.hpp"
 #include "tt_metal/hw/inc/ethernet/dataflow_api.h"
 
-// TODO: remove
-using namespace tt::fabric;
-
 namespace ccl {
 namespace edm {
 
@@ -100,12 +97,12 @@ struct WorkerToEdmSender {
     }
 
     FORCE_INLINE void send_payload_blocking(uint32_t cb_id, uint32_t num_pages, uint32_t page_size) {
-        send_payload_impl<tt::fabric::EDM_IO_BLOCKING_MODE::BLOCKING>(cb_id, num_pages, page_size);
+        send_payload_impl<tt::tt_fabric::EDM_IO_BLOCKING_MODE::BLOCKING>(cb_id, num_pages, page_size);
     }
 
     // Does not wait for CB. Assumes caller handles CB data availability
     FORCE_INLINE void send_payload_non_blocking(uint32_t cb_id, uint32_t num_pages, uint32_t page_size) {
-        send_payload_impl<tt::fabric::EDM_IO_BLOCKING_MODE::NON_BLOCKING>(cb_id, num_pages, page_size);
+        send_payload_impl<tt::tt_fabric::EDM_IO_BLOCKING_MODE::NON_BLOCKING>(cb_id, num_pages, page_size);
     }
 
     /*
@@ -113,7 +110,7 @@ struct WorkerToEdmSender {
      */
     FORCE_INLINE void send_payload_blocking_from_address(
         uint32_t source_address, uint32_t num_pages, uint32_t page_size) {
-        send_payload_from_address_impl<tt::fabric::EDM_IO_BLOCKING_MODE::BLOCKING>(
+        send_payload_from_address_impl<tt::tt_fabric::EDM_IO_BLOCKING_MODE::BLOCKING>(
             source_address, num_pages, page_size);
     }
 
@@ -123,7 +120,7 @@ struct WorkerToEdmSender {
     // Does not wait for CB. Assumes caller handles CB data availability
     FORCE_INLINE void send_payload_non_blocking_from_address(
         uint32_t source_address, uint32_t num_pages, uint32_t page_size) {
-        send_payload_from_address_impl<tt::fabric::EDM_IO_BLOCKING_MODE::NON_BLOCKING>(
+        send_payload_from_address_impl<tt::tt_fabric::EDM_IO_BLOCKING_MODE::NON_BLOCKING>(
             source_address, num_pages, page_size);
     }
 
@@ -145,7 +142,7 @@ struct WorkerToEdmSender {
     std::size_t buffer_index;
 
 private:
-    template <tt::fabric::EDM_IO_BLOCKING_MODE blocking_mode>
+    template <tt::tt_fabric::EDM_IO_BLOCKING_MODE blocking_mode>
     FORCE_INLINE void send_payload_from_address_impl(uint32_t source_address, uint32_t num_pages, uint32_t page_size) {
         uint64_t buffer_address =
             this->edm_buffer_addr + (this->buffer_index * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
@@ -155,7 +152,7 @@ private:
         this->buffer_index = (this->buffer_index == this->last_buffer_index) ? 0 : this->buffer_index + 1;
     }
 
-    template <tt::fabric::EDM_IO_BLOCKING_MODE blocking_mode>
+    template <tt::tt_fabric::EDM_IO_BLOCKING_MODE blocking_mode>
     FORCE_INLINE void send_payload_impl(uint32_t cb_id, uint32_t num_pages, uint32_t page_size) {
         uint64_t buffer_address =
             this->edm_buffer_addr + (this->buffer_index * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));

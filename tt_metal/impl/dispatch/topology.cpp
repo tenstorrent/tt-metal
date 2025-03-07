@@ -830,13 +830,14 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, b
     std::pair<mesh_id_t, chip_id_t> mesh_chip_id = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
     std::unordered_map<RoutingDirection, std::vector<chan_id_t>> active_fabric_eth_channels;
     std::unordered_map<RoutingDirection, chip_id_t> chip_neighbors;
-    std::unordered_map<chan_id_t, tt::fabric::FabricEriscDatamoverBuilder> edm_builders;
+    std::unordered_map<chan_id_t, tt::tt_fabric::FabricEriscDatamoverBuilder> edm_builders;
     auto routing_directions = {RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
     size_t num_neighbors = 0;
 
     static constexpr std::size_t edm_buffer_size =
-        tt::fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes + sizeof(tt::fabric::PacketHeader);
-    const auto edm_config = tt::fabric::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
+        tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
+        sizeof(tt::tt_fabric::PacketHeader);
+    const auto edm_config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
 
     for (const auto& direction : routing_directions) {
         auto active_eth_chans = control_plane->get_active_fabric_eth_channels_in_direction(
@@ -860,7 +861,7 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, b
             auto eth_logical_core = tt::Cluster::instance()
                                         .get_soc_desc(device->id())
                                         .get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
-            auto edm_builder = tt::fabric::FabricEriscDatamoverBuilder::build(
+            auto edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
                 device, *fabric_program_ptr, eth_logical_core, device->id(), remote_chip_id, edm_config, true, false);
             edm_builders.insert({eth_chan, edm_builder});
         }

@@ -422,9 +422,9 @@ void DevicePool::wait_for_fabric_router_sync() const {
     if (tt::Cluster::instance().get_fabric_config() == FabricConfig::FABRIC_1D) {
         using namespace tt::tt_fabric;
         static constexpr std::size_t edm_buffer_size =
-            tt::fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
-            sizeof(tt::fabric::PacketHeader);
-        const auto edm_config = tt::fabric::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
+            tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
+            sizeof(tt::tt_fabric::PacketHeader);
+        const auto edm_config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
         auto routing_directions = {RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
 
         for (const auto& dev : this->get_all_active_devices()) {
@@ -443,7 +443,7 @@ void DevicePool::wait_for_fabric_router_sync() const {
                     std::vector<std::uint32_t> router_status{0};
                     auto eth_logical_core = tt::Cluster::instance().get_soc_desc(dev->id()).get_eth_core_for_channel(
                         eth_chan, CoordSystem::LOGICAL);
-                    while (router_status[0] != tt::fabric::EDMStatus::HANDSHAKE_COMPLETE) {
+                    while (router_status[0] != tt::tt_fabric::EDMStatus::HANDSHAKE_COMPLETE) {
                         tt_metal::detail::ReadFromDeviceL1(
                             dev, eth_logical_core, edm_config.edm_status_address, 4, router_status, CoreType::ETH);
                     }
@@ -679,11 +679,11 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
     // Terminate fabric routers
     if (tt::Cluster::instance().get_fabric_config() == FabricConfig::FABRIC_1D) {
         using namespace tt::tt_fabric;
-        std::vector<uint32_t> signal(1, tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE);
+        std::vector<uint32_t> signal(1, tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE);
         static constexpr std::size_t edm_buffer_size =
-            tt::fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
-            sizeof(tt::fabric::PacketHeader);
-        const auto edm_config = tt::fabric::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
+            tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
+            sizeof(tt::tt_fabric::PacketHeader);
+        const auto edm_config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
         auto routing_directions = {RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
 
         for (const auto& dev : this->get_all_active_devices()) {

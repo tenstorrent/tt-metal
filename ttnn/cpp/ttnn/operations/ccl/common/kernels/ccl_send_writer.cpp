@@ -131,13 +131,13 @@ void kernel_main() {
     const bool has_forward_fabric_connection = get_arg_val<uint32_t>(arg_idx++) != 0;
     auto forward_fabric_sender =
         has_forward_fabric_connection
-            ? tt::fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx)
-            : tt::fabric::WorkerToFabricEdmSender();
+            ? tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx)
+            : tt::tt_fabric::WorkerToFabricEdmSender();
     const bool has_backward_fabric_connection = get_arg_val<uint32_t>(arg_idx++) != 0;
     auto backward_fabric_sender =
         has_backward_fabric_connection
-            ? tt::fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx)
-            : tt::fabric::WorkerToFabricEdmSender();
+            ? tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx)
+            : tt::tt_fabric::WorkerToFabricEdmSender();
 
     constexpr size_t num_args_per_sync_signal_sender = 3;
     const bool must_send_sync_signals = get_arg_val<uint32_t>(arg_idx++) != 0;

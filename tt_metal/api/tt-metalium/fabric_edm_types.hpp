@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-namespace tt::fabric {
+namespace tt::tt_fabric {
 
 struct WorkerXY {
     uint16_t x;
@@ -78,4 +78,4 @@ struct EDMChannelWorkerLocationInfo {
 
 static_assert(sizeof(EDMChannelWorkerLocationInfo) <= 64);
 
-}  // namespace tt::fabric
+}  // namespace tt::tt_fabric

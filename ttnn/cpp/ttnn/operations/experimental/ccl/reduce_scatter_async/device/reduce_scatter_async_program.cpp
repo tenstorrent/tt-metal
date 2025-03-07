@@ -1216,7 +1216,7 @@ static void populate_partial_reduce_rt_args(
 
     auto get_fabric_connection = [&device, &fabric](bool is_connected, Direction dir) {
         return is_connected
-                   ? std::make_optional<tt::fabric::SenderWorkerAdapterSpec>(fabric.uniquely_connect_worker(device, dir))
+                   ? std::make_optional<tt::tt_fabric::SenderWorkerAdapterSpec>(fabric.uniquely_connect_worker(device, dir))
                    : std::nullopt;
     };
 
@@ -1540,7 +1540,7 @@ static void create_end_of_line_worker_runtime_args(
 
     auto get_fabric_connection = [&device, &fabric](bool is_connected, Direction dir) {
         return is_connected
-                   ? std::make_optional<tt::fabric::SenderWorkerAdapterSpec>(fabric.uniquely_connect_worker(device, dir))
+                   ? std::make_optional<tt::tt_fabric::SenderWorkerAdapterSpec>(fabric.uniquely_connect_worker(device, dir))
                    : std::nullopt;
     };
 

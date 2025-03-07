@@ -17,9 +17,6 @@
 #include "erisc_datamover_builder_helper.hpp"
 #include "cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
-// TODO: remove this
-using namespace tt::fabric;
-
 namespace ttnn {
 namespace ccl {
 
@@ -543,7 +540,7 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
 tt::tt_metal::KernelHandle generate_edm_kernel(
    tt::tt_metal::Program& program,
     tt::tt_metal::IDevice const* device,
-    FabricEriscDatamoverBuilder const& edm_builder,
+    tt::tt_fabric::FabricEriscDatamoverBuilder const& edm_builder,
     CoreCoord const& eth_core,
     tt::tt_metal::NOC noc_id);
 

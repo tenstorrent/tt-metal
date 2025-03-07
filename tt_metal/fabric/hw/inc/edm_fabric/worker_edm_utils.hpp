@@ -8,7 +8,7 @@
 #include "debug/assert.h"
 #include "tt_metal/api/tt-metalium/fabric_edm_types.hpp"
 
-namespace tt::fabric {
+namespace tt::tt_fabric {
 
 static FORCE_INLINE coord_t coord_from_args(std::size_t& arg_idx) {
     uint32_t x = get_arg_val<uint32_t>(arg_idx++);
@@ -85,4 +85,4 @@ FORCE_INLINE void send_chunk(
     }
 }
 
-}  // namespace tt::fabric
+}  // namespace tt::tt_fabric

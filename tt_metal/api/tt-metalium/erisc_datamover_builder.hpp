@@ -19,7 +19,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace tt::fabric {
+namespace tt::tt_fabric {
 
 struct FabricEriscDatamoverConfig {
     static constexpr bool constrain_to_power_of_2_buffer_slot_counts = true;
@@ -42,9 +42,9 @@ struct FabricEriscDatamoverConfig {
 
     // Debug and Counters
     static constexpr std::size_t receiver_channel_counters_size_bytes =
-        (((tt::fabric::receiver_channel_counters_l1_size - 1) / field_size) + 1) * field_size;
+        (((tt::tt_fabric::receiver_channel_counters_l1_size - 1) / field_size) + 1) * field_size;
     static constexpr std::size_t sender_channel_counters_size_bytes =
-        (((tt::fabric::sender_channel_counters_l1_size - 1) / field_size) + 1) * field_size;
+        (((tt::tt_fabric::sender_channel_counters_l1_size - 1) / field_size) + 1) * field_size;
 
     std::size_t receiver_channel_counters_address = edm_status_address + field_size;
     std::size_t sender_channel_0_counters_address =
@@ -55,10 +55,10 @@ struct FabricEriscDatamoverConfig {
     // Packet header history buffer(s)
     static constexpr std::size_t receiver_completed_packet_header_cb_size_headers = 32;
     static constexpr std::size_t receiver_completed_packet_header_cb_size_bytes =
-        sizeof(tt::fabric::PacketHeader) * receiver_completed_packet_header_cb_size_headers;
+        sizeof(tt::tt_fabric::PacketHeader) * receiver_completed_packet_header_cb_size_headers;
     static constexpr std::size_t sender_completed_packet_header_cb_size_headers = 32;
     static constexpr std::size_t sender_completed_packet_header_cb_size_bytes =
-        sizeof(tt::fabric::PacketHeader) * sender_completed_packet_header_cb_size_headers;
+        sizeof(tt::tt_fabric::PacketHeader) * sender_completed_packet_header_cb_size_headers;
     std::size_t receiver_completed_packet_header_cb_address =
         sender_channel_1_counters_address + sender_channel_counters_size_bytes;
     std::size_t sender_0_completed_packet_header_cb_address =
@@ -76,7 +76,7 @@ struct FabricEriscDatamoverConfig {
     // 3: Hold's EDM's rdptr for the buffer index in the channel
     std::size_t sender_channel_0_worker_conn_info_base_address = sender_channel_0_buffer_index_address + field_size;
     std::size_t sender_channel_0_local_flow_control_semaphore_address =
-        sender_channel_0_worker_conn_info_base_address + sizeof(tt::fabric::EDMChannelWorkerLocationInfo);
+        sender_channel_0_worker_conn_info_base_address + sizeof(tt::tt_fabric::EDMChannelWorkerLocationInfo);
     // sender_channel_0_conn_info_edm_rdptr_address_address + field_size;
     std::size_t sender_channel_0_producer_terminate_connection_address =
         sender_channel_0_local_flow_control_semaphore_address + field_size;
@@ -87,7 +87,7 @@ struct FabricEriscDatamoverConfig {
     std::size_t sender_channel_0_buffer_index_semaphore_address =
         sender_channel_0_connection_semaphore_address + field_size;
 
-    static_assert(sizeof(tt::fabric::EDMChannelWorkerLocationInfo) % field_size == 0);
+    static_assert(sizeof(tt::tt_fabric::EDMChannelWorkerLocationInfo) % field_size == 0);
 
     // ----------- Sender Channel 1
     std::size_t sender_channel_1_buffer_index_address = sender_channel_0_buffer_index_semaphore_address + field_size;
@@ -98,7 +98,7 @@ struct FabricEriscDatamoverConfig {
     // 3: Hold's EDM's rdptr for the buffer index in the channel
     std::size_t sender_channel_1_worker_conn_info_base_address = sender_channel_1_buffer_index_address + field_size;
     std::size_t sender_channel_1_local_flow_control_semaphore_address =
-        sender_channel_1_worker_conn_info_base_address + sizeof(tt::fabric::EDMChannelWorkerLocationInfo);
+        sender_channel_1_worker_conn_info_base_address + sizeof(tt::tt_fabric::EDMChannelWorkerLocationInfo);
     // sender_channel_1_conn_info_edm_rdptr_address_address + field_size;
     std::size_t sender_channel_1_producer_terminate_connection_address =
         sender_channel_1_local_flow_control_semaphore_address + field_size;
@@ -223,7 +223,8 @@ public:
 
     void teardown_from_host(
         tt::tt_metal::IDevice* d,
-        tt::fabric::TerminationSignal termination_signal = tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE) const;
+        tt::tt_fabric::TerminationSignal termination_signal =
+            tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE) const;
 
     void set_firmware_context_switch_interval(size_t interval);
 
@@ -277,4 +278,4 @@ public:
     size_t firmware_context_switch_interval = default_firmware_context_switch_interval;
 };
 
-}  // namespace tt::fabric
+}  // namespace tt::tt_fabric

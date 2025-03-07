@@ -18,7 +18,7 @@
 #include "edm_fabric_worker_adapters.hpp"
 #include "edm_fabric_flow_control_helpers.hpp"
 
-namespace tt::fabric {
+namespace tt::tt_fabric {
 
 template <typename T>
 FORCE_INLINE auto wrap_increment(T val, size_t max) {
@@ -160,7 +160,7 @@ struct EdmChannelWorkerInterface {
             worker_info.worker_teardown_semaphore_address);
 
         // Set connection to unused so it's available for next worker
-        *this->connection_live_semaphore = tt::fabric::EdmToEdmSender<0>::unused_connection_value;
+        *this->connection_live_semaphore = tt::tt_fabric::EdmToEdmSender<0>::unused_connection_value;
 
         *reinterpret_cast<volatile uint32_t*>(&(worker_location_info_ptr->edm_rdptr)) = last_edm_rdptr_value;
 
@@ -178,10 +178,10 @@ struct EdmChannelWorkerInterface {
     FORCE_INLINE bool all_eth_packets_completed() const { return this->local_rdptr.is_caught_up_to(this->local_wrptr); }
 
     [[nodiscard]] FORCE_INLINE bool has_worker_teardown_request() const {
-        return *connection_live_semaphore == tt::fabric::EdmToEdmSender<0>::close_connection_request_value;
+        return *connection_live_semaphore == tt::tt_fabric::EdmToEdmSender<0>::close_connection_request_value;
     }
     [[nodiscard]] FORCE_INLINE bool connection_is_live() const {
-        return *connection_live_semaphore == tt::fabric::EdmToEdmSender<0>::open_connection_value;
+        return *connection_live_semaphore == tt::tt_fabric::EdmToEdmSender<0>::open_connection_value;
     }
 
     volatile EDMChannelWorkerLocationInfo* worker_location_info_ptr;
@@ -194,4 +194,4 @@ struct EdmChannelWorkerInterface {
     ChannelBufferPointer<NUM_BUFFERS> local_rdptr;  // also used as completion_ptr
 };
 
-}  // namespace tt::fabric
+}  // namespace tt::tt_fabric

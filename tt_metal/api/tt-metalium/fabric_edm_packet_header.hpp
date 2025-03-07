@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <limits>
 
-namespace tt::fabric {
+namespace tt::tt_fabric {
 
 enum TerminationSignal : uint32_t {
     KEEP_RUNNING = 0,
@@ -48,10 +48,10 @@ struct RoutingFields {
     static constexpr uint8_t START_DISTANCE_FIELD_BIT_WIDTH = 4;
     static constexpr uint8_t RANGE_HOPS_FIELD_BIT_WIDTH = 4;
     static constexpr uint8_t LAST_HOP_DISTANCE_VAL = 1;
-    static constexpr uint8_t LAST_CHIP_IN_MCAST_VAL = 1 << tt::fabric::RoutingFields::START_DISTANCE_FIELD_BIT_WIDTH;
-    static constexpr uint8_t HOP_DISTANCE_MASK = (1 << tt::fabric::RoutingFields::RANGE_HOPS_FIELD_BIT_WIDTH) - 1;
-    static constexpr uint8_t RANGE_MASK = ((1 << tt::fabric::RoutingFields::RANGE_HOPS_FIELD_BIT_WIDTH) - 1)
-                                          << tt::fabric::RoutingFields::START_DISTANCE_FIELD_BIT_WIDTH;
+    static constexpr uint8_t LAST_CHIP_IN_MCAST_VAL = 1 << tt::tt_fabric::RoutingFields::START_DISTANCE_FIELD_BIT_WIDTH;
+    static constexpr uint8_t HOP_DISTANCE_MASK = (1 << tt::tt_fabric::RoutingFields::RANGE_HOPS_FIELD_BIT_WIDTH) - 1;
+    static constexpr uint8_t RANGE_MASK = ((1 << tt::tt_fabric::RoutingFields::RANGE_HOPS_FIELD_BIT_WIDTH) - 1)
+                                          << tt::tt_fabric::RoutingFields::START_DISTANCE_FIELD_BIT_WIDTH;
     static constexpr uint8_t LAST_MCAST_VAL = LAST_CHIP_IN_MCAST_VAL | LAST_HOP_DISTANCE_VAL;
 
     uint8_t value;
@@ -262,7 +262,7 @@ struct PacketHeader : public PacketHeaderBase<PacketHeader> {
     RoutingFields routing_fields;
     // Sort of hack to work-around DRAM read alignment issues that must be 32B aligned
     // To simplify worker kernel code, we for now decide to pad up the packet header
-    // to 32B so the user can simplify shift into their CB chunk by sizeof(tt::fabric::PacketHeader)
+    // to 32B so the user can simplify shift into their CB chunk by sizeof(tt::tt_fabric::PacketHeader)
     // and automatically work around the DRAM read alignment bug.
     //
     // Future changes will remove this padding and require the worker kernel to be aware of this bug
@@ -389,11 +389,11 @@ static constexpr size_t header_size_bytes = sizeof(PacketHeader);
 #define FABRIC_LOW_LATENCY_MODE 1
 
 #if defined FABRIC_LOW_LATENCY_MODE and FABRIC_LOW_LATENCY_MODE == 1
-#define PACKET_HEADER_TYPE tt::fabric::LowLatencyPacketHeader
-#define ROUTING_FIELDS_TYPE tt::fabric::LowLatencyRoutingFields
+#define PACKET_HEADER_TYPE tt::tt_fabric::LowLatencyPacketHeader
+#define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyRoutingFields
 #else
-#define PACKET_HEADER_TYPE tt::fabric::PacketHeader
-#define ROUTING_FIELDS_TYPE tt::fabric::RoutingFields
+#define PACKET_HEADER_TYPE tt::tt_fabric::PacketHeader
+#define ROUTING_FIELDS_TYPE tt::tt_fabric::RoutingFields
 #endif
 
-}  // namespace tt::fabric
+}  // namespace tt::tt_fabric
