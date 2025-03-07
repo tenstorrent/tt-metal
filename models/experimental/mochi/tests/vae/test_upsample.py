@@ -3,12 +3,11 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-from models.experimental.mochi.vae.upsample import TtCausalUpsampleBlock
+from models.experimental.mochi.tt.vae.upsample import CausalUpsampleBlock as TtCausalUpsampleBlock
 from genmo.mochi_preview.vae.models import CausalUpsampleBlock as RefCausalUpsampleBlock
 
-from models.experimental.mochi.common import (
+from models.experimental.mochi.tt.common import (
     compute_metrics,
-    to_tt_tensor,
     to_torch_tensor,
 )
 from models.experimental.mochi.vae.common import load_decoder_weights

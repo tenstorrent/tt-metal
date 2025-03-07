@@ -4,10 +4,6 @@ import os
 from pathlib import Path
 from loguru import logger
 
-from models.experimental.mochi.common import (
-    to_tt_tensor,
-)
-
 
 def get_vae_dir():
     mochi_dir = os.environ.get("MOCHI_DIR")
@@ -46,7 +42,6 @@ def get_conv3d_config(in_channels, out_channels, kernel_size, stride, padding, p
     }
     blocking = shape_to_blocking.get(in_channels, None)
     if blocking is None:
-        # raise ValueError(f"No blocking found for input shape {input_shape}")
         C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = 128, 32, 1, 2, 16
         logger.warning(
             f"No blocking found for input shape {in_channels}. Using default blocking: {C_in_block}, {C_out_block}, {T_out_block}, {H_out_block}, {W_out_block}"

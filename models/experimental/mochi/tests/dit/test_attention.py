@@ -3,34 +3,28 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-from models.experimental.mochi.attn import TtAsymmetricAttention
 from models.utility_functions import skip_for_grayskull
-from genmo.mochi_preview.dit.joint_model.asymm_models_joint import AsymmetricAttention as RefAsymmetricAttention
-from models.experimental.mochi.common import (
+from models.experimental.mochi.tt.dit.attention import AsymmetricAttention as TtAsymmetricAttention
+from models.experimental.mochi.tt.common import (
     get_mochi_dir,
     get_cache_path,
     compute_metrics,
-    replicate_attn_mask,
     to_tt_tensor,
     to_torch_tensor,
+    stack_cos_sin,
+)
+
+from models.experimental.mochi.tests.dit.common import (
+    load_model_weights,
+    NUM_HEADS,
+    HEAD_DIM,
 )
 from models.demos.llama3.tt.llama_common import get_rot_transformation_mat
-from models.experimental.mochi.common import stack_cos_sin
-from models.utility_functions import nearest_32
+
+from genmo.mochi_preview.dit.joint_model.asymm_models_joint import AsymmetricAttention as RefAsymmetricAttention
 
 # Common test configurations
-NUM_HEADS = 24
-HEAD_DIM = 128
 PCC_REQUIRED = 0.99
-
-
-def load_model_weights(attn_path):
-    """Load and prepare model weights."""
-    weights_path = os.path.join(get_mochi_dir(), "dit.safetensors")
-    from safetensors.torch import load_file
-
-    state_dict = load_file(weights_path)
-    return state_dict, {k[len(attn_path) + 1 :]: v for k, v in state_dict.items() if k.startswith(attn_path)}
 
 
 def create_models(mesh_device, state_dict, partial_state_dict, attn_path, dim_x, dim_y, update_y=True):

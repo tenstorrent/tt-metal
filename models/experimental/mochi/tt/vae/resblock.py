@@ -1,10 +1,10 @@
 import ttnn
-from .groupnorm import TtGroupNorm
-from .conv3d import TtContextParallelConv3d
+from .groupnorm import GroupNorm
+from .conv3d import ContextParallelConv3d
 from models.common.lightweightmodule import LightweightModule
 
 
-class TtResBlock(LightweightModule):
+class ResBlock(LightweightModule):
     def __init__(
         self,
         mesh_device: ttnn.MeshDevice,
@@ -26,7 +26,7 @@ class TtResBlock(LightweightModule):
 
         # TODO: Figure out how these are actually named in the Sequential module
 
-        self.norm1 = TtGroupNorm(
+        self.norm1 = GroupNorm(
             mesh_device=mesh_device,
             state_dict=state_dict,
             state_dict_prefix=f"{state_dict_prefix}stack.0.",
@@ -35,7 +35,7 @@ class TtResBlock(LightweightModule):
             affine=affine,
         )
 
-        self.conv1 = TtContextParallelConv3d(
+        self.conv1 = ContextParallelConv3d(
             mesh_device=mesh_device,
             state_dict=state_dict,
             state_dict_prefix=f"{state_dict_prefix}stack.2.",
@@ -48,7 +48,7 @@ class TtResBlock(LightweightModule):
             causal=causal,
         )
 
-        self.norm2 = TtGroupNorm(
+        self.norm2 = GroupNorm(
             mesh_device=mesh_device,
             state_dict=state_dict,
             state_dict_prefix=f"{state_dict_prefix}stack.3.",
@@ -57,7 +57,7 @@ class TtResBlock(LightweightModule):
             affine=affine,
         )
 
-        self.conv2 = TtContextParallelConv3d(
+        self.conv2 = ContextParallelConv3d(
             mesh_device=mesh_device,
             state_dict=state_dict,
             state_dict_prefix=f"{state_dict_prefix}stack.5.",
@@ -96,7 +96,6 @@ class TtResBlock(LightweightModule):
         x_tile_NTHWC = ttnn.silu(x_tile_NTHWC, output_tensor=x_tile_NTHWC)  # in-place
         x_NTHWC = ttnn.to_layout(x_tile_NTHWC, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(x_tile_NTHWC)
-        # x_NTHWC = ttnn.to_layout(ttnn.silu(ttnn.to_layout(x_NTHWC, ttnn.TILE_LAYOUT)), ttnn.ROW_MAJOR_LAYOUT)
 
         x_conv2_NTHWC = self.conv2(x_NTHWC)
         ttnn.deallocate(x_NTHWC)

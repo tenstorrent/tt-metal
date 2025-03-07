@@ -1,16 +1,15 @@
-import ttnn
-from models.common.lightweightmodule import LightweightModule
-import torch
 from typing import Optional, Tuple
 
-from models.experimental.mochi.attn import TtAsymmetricAttention
-from models.experimental.mochi.ff import TtFeedForward
-from models.experimental.mochi.mod_rmsnorm import modulated_rmsnorm
-from models.experimental.mochi.residual_tanh_gated_rmsnorm import residual_tanh_gated_rmsnorm
-from models.experimental.mochi.common import create_linear_layer
+import ttnn
+from models.common.lightweightmodule import LightweightModule
+
+from models.experimental.mochi.tt.common import create_linear_layer
+from models.experimental.mochi.tt.dit.attention import AsymmetricAttention
+from models.experimental.mochi.tt.dit.mlp import FeedForward
+from models.experimental.mochi.tt.dit.norms import modulated_rmsnorm, residual_tanh_gated_rmsnorm
 
 
-class TtAsymmetricJointBlock(LightweightModule):
+class AsymmetricJointBlock(LightweightModule):
     def __init__(
         self,
         mesh_device,
@@ -70,7 +69,7 @@ class TtAsymmetricJointBlock(LightweightModule):
             )
 
         # Self-attention
-        self.attn = TtAsymmetricAttention(
+        self.attn = AsymmetricAttention(
             mesh_device=mesh_device,
             state_dict=state_dict,
             state_dict_prefix=f"{state_dict_prefix}.attn",
@@ -84,9 +83,9 @@ class TtAsymmetricJointBlock(LightweightModule):
             **block_kwargs,
         )
 
-        # MLP layers using TtFeedForward
+        # MLP layers using FeedForward
         mlp_hidden_dim_x = int(hidden_size_x * mlp_ratio_x)
-        self.mlp_x = TtFeedForward(
+        self.mlp_x = FeedForward(
             mesh_device=mesh_device,
             state_dict=state_dict,
             weight_cache_path=weight_cache_path,
@@ -101,7 +100,7 @@ class TtAsymmetricJointBlock(LightweightModule):
 
         if self.update_y:
             mlp_hidden_dim_y = int(hidden_size_y * mlp_ratio_y)
-            self.mlp_y = TtFeedForward(
+            self.mlp_y = FeedForward(
                 mesh_device=mesh_device,
                 state_dict=state_dict,
                 weight_cache_path=weight_cache_path,

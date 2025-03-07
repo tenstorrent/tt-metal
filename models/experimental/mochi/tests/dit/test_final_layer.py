@@ -3,14 +3,10 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-from models.experimental.mochi.final_layer import TtFinalLayer
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
-from models.utility_functions import skip_for_grayskull
+from models.experimental.mochi.tt.dit.final_layer import FinalLayer as TtFinalLayer
+from models.utility_functions import comp_allclose, skip_for_grayskull
 from genmo.mochi_preview.dit.joint_model.asymm_models_joint import FinalLayer as RefFinalLayer
-from models.experimental.mochi.common import get_mochi_dir, get_cache_path, compute_metrics
+from models.experimental.mochi.tt.common import get_mochi_dir, get_cache_path, compute_metrics
 
 
 @torch.no_grad()

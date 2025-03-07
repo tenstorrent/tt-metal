@@ -3,15 +3,14 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-from models.experimental.mochi.vae.decoder import TtDecoder
+from models.experimental.mochi.tt.vae.decoder import Decoder as TtDecoder
 from genmo.mochi_preview.vae.models import Decoder as RefDecoder
 
 from models.experimental.mochi.common import (
     compute_metrics,
-    to_tt_tensor,
     to_torch_tensor,
 )
-from models.experimental.mochi.vae.common import load_decoder_weights
+from models.experimental.mochi.tt.vae.common import load_decoder_weights
 
 # Common test configurations
 PCC_REQUIRED = 0.99

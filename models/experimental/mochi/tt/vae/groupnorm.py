@@ -2,13 +2,13 @@ import ttnn
 import torch
 from models.common.lightweightmodule import LightweightModule
 
-from models.experimental.mochi.common import (
+from models.experimental.mochi.tt.common import (
     to_tt_tensor,
 )
 from loguru import logger
 
 
-class TtGroupNorm(LightweightModule):
+class GroupNorm(LightweightModule):
     def __init__(
         self,
         mesh_device: ttnn.MeshDevice,

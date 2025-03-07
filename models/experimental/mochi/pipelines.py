@@ -20,7 +20,7 @@ from genmo.mochi_preview.pipelines import (
 )
 
 
-def sample_model_tt(device, dit, conditioning, **args):
+def sample_model(device, dit, conditioning, **args):
     random.seed(args["seed"])
     np.random.seed(args["seed"])
     torch.manual_seed(args["seed"])
@@ -141,7 +141,7 @@ class TTPipeline(MochiSingleGPUPipeline):
             print_max_memory()
 
             print("sample_model")
-            latents = sample_model_tt(self.device, self.dit, conditioning, **kwargs)
+            latents = sample_model(self.device, self.dit, conditioning, **kwargs)
             print_max_memory()
 
             with move_to_device(self.decoder, self.device):

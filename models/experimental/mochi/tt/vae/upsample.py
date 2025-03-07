@@ -1,12 +1,11 @@
 import ttnn
-from .resblock import TtResBlock
-from .conv1x1 import TtConv1x1
-from ..common import as_replicated_tensor
+from .resblock import ResBlock
+from .conv1x1 import Conv1x1
 from models.common.lightweightmodule import LightweightModule
 from loguru import logger
 
 
-class TtCausalUpsampleBlock(LightweightModule):
+class CausalUpsampleBlock(LightweightModule):
     def __init__(
         self,
         mesh_device: ttnn.MeshDevice,
@@ -32,7 +31,7 @@ class TtCausalUpsampleBlock(LightweightModule):
         self.blocks = []
         for i in range(num_res_blocks):
             self.blocks.append(
-                TtResBlock(
+                ResBlock(
                     mesh_device=mesh_device,
                     state_dict=state_dict,
                     state_dict_prefix=f"{state_dict_prefix}blocks.{i}.",
@@ -65,7 +64,7 @@ class TtCausalUpsampleBlock(LightweightModule):
             w = w.reshape(-1, temporal_expansion * spatial_expansion * spatial_expansion * out_channels)
             return w.squeeze()
 
-        self.proj = TtConv1x1(
+        self.proj = Conv1x1(
             mesh_device=mesh_device,
             state_dict=state_dict,
             state_dict_prefix=f"{state_dict_prefix}proj.",
@@ -108,14 +107,10 @@ class TtCausalUpsampleBlock(LightweightModule):
             return x
 
     def forward(self, x_NTHWC):
-        logger.info(f"TT input shape: {x_NTHWC.shape}")
         for block in self.blocks:
             x_NTHWC = block(x_NTHWC)
-            logger.info(f"TT output shape: {x_NTHWC.shape}")
 
         x_NTHWO = self.proj(x_NTHWC)
-        logger.info(f"TT proj output shape: {x_NTHWO.shape}")
         x_NTHWC = self.depth_to_spacetime(x_NTHWO)
-        logger.info(f"TT depth_to_spacetime output shape: {x_NTHWC.shape}")
         ttnn.deallocate(x_NTHWO)
         return x_NTHWC

@@ -1,11 +1,10 @@
+from functools import partial
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.mochi.common import unsqueeze_to_4d
-from functools import partial
-from models.experimental.mochi.common import matmul_2d_config
+from models.experimental.mochi.tt.common import unsqueeze_to_4d, matmul_2d_config
 
 
-class TtPatchEmbed(LightweightModule):
+class PatchEmbed(LightweightModule):
     def __init__(
         self,
         mesh_device,

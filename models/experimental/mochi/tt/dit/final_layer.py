@@ -2,10 +2,10 @@ import ttnn
 import torch
 from models.common.lightweightmodule import LightweightModule
 
-from models.experimental.mochi.common import col_parallel_linear, create_linear_layer, as_replicated_tensor
+from models.experimental.mochi.tt.common import col_parallel_linear, as_replicated_tensor
 
 
-class TtFinalLayer(LightweightModule):
+class FinalLayer(LightweightModule):
     """The final layer of DiT implemented for TensorTorch."""
 
     def __init__(

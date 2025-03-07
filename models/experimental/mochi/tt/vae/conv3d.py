@@ -14,7 +14,7 @@ def cast_tuple(t, length=1):
     return t if isinstance(t, tuple) else ((t,) * length)
 
 
-class TtContextParallelConv3d(LightweightModule):
+class ContextParallelConv3d(LightweightModule):
     def __init__(
         self,
         mesh_device: ttnn.MeshDevice,
@@ -147,7 +147,7 @@ class TtContextParallelConv3d(LightweightModule):
             x_pad_NTHWC = ttnn.aggregate_as_tensor(device_tensors)
             ttnn.deallocate(halos)
 
-        out_NTHWC = ttnn.conv3d(
+        out_NTHWC = ttnn.experimental.conv3d(
             input_tensor=x_pad_NTHWC,
             weight_tensor=self.weight,
             bias_tensor=self.bias,
