@@ -170,8 +170,8 @@ void kernel_main() {
 
             // Push and pop filler pages if needed to align CB ptr
             if (num_pages_to_transfer < max_buffer_size) {
-                push_filler_pages_to_cb(cb_id_in0, max_buffer_size - num_pages_to_transfer);
-                pop_filler_pages_from_cb(cb_id_in0, max_buffer_size - num_pages_to_transfer);
+                tt::tt_fabric::push_filler_pages_to_cb(cb_id_in0, max_buffer_size - num_pages_to_transfer);
+                tt::tt_fabric::pop_filler_pages_from_cb(cb_id_in0, max_buffer_size - num_pages_to_transfer);
             }
         }
     }

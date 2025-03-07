@@ -197,7 +197,7 @@ void kernel_main() {
                     uint32_t num_filler_pages = half_cb_n_pages - n_pages;
 
                     ASSERT(p + n_pages == num_pages_to_write);
-                    pop_filler_pages_from_cb(cb_in, num_filler_pages);
+                    tt::tt_fabric::pop_filler_pages_from_cb(cb_in, num_filler_pages);
                     if (i != 0 || is_line_reduce_scatter) {
                         // Line reduce scatter never forwards through short circuit CB
                         total_lifetime_cb_pages_popped_from_math += num_filler_pages;
@@ -242,7 +242,7 @@ void kernel_main() {
             if (n_pages < half_cb_n_pages) {
                 uint32_t num_filler_pages = half_cb_n_pages - n_pages;
                 ASSERT(p + n_pages == num_pages_to_write);
-                pop_filler_pages_from_cb(cb_id_in0, num_filler_pages);
+                tt::tt_fabric::pop_filler_pages_from_cb(cb_id_in0, num_filler_pages);
                 total_lifetime_cb_pages_popped_from_math += num_filler_pages;
             }
         }
@@ -254,7 +254,7 @@ void kernel_main() {
     ASSERT(total_lifetime_cb_pages_popped_from_math <= total_eltwise_kernel_num_pages);
     for (; total_lifetime_cb_pages_popped_from_math < total_eltwise_kernel_num_pages;
          total_lifetime_cb_pages_popped_from_math++) {
-        pop_filler_pages_from_cb(cb_id_in0, 1);
+        tt::tt_fabric::pop_filler_pages_from_cb(cb_id_in0, 1);
     }
 
     if (num_transfers > 0) {

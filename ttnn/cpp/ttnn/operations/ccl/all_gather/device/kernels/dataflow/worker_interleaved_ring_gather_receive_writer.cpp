@@ -182,7 +182,7 @@ void kernel_main() {
             }
             ASSERT(num_pages == 0 || num_pages > rem_num_pages);
             ASSERT(half_cb_n_pages > rem_num_pages);
-            pop_filler_pages_from_cb(cb_id_in0, half_cb_n_pages - rem_num_pages);
+            tt::tt_fabric::pop_filler_pages_from_cb(cb_id_in0, half_cb_n_pages - rem_num_pages);
         }
 
         // Synchronize if all gather fusion is enabled
