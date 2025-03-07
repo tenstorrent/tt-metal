@@ -45,7 +45,8 @@ void kernel_main() {
     fabric_connection.open();
 
     // construct packet header
-    volatile auto* unicast_packet_header = reinterpret_cast<PacketHeader*>(packet_header_buffer_address);
+    volatile auto* unicast_packet_header =
+        reinterpret_cast<volatile tt_l1_ptr LowLatencyPacketHeader*>(packet_header_buffer_address);
     unicast_packet_header->to_chip_unicast(static_cast<uint8_t>(unicast_hops));
     unicast_packet_header->to_noc_unicast_write(NocUnicastCommandHeader{noc_dest_addr}, packet_payload_size_bytes);
 

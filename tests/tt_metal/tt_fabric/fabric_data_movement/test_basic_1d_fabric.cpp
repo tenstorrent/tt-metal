@@ -9,6 +9,7 @@
 
 #include "fabric_fixture.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 
 namespace tt::tt_fabric {
 
@@ -63,7 +64,7 @@ TEST_F(Fabric1DFixture, TestUnicast) {
     uint32_t packet_header_address = 0x25000;
     uint32_t source_l1_buffer_address = 0x30000;
     uint32_t packet_payload_size_bytes = 4096;
-    uint32_t num_packets = 5;
+    uint32_t num_packets = 10;
     uint32_t num_hops = 1;
     uint32_t test_results_address = 0x100000;
     uint32_t test_results_size_bytes = 128;
@@ -150,5 +151,33 @@ TEST_F(Fabric1DFixture, TestUnicast) {
     this->WaitForSingleProgramDone(receiver_device, receiver_program);
 
     // Validate the status and packets processed by sender and receiver
+    std::vector<uint32_t> sender_status;
+    std::vector<uint32_t> receiver_status;
+
+    tt_metal::detail::ReadFromDeviceL1(
+        sender_device,
+        sender_logical_core,
+        test_results_address,
+        test_results_size_bytes,
+        sender_status,
+        CoreType::WORKER);
+
+    tt_metal::detail::ReadFromDeviceL1(
+        receiver_device,
+        receiver_logical_core,
+        test_results_address,
+        test_results_size_bytes,
+        receiver_status,
+        CoreType::WORKER);
+
+    EXPECT_EQ(sender_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS);
+    EXPECT_EQ(receiver_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS);
+
+    uint64_t sender_bytes =
+        ((uint64_t)sender_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | sender_status[TT_FABRIC_WORD_CNT_INDEX];
+    uint64_t receiver_bytes =
+        ((uint64_t)receiver_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | receiver_status[TT_FABRIC_WORD_CNT_INDEX];
+    EXPECT_EQ(sender_bytes, receiver_bytes);
 }
+
 }  // namespace tt::tt_fabric

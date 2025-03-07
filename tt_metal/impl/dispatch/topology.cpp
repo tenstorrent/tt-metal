@@ -841,18 +841,17 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, b
     for (const auto& direction : routing_directions) {
         auto active_eth_chans = control_plane->get_active_fabric_eth_channels_in_direction(
             mesh_chip_id.first, mesh_chip_id.second, direction);
-        if (active_eth_chans.size() > 0) {
-            auto neighbor_logical_chip_ids =
-                control_plane->get_intra_chip_neighbors(mesh_chip_id.first, mesh_chip_id.second, direction);
-            if (neighbor_logical_chip_ids.size() > 0) {
-                num_neighbors++;
-                std::pair<mesh_id_t, chip_id_t> neighbor_mesh_chip_id;
-                // assume same neighbor per direction
-                neighbor_mesh_chip_id = {mesh_chip_id.first, neighbor_logical_chip_ids[0]};
-                chip_neighbors[direction] =
-                    control_plane->get_physical_chip_id_from_mesh_chip_id(neighbor_mesh_chip_id);
-                active_fabric_eth_channels.insert({direction, active_eth_chans});
-            }
+        if (active_eth_chans.size() == 0) {
+            continue;
+        }
+        auto neighbors = control_plane->get_intra_chip_neighbors(mesh_chip_id.first, mesh_chip_id.second, direction);
+        if (neighbors.size() > 0) {
+            num_neighbors++;
+            std::pair<mesh_id_t, chip_id_t> neighbor_mesh_chip_id;
+            // assume same neighbor per direction
+            neighbor_mesh_chip_id = {mesh_chip_id.first, neighbors[0]};
+            chip_neighbors[direction] = control_plane->get_physical_chip_id_from_mesh_chip_id(neighbor_mesh_chip_id);
+            active_fabric_eth_channels.insert({direction, active_eth_chans});
         }
     }
 

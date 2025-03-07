@@ -38,7 +38,6 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_packets; i++) {
 #ifndef BENCHMARK_MODE
         time_seed = prng_next(time_seed);
-
         uint32_t expected_val = time_seed + (packet_payload_size_bytes / 16) - 1;
 
         while (expected_val != *poll_addr);

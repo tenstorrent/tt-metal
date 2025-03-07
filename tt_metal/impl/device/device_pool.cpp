@@ -420,16 +420,33 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
 
 void DevicePool::wait_for_fabric_router_sync() const {
     if (tt::Cluster::instance().get_fabric_config() == FabricConfig::FABRIC_1D) {
-        const auto edm_config = tt::fabric::FabricEriscDatamoverConfig(0, 0, 0);
+        using namespace tt::tt_fabric;
+        static constexpr std::size_t edm_buffer_size =
+            tt::fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
+            sizeof(tt::fabric::PacketHeader);
+        const auto edm_config = tt::fabric::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
+        auto routing_directions = {RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
+
         for (const auto& dev : this->get_all_active_devices()) {
-            auto fabric_eth_chans = tt::Cluster::instance().get_fabric_ethernet_channels(dev->id());
-            for (const auto& eth_chan : fabric_eth_chans) {
-                std::vector<std::uint32_t> router_status{0};
-                auto eth_logical_core = tt::Cluster::instance().get_soc_desc(dev->id()).get_eth_core_for_channel(
-                    eth_chan, CoordSystem::LOGICAL);
-                while (router_status[0] != tt::fabric::EDMStatus::HANDSHAKE_COMPLETE) {
-                    tt_metal::detail::ReadFromDeviceL1(
-                        dev, eth_logical_core, edm_config.edm_status_address, 4, router_status, CoreType::ETH);
+            auto [mesh_id, chip_id] = this->control_plane->get_mesh_chip_id_from_physical_chip_id(dev->id());
+            for (const auto& direction : routing_directions) {
+                auto fabric_active_eth_chans =
+                    control_plane->get_active_fabric_eth_channels_in_direction(mesh_id, chip_id, direction);
+                if (fabric_active_eth_chans.size() == 0) {
+                    continue;
+                }
+                auto neighbors = this->control_plane->get_intra_chip_neighbors(mesh_id, chip_id, direction);
+                if (neighbors.size() == 0) {
+                    continue;
+                }
+                for (const auto& eth_chan : fabric_active_eth_chans) {
+                    std::vector<std::uint32_t> router_status{0};
+                    auto eth_logical_core = tt::Cluster::instance().get_soc_desc(dev->id()).get_eth_core_for_channel(
+                        eth_chan, CoordSystem::LOGICAL);
+                    while (router_status[0] != tt::fabric::EDMStatus::HANDSHAKE_COMPLETE) {
+                        tt_metal::detail::ReadFromDeviceL1(
+                            dev, eth_logical_core, edm_config.edm_status_address, 4, router_status, CoreType::ETH);
+                    }
                 }
             }
         }
@@ -661,15 +678,33 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
 
     // Terminate fabric routers
     if (tt::Cluster::instance().get_fabric_config() == FabricConfig::FABRIC_1D) {
+        using namespace tt::tt_fabric;
         std::vector<uint32_t> signal(1, tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE);
-        const auto edm_config = tt::fabric::FabricEriscDatamoverConfig(0, 0, 0);
+        static constexpr std::size_t edm_buffer_size =
+            tt::fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
+            sizeof(tt::fabric::PacketHeader);
+        const auto edm_config = tt::fabric::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
+        auto routing_directions = {RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
+
         for (const auto& dev : this->get_all_active_devices()) {
-            auto fabric_eth_chans = tt::Cluster::instance().get_fabric_ethernet_channels(dev->id());
-            for (const auto& eth_chan : fabric_eth_chans) {
-                auto eth_logical_core = tt::Cluster::instance().get_soc_desc(dev->id()).get_eth_core_for_channel(
-                    eth_chan, CoordSystem::LOGICAL);
-                tt_metal::detail::WriteToDeviceL1(
-                    dev, eth_logical_core, edm_config.termination_signal_address, signal, CoreType::ETH);
+            auto [mesh_id, chip_id] = this->control_plane->get_mesh_chip_id_from_physical_chip_id(dev->id());
+            for (const auto& direction : routing_directions) {
+                auto fabric_active_eth_chans =
+                    control_plane->get_active_fabric_eth_channels_in_direction(mesh_id, chip_id, direction);
+                if (fabric_active_eth_chans.size() == 0) {
+                    continue;
+                }
+                auto neighbors = this->control_plane->get_intra_chip_neighbors(mesh_id, chip_id, direction);
+                if (neighbors.size() == 0) {
+                    continue;
+                }
+                for (const auto& eth_chan : fabric_active_eth_chans) {
+                    std::vector<std::uint32_t> router_status{0};
+                    auto eth_logical_core = tt::Cluster::instance().get_soc_desc(dev->id()).get_eth_core_for_channel(
+                        eth_chan, CoordSystem::LOGICAL);
+                    tt_metal::detail::WriteToDeviceL1(
+                        dev, eth_logical_core, edm_config.termination_signal_address, signal, CoreType::ETH);
+                }
             }
         }
     } else if (tt::Cluster::instance().get_fabric_config() == FabricConfig::FABRIC_2D) {
