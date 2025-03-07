@@ -10,6 +10,6 @@
 namespace ttml::ops {
 
 autograd::TensorPtr matmul_op(
-    const autograd::TensorPtr& a, const autograd::TensorPtr& b, bool transpose_a, bool transpose_b);
+    const autograd::TensorPtr& a, const autograd::TensorPtr& b, bool transpose_a = false, bool transpose_b = false);
 
 }  // namespace ttml::ops

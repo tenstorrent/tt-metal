@@ -27,14 +27,14 @@ std::pair<tt::tt_metal::Tensor, tt::tt_metal::Tensor> matmul_backward(
     bool transpose_a,
     bool transpose_b) {
     auto a_shape = a.get_logical_shape();
+    auto b_shape = b.get_logical_shape();
     auto grad_shape = out_grad.get_logical_shape();
 
-    const auto& a_value = a;
-    auto volume_without_features = a_value.get_logical_volume() / a_value.get_logical_shape()[-1];
-    auto reshaped_a = ttnn::reshape(a_value, ttnn::Shape({volume_without_features, a_value.get_logical_shape()[-1]}));
-
+    auto volume_without_features_a = a.get_logical_volume() / a.get_logical_shape()[-1];
+    auto reshaped_a = ttnn::reshape(a, ttnn::Shape({volume_without_features_a, a.get_logical_shape()[-1]}));
+    auto volume_without_features_grad = out_grad.get_logical_volume() / out_grad.get_logical_shape()[-1];
     auto reshaped_grad =
-        ttnn::reshape(out_grad, ttnn::Shape({volume_without_features, out_grad.get_logical_shape()[-1]}));
+        ttnn::reshape(out_grad, ttnn::Shape({volume_without_features_grad, out_grad.get_logical_shape()[-1]}));
 
     ttnn::Tensor reshaped_a_grad;
     ttnn::Tensor reshaped_b_grad;
@@ -65,10 +65,8 @@ std::pair<tt::tt_metal::Tensor, tt::tt_metal::Tensor> matmul_backward(
         // then grad_B = (dB_eff)^T = d_out^T * (transpose_a ? A^T : A).
         reshaped_b_grad = matmul(reshaped_grad, a, true, transpose_a);
     }
-
-    auto a_grad = ttnn::reshape(reshaped_a_grad, b.get_logical_shape());
-
-    auto b_grad = ttnn::reshape(reshaped_b_grad, a_value.get_logical_shape());
+    auto a_grad = ttnn::reshape(reshaped_a_grad, a_shape);
+    auto b_grad = ttnn::reshape(reshaped_b_grad, b_shape);
     return {a_grad, b_grad};
 }
 }  // namespace ttml::ttnn_fixed
