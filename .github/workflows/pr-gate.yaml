@@ -54,3 +54,31 @@ jobs:
       docker-image: ${{ needs.pr-gate-build.outputs.ci-build-docker-image }}
       package-artifact-name: ${{ needs.pr-gate-build.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
+
+  # GitHub has so many design limitations it's not even funny.
+  # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
+  workflow-status:
+    name: PR Gate Status
+    if: always() # Force this job to run so GH can 'see' it
+    needs: [pr-gate-build, smoke-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check if all jobs passed
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Required jobs
+          if [[ "${{ needs.pr-gate-build.outcome }}" != "success" ]]; then
+            echo "Some job(s) did not succeed."
+            exit 1
+          fi
+
+          # Optional jobs
+          # These may be 'skipped' (neither success nor failure) if they were not required.
+          # Treat skipped as success.
+          if [[ "${{ needs.smoke-tests }}" == "failure" ]]; then
+            echo "Some job(s) failed."
+            exit 1
+          fi
+
+          echo "Workflow was successful."
