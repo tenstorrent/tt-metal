@@ -30,7 +30,7 @@
 #include <circular_buffer.hpp>
 #include "dprint_server.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
-#include "hostdevcommon/cq_commands.hpp"
+#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include <dispatch_core_manager.hpp>
 #include <event.hpp>

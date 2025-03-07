@@ -6,7 +6,7 @@
 #include <gtest/gtest.h>
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
-#include "hostdevcommon/cq_commands.hpp"
+#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 
 namespace tt::tt_metal {
 

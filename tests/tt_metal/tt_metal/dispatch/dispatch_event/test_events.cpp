@@ -10,7 +10,7 @@
 #include <tt-metalium/event.hpp>
 #include <tt-metalium/command_queue.hpp>
 
-#include "hostdevcommon/cq_commands.hpp"
+#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 
 namespace tt::tt_metal {
 

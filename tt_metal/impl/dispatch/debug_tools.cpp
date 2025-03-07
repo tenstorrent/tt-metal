@@ -5,7 +5,7 @@
 #include "debug_tools.hpp"
 
 #include "tt_cluster.hpp"
-#include "hostdevcommon/cq_commands.hpp"
+#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 
 namespace internal {
 
