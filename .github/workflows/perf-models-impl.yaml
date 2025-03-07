@@ -63,7 +63,7 @@ jobs:
         with:
           name: perf-report-csv-${{ matrix.model-type }}-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}
           path: "${{ steps.check-perf-report.outputs.perf_report_filename }}"
-      - uses: ./.github/actions/upload-artifact-with-job-uuid
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:

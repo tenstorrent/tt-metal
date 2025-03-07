@@ -116,7 +116,7 @@ jobs:
           name: device-perf-report-csv-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}
           path: /work/${{ steps.check-device-perf-report.outputs.device_perf_report_filename }}
 
-      - uses: ./.github/actions/upload-artifact-with-job-uuid
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
