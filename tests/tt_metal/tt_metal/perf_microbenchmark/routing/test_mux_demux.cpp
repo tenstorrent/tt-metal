@@ -5,8 +5,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/rtoptions.hpp>
-#include <tt-metalium/cq_commands.hpp>
 #include <tt-metalium/device.hpp>
+#include "tt_metal/impl/dispatch/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "test_common.hpp"
 #include "routing_test_common.hpp"
