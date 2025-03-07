@@ -217,6 +217,12 @@ void DevicePool::initialize(
     if (_inst == nullptr) {
         static DevicePool device_pool{};
         _inst = &device_pool;
+    } else {
+        TT_FATAL(
+            _inst->num_hw_cqs == num_hw_cqs,
+            "Re-initialized device pool with different num_hw_cqs ({} before, now {}.",
+            _inst->num_hw_cqs,
+            num_hw_cqs);
     }
     _inst->l1_small_size = l1_small_size;
     _inst->trace_region_size = trace_region_size;
