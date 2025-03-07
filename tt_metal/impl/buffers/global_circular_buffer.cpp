@@ -170,10 +170,10 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
                 cb_config_host_buffer[receiver_idx++] = sender_physical_coord.y;
             }
         }
-        if (auto mesh_device = dynamic_cast<distributed::MeshDevice*>(device)) {
+        if (std::holds_alternative<std::shared_ptr<distributed::MeshBuffer>>(cb_config_buffer)) {
             auto mesh_buffer = std::get<std::shared_ptr<distributed::MeshBuffer>>(cb_config_buffer);
             distributed::EnqueueWriteMeshBuffer(
-                mesh_device->mesh_command_queue(), mesh_buffer, cb_config_host_buffer, false);
+                mesh_buffer->device()->mesh_command_queue(), mesh_buffer, cb_config_host_buffer, false);
         } else {
             if (device->using_slow_dispatch()) {
                 detail::WriteToBuffer(*extract_buffer(cb_config_buffer), cb_config_host_buffer);
