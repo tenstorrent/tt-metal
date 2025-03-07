@@ -323,7 +323,7 @@ def test_01_volume_tensors(device, a, b, c_golden, memory_config_a, memory_confi
     [
         [[2, 4, 12, 64, 64], [12, 1, 1]],
         [[12, 1, 1], [2, 4, 12, 64, 64]],
-        [[2, 4, 12, 64, 64], [2, 4, 12, 64, 64]],
+        [[3, 4, 8, 6, 32, 64], [1, 1, 8, 6, 32, 64]],
     ],
 )
 def test_binary_invalid_rank(device, a_shape, b_shape):
