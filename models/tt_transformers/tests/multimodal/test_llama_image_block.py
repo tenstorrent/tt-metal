@@ -11,7 +11,7 @@ import llama_models.llama3.reference_impl.multimodal.model as llama_reference_mo
 from llama_models.llama3.reference_impl.multimodal import encoder_utils
 from models.tt_transformers.tt.multimodal.llama_image_block import TtLlamaImageTransformerBlock
 from models.tt_transformers.tt.multimodal.llama_vision_encoder import pad_seq_one_tile, mask_tile_padding
-from models.tt_transformers.tt.model_config import TtModelArgs
+from models.tt_transformers.tt.model_config import ModelArgs
 
 from models.utility_functions import (
     comp_pcc,
@@ -44,7 +44,7 @@ def test_block_inference(batch, num_chunks, mesh_device, gated, use_program_cach
 
     mesh_device.enable_async(True)
 
-    model_args = TtModelArgs(mesh_device)
+    model_args = ModelArgs(mesh_device)
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names

@@ -11,7 +11,7 @@ import llama_models.llama3.reference_impl.multimodal.model as llama_reference_mo
 from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_text import (
     TtLlamaCrossAttentionTransformerText,
 )
-from models.tt_transformers.tt.model_config import TtModelArgs
+from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.common import (
     get_prefill_rot_mat,
     get_rot_transformation_mat,
@@ -60,7 +60,7 @@ def test_cross_attention_transformer_text_inference(
 
     mesh_device.enable_async(True)
 
-    model_args = TtModelArgs(mesh_device, max_batch_size=batch)
+    model_args = ModelArgs(mesh_device, max_batch_size=batch)
     # Limit the max seqlen to 4k to avoid OOM on host
     model_args.max_seq_len = 4096
 

@@ -9,7 +9,7 @@ import ttnn
 
 import llama_models.llama3.reference_impl.multimodal.model as llama_reference_mod
 from models.tt_transformers.tt.multimodal.llama_vision_encoder import TtLlamaVisionEncoder
-from models.tt_transformers.tt.model_config import TtModelArgs
+from models.tt_transformers.tt.model_config import ModelArgs
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -31,7 +31,7 @@ def test_vision_encoder_inference(mesh_device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat16
     pcc_required = 0.88
 
-    model_args = TtModelArgs(mesh_device)
+    model_args = ModelArgs(mesh_device)
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names

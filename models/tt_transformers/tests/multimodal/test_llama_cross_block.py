@@ -9,7 +9,7 @@ import ttnn
 
 import llama_models.llama3.reference_impl.multimodal.model as llama_reference_mod
 from models.tt_transformers.tt.multimodal.llama_cross_block import TtLlamaCrossAttentionTransformerBlock
-from models.tt_transformers.tt.model_config import TtModelArgs
+from models.tt_transformers.tt.model_config import ModelArgs
 from models.utility_functions import comp_pcc, comp_allclose, nearest_32
 from models.utility_functions import skip_for_grayskull
 
@@ -44,7 +44,7 @@ def test_cross_attention_transformer_block_inference(
 
     mesh_device.enable_async(True)
 
-    model_args = TtModelArgs(mesh_device, max_batch_size=batch)
+    model_args = ModelArgs(mesh_device, max_batch_size=batch)
     # Limit the max seqlen to 4k to avoid OOM on host
     model_args.max_seq_len = 4096
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))

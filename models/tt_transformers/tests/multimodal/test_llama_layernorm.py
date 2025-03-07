@@ -10,7 +10,7 @@ import ttnn
 
 import llama_models.llama3.reference_impl.multimodal.model as llama_reference_mod
 from models.tt_transformers.tt.multimodal.llama_layernorm import TtLayerNorm  # Updated import for LayerNorm
-from models.tt_transformers.tt.model_config import TtModelArgs
+from models.tt_transformers.tt.model_config import ModelArgs
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -34,7 +34,7 @@ def test_layernorm_inference(mesh_device, use_program_cache, reset_seeds, ensure
 
     mesh_device.enable_async(True)
 
-    model_args = TtModelArgs(mesh_device)
+    model_args = ModelArgs(mesh_device)
     width = model_args.vision_dim
     num_chunks = 4
     seq_len = nearest_32(model_args.vision_chunk_ntok) * num_chunks

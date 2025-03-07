@@ -27,7 +27,7 @@ from models.utility_functions import (
 from models.tt_transformers.tt.multimodal.llama_class_embedding import (
     TtLlamaClassEmbedding,
 )
-from models.tt_transformers.tt.model_config import TtModelArgs
+from models.tt_transformers.tt.model_config import ModelArgs
 
 
 ##### Torch op #####
@@ -88,7 +88,7 @@ def test_class_embedding_inference(
 
     mesh_device.enable_async(True)
 
-    model_args = TtModelArgs(mesh_device)
+    model_args = ModelArgs(mesh_device)
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
     first_layer_prefix = "vision_model.vision_encoder."
     partial_state_dict = {
