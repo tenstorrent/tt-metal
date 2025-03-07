@@ -121,6 +121,11 @@ enum CQNocSend {
     CQ_NOC_SEND = 1,
 };
 
+// Returns true if the fabric router can be used
+constexpr bool fabric_enabled(uint32_t fabric_router_xy) {
+    return fabric_router_xy != 0xdeadbeef && fabric_router_xy != 0;
+}
+
 template <enum CQNocFlags flags, enum CQNocWait wait = CQ_NOC_WAIT, enum CQNocSend send = CQ_NOC_SEND>
 FORCE_INLINE void cq_noc_async_write_with_state(
     uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1) {

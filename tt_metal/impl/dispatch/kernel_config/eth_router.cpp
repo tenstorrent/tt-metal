@@ -162,6 +162,7 @@ void EthRouterKernel::GenerateDependentConfigs() {
             dependent_config_.output_depacketize[remote_idx] = 1;
             dependent_config_.output_depacketize_downstream_sem[remote_idx] =
                 prefetch_kernel->GetStaticConfig().my_upstream_cb_sem_id;
+            static_config_.output_depacketize_remove_header[remote_idx] = 1;
             remote_idx++;
         }
 

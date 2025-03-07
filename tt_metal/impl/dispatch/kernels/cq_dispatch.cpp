@@ -282,9 +282,9 @@ template <uint32_t preamble_size>
 void relay_to_next_cb(
     uint32_t data_ptr, uint32_t length, uint32_t& block_noc_writes_to_clear, uint32_t block_next_start_addr[]) {
     // TODO: Size for fabric
-    static_assert(
-        preamble_size == 0 || preamble_size == sizeof(tt::packet_queue::dispatch_packet_header_t),
-        "Dispatcher preamble size must be 0 or sizeof(dispatch_packet_header_t)");
+    // static_assert(
+    //     preamble_size == 0 || preamble_size == sizeof(tt::packet_queue::dispatch_packet_header_t),
+    //     "Dispatcher preamble size must be 0 or sizeof(dispatch_packet_header_t)");
 
     // DPRINT << "relay_to_next_cb: " << data_ptr << " " << cb_fence << " " << length << ENDL();
 
@@ -315,6 +315,7 @@ void relay_to_next_cb(
         }
 
         if constexpr (preamble_size > 0) {
+            // Write the packet queue header directly
             uint32_t flag;
             cq_noc_inline_dw_write_with_state<CQ_NOC_INLINE_nDVB>(
                 downstream_cb_data_ptr, xfer_size + preamble_size + not_end_of_cmd);
@@ -1122,9 +1123,9 @@ re_run_command:
                    << dispatch_cb_end << " " << rd_block_idx << " "
                    << "xx" << ENDL();
             DPRINT << HEX() << *(uint32_t*)cmd_ptr << ENDL();
-            DPRINT << HEX() << *((uint32_t*)cmd_ptr + 1) << ENDL();
-            DPRINT << HEX() << *((uint32_t*)cmd_ptr + 2) << ENDL();
-            DPRINT << HEX() << *((uint32_t*)cmd_ptr + 3) << ENDL();
+            DPRINT << HEX() << *((uint32_t*)cmd_ptr + 4) << ENDL();
+            DPRINT << HEX() << *((uint32_t*)cmd_ptr + 8) << ENDL();
+            DPRINT << HEX() << *((uint32_t*)cmd_ptr + 12) << ENDL();
             WAYPOINT("!CMD");
             ASSERT(0);
     }
@@ -1135,6 +1136,10 @@ re_run_command:
 static inline bool process_cmd_h(
     uint32_t& cmd_ptr, uint32_t& block_noc_writes_to_clear, uint32_t block_next_start_addr[]) {
     bool done = false;
+
+    if constexpr (is_h_variant && !is_d_variant) {
+        cmd_ptr += split_dispatch_page_preamble_size * 4;
+    }
 
     volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
 
@@ -1175,11 +1180,15 @@ static inline bool process_cmd_h(
 }
 
 void kernel_main() {
-    // DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": start" << ENDL();
+    DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": start" << ENDL();
     // Initialize local state of any additional nocs used instead of the default
     static_assert(my_noc_index != upstream_noc_index);
     if constexpr (my_noc_index != upstream_noc_index) {
         noc_local_state_init(upstream_noc_index);
+    }
+
+    if constexpr (fabric_enabled(fabric_router_noc_xy)) {
+        tt::tt_fabric::fabric_endpoint_init(client_interface, 0);
     }
 
     static_assert(is_d_variant || split_dispatch_page_preamble_size == 0);

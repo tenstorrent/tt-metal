@@ -555,6 +555,7 @@ void configure_kernel_variant(
         {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(0xff)},
         {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(0xff)},  // todo, add dispatch_s testing
         {"FD_CORE_TYPE", std::to_string(0)},               // todo, support dispatch on eth
+        {"SPLIT_PREFETCH_HEADER_NSTRIPPED", "1"},          // In the case of split prefetcher
     };
     compile_args.push_back(is_dram_variant);
     compile_args.push_back(is_host_variant);
