@@ -207,6 +207,8 @@ Tensor get_device_tensor(const Tensor& multi_device_tensor, const IDevice* devic
     return get_device_tensor(multi_device_tensor, device->id());
 }
 
+bool is_host_mesh_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::MULTI_DEVICE_HOST; }
+
 bool is_multi_device_tensor(const Tensor& tensor) {
     return tensor.storage_type() == StorageType::MULTI_DEVICE or
            tensor.storage_type() == StorageType::MULTI_DEVICE_HOST;

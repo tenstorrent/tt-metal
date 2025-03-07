@@ -54,6 +54,7 @@ struct unique_any final {
             }
             this->delete_storage = other.delete_storage;
             this->move_storage = other.move_storage;
+            other.pointer = nullptr;
         }
         return *this;
     }

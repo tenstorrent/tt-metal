@@ -84,13 +84,17 @@ public:
     static constexpr auto attribute_names = std::forward_as_tuple("value");
     auto attribute_values() const { return std::forward_as_tuple(value_); }
 
-    friend bool operator==(const MeshCoordinate& lhs, const MeshCoordinate& rhs);
-    friend bool operator!=(const MeshCoordinate& lhs, const MeshCoordinate& rhs);
-    friend std::ostream& operator<<(std::ostream& os, const MeshCoordinate& shape);
-
 private:
     tt::stl::SmallVector<uint32_t> value_;
 };
+
+bool operator==(const MeshCoordinate& lhs, const MeshCoordinate& rhs);
+bool operator!=(const MeshCoordinate& lhs, const MeshCoordinate& rhs);
+bool operator<(const MeshCoordinate& lhs, const MeshCoordinate& rhs);
+bool operator>(const MeshCoordinate& lhs, const MeshCoordinate& rhs);
+bool operator<=(const MeshCoordinate& lhs, const MeshCoordinate& rhs);
+bool operator>=(const MeshCoordinate& lhs, const MeshCoordinate& rhs);
+std::ostream& operator<<(std::ostream& os, const MeshCoordinate& shape);
 
 // Converts a MeshCoordinate to a linear index.
 // Throws if `coord` is out of bounds of `shape`.

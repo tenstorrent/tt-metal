@@ -59,7 +59,7 @@ TEST(MeshShapeTest, Strides) {
     EXPECT_EQ(shape.get_stride(2), 1);   // 1
 }
 
-TEST(MeshShapeTest, Comparison) {
+TEST(MeshShapeTest, Equality) {
     MeshShape shape(2, 3);
 
     EXPECT_EQ(shape, MeshShape(2, 3));
@@ -113,12 +113,29 @@ TEST(MeshCoordinateTest, Construction) {
     EXPECT_EQ(coord_span[4], 5);
 }
 
-TEST(MeshCoordinateTest, Comparison) {
+TEST(MeshCoordinateTest, Equality) {
     MeshCoordinate coord1(1, 2);
 
     EXPECT_EQ(coord1, MeshCoordinate(1, 2));
     EXPECT_NE(coord1, MeshCoordinate(2, 1));
     EXPECT_NE(coord1, MeshCoordinate(1, 2, 1));
+}
+
+TEST(MeshCoordinateTest, ComparisonMismatchedDimensions) {
+    MeshCoordinate coord1(1);
+    EXPECT_ANY_THROW(void(coord1 < MeshCoordinate(1, 2)));
+}
+
+TEST(MeshCoordinateTest, Comparison) {
+    MeshCoordinate coord1(1);
+    MeshCoordinate coord2(2);
+    EXPECT_TRUE(coord1 < coord2);
+    EXPECT_FALSE(coord2 < coord1);
+
+    MeshCoordinate coord3(2, 0, 3);
+    MeshCoordinate coord4(2, 1, 3);
+    EXPECT_TRUE(coord3 < coord4);
+    EXPECT_FALSE(coord4 < coord3);
 }
 
 TEST(MeshCoordinateTest, UnorderedSet) {
