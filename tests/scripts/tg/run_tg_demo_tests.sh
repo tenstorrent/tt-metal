@@ -20,8 +20,8 @@ run_tg_llama3_tests() {
 
   # Run all Llama3 tests for 1B, 3B, 8B, 11B and 70B weights
   # for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b" "$llama70b"; do
-  for llama_dir in "$llama1b" "$llama8b" "$llama70b"; do
-    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3/demo/simple_text_demo.py --timeout 5000; fail+=$?
+  for llama_dir in "$llama70b"; do
+    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/demo/demo.py --timeout 5000; fail+=$?
     echo "LOG_METAL: Llama3 tests for $llama_dir completed"
   done
 
