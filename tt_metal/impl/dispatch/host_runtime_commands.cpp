@@ -352,9 +352,9 @@ void Finish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     detail::DispatchStateCheck(true);
     cq.finish(sub_device_ids);
     TT_ASSERT(
-        !(cq.is_dprint_server_hung()), "Command Queue could not finish: device hang due to unanswered DPRINT WAIT.");
+        !(DPrintServerHangDetected()), "Command Queue could not finish: device hang due to unanswered DPRINT WAIT.");
     TT_ASSERT(
-        !(cq.is_noc_hung()),
+        !(tt::watcher_server_killed_due_to_error()),
         "Command Queue could not finish: device hang due to illegal NoC transaction. See {} for details.",
         tt::watcher_get_log_file_name());
 }

@@ -71,10 +71,16 @@ uint32_t max_packet_size_mask;
 auto input_queue_state = select_input_queue<pkt_dest_size_choice>();
 volatile local_pull_request_t *local_pull_request = (volatile local_pull_request_t *)(data_buffer_start_addr - 1024);
 volatile tt_l1_ptr fabric_router_l1_config_t* routing_table;
+#ifdef FVC_MODE_PULL
 volatile tt_l1_ptr fabric_pull_client_interface_t* client_interface =
     (volatile tt_l1_ptr fabric_pull_client_interface_t*)client_interface_addr;
 
-fvc_producer_state_t test_producer __attribute__((aligned(16)));
+fvc_inbound_pull_state_t test_producer __attribute__((aligned(16)));
+#else
+volatile tt_l1_ptr fabric_push_client_interface_t* client_interface =
+    (volatile tt_l1_ptr fabric_push_client_interface_t*)client_interface_addr;
+fvc_inbound_push_state_t test_producer __attribute__((aligned(16)));
+#endif
 fvcc_inbound_state_t fvcc_test_producer __attribute__((aligned(16)));
 
 uint64_t xy_local_addr;
@@ -458,8 +464,12 @@ void kernel_main() {
 
     // initalize client
     tt_fabric_init();
-    fabric_endpoint_init<RoutingType::ROUTING_TABLE>(client_interface, outbound_eth_chan);
+    fabric_endpoint_init<decltype(client_interface), RoutingType::ROUTING_TABLE>(client_interface, outbound_eth_chan);
     routing_table = reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(client_interface->routing_tables_l1_offset);
+
+#ifndef FVC_MODE_PULL
+    test_producer.register_with_routers<FVC_MODE_ENDPOINT>(dest_device & 0xFFFF, dest_device >> 16);
+#endif
 
     while (true) {
         iter++;
@@ -476,9 +486,14 @@ void kernel_main() {
         bool all_packets_initialized = test_buffer_handler();
 
         if (test_producer.get_curr_packet_valid<FVC_MODE_ENDPOINT>()) {
+#ifdef FVC_MODE_PULL
             curr_packet_size =
                 (test_producer.current_packet_header.routing.packet_size_bytes + PACKET_WORD_SIZE_BYTES - 1) >> 4;
             uint32_t curr_data_words_sent = test_producer.pull_data_from_fvc_buffer<FVC_MODE_ENDPOINT>();
+#else
+            curr_packet_size = ((test_producer.packet_word_0[0] & 0x3FFFFFFF) + PACKET_WORD_SIZE_BYTES - 1) >> 4;
+            uint32_t curr_data_words_sent = test_producer.push_data_to_eth_router<FVC_MODE_ENDPOINT>();
+#endif
             curr_packet_words_sent += curr_data_words_sent;
             data_words_sent += curr_data_words_sent;
             if constexpr (!(data_sent_per_iter_low == 0 && data_sent_per_iter_high == 0)) {

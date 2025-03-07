@@ -48,7 +48,7 @@ enum class EthRouterMode : uint32_t {
     FABRIC_ROUTER = 2,
 };
 
-enum class FabricConfig { DISABLED = 0, FABRIC_1D = 1, FABRIC_2D = 2, CUSTOM = 4 };
+enum class FabricConfig { DISABLED = 0, FABRIC_1D = 1, FABRIC_2D = 2, FABRIC_2D_PUSH = 3, CUSTOM = 4 };
 
 class Cluster {
 public:
@@ -318,6 +318,9 @@ private:
     // UMD static APIs `detect_available_device_ids` and `detect_number_of_chips` only returns number of MMIO mapped
     // devices
     tt_ClusterDescriptor* cluster_desc_ = nullptr;
+    // In case of mock cluster descriptor, the tt_cluster holds the ownership of the created object;
+    // This is obviously a design issue. This should go away once the design is fixed.
+    std::unique_ptr<tt_ClusterDescriptor> mock_cluster_desc_ptr_;
     // There is an entry for every device that can be targeted (MMIO and remote)
     std::unordered_map<chip_id_t, metal_SocDescriptor> sdesc_per_chip_;
 

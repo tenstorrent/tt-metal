@@ -525,16 +525,6 @@ bool Buffer::is_valid_partial_region(const BufferRegion& region) const {
     return this->is_valid_region(region) && (region.offset > 0 || region.size != this->size());
 }
 
-uint32_t Buffer::dram_channel_from_bank_id(uint32_t bank_id) const {
-    TT_FATAL(this->is_dram(), "Expected DRAM buffer!");
-    return allocator_->get_dram_channel_from_bank_id(bank_id);
-}
-
-CoreCoord Buffer::logical_core_from_bank_id(uint32_t bank_id) const {
-    TT_FATAL(this->is_l1(), "Expected L1 buffer!");
-    return allocator_->get_logical_core_from_bank_id(bank_id);
-}
-
 DeviceAddr Buffer::page_address(uint32_t bank_id, uint32_t page_index) const {
     uint32_t num_banks = allocator_->get_num_banks(buffer_type_);
     TT_FATAL(bank_id < num_banks, "Invalid Bank ID: {} exceeds total numbers of banks ({})!", bank_id, num_banks);

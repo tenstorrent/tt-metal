@@ -4,15 +4,10 @@
 
 #include <build.hpp>
 
-#include <chrono>
 #include <filesystem>
 #include <fstream>
-#include <iomanip>
-#include <iostream>
 #include <span>
-#include <sstream>
 #include <string>
-#include <thread>
 
 #include "common/executor.hpp"
 #include "jit_build/genfiles.hpp"
@@ -49,14 +44,25 @@ static std::string get_string_aliased_arch_lowercase(tt::ARCH arch) {
     }
 }
 
-JitBuildEnv::JitBuildEnv() {}
+static void build_failure(const string& target_name, const string& op, const string& cmd, const string& log_file) {
+    log_error(tt::LogBuildKernels, "{} {} failure -- cmd: {}", target_name, op, cmd);
+    std::ifstream file{log_file};
+    if (file.is_open()) {
+        std::string log_contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        log_error(tt::LogBuildKernels, "{}", log_contents);
+        TT_THROW("{} build failed", target_name);
+    } else {
+        TT_THROW("Failed to open {} failure log file {}", op, log_file);
+    }
+}
 
-void check_built_dir(const std::filesystem::path& dir_path, const std::filesystem::path& git_hash_path)
-{
+static void check_built_dir(const std::filesystem::path& dir_path, const std::filesystem::path& git_hash_path) {
     if (dir_path.compare(git_hash_path) != 0) {
         std::filesystem::remove_all(dir_path);
     }
 }
+
+JitBuildEnv::JitBuildEnv() {}
 
 void JitBuildEnv::init(
     uint32_t build_key, tt::ARCH arch, const std::map<std::string, std::string>& device_kernel_defines) {
@@ -610,18 +616,6 @@ JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuil
     this->process_defines_at_compile = true;
 
     finish_init();
-}
-
-static void build_failure(const string& target_name, const string& op, const string& cmd, const string& log_file) {
-    log_info(tt::LogBuildKernels, "{} {} failure -- cmd: {}", target_name, op, cmd);
-    string cat = "cat " + log_file;
-    if (fs::exists(log_file)) {
-        // XXXX PGK(TODO) not portable
-        if (system(cat.c_str())) {
-            TT_THROW("Failed system comand {}", cat);
-        }
-    }
-    TT_THROW("{} build failed", target_name);
 }
 
 void JitBuildState::compile_one(
