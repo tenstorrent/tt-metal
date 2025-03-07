@@ -11,6 +11,7 @@
 #include "core/tt_tensor_utils.hpp"
 #include "init/cpu_initializers.hpp"
 #include "init/tensor_initializers.hpp"
+#include "modules/dropout_module.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/linear_op.hpp"
 #include "ops/matmul_op.hpp"
@@ -56,42 +57,51 @@ ttml::autograd::TensorPtr create_bias(uint32_t in_features, uint32_t out_feature
 void LoRALinearLayer::register_tensors() {
     create_name("linear");
     register_tensor(m_weight, "weight");
-    m_weight->set_requires_grad(false);
-    register_tensor(m_lora_a, "m_lora_a");
-    register_tensor(m_lora_b, "m_lora_b");
+
+    register_tensor(m_lora_a, "lora_a");
+    register_tensor(m_lora_b, "lora_b");
+    register_module(m_dropout, "dropout");
     if (m_bias != nullptr) {
         register_tensor(m_bias, "bias");
-        m_weight->set_requires_grad(false);
     }
 }
 
 LoRALinearLayer::LoRALinearLayer(const LoRaConfig& config, uint32_t in_features, uint32_t out_features, bool has_bias) {
     m_weight = create_weight(in_features, out_features);
+    m_weight->set_requires_grad(false);
     m_scale = config.alpha / static_cast<float>(config.rank);
     m_lora_a = create_lora_a(config.rank, out_features);
     m_lora_b = create_lora_b(in_features, config.rank);
     if (has_bias) {
         m_bias = create_bias(in_features, out_features);
+        m_bias->set_requires_grad(config.is_bias_trainable);
     }
     register_tensors();
 }
 
 LoRALinearLayer::LoRALinearLayer(const LoRaConfig& config, const autograd::TensorPtr& weight, bool has_bias) :
     m_weight(weight) {
+    m_weight->set_requires_grad(false);
     m_scale = config.alpha / static_cast<float>(config.rank);
     uint32_t in_features = m_weight->get_value().get_logical_shape()[3];
     uint32_t out_features = m_weight->get_value().get_logical_shape()[2];
     m_lora_a = create_lora_a(config.rank, out_features);
     m_lora_b = create_lora_b(in_features, config.rank);
+    m_dropout = std::make_shared<DropoutLayer>(config.dropout);
     if (has_bias) {
         m_bias = create_bias(in_features, out_features);
+        m_bias->set_requires_grad(config.is_bias_trainable);
     }
     register_tensors();
 }
 
 autograd::TensorPtr LoRALinearLayer::operator()(const autograd::TensorPtr& tensor) {
-    auto weight = m_weight + ops::matmul_op(m_lora_a, m_lora_b) * m_scale;
-    return ops::linear_op(tensor, weight, m_bias);
+    auto base_output = ops::linear_op(tensor, m_weight, m_bias);
+    auto lora_down = ops::matmul_op(tensor, m_lora_a);
+    auto lora_down_dropout = (*m_dropout)(lora_down);
+
+    auto lora_update = ops::matmul_op(lora_down_dropout, m_lora_b);
+    return base_output + (lora_update * m_scale);
 }
 
 }  // namespace ttml::modules

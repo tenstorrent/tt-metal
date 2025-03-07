@@ -32,6 +32,8 @@ private:
     autograd::TensorPtr m_lora_a;
     autograd::TensorPtr m_lora_b;
 
+    std::shared_ptr<autograd::ModuleBase> m_dropout;
+
     float m_scale = 1.0F;
     void initialize_tensors(uint32_t in_features, uint32_t out_features, bool has_bias = true);
     void register_tensors();
