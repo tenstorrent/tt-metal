@@ -134,7 +134,7 @@ run_n300_perf_tests(){
 
   # Whisper conditional generation
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/whisper/demo/demo.py --input-path="models/demos/whisper/demo/dataset/conditional_generation" -k "conditional_generation"; fail+=$?
-  
+
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
