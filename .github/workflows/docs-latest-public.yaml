@@ -85,6 +85,9 @@ jobs:
       - name: Prepare artifact - create root index
         run: |
           touch gh_pages/index.html
+      - name: Install rsync 📚
+        run: |
+          apt-get update && apt-get install -y rsync      
       - name: Deploy to GitHub Pages
         uses: JamesIves/github-pages-deploy-action@v4
         id: deployment
@@ -92,7 +95,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           branch: gh-pages
           target-folder: ${{ inputs.version }}
-          folder: ${{ github.workspace }}/docker-job/gh_pages/${{ inputs.version }}
+          folder: /work/gh_pages/${{ inputs.version }}
           force: false
       - name: Delete artifact if deployment failed
         # When the deployment API call fails, the artifacts are not cleaned up correctly
