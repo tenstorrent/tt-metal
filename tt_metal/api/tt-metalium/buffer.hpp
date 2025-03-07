@@ -311,6 +311,14 @@ class Buffer final {
 
 }  // namespace v0
 
+std::tuple<std::vector<std::vector<uint32_t>>, std::vector<std::array<uint32_t, 2>>> core_to_host_pages(
+    const uint32_t total_pages,
+    const uint32_t pages_per_shard,
+    const uint32_t num_shards,
+    const TensorMemoryLayout layout,
+    const std::array<uint32_t, 2>& page_shape,
+    const std::array<uint32_t, 2>& shard_shape,
+    const std::array<uint32_t, 2>& tensor2d_size);
 BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer);
 
 inline namespace v0 {

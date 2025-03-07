@@ -76,6 +76,51 @@ void validate_buffer_size_and_page_size(
     }
 }
 
+void validate_sub_device_id(
+    std::optional<SubDeviceId> sub_device_id,
+    IDevice* device,
+    BufferType buffer_type,
+    const std::optional<ShardSpecBuffer>& shard_parameters) {
+    // No need to validate if we're using the global allocator or not sharding
+    if (!sub_device_id.has_value()) {
+        return;
+    }
+    TT_FATAL(shard_parameters.has_value(), "Specifying sub-device for buffer requires buffer to be sharded");
+    TT_FATAL(is_l1_impl(buffer_type), "Specifying sub-device for buffer requires buffer to be L1");
+    const auto& sub_device_cores = device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id.value());
+    const auto& shard_cores = shard_parameters->grid();
+    TT_FATAL(
+        sub_device_cores.contains(shard_cores),
+        "Shard cores specified {} do not match sub-device cores {}",
+        shard_cores,
+        sub_device_cores);
+}
+
+void validate_sub_device_manager_id(std::optional<SubDeviceManagerId> sub_device_manager_id, IDevice* device) {
+    if (sub_device_manager_id.has_value()) {
+        TT_FATAL(
+            sub_device_manager_id.value() == device->get_active_sub_device_manager_id(),
+            "Sub-device manager id mismatch. Buffer sub-device manager id: {}, Device active sub-device manager id: {}",
+            sub_device_manager_id.value(),
+            device->get_active_sub_device_manager_id());
+    }
+}
+
+}  // namespace
+
+std::atomic<size_t> Buffer::next_unique_id = 0;
+
+std::ostream& operator<<(std::ostream& os, const ShardSpec& spec) {
+    tt::stl::reflection::operator<<(os, spec);
+    return os;
+}
+
+bool is_sharded(const TensorMemoryLayout& layout) {
+    return (
+        layout == TensorMemoryLayout::HEIGHT_SHARDED || layout == TensorMemoryLayout::WIDTH_SHARDED ||
+        layout == TensorMemoryLayout::BLOCK_SHARDED);
+}
+
 std::tuple<std::vector<std::vector<uint32_t>>, std::vector<std::array<uint32_t, 2>>> core_to_host_pages(
     const uint32_t total_pages,
     const uint32_t pages_per_shard,
@@ -140,51 +185,6 @@ std::tuple<std::vector<std::vector<uint32_t>>, std::vector<std::array<uint32_t, 
         }
     }
     return {ret_vec, ret_shard_shape};
-}
-
-void validate_sub_device_id(
-    std::optional<SubDeviceId> sub_device_id,
-    IDevice* device,
-    BufferType buffer_type,
-    const std::optional<ShardSpecBuffer>& shard_parameters) {
-    // No need to validate if we're using the global allocator or not sharding
-    if (!sub_device_id.has_value()) {
-        return;
-    }
-    TT_FATAL(shard_parameters.has_value(), "Specifying sub-device for buffer requires buffer to be sharded");
-    TT_FATAL(is_l1_impl(buffer_type), "Specifying sub-device for buffer requires buffer to be L1");
-    const auto& sub_device_cores = device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id.value());
-    const auto& shard_cores = shard_parameters->grid();
-    TT_FATAL(
-        sub_device_cores.contains(shard_cores),
-        "Shard cores specified {} do not match sub-device cores {}",
-        shard_cores,
-        sub_device_cores);
-}
-
-void validate_sub_device_manager_id(std::optional<SubDeviceManagerId> sub_device_manager_id, IDevice* device) {
-    if (sub_device_manager_id.has_value()) {
-        TT_FATAL(
-            sub_device_manager_id.value() == device->get_active_sub_device_manager_id(),
-            "Sub-device manager id mismatch. Buffer sub-device manager id: {}, Device active sub-device manager id: {}",
-            sub_device_manager_id.value(),
-            device->get_active_sub_device_manager_id());
-    }
-}
-
-}  // namespace
-
-std::atomic<size_t> Buffer::next_unique_id = 0;
-
-std::ostream& operator<<(std::ostream& os, const ShardSpec& spec) {
-    tt::stl::reflection::operator<<(os, spec);
-    return os;
-}
-
-bool is_sharded(const TensorMemoryLayout& layout) {
-    return (
-        layout == TensorMemoryLayout::HEIGHT_SHARDED || layout == TensorMemoryLayout::WIDTH_SHARDED ||
-        layout == TensorMemoryLayout::BLOCK_SHARDED);
 }
 
 BufferPageMapping generate_buffer_page_mapping(const Buffer& buffer) {
