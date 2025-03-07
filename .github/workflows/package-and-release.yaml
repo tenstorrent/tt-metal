@@ -205,6 +205,7 @@ jobs:
       is_major_version:  ${{ needs.get-params.outputs.is-release-candidate !='true' && needs.get-params.outputs.should-create-release == 'true' }}
   release-docs:
     needs: [
+      build-artifact,
       get-params,
       create-tag,
       create-and-upload-draft-release
@@ -213,4 +214,7 @@ jobs:
     uses: ./.github/workflows/docs-latest-public.yaml
     with:
       version: ${{ needs.create-tag.outputs.version }}
+      docker-image: ${{ needs.build-artifact-profiler.outputs.ci-build-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
     secrets: inherit
