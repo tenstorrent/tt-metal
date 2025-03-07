@@ -8,7 +8,8 @@
 #include "dataflow_api.h"
 
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/worker_edm_utils.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
+#include "worker_edm_utils.hpp"
 #include "tt_metal/hw/inc/ethernet/dataflow_api.h"
 
 namespace ccl {
@@ -42,7 +43,7 @@ struct WorkerToEdmReader {
         uint32_t cb_id, uint32_t num_pages, uint32_t page_size, bool last_message) {
         uint64_t buffer_address =
             this->edm_buffer_addr + (this->buffer_index * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
-        tt::tt_fabric::fetch_chunk(cb_id, num_pages, page_size, buffer_address);
+        fetch_chunk(cb_id, num_pages, page_size, buffer_address);
         if constexpr (termination_mode == ttnn::ccl::EriscDataMoverTerminationMode::WORKER_INITIATED) {
             if (!last_message) {
                 noc_semaphore_inc(edm_semaphore_addr, ttnn::ccl::EriscDataMoverWorkerSignal::NEXT_MESSAGE_AVAILABLE);

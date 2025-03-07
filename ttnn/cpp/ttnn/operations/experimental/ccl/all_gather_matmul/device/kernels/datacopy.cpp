@@ -5,7 +5,7 @@
 #include <cstdint>
 #include "dataflow_api.h"
 #include "cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/worker_edm_utils.hpp"
+#include "cpp/ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp"
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "debug/dprint.h"
@@ -170,8 +170,8 @@ void kernel_main() {
 
             // Push and pop filler pages if needed to align CB ptr
             if (num_pages_to_transfer < max_buffer_size) {
-                tt::tt_fabric::push_filler_pages_to_cb(cb_id_in0, max_buffer_size - num_pages_to_transfer);
-                tt::tt_fabric::pop_filler_pages_from_cb(cb_id_in0, max_buffer_size - num_pages_to_transfer);
+                push_filler_pages_to_cb(cb_id_in0, max_buffer_size - num_pages_to_transfer);
+                pop_filler_pages_from_cb(cb_id_in0, max_buffer_size - num_pages_to_transfer);
             }
         }
     }

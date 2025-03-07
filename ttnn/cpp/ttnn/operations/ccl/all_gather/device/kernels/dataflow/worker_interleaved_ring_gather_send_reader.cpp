@@ -174,7 +174,7 @@ void kernel_main() {
         read_chunk_from_input_tensor(input_page_idx, cb_id_in0, s, rem_num_pages, page_size);
         ASSERT(num_pages == 0 || num_pages > rem_num_pages);
         ASSERT(half_cb_n_pages > rem_num_pages);
-        tt::tt_fabric::push_filler_pages_to_cb(cb_id_in0, half_cb_n_pages - rem_num_pages);
+        push_filler_pages_to_cb(cb_id_in0, half_cb_n_pages - rem_num_pages);
     }
 
     uint32_t sem_idx = 1;
@@ -258,7 +258,7 @@ void kernel_main() {
                 page_size);
             ASSERT(num_pages == 0 || num_pages > rem_num_pages);
             ASSERT(half_cb_n_pages > rem_num_pages);
-            tt::tt_fabric::push_filler_pages_to_cb(cb_id_in0, half_cb_n_pages - rem_num_pages);
+            push_filler_pages_to_cb(cb_id_in0, half_cb_n_pages - rem_num_pages);
         }
     }
 }

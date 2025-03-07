@@ -7,7 +7,7 @@
 #include "dataflow_api.h"
 
 #include "tt_metal/hw/inc/ethernet/dataflow_api.h"
-#include "worker_edm_utils.hpp"
+#include "edm_fabric_utils.hpp"
 #include "fabric_edm_packet_header_validate.hpp"
 #include "fabric_edm_types.hpp"
 #include "edm_fabric_flow_control_helpers.hpp"
