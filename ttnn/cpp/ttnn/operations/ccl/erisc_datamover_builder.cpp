@@ -189,17 +189,19 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         channel_buffer_size_with_channel_sync <= this->receiver_1_channel_size_bytes / this->receiver_1_num_buffers,
         "Specified channel buffer size and number of buffer slots does not fit");
 
-    this->sender_0_channel_base_address = buffer_region_start;
-    this->sender_1_channel_base_address = this->sender_0_channel_base_address + this->sender_0_channel_size_bytes;
-    this->sender_2_channel_base_address = this->sender_1_channel_base_address + this->sender_1_channel_size_bytes;
-    this->receiver_0_channel_base_address = this->sender_2_channel_base_address + this->sender_2_channel_size_bytes;
-    this->receiver_1_channel_base_address = this->receiver_0_channel_base_address + this->receiver_0_channel_size_bytes;
+    this->sender_channel_base_addresses[0] = buffer_region_start;
+    this->sender_channel_base_addresses[1] = this->sender_channel_base_addresses[0] + this->sender_0_channel_size_bytes;
+    this->sender_channel_base_addresses[2] = this->sender_channel_base_addresses[1] + this->sender_1_channel_size_bytes;
+    this->receiver_channel_base_addresses[0] =
+        this->sender_channel_base_addresses[2] + this->sender_2_channel_size_bytes;
+    this->receiver_channel_base_addresses[1] =
+        this->receiver_channel_base_addresses[0] + this->receiver_0_channel_size_bytes;
 
-    log_trace(tt::LogOp, "Sender 0 channel_start: {}", this->sender_0_channel_base_address);
-    log_trace(tt::LogOp, "Sender 1 channel_start: {}", this->sender_1_channel_base_address);
-    log_trace(tt::LogOp, "Sender 2 channel_start: {}", this->sender_2_channel_base_address);
-    log_trace(tt::LogOp, "Receiver 0 channel_start: {}", this->receiver_0_channel_base_address);
-    log_trace(tt::LogOp, "Receiver 1 channel_start: {}", this->receiver_1_channel_base_address);
+    log_trace(tt::LogOp, "Sender 0 channel_start: {}", this->sender_channel_base_addresses[0]);
+    log_trace(tt::LogOp, "Sender 1 channel_start: {}", this->sender_channel_base_addresses[1]);
+    log_trace(tt::LogOp, "Sender 2 channel_start: {}", this->sender_channel_base_addresses[2]);
+    log_trace(tt::LogOp, "Receiver 0 channel_start: {}", this->receiver_channel_base_addresses[0]);
+    log_trace(tt::LogOp, "Receiver 1 channel_start: {}", this->receiver_channel_base_addresses[1]);
     log_trace(tt::LogOp, "Available channel buffering space: {}", this->available_channel_buffering_space);
 
     static constexpr size_t total_num_channels = 5;  // sender0, sender1, sender2, receiver0, receiver1
@@ -231,7 +233,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
             this->available_channel_buffering_space,
         "Internal error when computing channel sizes. Total channel size exceeds available space");
     TT_FATAL(
-        this->receiver_1_channel_base_address + this->receiver_1_channel_size_bytes < this->max_l1_loading_size,
+        this->receiver_channel_base_addresses.back() + this->receiver_1_channel_size_bytes < this->max_l1_loading_size,
         "Internal error - channel buffers spilled past the end of usable L1 region.");
 }
 
@@ -348,15 +350,11 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
 
     receiver_channel_0_local_buffer_index_address(config.receiver_channel_0_local_buffer_index_address),
     receiver_channel_1_local_buffer_index_address(config.receiver_channel_1_local_buffer_index_address),
-
-    local_sender_channel_0_buffer_address(config.sender_0_channel_base_address),
+    local_sender_channel_buffer_addresses(config.sender_channel_base_addresses),
     local_sender_channel_0_connection_info_addr(config.sender_channel_0_worker_conn_info_base_address),
-    local_sender_channel_1_buffer_address(config.sender_1_channel_base_address),
     local_sender_channel_1_connection_info_addr(config.sender_channel_1_worker_conn_info_base_address),
-    local_sender_channel_2_buffer_address(config.sender_2_channel_base_address),
     local_sender_channel_2_connection_info_addr(config.sender_channel_2_worker_conn_info_base_address),
-    local_receiver_channel_0_buffer_address(config.receiver_0_channel_base_address),
-    local_receiver_channel_1_buffer_address(config.receiver_1_channel_base_address),
+    local_receiver_channel_buffer_addresses(config.receiver_channel_base_addresses),
 
     termination_signal_ptr(config.termination_signal_address),
     enable_persistent_mode(enable_persistent_mode),
@@ -369,15 +367,15 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const
         this->sender_0_num_buffers == this->sender_1_num_buffers);  //, "Implementation expects sender_0_num_buffers and
                                                                     // sender_1_num_buffers to be the same for now");
     log_trace(tt::LogTest, "Sender 0 num buffers: {}", this->sender_0_num_buffers);
-    log_trace(tt::LogTest, "Sender 0 channel address: {}", this->local_sender_channel_0_buffer_address);
+    log_trace(tt::LogTest, "Sender 0 channel address: {}", this->local_sender_channel_buffer_addresses[0]);
     log_trace(tt::LogTest, "Sender 1 num buffers: {}", this->sender_1_num_buffers);
-    log_trace(tt::LogTest, "Sender 1 channel address: {}", this->local_sender_channel_1_buffer_address);
+    log_trace(tt::LogTest, "Sender 1 channel address: {}", this->local_sender_channel_buffer_addresses[1]);
     log_trace(tt::LogTest, "Sender 2 num buffers: {}", this->sender_2_num_buffers);
-    log_trace(tt::LogTest, "Sender 2 channel address: {}", this->local_sender_channel_2_buffer_address);
+    log_trace(tt::LogTest, "Sender 2 channel address: {}", this->local_sender_channel_buffer_addresses[2]);
     log_trace(tt::LogTest, "Receiver 0 num buffers: {}", this->receiver_0_num_buffers);
-    log_trace(tt::LogTest, "Receiver 0 channel address: {}", this->local_receiver_channel_0_buffer_address);
+    log_trace(tt::LogTest, "Receiver 0 channel address: {}", this->local_receiver_channel_buffer_addresses[0]);
     log_trace(tt::LogTest, "Receiver 1 num buffers: {}", this->receiver_1_num_buffers);
-    log_trace(tt::LogTest, "Receiver 1 channel address: {}", this->local_receiver_channel_1_buffer_address);
+    log_trace(tt::LogTest, "Receiver 1 channel address: {}", this->local_receiver_channel_buffer_addresses[1]);
 
     return std::vector<uint32_t>{
         this->firmware_context_switch_interval,
@@ -388,20 +386,20 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const
         this->sender_0_num_buffers,
         this->receiver_0_num_buffers,
 
-        config.sender_0_channel_base_address,
+        config.sender_channel_base_addresses[0],
         config.sender_channel_0_worker_conn_info_base_address,
-        config.sender_1_channel_base_address,
+        config.sender_channel_base_addresses[1],
         config.sender_channel_1_worker_conn_info_base_address,
-        config.sender_2_channel_base_address,
+        config.sender_channel_base_addresses[2],
         config.sender_channel_2_worker_conn_info_base_address,
-        config.receiver_0_channel_base_address,
-        config.receiver_0_channel_base_address,
-        config.receiver_1_channel_base_address,
-        config.receiver_1_channel_base_address,
+        config.receiver_channel_base_addresses[0],
+        config.receiver_channel_base_addresses[0],
+        config.receiver_channel_base_addresses[1],
+        config.receiver_channel_base_addresses[1],
 
-        config.sender_0_channel_base_address,
-        config.sender_1_channel_base_address,
-        config.sender_2_channel_base_address,
+        config.sender_channel_base_addresses[0],
+        config.sender_channel_base_addresses[1],
+        config.sender_channel_base_addresses[2],
 
         this->termination_signal_ptr,
         this->enable_persistent_mode,
@@ -602,7 +600,7 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_worker_
     return SenderWorkerAdapterSpec{
         this->my_noc_x,
         this->my_noc_y,
-        this->local_sender_channel_0_buffer_address,
+        this->local_sender_channel_buffer_addresses[0],
         this->sender_0_num_buffers,
         this->sender_channel_0_flow_control_semaphore_id,
         this->sender_channel_0_connection_semaphore_id,
@@ -617,7 +615,7 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
         return SenderWorkerAdapterSpec{
             this->my_noc_x,
             this->my_noc_y,
-            this->local_sender_channel_1_buffer_address,
+            this->local_sender_channel_buffer_addresses[1],
             this->sender_1_num_buffers,
             this->sender_channel_1_flow_control_semaphore_id,
             this->sender_channel_1_connection_semaphore_id,
@@ -629,7 +627,7 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
         return SenderWorkerAdapterSpec{
             this->my_noc_x,
             this->my_noc_y,
-            this->local_sender_channel_2_buffer_address,
+            this->local_sender_channel_buffer_addresses[2],
             this->sender_2_num_buffers,
             this->sender_channel_2_flow_control_semaphore_id,
             this->sender_channel_2_connection_semaphore_id,

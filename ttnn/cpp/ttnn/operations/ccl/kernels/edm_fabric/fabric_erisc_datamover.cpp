@@ -1039,7 +1039,7 @@ void run_fabric_edm_main_loop(
                 channel_connection_established[2],
                 2);
 
-            did_something = did_something || did_something_sender0 || did_something_sender1 || false;
+            did_something = did_something || did_something_sender0 || did_something_sender1 || did_something_sender2;
         }
 
         if (did_something) {

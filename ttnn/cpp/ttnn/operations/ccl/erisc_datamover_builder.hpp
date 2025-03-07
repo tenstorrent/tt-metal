@@ -29,6 +29,8 @@ namespace ttnn {
 namespace ccl {
 
 struct FabricEriscDatamoverConfig {
+    static constexpr uint32_t num_sender_channels = 3;
+    static constexpr uint32_t num_receiver_channels = 2;
     static constexpr bool constrain_to_power_of_2_buffer_slot_counts = true;
 
     static constexpr std::size_t field_size = 16;
@@ -81,7 +83,7 @@ struct FabricEriscDatamoverConfig {
 
     // ----------- Sender Channel 0
     std::size_t sender_channel_0_buffer_index_address =
-        sender_1_completed_packet_header_cb_address + sender_completed_packet_header_cb_size_bytes;
+        sender_2_completed_packet_header_cb_address + sender_completed_packet_header_cb_size_bytes;
     // Connection info layout:
     // 0: buffer_index_rdptr -> Tells EDM the address in worker L1 to update EDM's copy of channel rdptr
     // 1: worker_teardown_semaphore_address -> Tells EDM where to signal connection teardown completion in worker's L1
@@ -155,14 +157,14 @@ struct FabricEriscDatamoverConfig {
     std::size_t receiver_channel_1_local_buffer_index_address =
         receiver_channel_0_downstream_flow_control_semaphore_address + field_size;
     // persistent mode field
-    std::size_t receiver_channel_downstream_flow_control_semaphore_address =
+    std::size_t receiver_channel_1_downstream_flow_control_semaphore_address =
         receiver_channel_1_local_buffer_index_address + field_size;
 
     // Channel Allocations
     std::size_t max_l1_loading_size = tt::tt_metal::experimental::hal::get_erisc_l1_unreserved_size() +
                                       tt::tt_metal::experimental::hal::get_erisc_l1_unreserved_base();
     std::size_t buffer_region_start =
-        (receiver_channel_downstream_flow_control_semaphore_address + field_size + buffer_alignment) &
+        (receiver_channel_1_downstream_flow_control_semaphore_address + field_size + buffer_alignment) &
         ~(buffer_alignment - 1);  // Align
     std::size_t available_channel_buffering_space = max_l1_loading_size - buffer_region_start;
 
@@ -182,11 +184,8 @@ struct FabricEriscDatamoverConfig {
     std::size_t receiver_1_channel_size_bytes = 0;
     std::size_t receiver_1_num_buffers = 0;
 
-    std::size_t sender_0_channel_base_address = 0;
-    std::size_t sender_1_channel_base_address = 0;
-    std::size_t sender_2_channel_base_address = 0;
-    std::size_t receiver_0_channel_base_address = 0;
-    std::size_t receiver_1_channel_base_address = 0;
+    std::array<std::size_t, num_sender_channels> sender_channel_base_addresses = {0, 0, 0};
+    std::array<std::size_t, num_receiver_channels> receiver_channel_base_addresses = {0, 0};
 };
 
 struct SenderWorkerAdapterSpec {
@@ -298,14 +297,12 @@ public:
     size_t receiver_0_num_buffers = 0;
     size_t receiver_1_num_buffers = 0;
 
-    size_t local_sender_channel_0_buffer_address = 0;
-    size_t local_sender_channel_0_connection_info_addr = 0;
-    size_t local_sender_channel_1_buffer_address = 0;
-    size_t local_sender_channel_1_connection_info_addr = 0;
-    size_t local_sender_channel_2_buffer_address = 0;
-    size_t local_sender_channel_2_connection_info_addr = 0;
-    size_t local_receiver_channel_0_buffer_address = 0;
-    size_t local_receiver_channel_1_buffer_address = 0;
+    std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> local_sender_channel_buffer_addresses;
+    std::array<size_t, FabricEriscDatamoverConfig::num_receiver_channels> local_receiver_channel_buffer_addresses;
+
+    size_t local_sender_channel_0_connection_info_addr;
+    size_t local_sender_channel_1_connection_info_addr;
+    size_t local_sender_channel_2_connection_info_addr;
 
     size_t termination_signal_ptr = 0;
 
