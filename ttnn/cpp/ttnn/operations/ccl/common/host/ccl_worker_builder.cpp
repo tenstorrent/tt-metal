@@ -8,6 +8,7 @@
 #include "hostdevcommon/kernel_structs.h"
 #include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 #include "cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
+#include "tt-metalium/kernel_types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/erisc_datamover_builder.hpp"
 
@@ -890,6 +891,8 @@ tt::tt_metal::KernelHandle generate_multi_command_stream_kernel_ct_args(
             log_trace(tt::LogOp, "\t\t{}: {}", i, arg);
         }
     }
+    // Kernel overflowed with O2
+    datamovement_kernel_config.opt_level = tt::tt_metal::KernelBuildOptLevel::Os;
     auto sender_worker_reader_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/ccl/common/kernels/ccl_send_reader_two_input.cpp",
