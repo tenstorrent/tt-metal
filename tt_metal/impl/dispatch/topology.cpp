@@ -886,7 +886,7 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, b
             auto& eth_chans_dir2 = active_fabric_eth_channels.at(dir2);
 
             TT_ASSERT(
-                eth_chan_dir1.size() == eth_chan_dir2.size(), "Unequal number of routers for downstream connections");
+                eth_chans_dir1.size() == eth_chans_dir2.size(), "Unequal number of routers for downstream connections");
 
             for (const auto& eth_chan_dir1 : eth_chans_dir1) {
                 // connect with the router on the same routing plane
