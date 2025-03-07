@@ -42,7 +42,7 @@ struct WorkerToEdmReader {
         uint32_t cb_id, uint32_t num_pages, uint32_t page_size, bool last_message) {
         uint64_t buffer_address =
             this->edm_buffer_addr + (this->buffer_index * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
-        fetch_chunk(cb_id, num_pages, page_size, buffer_address);
+        tt::tt_fabric::fetch_chunk(cb_id, num_pages, page_size, buffer_address);
         if constexpr (termination_mode == ttnn::ccl::EriscDataMoverTerminationMode::WORKER_INITIATED) {
             if (!last_message) {
                 noc_semaphore_inc(edm_semaphore_addr, ttnn::ccl::EriscDataMoverWorkerSignal::NEXT_MESSAGE_AVAILABLE);
@@ -147,7 +147,7 @@ private:
         uint64_t buffer_address =
             this->edm_buffer_addr + (this->buffer_index * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
         ASSERT(num_pages * page_size <= this->buffer_size_bytes);
-        send_chunk_from_address<blocking_mode>(source_address, num_pages, page_size, buffer_address);
+        tt::tt_fabric::send_chunk_from_address<blocking_mode>(source_address, num_pages, page_size, buffer_address);
         noc_semaphore_inc(edm_semaphore_addr, 1);
         this->buffer_index = (this->buffer_index == this->last_buffer_index) ? 0 : this->buffer_index + 1;
     }
@@ -157,7 +157,7 @@ private:
         uint64_t buffer_address =
             this->edm_buffer_addr + (this->buffer_index * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
         ASSERT(num_pages * page_size <= this->buffer_size_bytes);
-        send_chunk<blocking_mode>(cb_id, num_pages, page_size, buffer_address);
+        tt::tt_fabric::send_chunk<blocking_mode>(cb_id, num_pages, page_size, buffer_address);
         noc_semaphore_inc(edm_semaphore_addr, 1);
         this->buffer_index = (this->buffer_index == this->last_buffer_index) ? 0 : this->buffer_index + 1;
     }

@@ -3,10 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/fabric_connection_manager.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 #include "dataflow_api.h"
-
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp"
 
 #include <cstdint>
