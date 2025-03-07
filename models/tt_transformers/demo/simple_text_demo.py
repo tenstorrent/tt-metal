@@ -597,7 +597,6 @@ def test_demo_text(
             # Get the next token
             if argmax_on_device:
                 out_tok = logits.unsqueeze(1)
-                out_tok = out_tok[:, 0, 0, : (batch_size // data_parallel)].to(torch.int)
             else:
                 # TODO Fix use case with temperature > 0
                 _, out_tok = sample_host(

@@ -214,7 +214,7 @@ class Generator:
         if read_from_device:
             to_host = []
             for i, t in enumerate(tokens):
-                to_host.append(self.read_decode_output(tt_logits[i], t.shape[0], i))
+                to_host.append(self.read_decode_output(tt_logits[i], t.shape[0], i, argmax_on_device))
             to_host = torch.cat(to_host, 0)
             return to_host
         else:
