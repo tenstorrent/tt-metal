@@ -8,6 +8,7 @@ from loguru import logger
 from transformers import AutoImageProcessor
 import pytest
 import ttnn
+from models.perf.perf_utils import prep_perf_report
 
 from models.utility_functions import (
     disable_compilation_reports,
@@ -48,6 +49,8 @@ def run_resnet_imagenet_inference(
 
     # Create TT Model Start
     # this will move weights to device
+    profiler.start(f"compile")
+
     test_infra = create_test_infra(
         device,
         batch_size,
@@ -59,13 +62,22 @@ def run_resnet_imagenet_inference(
         model_location_generator=model_location_generator,
     )
     ttnn.synchronize_device(device)
+    profiler.end(f"compile")
 
     # load ImageNet batch by batch
     # and run inference
+    input_tensors_all = []
+    input_labels_all = []
+    for iter in range(iterations):
+        inputs, labels = get_batch(data_loader, image_processor)
+        input_tensors_all.append(inputs)
+        input_labels_all.append(labels)
     correct = 0
+    profiler.start(f"run")
     for iter in range(iterations):
         predictions = []
-        inputs, labels = get_batch(data_loader, image_processor)
+        inputs = input_tensors_all[iter]
+        labels = input_labels_all[iter]
         tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(device, inputs)
         test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
         tt_output = test_infra.run()
@@ -73,14 +85,31 @@ def run_resnet_imagenet_inference(
         prediction = tt_output[:, 0, 0, :].argmax(dim=-1)
         for i in range(batch_size):
             predictions.append(imagenet_label_dict[prediction[i].item()])
-            logger.info(
-                f"Iter: {iter} Sample: {i} - Expected Label: {imagenet_label_dict[labels[i]]} -- Predicted Label: {predictions[-1]}"
-            )
             if imagenet_label_dict[labels[i]] == predictions[-1]:
                 correct += 1
         del tt_output, inputs, labels, predictions
+    profiler.end(f"run")
     accuracy = correct / (batch_size * iterations)
     logger.info(f"Accuracy for {batch_size}x{iterations} inputs: {accuracy}")
+
+    first_iter_time = profiler.get(f"compile")
+    # ensuring inference time fluctuations is not noise
+    inference_time_avg = profiler.get("run") / (iterations)
+
+    compile_time = first_iter_time - 2 * inference_time_avg
+    prep_perf_report(
+        model_name=f"ttnn_{model_version}_batch_size{batch_size}",
+        batch_size=batch_size,
+        inference_and_compile_time=first_iter_time,
+        inference_time=inference_time_avg,
+        expected_compile_time=30,
+        expected_inference_time=0.004,
+        comments="tests",
+    )
+    logger.info(
+        f"ttnn_{model_version}_batch_size{batch_size} tests inference time (avg): {inference_time_avg}, FPS: {batch_size/inference_time_avg}"
+    )
+    logger.info(f"ttnn_{model_version}_batch_size{batch_size} compile time: {compile_time}")
 
 
 def run_resnet_inference(
