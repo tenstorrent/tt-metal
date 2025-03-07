@@ -11,7 +11,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include "noc/noc_parameters.h"
-#include "tt_metal/impl/dispatch/cq_commands.hpp"
+#include "hostdevcommon/cq_commands.hpp"
 
 #include <tt-metalium/hal.hpp>
 #include "llrt.hpp"

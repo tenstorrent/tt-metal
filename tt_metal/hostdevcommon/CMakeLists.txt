@@ -10,6 +10,7 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
             BASE_DIRS api
             FILES
                 api/hostdevcommon/common_values.hpp
+                api/hostdevcommon/cq_commands.hpp
                 api/hostdevcommon/dprint_common.h
                 api/hostdevcommon/kernel_structs.h
                 api/hostdevcommon/profiler_common.h

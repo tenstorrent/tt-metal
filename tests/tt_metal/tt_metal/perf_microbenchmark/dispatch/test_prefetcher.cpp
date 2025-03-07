@@ -15,7 +15,7 @@
 #include <tt-metalium/dispatch_settings.hpp>
 #include "common.h"
 #include "tt_cluster.hpp"
-#include "tt_metal/impl/dispatch/cq_commands.hpp"
+#include "hostdevcommon/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 
 #include <tt-metalium/hal.hpp>

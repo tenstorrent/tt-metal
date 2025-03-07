@@ -7,7 +7,7 @@
 #include <tt_cluster.hpp>
 #include "magic_enum/magic_enum.hpp"
 #include "umd/device/tt_core_coordinates.h"
-#include "tt_metal/impl/dispatch/cq_commands.hpp"
+#include "hostdevcommon/cq_commands.hpp"
 #include <dispatch_settings.hpp>
 #include <helpers.hpp>
 

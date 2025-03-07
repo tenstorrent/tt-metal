@@ -30,7 +30,6 @@ target_sources(
             core_descriptors/blackhole_140_arch.yaml
             core_descriptors/grayskull_120_arch.yaml
             core_descriptors/wormhole_b0_80_arch.yaml
-            impl/dispatch/cq_commands.hpp
             impl/dispatch/kernels/cq_common.hpp
             impl/dispatch/kernels/cq_helpers.hpp
             impl/dispatch/kernels/packet_queue.hpp

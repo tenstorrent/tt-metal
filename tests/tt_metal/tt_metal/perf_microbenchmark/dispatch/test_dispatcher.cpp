@@ -11,7 +11,7 @@
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/rtoptions.hpp>
-#include "tt_metal/impl/dispatch/cq_commands.hpp"
+#include "hostdevcommon/cq_commands.hpp"
 #include "common.h"
 
 #include "test_common.hpp"
