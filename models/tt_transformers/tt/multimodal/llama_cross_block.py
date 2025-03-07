@@ -12,7 +12,7 @@ from models.utility_functions import (
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.multimodal.llama_cross_attention import TtLlamaCrossAttention
-from models.tt_transformers.tt.mlp import TtLlamaMLP
+from models.tt_transformers.tt.mlp import MLP
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 import os
 
@@ -79,7 +79,7 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        self.feed_forward = TtLlamaMLP(
+        self.feed_forward = MLP(
             mesh_device=mesh_device,
             args=configuration,
             state_dict=state_dict,
