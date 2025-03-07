@@ -1,22 +1,35 @@
 # TT-Transformers
 
-This code can run Llama3 family of models and other similar models including QwQ, Qwen2.5 and DeepSeek-R1-Distill variants.
+This code can run large language models that are similar to the Llama3 family and other similar models such as Qwen2.5, Mistral and DeepSeek-R1-Distill variants. Tensor-parallelism is automatically used to parallelize workloads across all available chips.
 
-The current version is known to support the following Llama3 models:
+The current version is verified to work with the following models:
 - Llama3.2-1B
 - Llama3.2-3B
 - Llama3.1-8B
 - Llama3.2-11B
-- Llama3.1-70B (T3000 and TG-only)
-- Qwen2.5-7B
-- Qwen2.5-72B
-- QwQ-32B
-- DeepSeek R1 Distill Llama 3.3 70B (T3000 and TG-only)
+- Llama3.1-70B (LoudBox / QuietBox and Galaxy)
+- Qwen2.5-7B (N300)
+- Qwen2.5-72B (LoudBox / QuietBox)
+- DeepSeek R1 Distill Llama 3.3 70B (LoudBox / QuietBox and Galaxy)
 
-Qwen-7B requires N300
-Qwen-72B requires T3K
+## Dependencies
+TT-Transformers has some additional python dependencies. Install them from:
 
-## How to Run
+```
+pip install -r models/tt_transformers/requirements.txt
+```
+
+## Run a demo
+
+### 1. Specify which model you want to run
+
+The easiest way to do this is to set the `HF_MODEL` environment variable to the Huggingface org/name of the model you want to run:
+
+```
+export HF_MODEL=deepseek-ai/DeepSeek-R1-Distill-Llama-70B
+```
+
+This will automatically download the weights into your HuggingFace cache directory and run the model directly. If you wish, you can manually download the weights either from Huggingface or from Meta as described by the two following sections:
 
 #### Option 1: download Llama weights from Meta
 
@@ -196,6 +209,6 @@ Max Prefill Chunk Sizes (text-only):
 | Llama3.1-70B | Not supported | Not supported | 32k tokens     | 128k tokens |
 | DeepSeek-R1-Distill-Llama3.3-70B | Not supported | Not supported | 32k tokens     | 128k tokens |
 
-- These max chunk sizes are specific to max context length 128k and are configured via `MAX_PREFILL_CHUNK_SIZES_DIV1024` in [model_config.py](tt/model_config.py). If the max context length is set to a smaller value using the `max_seq_len` flag (see [Run the demo](#run-the-demo)), these chunk sizes can possibly be increased due to using a smaller KV cache.
+- These max chunk sizes are specific to max context length 128k and are configured via `MAX_PREFILL_CHUNK_SIZES_DIV1024` in [model_config.py](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tt/model_config.py). If the max context length is set to a smaller value using the `max_seq_len` flag (see [Run the demo](#run-the-demo)), these chunk sizes can possibly be increased due to using a smaller KV cache.
 
 **Chunked prefill (Llama3.2-11B multimodal)**: Llama3.2-11B multimodal is currently only supported on N300 and T3000. On N300, a max prefill context length of 8k is supported, while T3000 supports a max context length of 128k.
