@@ -176,8 +176,8 @@ bool test_program_specified_with_core_range_set(
         tt_metal::SetRuntimeArgs(program, unary_reader_kernel, core, reader_rt_args);
 
         auto bank_id = 0;
-        auto l1_dst_noc_xy =
-            device->virtual_core_from_logical_core(dst_l1_buffer->logical_core_from_bank_id(0), CoreType::WORKER);
+        auto l1_dst_noc_xy = device->virtual_core_from_logical_core(
+            dst_l1_buffer->allocator()->get_logical_core_from_bank_id(0), CoreType::WORKER);
 
         tt_metal::SetRuntimeArgs(
             program,

@@ -63,8 +63,10 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
     auto output_l1_buffer = CreateBuffer(l1_config);
     uint32_t output_l1_buffer_addr = output_l1_buffer->address();
 
-    auto input_buf_noc_xy = device->worker_core_from_logical_core(input_l1_buffer->logical_core_from_bank_id(0));
-    auto output_buf_noc_xy = device->worker_core_from_logical_core(output_l1_buffer->logical_core_from_bank_id(0));
+    auto input_buf_noc_xy =
+        device->worker_core_from_logical_core(input_l1_buffer->allocator()->get_logical_core_from_bank_id(0));
+    auto output_buf_noc_xy =
+        device->worker_core_from_logical_core(output_l1_buffer->allocator()->get_logical_core_from_bank_id(0));
     log_info("Input DRAM: {}", input_buf_noc_xy);
     log_info("Output DRAM: {}", output_buf_noc_xy);
 
