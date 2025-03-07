@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tt-metalium/host_api.hpp>
+
 namespace ttnn::operations::conv {
 namespace conv2d {
 
