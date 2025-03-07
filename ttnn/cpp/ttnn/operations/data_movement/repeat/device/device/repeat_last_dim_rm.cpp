@@ -33,9 +33,9 @@ void kernel_main() {
     // if it is an odd number equal to original_page_size_bytes * 16 + 128
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(3);
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(4);
-#define source_page_is_pow_2 (get_compile_time_arg_val(5) == 1)
+    constexpr bool source_page_is_pow_2 = (get_compile_time_arg_val(5) == 1);
     constexpr uint32_t source_page_pow_2 = get_compile_time_arg_val(6);
-#define dest_page_is_pow_2 (get_compile_time_arg_val(7) == 1)
+    constexpr bool dest_page_is_pow_2 = (get_compile_time_arg_val(7) == 1);
     constexpr uint32_t dest_page_pow_2 = get_compile_time_arg_val(8);
     constexpr uint32_t dest_page_size_bytes = original_page_size_bytes * num_repeats;
     // Number of times we must double the input page to make it write aligned
@@ -50,19 +50,11 @@ void kernel_main() {
     if (nop == 1) {
         return;
     }
-#if source_page_is_pow_2
-    // TODO: add CCL sharded native support
-    const InterleavedPow2AddrGen<tensor_is_dram> s = {
-        .bank_base_address = src_addr, .log_base_2_of_page_size = source_page_pow_2};
-#else
-    const InterleavedAddrGen<tensor_is_dram> s = {.bank_base_address = src_addr, .page_size = original_page_size_bytes};
-#endif
-#if dest_page_is_pow_2
-    const InterleavedPow2AddrGen<tensor_is_dram> d = {
-        .bank_base_address = dst_addr, .log_base_2_of_page_size = dest_page_pow_2};
-#else
-    const InterleavedAddrGen<tensor_is_dram> d = {.bank_base_address = dst_addr, .page_size = dest_page_size_bytes};
-#endif
+
+    const auto s = get_interleaved_addr_gen<tensor_is_dram, source_page_is_pow_2>(
+        src_addr, original_page_size_bytes, source_page_pow_2);
+    const auto d =
+        get_interleaved_addr_gen<tensor_is_dram, dest_page_is_pow_2>(dst_addr, dest_page_size_bytes, dest_page_pow_2);
 
     // Get scratchpads guaranteed to be allocated until the function terminates
     cb_reserve_back(cb_id_in0, 1);

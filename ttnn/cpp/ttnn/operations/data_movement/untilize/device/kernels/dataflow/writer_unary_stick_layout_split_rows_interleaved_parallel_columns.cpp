@@ -19,17 +19,11 @@ void kernel_main() {
     uint32_t offset_within_stick = get_arg_val<uint32_t>(6);
 
     constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
-#define stick_size_is_power_of_two get_compile_time_arg_val(1) == 1
-
-#if (stick_size_is_power_of_two)
+    constexpr bool stick_size_is_power_of_two = get_compile_time_arg_val(1) == 1;
     constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(2);
-    const InterleavedPow2AddrGen<dst_is_dram> s = {
-        .bank_base_address = dst_addr,
-        .log_base_2_of_page_size = log_base_2_of_page_size  // TODO(AP): refactor
-    };
-#else
-    const InterleavedAddrGen<dst_is_dram> s = {.bank_base_address = dst_addr, .page_size = stick_size};
-#endif
+
+    const auto s = get_interleaved_addr_gen<dst_is_dram, stick_size_is_power_of_two>(
+        dst_addr, stick_size, log_base_2_of_page_size);
 
     uint64_t base_dst_noc_addr[tile_height];
 
