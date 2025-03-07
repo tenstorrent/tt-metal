@@ -81,4 +81,33 @@ protected:
     std::shared_ptr<MeshDevice> mesh_device_;
 };
 
+class TTNNFixtureWithTraceEnabledDevice : public TTNNFixture {
+private:
+    int trace_region_size;
+    int l1_small_size;
+
+protected:
+    ttnn::IDevice* device_ = nullptr;
+
+    void SetUp() override {
+        TTNNFixture::SetUp();
+        device_ = &ttnn::open_device(0, l1_small_size, /* trace region size= */ trace_region_size);
+    }
+
+    void TearDown() override {
+        ttnn::close_device(*device_);
+        TTNNFixture::TearDown();
+    }
+
+    ttnn::IDevice& getDevice() { return *device_; }
+
+public:
+    static const ttnn::TensorSpec m_interleaved_1_3_1024_1024_tiled;
+
+    TTNNFixtureWithTraceEnabledDevice() : trace_region_size(200000), l1_small_size(DEFAULT_L1_SMALL_SIZE) {}
+
+    TTNNFixtureWithTraceEnabledDevice(int trace_region_size, int l1_small_size) :
+        trace_region_size(trace_region_size), l1_small_size(l1_small_size) {}
+};
+
 }  // namespace ttnn::distributed::test

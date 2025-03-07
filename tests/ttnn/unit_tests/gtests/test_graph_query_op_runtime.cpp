@@ -20,44 +20,21 @@
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
 
-namespace ttnn::operations::binary::test {
-
 // ============================================================================
 // Test data
 // ============================================================================
-
-class TTNNFixtureWithTraceEnabledDevice : public TTNNFixture {
-protected:
-    ttnn::IDevice* device_ = nullptr;
-
-    void SetUp() override {
-        TTNNFixture::SetUp();
-        device_ = &ttnn::open_device(0, DEFAULT_L1_SMALL_SIZE, /* trace region size= */ 200000);
-    }
-
-    void TearDown() override {
-        ttnn::close_device(*device_);
-        TTNNFixture::TearDown();
-    }
-
-    ttnn::IDevice& getDevice() { return *device_; }
-
-public:
-    static const ttnn::TensorSpec m_interleaved_1_3_1024_1024_tiled;
-};
-
-const ttnn::TensorSpec TTNNFixtureWithTraceEnabledDevice::m_interleaved_1_3_1024_1024_tiled = ttnn::TensorSpec(
-    ttnn::Shape({1, 3, 1024, 1024}),
-    tt::tt_metal::TensorLayout(
-        tt::tt_metal::DataType::BFLOAT16,
-        tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
-        ttnn::L1_MEMORY_CONFIG));
-
+const ttnn::TensorSpec ttnn::distributed::test::TTNNFixtureWithTraceEnabledDevice::m_interleaved_1_3_1024_1024_tiled =
+    ttnn::TensorSpec(
+        ttnn::Shape({1, 3, 1024, 1024}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::L1_MEMORY_CONFIG));
 // ============================================================================
 // Binary Eltwise Op tests
 // ============================================================================
-
-class BinaryOpTraceRuntime : public TTNNFixtureWithTraceEnabledDevice,
+namespace ttnn::operations::binary::test {
+class BinaryOpTraceRuntime : public distributed::test::TTNNFixtureWithTraceEnabledDevice,
                              public testing::WithParamInterface<std::tuple<ttnn::TensorSpec, ttnn::TensorSpec>> {};
 
 TEST_P(BinaryOpTraceRuntime, Add) {
