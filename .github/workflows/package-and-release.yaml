@@ -31,6 +31,32 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     with:
       tracy: true
+  test-wheels:
+    needs: build-artifact
+    uses: ./.github/workflows/_test-wheels-impl.yaml
+    with:
+      from-precompiled: true
+    secrets: inherit
+  single-card-demos:
+    needs: build-artifact
+    uses: ./.github/workflows/single-card-demo-tests-impl.yaml
+    secrets: inherit
+  t3000-demos:
+    needs: build-artifact
+    uses: ./.github/workflows/t3000-demo-tests-impl.yaml
+    secrets: inherit
+  t3000-model-perf:
+    needs: build-artifact
+    uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
+    secrets: inherit
+  tg-demos:
+    needs: build-artifact
+    uses: ./.github/workflows/tg-demo-tests-impl.yaml
+    secrets: inherit
+  tgg-model-perf:
+    needs: build-artifact
+    uses: ./.github/workflows/tgg-model-perf-tests-impl.yaml
+    secrets: inherit
   get-params:
     runs-on: ubuntu-latest
     outputs:
@@ -114,7 +140,7 @@ jobs:
           path: RELEASE_NOTES.txt
   # Candidate for breaking up
   create-and-upload-draft-release:
-    needs: [create-tag, create-release-notes]
+    needs: [create-tag, create-release-notes, build-artifact, test-wheels]
     # May accidentally create two releases without restricting to 1 job
     concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
@@ -127,6 +153,14 @@ jobs:
         uses: qmonnet/git-archive-all-action@791fb850881cf58b1d1fcc9b06c01940080bba0a
         with:
           output-files: tt-metalium.tar.gz
+      - name: Download eager 20.04 Python packages
+        uses: actions/download-artifact@v4
+        with:
+          name: eager-dist-ubuntu-20.04-any
+      - name: Download eager 22.04 Python packages
+        uses: actions/download-artifact@v4
+        with:
+          name: eager-dist-ubuntu-22.04-any
       - name: Create VERSION
         run: echo ${{ needs.create-tag.outputs.version }} > VERSION
       - name : Download release notes
@@ -137,6 +171,8 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: changelog
+      - name: Assert wheels exist
+        run: ls -arhl ttnn-*+*.whl
       - name: Release
         # A major release has not been tagged yet, so we need to do this to avoid
         # Node 16 deprecation warning message
@@ -153,6 +189,7 @@ jobs:
             README.md
             INSTALLING.md
             models/MODEL_UPDATES.md
+            ttnn-*+*.whl
             tt-metalium.tar.gz
           fail_on_unmatched_files: true
   create-docker-release-image:
@@ -167,3 +204,18 @@ jobs:
       base-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
       version: ${{ needs.create-tag.outputs.version }}
       is_major_version:  ${{ needs.get-params.outputs.is-release-candidate !='true' && needs.get-params.outputs.should-create-release == 'true' }}
+  release-docs:
+    needs: [
+      build-artifact,
+      get-params,
+      create-tag,
+      create-and-upload-draft-release
+    ]
+    if: ${{ needs.get-params.outputs.is-release-candidate !='true' && needs.get-params.outputs.should-create-release == 'true' }}
+    uses: ./.github/workflows/docs-latest-public.yaml
+    with:
+      version: ${{ needs.create-tag.outputs.version }}
+      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+    secrets: inherit
