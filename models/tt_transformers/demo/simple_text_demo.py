@@ -601,7 +601,6 @@ def test_demo_text(
                 # TODO Fix use case with temperature > 0
                 _, out_tok = sample_host(
                     logits,
-                    None,
                     temperature=sampling_params["temperature"],
                     top_p=sampling_params["top_p"],
                     on_host=True,
