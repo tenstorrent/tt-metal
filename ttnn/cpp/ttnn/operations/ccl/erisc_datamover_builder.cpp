@@ -595,10 +595,26 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
 
         IDevice*remote_device = device_pairs[i].second.value();
         auto const connected_sockets = local_device->get_ethernet_sockets(remote_device->id());
+        // re-order the connected_sockets based on virtual coords
+        uint32_t size = connected_sockets.size();
+        std::vector<CoreCoord> reordered_connected_sockets;
+        reordered_connected_sockets.reserve(size);
+        std::vector<std::pair<CoreCoord, CoreCoord>> ethernet_cores_logical_virtual;
+        ethernet_cores_logical_virtual.reserve(size);
+        for (auto core : connected_sockets) {
+            auto core_physical = local_device->virtual_core_from_logical_core(core, CoreType::ETH);
+            ethernet_cores_logical_virtual.emplace_back(core, core_physical);
+        }
+        std::sort(ethernet_cores_logical_virtual.begin(), ethernet_cores_logical_virtual.end(), [](auto& a, auto& b) {
+            return a.second.x < b.second.x;
+        });
+        for (auto& core_pair : ethernet_cores_logical_virtual) {
+            reordered_connected_sockets.push_back(core_pair.first);
+        }
 
         TT_FATAL(edm_builders.size() == 0, "EDM builders already exist for this device");
         edm_builders.clear();
-        for (const auto& core : local_device->get_ethernet_sockets(remote_device->id())) {
+        for (const auto& core : reordered_connected_sockets) {
             if (!local_device->is_active_ethernet_core(core, true)) {
                 continue;
             }
