@@ -6,7 +6,7 @@ import ttnn
 from models.experimental.mochi.tt.vae.decoder import Decoder as TtDecoder
 from genmo.mochi_preview.vae.models import Decoder as RefDecoder
 
-from models.experimental.mochi.common import (
+from models.experimental.mochi.tt.common import (
     compute_metrics,
     to_torch_tensor,
 )

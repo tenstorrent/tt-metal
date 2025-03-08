@@ -10,7 +10,7 @@ from models.experimental.mochi.tt.common import (
     compute_metrics,
     to_torch_tensor,
 )
-from models.experimental.mochi.vae.common import load_decoder_weights
+from models.experimental.mochi.tt.vae.common import load_decoder_weights
 
 # Common test configurations
 PCC_REQUIRED = 0.99
