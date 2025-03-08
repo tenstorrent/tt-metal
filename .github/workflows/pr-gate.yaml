@@ -76,21 +76,24 @@ jobs:
             const requiredJobs = ["pr-gate-build"];
             const optionalJobs = ["smoke-tests"];
 
-            // The 'needs' context provides job outcomes
+            // Debugging: print the entire needs context
             const needs = ${{ toJSON(needs) }};
             console.log("Needs context:", needs);
 
             // Check required jobs
             for (const job of requiredJobs) {
-              if (needs[job]?.outcome !== "success") {
+              const result = needs[job]?.result;
+              console.log(`Job: ${job}, Result: ${result}`);
+              if (result !== "success") {
                 core.setFailed(`Required job '${job}' did not succeed.`);
               }
             }
 
             // Check optional jobs (treat skipped as success)
             for (const job of optionalJobs) {
-              const outcome = needs[job]?.outcome || "success"; // Default to success if undefined
-              if (outcome === "failure") {
+              const result = needs[job]?.result || "success"; // Default to success if missing
+              console.log(`Job: ${job}, Result: ${result}`);
+              if (result === "failure") {
                 core.setFailed(`Optional job '${job}' failed.`);
               }
             }
