@@ -20,7 +20,7 @@ runs:
           const requiredJobs = "${{ inputs.required-jobs }}".split(",");
           const optionalJobs = "${{ inputs.optional-jobs }}".split(",");
 
-          const needs = ${{ toJSON(needs) }};
+          const needs = JSON.parse(process.env.NEEDS_CONTEXT);
 
           // Check required jobs
           for (const job of requiredJobs) {
