@@ -765,33 +765,33 @@ void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
     }
 }
 
-void populate_cq_static_args(const std::vector<IDevice*>& devices) {
+void populate_cq_static_args(IDevice* device) {
     TT_ASSERT(
         node_id_to_kernel.size() > 0,
         "Tried to populate static args on nodes without the nodes populated (need to run populate_fd_kernels()");
-    for (const auto& device : devices) {
-        // First pass, add device/program to all kernels for this device and generate static configs.
-        auto cq_program_ptr = std::make_unique<Program>();
-
-        for (auto node_and_kernel : node_id_to_kernel) {
-            if (node_and_kernel->GetDeviceId() == device->id()) {
-                node_and_kernel->AddDevice(device);
-                // TODO: Be careful downstream. Using get() on a smart pointer defeats the purpose of using them
-                // Memory could be changed at that location later.
-                node_and_kernel->AddProgram(cq_program_ptr.get());
-                node_and_kernel->GenerateStaticConfigs();
-            }
+    // First pass, add device/program to all kernels for this device and generate static configs.
+    auto cq_program_ptr = std::make_unique<Program>();
+    for (auto node_and_kernel : node_id_to_kernel) {
+        // GetDeviceId() uses Id from topology as IDevice* is not present yet
+        if (node_and_kernel->GetDeviceId() == device->id()) {
+            node_and_kernel->AddDevice(device);
+            // TODO: Be careful downstream. Using get() on a smart pointer defeats the purpose of using them
+            // Memory could be changed at that location later.
+            node_and_kernel->AddProgram(cq_program_ptr.get());
+            node_and_kernel->GenerateStaticConfigs();
         }
-
-        // Move program into the storage for create_and_compile_cq_program to be called later
-        command_queue_pgms[device->id()] = std::move(cq_program_ptr);
     }
+
+    // Move program into the storage for create_and_compile_cq_program to be called later
+    command_queue_pgms[device->id()] = std::move(cq_program_ptr);
 }
 
 std::unique_ptr<Program> create_and_compile_cq_program(IDevice* device) {
     TT_ASSERT(
         command_queue_pgms.contains(device->id()),
-        "Tried to create and compile CQ program without static args populated (need to run populate_cq_static_args())");
+        "Tried to create and compile CQ program on device {} without static args populated (need to run "
+        "populate_cq_static_args())",
+        device->id());
     std::unique_ptr<Program> cq_program = std::move(command_queue_pgms[device->id()]);
     // Third pass, populate dependent configs and create kernels for each node
     for (auto node_and_kernel : node_id_to_kernel) {

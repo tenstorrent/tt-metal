@@ -33,9 +33,9 @@ void populate_fd_kernels(const std::vector<IDevice*>& devices, uint32_t num_hw_c
 void populate_fd_kernels(const std::set<chip_id_t>& device_ids, uint32_t num_hw_cqs);
 void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes);
 
-// Populate the static arguments.
+// Populate the static arguments for a device.
 // Prerequisites: Must call populate_fd_kernels
-void populate_cq_static_args(const std::vector<IDevice*>& devices);
+void populate_cq_static_args(IDevice* device);
 
 // Fill out all settings for FD kernels on the given device, and add them to a Program and return it.
 // Prerequisites: Must call populate_cq_static_args
