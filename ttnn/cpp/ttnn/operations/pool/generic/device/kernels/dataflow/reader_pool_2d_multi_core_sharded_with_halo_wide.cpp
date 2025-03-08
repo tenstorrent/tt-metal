@@ -56,9 +56,9 @@ void kernel_main() {
     // DPRINT << "Wide reader kernel - bf16_scalar : " << bf16_scalar << ENDL();
     // DPRINT << "Wide reader kernel - bf16_scalar >> 16 : " << (bf16_scalar >> 16) << ENDL();
 
-    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(13);
+    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(14);
 
-    constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(16);
+    constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(17);
 
     // static_assert(0 == reader_nindices%2, "reader_nindices must be multiple of 2");
 
@@ -79,9 +79,8 @@ void kernel_main() {
         // uint32_t bf16_one_u16 = bf16_scalar >> 16;  // This scalar is bf16_one_u32 for maxpool.
         // fill 1 row w/ scalar
         // fill_with_val(get_write_ptr(in_scalar_cb_id), ROW_HW, bf16_one_u16);
-        fill_with_val(get_write_ptr(in_scalar_cb_id), ROW_HW, bf16_scalar >> 16);  // >> 16 is needed for maxpool?
-        // noc_async_read_barrier();
-        // noc_async_write_barrier();
+        // fill_with_val(get_write_ptr(in_scalar_cb_id), ROW_HW, bf16_scalar >> 16);  // >> 16 is needed for maxpool?
+        fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, bf16_scalar >> 16);  // >> 16 is needed for maxpool?
         cb_push_back(in_scalar_cb_id, 1);
     }
 
@@ -108,6 +107,7 @@ void kernel_main() {
                         in_l1_read_base_addr +
                         (stick_offset * in_nbytes_c + c_i * MAX_ELE_PER_REDUCTION);  // 2 bytes, max 8 tiles
                     noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, read_bytes);
+                    // noc_async_read_barrier();
                     out_l1_write_addr += MAX_ELE_PER_REDUCTION;
                 }
             }

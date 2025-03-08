@@ -160,14 +160,18 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     auto in_scalar_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, in_scalar_cb_config);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_scalar_cb_id, in_scalar_cb_pagesize, in_scalar_cb_npages);
 
-    // Conditionally only for avgpool, we instantiate and use this CB, which consists of 1s.
-    // uint32_t in_one_cb_id = tt::CBIndex::c_5; uint32_t in_one_cb_pagesize = tile_size(in_df);
-    // uint32_t in_one_cb_npages = 1;
-    // CircularBufferConfig in_one_cb_config =
-    //     CircularBufferConfig(in_one_cb_npages * in_one_cb_pagesize, {{in_one_cb_id, in_df}})
-    //         .set_page_size(in_one_cb_id, in_one_cb_pagesize);
-    // auto in_one_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, in_one_cb_config);
-    // log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_one_cb_id, in_one_cb_pagesize, in_one_cb_npages);
+    // Conditionally only for avgpool, we instantiate and use this CB, which consists of 1s. We don't want to divide
+    // twice for large kernel case.
+    if (pool_type == Pool2DType::AVG_POOL2D) {
+        uint32_t in_one_cb_id = tt::CBIndex::c_5;
+        uint32_t in_one_cb_pagesize = tile_size(in_df);
+        uint32_t in_one_cb_npages = 1;
+        CircularBufferConfig in_one_cb_config =
+            CircularBufferConfig(in_one_cb_npages * in_one_cb_pagesize, {{in_one_cb_id, in_df}})
+                .set_page_size(in_one_cb_id, in_one_cb_pagesize);
+        auto in_one_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, in_one_cb_config);
+        log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_one_cb_id, in_one_cb_pagesize, in_one_cb_npages);
+    }
 
     // incoming data is the input cb instead of raw l1/dram addr
     // this input shard has halo and padding inserted.
@@ -324,10 +328,16 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
      */
     // TODO(jongbinlimTT): 1.0 for max pool, 1.0 / kernel_size for avg pool.
     uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_size_hw) << 16;  // << 16 is needed for maxpool.
+    float one = 1.;
+    uint32_t bf16_one_u32 = *reinterpret_cast<uint32_t*>(&one);
     // std::cout << "bf16_scalar: " << bf16_scalar << std::endl;
     // std::cout << "bf16_scalar >> 16: " << (bf16_scalar >> 16) << std::endl;
     // std::cout << "bf16_scalar & 0xFFFF: " << (bf16_scalar & 0xFFFF) << std::endl;
     // std::cout << "bf16_scalar & 0xFFFF0000: " << (bf16_scalar & 0xFFFF0000) << std::endl;
+    // std::cout << "bf16_one_u32: " << bf16_one_u32 << std::endl;
+    // std::cout << "bf16_one_u32 >> 16: " << (bf16_one_u32 >> 16) << std::endl;
+    // std::cout << "bf16_one_u32 & 0xFFFF: " << (bf16_one_u32 & 0xFFFF) << std::endl;
+    // std::cout << "bf16_one_u32 & 0xFFFF0000: " << (bf16_one_u32 & 0xFFFF0000) << std::endl;
     uint32_t bf16_init_value =
         get_bf16_pool_init_value(pool_type);  // TODO(jongbinlimTT): -inf for max pool, 0 for avg pool.
     // std::cout << "bf16_init_value: " << bf16_init_value << std::endl;
@@ -342,9 +352,10 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_cb_page_padded * in_cb_npages / tile_w,
         input_shape[3] / num_shards_c,
         nblocks,
-        split_reader,     // enable split reader
-        0,                // split reader id
-        bf16_scalar,      // bf16_one_u32,     // bf16_scalar,
+        split_reader,  // enable split reader
+        0,             // split reader id
+        bf16_scalar,   // bf16_one_u32,     // bf16_scalar,
+        bf16_one_u32,
         bf16_init_value,  //
         in_nblocks_c,
         in_cb_sz,
@@ -361,9 +372,10 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_cb_page_padded * in_cb_npages / tile_w,
         input_shape[3] / num_shards_c,
         nblocks,
-        split_reader,     // enable split reader
-        1,                // split reader id
-        bf16_scalar,      // bf16_one_u32,     // bf16_scalar,
+        split_reader,  // enable split reader
+        1,             // split reader id
+        bf16_scalar,   // bf16_one_u32,     // bf16_scalar,
+        bf16_one_u32,
         bf16_init_value,  //
         in_nblocks_c,
         in_cb_sz,

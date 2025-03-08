@@ -105,8 +105,7 @@ void MAIN {
 
     constexpr uint32_t in_cb_id = tt::CBIndex::c_0;  // and tt::CBIndex::c_1 for split reader
     constexpr uint32_t in_scalar_cb_id = tt::CBIndex::c_4;
-    // constexpr uint32_t in_one_cb_id = tt::CBIndex::c_5; // TODO(jongbinlimTT): Need to have this CB is filled with
-    // value of 1 to avoid double division.
+    constexpr uint32_t in_one_cb_id = tt::CBIndex::c_5;  // value of 1 to avoid double division.
 
     constexpr uint32_t in_tiled_cb_id = tt::CBIndex::c_24;
     constexpr uint32_t out_cb_id = tt::CBIndex::c_16;
@@ -158,7 +157,7 @@ void MAIN {
             pack_untilize_uninit(out_cb_id);
             pack_untilize_dst_init_short<max_tiles_per_iter>(out_cb_id, num_out_rows, num_faces_in_output_tile);
             reduce_h_fused<max_tiles_per_iter, is_partial_tile, max_rows_for_reduction>(
-                interm_cb_id, in_scalar_cb_id, out_cb_id);
+                interm_cb_id, in_one_cb_id, out_cb_id);
         }
 
         // perform the intermediate reduction over chunk N (across the whole chunk even if the last chunk is partial)
@@ -179,7 +178,7 @@ void MAIN {
         pack_untilize_uninit(out_cb_id);
         pack_untilize_dst_init_short<partial_iter_output_tiles>(out_cb_id, num_out_rows, num_faces_in_output_tile);
         reduce_h_fused<partial_iter_output_tiles, is_partial_tile, max_rows_for_reduction>(
-            interm_cb_id, in_scalar_cb_id, out_cb_id);
+            interm_cb_id, in_one_cb_id, out_cb_id);
     }
     cb_pop_front(in_scalar_cb_id, 1);
 }

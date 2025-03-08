@@ -54,17 +54,19 @@ void kernel_main() {
     // compile time args
     // BF16 value packed in UINT32. For maxpool, value is 1.
     constexpr uint32_t bf16_scalar = get_compile_time_arg_val(11);  // This scalar is bf16_one_u32 for maxpool.
-    constexpr uint32_t bf16_init_value = get_compile_time_arg_val(12);
+    constexpr uint32_t bf16_one_u32 = get_compile_time_arg_val(12);  // This scalar is bf16_one_u32 for maxpool.
+    constexpr uint32_t bf16_init_value = get_compile_time_arg_val(13);
 
     DPRINT << "Large reader kernel - bf16_scalar : " << bf16_scalar << ENDL();
     DPRINT << "Large reader kernel - bf16_scalar >> 16 : " << (bf16_scalar >> 16) << ENDL();
     DPRINT << "Large reader kernel - bf16_init_value : " << bf16_init_value << ENDL();
 
-    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(13);
-    constexpr uint32_t in_cb_sz = get_compile_time_arg_val(14);
-    constexpr uint32_t max_rows_for_reduction = get_compile_time_arg_val(15);
-    constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(16);
+    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(14);
+    constexpr uint32_t in_cb_sz = get_compile_time_arg_val(15);
+    constexpr uint32_t max_rows_for_reduction = get_compile_time_arg_val(16);
+    constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(17);
 
+    constexpr uint32_t TILE_WIDTH = 32;
     constexpr uint32_t TILE_SIZE = 32 * 32;
     constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
     constexpr uint32_t MAX_ELE_PER_REDUCTION = 512;  // TILE_WIDTH * 8 * numbytes
@@ -74,6 +76,7 @@ void kernel_main() {
     constexpr uint32_t in_shard_cb_id = tt::CBIndex::c_2;  // local input shard
     constexpr uint32_t in_reader_indices_cb_id = tt::CBIndex::c_3;
     constexpr uint32_t in_scalar_cb_id = tt::CBIndex::c_4;
+    constexpr uint32_t in_one_cb_id = tt::CBIndex::c_5;
     constexpr uint32_t interm_reduction_cb_id = tt::CBIndex::c_25;
 
     // minus infinity for bfp16 // TODO(jongbinlimTT): Need to check if this is necessary.
@@ -82,7 +85,7 @@ void kernel_main() {
     if (reader_id == 0) {
         cb_reserve_back(in_scalar_cb_id, 1);
 
-        // uint32_t bf16_one_u16 = bf16_scalar >> 16;  // This scalar is bf16_one_u32 for maxpool.
+        uint32_t bf16_one_u16 = bf16_one_u32 >> 16;  // This scalar is bf16_one_u32 for maxpool.
         // needed for maxpool.
         // // fill interm buffer with minus_inf
         // fill_with_val(get_write_ptr(interm_reduction_cb_id), in_cb_sz, minus_inf);
@@ -90,7 +93,8 @@ void kernel_main() {
         fill_with_val(get_write_ptr(interm_reduction_cb_id), in_cb_sz, bf16_init_value);
         // fill 1 row w/ scalar
         // fill_with_val(get_write_ptr(in_scalar_cb_id), ROW_HW, bf16_one_u16);
-        fill_with_val(get_write_ptr(in_scalar_cb_id), ROW_HW, bf16_scalar >> 16);  // >> 16 is needed for maxpool.
+        fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, bf16_scalar >> 16);  // >> 16 is needed for maxpool.
+        fill_with_val(get_write_ptr(in_one_cb_id), TILE_WIDTH, bf16_one_u16);
         cb_push_back(in_scalar_cb_id, 1);
     }
 

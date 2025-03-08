@@ -55,9 +55,9 @@ void kernel_main() {
     DPRINT << "Normal reader kernel - bf16_scalar : " << bf16_scalar << ENDL();
     DPRINT << "Normal reader kernel - bf16_scalar >> 16 : " << (bf16_scalar >> 16) << ENDL();
 
-    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(13);
+    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(14);
 
-    constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(16);
+    constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(17);
 
     constexpr uint32_t TILE_WIDTH = 32;
 
