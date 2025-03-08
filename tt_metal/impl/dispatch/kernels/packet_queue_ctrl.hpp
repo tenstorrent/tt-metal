@@ -5,6 +5,8 @@
 #pragma once
 #include <string_view>
 
+namespace tt::packet_queue {
+
 constexpr uint32_t PACKET_WORD_SIZE_BYTES = 16;
 constexpr uint32_t MAX_SWITCH_FAN_IN = 4;
 constexpr uint32_t MAX_SWITCH_FAN_OUT = 4;
@@ -102,3 +104,5 @@ inline uint64_t packet_switch_dest_pack(uint32_t* dest_output_map_array, uint32_
     }
     return result;
 }
+
+} // namespace tt::packet_queue

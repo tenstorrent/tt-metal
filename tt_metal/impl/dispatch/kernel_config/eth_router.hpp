@@ -14,31 +14,39 @@ typedef struct eth_router_static_config {
     std::optional<uint32_t> kernel_status_buf_size_bytes;
     std::optional<uint32_t> timeout_cycles;
 
-    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> output_depacketize_log_page_size;  // [26:29]
-    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> output_depacketize_local_sem;      // [26:29]
-    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> output_depacketize_remove_header;  // [26:29]
-    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> input_packetize;                    // [30:33]
-    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> input_packetize_log_page_size;      // [30:33]
-    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> input_packetize_local_sem;          // [30:33]
+    std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_OUT>
+        output_depacketize_log_page_size;                                                                    // [26:29]
+    std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_OUT> output_depacketize_local_sem;  // [26:29]
+    std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_OUT>
+        output_depacketize_remove_header;                                                                    // [26:29]
+    std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_IN> input_packetize;                // [30:33]
+    std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_IN> input_packetize_log_page_size;  // [30:33]
+    std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_IN> input_packetize_local_sem;      // [30:33]
 } eth_router_static_config_t;
 
 typedef struct eth_router_dependent_config {
-    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> remote_tx_x;                       // [4:7], dependent
-    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> remote_tx_y;                       // [4:7], dependent
-    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> remote_tx_queue_id;                // [4:7], dependent
-    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> remote_tx_network_type;            // [4:7], dependent
-    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> remote_tx_queue_start_addr_words;  // [8:2:14], dependent
-    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> remote_tx_queue_size_words;        // [9:2:15], dependent
-    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> remote_rx_x;                        // [16:19], dependent
-    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> remote_rx_y;                        // [16:19], dependent
-    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> remote_rx_queue_id;                 // [16:19], dependent
-    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> remote_rx_network_type;             // [17:19], dependent
+    std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_OUT> remote_tx_x;         // [4:7], dependent
+    std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_OUT> remote_tx_y;         // [4:7], dependent
+    std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_OUT> remote_tx_queue_id;  // [4:7], dependent
+    std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_OUT>
+        remote_tx_network_type;  // [4:7], dependent
+    std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_OUT>
+        remote_tx_queue_start_addr_words;  // [8:2:14], dependent
+    std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_OUT>
+        remote_tx_queue_size_words;                                                               // [9:2:15], dependent
+    std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_IN> remote_rx_x;         // [16:19], dependent
+    std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_IN> remote_rx_y;         // [16:19], dependent
+    std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_IN> remote_rx_queue_id;  // [16:19], dependent
+    std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_IN>
+        remote_rx_network_type;  // [17:19], dependent
 
-    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> output_depacketize;                 // 25, dependent
-    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> output_depacketize_downstream_sem;  // [26:29], dependent
-    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> input_packetize_upstream_sem;        // [30:33], dependent
-    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> input_packetize_src_endpoint;        // Dependent
-    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> input_packetize_dst_endpoint;        // Dependent
+    std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_OUT> output_depacketize;  // 25, dependent
+    std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_OUT>
+        output_depacketize_downstream_sem;  // [26:29], dependent
+    std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_IN>
+        input_packetize_upstream_sem;  // [30:33], dependent
+    std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_IN> input_packetize_src_endpoint;  // Dependent
+    std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_IN> input_packetize_dst_endpoint;  // Dependent
 } eth_router_dependent_config_t;
 
 class EthRouterKernel : public FDKernel {

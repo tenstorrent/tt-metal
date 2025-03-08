@@ -11,10 +11,10 @@
 #include "routing_test_common.hpp"
 #include "llrt.hpp"
 
-using std::vector;
-using namespace tt;
-
 int main(int argc, char **argv) {
+    using std::vector;
+    using namespace tt;
+    using namespace tt::packet_queue;
 
     constexpr uint32_t default_prng_seed = 0x100;
     constexpr uint32_t default_data_kb_per_tx = 64*1024;
