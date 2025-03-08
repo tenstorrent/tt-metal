@@ -20,7 +20,7 @@ struct ExecuteGroupNorm {
         const std::optional<ttnn::Tensor>& weight = std::nullopt,
         const std::optional<ttnn::Tensor>& bias = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<GroupNormProgramConfig>& program_config = std::nullopt,
+        const std::optional<const GroupNormProgramConfig>& program_config = std::nullopt,
         const std::optional<ttnn::DataType> dtype = std::nullopt,
         std::optional<CoreGrid> core_grid = std::nullopt,
         std::optional<bool> inplace = std::nullopt,

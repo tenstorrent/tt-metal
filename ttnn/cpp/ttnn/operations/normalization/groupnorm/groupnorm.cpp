@@ -17,7 +17,7 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
     const std::optional<ttnn::Tensor>& weight,
     const std::optional<ttnn::Tensor>& bias,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<GroupNormProgramConfig>& program_config,
+    const std::optional<const GroupNormProgramConfig>& program_config,
     const std::optional<ttnn::DataType> dtype,
     std::optional<CoreGrid> core_grid,
     std::optional<bool> inplace,

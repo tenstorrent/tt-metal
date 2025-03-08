@@ -13,7 +13,7 @@
 namespace ttnn::operations::normalization::detail {
 namespace py = pybind11;
 
-void bind_normalization_group_norm_program_config(py::module& module) {
+void bind_normalization_groupnorm_program_config(py::module& module) {
     py::class_<GroupNormProgramConfig>(module, "GroupNormProgramConfig").def(py::init<>());
 
     py::class_<GroupNormMultiCoreProgramConfig>(module, "GroupNormMultiCoreProgramConfig")
@@ -42,7 +42,7 @@ void bind_normalization_group_norm_program_config(py::module& module) {
             "__repr__", [](const GroupNormShardedMultiCoreProgramConfig& config) { return fmt::format("{}", config); });
 }
 
-void bind_normalization_group_norm_operation(pybind11::module& module) {
+void bind_normalization_groupnorm_operation(pybind11::module& module) {
     ttnn::bind_registered_operation(
         module,
         ttnn::group_norm,
@@ -81,14 +81,15 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
             py::arg("weight") = std::nullopt,
             py::arg("bias") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
+            py::arg("program_config") = std::nullopt,
             py::arg("dtype") = std::nullopt,
             py::arg("core_grid") = std::nullopt,
             py::arg("inplace") = true,
             py::arg("output_layout") = std::nullopt});
 }
 void bind_normalization_groupnorm(py::module& module) {
-    bind_normalization_group_norm_program_config(module);
-    bind_normalization_group_norm_operation(module);
+    bind_normalization_groupnorm_program_config(module);
+    bind_normalization_groupnorm_operation(module);
 }
 
 }  // namespace ttnn::operations::normalization::detail
