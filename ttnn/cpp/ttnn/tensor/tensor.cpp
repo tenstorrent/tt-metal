@@ -833,7 +833,11 @@ Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshD
     TT_FATAL(
         tt::tt_metal::detail::InMainThread(), "Allocation of a tensor on mesh must be called from the main thread");
     auto mesh_buffer = tensor_impl::allocate_mesh_buffer_on_device(mesh_device, tensor_spec);
-    DeviceStorage device_storage(std::move(mesh_buffer));
+    std::map<distributed::MeshCoordinate, TensorSpec> specs;
+    for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
+        specs.emplace(coord, tensor_spec);
+    }
+    DeviceStorage device_storage(std::move(mesh_buffer), specs, ReplicateTensor());
     return Tensor(std::move(device_storage), tensor_spec);
 }
 

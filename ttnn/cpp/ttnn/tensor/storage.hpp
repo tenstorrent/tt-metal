@@ -51,7 +51,10 @@ struct DeviceStorage {
 
     DeviceStorage() = default;
     DeviceStorage(std::shared_ptr<Buffer> buffer_);
-    DeviceStorage(std::shared_ptr<distributed::MeshBuffer> mesh_buffer_);
+    DeviceStorage(
+        std::shared_ptr<distributed::MeshBuffer> mesh_buffer_,
+        std::map<distributed::MeshCoordinate, TensorSpec> specs_,
+        DistributedTensorConfig strategy_);
 
     MemoryConfig memory_config() const;
     void insert_buffer(const std::shared_ptr<Buffer>& buffer_);
