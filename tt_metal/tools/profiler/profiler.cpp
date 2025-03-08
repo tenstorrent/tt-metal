@@ -36,9 +36,8 @@ void DeviceProfiler::readRiscProfilerResults(
     std::ofstream& log_file_ofs,
     nlohmann::ordered_json& noc_trace_json_log) {
     ZoneScoped;
-    auto device_id = device->id();
+    chip_id_t device_id = device->id();
 
-    my_device_id = device_id;
     HalProgrammableCoreType CoreType;
     int riscCount;
 
@@ -268,7 +267,7 @@ void DeviceProfiler::logPacketData(
     uint32_t run_id,
     uint32_t run_host_id,
     const std::string& opname,
-    int device_id,
+    chip_id_t device_id,
     CoreCoord core,
     int core_flat,
     int risc_num,
@@ -356,7 +355,7 @@ void DeviceProfiler::logPacketData(
 
 void DeviceProfiler::logPacketDataToCSV(
     std::ofstream& log_file_ofs,
-    int device_id,
+    chip_id_t device_id,
     int core_x,
     int core_y,
     const std::string_view risc_name,
@@ -390,7 +389,7 @@ void DeviceProfiler::logPacketDataToCSV(
 
 void DeviceProfiler::logNocTracePacketDataToJson(
     nlohmann::ordered_json& noc_trace_json_log,
-    int device_id,
+    chip_id_t device_id,
     int core_x,
     int core_y,
     const std::string_view risc_name,
@@ -474,7 +473,7 @@ void DeviceProfiler::emitCSVHeader(
 }
 
 void DeviceProfiler::serializeJsonNocTraces(
-    const nlohmann::ordered_json& noc_trace_json_log, const std::filesystem::path& output_dir, int device_id) {
+    const nlohmann::ordered_json& noc_trace_json_log, const std::filesystem::path& output_dir, chip_id_t device_id) {
     // create output directory if it does not exist
     std::filesystem::create_directories(output_dir);
     if (!std::filesystem::is_directory(output_dir)) {
@@ -545,7 +544,7 @@ void DeviceProfiler::serializeJsonNocTraces(
     }
 }
 
-CoreCoord DeviceProfiler::getPhysicalAddressFromVirtual(int device_id, const CoreCoord& c) const {
+CoreCoord DeviceProfiler::getPhysicalAddressFromVirtual(chip_id_t device_id, const CoreCoord& c) const {
     if (c.x >= hal.get_virtual_worker_start_x() && c.y >= hal.get_virtual_worker_start_y()) {
         auto logical_x = c.x - hal.get_virtual_worker_start_x();
         auto logical_y = c.y - hal.get_virtual_worker_start_y();
@@ -713,7 +712,7 @@ void DeviceProfiler::pushTracyDeviceResults() {
     static uint64_t cpuTime = 0;
 
     for (auto& device_core : device_cores) {
-        int device_id = device_core.first;
+        chip_id_t device_id = device_core.first;
         CoreCoord worker_core = device_core.second;
 
         if (device_core_sync_info.find(worker_core) != device_core_sync_info.end()) {
@@ -730,7 +729,7 @@ void DeviceProfiler::pushTracyDeviceResults() {
     }
 
     for (auto& device_core : device_cores) {
-        int device_id = device_core.first;
+        chip_id_t device_id = device_core.first;
         CoreCoord worker_core = device_core.second;
 
         if (delay == 0.0 || frequency == 0.0) {

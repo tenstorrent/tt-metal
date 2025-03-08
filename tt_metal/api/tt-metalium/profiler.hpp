@@ -66,13 +66,13 @@ private:
 
     // serialize all noc trace data into per-op json trace files
     void serializeJsonNocTraces(
-        const nlohmann::ordered_json& noc_trace_json_log, const std::filesystem::path& output_dir, int device_id);
+        const nlohmann::ordered_json& noc_trace_json_log, const std::filesystem::path& output_dir, chip_id_t device_id);
 
     void emitCSVHeader(
         std::ofstream& log_file_ofs, const tt::ARCH& device_architecture, int device_core_frequency) const;
 
     // translates potentially-virtual coordinates recorded on Device into physical coordinates
-    CoreCoord getPhysicalAddressFromVirtual(int device_id, const CoreCoord& c) const;
+    CoreCoord getPhysicalAddressFromVirtual(chip_id_t device_id, const CoreCoord& c) const;
 
     // Dumping profile result to file
     void logPacketData(
@@ -81,7 +81,7 @@ private:
         uint32_t runID,
         uint32_t runHostID,
         const std::string& opname,
-        int device_id,
+        chip_id_t device_id,
         CoreCoord core,
         int core_flat,
         int risc_num,
@@ -92,7 +92,7 @@ private:
     // logs packet data to CSV file
     void logPacketDataToCSV(
         std::ofstream& log_file_ofs,
-        int device_id,
+        chip_id_t device_id,
         int core_x,
         int core_y,
         const std::string_view risc_name,
@@ -110,7 +110,7 @@ private:
     // dump noc trace related profile data to json file
     void logNocTracePacketDataToJson(
         nlohmann::ordered_json& noc_trace_json_log,
-        int device_id,
+        chip_id_t device_id,
         int core_x,
         int core_y,
         const std::string_view risc_name,
@@ -168,8 +168,6 @@ public:
 
     // frequency scale
     double freqScale = 1.0;
-
-    uint32_t my_device_id = 0;
 
     // Freshen device logs
     void freshDeviceLog();
