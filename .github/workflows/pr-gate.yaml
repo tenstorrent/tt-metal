@@ -44,7 +44,6 @@ jobs:
     #   version: "22.04"
 
   smoke-tests:
-    if: false
     needs: pr-gate-build
     strategy:
       fail-fast: false
