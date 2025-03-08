@@ -158,7 +158,6 @@ public:
     uint32_t prefetch_q_rd_ptr_size_{0};    // configured with alignment
     uint32_t prefetch_q_pcie_rd_ptr_size_;  // configured with alignment
     uint32_t dispatch_s_sync_sem_;          // configured with alignment
-    uint32_t dispatch_message_;             // configured with alignment
     uint32_t other_ptrs_size;               // configured with alignment
 
     // cq_prefetch
@@ -185,9 +184,9 @@ public:
     bool operator==(const DispatchSettings& other) const {
         return num_hw_cqs_ == other.num_hw_cqs_ && prefetch_q_rd_ptr_size_ == other.prefetch_q_rd_ptr_size_ &&
                prefetch_q_pcie_rd_ptr_size_ == other.prefetch_q_pcie_rd_ptr_size_ &&
-               dispatch_s_sync_sem_ == other.dispatch_s_sync_sem_ && dispatch_message_ == other.dispatch_message_ &&
-               other_ptrs_size == other.other_ptrs_size && prefetch_q_entries_ == other.prefetch_q_entries_ &&
-               prefetch_q_size_ == other.prefetch_q_size_ && prefetch_max_cmd_size_ == other.prefetch_max_cmd_size_ &&
+               dispatch_s_sync_sem_ == other.dispatch_s_sync_sem_ && other_ptrs_size == other.other_ptrs_size &&
+               prefetch_q_entries_ == other.prefetch_q_entries_ && prefetch_q_size_ == other.prefetch_q_size_ &&
+               prefetch_max_cmd_size_ == other.prefetch_max_cmd_size_ &&
                prefetch_cmddat_q_size_ == other.prefetch_cmddat_q_size_ &&
                prefetch_scratch_db_size_ == other.prefetch_scratch_db_size_ &&
                prefetch_d_buffer_size_ == other.prefetch_d_buffer_size_ &&
@@ -275,7 +274,6 @@ public:
         this->prefetch_q_rd_ptr_size_ = sizeof(prefetch_q_ptr_type);
         this->prefetch_q_pcie_rd_ptr_size_ = l1_alignment - sizeof(prefetch_q_ptr_type);
         this->dispatch_s_sync_sem_ = DISPATCH_MESSAGE_ENTRIES * l1_alignment;
-        this->dispatch_message_ = DISPATCH_MESSAGE_ENTRIES * l1_alignment;
         this->other_ptrs_size = l1_alignment;
 
         return *this;

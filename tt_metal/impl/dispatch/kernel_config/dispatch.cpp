@@ -59,6 +59,7 @@ void DispatchKernel::GenerateStaticConfigs() {
                 ? hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG)
                 : 0;
         static_config_.distributed_dispatcher = DispatchQueryManager::instance().distributed_dispatcher();
+        static_config_.first_stream_used = my_dispatch_constants.get_dispatch_stream_index(0);
 
         static_config_.host_completion_q_wr_ptr =
             my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
@@ -106,6 +107,7 @@ void DispatchKernel::GenerateStaticConfigs() {
         static_config_.mcast_go_signal_addr = 0;                // Unused
         static_config_.unicast_go_signal_addr = 0;              // Unused
         static_config_.distributed_dispatcher = 0;              // Unused
+        static_config_.first_stream_used = 0;                   // Unused
 
         static_config_.host_completion_q_wr_ptr =
             my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
@@ -155,6 +157,7 @@ void DispatchKernel::GenerateStaticConfigs() {
                 ? hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG)
                 : 0;
         static_config_.distributed_dispatcher = DispatchQueryManager::instance().distributed_dispatcher();
+        static_config_.first_stream_used = my_dispatch_constants.get_dispatch_stream_index(0);
 
         static_config_.host_completion_q_wr_ptr =
             my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
@@ -323,10 +326,12 @@ void DispatchKernel::CreateKernel() {
         static_config_.dev_completion_q_wr_ptr.value(),
         static_config_.dev_completion_q_rd_ptr.value(),
 
+        static_config_.first_stream_used.value(),
+
         static_config_.is_d_variant.value(),
         static_config_.is_h_variant.value(),
     };
-    TT_ASSERT(compile_args.size() == 31);
+    TT_ASSERT(compile_args.size() == 32);
     auto my_virtual_core = device_->virtual_core_from_logical_core(logical_core_, GetCoreType());
     auto upstream_virtual_core =
         device_->virtual_core_from_logical_core(dependent_config_.upstream_logical_core.value(), GetCoreType());
@@ -363,15 +368,9 @@ void DispatchKernel::ConfigureCore() {
     auto& my_dispatch_constants = DispatchMemMap::get(GetCoreType());
     uint32_t dispatch_s_sync_sem_base_addr =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM);
-    uint32_t dispatch_message_base_addr =
-        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
     for (uint32_t i = 0; i < DispatchSettings::DISPATCH_MESSAGE_ENTRIES; i++) {
-        uint32_t dispatch_s_sync_sem_addr =
-            dispatch_s_sync_sem_base_addr + my_dispatch_constants.get_dispatch_message_offset(i);
-        uint32_t dispatch_message_addr =
-            dispatch_message_base_addr + my_dispatch_constants.get_dispatch_message_offset(i);
+        uint32_t dispatch_s_sync_sem_addr = dispatch_s_sync_sem_base_addr + my_dispatch_constants.get_sync_offset(i);
         detail::WriteToDeviceL1(device_, logical_core_, dispatch_s_sync_sem_addr, zero, GetCoreType());
-        detail::WriteToDeviceL1(device_, logical_core_, dispatch_message_addr, zero, GetCoreType());
     }
 
     // For DISPATCH_D, need to clear completion q events

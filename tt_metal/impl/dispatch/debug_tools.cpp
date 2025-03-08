@@ -161,14 +161,11 @@ uint32_t dump_dispatch_cmd(CQDispatchCmd* cmd, uint32_t cmd_addr, std::ofstream&
                 break;
             case CQ_DISPATCH_CMD_WAIT:
                 cq_file << fmt::format(
-                    " (barrier={}, notify_prefetch={}, clear_count=(), wait={}, addr={:#010x}, "
-                    "count = {})",
-                    val(cmd->wait.barrier),
-                    val(cmd->wait.notify_prefetch),
-                    val(cmd->wait.clear_count),
-                    val(cmd->wait.wait),
+                    " (flags={}, count={}, addr={:#010x}, stream={})",
+                    val(cmd->wait.flags),
+                    val(cmd->wait.count),
                     val(cmd->wait.addr),
-                    val(cmd->wait.count));
+                    val(cmd->wait.stream));
                 break;
             case CQ_DISPATCH_CMD_DEBUG:
                 cq_file << fmt::format(

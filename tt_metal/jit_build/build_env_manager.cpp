@@ -115,8 +115,8 @@ uint32_t compute_build_key(chip_id_t device_id, uint8_t num_hw_cqs) {
 JitBuildStateSet create_build_state(JitBuildEnv& build_env, chip_id_t device_id, uint8_t num_hw_cqs, bool is_fw) {
     // Get the dispatch message address for this device
     CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device_id);
-    uint32_t dispatch_message_addr = DispatchMemMap::get(dispatch_core_type, num_hw_cqs)
-                                         .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
+    uint32_t dispatch_message_addr =
+        DispatchMemMap::get(dispatch_core_type, num_hw_cqs).get_dispatch_message_addr_start();
 
     // Prepare the container for build states
     uint32_t num_build_states = hal.get_num_risc_processors();

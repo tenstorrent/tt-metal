@@ -172,21 +172,10 @@ int main() {
             // Notify dispatcher core that it has completed
             if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
                 launch_msg_address->kernel_config.enables = 0;
-                uint64_t dispatch_addr = NOC_XY_ADDR(
-                    NOC_X(mailboxes->go_message.master_x),
-                    NOC_Y(mailboxes->go_message.master_y),
-                    DISPATCH_MESSAGE_ADDR + mailboxes->go_message.dispatch_message_offset);
+                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);
                 DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
-                noc_fast_atomic_increment(
-                    noc_index,
-                    NCRISC_AT_CMD_BUF,
-                    dispatch_addr,
-                    NOC_UNICAST_WRITE_VC,
-                    1,
-                    31 /*wrap*/,
-                    false /*linked*/,
-                    true /*posted*/);
+                notify_dispatch_core_done(dispatch_addr, noc_index);
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
             }
         }

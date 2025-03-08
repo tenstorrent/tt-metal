@@ -414,10 +414,6 @@ void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDevi
     // Initialize stall command sequences for this program.
     auto dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
     auto dispatch_core_type = dispatch_core_config.get_core_type();
-    uint32_t dispatch_message_addr =
-        DispatchMemMap::get(dispatch_core_type)
-            .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE) +
-        DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(*sub_device_id);
     uint32_t uncached_stall_cmd_sizeB = hal.get_alignment(HalMemType::HOST) + hal.get_alignment(HalMemType::HOST);
     uint32_t cached_stall_cmd_seqB = hal.get_alignment(HalMemType::HOST);
 
@@ -425,12 +421,18 @@ void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDevi
         HostMemDeviceCommand(uncached_stall_cmd_sizeB);
     // Empty wait command initialized here. Will get updated when program is enqueued.
     program_command_sequence.stall_command_sequences[UncachedStallSequenceIdx].add_dispatch_wait_with_prefetch_stall(
-        true, dispatch_message_addr, 0);
+        CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER | CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
+        0,
+        DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(*sub_device_id),
+        0);
     // Empty wait command initialized here. Will get updated when program is enqueued.
     program_command_sequence.stall_command_sequences[CachedStallSequenceIdx] =
         HostMemDeviceCommand(cached_stall_cmd_seqB);
     program_command_sequence.stall_command_sequences[CachedStallSequenceIdx].add_dispatch_wait(
-        false, dispatch_message_addr, 0);
+        CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
+        0,
+        DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(*sub_device_id),
+        0);
 }
 
 template <typename PackedSubCmd>
@@ -1393,10 +1395,6 @@ void assemble_device_commands(
 
     DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
     auto sub_device_index = *sub_device_id;
-    uint32_t dispatch_message_addr =
-        DispatchMemMap::get(dispatch_core_type)
-            .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE) +
-        DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(sub_device_index);
     if (tt_metal::DispatchQueryManager::instance().dispatch_s_enabled()) {
         // dispatch_d signals dispatch_s to send the go signal, use a barrier if there are cores active
         uint16_t index_bitmask = 0;
@@ -1407,7 +1405,7 @@ void assemble_device_commands(
     } else {
         // Wait Noc Write Barrier, wait for binaries/configs and launch_msg to be written to worker cores
         if (program_transfer_info.num_active_cores > 0) {
-            device_command_sequence.add_dispatch_wait(true, dispatch_message_addr, 0, 0, false, false);
+            device_command_sequence.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
         }
     }
     go_msg_t run_program_go_signal;
@@ -1416,13 +1414,13 @@ void assemble_device_commands(
     run_program_go_signal.master_x = 0;
     run_program_go_signal.master_y = 0;
     run_program_go_signal.dispatch_message_offset =
-        (uint8_t)DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(sub_device_index);
+        DispatchMemMap::get(dispatch_core_type).get_dispatch_message_update_offset(sub_device_index);
     uint32_t write_offset_bytes = device_command_sequence.write_offset_bytes();
     // Num Workers Resolved when the program is enqueued
     device_command_sequence.add_dispatch_go_signal_mcast(
         0,
         *reinterpret_cast<uint32_t*>(&run_program_go_signal),
-        dispatch_message_addr,
+        DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(sub_device_index),
         num_noc_mcast_txns,
         num_noc_unicast_txns,
         noc_data_start_idx,
@@ -1617,7 +1615,7 @@ void update_program_dispatch_commands(
     run_program_go_signal.master_x = (uint8_t)dispatch_core.x;
     run_program_go_signal.master_y = (uint8_t)dispatch_core.y;
     run_program_go_signal.dispatch_message_offset =
-        (uint8_t)DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(*sub_device_id);
+        DispatchMemMap::get(dispatch_core_type).get_dispatch_message_update_offset(*sub_device_id);
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->go_signal =
         *reinterpret_cast<uint32_t*>(&run_program_go_signal);
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
@@ -1850,13 +1848,9 @@ void reset_worker_dispatch_state_on_device(
             num_sub_devices;
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
-    bool clear_count = true;
     DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
     const auto& dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
-    uint32_t dispatch_message_base_addr =
-        DispatchMemMap::get(dispatch_core_type)
-            .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
     if (reset_launch_msg_state) {
         if (DispatchQueryManager::instance().dispatch_s_enabled()) {
             uint16_t index_bitmask = 0;
@@ -1872,15 +1866,13 @@ void reset_worker_dispatch_state_on_device(
         reset_launch_message_read_ptr_go_signal.master_y = (uint8_t)dispatch_core.y;
         for (uint32_t i = 0; i < num_sub_devices; ++i) {
             reset_launch_message_read_ptr_go_signal.dispatch_message_offset =
-                (uint8_t)DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(i);
-            uint32_t dispatch_message_addr =
-                dispatch_message_base_addr + DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(i);
+                DispatchMemMap::get(dispatch_core_type).get_dispatch_message_update_offset(i);
             // Wait to ensure that all kernels have completed. Then send the reset_rd_ptr go_signal.
             SubDeviceId sub_device_id(static_cast<uint8_t>(i));
             command_sequence.add_dispatch_go_signal_mcast(
                 expected_num_workers_completed[i],
                 *reinterpret_cast<uint32_t*>(&reset_launch_message_read_ptr_go_signal),
-                dispatch_message_addr,
+                DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(i),
                 device->num_noc_mcast_txns(sub_device_id),
                 device->num_noc_unicast_txns(sub_device_id),
                 device->noc_data_start_index(sub_device_id),
@@ -1891,17 +1883,23 @@ void reset_worker_dispatch_state_on_device(
     // this step, before sending kernel config data to workers or notifying dispatch_s that its safe to send the
     // go_signal. Clear the dispatch <--> worker semaphore, since trace starts at 0.
     for (uint32_t i = 0; i < num_sub_devices; ++i) {
-        uint32_t dispatch_message_addr =
-            dispatch_message_base_addr + DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(i);
         SubDeviceId sub_device_id(static_cast<uint8_t>(i));
         uint32_t expected_num_workers = expected_num_workers_completed[i] +
                                         device->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id) +
                                         device->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
         if (DispatchQueryManager::instance().distributed_dispatcher()) {
             command_sequence.add_dispatch_wait(
-                false, dispatch_message_addr, expected_num_workers, clear_count, false, true, 1);
+                CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
+                0,
+                DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(i),
+                expected_num_workers,
+                1);
         }
-        command_sequence.add_dispatch_wait(false, dispatch_message_addr, expected_num_workers, clear_count);
+        command_sequence.add_dispatch_wait(
+            CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
+            0,
+            DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(i),
+            expected_num_workers);
     }
     manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
     manager.fetch_queue_reserve_back(cq_id);

@@ -155,7 +155,7 @@ static void RunTest(WatcherFixture *fixture, IDevice* device, riscv_id_t riscv_t
     // We should be able to find the expected watcher error in the log as well,
     // expected error message depends on the risc we're running on.
     string kernel = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp";
-    int line_num = 57;
+    int line_num = 66;
 
     string expected = fmt::format(
         "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} tripped an assert on line {}. Current kernel: {}.",

@@ -32,8 +32,7 @@ enum class CommandQueueDeviceAddrType : uint8_t {
     COMPLETION_Q0_LAST_EVENT = 4,
     COMPLETION_Q1_LAST_EVENT = 5,
     DISPATCH_S_SYNC_SEM = 6,
-    DISPATCH_MESSAGE = 7,
-    UNRESERVED = 8
+    UNRESERVED = 7
 };
 
 enum class CommandQueueHostAddrType : uint8_t {
@@ -125,10 +124,36 @@ public:
                tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::HOST);
     }
 
-    uint32_t get_dispatch_message_offset(uint32_t index) const {
+    uint32_t get_sync_offset(uint32_t index) const {
         TT_ASSERT(index < tt::tt_metal::DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
         uint32_t offset = index * hal.get_alignment(HalMemType::L1);
         return offset;
+    }
+
+    uint32_t get_dispatch_message_addr_start() const {
+        // Address of the first dispatch message entry. Remaining entries are each offset by
+        // get_noc_stream_reg_space_size() bytes.
+        return tt::tt_metal::hal.get_noc_overlay_start_addr() +
+               tt::tt_metal::hal.get_noc_stream_reg_space_size() * get_dispatch_stream_index(0) +
+               tt::tt_metal::hal.get_noc_stream_remote_dest_buf_space_available_update_reg_index() * sizeof(uint32_t);
+    }
+
+    uint32_t get_dispatch_stream_index(uint32_t index) const {
+        if (last_core_type == CoreType::WORKER) {
+            // There are 64 streams. CBs use entries 8-39.
+            return 48u + index;
+        } else if (last_core_type == CoreType::ETH) {
+            // There are 32 streams.
+            return 16u + index;
+        } else {
+            TT_THROW("get_dispatch_starting_stream_index not implemented for core type");
+        }
+    }
+
+    // Offset to be passed in the go message.
+    uint8_t get_dispatch_message_update_offset(uint32_t index) const {
+        TT_ASSERT(index < tt::tt_metal::DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
+        return index;
     }
 
 private:
@@ -169,8 +194,6 @@ private:
                 device_cq_addr_sizes_[dev_addr_idx] = settings.prefetch_q_pcie_rd_ptr_size_;
             } else if (dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM) {
                 device_cq_addr_sizes_[dev_addr_idx] = settings.dispatch_s_sync_sem_;
-            } else if (dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_MESSAGE) {
-                device_cq_addr_sizes_[dev_addr_idx] = settings.dispatch_message_;
             } else {
                 device_cq_addr_sizes_[dev_addr_idx] = settings.other_ptrs_size;
             }
