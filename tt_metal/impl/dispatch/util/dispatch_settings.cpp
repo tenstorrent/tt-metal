@@ -7,10 +7,15 @@
 #include <tt_cluster.hpp>
 #include "magic_enum/magic_enum.hpp"
 #include "umd/device/tt_core_coordinates.h"
+#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include <dispatch_settings.hpp>
 #include <helpers.hpp>
 
 namespace tt::tt_metal {
+
+static_assert(
+    DispatchSettings::DISPATCH_MESSAGE_ENTRIES <=
+    sizeof(decltype(CQDispatchCmd::notify_dispatch_s_go_signal.index_bitmask)) * CHAR_BIT);
 
 DispatchSettings DispatchSettings::worker_defaults(const tt::Cluster& cluster, const uint32_t num_hw_cqs) {
     uint32_t prefetch_q_entries;

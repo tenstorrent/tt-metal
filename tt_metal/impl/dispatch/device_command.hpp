@@ -10,7 +10,7 @@
 
 #include "env_lib.hpp"
 #include "command_queue_interface.hpp"
-#include "cq_commands.hpp"
+#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "memcpy.hpp"
 #include "aligned_allocator.hpp"
 #include "hal.hpp"
