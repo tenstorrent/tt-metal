@@ -38,7 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: |
-          exit 0
+          exit 1
     # uses: ./.github/workflows/build-artifact.yaml
     # with:
     #   version: "22.04"
