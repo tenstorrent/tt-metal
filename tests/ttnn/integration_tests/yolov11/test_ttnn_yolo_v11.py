@@ -738,13 +738,10 @@ def test_yolo_v11_detect(
 )
 @pytest.mark.parametrize(
     "use_pretrained_weight",
-    [
-        False,
-        True      # uncomment  to run the model for real weights
-    ],
+    [False, True],  # uncomment  to run the model for real weights
     ids=[
         "pretrained_weight_false",
-        "pretrained_weight_true",    # uncomment to run the model for real weights
+        "pretrained_weight_true",  # uncomment to run the model for real weights
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
