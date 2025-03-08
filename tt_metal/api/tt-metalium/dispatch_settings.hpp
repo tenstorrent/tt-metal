@@ -9,7 +9,6 @@
 #include <unordered_map>
 #include "dev_msgs.h"  // go_msg_t
 #include "hal.hpp"
-#include <tt-metalium/cq_commands.hpp>
 #include "umd/device/tt_core_coordinates.h"
 
 namespace tt {
@@ -138,10 +137,6 @@ public:
     // down into equal sized partial pages BASE_PARTIAL_PAGE_SIZE denotes the initial partial page size to use, it is
     // incremented by PCIe alignment until page size can be evenly split
     static constexpr uint32_t BASE_PARTIAL_PAGE_SIZE = 4096;
-
-    static_assert(
-        DISPATCH_MESSAGE_ENTRIES <=
-        sizeof(decltype(CQDispatchCmd::notify_dispatch_s_go_signal.index_bitmask)) * CHAR_BIT);
 
     static constexpr uint32_t MAX_HUGEPAGE_SIZE = 1 << 30;                                        // 1GB
     static constexpr uint32_t MAX_DEV_CHANNEL_SIZE = 1 << 28;                                     // 256 MB;
