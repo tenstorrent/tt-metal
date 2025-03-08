@@ -123,6 +123,10 @@ FORCE_INLINE volatile uint32_t* get_cq_completion_write_ptr() {
     return reinterpret_cast<volatile uint32_t*>(dev_completion_q_wr_ptr);
 }
 
+constexpr uint32_t DISPATCH_COMMAND_ID_DATA = 1;
+constexpr uint32_t DISPATCH_PROGRAM_HOST_ID_DATA = 2;
+constexpr uint32_t DISPATCH_COMMAND_SUBTYPE_DATA = 3;
+
 FORCE_INLINE
 void completion_queue_reserve_back(uint32_t num_pages) {
     WAYPOINT("QRBW");
@@ -978,10 +982,9 @@ void set_go_signal_noc_data() {
 static inline bool process_cmd_d(
     uint32_t& cmd_ptr, uint32_t* l1_cache, uint32_t& block_noc_writes_to_clear, uint32_t block_next_start_addr[]) {
     bool done = false;
-
 re_run_command:
     volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
-
+    DeviceTimestampedData("process_cmd_d_dispatch", (uint32_t)cmd->base.cmd_id);
     switch (cmd->base.cmd_id) {
         case CQ_DISPATCH_CMD_WRITE_LINEAR:
             WAYPOINT("DWB");
@@ -1020,6 +1023,7 @@ re_run_command:
         case CQ_DISPATCH_CMD_WRITE_PACKED: {
             DPRINT << "cmd_write_packed" << ENDL();
             uint32_t flags = cmd->write_packed.flags;
+            DeviceTimestampedData("subtype_data_dispatch", flags & CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST);
             if (flags & CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST) {
                 process_write_packed<true, CQDispatchWritePackedMulticastSubCmd>(
                     flags, l1_cache, block_noc_writes_to_clear, block_next_start_addr);
@@ -1083,8 +1087,9 @@ re_run_command:
         case CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA: set_go_signal_noc_data(); break;
 
         case CQ_DISPATCH_CMD_SET_WRITE_OFFSET:
-            DPRINT << "write offset: " << cmd->set_write_offset.offset0 << " " << cmd->set_write_offset.offset1 << " "
-                   << cmd->set_write_offset.offset2 << ENDL();
+            DPRINT << " " << cmd->set_write_offset.offset0 << " " << cmd->set_write_offset.offset1 << " "
+                   << cmd->set_write_offset.offset2 << " host id " << cmd->set_write_offset.program_host_id << ENDL();
+            DeviceTimestampedData("runtime_host_id_dispatch", cmd->set_write_offset.program_host_id);
             write_offset[0] = cmd->set_write_offset.offset0;
             write_offset[1] = cmd->set_write_offset.offset1;
             write_offset[2] = cmd->set_write_offset.offset2;
@@ -1122,6 +1127,7 @@ static inline bool process_cmd_h(
 
     volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
 
+    DeviceTimestampedData("process_cmd_h_dispatch", (uint32_t)cmd->base.cmd_id);
     switch (cmd->base.cmd_id) {
         case CQ_DISPATCH_CMD_WRITE_LINEAR_H:
             DPRINT << "dispatch_h write_linear_h\n";

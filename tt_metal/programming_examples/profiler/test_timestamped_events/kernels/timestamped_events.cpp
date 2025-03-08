@@ -8,7 +8,7 @@ constexpr uint16_t THE_ID = 12345;
 void kernel_main() {
     for (int i = 0; i < LOOP_COUNT; i++) {
         DeviceZoneScopedN("TEST-FULL");
-        DeviceTimestampedData(THE_ID, i + ((uint64_t)1 << 32));
+        DeviceTimestampedData("TEST", i + ((uint64_t)1 << 32));
         DeviceRecordEvent(i);
 // Max unroll size
 #pragma GCC unroll 65534
