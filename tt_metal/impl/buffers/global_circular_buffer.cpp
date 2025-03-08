@@ -35,7 +35,7 @@ Buffer* extract_buffer(
             [](const std::shared_ptr<Buffer>& buffer) { return buffer.get(); },
             [](const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer) {
                 auto shape = mesh_buffer->device()->shape();
-                return mesh_buffer->get_device_buffer(*distributed::MeshCoordinateRange(shape).begin()).get();
+                return mesh_buffer->get_device_buffer(*distributed::MeshCoordinateRange(shape).begin());
             }},
         buffer_variant);
 }
