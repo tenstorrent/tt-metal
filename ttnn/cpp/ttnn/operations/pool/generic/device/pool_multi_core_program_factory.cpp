@@ -146,14 +146,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         nblocks);
 
     // CBs
-    // TODO(jongbinlimTT): There is an unidentifiable synchronization bug among BRISC, TRSIC's, and NCRISC for avgpool
-    // (not maxpool). Thus, double buffering and split reading are not diabled for avgpool for now. Eventually, we need
-    // to enable this feature to enhance performance. The following were hard-coded variables, and the solution is also
-    // a workaround hack.
-    uint32_t multi_buffering_factor =
-        (pool_type == Pool2DType::MAX_POOL2D) ? 2 : (pool_type == Pool2DType::AVG_POOL2D ? 1 : 1);
+    uint32_t multi_buffering_factor = 2;
 
-    uint32_t split_reader = (pool_type == Pool2DType::MAX_POOL2D) ? 1 : (pool_type == Pool2DType::AVG_POOL2D ? 0 : 0);
+    uint32_t split_reader = 1;
 
     // scalar CB as coefficient of reduce
     uint32_t in_scalar_cb_id = tt::CBIndex::c_4;
@@ -165,8 +160,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     auto in_scalar_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, in_scalar_cb_config);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_scalar_cb_id, in_scalar_cb_pagesize, in_scalar_cb_npages);
 
-    // // Conditionally only for avgpool, we instantiate and use this CB. TODO(jongbinlimTT): Need to implement this
-    // conditional feature. uint32_t in_one_cb_id = tt::CBIndex::c_5; uint32_t in_one_cb_pagesize = tile_size(in_df);
+    // Conditionally only for avgpool, we instantiate and use this CB, which consists of 1s.
+    // uint32_t in_one_cb_id = tt::CBIndex::c_5; uint32_t in_one_cb_pagesize = tile_size(in_df);
     // uint32_t in_one_cb_npages = 1;
     // CircularBufferConfig in_one_cb_config =
     //     CircularBufferConfig(in_one_cb_npages * in_one_cb_pagesize, {{in_one_cb_id, in_df}})
