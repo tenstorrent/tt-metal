@@ -1,0 +1,14 @@
+name: "Workflow Status"
+description: "Ensures all required jobs succeeded and handles optional jobs correctly."
+inputs:
+  required-jobs:
+    description: "Comma-separated list of required jobs (must succeed)."
+    required: true
+  optional-jobs:
+    description: "Comma-separated list of optional jobs (skipped is OK, but failure is not)."
+    required: false
+    default: ""
+
+runs:
+  using: "node16"
+  main: "script.js"
