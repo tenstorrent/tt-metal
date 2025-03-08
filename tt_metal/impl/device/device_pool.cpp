@@ -286,7 +286,7 @@ void DevicePool::initialize_host(IDevice* dev) const {
 }
 
 void DevicePool::initialize_active_devices() const {
-    const auto& active_devices = this->get_all_active_devices();  // MMIO
+    const auto& active_devices = this->get_all_active_devices();
 
     // Activate fabric (must be before FD)
     // TODO: add handling of EDM
@@ -311,9 +311,7 @@ void DevicePool::initialize_active_devices() const {
         return;
     }
 
-    populate_cq_static_args(active_devices);
-
-    for (const auto& dev : active_devices) {
+    for (auto dev : active_devices) {
         // For Galaxy init, we only need to loop over mmio devices
         const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(dev->id());
         if (mmio_device_id != dev->id()) {
@@ -321,6 +319,7 @@ void DevicePool::initialize_active_devices() const {
         }
 
         auto tunnels_from_mmio = tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_device_id);
+        populate_cq_static_args(dev);
         dev->init_command_queue_device();
         if (not this->skip_remote_devices) {
             for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
@@ -328,6 +327,7 @@ void DevicePool::initialize_active_devices() const {
                 for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0; ts--) {
                     uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
                     auto device = get_device(mmio_controlled_device_id);
+                    populate_cq_static_args(device);
                     device->init_command_queue_device();
                 }
             }
@@ -435,13 +435,6 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
                 log_fatal(tt::LogMetal, "Fabric is being used but {} is not active", i);
             }
         }
-        // TODO: add handling of EDM
-        // Initialize control plane, does not configure kernels/routing tables
-        // We always need a control plane for mapping of logical devices to physical devices
-        // TODO: add single device support
-        _inst->initialize_control_plane();
-        // write routing tables to all ethernet cores
-        this->control_plane->configure_routing_tables();
     }
 
     this->using_fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
