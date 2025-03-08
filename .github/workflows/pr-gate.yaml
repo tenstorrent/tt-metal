@@ -38,7 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: |
-          exit 1
+          exit 0
     # uses: ./.github/workflows/build-artifact.yaml
     # with:
     #   version: "22.04"
@@ -54,7 +54,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: |
-          exit 0
+          exit 1
     # uses: ./.github/workflows/smoke.yaml
     # with:
     #   docker-image: ${{ needs.pr-gate-build.outputs.ci-build-docker-image }}
