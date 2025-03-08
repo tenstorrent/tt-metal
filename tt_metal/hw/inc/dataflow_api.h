@@ -501,7 +501,6 @@ inline void noc_async_read(
         Read requests - use static VC
         Read responses - assigned VCs dynamically
     */
-
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ,src_noc_addr,size, -1);
 
     if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
@@ -522,7 +521,6 @@ void noc_async_read_one_packet_set_state(std::uint64_t src_noc_addr, std::uint32
         Read requests - use static VC
         Read responses - assigned VCs dynamically
     */
-
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_SET_STATE, src_noc_addr, size, -1);
 
     WAYPOINT("RP3W");
@@ -559,7 +557,6 @@ FORCE_INLINE void noc_async_read_one_packet_with_state(
         Read requests - use static VC
         Read responses - assigned VCs dynamically
     */
-
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_WITH_STATE, static_cast<uint64_t>(src_noc_addr), 0, -1);
 
     WAYPOINT("RP4W");
@@ -593,7 +590,6 @@ void noc_async_read_set_state(std::uint64_t src_noc_addr, uint8_t noc = noc_inde
         Read requests - use static VC
         Read responses - assigned VCs dynamically
     */
-
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_SET_STATE,src_noc_addr,0,-1);
 
     WAYPOINT("RP5W");
@@ -736,7 +732,6 @@ void noc_async_write_multicast_one_packet(
     bool linked = false,
     bool multicast_path_reserve = true,
     uint8_t noc = noc_index) {
-
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_MULTICAST,dst_noc_addr_multicast,size, NOC_MULTICAST_WRITE_VC);
 
     WAYPOINT("NWPW");
@@ -888,7 +883,6 @@ inline void noc_async_write(
     if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
         noc_async_write_one_packet(src_local_l1_addr, dst_noc_addr, size, noc);
     } else {
-
         RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_, dst_noc_addr, size, NOC_UNICAST_WRITE_VC);
 
         WAYPOINT("NAWW");
@@ -1195,7 +1189,6 @@ inline void noc_async_write_multicast_exclude_region(
  * Return value: None
  */
 void noc_async_read_barrier(uint8_t noc = noc_index) {
-
     RECORD_NOC_EVENT(NocEventType::READ_BARRIER_START);
 
     WAYPOINT("NRBW");
@@ -1222,7 +1215,6 @@ void noc_async_read_barrier(uint8_t noc = noc_index) {
  */
 FORCE_INLINE
 void noc_async_write_barrier(uint8_t noc = noc_index) {
-
     RECORD_NOC_EVENT(NocEventType::WRITE_BARRIER_START);
 
     WAYPOINT("NWBW");
@@ -1246,7 +1238,6 @@ void noc_async_write_barrier(uint8_t noc = noc_index) {
  */
 FORCE_INLINE
 void noc_async_writes_flushed(uint8_t noc = noc_index) {
-
     RECORD_NOC_EVENT(NocEventType::WRITE_FLUSH);
 
     WAYPOINT("NWFW");
@@ -1290,7 +1281,6 @@ void noc_async_posted_writes_flushed(uint8_t noc = noc_index) {
  */
 FORCE_INLINE
 void noc_async_atomic_barrier(uint8_t noc_idx = noc_index) {
-
     RECORD_NOC_EVENT(NocEventType::ATOMIC_BARRIER);
 
     WAYPOINT("NABW");
@@ -1361,7 +1351,6 @@ void noc_async_full_barrier(uint8_t noc_idx = noc_index) {
 // clang-format on
 FORCE_INLINE
 void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
-
     RECORD_NOC_EVENT(NocEventType::SEMAPHORE_WAIT);
 
     WAYPOINT("NSW");
@@ -1388,7 +1377,6 @@ void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
 // clang-format on
 FORCE_INLINE
 void noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
-
     RECORD_NOC_EVENT(NocEventType::SEMAPHORE_WAIT);
 
     WAYPOINT("NSMW");
@@ -1415,7 +1403,6 @@ void noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val)
 // clang-format on
 FORCE_INLINE
 void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
-
     RECORD_NOC_EVENT(NocEventType::SEMAPHORE_SET);
 
     // set semaphore value to val
@@ -1446,7 +1433,6 @@ void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
 // clang-format on
 FORCE_INLINE
 void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 0xF, uint8_t noc = noc_index) {
-
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_INLINE, addr, 32, NOC_UNICAST_WRITE_VC);
 
     WAYPOINT("NWIW");
@@ -1485,7 +1471,6 @@ void noc_semaphore_inc(uint64_t addr, uint32_t incr, uint8_t noc_id = noc_index)
     [REFER TO grayskull/noc/noc.h for the documentation of noc_atomic_increment()]
     Generic increment with 32-bit wrap.
   */
-
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::SEMAPHORE_INC,addr,0, NOC_UNICAST_WRITE_VC);
 
     WAYPOINT("NSIW");
@@ -1583,7 +1568,6 @@ void noc_async_read_tile_dram_sharded_with_state_with_trid(
 
 FORCE_INLINE
 void noc_async_read_tile_dram_sharded_set_trid(uint32_t trid = 0, uint8_t noc = noc_index) {
-
     RECORD_NOC_EVENT(NocEventType::READ_SET_TRID);
 
     WAYPOINT("NSTW");
