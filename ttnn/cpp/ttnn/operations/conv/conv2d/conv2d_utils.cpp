@@ -104,7 +104,6 @@ ParallelConfig determine_parallel_config(
     bool is_shard_height_tile_multiple,
     bool is_shard_width_tile_multiple,
     uint32_t act_block_h_override) {
-    tt::log_info("flags: {} {}", is_shard_height_tile_multiple, is_shard_width_tile_multiple);
     // Currently, convolution requires multiples of the tile size for both shard height and width,
     // while pooling can accept any height and either a tile multiple or half a tile for width.
     // This approach needs to be modified when other shard dimensions are supported.
