@@ -9,7 +9,7 @@ from pathlib import Path
 from models.experimental.mochi.tt.vae.conv1x1 import Conv1x1 as TtConv1x1
 from genmo.mochi_preview.vae.models import Conv1x1 as RefConv1x1, Decoder
 
-from models.experimental.mochi.tests.common import (
+from models.experimental.mochi.tt.common import (
     compute_metrics,
     to_torch_tensor,
 )

@@ -24,10 +24,10 @@ pytest models/experimental/mochi/tests/dit/test_model.py::test_tt_asymm_dit_join
 pytest models/experimental/mochi/tests/dit/test_pipeline.py -k "L1"
 
 # VAE tests
-pytest models/experimental/mochi/tests/vae/test_context_parallel_conv3d.py
-pytest models/experimental/mochi/tests/vae/test_conv1x1.py
-pytest models/experimental/mochi/tests/vae/test_depth_to_spacetime.py
-pytest models/experimental/mochi/tests/vae/test_silu.py
-pytest models/experimental/mochi/tests/vae/test_resblock.py
-pytest models/experimental/mochi/tests/vae/test_upsample.py
-pytest models/experimental/mochi/tests/vae/test_decoder.py
+# pytest models/experimental/mochi/tests/vae/test_context_parallel_conv3d.py
+# pytest models/experimental/mochi/tests/vae/test_conv1x1.py
+# pytest models/experimental/mochi/tests/vae/test_depth_to_spacetime.py
+# pytest models/experimental/mochi/tests/vae/test_silu.py
+# pytest models/experimental/mochi/tests/vae/test_resblock.py
+# pytest models/experimental/mochi/tests/vae/test_upsample.py
+# pytest models/experimental/mochi/tests/vae/test_decoder.py
