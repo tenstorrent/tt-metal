@@ -7,7 +7,7 @@
 #include <memory>
 #include <vector>
 
-#include "device_command.hpp"
+#include "tt_metal/impl/dispatch/device_command.hpp"
 
 struct CQDispatchWritePackedCmd;
 struct launch_msg_t;

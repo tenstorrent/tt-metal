@@ -32,6 +32,7 @@
 #include <sub_device_types.hpp>
 #include <span.hpp>
 #include <types.hpp>
+#include <tt-metalium/program_cache.hpp>
 
 #include "impl/dispatch/topology.hpp"
 #include "impl/dispatch/hardware_command_queue.hpp"
@@ -1424,7 +1425,7 @@ void Device::replay_trace(
                 this->id_,
                 active_sub_device_manager->id());
             if constexpr (check) {
-                Trace::validate_instance(*trace_buffer);
+                trace_buffer->validate();
             }
             EnqueueTrace(this->command_queue(cq_id), tid, block_on_device);
         },
