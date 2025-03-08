@@ -8,6 +8,7 @@
 #include <numa.h>
 #include <semaphore>
 
+#include <tt-metalium/device.hpp>
 #include "tt_metal/common/thread_pool.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 
@@ -305,11 +306,24 @@ private:
 // Allows enqueuing tasks tied to specific devices.
 class DeviceBoundThreadPool : public ThreadPool {
 public:
+    // Constuctor accepting the physical device IDs this pool is bound to. Each thread will be tied to a device, and is
+    // guaranteed to be bound to a CPU core on a NUMA Node "closest" to that device.
+    DeviceBoundThreadPool(const std::vector<tt::tt_metal::IDevice*>& physical_devices, uint32_t logical_cpu_offset) {
+        num_workers_ = physical_devices.size();
+        workers_.reserve(num_workers_);
+        for (uint32_t i = 0; i < num_workers_; i++) {
+            workers_.emplace_back(std::make_unique<NumaAwareExecutor>(physical_devices[i]->id(), logical_cpu_offset));
+            phys_device_to_thread_id_[physical_devices[i]->id()] = i;
+        }
+    }
+    // Constructor accepting the number of threads to spawn. The threads in this pool will be bound to a specific CPU
+    // core but they are not guaranteed to be "close" to any physical device.
     DeviceBoundThreadPool(uint32_t thread_count, uint32_t logical_cpu_offset) {
         workers_.reserve(thread_count);
         num_workers_ = thread_count;
         for (uint32_t i = 0; i < thread_count; i++) {
             workers_.emplace_back(std::make_unique<NumaAwareExecutor>(i, logical_cpu_offset));
+            phys_device_to_thread_id_[i] = i;
         }
     }
 
@@ -317,8 +331,10 @@ public:
         // If the user does not provide the Device ID tied to this task, determine the thread to use
         // based on the internally stored thread_idx. Tasks will get round-robined across threads,
         // when relying on the thread_idx.
-        workers_[device_idx.value_or(thread_idx_ % num_workers_)]->enqueue(std::move(f));
-        ++thread_idx_;
+        // If the device id is specified, use the thread tied to the device.
+        uint32_t thread_id =
+            device_idx.has_value() ? phys_device_to_thread_id_[device_idx.value()] : ((thread_idx_++) % num_workers_);
+        workers_[thread_id]->enqueue(std::move(f));
     }
 
     void wait() override {
@@ -335,6 +351,8 @@ private:
     uint32_t thread_idx_ = 0;
     // Store the number of workers to repeated lookups
     uint32_t num_workers_ = 0;
+    // Mapping between the physical device id and its associated thread
+    std::unordered_map<uint32_t, uint32_t> phys_device_to_thread_id_;
 };
 
 }  // namespace thread_pool_impls
@@ -349,6 +367,11 @@ std::shared_ptr<ThreadPool> create_distributed_boost_thread_pool(int num_threads
 
 std::shared_ptr<ThreadPool> create_device_bound_thread_pool(int num_threads, uint32_t logical_cpu_offset) {
     return std::make_shared<thread_pool_impls::DeviceBoundThreadPool>(num_threads, logical_cpu_offset);
+}
+
+std::shared_ptr<ThreadPool> create_device_bound_thread_pool(
+    const std::vector<tt::tt_metal::IDevice*>& physical_devices, uint32_t logical_cpu_offset) {
+    return std::make_shared<thread_pool_impls::DeviceBoundThreadPool>(physical_devices, logical_cpu_offset);
 }
 
 }  // namespace tt::tt_metal
