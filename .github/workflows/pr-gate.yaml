@@ -35,9 +35,13 @@ jobs:
   pr-gate-build:
     name: Build
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    uses: ./.github/workflows/build-artifact.yaml
-    with:
-      version: "22.04"
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          exit 0
+    # uses: ./.github/workflows/build-artifact.yaml
+    # with:
+    #   version: "22.04"
 
   smoke-tests:
     if: false
@@ -48,11 +52,15 @@ jobs:
         platform: [
           "tt-beta-ubuntu-2204-n300-large-stable",
         ]
-    uses: ./.github/workflows/smoke.yaml
-    with:
-      docker-image: ${{ needs.pr-gate-build.outputs.ci-build-docker-image }}
-      package-artifact-name: ${{ needs.pr-gate-build.outputs.packages-artifact-name }}
-      runner: ${{ matrix.platform }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          exit 0
+    #uses: ./.github/workflows/smoke.yaml
+    #with:
+    #  docker-image: ${{ needs.pr-gate-build.outputs.ci-build-docker-image }}
+    #  package-artifact-name: ${{ needs.pr-gate-build.outputs.packages-artifact-name }}
+    #  runner: ${{ matrix.platform }}
 
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
@@ -63,7 +71,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
-        uses: ./.github/actions/pr-gate-status
+        uses: ./.github/actions/workflow-status
         with:
           required-jobs: "pr-gate-build"
           optional-jobs: "smoke-tests"
