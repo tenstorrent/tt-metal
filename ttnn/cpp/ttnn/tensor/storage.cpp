@@ -30,8 +30,11 @@ MemoryConfig DeviceStorage::memory_config() const {
         .shard_spec = shard_spec};
 }
 
-DeviceStorage::DeviceStorage(std::shared_ptr<distributed::MeshBuffer> mesh_buffer_) :
-    mesh_buffer(std::move(mesh_buffer_)) {}
+DeviceStorage::DeviceStorage(
+    std::shared_ptr<distributed::MeshBuffer> mesh_buffer_,
+    std::map<distributed::MeshCoordinate, TensorSpec> specs_,
+    DistributedTensorConfig strategy_) :
+    strategy(std::move(strategy_)), mesh_buffer(std::move(mesh_buffer_)), specs(std::move(specs_)) {}
 
 void DeviceStorage::insert_buffer(const std::shared_ptr<Buffer>& buffer_) { this->buffer = buffer_; }
 
