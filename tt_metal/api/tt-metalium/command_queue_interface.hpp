@@ -9,7 +9,6 @@
 #include <tt-metalium/tt_align.hpp>
 #include <unordered_map>
 
-#include "cq_commands.hpp"
 #include "dispatch_core_manager.hpp"
 #include "launch_message_ring_buffer_state.hpp"
 #include "memcpy.hpp"

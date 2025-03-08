@@ -443,9 +443,18 @@ void Buffer::deallocate_impl() {
             validate_sub_device_manager_id(sub_device_manager_id_, device_);
             allocator_->deallocate_buffer(this);
         }
+
+        // Capture deallocates here instead of higher levels.
+        LIGHT_METAL_TRACE_FUNCTION_ENTRY();
+        LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureBufferDeallocate, *this);
     }
 
     allocation_status_.store(AllocationStatus::DEALLOCATED, std::memory_order::relaxed);
+}
+
+Buffer::~Buffer() {
+    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
+    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureBufferDelete, *this);
 }
 
 bool Buffer::is_allocated() const {
@@ -514,16 +523,6 @@ bool Buffer::is_valid_region(const BufferRegion& region) const { return region.o
 
 bool Buffer::is_valid_partial_region(const BufferRegion& region) const {
     return this->is_valid_region(region) && (region.offset > 0 || region.size != this->size());
-}
-
-uint32_t Buffer::dram_channel_from_bank_id(uint32_t bank_id) const {
-    TT_FATAL(this->is_dram(), "Expected DRAM buffer!");
-    return allocator_->get_dram_channel_from_bank_id(bank_id);
-}
-
-CoreCoord Buffer::logical_core_from_bank_id(uint32_t bank_id) const {
-    TT_FATAL(this->is_l1(), "Expected L1 buffer!");
-    return allocator_->get_logical_core_from_bank_id(bank_id);
 }
 
 DeviceAddr Buffer::page_address(uint32_t bank_id, uint32_t page_index) const {

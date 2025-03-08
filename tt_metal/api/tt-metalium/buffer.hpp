@@ -194,8 +194,10 @@ class Buffer final {
     Buffer &operator=(const Buffer &other) = delete;
     Buffer(Buffer &&other) = delete;
     Buffer &operator=(Buffer &&other) = delete;
+    ~Buffer();
 
     IDevice* device() const { return device_; }
+    Allocator* allocator() const { return allocator_; }
     DeviceAddr size() const { return size_; }
     bool is_allocated() const;
 
@@ -221,10 +223,6 @@ class Buffer final {
     TensorMemoryLayout buffer_layout() const { return buffer_layout_; }
 
     bool bottom_up() const { return bottom_up_; }
-
-    uint32_t dram_channel_from_bank_id(uint32_t bank_id) const;
-
-    CoreCoord logical_core_from_bank_id(uint32_t bank_id) const;
 
     DeviceAddr page_address(uint32_t bank_id, uint32_t page_index) const;
 
