@@ -196,10 +196,7 @@ void JitBuildEnv::init(
 
     std::ostringstream oss;
     for (size_t i = 0; i < includeDirs.size(); ++i) {
-        oss << "-I" << includeDirs[i];
-        if (i != includeDirs.size() - 1) {
-            oss << " "; // add delimiter only between paths
-        }
+        oss << "-I" << includeDirs[i] << " ";
     }
     this->includes_ = oss.str();
 
