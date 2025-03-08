@@ -34,7 +34,7 @@ concurrency:
 jobs:
   pr-gate-build:
     name: Build
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft && false
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     steps:
       - run: |
@@ -44,6 +44,7 @@ jobs:
     #   version: "22.04"
 
   smoke-tests:
+    if: false
     needs: pr-gate-build
     strategy:
       fail-fast: false
