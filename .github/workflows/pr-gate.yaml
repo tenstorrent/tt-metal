@@ -78,6 +78,7 @@ jobs:
 
             // The 'needs' context provides job outcomes
             const needs = ${{ toJSON(needs) }};
+            console.log("Needs context:", needs);
 
             // Check required jobs
             for (const job of requiredJobs) {
