@@ -17,7 +17,6 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
     const std::optional<ttnn::Tensor>& weight,
     const std::optional<ttnn::Tensor>& bias,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<const GroupNormProgramConfig>& program_config,
     const std::optional<ttnn::DataType> dtype,
     std::optional<CoreGrid> core_grid,
     std::optional<bool> inplace,
@@ -43,9 +42,6 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
     TT_FATAL(
         core_grid.has_value(),
         "Automatic grid size determination is not supported. Please specify the grid size explicitly.");
-
-    //    TT_FATAL(
-    //   input_tensor.is_sharded(), "Only sharded input tensors are supported. The provided tensor is not sharded.");
 
     TT_FATAL(
         input_tensor.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED,
@@ -79,21 +75,42 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
     const MemoryConfig& dram_memory_config = tt::tt_metal::MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED, .buffer_type = tt::tt_metal::BufferType::DRAM};
     const MemoryConfig& output_mem_config = memory_config.value_or(dram_memory_config);
-    return operation::run(
-               GroupNorm{
-                   .eps = epsilon,
-                   .num_groups = static_cast<uint32_t>(num_groups),
-                   .output_mem_config = output_mem_config,
-                   .program_config = program_config.value_or(GroupNormShardedMultiCoreProgramConfig{
-                       .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
-                       .math_fidelity = MathFidelity::HiFi4,
-                       .im_data_format = DataType::BFLOAT16,
-                       .out_data_format = DataType::BFLOAT16,
-                       .inplace = inplace.value_or(false),
-                       .output_layout = output_layout.value_or(input_tensor.get_layout())})},
-               {input_tensor},
-               {gamma, beta, input_mask})
-        .at(0);
+
+    if (input_tensor.is_sharded()) {
+        const ttnn::operations::normalization::GroupNormShardedMultiCoreProgramConfig& program_config = {
+            .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
+            .math_fidelity = MathFidelity::HiFi4,
+            .im_data_format = DataType::BFLOAT16,
+            .out_data_format = DataType::BFLOAT16,
+            .inplace = inplace.value_or(false),
+            .output_layout = output_layout.value_or(input_tensor.get_layout())};
+        return operation::run(
+                   GroupNorm{
+                       .eps = epsilon,
+                       .num_groups = static_cast<uint32_t>(num_groups),
+                       .output_mem_config = output_mem_config,
+                       .program_config = program_config},
+                   {input_tensor},
+                   {gamma, beta, input_mask})
+            .at(0);
+    } else {
+        const ttnn::operations::normalization::GroupNormMultiCoreProgramConfig& program_config = {
+            .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
+            .math_fidelity = MathFidelity::HiFi4,
+            .im_data_format = DataType::BFLOAT16,
+            .out_data_format = DataType::BFLOAT16,
+            .inplace = inplace.value_or(false),
+            .output_layout = output_layout.value_or(input_tensor.get_layout())};
+        return operation::run(
+                   GroupNorm{
+                       .eps = epsilon,
+                       .num_groups = static_cast<uint32_t>(num_groups),
+                       .output_mem_config = output_mem_config,
+                       .program_config = program_config},
+                   {input_tensor},
+                   {gamma, beta, input_mask})
+            .at(0);
+    }
 }
 
 }  // namespace ttnn::operations::normalization
