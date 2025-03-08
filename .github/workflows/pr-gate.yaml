@@ -73,7 +73,7 @@ jobs:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@afuller/test
         with:
-          required-jobs: "pr-gate-build"
+          required-jobs: "pr-gate-build, smoke-tests"
           optional-jobs: "smoke-tests"
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'
