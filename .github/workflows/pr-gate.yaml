@@ -71,7 +71,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
-        uses: ./.github/actions/workflow-status
+        uses: tenstorrent/tt-metal/.github/actions/workflow-status@afuller/test
         with:
           required-jobs: "pr-gate-build"
           optional-jobs: "smoke-tests"
