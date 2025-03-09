@@ -51,9 +51,9 @@ constexpr noc_selection_t k_prefetcher_noc = {
 };
 
 //
-// Dispatcher NOC selections
+// Dispatcher NOC selections. NOTE: Upstream and downstream NOCs cannot be the same.
 //
-// Non Dispatch NOC: acquire pages on local semaphore
+// Non Dispatch NOC: acquire pages on local semaphore and send go/done
 //
 // Upstream: sync sem with tunnel and/or dispatch_d variant and/or prefetch_d
 //
@@ -62,12 +62,11 @@ constexpr noc_selection_t k_prefetcher_noc = {
 constexpr noc_selection_t k_dispatcher_noc = {
     .non_dispatch_noc = tt::tt_metal::NOC::NOC_0,
     .upstream_noc = tt::tt_metal::NOC::NOC_1,
-    .downstream_noc = dispatch_downstream_noc,  // Needs to be dispatch_downstream_noc. Used from the host side to sent
-                                                // data to dispatcher
+    .downstream_noc = dispatch_downstream_noc,
 };
 
 //
-// Dispatch S NOC selections
+// Dispatch S NOC selections.
 //
 // Non Dispatch NOC: acquire pages on local semaphore
 //
@@ -80,6 +79,11 @@ constexpr noc_selection_t k_dispatcher_s_noc = {
     .upstream_noc = tt::tt_metal::NOC::NOC_1,
     .downstream_noc = tt::tt_metal::NOC::NOC_1,
 };
+
+// Must be on different NOCs because Dispatch+S may be running on the same
+// core. They are using stateful APIs. Running on the same NOC will mess up
+// requests sent/to free count.
+static_assert(k_dispatcher_noc.non_dispatch_noc != k_dispatcher_s_noc.non_dispatch_noc);
 
 //
 // Packet Queue NOC selections
