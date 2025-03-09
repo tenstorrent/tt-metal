@@ -14,7 +14,6 @@ from tests.ttnn.unit_tests.operations.ccl.test_reduce_scatter_TG_nightly import 
 from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
     create_and_load_sub_device_manager_with_fabric_interface,
     teardown_fabric_interface,
-    create_global_semaphore_with_same_address,
 )
 
 
@@ -168,10 +167,10 @@ def run_reduce_scatter_test(
 
     # create global semaphore handles
     from_remote_semaphore_handles = [
-        create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
+        ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
     ]
     to_remote_semaphore_handles = [
-        create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
+        ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
     ]
     mesh_device.set_sub_device_stall_group([worker_sub_device_id])
     debug = False

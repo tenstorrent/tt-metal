@@ -13,7 +13,7 @@ namespace ttnn::operations::experimental::ccl {
 ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const ttnn::Tensor& input_tensor,
     const int32_t dim,
-    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+    const GlobalSemaphore& multi_device_global_semaphore,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
@@ -36,7 +36,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
-    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+    const GlobalSemaphore& multi_device_global_semaphore,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
