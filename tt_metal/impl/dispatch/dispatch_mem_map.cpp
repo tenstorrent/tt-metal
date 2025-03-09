@@ -3,11 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/dispatch_mem_map.hpp>
+#include <tt-metalium/helpers.hpp>
+#include <tt-metalium/tt_align.hpp>
 
 namespace tt::tt_metal {
 
-static const DispatchMemMap& DispatchMemMap::get(
-    const CoreType& core_type, const uint32_t num_hw_cqs = 0, const bool force_reinit_with_settings) {
+const DispatchMemMap& DispatchMemMap::get(
+    const CoreType& core_type, const uint32_t num_hw_cqs, const bool force_reinit_with_settings) {
     auto& instance = get_instance();
 
     if (num_hw_cqs > 0 && (core_type != instance.last_core_type || num_hw_cqs != instance.hw_cqs) ||
@@ -44,11 +46,11 @@ uint32_t DispatchMemMap::prefetch_d_buffer_size() const { return settings.prefet
 
 uint32_t DispatchMemMap::prefetch_d_buffer_pages() const { return settings.prefetch_d_pages_; }
 
-uint32_t DispatchMemMap::mux_buffer_size(uint8_t num_hw_cqs = 1) const {
+uint32_t DispatchMemMap::mux_buffer_size(uint8_t num_hw_cqs) const {
     return settings.tunneling_buffer_size_ / num_hw_cqs;
 }
 
-uint32_t DispatchMemMap::mux_buffer_pages(uint8_t num_hw_cqs = 1) const {
+uint32_t DispatchMemMap::mux_buffer_pages(uint8_t num_hw_cqs) const {
     return settings.tunneling_buffer_pages_ / num_hw_cqs;
 }
 
@@ -75,7 +77,7 @@ uint32_t DispatchMemMap::get_dispatch_message_offset(uint32_t index) const {
     return offset;
 }
 
-static DispatchMemMap& DispatchMemMap::get_instance() {
+DispatchMemMap& DispatchMemMap::get_instance() {
     static DispatchMemMap instance;
     return instance;
 }
@@ -141,7 +143,7 @@ void DispatchMemMap::reset(const CoreType& core_type, const uint32_t num_hw_cqs)
     TT_ASSERT(dispatch_cb_end < l1_size);
 }
 
-std::pair<uint32_t, uint32_t> get_device_l1_info(const CoreType& core_type) const {
+std::pair<uint32_t, uint32_t> DispatchMemMap::get_device_l1_info(const CoreType& core_type) const {
     uint32_t l1_base;
     uint32_t l1_size;
     if (core_type == CoreType::WORKER) {

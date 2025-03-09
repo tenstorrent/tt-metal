@@ -5,6 +5,19 @@
 #pragma once
 
 #include <tt-metalium/system_memory_cq_interface.hpp>
+#include <umd/device/types/cluster_descriptor_types.h>  // should I really be bring this in just for chip_id_t?
+
+#include <cstdint>
+#include <mutex>
+#include <vector>
+
+// needed for private members
+#include <tt-metalium/dispatch_settings.hpp>
+#include <tt-metalium/launch_message_ring_buffer_state.hpp>
+#include <tt-metalium/dispatch_settings.hpp>
+#include <umd/device/tt_xy_pair.h>             // for tt_cxy_pair
+#include <umd/device/tt_device/tlb_manager.h>  // needed because tt_io.hpp requires needs TLBManager
+#include <umd/device/tt_io.hpp>                // for tt::Writer
 
 namespace tt::tt_metal {
 
@@ -38,13 +51,13 @@ public:
 
     uint32_t get_completion_queue_size(const uint8_t cq_id) const;
 
-    uint32_t get_completion_queue_limit(const uint8_t cq_id);
+    uint32_t get_completion_queue_limit(const uint8_t cq_id) const;
 
-    uint32_t get_issue_queue_write_ptr(const uint8_t cq_id);
+    uint32_t get_issue_queue_write_ptr(const uint8_t cq_id) const;
 
-    uint32_t get_completion_queue_read_ptr(const uint8_t cq_id);
+    uint32_t get_completion_queue_read_ptr(const uint8_t cq_id) const;
 
-    uint32_t get_completion_queue_read_toggle(const uint8_t cq_id);
+    uint32_t get_completion_queue_read_toggle(const uint8_t cq_id) const;
 
     uint32_t get_cq_size() const;
 

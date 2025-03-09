@@ -4,7 +4,13 @@
 
 #include <tt-metalium/system_memory_manager.hpp>
 #include <tt-metalium/dispatch_mem_map.hpp>
+#include <tt-metalium/dispatch_core_manager.hpp>
 #include <tt-metalium/command_queue_common.hpp>
+
+#include <tt-metalium/launch_message_ring_buffer_state.hpp>
+#include <tt-metalium/tt_align.hpp>
+
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal {
 
