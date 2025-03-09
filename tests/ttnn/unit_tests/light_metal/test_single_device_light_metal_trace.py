@@ -194,3 +194,126 @@ def test_ttnn_conv2d(batch_size, device, reset_device, tmp_path):
     binary_data = ttnn.light_metal_end_capture()
     write_binary_to_file(binary_data, tmp_path, inspect.currentframe().f_code.co_name)
     reset_device_and_replay_binary(reset_device, device, binary_data)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("batch_size", [1])
+def test_ttnn_conv2d_complex(batch_size, device, reset_device, tmp_path):
+    ttnn.light_metal_begin_capture()
+
+    # --- First Conv2D Op ---
+    # Create input tensor in NCHW and convert to NHWC for TTNN.
+    torch_input_tensor_nchw = torch.rand((batch_size, 3, 32, 32), dtype=torch.bfloat16)
+    torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))  # (N, H, W, C)
+    input_tt = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
+
+    # Create weights & bias for first conv2d op in OIHW and (1,1,1,C) formats.
+    weight1_torch = torch.rand((8, 3, 3, 3), dtype=torch.bfloat16)
+    bias1_torch = torch.rand((1, 1, 1, 8), dtype=torch.bfloat16)
+    weight1_tt = ttnn.from_torch(weight1_torch, ttnn.bfloat16)
+    bias1_tt = ttnn.from_torch(bias1_torch, ttnn.bfloat16)
+
+    conv_config = ttnn.Conv2dConfig(
+        dtype=ttnn.bfloat16,
+        weights_dtype=ttnn.bfloat16,
+        activation="relu",
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        reshard_if_not_optimal=False,
+        transpose_shards=True,
+    )
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+
+    memory_config = ttnn.L1_MEMORY_CONFIG
+
+    conv_kwargs1 = {
+        "in_channels": 3,
+        "out_channels": 8,
+        "batch_size": batch_size,
+        "input_height": 32,
+        "input_width": 32,
+        "kernel_size": (3, 3),
+        "stride": (1, 1),
+        "padding": (1, 1),
+        "dilation": (1, 1),
+        "groups": 1,
+        "device": device,
+    }
+
+    # Run the first conv2d op.
+    output1_tt, [out_height1, out_width1] = ttnn.conv2d(
+        input_tensor=input_tt,
+        weight_tensor=weight1_tt,
+        bias_tensor=bias1_tt,
+        **conv_kwargs1,
+        conv_config=conv_config,
+        compute_config=compute_config,
+        conv_op_cache={},
+        memory_config=memory_config,
+        return_output_dim=True,
+    )
+
+    # Read back and print the first conv2d output.
+    output1_host = ttnn.to_torch(output1_tt)
+    print("First conv2d output:")
+    print("  Shape:", output1_host.shape)
+    print("  Stats: min =", output1_host.min(), "max =", output1_host.max(), "mean =", output1_host.mean())
+
+    # --- Residual Addition ---
+    # Simulate a residual connection by adding the conv output to itself.
+    added_tt = ttnn.add_(output1_tt, output1_tt)
+    added_host = ttnn.to_torch(added_tt)
+    print("After addition (residual):")
+    print("  Shape:", added_host.shape)
+    print("  Stats: min =", added_host.min(), "max =", added_host.max(), "mean =", added_host.mean())
+
+    # --- Second Conv2D Op ---
+    # Create weights & bias for a second conv2d op.
+    # Now input channels are 8 (from the first op) and let's output 16 channels.
+    weight2_torch = torch.rand((16, 8, 3, 3), dtype=torch.bfloat16)
+    bias2_torch = torch.rand((1, 1, 1, 16), dtype=torch.bfloat16)
+    weight2_tt = ttnn.from_torch(weight2_torch, ttnn.bfloat16)
+    bias2_tt = ttnn.from_torch(bias2_torch, ttnn.bfloat16)
+
+    conv_kwargs2 = {
+        "in_channels": 8,
+        "out_channels": 16,
+        "batch_size": batch_size,
+        "input_height": out_height1,
+        "input_width": out_width1,
+        "kernel_size": (3, 3),
+        "stride": (1, 1),
+        "padding": (1, 1),
+        "dilation": (1, 1),
+        "groups": 1,
+        "device": device,
+    }
+
+    # Run the second conv2d op on the result of the addition.
+    output2_tt, [out_height2, out_width2] = ttnn.conv2d(
+        input_tensor=added_tt,
+        weight_tensor=weight2_tt,
+        bias_tensor=bias2_tt,
+        **conv_kwargs2,
+        conv_config=conv_config,
+        compute_config=compute_config,
+        conv_op_cache={},
+        memory_config=memory_config,
+        return_output_dim=True,
+    )
+
+    output2_host = ttnn.to_torch(output2_tt)
+    print("Second conv2d output:")
+    print("  Shape:", output2_host.shape)
+    print("  Stats: min =", output2_host.min(), "max =", output2_host.max(), "mean =", output2_host.mean())
+
+    # End capture and replay.
+    binary_data = ttnn.light_metal_end_capture()
+    write_binary_to_file(binary_data, tmp_path, inspect.currentframe().f_code.co_name)
+    reset_device_and_replay_binary(reset_device, device, binary_data)
