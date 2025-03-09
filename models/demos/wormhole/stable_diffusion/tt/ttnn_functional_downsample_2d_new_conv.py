@@ -97,7 +97,6 @@ class downsample_2d:
                 compute_grid_size=self.device.compute_with_storage_grid_size(),
                 block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 enable_channels_padding=False,
-                is_out_tiled=True,
             ),
             tile_size=32,
         )
