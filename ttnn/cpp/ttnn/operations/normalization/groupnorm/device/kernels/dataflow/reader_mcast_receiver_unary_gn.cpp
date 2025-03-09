@@ -10,33 +10,29 @@
 
 // split REDUCE across cores
 void kernel_main() {
-    uint32_t reduce_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(0));
-    uint32_t reduce_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(1));
+    constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
 
-    constexpr uint32_t num_batch_group = get_compile_time_arg_val(2);
+    uint32_t reduce_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(1));
+    uint32_t reduce_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(2));
 
-    constexpr uint32_t per_core_N = get_compile_time_arg_val(3);
-    const uint32_t per_core_N_bytes = get_compile_time_arg_val(4);
-    const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(5);
-    constexpr uint32_t per_core_M = get_compile_time_arg_val(6);
-    constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(7);
-    // TODO: Add to prog fractory
-    // Move to right spot
-    constexpr bool src0_is_dram = get_compile_time_arg_val(8) == 1;
+    constexpr uint32_t num_batch_group = get_compile_time_arg_val(3);
 
-    const uint32_t mcast_sender_noc_x = get_arg_val<uint32_t>(0);
-    const uint32_t mcast_sender_noc_y = get_arg_val<uint32_t>(1);
-    // TODO: move to first arg when done
-    uint32_t src_addr = get_arg_val<uint32_t>(2);
-    // TODO: move to first arg when done
-    uint32_t start_id = get_arg_val<uint32_t>(3);
-    // TODO: move to first arg when done
-    uint32_t num_of_channels = get_arg_val<uint32_t>(4);
+    constexpr uint32_t per_core_N = get_compile_time_arg_val(4);
+    const uint32_t per_core_N_bytes = get_compile_time_arg_val(5);
+    const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(6);
+    constexpr uint32_t per_core_M = get_compile_time_arg_val(7);
+    constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(8);
+
+    uint32_t src_addr = get_arg_val<uint32_t>(0);
+    uint32_t start_id = get_arg_val<uint32_t>(1);
+    uint32_t num_channels_tiles = get_arg_val<uint32_t>(2);
+    const uint32_t mcast_sender_noc_x = get_arg_val<uint32_t>(3);
+    const uint32_t mcast_sender_noc_y = get_arg_val<uint32_t>(4);
 
     constexpr uint32_t cb_ex_partial = tt::CBIndex::c_8;  // E[x] partial reduce
     constexpr uint32_t cb_ex = tt::CBIndex::c_9;          // E[x] partial reduce
     constexpr uint32_t cb_ex_global = tt::CBIndex::c_15;  // E[x] global reduce
-    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;         // sharded cb
+    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;         // input cb
     constexpr uint32_t cb_repack = tt::CBIndex::c_26;
     constexpr uint32_t cb_repack_out = tt::CBIndex::c_31;
     constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
@@ -52,6 +48,8 @@ void kernel_main() {
     const uint64_t reduce_receiver_semaphore_noc_addr =
         get_noc_addr(mcast_sender_noc_x, mcast_sender_noc_y, reduce_receiver_semaphore_addr);
 
+    const uint32_t src0_tile_bytes = get_tile_size(cb_in0);
+    const DataFormat src0_data_format = get_dataformat(cb_in0);
     const InterleavedAddrGenFast<src0_is_dram> src_a = {
         .bank_base_address = src_addr, .page_size = src0_tile_bytes, .data_format = src0_data_format};
 #if defined(READER_REPACK) and defined(TILIZE_IN)
@@ -70,19 +68,17 @@ void kernel_main() {
     }
 #else
     // we want to read into cb_in0
-    //
     const int onetile = 1;
     uint32_t l1_write_addr = get_write_ptr(cb_in0);
-    for (uint32_t mt = 0; mt < per_core_M / TILE_WIDTH; mt++) {
-        for (uint32_t nt = 0; nt < per_core_N / TILE_WIDTH; nt++) {
+    for (uint32_t mt = 0; mt < per_core_M; mt++) {
+        for (uint32_t nt = 0; nt < per_core_N; nt++) {
             cb_reserve_back(cb_in0, onetile);
-            noc_async_read_tile(start_id + ((mt) * (num_of_channels / TILE_WIDTH)) + (nt), src_a, l1_write_addr);
+            noc_async_read_tile(start_id + (mt * num_channels_tiles) + nt, src_a, l1_write_addr);
             l1_write_addr += src0_tile_bytes;
             noc_async_read_barrier();
             cb_push_back(cb_in0, onetile);
         }
     }
-
 #endif
 
     for (uint32_t i = 0; i < num_batch_group; ++i) {

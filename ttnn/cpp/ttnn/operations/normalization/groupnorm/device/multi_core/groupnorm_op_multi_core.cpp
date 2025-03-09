@@ -1043,8 +1043,6 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     bool inplace) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
-    TT_FATAL(false, "GROUP NORM MULTI CORE SHOULD NOT BE CALLED");
-
     if (gamma.has_value()) {
         TT_ASSERT(gamma.value().get_layout() == Layout::ROW_MAJOR);
     }
@@ -1076,32 +1074,31 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     uint32_t out_single_tile_size = tt::tt_metal::detail::TileSize(out_data_format);
     uint32_t gamma_beta_single_tile_size = tt::tt_metal::detail::TileSize(gamma_beta_cb_data_format);
     uint32_t in_mask_single_tile_size = tt::tt_metal::detail::TileSize(in_mask_cb_data_format);
-    // shard shape per core
-    uint32_t per_core_M = a.shard_spec().value().shape[0];
-    uint32_t per_core_N = a.shard_spec().value().shape[1];
-    uint32_t per_core_Mt = per_core_M / TILE_HEIGHT;
-    uint32_t per_core_Nt = (per_core_N + TILE_WIDTH - 1) / TILE_WIDTH;
-    uint32_t per_core_N_bytes_padded = tt::round_up(per_core_N * datum_size_bytes, output.buffer()->alignment());
-    bool reader_repack_output = (per_core_N % TILE_WIDTH) != 0;
-    bool tilize_in = a.get_layout() == Layout::ROW_MAJOR;
-    bool untilize_out = output.get_layout() == Layout::ROW_MAJOR;
+
+    IDevice* device = a.device();
+
+    // grid
+    uint32_t num_cores_c = grid_size.x;
+    uint32_t num_cores_r = grid_size.y;
+    uint32_t num_cores = num_cores_c * num_cores_r;
+    auto all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, grid_size, true);
+
     // tensor shape
     const auto shape = a.get_padded_shape();
     uint32_t H = shape[2] * num_batches;
     uint32_t Ht = H / TILE_HEIGHT;
     uint32_t W = shape[3];
     uint32_t Wt = W / TILE_WIDTH;
+    uint32_t per_core_M = H / num_cores_r;
+    uint32_t per_core_N = W / num_cores_c;
+    TT_ASSERT(H % num_cores_r == 0 && "width * height must be divisible by num_cores.y");
+    TT_ASSERT(W % num_cores_c == 0 && "channels must be divisible by num_cores.x");
+    uint32_t per_core_Mt = per_core_M / TILE_HEIGHT;
+    uint32_t per_core_Nt = (per_core_N + TILE_WIDTH - 1) / TILE_WIDTH;
     uint32_t num_datum_row_per_group = W / num_groups;
     uint32_t num_datum_row_per_group_mod_tile_w =
         num_datum_row_per_group % TILE_WIDTH == 0 ? TILE_WIDTH : num_datum_row_per_group % TILE_WIDTH;
     uint32_t group_size = W / num_groups;
-    // grid
-    uint32_t num_cores_c = grid_size.x;
-    uint32_t num_cores_r = grid_size.y;
-    // uint32_t num_cores = num_cores_c * num_cores_r;
-    auto all_cores = a.shard_spec().value().grid;
-    uint32_t num_cores = all_cores.num_cores();
-    auto shard_orientation = a.shard_spec().value().orientation;
     // split each batch into multiple cores
     uint32_t num_shards_r = H / per_core_M;
     uint32_t num_cores_per_batch = num_batches > num_shards_r ? 1 : num_shards_r / num_batches;
@@ -1111,16 +1108,17 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     uint32_t num_batches_per_core = num_batches > num_shards_r ? num_batches / num_shards_r : 1;
     uint32_t num_groups_per_core = num_groups > num_shards_c ? num_groups / num_shards_c : 1;
 
+    // shard shape per core
+    uint32_t per_core_N_bytes_padded = tt::round_up(per_core_N * datum_size_bytes, output.buffer()->alignment());
+    bool reader_repack_output = (per_core_N % TILE_WIDTH) != 0;
+    bool tilize_in = a.get_layout() == Layout::ROW_MAJOR;
+    bool untilize_out = output.get_layout() == Layout::ROW_MAJOR;
+
     TT_ASSERT(per_core_N % num_datum_row_per_group == 0);
     TT_ASSERT(per_core_M % TILE_HEIGHT == 0);
     if (per_core_N != W) {
-        if (shard_orientation == ShardOrientation::COL_MAJOR) {
-            TT_ASSERT(per_core_N * num_cores_r == W);
-            TT_ASSERT(per_core_M * num_cores_c == H);
-        } else {
-            TT_ASSERT(per_core_N * num_cores_c == W);
-            TT_ASSERT(per_core_M * num_cores_r == H);
-        }
+        TT_ASSERT(per_core_N * num_cores_c == W);
+        TT_ASSERT(per_core_M * num_cores_r == H);
     }
 
     TT_ASSERT(per_core_M % TILE_HEIGHT == 0 && "per_core_M must be divisble by TILE_HEIGHT");
@@ -1173,33 +1171,39 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
 
     TT_ASSERT(per_core_M % num_batches_per_core == 0 && "shard height must be div by per_core_batch");
     TT_ASSERT(W % num_groups == 0 && "tensor width must be divisible by num_groups!");
-    if (shard_orientation == ShardOrientation::ROW_MAJOR and num_groups_per_core == 1) {
-        TT_ASSERT(
-            num_cores_c % num_groups == 0 &&
-            "for RM shard, when each group is split across cores, num_cores_c must be divisible by num_groups!");
-    } else if (shard_orientation == ShardOrientation::COL_MAJOR and num_groups_per_core == 1) {
-        TT_ASSERT(
-            num_cores_r % num_groups == 0 &&
-            "for CM shard, when each group is split across cores, num_cores_r must be divisible by num_groups!");
-    }
+    // if (shard_orientation == ShardOrientation::ROW_MAJOR and num_groups_per_core == 1) {
+    //     TT_FATAL(false, "VASH TODO");
+    // 	TT_ASSERT(
+    //         num_cores_c % num_groups == 0 &&
+    //         "for RM shard, when each group is split across cores, num_cores_c must be divisible by num_groups!");
+    // } else if (shard_orientation == ShardOrientation::COL_MAJOR and num_groups_per_core == 1) {
+    //     TT_FATAL(false, "VASH TODO");
+    //     TT_ASSERT(
+    //         num_cores_r % num_groups == 0 &&
+    //         "for CM shard, when each group is split across cores, num_cores_r must be divisible by num_groups!");
+    // }
 
-    if (per_core_N != W) {  // block sharded
-        if (shard_orientation == ShardOrientation::ROW_MAJOR and num_batches_per_core == 1) {
-            TT_ASSERT(
-                num_cores_r % num_batches == 0 &&
-                "for RM shard, when each batch is split across cores, num_cores_r must be divisible by num_batches!");
-        } else if (shard_orientation == ShardOrientation::COL_MAJOR and num_groups_per_core == 1) {
-            TT_ASSERT(
-                num_cores_c % num_batches == 0 &&
-                "for CM shard, when each batch is split across cores, num_cores_c must be divisible by num_batches!");
-        }
-    } else {  // height sharded
-        if (num_batches_per_core == 1) {
-            TT_ASSERT(
-                (num_cores_c * num_cores_r) % num_batches == 0 &&
-                "for height shard, number of cores must be divisible by num_batches!");
-        }
-    }
+    // if (per_core_N != W) {  // block sharded
+    //     TT_FATAL(false, "VASH TODO");
+    //     if (shard_orientation == ShardOrientation::ROW_MAJOR and num_batches_per_core == 1) {
+    //         TT_ASSERT(
+    //             num_cores_r % num_batches == 0 &&
+    //             "for RM shard, when each batch is split across cores, num_cores_r must be divisible by
+    //             num_batches!");
+    //     } else if (shard_orientation == ShardOrientation::COL_MAJOR and num_groups_per_core == 1) {
+    //         TT_ASSERT(
+    //             num_cores_c % num_batches == 0 &&
+    //             "for CM shard, when each batch is split across cores, num_cores_c must be divisible by
+    //             num_batches!");
+    //     }
+    // } else {  // height sharded
+    //     TT_FATAL(false, "VASH TODO");
+    //     if (num_batches_per_core == 1) {
+    //         TT_ASSERT(
+    //             (num_cores_c * num_cores_r) % num_batches == 0 &&
+    //             "for height shard, number of cores must be divisible by num_batches!");
+    //     }
+    // }
 
     if (input_mask.has_value()) {
         TT_ASSERT(
@@ -1207,9 +1211,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             "input mask must have the same width as block_wt");
     }
 
-    // get sharded addr
-    auto in0_addr = a.buffer()->address();
-    auto out_addr = output.buffer()->address();
+    // get addr
+    auto in0_dram_addr = a.buffer()->address();
+    auto out_dram_addr = output.buffer()->address();
     // gamma, beta addr
     auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
     auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
@@ -1221,16 +1225,11 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     uint32_t num_input_mask_tiles = input_mask.has_value() ? input_mask.value().volume() / TILE_HW : 0;
 
     ////////////////////////////////////////////////////////////////////////////
-    //                      Grayskull Device Setup
-    ////////////////////////////////////////////////////////////////////////////
-    IDevice* device = a.device();
-
-    ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     // block size for in0 (tensor a)
     uint32_t in0_block_tiles = per_core_Nt * per_core_Mt;
-    uint32_t in0_CB_size = a.buffer()->aligned_size_per_bank();  // use buffer size to handle both RM and Tile
+    uint32_t in0_CB_size = in0_block_tiles * in_single_tile_size;
     uint32_t in_CB_size = in0_block_tiles * in_single_tile_size;
     // in2 - scaler
     uint32_t in2_CB_size = single_tile_size;
@@ -1277,31 +1276,18 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     uint32_t start_core_y = 0;
 
     // create a vector of cores, in either RM or CM
-    std::vector<CoreCoord> core_coords =
-        grid_to_cores(num_cores, num_cores_c, num_cores_r, shard_orientation == ShardOrientation::ROW_MAJOR);
+    std::vector<CoreCoord> core_coords = grid_to_cores(num_cores, num_cores_c, num_cores_r, true);
     for (int i = 0; i < core_coords.size(); ++i) {
         log_debug(tt::LogOp, "worker coord: {} {}", core_coords[i].x, core_coords[i].y);
     }
     std::vector<std::vector<CoreCoord>> core_coords2D;
-    if (shard_orientation == ShardOrientation::ROW_MAJOR) {
-        for (int i = 0; i < num_cores_c / num_cores_per_group; ++i) {
-            for (int j = 0; j < num_cores_r; ++j) {
-                std::vector<CoreCoord> temp;
-                for (int k = 0; k < num_cores_per_group; ++k) {
-                    temp.push_back(CoreCoord{(std::size_t)(k + i * num_cores_per_group), (std::size_t)j});
-                }
-                core_coords2D.push_back(temp);
+    for (int i = 0; i < num_cores_c / num_cores_per_group; ++i) {
+        for (int j = 0; j < num_cores_r; ++j) {
+            std::vector<CoreCoord> temp;
+            for (int k = 0; k < num_cores_per_group; ++k) {
+                temp.push_back(CoreCoord{(std::size_t)(k + i * num_cores_per_group), (std::size_t)j});
             }
-        }
-    } else {
-        for (int i = 0; i < num_cores_r / num_cores_per_group; ++i) {
-            for (int j = 0; j < num_cores_c; ++j) {
-                std::vector<CoreCoord> temp;
-                for (int k = 0; k < num_cores_per_group; ++k) {
-                    temp.push_back(CoreCoord{(std::size_t)j, (std::size_t)(k + i * num_cores_per_group)});
-                }
-                core_coords2D.push_back(temp);
-            }
+            core_coords2D.push_back(temp);
         }
     }
 
@@ -1335,27 +1321,15 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     // mcast groups
     std::vector<std::vector<CoreCoord>> mcast_groups;
     int group_index = -1;
-    if (is_height_sharding) {
-        for (int i = 0; i < num_cores; ++i) {
-            if (mcast_sender_core_ranges.find(CoreRange(core_coords[i])) != mcast_sender_core_ranges.end()) {
+    for (int i = 0; i < core_coords2D.size(); ++i) {
+        for (int j = 0; j < core_coords2D[i].size(); ++j) {
+            if (mcast_sender_core_ranges.find(CoreRange(core_coords2D[i][j])) != mcast_sender_core_ranges.end()) {
                 group_index += 1;
             }
             if (group_index >= mcast_groups.size()) {
                 mcast_groups.push_back(std::vector<CoreCoord>());  // Add a new group
             }
-            mcast_groups[group_index].push_back(core_coords[i]);
-        }
-    } else {
-        for (int i = 0; i < core_coords2D.size(); ++i) {
-            for (int j = 0; j < core_coords2D[i].size(); ++j) {
-                if (mcast_sender_core_ranges.find(CoreRange(core_coords2D[i][j])) != mcast_sender_core_ranges.end()) {
-                    group_index += 1;
-                }
-                if (group_index >= mcast_groups.size()) {
-                    mcast_groups.push_back(std::vector<CoreCoord>());  // Add a new group
-                }
-                mcast_groups[group_index].push_back(core_coords2D[i][j]);
-            }
+            mcast_groups[group_index].push_back(core_coords2D[i][j]);
         }
     }
     for (int i = 0; i < mcast_groups.size(); ++i) {
@@ -1393,6 +1367,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     }
     // reader compile time args
     std::vector<uint32_t> reader_mcast_sender_compile_time_args = {
+        (std::uint32_t)1,
         (std::uint32_t)reduce_receiver_semaphore_id,
         (std::uint32_t)reduce_sender_semaphore_id,
         (std::uint32_t)num_cores_per_mcast_group,
@@ -1404,6 +1379,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)per_core_Mt,
         (std::uint32_t)TILE_HEIGHT};
     std::vector<uint32_t> reader_mcast_receiver_compile_time_args = {
+        (std::uint32_t)1,
         (std::uint32_t)reduce_receiver_semaphore_id,
         (std::uint32_t)reduce_sender_semaphore_id,
         (std::uint32_t)num_groups_per_core * num_batches_per_core,
@@ -1418,7 +1394,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     auto reader_mcast_sender_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
-        "reader_mcast_sender_unary_sharded_gn_v2.cpp",
+        "reader_mcast_sender_unary_gn.cpp",
         mcast_sender_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -1487,7 +1463,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     // writer kernel
     bool use_row_major_kernel = true;
     std::string writer_kernel =
-        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/writer_unary_sharded_gn_rm_gb_v2.cpp";
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/writer_unary_gn_rm_gb.cpp";
     auto writer_kernels_id = CreateKernel(
         program,
         writer_kernel,
@@ -1594,6 +1570,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             .math_approx_mode = math_approx_mode,
             .compile_args = mcast_receiver_compute_compile_time_args,
             .defines = eltwise_binary_defines});
+
     // Create circular buffers
     uint32_t in0_cb_index = tt::CBIndex::c_0;
     uint32_t output_cb_index = tt::CBIndex::c_16;
@@ -1613,9 +1590,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     } else {
         tt::tt_metal::CircularBufferConfig in0_cb_config =
             tt::tt_metal::CircularBufferConfig(in0_CB_size, {{in0_cb_index, in_data_format}})
-                .set_page_size(in0_cb_index, in_single_tile_size)
-                .set_globally_allocated_address(*a.buffer());
-
+                .set_page_size(in0_cb_index, in_single_tile_size);
         tt::tt_metal::CircularBufferConfig output_cb_config =
             tt::tt_metal::CircularBufferConfig(out_CB_size, {{output_cb_index, out_data_format}})
                 .set_page_size(output_cb_index, out_single_tile_size)
@@ -1624,7 +1599,6 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         cb_in0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in0_cb_config);
         cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
     }
-
     // in - stores tilized input
     uint32_t in_cb_index = tt::CBIndex::c_29;
     tt::tt_metal::CircularBufferConfig in_cb_config =
@@ -1760,6 +1734,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         for (int j = 0; j < group.size(); ++j) {
             CoreCoord core = group[j];
             CoreCoord core_physical = device->worker_core_from_logical_core(core);
+            uint32_t in0_start_id = in0_block_tiles * mcast_groups.size() * j + in0_block_tiles * i;
 
             if (j == 0) {  // mcast sender
                 // get the bounding box for the mcast
@@ -1777,6 +1752,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
                     std::swap(mcast_start, mcast_end);
                 }
                 std::vector<uint32_t> mcast_sender_args;
+                mcast_sender_args.push_back((std::uint32_t)in0_dram_addr);
+                mcast_sender_args.push_back(in0_start_id);
+                mcast_sender_args.push_back(Wt);
                 mcast_sender_args.push_back(not mcast_group_first.empty());
                 mcast_sender_args.push_back(not mcast_group_last.empty());
                 mcast_sender_args.push_back(mcast_start.x);
@@ -1859,9 +1837,13 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
 
             } else {  // mcast receiver
                 log_debug(tt::LogOp, "mcast receiver receive from coord: {} {}", group.front().x, group.front().y);
-                std::vector<uint32_t> mcast_receiver_args;
-                mcast_receiver_args.push_back(device->worker_core_from_logical_core(group.front()).x);
-                mcast_receiver_args.push_back(device->worker_core_from_logical_core(group.front()).y);
+
+                std::vector<uint32_t> mcast_receiver_args = {
+                    (std::uint32_t)in0_dram_addr,  // in0_tensor_addr
+                    (std::uint32_t)in0_start_id,   // in0_tensor_start_tile_id
+                    (std::uint32_t)Wt,             // num channel tiles
+                    (std::uint32_t)(device->worker_core_from_logical_core(group.front()).x),
+                    (std::uint32_t)(device->worker_core_from_logical_core(group.front()).y)};
                 tt::tt_metal::SetRuntimeArgs(program, reader_mcast_receiver_kernels_id, core, mcast_receiver_args);
             }
         }
