@@ -6,13 +6,6 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/bfloat16.hpp>
 
-/*
- * 1. Host writes data to buffer in DRAM
- * 2. dram_copy kernel on logical core {0, 0} BRISC copies data from buffer
- *      in step 1. to buffer in L1 and back to another buffer in DRAM
- * 3. Host reads from buffer written to in step 2.
- */
-
 using namespace tt::tt_metal;
 
 int main(int argc, char** argv) {

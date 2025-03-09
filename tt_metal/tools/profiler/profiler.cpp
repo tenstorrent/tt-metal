@@ -72,7 +72,7 @@ void DeviceProfiler::readRiscProfilerResults(
 
     // helper function to lookup opname from runtime id if metadata is available
     auto getOpNameIfAvailable = [&metadata](auto device_id, auto runtime_id) {
-        return (metadata.has_value()) ? metadata->getOpName(device_id, runtime_id) : "";
+        return (metadata.has_value()) ? metadata->get_op_name(device_id, runtime_id) : "";
     };
 
     // translate worker core virtual coord to phys coordinates
