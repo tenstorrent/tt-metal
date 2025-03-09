@@ -109,3 +109,88 @@ def test_chain_op_test_light_metal_capture(device, reset_device, shape, enable_a
 
 
 # TODO (kmabee) - Add more tests, including version with metal-trace.
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("batch_size", [1])
+def test_ttnn_conv2d(batch_size, device, reset_device, tmp_path):
+    ttnn.light_metal_begin_capture()
+
+    # Create input tensor in NCHW
+    torch_input_tensor_nchw = torch.rand((batch_size, 3, 32, 32), dtype=torch.bfloat16)
+    # Permute to NHWC, as expected by TTNN
+    torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))  # (N, H, W, C)
+    # Convert input tensor to TTNN tensor with proper dtype.
+    input_tt = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
+
+    # Create weight tensor in OIHW format:
+    # Weight shape: (out_channels, in_channels, filter_height, filter_width)
+    weight_torch = torch.rand((8, 3, 3, 3), dtype=torch.bfloat16)
+    # Create bias tensor shaped as (1, 1, 1, out_channels) as used in the reference test.
+    bias_torch = torch.rand((1, 1, 1, 8), dtype=torch.bfloat16)
+
+    weight_tt = ttnn.from_torch(weight_torch, ttnn.bfloat16)
+    bias_tt = ttnn.from_torch(bias_torch, ttnn.bfloat16)
+
+    # Set up conv2d configuration similar to the reference test.
+    conv_config = ttnn.Conv2dConfig(
+        dtype=ttnn.bfloat16,
+        weights_dtype=ttnn.bfloat16,
+        activation="relu",
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        reshard_if_not_optimal=False,
+        transpose_shards=True,
+    )
+
+    # Initialize compute config using an appropriate MathFidelity enum.
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+
+    # Use a default L1 memory configuration.
+    memory_config = ttnn.L1_MEMORY_CONFIG
+
+    # Note: We must provide explicit dimensions.
+    conv_kwargs = {
+        "in_channels": 3,
+        "out_channels": 8,
+        "batch_size": batch_size,
+        "input_height": 32,  # from our NCHW input tensor
+        "input_width": 32,
+        "kernel_size": (3, 3),
+        "stride": (1, 1),
+        "padding": (1, 1),
+        "dilation": (1, 1),
+        "groups": 1,
+        "device": device,
+    }
+
+    # Run conv2d using the public API (which internally calls the same routines as in the reference test).
+    output_tt, [out_height, out_width] = ttnn.conv2d(
+        input_tensor=input_tt,
+        weight_tensor=weight_tt,
+        bias_tensor=bias_tt,
+        **conv_kwargs,
+        conv_config=conv_config,
+        compute_config=compute_config,
+        conv_op_cache={},
+        memory_config=memory_config,
+        return_output_dim=True,
+    )
+
+    # Read back the output tensor from device to host.
+    output_host = ttnn.to_torch(output_tt)
+    print("Output tensor (host):")
+    print("  Shape:", output_host.shape)
+    print("  Stats: min =", output_host.min(), "max =", output_host.max(), "mean =", output_host.mean())
+
+    # Verify that the last dimension (channels) matches our expected output channels.
+    assert output_host.shape[-1] == 8, "Output channel dimension mismatch."
+
+    binary_data = ttnn.light_metal_end_capture()
+    write_binary_to_file(binary_data, tmp_path, inspect.currentframe().f_code.co_name)
+    reset_device_and_replay_binary(reset_device, device, binary_data)
