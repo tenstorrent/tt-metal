@@ -124,7 +124,6 @@ from ttnn._ttnn.global_semaphore import (
     create_global_semaphore,
     get_global_semaphore_address,
     reset_global_semaphore_value,
-    create_global_semaphore_with_same_address,
 )
 
 from ttnn.types import (
