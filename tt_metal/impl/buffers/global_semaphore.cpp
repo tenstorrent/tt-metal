@@ -50,14 +50,14 @@ void GlobalSemaphore::setup_buffer(uint32_t initial_value, BufferType buffer_typ
         .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
         .shard_parameters = std::move(shard_parameters),
     };
-    buffer_ = CreateBuffer(sem_shard_config);
+    buffer_ = distributed::AnyBuffer::create(sem_shard_config);
 
     this->reset_semaphore_value(initial_value);
 }
 
 IDevice* GlobalSemaphore::device() const { return device_; }
 
-DeviceAddr GlobalSemaphore::address() const { return buffer_->address(); }
+DeviceAddr GlobalSemaphore::address() const { return buffer_.get_buffer()->address(); }
 
 void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value) const {
     // Write the initial value to the semaphore to the device
@@ -65,29 +65,15 @@ void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value) const {
     auto* device = device_;
     device->push_work([device, reset_value, num_cores = cores_.num_cores(), buffer = buffer_] {
         std::vector<uint32_t> host_buffer(num_cores, reset_value);
-        if (device->using_slow_dispatch()) {
-            detail::WriteToBuffer(*buffer, host_buffer);
-            tt::Cluster::instance().l1_barrier(device->id());
+        if (auto mesh_buffer = buffer.get_mesh_buffer()) {
+            distributed::EnqueueWriteMeshBuffer(mesh_buffer->device()->mesh_command_queue(), mesh_buffer, host_buffer);
         } else {
-            // Dynamic resolution of device types is unclean and poor design. This will be cleaned up
-            // when MeshBuffer + Buffer and MeshCommandQueue + CommandQueue are unified under the same
-            // API
-            if (dynamic_cast<distributed::MeshDevice*>(device)) {
-                distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device);
-
-                distributed::ReplicatedBufferConfig replicated_buffer_config{.size = buffer->size()};
-                distributed::DeviceLocalBufferConfig local_config{
-                    .page_size = buffer->page_size(),
-                    .buffer_type = buffer->buffer_type(),
-                    .buffer_layout = buffer->buffer_layout(),
-                    .shard_parameters = buffer->shard_spec(),
-                    .bottom_up = buffer->bottom_up()};
-                auto mesh_buffer = distributed::MeshBuffer::create(
-                    replicated_buffer_config, local_config, mesh_device, buffer->address());
-                distributed::EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), mesh_buffer, host_buffer);
-                // mesh_device->mesh_command_queue().enqueue_write_buffer_broadcast(buffer, host_buffer.data(), false);
+            auto buffer_ptr = buffer.get_buffer();
+            if (device->using_slow_dispatch()) {
+                detail::WriteToBuffer(*buffer_ptr, host_buffer);
+                tt::Cluster::instance().l1_barrier(device->id());
             } else {
-                EnqueueWriteBuffer(device->command_queue(), buffer, host_buffer, false);
+                EnqueueWriteBuffer(device->command_queue(), *buffer_ptr, host_buffer, false);
             }
         }
     });

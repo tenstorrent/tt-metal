@@ -8,6 +8,7 @@
 #include <mesh_device_view.hpp>
 #include <overloaded.hpp>
 #include <tt_metal.hpp>
+#include <host_api.hpp>
 
 namespace tt::tt_metal::distributed {
 namespace {
@@ -207,6 +208,46 @@ std::pair<bool, bool> MeshBuffer::replicated_dims() const {
         this->global_layout() == MeshBufferLayout::SHARDED,
         "Can only query replicated dims for buffers sharded across the Mesh");
     return this->global_shard_spec().replicated_dims();
+}
+
+AnyBuffer::AnyBuffer(std::shared_ptr<Buffer> buffer) : buffer_(std::move(buffer)) {}
+AnyBuffer::AnyBuffer(std::shared_ptr<MeshBuffer> buffer) : buffer_(std::move(buffer)) {}
+
+AnyBuffer AnyBuffer::create(const tt::tt_metal::ShardedBufferConfig& config) {
+    auto mesh_device = dynamic_cast<MeshDevice*>(config.device);
+    if (!mesh_device) {
+        return AnyBuffer{CreateBuffer(config)};
+    }
+    MeshBufferConfig mesh_config = ReplicatedBufferConfig{
+        .size = config.size,
+    };
+    DeviceLocalBufferConfig local_config{
+        .page_size = config.page_size,
+        .buffer_type = config.buffer_type,
+        .buffer_layout = config.buffer_layout,
+        .shard_parameters = config.shard_parameters,
+    };
+    return MeshBuffer::create(mesh_config, local_config, mesh_device);
+}
+
+Buffer* AnyBuffer::get_buffer() const {
+    return std::visit(
+        tt::stl::overloaded{
+            [](const std::shared_ptr<Buffer>& buffer) { return buffer.get(); },
+            [](const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer) {
+                auto shape = mesh_buffer->device()->shape();
+                return mesh_buffer->get_device_buffer(*distributed::MeshCoordinateRange(shape).begin());
+            }},
+        buffer_);
+}
+
+bool AnyBuffer::is_mesh_buffer() const { return std::holds_alternative<std::shared_ptr<MeshBuffer>>(buffer_); }
+
+std::shared_ptr<MeshBuffer> AnyBuffer::get_mesh_buffer() const {
+    if (auto mesh_buffer = std::get_if<std::shared_ptr<MeshBuffer>>(&buffer_)) {
+        return *mesh_buffer;
+    }
+    return nullptr;
 }
 
 }  // namespace tt::tt_metal::distributed
