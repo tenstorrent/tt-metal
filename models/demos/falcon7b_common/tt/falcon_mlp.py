@@ -4,7 +4,7 @@
 
 import torch
 import ttnn
-from ttnn import ReplicateTensorToMesh
+from ttnn import replicate_tensor_to_mesh_mapper
 from models.demos.falcon7b_common.tt.model_utils import (
     get_falcon_default_core_grid,
     get_weights_cached,
@@ -176,7 +176,7 @@ class TtFalconMLPPrefill(nn.Module):
                 device=self.mesh_device,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+                mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
             )
             mlp_padding_tensors[seq_len] = tt_padding
         self.model_config["MLP_PREFILL_PADDING_TENSORS"] = mlp_padding_tensors
@@ -191,7 +191,7 @@ class TtFalconMLPPrefill(nn.Module):
             device=self.mesh_device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
         )
         self.model_config["MLP_OUTPUT_TENSORS"] = out_tt
 
@@ -344,7 +344,7 @@ class TtFalconMLPDecode(nn.Module):
             device=self.mesh_device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
         )
         self.model_config["MLP_DECODE_PADDING_TENSORS"] = tt_paddings
 

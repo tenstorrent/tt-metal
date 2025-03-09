@@ -28,7 +28,7 @@ class TtQwenEmbedding(LightweightModule):
             torch_weight,
             dtype=dtype,
             device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=3),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=3),
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=args.get_model_config()["EMB_WEIGHTS_MEMCFG"],
             cache_file_name=cache_name,

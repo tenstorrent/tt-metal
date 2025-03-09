@@ -6,7 +6,7 @@ import torch
 from typing import Optional, Tuple
 
 import ttnn
-from ttnn import ReplicateTensorToMesh
+from ttnn import replicate_tensor_to_mesh_mapper
 
 from models.demos.t3000.falcon40b.tt.falcon_attention import TtFalconAttention
 from models.demos.t3000.falcon40b.tt.falcon_mlp import TtFalconMLP
@@ -80,7 +80,7 @@ class TtFalconDecoderLayer:
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=self.model_config["LN_MLP_WEIGHTS_MEMCFG"],
-            mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+            ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
             cache_file_name=ln_mlp_weights_path,
             preprocess=pad_ln_params,
         )
@@ -93,7 +93,7 @@ class TtFalconDecoderLayer:
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=self.model_config["LN_MLP_BIAS_MEMCFG"],
-            mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+            ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
             cache_file_name=ln_mlp_bias_path,
             preprocess=pad_ln_params,
         )
@@ -111,7 +111,7 @@ class TtFalconDecoderLayer:
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=self.model_config["LN_ATTN_WEIGHTS_MEMCFG"],
-            mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+            ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
             cache_file_name=ln_attn_weights_path,
             preprocess=pad_ln_params,
         )
@@ -124,7 +124,7 @@ class TtFalconDecoderLayer:
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=self.model_config["LN_ATTN_BIAS_MEMCFG"],
-            mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+            ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
             cache_file_name=ln_attn_bias_path,
             preprocess=pad_ln_params,
         )

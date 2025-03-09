@@ -433,7 +433,7 @@ def generate_layernorm_persistent_tensors(seq_len, slice_size, ln_output_tensors
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
         if name in ln_output_tensors_dict and ln_output_tensors_dict[name] is not None:
             ln_output_tensors_dict[name].update({seq_len: output_tensor})

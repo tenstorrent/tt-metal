@@ -7,7 +7,7 @@ from loguru import logger
 import pytest
 
 import ttnn
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
+from ttnn import replicate_tensor_to_mesh_mapper, ConcatMeshToTensor
 
 from models.demos.t3000.mixtral8x7b.tt.mixtral_mlp import TtMixtralMLP
 from models.demos.t3000.mixtral8x7b.reference.model import FeedForward, RMSNorm
@@ -73,7 +73,7 @@ def test_mixtral_mlp_inference(t3k_mesh_device, use_program_cache, reset_seeds, 
         dtype=ttnn.bfloat8_b,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
+        ttnn.replicate_tensor_to_mesh_mapper(t3k_mesh_device),
     )
     tt_input = ttnn.to_device(tt_input, t3k_mesh_device)
 

@@ -13,7 +13,7 @@ from time import time
 import pytest
 from loguru import logger
 import ttnn
-from ttnn import ReplicateTensorToMesh
+from ttnn import replicate_tensor_to_mesh_mapper
 
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 from transformers.generation.utils import top_k_top_p_filtering
@@ -243,7 +243,7 @@ def run_decode(
         static_page_table,
         dtype=ttnn.int32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        mesh_mapper=ReplicateTensorToMesh(model.mesh_device),
+        ttnn.replicate_tensor_to_mesh_mapper(model.mesh_device),
     )
     page_table_tt = ttnn.to_device(page_table_tt, model.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
