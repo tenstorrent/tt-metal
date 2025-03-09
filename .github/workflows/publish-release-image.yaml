@@ -68,10 +68,6 @@ jobs:
         test_group:
           [
               {
-                runs-on: ["cloud-virtual-machine", "E150", "in-service"],
-                cmd: pytest tests/end_to_end_tests,
-              },
-              {
                 runs-on: ["cloud-virtual-machine", "N150", "in-service"],
                 cmd: pytest tests/end_to_end_tests,
               },
