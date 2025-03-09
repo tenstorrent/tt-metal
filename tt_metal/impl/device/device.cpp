@@ -20,7 +20,7 @@
 #include <tt_metal.hpp>
 #include "dprint_server.hpp"
 #include "impl/debug/watcher_server.hpp"
-#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
+#include "tt_metal/impl/dispatch/topology.hpp"
 #include <utils.hpp>
 #include "llrt.hpp"
 #include <dev_msgs.h>
