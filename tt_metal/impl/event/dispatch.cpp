@@ -7,6 +7,7 @@
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include <tt-metalium/program_impl.hpp>
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
+#include "tt_metal/impl/dispatch/topology.hpp"
 #include <tt_align.hpp>
 
 #include "tt_cluster.hpp"
