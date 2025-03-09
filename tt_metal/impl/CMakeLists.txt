@@ -28,7 +28,10 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_query_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_core_common.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_core_manager.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/command_queue_interface.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/command_queue_common.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_mem_map.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/system_memory_cq_interface.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/system_memory_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/hardware_command_queue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/launch_message_ring_buffer_state.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/worker_config_buffer.cpp

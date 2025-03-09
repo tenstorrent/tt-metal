@@ -7,6 +7,9 @@
 #include <string>
 #include <thread>
 #include <tt_align.hpp>
+#include <tt-metalium/dispatch_mem_map.hpp>
+#include <tt-metalium/program_cache.hpp>
+
 #include "tt_metal/deprecated/device.hpp"
 #include "common/core_assignment.hpp"
 #include <host_api.hpp>
@@ -32,7 +35,6 @@
 #include <sub_device_types.hpp>
 #include <span.hpp>
 #include <types.hpp>
-#include <tt-metalium/program_cache.hpp>
 
 #include "impl/dispatch/topology.hpp"
 #include "impl/dispatch/hardware_command_queue.hpp"
