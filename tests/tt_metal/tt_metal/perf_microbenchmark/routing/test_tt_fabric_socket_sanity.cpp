@@ -7,7 +7,6 @@
 #include <tt-metalium/device_impl.hpp>
 #include <tt-metalium/rtoptions.hpp>
 #include <tt-metalium/control_plane.hpp>
-// #include "tt_metal/impl/dispatch/cq_commands.hpp"
 // #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "test_common.hpp"

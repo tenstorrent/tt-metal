@@ -33,7 +33,8 @@ private:
 public:
     explicit DistributedTransformer(const TransformerConfig& config);
 
-    ttml::autograd::TensorPtr operator()(const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask);
+    ttml::autograd::TensorPtr operator()(
+        const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) override;
 };
 
 [[nodiscard]] std::shared_ptr<DistributedTransformer> create(const TransformerConfig& config);

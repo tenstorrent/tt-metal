@@ -9,7 +9,6 @@
 #include <tt-metalium/tt_align.hpp>
 #include <unordered_map>
 
-#include "cq_commands.hpp"
 #include "dispatch_core_manager.hpp"
 #include "launch_message_ring_buffer_state.hpp"
 #include "memcpy.hpp"
@@ -18,9 +17,6 @@
 #include "helpers.hpp"
 #include "buffer.hpp"
 #include "umd/device/tt_core_coordinates.h"
-
-// FIXME: Don't do this in header files
-using namespace tt::tt_metal;
 
 namespace tt::tt_metal {
 

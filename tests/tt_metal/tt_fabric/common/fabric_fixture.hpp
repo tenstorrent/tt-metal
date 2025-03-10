@@ -34,8 +34,8 @@ class ControlPlaneFixture : public ::testing::Test {
 class FabricFixture : public ::testing::Test {
 protected:
     tt::ARCH arch_;
-    std::map<chip_id_t, IDevice*> devices_map_;
-    std::vector<IDevice*> devices_;
+    std::map<chip_id_t, tt::tt_metal::IDevice*> devices_map_;
+    std::vector<tt::tt_metal::IDevice*> devices_;
     bool slow_dispatch_;
 
     void SetUp() override {
@@ -77,7 +77,10 @@ protected:
         }
     }
 
-    void TearDown() override { tt::tt_metal::detail::CloseDevices(devices_map_); }
+    void TearDown() override {
+        tt::tt_metal::detail::CloseDevices(devices_map_);
+        tt::tt_metal::detail::InitializeFabricConfig(tt::FabricConfig::DISABLED);
+    }
 };
 
 }  // namespace tt::tt_fabric

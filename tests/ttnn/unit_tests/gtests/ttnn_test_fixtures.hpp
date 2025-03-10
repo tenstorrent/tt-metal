@@ -13,10 +13,14 @@
 
 #include "ttnn/device.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
 #include "tests/tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/host_api.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/mesh_device.hpp>
+
+using namespace tt::tt_metal;  // For test
 
 namespace ttnn {
 
@@ -49,6 +53,26 @@ protected:
     }
 
     tt::tt_metal::IDevice& getDevice() { return *device_; }
+};
+
+struct CreateTensorParameters {
+    ttnn::Shape input_shape;
+    DataType dtype;
+    Layout layout;
+    MemoryConfig mem_cfg;
+};
+
+class TTNNFixtureWithTensor : public TTNNFixtureWithDevice, public testing::WithParamInterface<CreateTensorParameters> {
+protected:
+    [[nodiscard]] const Tensor CreateTensor() {
+        CreateTensorParameters params = GetParam();
+        TensorSpec tensor_spec(
+            params.input_shape, TensorLayout(params.dtype, PageConfig(params.layout), params.mem_cfg));
+        auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device_, tensor_spec);
+        auto input_storage = tt::tt_metal::DeviceStorage{input_buffer};
+        Tensor input_tensor = Tensor(input_storage, params.input_shape, params.dtype, params.layout);
+        return std::move(input_tensor);
+    }
 };
 
 }  // namespace ttnn

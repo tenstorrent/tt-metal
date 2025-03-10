@@ -36,9 +36,10 @@ MeshEvent EnqueueRecordEventToHost(
 void EnqueueWaitForEvent(MeshCommandQueue& mesh_cq, const MeshEvent& event) { mesh_cq.enqueue_wait_for_event(event); }
 
 void EventSynchronize(const MeshEvent& event) {
-    auto& mesh_cq = event.device()->mesh_command_queue(event.mesh_cq_id());
-    mesh_cq.drain_events_from_completion_queue();
-    mesh_cq.verify_reported_events_after_draining(event);
+    for (const auto& coord : event.device_range()) {
+        auto physical_device = event.device()->get_device(coord);
+        while (physical_device->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) < event.id());
+    }
 }
 
 MeshTraceId BeginTraceCapture(MeshDevice* device, uint8_t cq_id) {
@@ -56,6 +57,16 @@ void ReplayTrace(MeshDevice* device, uint8_t cq_id, const MeshTraceId& trace_id,
 }
 
 void ReleaseTrace(MeshDevice* device, const MeshTraceId& trace_id) { device->release_mesh_trace(trace_id); }
+
+void Synchronize(MeshDevice* device, std::optional<uint8_t> cq_id, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    if (cq_id.has_value()) {
+        device->mesh_command_queue(*cq_id).finish(sub_device_ids);
+    } else {
+        for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
+            device->mesh_command_queue(cq_id).finish(sub_device_ids);
+        }
+    }
+}
 
 void Finish(MeshCommandQueue& mesh_cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     mesh_cq.finish(sub_device_ids);

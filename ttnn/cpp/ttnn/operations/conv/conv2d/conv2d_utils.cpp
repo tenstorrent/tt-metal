@@ -110,7 +110,7 @@ ParallelConfig determine_parallel_config(
     if (shard_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         uint32_t num_cores_nhw = find_closest_largest_divisor_with_num_padding_and_mult(
             out_nhw_ntiles, max_num_cores, act_block_h_override_ntiles);
-        grid = num_cores_to_corerangeset(num_cores_nhw, compute_grid_size, true);
+        grid = tt::tt_metal::num_cores_to_corerangeset(num_cores_nhw, compute_grid_size, true);
     } else if (shard_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         uint32_t start_divisor =
             block_shard_orientation == ShardOrientation::COL_MAJOR ? compute_grid_size.x : compute_grid_size.y;
@@ -131,7 +131,7 @@ ParallelConfig determine_parallel_config(
         uint32_t num_cores_c = enable_channels_padding
                                    ? find_closest_largest_divisor_with_num_padding(input_channles_ntiles, max_num_cores)
                                    : find_closest_largest_divisor(input_channles_ntiles, max_num_cores);
-        grid = num_cores_to_corerangeset(num_cores_c, compute_grid_size, true);
+        grid = tt::tt_metal::num_cores_to_corerangeset(num_cores_c, compute_grid_size, true);
     } else {
         TT_THROW("Conv2d supports Height, Block or Width Sharded Layouts but got {}", shard_layout);
     }
@@ -154,7 +154,7 @@ ParallelConfig determine_output_parallel_config(
     if (input_parallel_config.shard_scheme == ttnn::TensorMemoryLayout::WIDTH_SHARDED && !is_mm_conv) {
         uint32_t max_num_cores = compute_grid_size.x * compute_grid_size.y;
         output_parallel_config = {
-            .grid = num_cores_to_corerangeset(
+            .grid = tt::tt_metal::num_cores_to_corerangeset(
                 find_closest_largest_divisor_with_num_padding(
                     tt::div_up(out_channels, tt::constants::TILE_WIDTH), max_num_cores),
                 compute_grid_size,
@@ -238,7 +238,7 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(
     uint32_t nhw_shard = nhw_padded / num_cores_nhw;
     TT_ASSERT(channels % num_cores_channels == 0, "Channels: {}, num core channels: {}", channels, num_cores_channels);
     uint32_t channel_shard = channels / num_cores_channels;
-    auto shard_spec = ShardSpec{parallel_config.grid, {nhw_shard, channel_shard}, shard_orientation};
+    auto shard_spec = tt::tt_metal::ShardSpec{parallel_config.grid, {nhw_shard, channel_shard}, shard_orientation};
     log_debug("Calculated Shard Spec = {}", shard_spec);
     return MemoryConfig{shard_scheme, BufferType::L1, shard_spec};
 }
@@ -597,7 +597,7 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
                 if (!input_tensor.is_sharded()) {
                     // In case we need to run Interleaved2Sharded switch fron physical sharding
                     // to logical sharding, in order to get smaller allocation size of sharded buffer.
-                    input_tensor_sharded_memory_config_to_layout.shard_spec = ShardSpec(
+                    input_tensor_sharded_memory_config_to_layout.shard_spec = tt::tt_metal::ShardSpec(
                         input_tensor_sharded_memory_config.shard_spec.value().grid,
                         input_tensor_sharded_memory_config.shard_spec.value().shape,
                         input_tensor_sharded_memory_config.shard_spec.value().shape,
@@ -913,7 +913,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     uint32_t output_tile_size = tt::tile_size(datatype_to_dataformat_converter(conv_config.dtype));
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(hal.get_arch(), compute_kernel_config);
+        get_compute_kernel_config_args(tt::tt_metal::hal.get_arch(), compute_kernel_config);
 
     uint32_t act_block_w_ntiles = block_config.act_block_w_ntiles;
     uint32_t act_block_h_ntiles = block_config.act_block_h_ntiles;
@@ -961,40 +961,40 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
 
         uint32_t partials_block_num_bytes = out_block_num_tiles * partial_tile_size;
 
-        // CB 0
-        uint32_t act_cb_0_size = tilized_act_block_num_bytes;
-        tt::log_debug(tt::LogOp, "CB0 Size: {}", act_cb_0_size);
+        // ACT CB
+        uint32_t act_cb_size = tilized_act_block_num_bytes;
+        tt::log_debug(tt::LogOp, "Act CB Size: {}", act_cb_size);
 
-        // CB 1
-        uint32_t weights_cb_1_size = weight_block_num_bytes;
-        tt::log_debug(tt::LogOp, "CB1 Size: {}", weights_cb_1_size);
+        // WEIGHTS CB
+        uint32_t weights_cb_size = weight_block_num_bytes;
+        tt::log_debug(tt::LogOp, "Weights CB Size: {}", weights_cb_size);
 
-        // CB 2
-        uint32_t bias_cb_2_size = bias_block_num_bytes;
-        tt::log_debug(tt::LogOp, "CB2 Size: {}", bias_cb_2_size);
+        // BIAS CB
+        uint32_t bias_cb_size = bias_block_num_bytes;
+        tt::log_debug(tt::LogOp, "Bias CB Size: {}", bias_cb_size);
 
-        // CB 5
-        uint32_t l1_scratchpad_cb_5_size = conv2d::l1_scratchpad_CB_size;
-        tt::log_debug(tt::LogOp, "CB5 Size: {}", l1_scratchpad_cb_5_size);
+        // L1 CB
+        uint32_t l1_scratchpad_cb_size = conv2d::l1_scratchpad_CB_size;
+        tt::log_debug(tt::LogOp, "L1 CB Size: {}", l1_scratchpad_cb_size);
 
-        // CB 6
-        uint32_t row_major_act_cb_6_size = act_block_num_bytes;
-        tt::log_debug(tt::LogOp, "CB6 Size: {}", row_major_act_cb_6_size);
+        // ACT ROW MAJOR CB
+        uint32_t row_major_act_cb_size = act_block_num_bytes;
+        tt::log_debug(tt::LogOp, "Act row major CB Size: {}", row_major_act_cb_size);
 
-        // CB 24
-        uint32_t matmul_partial_cb_24_size = partials_block_num_bytes;
+        // MATMUL PARTIALs CB
+        uint32_t matmul_partials_cb_size = partials_block_num_bytes;
         if (interm_dtype == conv_config.dtype) {
-            matmul_partial_cb_24_size = 0;
+            matmul_partials_cb_size = 0;
         } else {
-            tt::log_debug(tt::LogOp, "CB24 Size: {}", matmul_partial_cb_24_size);
+            tt::log_debug(tt::LogOp, "Matmul partial CB Size: {}", matmul_partials_cb_size);
         }
 
-        // CB 25
-        uint32_t tilized_act_cb_25_size = tilized_act_block_num_bytes;
-        tt::log_debug(tt::LogOp, "CB25 Size: {}", tilized_act_cb_25_size);
+        // TILIZED ACT CB
+        uint32_t tilized_act_cb_size = tilized_act_block_num_bytes;
+        tt::log_debug(tt::LogOp, "Tilized act CB Size: {}", tilized_act_cb_size);
 
-        uint32_t total_CB_size = act_cb_0_size + weights_cb_1_size + bias_cb_2_size + l1_scratchpad_cb_5_size +
-                                 row_major_act_cb_6_size + matmul_partial_cb_24_size + tilized_act_cb_25_size;
+        uint32_t total_CB_size = act_cb_size + weights_cb_size + bias_cb_size + l1_scratchpad_cb_size +
+                                 row_major_act_cb_size + matmul_partials_cb_size + tilized_act_cb_size;
 
         tt::log_debug(tt::LogOp, "Total CB Size: {}", total_CB_size);
 
@@ -1041,55 +1041,56 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
             act_block_split_last_ntiles *= 2;
             act_block_split_ntiles *= 2;
         }
-        // CB 0
-        uint32_t act_cb_0_size = act_block_split_ntiles * input_tile_size;
-        tt::log_debug(tt::LogOp, "CB0 Size: {}", act_cb_0_size);
+        // ACT CB
+        uint32_t act_cb_size = act_block_split_ntiles * input_tile_size;
+        tt::log_debug(tt::LogOp, "Act CB Size: {}", act_cb_size);
 
-        // CB 1
-        uint32_t weights_cb_1_size = weight_block_h_ntiles * weight_block_w_ntiles * weights_tile_size;
+        // WEIGHTS CB
+        uint32_t weights_cb_size = weight_block_h_ntiles * weight_block_w_ntiles * weights_tile_size;
         if (num_blocks_act_h > 1) {
-            weights_cb_1_size *= kernel_size[0];
+            weights_cb_size *= kernel_size[0];
         }
         if (num_blocks_act_h <= 1 && conv_config.enable_weights_double_buffer) {
-            weights_cb_1_size *= 2;
+            weights_cb_size *= 2;
         }
-        tt::log_debug(tt::LogOp, "CB1 Size: {}", weights_cb_1_size);
+        tt::log_debug(tt::LogOp, "Weights CB Size: {}", weights_cb_size);
 
-        // CB 2
-        uint32_t bias_cb_2_size = bias_block_num_bytes;
-        tt::log_debug(tt::LogOp, "CB2 Size: {}", bias_cb_2_size);
+        // BIAS CB
+        uint32_t bias_cb_size = bias_block_num_bytes;
+        tt::log_debug(tt::LogOp, "Bias CB Size: {}", bias_cb_size);
 
-        uint32_t l1_scratchpad_cb_5_size = conv2d::l1_scratchpad_CB_size;
-        tt::log_debug(tt::LogOp, "CB5 Size: {}", l1_scratchpad_cb_5_size);
+        // L1 CB
+        uint32_t l1_scratchpad_cb_size = conv2d::l1_scratchpad_CB_size;
+        tt::log_debug(tt::LogOp, "L1 CB Size: {}", l1_scratchpad_cb_size);
 
-        uint32_t split_second_act_reader_cb_7_size = 0;
+        // SPLIT READER CB
+        uint32_t split_second_act_reader_cb_size = act_block_split_last_ntiles * input_tile_size;
+        tt::log_debug(tt::LogOp, "Split reader CB Size: {}", split_second_act_reader_cb_size);
 
-        split_second_act_reader_cb_7_size = act_block_split_last_ntiles * input_tile_size;
-        tt::log_debug(tt::LogOp, "CB7 Size: {}", split_second_act_reader_cb_7_size);
-
-        // CB 24
-        uint32_t matmul_partials_cb_24_size = output_block_ntiles * partial_tile_size;
+        // MATMUL PARTIALS CB
+        uint32_t matmul_partials_cb_size = output_block_ntiles * partial_tile_size;
         if (untilize_out == false && interm_dtype == conv_config.dtype) {
-            matmul_partials_cb_24_size = 0;
+            matmul_partials_cb_size = 0;
         }
         if (is_1d_depthwise_conv) {
-            matmul_partials_cb_24_size = output_tile_size;
+            matmul_partials_cb_size = output_tile_size;
         }
-        if (matmul_partials_cb_24_size != 0) {
-            tt::log_debug(tt::LogOp, "CB24 Size: {}", matmul_partials_cb_24_size);
+        if (matmul_partials_cb_size != 0) {
+            tt::log_debug(tt::LogOp, "Matmul partials CB Size: {}", matmul_partials_cb_size);
         }
-        // CB 25
-        uint32_t tilized_act_cb_25_size = tilzed_act_cb_size;
-        tt::log_debug(tt::LogOp, "CB25 Size: {}", tilized_act_cb_25_size);
+        // TILIZED ACT CB
+        uint32_t tilized_act_cb_size = tilzed_act_cb_size;
+        tt::log_debug(tt::LogOp, "Tilized act CB Size: {}", tilized_act_cb_size);
 
-        uint32_t temp_sum_cb_27_size = 0;
+        // TEMP SUM CB
+        uint32_t temp_sum_cb_size = 0;
         if (is_1d_depthwise_conv) {
-            temp_sum_cb_27_size = output_tile_size;
-            tt::log_debug(tt::LogOp, "CB27 Size: {}", temp_sum_cb_27_size);
+            temp_sum_cb_size = output_tile_size;
+            tt::log_debug(tt::LogOp, "Temp sum CB Size: {}", temp_sum_cb_size);
         }
-        uint32_t total_CB_size = act_cb_0_size + weights_cb_1_size + bias_cb_2_size + l1_scratchpad_cb_5_size +
-                                 split_second_act_reader_cb_7_size + matmul_partials_cb_24_size +
-                                 tilized_act_cb_25_size + temp_sum_cb_27_size;
+        uint32_t total_CB_size = act_cb_size + weights_cb_size + bias_cb_size + l1_scratchpad_cb_size +
+                                 split_second_act_reader_cb_size + matmul_partials_cb_size + tilized_act_cb_size +
+                                 temp_sum_cb_size;
         return conv2d::conv_op_l1_usage{.tensor_allocation_size = output_size, .CB_allocation_size = total_CB_size};
     } else if (sharding_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
         auto output_shard_shape = output_memory_config.shard_spec.value().shape;
@@ -1102,8 +1103,9 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
             } else if (conv_config.dtype == DataType::FLOAT32) {
                 per_core_out_width_aligned *= 4;
             }
-            output_size = round_up(per_core_out_width_aligned, hal.get_alignment(HalMemType::L1)) *
-                          pconfig.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT;
+            output_size =
+                round_up(per_core_out_width_aligned, tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::L1)) *
+                pconfig.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT;
         } else {
             output_size = per_core_out_matrix_height_ntiles * per_core_out_matrix_width_ntiles * output_tile_size;
         }
@@ -1132,43 +1134,42 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
 
         uint32_t partial_tile_size = tt::tile_size(datatype_to_dataformat_converter(interm_dtype));
 
-        // CB 0
-        uint32_t act_cb_0_size = tilized_act_block_cb_size;
+        // ACT CB
+        uint32_t act_cb_size = tilized_act_block_cb_size;
         if (conv_config.enable_act_double_buffer) {
-            act_cb_0_size *= 2;
+            act_cb_size *= 2;
         }
-        tt::log_debug(tt::LogOp, "CB0 Size: {}", act_cb_0_size);
+        tt::log_debug(tt::LogOp, "Act CB Size: {}", act_cb_size);
 
-        // CB 1
-        uint32_t weights_cb_1_size = weight_block_h_ntiles * weight_block_w_ntiles * weights_tile_size;
+        // WEIGHTS CB
+        uint32_t weights_cb_size = weight_block_h_ntiles * weight_block_w_ntiles * weights_tile_size;
         if (conv_config.enable_weights_double_buffer) {
-            weights_cb_1_size *= 2;
+            weights_cb_size *= 2;
         }
-        tt::log_debug(tt::LogOp, "CB1 Size: {}", weights_cb_1_size);
+        tt::log_debug(tt::LogOp, "Weights CB Size: {}", weights_cb_size);
 
-        // CB 2
-        uint32_t bias_cb_2_size = bias_block_num_bytes;
-        tt::log_debug(tt::LogOp, "CB2 Size: {}", bias_cb_2_size);
+        // BIAS CB
+        uint32_t bias_cb_size = bias_block_num_bytes;
+        tt::log_debug(tt::LogOp, "Bias CB Size: {}", bias_cb_size);
 
-        // CB 5
-        uint32_t l1_scratchpad_cb_5_size = conv2d::l1_scratchpad_CB_size;
-        tt::log_debug(tt::LogOp, "CB5 Size: {}", l1_scratchpad_cb_5_size);
+        // L1 CB
+        uint32_t l1_scratchpad_cb_size = conv2d::l1_scratchpad_CB_size;
+        tt::log_debug(tt::LogOp, "L1 CB Size: {}", l1_scratchpad_cb_size);
 
-        // CB 6
-        uint32_t cb6_size = row_major_act_cb_size;
-        tt::log_debug(tt::LogOp, "CB6 Size: {}", cb6_size);
+        // ACT ROW MAJOR CB
+        tt::log_debug(tt::LogOp, "Act row major CB Size: {}", row_major_act_cb_size);
 
-        // CB 24
-        uint32_t matmul_partials_cb_24_size = output_block_ntiles * partial_tile_size;
+        // MATMUL PARTIALS CB
+        uint32_t matmul_partials_cb_size = output_block_ntiles * partial_tile_size;
         if (untilize_out == false && interm_dtype == conv_config.dtype) {
-            matmul_partials_cb_24_size = 0;
+            matmul_partials_cb_size = 0;
         } else {
-            tt::log_debug(tt::LogOp, "CB24 Size: {}", matmul_partials_cb_24_size);
+            tt::log_debug(tt::LogOp, "Matmul partials CB Size: {}", matmul_partials_cb_size);
         }
 
-        // CB 25
-        uint32_t tilized_act_cb_25_size = tilized_act_block_cb_size;
-        tt::log_debug(tt::LogOp, "CB25 Size: {}", tilized_act_cb_25_size);
+        // TILIZED ACT CB
+        uint32_t tilized_act_cb_size = tilized_act_block_cb_size;
+        tt::log_debug(tt::LogOp, "Tilized act CB Size: {}", tilized_act_cb_size);
 
         bool need_unpad_after_untilize =
             output_shard_shape[1] * output_shard_shape[0] <
@@ -1176,13 +1177,15 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
 
         tt::log_debug(tt::LogOp, "Need Unpad after untilize: {}", need_unpad_after_untilize);
 
-        uint32_t cb28_size = 0;
+        // UNTILIZED UNPADDED OUT CB
+        uint32_t untilized_unpadded_out_cb_size = 0;
         if (need_unpad_after_untilize && untilize_out) {
-            cb28_size = output_block_ntiles * output_tile_size;
-            tt::log_debug(tt::LogOp, "CB28 Size: {}", cb28_size);
+            untilized_unpadded_out_cb_size = output_block_ntiles * output_tile_size;
+            tt::log_debug(tt::LogOp, "Untilized unapadded out CB Size: {}", untilized_unpadded_out_cb_size);
         }
-        uint32_t total_CB_size = act_cb_0_size + weights_cb_1_size + bias_cb_2_size + l1_scratchpad_cb_5_size +
-                                 cb6_size + matmul_partials_cb_24_size + tilized_act_cb_25_size + cb28_size;
+        uint32_t total_CB_size = act_cb_size + weights_cb_size + bias_cb_size + l1_scratchpad_cb_size +
+                                 row_major_act_cb_size + matmul_partials_cb_size + tilized_act_cb_size +
+                                 untilized_unpadded_out_cb_size;
         return conv2d::conv_op_l1_usage{.tensor_allocation_size = output_size, .CB_allocation_size = total_CB_size};
     }
     TT_THROW("Invalid shard layout {}", sharding_scheme);

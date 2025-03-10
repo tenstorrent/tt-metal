@@ -45,8 +45,7 @@ def run_all_reduce_test(
     if teardown_persistent_fabric:
         assert enable_persistent_fabric
 
-    for d in mesh_device.get_devices():
-        ttnn.enable_program_cache(d)
+    ttnn.synchronize_device(mesh_device)
 
     sub_device_stall_group = []
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
@@ -110,8 +109,8 @@ def run_all_reduce_test(
             subdevice_id=worker_sub_device_id,
         )
         if enable_persistent_fabric:
-            ttnn.synchronize_devices(mesh_device, sub_device_ids=sub_device_stall_group)
-    ttnn.synchronize_devices(mesh_device, sub_device_ids=sub_device_stall_group)
+            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+    ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
 
     if enable_persistent_fabric and teardown_persistent_fabric:
         logger.info("Tearing down persistent fabric interface")
@@ -324,8 +323,7 @@ def run_all_reduce_with_mesh_tensor_along_row(
     if teardown_persistent_fabric:
         assert enable_persistent_fabric
 
-    for d in mesh_device.get_devices():
-        ttnn.enable_program_cache(d)
+    ttnn.synchronize_device(mesh_device)
 
     sub_device_stall_group = []
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
@@ -406,8 +404,8 @@ def run_all_reduce_with_mesh_tensor_along_row(
                 subdevice_id=worker_sub_device_id,
             )
             if enable_persistent_fabric:
-                ttnn.synchronize_devices(mesh_device, sub_device_ids=sub_device_stall_group)
-        ttnn.synchronize_devices(mesh_device, sub_device_ids=sub_device_stall_group)
+                ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+        ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
     except Exception as e:
         raise e
     finally:

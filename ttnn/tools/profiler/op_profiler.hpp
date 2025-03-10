@@ -108,6 +108,62 @@ inline auto compute_program_hash(
 }
 #endif
 
+class RuntimeIDToOpName {
+    using RuntimeID = uint32_t;
+    using KeyType = std::pair<chip_id_t, RuntimeID>;
+    using MapType = std::map<KeyType, std::string>;
+
+public:
+    MapType::iterator find(chip_id_t device_id, RuntimeID runtime_id) {
+        std::scoped_lock<std::mutex> lock(map_mutex);
+        return map.find({device_id, runtime_id});
+    }
+    std::string at(chip_id_t device_id, RuntimeID runtime_id) {
+        std::scoped_lock<std::mutex> lock(map_mutex);
+        return map.at({device_id, runtime_id});
+    }
+    void insert(KeyType key, std::string opname) {
+        std::scoped_lock<std::mutex> lock(map_mutex);
+        map.emplace(key, std::move(opname));
+    }
+    MapType export_map() {
+        // thread-safe copy of internal map contents
+        std::scoped_lock<std::mutex> lock(map_mutex);
+        return map;
+    }
+
+private:
+    std::mutex map_mutex;
+    MapType map;
+};
+
+inline RuntimeIDToOpName runtime_id_to_opname_{};
+
+class ProgramHashToOpName {
+    using KeyType = std::pair<chip_id_t, tt::stl::hash::hash_t>;
+
+public:
+    std::string find_if_exists(const KeyType& key) {
+        std::scoped_lock<std::mutex> lock(map_mutex);
+        auto it = map.find(key);
+        if (it != map.end()) {
+            return it->second;
+        } else {
+            return "";
+        }
+    }
+    void insert(const KeyType& key, std::string opname) {
+        std::scoped_lock<std::mutex> lock(map_mutex);
+        map.emplace(key, std::move(opname));
+    }
+
+private:
+    std::mutex map_mutex;
+    std::map<KeyType, std::string> map;
+};
+
+inline ProgramHashToOpName program_hash_to_opname_{};
+
 static void start_tracy_zone(const string& source, const string& functName, uint32_t lineNum, uint32_t color = 0) {
 #if defined(TRACY_ENABLE)
     auto tracySrcLoc =
@@ -384,6 +440,10 @@ inline std::string op_meta_data_serialized_json(
         j["op_hash"] = program_hash;
         j["kernel_info"] = get_kernels_json(device_id, program);
 
+        auto opname = j["op_code"].template get<std::string>();
+        runtime_id_to_opname_.insert({device_id, program.get_runtime_id()}, opname);
+        program_hash_to_opname_.insert({device_id, program_hash}, opname);
+
         j["optional_input_tensors"] = std::vector<json>{};
 
         auto perfModel = [&]() {
@@ -391,7 +451,7 @@ inline std::string op_meta_data_serialized_json(
                 return device_operation_t::create_op_performance_model(
                     operation_attributes, tensor_args, tensor_return_value);
             } else {
-                return operation::OpPerformanceModel{};
+                return tt::tt_metal::operation::OpPerformanceModel{};
             }
         }();
         j["performance_model"]["compute_ns"] = perfModel.get_compute_ns();
@@ -412,22 +472,24 @@ inline std::string op_meta_data_serialized_json(
         std::string ser = j.dump(4);
         return fmt::format("{}{} ->\n{}`", short_str, operation_id, ser);
     } else {
+        auto opname = program_hash_to_opname_.find_if_exists({device_id, program_hash});
+        runtime_id_to_opname_.insert({device_id, program.get_runtime_id()}, std::move(opname));
         return fmt::format("{}{}`", cached_ops.at(device_id).at(program_hash), operation_id);
     }
 }
 
 #define TracyOpTTNNDevice(                                                                                    \
     operation, operation_id, device_id, program, operation_attributes, tensor_args, tensor_return_value)      \
-    std::string op_message = op_profiler::op_meta_data_serialized_json(                                       \
+    std::string op_message = tt::tt_metal::op_profiler::op_meta_data_serialized_json(                         \
         operation, operation_id, device_id, program, operation_attributes, tensor_args, tensor_return_value); \
     std::string op_text = fmt::format("id:{}", operation_id);                                                 \
     ZoneText(op_text.c_str(), op_text.size());                                                                \
     TracyMessage(op_message.c_str(), op_message.size());
 
-#define TracyOpTTNNExternal(op_id, op, input_tensors)                                             \
-    std::string op_message = op_profiler::op_meta_data_serialized_json(op_id, op, input_tensors); \
-    std::string op_text = fmt::format("id:{}", op_id);                                            \
-    ZoneText(op_text.c_str(), op_text.size());                                                    \
+#define TracyOpTTNNExternal(op_id, op, input_tensors)                                                           \
+    std::string op_message = tt::tt_metal::op_profiler::op_meta_data_serialized_json(op_id, op, input_tensors); \
+    std::string op_text = fmt::format("id:{}", op_id);                                                          \
+    ZoneText(op_text.c_str(), op_text.size());                                                                  \
     TracyMessage(op_message.c_str(), op_message.size());
 
 #else

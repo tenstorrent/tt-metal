@@ -11,6 +11,8 @@
 #include "tests/tt_metal/test_utils/tilization.hpp"
 #include "matmul_test_utils.hpp"
 
+namespace tt::tt_metal {
+
 using std::vector;
 using namespace tt;
 using namespace tt::test_utils;
@@ -171,7 +173,7 @@ void create_CBs_for_fused_matmul(
 }
 
 bool matmul_large_block(
-    DispatchFixture* fixture,
+    tt_metal::DispatchFixture* fixture,
     tt_metal::IDevice* device,
     bool activations_rm,
     bool output_rm,
@@ -376,19 +378,19 @@ bool matmul_large_block(
     if (output_rm) {
         pass &= (golden == result_bfp16);
         if (not pass) {
-            print_faces(result_bfp16, "Result");
+            tt_metal::print_faces(result_bfp16, "Result");
         }
     } else {
         auto result_flat_layout = convert_to_flat_layout(result_bfp16);
         auto result_untilized = test_utils::untilize(result_flat_layout, M * 32, N * 32);
         pass &= (golden == result_untilized);
         if (not pass) {
-            print_faces(result_untilized, "Result");
+            tt_metal::print_faces(result_untilized, "Result");
         }
     }
 
     if (not pass) {
-        print_faces(tensor.get_values(), "Golden");
+        tt_metal::print_faces(tensor.get_values(), "Golden");
     }
     return pass;
 }
@@ -417,3 +419,5 @@ TEST_F(DispatchFixture, TensixMatmulLargeBlock) {
         }
     }
 }
+
+}  // namespace tt::tt_metal

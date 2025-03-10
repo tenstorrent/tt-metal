@@ -10,6 +10,7 @@
 
 #include "ttnn/core.hpp"
 #include "tt-metalium/lightmetal_binary.hpp"
+#include "tt-metalium/lightmetal_replay.hpp"
 
 namespace py = pybind11;
 
@@ -19,6 +20,9 @@ namespace core {
 void py_module_types(py::module& module) { py::class_<ttnn::Config>(module, "Config"); }
 
 void py_module(py::module& module) {
+    using tt::tt_metal::LightMetalBeginCapture;
+    using tt::tt_metal::LightMetalBinary;
+    using tt::tt_metal::LightMetalEndCapture;
     auto py_config = static_cast<py::class_<ttnn::Config>>(module.attr("Config"));
     py_config.def(py::init<const ttnn::Config&>()).def("__repr__", [](const ttnn::Config& config) {
         return fmt::format("{}", config);
@@ -40,6 +44,16 @@ void py_module(py::module& module) {
         .def("is_empty", &LightMetalBinary::is_empty)
         .def("save_to_file", &LightMetalBinary::save_to_file)
         .def_static("load_from_file", &LightMetalBinary::load_from_file);
+
+    py::class_<tt::tt_metal::LightMetalReplay>(module, "LightMetalReplay")
+        .def_static(
+            "create",
+            [](LightMetalBinary binary, IDevice* device = nullptr) {
+                return std::make_unique<tt::tt_metal::LightMetalReplay>(std::move(binary), device);
+            },
+            py::arg("binary"),
+            py::arg("device") = nullptr)
+        .def("run", &tt::tt_metal::LightMetalReplay::run);
 
     module.def("get_memory_config", &ttnn::get_memory_config);
     module.def("light_metal_begin_capture", &LightMetalBeginCapture);

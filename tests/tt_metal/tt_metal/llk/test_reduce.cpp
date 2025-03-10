@@ -20,9 +20,10 @@
 #include <tt-metalium/test_tiles.hpp>
 #include <tt-metalium/bfloat16.hpp>
 
+namespace tt::tt_metal {
+
 using std::vector;
 using namespace tt;
-using namespace tt::tt_metal;
 using namespace tt::test_utils;
 using namespace constants;
 
@@ -447,7 +448,7 @@ TEST_F(DeviceFixture, TensixComputeReduceH) {
                             .data_gen_offset = -10.0f,
                             .atol = 1e-2f,
                             .rtol = 0.08f,
-                            .golden_function = unit_tests::compute::gold_reduce_h,
+                            .golden_function = ::unit_tests::compute::gold_reduce_h,
                             .result_shape = result_shape,
                             .fp32_dest_acc_en = fp32_dest_acc_en,
                             .dst_full_sync_en = dst_full_sync_en,
@@ -486,7 +487,7 @@ TEST_F(DeviceFixture, TensixComputeReduceW) {
                             .data_gen_offset = -10.0f,
                             .atol = 1e-2f,
                             .rtol = 0.08f,
-                            .golden_function = unit_tests::compute::gold_reduce_w,
+                            .golden_function = ::unit_tests::compute::gold_reduce_w,
                             .result_shape = result_shape,
                             .fp32_dest_acc_en = fp32_dest_acc_en,
                             .dst_full_sync_en = dst_full_sync_en,
@@ -500,8 +501,8 @@ TEST_F(DeviceFixture, TensixComputeReduceW) {
         }
     }
 }
-// Disabled due to GH issue #14510
-TEST_F(DeviceFixture, DISABLED_TensixComputeReduceHW) {
+
+TEST_F(DeviceFixture, TensixComputeReduceHW) {
     std::vector<uint32_t> shape = {1, 2, 7 * TILE_HEIGHT, 5 * TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], 32, 32};
     for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
@@ -526,7 +527,7 @@ TEST_F(DeviceFixture, DISABLED_TensixComputeReduceHW) {
                             .data_gen_offset = -10.0f,
                             .atol = 1e-2f,
                             .rtol = 0.08f,
-                            .golden_function = unit_tests::compute::gold_reduce_hw,
+                            .golden_function = ::unit_tests::compute::gold_reduce_hw,
                             .result_shape = result_shape,
                             .fp32_dest_acc_en = fp32_dest_acc_en,
                             .dst_full_sync_en = dst_full_sync_en,
@@ -565,7 +566,7 @@ TEST_F(DeviceFixture, TensixComputeReduceHMathOnly) {
                             .data_gen_offset = -10.0f,
                             .atol = 1e-2f,
                             .rtol = 0.08f,
-                            .golden_function = unit_tests::compute::gold_reduce_h,
+                            .golden_function = ::unit_tests::compute::gold_reduce_h,
                             .result_shape = result_shape,
                             .math_only_reduce = true,
                             .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -604,7 +605,7 @@ TEST_F(DeviceFixture, TensixComputeReduceWMathOnly) {
                             .data_gen_offset = -10.0f,
                             .atol = 1e-2f,
                             .rtol = 0.08f,
-                            .golden_function = unit_tests::compute::gold_reduce_w,
+                            .golden_function = ::unit_tests::compute::gold_reduce_w,
                             .result_shape = result_shape,
                             .math_only_reduce = true,
                             .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -644,7 +645,7 @@ TEST_F(DeviceFixture, DISABLED_TensixComputeReduceHWMathOnly) {
                             .data_gen_offset = -10.0f,
                             .atol = 1e-2f,
                             .rtol = 0.08f,
-                            .golden_function = unit_tests::compute::gold_reduce_hw,
+                            .golden_function = ::unit_tests::compute::gold_reduce_hw,
                             .result_shape = result_shape,
                             .math_only_reduce = true,
                             .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -685,7 +686,7 @@ TEST_F(DeviceFixture, TensixComputeReduceHShortInit) {
                             .data_gen_offset = -10.0f,
                             .atol = 1e-2f,
                             .rtol = 0.08f,
-                            .golden_function = unit_tests::compute::gold_reduce_h,
+                            .golden_function = ::unit_tests::compute::gold_reduce_h,
                             .result_shape = result_shape,
                             .fp32_dest_acc_en = fp32_dest_acc_en,
                             .dst_full_sync_en = dst_full_sync_en,
@@ -724,7 +725,7 @@ TEST_F(DeviceFixture, TensixComputeReduceWShortInit) {
                             .data_gen_offset = -10.0f,
                             .atol = 1e-2f,
                             .rtol = 0.08f,
-                            .golden_function = unit_tests::compute::gold_reduce_w,
+                            .golden_function = ::unit_tests::compute::gold_reduce_w,
                             .result_shape = result_shape,
                             .fp32_dest_acc_en = fp32_dest_acc_en,
                             .dst_full_sync_en = dst_full_sync_en,
@@ -764,7 +765,7 @@ TEST_F(DeviceFixture, DISABLED_TensixComputeReduceHWShortInit) {
                             .data_gen_offset = -10.0f,
                             .atol = 1e-2f,
                             .rtol = 0.08f,
-                            .golden_function = unit_tests::compute::gold_reduce_hw,
+                            .golden_function = ::unit_tests::compute::gold_reduce_hw,
                             .result_shape = result_shape,
                             .fp32_dest_acc_en = fp32_dest_acc_en,
                             .dst_full_sync_en = dst_full_sync_en,
@@ -777,3 +778,5 @@ TEST_F(DeviceFixture, DISABLED_TensixComputeReduceHWShortInit) {
         }
     }
 }
+
+}  // namespace tt::tt_metal

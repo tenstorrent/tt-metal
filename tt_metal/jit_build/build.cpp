@@ -4,15 +4,10 @@
 
 #include <build.hpp>
 
-#include <chrono>
 #include <filesystem>
 #include <fstream>
-#include <iomanip>
-#include <iostream>
 #include <span>
-#include <sstream>
 #include <string>
-#include <thread>
 
 #include "common/executor.hpp"
 #include "jit_build/genfiles.hpp"
@@ -49,14 +44,25 @@ static std::string get_string_aliased_arch_lowercase(tt::ARCH arch) {
     }
 }
 
-JitBuildEnv::JitBuildEnv() {}
+static void build_failure(const string& target_name, const string& op, const string& cmd, const string& log_file) {
+    log_error(tt::LogBuildKernels, "{} {} failure -- cmd: {}", target_name, op, cmd);
+    std::ifstream file{log_file};
+    if (file.is_open()) {
+        std::string log_contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        log_error(tt::LogBuildKernels, "{}", log_contents);
+        TT_THROW("{} build failed", target_name);
+    } else {
+        TT_THROW("Failed to open {} failure log file {}", op, log_file);
+    }
+}
 
-void check_built_dir(const std::filesystem::path& dir_path, const std::filesystem::path& git_hash_path)
-{
+static void check_built_dir(const std::filesystem::path& dir_path, const std::filesystem::path& git_hash_path) {
     if (dir_path.compare(git_hash_path) != 0) {
         std::filesystem::remove_all(dir_path);
     }
 }
+
+JitBuildEnv::JitBuildEnv() {}
 
 void JitBuildEnv::init(
     uint32_t build_key, tt::ARCH arch, const std::map<std::string, std::string>& device_kernel_defines) {
@@ -135,6 +141,13 @@ void JitBuildEnv::init(
             this->defines_ += "-DPROFILE_KERNEL=1 ";
         }
     }
+    if (tt::llrt::RunTimeOptions::get_instance().get_profiler_noc_events_enabled()) {
+        // force profiler on if noc events are being profiled
+        if (not tt::tt_metal::getDeviceProfilerState()) {
+            this->defines_ += "-DPROFILE_KERNEL=1 ";
+        }
+        this->defines_ += "-DPROFILE_NOC_EVENTS=1 ";
+    }
 
     if (tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
         this->defines_ += "-DWATCHER_ENABLED ";
@@ -172,20 +185,33 @@ void JitBuildEnv::init(
 
     // Includes
     // TODO(pgk) this list is insane
-    this->includes_ = string("") + "-I. " + "-I.. " + "-I" + this->root_ + " " + "-I" + this->root_ + "ttnn " + "-I" +
-                      this->root_ + "tt_metal " + "-I" + this->root_ + "tt_metal/include " + "-I" + this->root_ +
-                      "tt_metal/hw/inc " + "-I" + this->root_ + "tt_metal/hostdevcommon/api " + "-I" + this->root_ +
-                      "tt_metal/hw/inc/debug " + "-I" + this->root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ +
-                      " " + "-I" + this->root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/" +
-                      this->arch_name_ + "_defines " + "-I" + this->root_ + "tt_metal/hw/inc/" +
-                      this->aliased_arch_name_ + "/noc " + "-I" + this->root_ + "tt_metal/hw/ckernels/" +
-                      this->arch_name_ + "/metal/common " + "-I" + this->root_ + "tt_metal/hw/ckernels/" +
-                      this->arch_name_ + "/metal/llk_io " + "-I" + this->root_ + "tt_metal/third_party/tt_llk/tt_llk_" +
-                      this->arch_name_ + "/common/inc " +  // TODO(fixme) datamovement fw shouldn't read this
-                      "-I" + this->root_ + "tt_metal/api/" + this->aliased_arch_name_ + " " + "-I" + this->root_ +
-                      "tt_metal/api/" + this->aliased_arch_name_ + "/tt-metalium " + "-I" + this->root_ +
-                      "tt_metal/api/tt-metalium/ " + "-I" + this->root_ + "tt_metal/api/ " + "-I" + this->root_ +
-                      "tt_metal/third_party/tt_llk/tt_llk_" + this->arch_name_ + "/llk_lib ";
+    std::vector<std::string> includeDirs = {
+        ".",
+        "..",
+        root_,
+        root_ + "ttnn",
+        root_ + "tt_metal",
+        root_ + "tt_metal/include",
+        root_ + "tt_metal/hw/inc",
+        root_ + "tt_metal/hostdevcommon/api",
+        root_ + "tt_metal/hw/inc/debug",
+        root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_,
+        root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/" + this->arch_name_ + "_defines",
+        root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/noc",
+        root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/metal/common",
+        root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/metal/llk_io",
+        // TODO: datamovement fw shouldn't read this
+        root_ + "tt_metal/third_party/tt_llk/tt_llk_" + this->arch_name_ + "/common/inc",
+        root_ + "tt_metal/api/",
+        root_ + "tt_metal/api/tt-metalium/",
+        root_ + "tt_metal/third_party/tt_llk/tt_llk_" + this->arch_name_ + "/llk_lib"
+    };
+
+    std::ostringstream oss;
+    for (size_t i = 0; i < includeDirs.size(); ++i) {
+        oss << "-I" << includeDirs[i] << " ";
+    }
+    this->includes_ = oss.str();
 
     this->lflags_ = common_flags;
     this->lflags_ += "-fno-exceptions -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
@@ -484,6 +510,9 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
             this->target_name_ = "erisc";
             this->cflags_ = env_.cflags_ + " -fno-delete-null-pointer-checks ";
 
+            if (tt::llrt::RunTimeOptions::get_instance().get_erisc_iram_enabled()) {
+                this->defines_ += "-DENABLE_IRAM ";
+            }
             this->defines_ +=
                 "-DCOMPILE_FOR_ERISC "
                 "-DERISC "
@@ -501,9 +530,17 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
 
             string linker_str;
             if (this->is_fw_) {
-                linker_str = "tt_metal/hw/toolchain/erisc-b0-app.ld ";
+                if (tt::llrt::RunTimeOptions::get_instance().get_erisc_iram_enabled()) {
+                    linker_str = "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/erisc-b0-app_iram.ld ";
+                } else {
+                    linker_str = "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/erisc-b0-app.ld ";
+                }
             } else {
-                linker_str = "tt_metal/hw/toolchain/erisc-b0-kernel.ld ";
+                if (tt::llrt::RunTimeOptions::get_instance().get_erisc_iram_enabled()) {
+                    linker_str = "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/erisc-b0-kernel_iram.ld ";
+                } else {
+                    linker_str = "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/erisc-b0-kernel.ld ";
+                }
             }
             this->lflags_ = env_.lflags_ + "-L" + env_.root_ +
                             "/tt_metal/hw/toolchain "
@@ -599,18 +636,6 @@ JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuil
     this->process_defines_at_compile = true;
 
     finish_init();
-}
-
-static void build_failure(const string& target_name, const string& op, const string& cmd, const string& log_file) {
-    log_info(tt::LogBuildKernels, "{} {} failure -- cmd: {}", target_name, op, cmd);
-    string cat = "cat " + log_file;
-    if (fs::exists(log_file)) {
-        // XXXX PGK(TODO) not portable
-        if (system(cat.c_str())) {
-            TT_THROW("Failed system comand {}", cat);
-        }
-    }
-    TT_THROW("{} build failed", target_name);
 }
 
 void JitBuildState::compile_one(

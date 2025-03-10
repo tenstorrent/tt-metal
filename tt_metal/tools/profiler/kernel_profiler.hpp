@@ -188,7 +188,7 @@ inline void __attribute__((always_inline)) profiler_noc_async_write_posted(
     std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index) {
     WAYPOINT("NAWW");
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
-    ncrisc_noc_fast_write_any_len<proc_type, noc_mode>(
+    ncrisc_noc_fast_write_any_len<noc_mode>(
         noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, NOC_UNICAST_WRITE_VC, false, false, 1, true, true);
     WAYPOINT("NAWD");
 }
@@ -268,8 +268,9 @@ __attribute__((noinline)) void finish_profiler() {
 }
 
 __attribute__((noinline)) void quick_push() {
-#if defined(DISPATCH_KERNEL) && (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES) && \
-    (defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC))
+#if (                                                                                          \
+    defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || \
+    defined(COMPILE_FOR_IDLE_ERISC))
 
     SrcLocNameToHash("PROFILER-NOC-QUICK-SEND");
     mark_time_at_index_inlined(wIndex, hash);
@@ -381,6 +382,14 @@ struct profileScopeAccumulate {
     }
 };
 
+// performs quick push to DRAM if buffers appear full
+template <DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH>
+inline __attribute__((always_inline)) void flush_to_dram_if_full() {
+    if (not bufferHasRoom<dispatch>()) {
+        quick_push();
+    }
+}
+
 template <uint32_t data_id, DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH>
 inline __attribute__((always_inline)) void timeStampedData(uint64_t data) {
     if (bufferHasRoom<dispatch>()) {
@@ -399,6 +408,8 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
     }
 }
 }  // namespace kernel_profiler
+
+#include "noc_event_profiler.hpp"
 
 // Not dispatch
 #if (                            \
@@ -484,5 +495,10 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
 #define DeviceTimestampedData(data_id, data)
 
 #define DeviceRecordEvent(event_id)
+
+// null macros when noc tracing is disabled
+#define RECORD_NOC_EVENT_WITH_ADDR(type, noc_addr, num_bytes, vc)
+#define RECORD_NOC_EVENT_WITH_ID(type, noc_id, num_bytes, vc)
+#define RECORD_NOC_EVENT(type)
 
 #endif

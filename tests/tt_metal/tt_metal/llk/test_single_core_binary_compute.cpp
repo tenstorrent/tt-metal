@@ -17,6 +17,8 @@
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 
+namespace tt::tt_metal {
+
 using std::map;
 using std::vector;
 using namespace tt;
@@ -591,3 +593,5 @@ TEST_F(DeviceFixture, TensixBinaryComputeSingleCoreMultiTileMulDestAcc) {
         }
     }
 }
+
+}  // namespace tt::tt_metal

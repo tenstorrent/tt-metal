@@ -5,6 +5,7 @@
 #pragma once
 
 #include "command_queue_fixture.hpp"
+#include <tt-metalium/env_lib.hpp>
 #include <tt-metalium/device_impl.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -13,6 +14,8 @@
 #include <tt-metalium/kernel.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "dispatch_test_utils.hpp"
+
+namespace tt::tt_metal {
 
 class RandomProgramFixture : virtual public CommandQueueSingleCardProgramFixture {
 protected:
@@ -387,3 +390,5 @@ private:
         }
     }
 };
+
+}  // namespace tt::tt_metal

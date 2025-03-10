@@ -28,9 +28,6 @@ public:
 
     virtual const CoreCoord& virtual_enqueue_program_dispatch_core() const = 0;
 
-    virtual volatile bool is_dprint_server_hung() = 0;
-    virtual volatile bool is_noc_hung() = 0;
-
     virtual void record_begin(const uint32_t tid, const std::shared_ptr<TraceDescriptor>& ctx) = 0;
     virtual void record_end() = 0;
 
@@ -79,5 +76,10 @@ public:
 
     virtual void finish(tt::stl::Span<const SubDeviceId> sub_device_ids) = 0;
 };
+
+struct ReadBufferDescriptor;
+struct ReadEventDescriptor;
+
+using CompletionReaderVariant = std::variant<std::monostate, ReadBufferDescriptor, ReadEventDescriptor>;
 
 }  // namespace tt::tt_metal

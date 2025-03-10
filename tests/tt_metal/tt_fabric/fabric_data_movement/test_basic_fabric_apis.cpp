@@ -13,6 +13,10 @@
 namespace tt::tt_fabric {
 
 TEST_F(FabricFixture, TestAsyncWrite) {
+    using tt::tt_metal::ShardedBufferConfig;
+    using tt::tt_metal::ShardOrientation;
+    using tt::tt_metal::ShardSpecBuffer;
+
     CoreCoord sender_logical_core = {0, 0};
     CoreRangeSet sender_logical_crs = {sender_logical_core};
     CoreCoord receiver_logical_core = {1, 0};
@@ -60,8 +64,8 @@ TEST_F(FabricFixture, TestAsyncWrite) {
         .device = receiver_device,
         .size = data_size,
         .page_size = data_size,
-        .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+        .buffer_type = tt_metal::BufferType::L1,
+        .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
         .shard_parameters = std::move(receiver_shard_parameters),
     };
     auto receiver_buffer = CreateBuffer(receiver_shard_config);
@@ -78,8 +82,8 @@ TEST_F(FabricFixture, TestAsyncWrite) {
         .device = sender_device,
         .size = sender_packet_header_and_data_size,
         .page_size = sender_packet_header_and_data_size,
-        .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+        .buffer_type = tt_metal::BufferType::L1,
+        .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
         .shard_parameters = std::move(sender_shard_parameters),
     };
     auto sender_buffer = CreateBuffer(sender_shard_config);
@@ -113,14 +117,17 @@ TEST_F(FabricFixture, TestAsyncWrite) {
         tt::tt_metal::CreateCircularBuffer(sender_program, sender_logical_core, client_interface_cb_config);
 
     std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index};
+    std::map<string, string> defines = {};
+    defines["FVC_MODE_PULL"] = "";
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
         "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_async_write_sender.cpp",
         sender_logical_crs,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = sender_compile_time_args});
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = sender_compile_time_args,
+            .defines = defines});
 
     auto& sender_virtual_router_coord = routers[0].second;
     auto sender_router_noc_xy =
@@ -143,7 +150,9 @@ TEST_F(FabricFixture, TestAsyncWrite) {
         "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_receiver.cpp",
         {receiver_logical_core},
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .defines = defines});
 
     std::vector<uint32_t> receiver_runtime_args = {
         receiver_buffer->address(),
@@ -164,6 +173,10 @@ TEST_F(FabricFixture, TestAsyncWrite) {
 }
 
 TEST_F(FabricFixture, TestAtomicInc) {
+    using tt::tt_metal::ShardedBufferConfig;
+    using tt::tt_metal::ShardOrientation;
+    using tt::tt_metal::ShardSpecBuffer;
+
     CoreCoord sender_logical_core = {0, 0};
     CoreRangeSet sender_logical_crs = {sender_logical_core};
     CoreCoord receiver_logical_core = {1, 0};
@@ -211,8 +224,8 @@ TEST_F(FabricFixture, TestAtomicInc) {
         .device = receiver_device,
         .size = data_size,
         .page_size = data_size,
-        .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+        .buffer_type = tt_metal::BufferType::L1,
+        .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
         .shard_parameters = std::move(receiver_shard_parameters),
     };
     auto receiver_buffer = CreateBuffer(receiver_shard_config);
@@ -229,8 +242,8 @@ TEST_F(FabricFixture, TestAtomicInc) {
         .device = sender_device,
         .size = sender_packet_header_and_data_size,
         .page_size = sender_packet_header_and_data_size,
-        .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+        .buffer_type = tt_metal::BufferType::L1,
+        .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
         .shard_parameters = std::move(sender_shard_parameters),
     };
     auto sender_buffer = CreateBuffer(sender_shard_config);
@@ -262,6 +275,8 @@ TEST_F(FabricFixture, TestAtomicInc) {
     auto client_interface_cb =
         tt::tt_metal::CreateCircularBuffer(sender_program, sender_logical_core, client_interface_cb_config);
 
+    std::map<string, string> defines = {};
+    defines["FVC_MODE_PULL"] = "";
     std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index};
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
@@ -269,8 +284,9 @@ TEST_F(FabricFixture, TestAtomicInc) {
         sender_logical_crs,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = sender_compile_time_args});
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = sender_compile_time_args,
+            .defines = defines});
 
     auto& sender_virtual_router_coord = routers[0].second;
     auto sender_router_noc_xy =
@@ -293,7 +309,9 @@ TEST_F(FabricFixture, TestAtomicInc) {
         "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_receiver.cpp",
         {receiver_logical_core},
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .defines = defines});
 
     std::vector<uint32_t> receiver_runtime_args = {
         receiver_buffer->address(),
@@ -314,6 +332,10 @@ TEST_F(FabricFixture, TestAtomicInc) {
 }
 
 TEST_F(FabricFixture, TestAsyncWriteAtomicInc) {
+    using tt::tt_metal::ShardedBufferConfig;
+    using tt::tt_metal::ShardOrientation;
+    using tt::tt_metal::ShardSpecBuffer;
+
     CoreCoord sender_logical_core = {0, 0};
     CoreRangeSet sender_logical_crs = {sender_logical_core};
     CoreCoord receiver_logical_core = {1, 0};
@@ -362,8 +384,8 @@ TEST_F(FabricFixture, TestAsyncWriteAtomicInc) {
         .device = receiver_device,
         .size = data_size,
         .page_size = data_size,
-        .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+        .buffer_type = tt_metal::BufferType::L1,
+        .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
         .shard_parameters = receiver_shard_parameters,
     };
     auto receiver_buffer = CreateBuffer(receiver_shard_config);
@@ -371,8 +393,8 @@ TEST_F(FabricFixture, TestAsyncWriteAtomicInc) {
         .device = receiver_device,
         .size = atomic_inc_size,
         .page_size = atomic_inc_size,
-        .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+        .buffer_type = tt_metal::BufferType::L1,
+        .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
         .shard_parameters = receiver_shard_parameters,
     };
     auto receiver_atomic_buffer = CreateBuffer(receiver_atomic_shard_config);
@@ -391,8 +413,8 @@ TEST_F(FabricFixture, TestAsyncWriteAtomicInc) {
         .device = sender_device,
         .size = sender_packet_header_and_data_size,
         .page_size = sender_packet_header_and_data_size,
-        .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+        .buffer_type = tt_metal::BufferType::L1,
+        .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
         .shard_parameters = std::move(sender_shard_parameters),
     };
     auto sender_buffer = CreateBuffer(sender_shard_config);
@@ -427,6 +449,8 @@ TEST_F(FabricFixture, TestAsyncWriteAtomicInc) {
     auto client_interface_cb =
         tt::tt_metal::CreateCircularBuffer(sender_program, sender_logical_core, client_interface_cb_config);
 
+    std::map<string, string> defines = {};
+    defines["FVC_MODE_PULL"] = "";
     std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index};
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
@@ -434,8 +458,9 @@ TEST_F(FabricFixture, TestAsyncWriteAtomicInc) {
         sender_logical_crs,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = sender_compile_time_args});
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = sender_compile_time_args,
+            .defines = defines});
 
     auto& sender_virtual_router_coord = routers[0].second;
     auto sender_router_noc_xy =
@@ -460,7 +485,9 @@ TEST_F(FabricFixture, TestAsyncWriteAtomicInc) {
         "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_receiver.cpp",
         {receiver_logical_core},
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .defines = defines});
 
     std::vector<uint32_t> receiver_runtime_args = {
         receiver_buffer->address(),
@@ -484,6 +511,10 @@ TEST_F(FabricFixture, TestAsyncWriteAtomicInc) {
 }
 
 TEST_F(FabricFixture, TestAsyncWriteMulticast) {
+    using tt::tt_metal::ShardedBufferConfig;
+    using tt::tt_metal::ShardOrientation;
+    using tt::tt_metal::ShardSpecBuffer;
+
     CoreCoord sender_logical_core = {0, 0};
     CoreRangeSet sender_logical_crs = {sender_logical_core};
     CoreCoord receiver_logical_core = {1, 0};
@@ -555,8 +586,10 @@ TEST_F(FabricFixture, TestAsyncWriteMulticast) {
     // Reset buffer space for test validation
     std::vector<uint32_t> receiver_buffer_data(data_size / sizeof(uint32_t), 0);
 
+    std::map<string, string> defines = {};
+    defines["FVC_MODE_PULL"] = "";
     std::vector<tt_metal::Program> receiver_programs;
-    std::vector<std::shared_ptr<Buffer>> receiver_buffers;
+    std::vector<std::shared_ptr<tt_metal::Buffer>> receiver_buffers;
     for (auto& [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
         for (auto physical_end_device_id : physical_end_device_ids) {
             auto* receiver_device = DevicePool::instance().get_active_device(physical_end_device_id);
@@ -564,8 +597,8 @@ TEST_F(FabricFixture, TestAsyncWriteMulticast) {
                 .device = receiver_device,
                 .size = data_size,
                 .page_size = data_size,
-                .buffer_type = BufferType::L1,
-                .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+                .buffer_type = tt_metal::BufferType::L1,
+                .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
                 .shard_parameters = receiver_shard_parameters,
             };
             auto receiver_buffer = CreateBuffer(receiver_shard_config);
@@ -578,7 +611,9 @@ TEST_F(FabricFixture, TestAsyncWriteMulticast) {
                 "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_receiver.cpp",
                 {receiver_logical_core},
                 tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                    .defines = defines});
 
             std::vector<uint32_t> receiver_runtime_args = {
                 receiver_buffer->address(),
@@ -608,8 +643,8 @@ TEST_F(FabricFixture, TestAsyncWriteMulticast) {
         .device = sender_device,
         .size = sender_packet_header_and_data_size,
         .page_size = sender_packet_header_and_data_size,
-        .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+        .buffer_type = tt_metal::BufferType::L1,
+        .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
         .shard_parameters = std::move(sender_shard_parameters),
     };
     auto sender_buffer = CreateBuffer(sender_shard_config);
@@ -648,8 +683,9 @@ TEST_F(FabricFixture, TestAsyncWriteMulticast) {
         sender_logical_crs,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = sender_compile_time_args});
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = sender_compile_time_args,
+            .defines = defines});
 
     std::unordered_map<RoutingDirection, uint32_t> sender_router_noc_xys;
     for (auto& [routing_direction, end_mesh_chip_ids] : end_mesh_chip_ids_by_dir) {
@@ -696,6 +732,10 @@ TEST_F(FabricFixture, TestAsyncWriteMulticast) {
 }
 
 TEST_F(FabricFixture, TestAsyncWriteMulticastMultidirectional) {
+    using tt::tt_metal::ShardedBufferConfig;
+    using tt::tt_metal::ShardOrientation;
+    using tt::tt_metal::ShardSpecBuffer;
+
     CoreCoord sender_logical_core = {0, 0};
     CoreRangeSet sender_logical_crs = {sender_logical_core};
     CoreCoord receiver_logical_core = {1, 0};
@@ -768,8 +808,10 @@ TEST_F(FabricFixture, TestAsyncWriteMulticastMultidirectional) {
     // Reset buffer space for test validation
     std::vector<uint32_t> receiver_buffer_data(data_size / sizeof(uint32_t), 0);
 
+    std::map<string, string> defines = {};
+    defines["FVC_MODE_PULL"] = "";
     std::vector<tt_metal::Program> receiver_programs;
-    std::vector<std::shared_ptr<Buffer>> receiver_buffers;
+    std::vector<std::shared_ptr<tt_metal::Buffer>> receiver_buffers;
     for (auto& [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
         for (auto physical_end_device_id : physical_end_device_ids) {
             auto* receiver_device = DevicePool::instance().get_active_device(physical_end_device_id);
@@ -777,8 +819,8 @@ TEST_F(FabricFixture, TestAsyncWriteMulticastMultidirectional) {
                 .device = receiver_device,
                 .size = data_size,
                 .page_size = data_size,
-                .buffer_type = BufferType::L1,
-                .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+                .buffer_type = tt_metal::BufferType::L1,
+                .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
                 .shard_parameters = receiver_shard_parameters,
             };
             auto receiver_buffer = CreateBuffer(receiver_shard_config);
@@ -791,7 +833,9 @@ TEST_F(FabricFixture, TestAsyncWriteMulticastMultidirectional) {
                 "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_receiver.cpp",
                 {receiver_logical_core},
                 tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                    .defines = defines});
 
             std::vector<uint32_t> receiver_runtime_args = {
                 receiver_buffer->address(),
@@ -821,8 +865,8 @@ TEST_F(FabricFixture, TestAsyncWriteMulticastMultidirectional) {
         .device = sender_device,
         .size = sender_packet_header_and_data_size,
         .page_size = sender_packet_header_and_data_size,
-        .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+        .buffer_type = tt_metal::BufferType::L1,
+        .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
         .shard_parameters = std::move(sender_shard_parameters),
     };
     auto sender_buffer = CreateBuffer(sender_shard_config);
@@ -862,8 +906,9 @@ TEST_F(FabricFixture, TestAsyncWriteMulticastMultidirectional) {
         sender_logical_crs,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = sender_compile_time_args});
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = sender_compile_time_args,
+            .defines = defines});
 
     std::unordered_map<RoutingDirection, uint32_t> sender_router_noc_xys;
     for (auto& [routing_direction, end_mesh_chip_ids] : end_mesh_chip_ids_by_dir) {

@@ -21,12 +21,13 @@
 #include "dprint_server.hpp"
 #include <device.hpp>
 #include <command_queue.hpp>
-#include <device_command.hpp>
+#include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "llrt.hpp"
+#include "program_command_sequence.hpp"
 #include "tt_metal/program.hpp"
 #include "tracy/Tracy.hpp"
 #include <tt_align.hpp>
@@ -388,6 +389,7 @@ KernelGroup::KernelGroup(
     }
 
     uint32_t processor_classes = hal.get_processor_classes_count(programmable_core_type_index);
+    std::set<NOC_MODE> noc_modes;
     for (int class_id = 0; class_id < processor_classes; class_id++) {
         auto& optional_id = kernel_ids[class_id];
         if (optional_id) {
@@ -399,6 +401,7 @@ KernelGroup::KernelGroup(
                 // The code below sets the brisc_noc_id for use by the device firmware
                 // Use 0 if neither brisc nor ncrisc specify a noc
                 if (class_id == utils::underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_0)) {
+                    noc_modes.insert(std::get<DataMovementConfig>(kernel->config()).noc_mode);
                     // Use brisc's noc if brisc specifies a noc
                     this->launch_msg.kernel_config.brisc_noc_id = std::get<DataMovementConfig>(kernel->config()).noc;
                     // if noc mode is already set to DM_DYNAMIC_NOC then we can't change back to DM_DEDICATED_NOC
@@ -406,6 +409,7 @@ KernelGroup::KernelGroup(
                         this->launch_msg.kernel_config.brisc_noc_mode = NOC_MODE::DM_DYNAMIC_NOC;
                     }
                 } else if (class_id == utils::underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_1)) {
+                    noc_modes.insert(std::get<DataMovementConfig>(kernel->config()).noc_mode);
                     // Use 1-ncrisc's noc (the other noc) if ncrisc specifies a noc
                     // If both brisc and ncrisc set the noc, then this is safe due to prior correctness validation
                     this->launch_msg.kernel_config.brisc_noc_id = 1 - std::get<DataMovementConfig>(kernel->config()).noc;
@@ -417,6 +421,7 @@ KernelGroup::KernelGroup(
             }
         }
     }
+    TT_FATAL(noc_modes.size() <= 1, "KernelGroup must have the same noc mode for all kernels");
 
     for (uint32_t index = 0; index < NUM_PROCESSORS_PER_CORE_TYPE; index ++) {
         this->kernel_bin_sizes[index] = 0;
@@ -1120,6 +1125,7 @@ void detail::Program_::populate_dispatch_data(IDevice* device) {
             }
             const auto& binaries =
                 kernel->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
+            const auto core_type = kernel->get_kernel_programmable_core_type();
             std::vector<uint32_t> dst_base_addrs;
             std::vector<uint32_t> page_offsets;
             std::vector<uint32_t> lengths;
@@ -1137,8 +1143,9 @@ void detail::Program_::populate_dispatch_data(IDevice* device) {
                 lengths.resize(lengths.size() + num_spans);
                 riscvs.resize(riscvs.size() + num_spans);
 
-                kernel_bin.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t dst, uint32_t len) {
-
+                kernel_bin.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr,
+                                             uint64_t dst,
+                                             uint32_t len) {
                     // Set dst for eth kernels until they move to ring buffer
                     dst_base_addrs[transfer_info_index] = dst;
                     page_offsets[transfer_info_index] =
@@ -1392,6 +1399,7 @@ void detail::Program_::compile(IDevice* device, bool fd_bootloader_mode) {
                 if (kernel->get_kernel_core_type() != dispatch_core_type) {
                     return false;
                 }
+
                 return kernel->is_on_logical_core(dispatch_core);
             });
 

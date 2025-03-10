@@ -2,11 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/device_command.hpp>
-#include "cq_commands.hpp"
 #include "memcpy.hpp"
 #include <gtest/gtest.h>
+#include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
+#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
+
+namespace tt::tt_metal {
 
 TEST(DeviceCommandTest, AddDispatchWait) {
     DeviceCommandCalculator calculator;
@@ -275,3 +277,5 @@ TYPED_TEST(WritePackedCommandTest, RandomAddDispatchWritePacked) {
         EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
     }
 }
+
+}  // namespace tt::tt_metal

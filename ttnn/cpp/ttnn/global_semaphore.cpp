@@ -4,7 +4,6 @@
 
 #include "global_semaphore.hpp"
 
-#include <memory>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/span.hpp>
@@ -65,7 +64,7 @@ MultiDeviceGlobalSemaphore create_global_semaphore_with_same_address(
 
     if (!all_same) {
         tt::log_debug("chkpt 1, attempts: {}", attempts);
-        DeviceAddr target_addr = get_global_semaphore_address(global_semaphores.front());
+        tt::tt_metal::DeviceAddr target_addr = get_global_semaphore_address(global_semaphores.front());
         for (auto i = 1; i < global_semaphores.size(); i++) {
             tt::log_debug(
                 "chkpt 1.1, i: {}, global_semaphores[i]->address(): {}",

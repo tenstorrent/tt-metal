@@ -111,6 +111,8 @@ class RunTimeOptions {
     bool profile_dispatch_cores = false;
     bool profiler_sync_enabled = false;
     bool profiler_buffer_usage_enabled = false;
+    bool profiler_noc_events_enabled = false;
+    std::string profiler_noc_events_report_path;
 
     bool null_kernels = false;
 
@@ -137,6 +139,8 @@ class RunTimeOptions {
 
     bool simulator_enabled = false;
     std::filesystem::path simulator_path = "";
+
+    bool erisc_iram_enabled = false;
 
     RunTimeOptions();
 
@@ -285,6 +289,8 @@ public:
     inline bool get_profiler_do_dispatch_cores() { return profile_dispatch_cores; }
     inline bool get_profiler_sync_enabled() { return profiler_sync_enabled; }
     inline bool get_profiler_buffer_usage_enabled() { return profiler_buffer_usage_enabled; }
+    inline bool get_profiler_noc_events_enabled() { return profiler_noc_events_enabled; }
+    inline std::string get_profiler_noc_events_report_path() { return profiler_noc_events_report_path; }
 
     inline void set_kernels_nullified(bool v) { null_kernels = v; }
     inline bool get_kernels_nullified() { return null_kernels; }
@@ -316,6 +322,8 @@ public:
 
     inline bool get_simulator_enabled() { return simulator_enabled; }
     inline const std::filesystem::path& get_simulator_path() { return simulator_path; }
+
+    inline bool get_erisc_iram_enabled() { return erisc_iram_enabled; }
 
 private:
     // Helper functions to parse feature-specific environment vaiables.
