@@ -73,7 +73,7 @@ tests/tt_metal/distributed/ @cfjchu @tt-asaigal @omilyutin-tt
 tests/tt_metal/distributed/**/requirements*.txt @tenstorrent/metalium-developers-infra @cfjchu @tt-asaigal @omilyutin-tt
 
 # metal - fw, llks, risc-v
-tt_metal/hw/ckernels/ @rtawfik01 @rdjogoTT @ttmtrajkovic
+tt_metal/hw/ckernels/ @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelickovicTT
 tt_metal/include/compute_kernel_api.h @davorchap @mywoodstock
 tt_metal/include/compute_kernel_api/ @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelickovicTT
 tt_metal/include/dataflow_kernel_api.h @davorchap @mywoodstock @ntarafdar
