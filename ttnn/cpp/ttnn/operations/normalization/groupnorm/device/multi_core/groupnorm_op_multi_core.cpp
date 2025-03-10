@@ -1276,13 +1276,13 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     uint32_t start_core_y = 0;
 
     // create a vector of cores, in either RM or CM
-    std::vector<CoreCoord> core_coords = grid_to_cores(num_cores, num_cores_c, num_cores_r, true);
+    std::vector<CoreCoord> core_coords = grid_to_cores(num_cores, num_cores_c, num_cores_r, false);
     for (int i = 0; i < core_coords.size(); ++i) {
         log_debug(tt::LogOp, "worker coord: {} {}", core_coords[i].x, core_coords[i].y);
     }
     std::vector<std::vector<CoreCoord>> core_coords2D;
-    for (int i = 0; i < num_cores_c / num_cores_per_group; ++i) {
-        for (int j = 0; j < num_cores_r; ++j) {
+    for (int j = 0; j < num_cores_r; ++j) {
+        for (int i = 0; i < num_cores_c / num_cores_per_group; ++i) {
             std::vector<CoreCoord> temp;
             for (int k = 0; k < num_cores_per_group; ++k) {
                 temp.push_back(CoreCoord{(std::size_t)(k + i * num_cores_per_group), (std::size_t)j});
@@ -1734,7 +1734,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         for (int j = 0; j < group.size(); ++j) {
             CoreCoord core = group[j];
             CoreCoord core_physical = device->worker_core_from_logical_core(core);
-            uint32_t in0_start_id = in0_block_tiles * mcast_groups.size() * j + in0_block_tiles * i;
+            uint32_t in0_start_id = in0_block_tiles * mcast_groups.size() * j + per_core_Nt * i;
 
             if (j == 0) {  // mcast sender
                 // get the bounding box for the mcast
