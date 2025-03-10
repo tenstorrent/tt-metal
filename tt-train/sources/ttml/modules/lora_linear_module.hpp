@@ -8,10 +8,10 @@
 
 namespace ttml::modules {
 
-// LoRaConfig represents the configuration parameters for LoRA fine-tuning,
+// LoRALayerConfig represents the configuration parameters for LoRA fine-tuning,
 // similar to what Hugging Face provides in their implementations.
-// but without
-struct LoRaConfig {
+// but without layer names
+struct LoRALayerConfig {
     // The rank (r) determines the size of the low-rank matrices inserted into target layers.
     // A smaller rank reduces the number of additional parameters but may limit the adaptation capacity.
     uint32_t rank = 128U;
@@ -39,13 +39,13 @@ private:
     std::shared_ptr<autograd::ModuleBase> m_dropout;
 
     float m_scale = 1.0F;
-    void initialize_tensors(uint32_t in_features, uint32_t out_features, bool has_bias = true);
+
     void register_tensors();
 
 public:
-    LoRALinearLayer(const LoRaConfig& config, uint32_t in_features, uint32_t out_features, bool has_bias = true);
-    LoRALinearLayer(const LoRaConfig& config, const autograd::TensorPtr& weight, const autograd::TensorPtr& bias);
-    LoRALinearLayer(const LoRaConfig& config, const autograd::TensorPtr& weight, bool has_bias = true);
+    LoRALinearLayer(const LoRALayerConfig& config, uint32_t in_features, uint32_t out_features, bool has_bias = true);
+    LoRALinearLayer(const LoRALayerConfig& config, const autograd::TensorPtr& weight, const autograd::TensorPtr& bias);
+    LoRALinearLayer(const LoRALayerConfig& config, const autograd::TensorPtr& weight, bool has_bias = true);
 
     [[nodiscard]] autograd::TensorPtr operator()(const autograd::TensorPtr& tensor) override;
 };
