@@ -155,7 +155,7 @@ std::vector<BufferPageInfo> get_buffer_pages() {
 
                 if (buffer->buffer_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
                     page_address = buffer->page_address(bank_id, page_index);
-                    core = buffer->logical_core_from_bank_id(bank_id);
+                    core = buffer->allocator()->get_logical_core_from_bank_id(bank_id);
                     bank_id = (bank_id + 1) % num_banks;
                 } else {
                     const auto& buffer_page_mapping = *buffer->get_buffer_page_mapping();

@@ -58,8 +58,8 @@ int main(int argc, char** argv) {
         auto src1_dram_buffer = CreateBuffer(dram_config);
         auto dst_l1_buffer = CreateBuffer(l1_config);
 
-        auto l1_dst_noc_xy =
-            device->virtual_core_from_logical_core(dst_l1_buffer->logical_core_from_bank_id(0), CoreType::WORKER);
+        auto l1_dst_noc_xy = device->virtual_core_from_logical_core(
+            dst_l1_buffer->allocator()->get_logical_core_from_bank_id(0), CoreType::WORKER);
         ;
 
         uint32_t src0_cb_index = 0;
