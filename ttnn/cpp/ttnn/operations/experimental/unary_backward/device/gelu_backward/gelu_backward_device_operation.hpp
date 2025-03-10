@@ -49,6 +49,6 @@ struct GeluBackwardDeviceOperation {
 
 namespace ttnn::prim {
 constexpr auto gelu_bw = ttnn::register_operation<
-    "ttnn::prim::experimental::gelu_bw",
+    "ttnn::prim::gelu_bw",
     ttnn::operations::experimental::gelu_backward::GeluBackwardDeviceOperation>();
 }  // namespace ttnn::prim
