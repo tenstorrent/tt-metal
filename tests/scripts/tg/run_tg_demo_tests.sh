@@ -50,6 +50,8 @@ run_tg_demo_tests() {
 
   if [[ "$1" == "falcon7b" ]]; then
     run_tg_falcon7b_tests
+  elif  [[ "$1" == "llama3" ]]; then
+    run_tg_llama3_tests
   else
     echo "LOG_METAL: Unknown model type: $1"
     return 1
