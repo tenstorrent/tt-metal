@@ -332,7 +332,6 @@ class AsymmetricAttention(LightweightModule):
         out_1BNX: ttnn.Tensor,
         out_joint_1BLX: ttnn.Tensor,
         B: int,
-        L: int,
         dtype: ttnn.bfloat16,
         uncond: bool = False,
     ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -356,22 +355,6 @@ class AsymmetricAttention(LightweightModule):
         assert (out_joint_1BLX is None) == uncond
         local_dim = self.dim_x // self.num_devices  # No head parallel support yet
 
-        # Split sequence into visual and text tokens, adding back padding
-        if B == 1:
-            if uncond:
-                # TODO: Remove this
-                out_joint_1BLX = ttnn.as_tensor(
-                    torch.zeros(1, B, L, local_dim),
-                    dtype=dtype,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    device=self.mesh_device,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                )
-
-        else:
-            raise ValueError("Batch size > 1 not supported")
-
         if self.num_devices > 1:
             out_1BNX = ttnn.all_gather(
                 out_1BNX,
@@ -389,24 +372,26 @@ class AsymmetricAttention(LightweightModule):
             program_config=self.proj_x_config(m=N),
         )
 
-        if self.update_y:
-            if self.num_devices > 1:
-                out_joint_1BLX = ttnn.all_gather(
+        out_joint = None  # Default None if uncond
+        if not uncond:
+            if self.update_y:
+                if self.num_devices > 1:
+                    out_joint_1BLX = ttnn.all_gather(
+                        out_joint_1BLX,
+                        dim=3,
+                    )
+                out_joint_1BLY = ttnn.linear(
                     out_joint_1BLX,
-                    dim=3,
+                    self.proj_y,
+                    bias=self.proj_y_bias,
+                    compute_kernel_config=self.mm_compute_kernel_config,
+                    core_grid=ttnn.CoreGrid(y=8, x=8),
+                    dtype=ttnn.bfloat16,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
-            out_joint_1BLY = ttnn.linear(
-                out_joint_1BLX,
-                self.proj_y,
-                bias=self.proj_y_bias,
-                compute_kernel_config=self.mm_compute_kernel_config,
-                core_grid=ttnn.CoreGrid(y=8, x=8),
-                dtype=ttnn.bfloat16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            out_joint = out_joint_1BLY
-        else:
-            out_joint = out_joint_1BLX
+                out_joint = out_joint_1BLY
+            else:
+                out_joint = out_joint_1BLX
 
         return out_1BNX, out_joint
 
@@ -423,8 +408,7 @@ class AsymmetricAttention(LightweightModule):
         uncond: bool = False,
     ) -> ttnn.Tensor:
         # input is replicated
-        B, L = y_1BLY.shape[1], y_1BLY.shape[2]
-        M = x_1BNX.shape[2]
+        B = x_1BNX.shape[1]
 
         # output is head-sharded q, k, v
         q_x_BHND, k_x_BHND, v_x_BHND, q_y_BHLD, k_y_BHLD, v_y_BHLD = self.prepare_qkv(
@@ -454,7 +438,6 @@ class AsymmetricAttention(LightweightModule):
             out_1BNX,
             out_joint_1BLX,
             B=B,
-            L=L,
             dtype=out_1BNX.dtype,
             uncond=uncond,
         )

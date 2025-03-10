@@ -213,24 +213,26 @@ class AsymmetricJointBlock(LightweightModule):
         gate_mlp_x_B11X = mod_x_B11M[:, :, :, 3 * self.hidden_size_x :]
         # scale_msa_x, gate_msa_x, scale_mlp_x, gate_mlp_x = ttnn.split(mod_x, 4, dim=1)
 
-        mod_y_B11C = ttnn.linear(
-            c_B11X,
-            self.mod_y,
-            bias=self.mod_y_bias,
-            compute_kernel_config=compute_kernel_config,
-            core_grid=ttnn.CoreGrid(y=8, x=8),
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        scale_msa_y_B11Y = None
+        if not uncond:
+            mod_y_B11C = ttnn.linear(
+                c_B11X,
+                self.mod_y,
+                bias=self.mod_y_bias,
+                compute_kernel_config=compute_kernel_config,
+                core_grid=ttnn.CoreGrid(y=8, x=8),
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
-        if self.update_y:
-            scale_msa_y_B11Y = mod_y_B11C[:, :, :, : self.hidden_size_y]
-            gate_msa_y_B11Y = mod_y_B11C[:, :, :, self.hidden_size_y : 2 * self.hidden_size_y]
-            scale_mlp_y_B11Y = mod_y_B11C[:, :, :, 2 * self.hidden_size_y : 3 * self.hidden_size_y]
-            gate_mlp_y_B11Y = mod_y_B11C[:, :, :, 3 * self.hidden_size_y :]
-            # scale_msa_y, gate_msa_y, scale_mlp_y, gate_mlp_y = ttnn.split(mod_y, 4, dim=1)
-        else:
-            scale_msa_y_B11Y = mod_y_B11C
+            if self.update_y:
+                scale_msa_y_B11Y = mod_y_B11C[:, :, :, : self.hidden_size_y]
+                gate_msa_y_B11Y = mod_y_B11C[:, :, :, self.hidden_size_y : 2 * self.hidden_size_y]
+                scale_mlp_y_B11Y = mod_y_B11C[:, :, :, 2 * self.hidden_size_y : 3 * self.hidden_size_y]
+                gate_mlp_y_B11Y = mod_y_B11C[:, :, :, 3 * self.hidden_size_y :]
+                # scale_msa_y, gate_msa_y, scale_mlp_y, gate_mlp_y = ttnn.split(mod_y, 4, dim=1)
+            else:
+                scale_msa_y_B11Y = mod_y_B11C
 
         # Self-attention block
         x_attn_shard_1BNX, y_attn_shard_1BLY = self.attn(
@@ -247,20 +249,23 @@ class AsymmetricJointBlock(LightweightModule):
         if self.num_devices > 1:
             # Collect hidden-dim-fractured attention outputs
             x_attn_1BNX = ttnn.all_gather(x_attn_shard_1BNX, dim=3)
-            y_attn_1BLY = ttnn.all_gather(y_attn_shard_1BLY, dim=3)
         else:
             x_attn_1BNX = x_attn_shard_1BNX
-            y_attn_1BLY = y_attn_shard_1BLY
 
         assert x_attn_1BNX.shape[2] == N
         x_1BNX = residual_tanh_gated_rmsnorm(x_1BNX, x_attn_1BNX, gate_msa_x_B11X)
-
-        if self.update_y:
-            y_1BLY = residual_tanh_gated_rmsnorm(y_1BLY, y_attn_1BLY, gate_msa_y_B11Y)
-
         # MLP block
         x_1BNX = self.ff_block_x(x_1BNX, scale_mlp_x_B11X, gate_mlp_x_B11X)
-        if self.update_y:
-            y_1BLY = self.ff_block_y(y_1BLY, scale_mlp_y_B11Y, gate_mlp_y_B11Y)
+
+        if not uncond:
+            if self.num_devices > 1:
+                # Collect hidden-dim-fractured attention outputs
+                y_attn_1BLY = ttnn.all_gather(y_attn_shard_1BLY, dim=3)
+            else:
+                y_attn_1BLY = y_attn_shard_1BLY
+
+            if self.update_y:
+                y_1BLY = residual_tanh_gated_rmsnorm(y_1BLY, y_attn_1BLY, gate_msa_y_B11Y)
+                y_1BLY = self.ff_block_y(y_1BLY, scale_mlp_y_B11Y, gate_mlp_y_B11Y)
 
         return x_1BNX, y_1BLY
