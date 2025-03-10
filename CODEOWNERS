@@ -141,6 +141,10 @@ tests/ttnn/ @ayerofieiev-tt @dmakoviichuk-tt @rfurko-tt @cfjchu @TT-BrianLiu @ra
 tests/ttnn/unit_tests/gtests/ccl/ @SeanNijjar @jvegaTT @cfjchu @tt-aho
 tests/ttnn/unit_tests/operations/ccl/ @SeanNijjar @jvegaTT @tt-aho
 tests/ttnn/unit_tests/operations/eltwise/ @patrickroberts @sjameelTT @ntarafdar @dchenTT
+tests/ttnn/unit_tests/operations/conv/ @tenstorrent/metalium-developers-convolutions
+tests/ttnn/unit_tests/operations/pool/ @tenstorrent/metalium-developers-convolutions
+tests/ttnn/nightly/unit_tests/operations/conv/ @tenstorrent/metalium-developers-convolutions
+tests/ttnn/nightly/unit_tests/operations/pool/ @tenstorrent/metalium-developers-convolutions
 tests/sweep_framework/ @xanderchin @jdesousa-TT @sjameelTT
 tests/sweep_framework/sweeps
 tests/sweep_framework/sweeps/eltwise/ @patrickroberts @sjameelTT @ntarafdar @dchenTT
@@ -196,9 +200,6 @@ docs/source/ttnn/ttnn/dependencies/tt_lib.rst @patrickroberts @sminakov-tt @ayer
 docs/source/ttnn/ @patrickroberts @ayerofieiev-tt @razorback3 @dongjin-na
 
 # misc
-tests/**/dtx/ @tenstorrent/metalium-developers-convolutions
-tests/**/*test*conv*.py @tenstorrent/metalium-developers-convolutions
-tests/ttnn/unit_tests/operations/convolution @tenstorrent/metalium-developers-convolutions
 tests/python_api_testing/unit_testing/fallback_ops @tt-aho
 scripts/profiler/ @mo-tenstorrent
 scripts/docker @tenstorrent/metalium-developers-infra

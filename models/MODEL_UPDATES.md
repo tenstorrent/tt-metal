@@ -4,17 +4,22 @@
 >
 > Please refer to the front-page [README](../README.md) for the latest verified release for each model.
 
+## March 10, 2025
+
+### [QwQ-32B](tt_transformers)
+- Added support for QwQ-32B on QuietBox.
+
 ## February 24, 2025
 
-### [DeepSeek R1 Distill Llama 3.3 70B](demos/llama3)
-- Added support for DeepSeek R1 Distill Llama 3.3 70B on T3000.
+### [DeepSeek R1 Distill Llama 3.3 70B](tt_transformers)
+- Added support for DeepSeek R1 Distill Llama 3.3 70B on QuietBox.
 
-### [Qwen 2.5](demos/llama3)
-- Added support for Qwen2.5-7B on N300 and Qwen2.5-72B on T3000.
+### [Qwen 2.5](tt_transformers)
+- Added support for Qwen2.5-7B on N300 and Qwen2.5-72B on QuietBox.
 
-### [Llama 3.1/3.2](demos/llama3)
+### [Llama 3.1/3.2](tt_transformers)
 > **Note:** This feature is available as of release [v0.56.0-rc37](https://github.com/tenstorrent/tt-metal/tree/v0.56.0-rc37)
-- Overhauled the demo script (now called [simple_text_demo.py](demos/llama3/demo/simple_text_demo.py)) to use a simplified causal generation interface.
+- Overhauled the demo script (now called [simple_text_demo.py](tt_transformers/demo/simple_text_demo.py)) to use a simplified causal generation interface.
 - Added support for custom input argument overrides to the demo.
 
 ## February 10, 2025
@@ -28,8 +33,7 @@
 
 ## January 13, 2025
 
-### [Llama 3.1/3.2](tt_transformers)
-- Integrated Llama3 models (1B/3B/8B/11B/70B) into [vLLM fork](https://github.com/tenstorrent/vllm/tree/dev/tt_metal) for all compatible Tenstorrent devices (N150/N300/T3000/Galaxy).
+- Integrated Llama3 models (1B/3B/8B/11B/70B) into [vLLM fork](https://github.com/tenstorrent/vllm/tree/dev/tt_metal) for all compatible Tenstorrent devices (N150/N300/QuietBox/Galaxy).
 - Enabled prefill with the maximum context length (131072) when running the Llama3 text models on smaller devices (N150/N300) via chunked prefill.
 
 ## December 16, 2024

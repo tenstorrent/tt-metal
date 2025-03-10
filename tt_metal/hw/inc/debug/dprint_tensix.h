@@ -41,6 +41,29 @@ inline void dprint_array_with_data_type(uint32_t data_format, uint32_t* data, ui
            << ENDL();
 }
 
+// Dprints data format as string given an uint
+inline void dprint_data_format(uint8_t data_format) {
+    switch (data_format) {
+        case (uint8_t)DataFormat::Float32: DPRINT << "Float32"; break;
+        case (uint8_t)DataFormat::Float16: DPRINT << "Float16"; break;
+        case (uint8_t)DataFormat::Bfp8: DPRINT << "Bfp8"; break;
+        case (uint8_t)DataFormat::Bfp4: DPRINT << "Bfp4"; break;
+        case (uint8_t)DataFormat::Bfp2: DPRINT << "Bfp2"; break;
+        case (uint8_t)DataFormat::Float16_b: DPRINT << "Float16_b"; break;
+        case (uint8_t)DataFormat::Bfp8_b: DPRINT << "Bfp8_b"; break;
+        case (uint8_t)DataFormat::Bfp4_b: DPRINT << "Bfp4_b"; break;
+        case (uint8_t)DataFormat::Bfp2_b: DPRINT << "Bfp2_b"; break;
+        case (uint8_t)DataFormat::Lf8: DPRINT << "Lf8"; break;
+        case (uint8_t)DataFormat::Int8: DPRINT << "Int8"; break;
+        case (uint8_t)DataFormat::UInt8: DPRINT << "UInt8"; break;
+        case (uint8_t)DataFormat::UInt16: DPRINT << "UInt16"; break;
+        case (uint8_t)DataFormat::Int32: DPRINT << "Int32"; break;
+        case (uint8_t)DataFormat::UInt32: DPRINT << "UInt32"; break;
+        case (uint8_t)DataFormat::Tf32: DPRINT << "Tf32"; break;
+        default: DPRINT << "INVALID DATA FORMAT"; break;
+    }
+}
+
 // if flag DEST_ACCESS_CFG_remap_addrs is enabled
 // destination register row identifiers are remmaped
 // bits 5:3 are rotated 543 -> 354
@@ -197,3 +220,27 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
         uint32_t reg_val = dbg_read_cfgreg(ckernel::dbg_cfgreg::bank, reg_field_name##_ADDR32); \
         DPRINT << #reg_field_name << " = " << HEX() << reg_val << ENDL();                       \
     }
+
+// Print the content of the register field given the value in the register.
+#define DPRINT_TENSIX_CONFIG_FIELD(reg_val, reg_field_name, name, printDec)                 \
+    {                                                                                       \
+        uint32_t field_value = (reg_val & reg_field_name##_MASK) >> reg_field_name##_SHAMT; \
+        DPRINT << name << " = ";                                                            \
+        if (printDec) {                                                                     \
+            DPRINT << DEC();                                                                \
+        } else {                                                                            \
+            DPRINT << "0x" << HEX();                                                        \
+        }                                                                                   \
+        DPRINT << field_value << "; ";                                                      \
+    }
+
+inline void dprint_tensix_struct_field(
+    uint32_t word, uint32_t mask, uint8_t shamt, const char* name, bool printDec = false) {
+    DPRINT << name << ": ";
+    if (printDec) {
+        DPRINT << DEC();
+    } else {
+        DPRINT << "0x" << HEX();
+    }
+    DPRINT << ((word & mask) >> shamt) << ENDL();
+}

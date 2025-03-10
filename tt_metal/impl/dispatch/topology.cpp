@@ -757,6 +757,7 @@ std::unique_ptr<Program> create_and_compile_fabric_program(IDevice* device) {
 
     std::uint32_t router_mask = 0;
     auto router_chans = tt::Cluster::instance().get_fabric_ethernet_channels(device->id());
+    auto fabric_config = tt::Cluster::instance().get_fabric_config();
     size_t num_routers = router_chans.size();
     for (const auto& router_chan : router_chans) {
         router_mask += 0x1 << (uint32_t)router_chan;
@@ -778,6 +779,9 @@ std::unique_ptr<Program> create_and_compile_fabric_program(IDevice* device) {
     };
 
     std::map<string, string> router_defines = {};
+    if (fabric_config == FabricConfig::FABRIC_2D) {
+        router_defines["FVC_MODE_PULL"] = "";
+    }
 
     // TODO: Manual clear of semaphore, move this to proper Metal sempahore apis
     std::vector<uint32_t> fabric_sem_zero_buf(1, 0);

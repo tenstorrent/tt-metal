@@ -12,7 +12,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 45
+        default: 120
   workflow_dispatch:
     inputs:
       arch:
@@ -31,7 +31,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 45
+        default: 120
   schedule:
     - cron: "0 22 * * *"
 
@@ -63,7 +63,7 @@ jobs:
         with:
           name: eager-dist-${{ matrix.os }}-any
       - name: ${{ matrix.test-group.name }} tests
-        timeout-minutes: ${{ fromJSON(inputs.timeout) || '45' }}
+        timeout-minutes: ${{ fromJSON(inputs.timeout) || 120 }}
         uses: ./.github/actions/docker-run
         with:
           docker_username: ${{ github.actor }}
@@ -75,7 +75,7 @@ jobs:
             WHEEL_FILENAME=$(ls -1 *.whl)
             pip3 install --user $WHEEL_FILENAME
             ${{ matrix.test-group.cmd }}
-      - uses: ./.github/actions/upload-artifact-with-job-uuid
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:

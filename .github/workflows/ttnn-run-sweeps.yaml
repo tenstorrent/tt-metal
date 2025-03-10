@@ -175,6 +175,7 @@ on:
           - eltwise.unary.hardshrink.hardshrink_sharded
           - normalization.softmax.softmax
           - normalization.softmax.softmax_sharded
+          - normalization.batch_norm.batch_norm
           - eltwise.unary.identity.identity
           - eltwise.unary.identity.identity_sharded
           - eltwise.unary.neg.neg
