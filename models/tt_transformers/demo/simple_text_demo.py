@@ -369,6 +369,34 @@ def prepare_generator_args(
             False,  # ci_only
             4,  # data_parallel
         ),
+        (  # CI Batch-1 run - Measures the performance of a single user over 4096 iterations
+            "models/demos/llama3/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            8192,  # max_seq_len
+            1,  # batch_size
+            4096,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            True,  # ci_only
+            4,  # data_parallel
+        ),
+        (  # CI Batch-1 run - Measures the performance of a single user over 4096 iterations
+            "models/demos/llama3/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            8192,  # max_seq_len
+            1,  # batch_size
+            4096,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            True,  # ci_only
+            8,  # data_parallel
+        ),
     ],
     ids=[
         "batch-1",  # latency
@@ -380,6 +408,8 @@ def prepare_generator_args(
         "batch-1-DP-4",  # DP 4 latency
         "batch-1-DP-8",  # DP 8 latency
         "batch-32-DP-4",  # DP 4 throughput
+        "ci-b1-DP-4",  # CI DP 4 batch 1
+        "ci-b1-DP-8",  # CI DP 8 batch 1
     ],
 )
 @pytest.mark.parametrize(
