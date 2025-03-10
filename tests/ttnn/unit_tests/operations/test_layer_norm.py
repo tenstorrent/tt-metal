@@ -118,3 +118,45 @@ def test_layer_norm_with_tile_layout(device, h, w):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
+
+
+@pytest.mark.parametrize("h", [32])
+@pytest.mark.parametrize("w", [8192])
+def test_large_layer_norm(device, h, w):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w])
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.layer_norm(input_tensor)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
+
+
+@pytest.mark.parametrize("h", [32])
+@pytest.mark.parametrize("w", [8192])
+def test_large_layer_norm_with_weight_and_bias(device, h, w):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    torch_weight = torch.rand((w,), dtype=torch.bfloat16)
+    torch_bias = torch.rand((w,), dtype=torch.bfloat16)
+
+    torch_output_tensor = torch.nn.functional.layer_norm(
+        torch_input_tensor, normalized_shape=[w], weight=torch_weight, bias=torch_bias
+    )
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
+    bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.layer_norm(input_tensor, weight=weight, bias=bias)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
