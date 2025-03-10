@@ -268,9 +268,8 @@ __attribute__((noinline)) void finish_profiler() {
 }
 
 __attribute__((noinline)) void quick_push() {
-#if (                                                                                          \
-    defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || \
-    defined(COMPILE_FOR_IDLE_ERISC))
+#if defined(DISPATCH_KERNEL) && (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES) && \
+    (defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC))
 
     SrcLocNameToHash("PROFILER-NOC-QUICK-SEND");
     mark_time_at_index_inlined(wIndex, hash);
@@ -382,14 +381,6 @@ struct profileScopeAccumulate {
     }
 };
 
-// performs quick push to DRAM if buffers appear full
-template <DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH>
-inline __attribute__((always_inline)) void flush_to_dram_if_full() {
-    if (not bufferHasRoom<dispatch>()) {
-        quick_push();
-    }
-}
-
 template <uint32_t data_id, DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH>
 inline __attribute__((always_inline)) void timeStampedData(uint64_t data) {
     if (bufferHasRoom<dispatch>()) {
@@ -408,8 +399,6 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
     }
 }
 }  // namespace kernel_profiler
-
-#include "noc_event_profiler.hpp"
 
 // Not dispatch
 #if (                            \
@@ -495,10 +484,5 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
 #define DeviceTimestampedData(data_id, data)
 
 #define DeviceRecordEvent(event_id)
-
-// null macros when noc tracing is disabled
-#define RECORD_NOC_EVENT_WITH_ADDR(type, noc_addr, num_bytes, vc)
-#define RECORD_NOC_EVENT_WITH_ID(type, noc_id, num_bytes, vc)
-#define RECORD_NOC_EVENT(type)
 
 #endif
