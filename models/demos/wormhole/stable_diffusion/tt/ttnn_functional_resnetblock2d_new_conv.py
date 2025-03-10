@@ -404,6 +404,9 @@ class resnetBlock2D:
         else:
             nonlinearity = ttnn.silu
 
+        if input_tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+            input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG)
+
         out_channels = in_channels if out_channels is None else out_channels
         hidden_states = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         if ttnn.get_memory_config(hidden_states) != self.first_gn_expected_input_sharded_memory_config:
