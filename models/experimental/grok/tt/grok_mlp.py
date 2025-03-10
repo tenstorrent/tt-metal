@@ -36,7 +36,7 @@ class TtGrokMLP(LightweightModule):
             torch_weight(name),
             dtype=dtypes[name],
             device=self.mesh_device,
-            ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=0),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=0),
             layout=self.model_config["MLP_W_LAYOUT_TILE"],
             memory_config=self.model_config["MLP_WEIGHTS_MEMCFG"],
             cache_file_name=cache_name(name),

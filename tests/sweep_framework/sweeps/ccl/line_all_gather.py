@@ -104,7 +104,7 @@ def run(
     input_tensor = torch.rand(input_shape).bfloat16()
 
     ttnn_tensor = ttnn.from_torch(
-        input_tensor, tile=ttnn.Tile(tile), ttnn.shard_tensor_to_mesh_mapper(t3k_mesh_device, dim=dim)
+        input_tensor, tile=ttnn.Tile(tile), mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(t3k_mesh_device, dim=dim)
     )
     input_tensor_mesh = ttnn.to_device(ttnn_tensor, t3k_mesh_device)
 

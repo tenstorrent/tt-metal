@@ -75,7 +75,7 @@ class TtGrokAttention(LightweightModule):
             .unsqueeze(0)
             .unsqueeze(0),
             device=self.mesh_device,
-            ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=-1),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=-1),
             dtype=self.dtype,
             memory_config=self.model_config["ATTN_WEIGHTS_MEMCFG"],
             layout=self.model_config["ATTN_W_LAYOUT_TILE"],
@@ -119,7 +119,7 @@ class TtGrokAttention(LightweightModule):
             ttnn.as_tensor(
                 lp,
                 device=self.mesh_device,
-                ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=0),
+                mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=0),
                 dtype=ttnn.bfloat8_b,
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
                 memory_config=self.model_config["ATTN_CACHE_WEIGHTS_MEMCFG"],
