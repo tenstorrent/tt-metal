@@ -18,9 +18,9 @@ ALWI void process_tile(
     tt::CBIndex cb_post_rhs,
     tt::CBIndex cb_out,
     uint32_t freq,
-    uint32_t tile_start) {
+    uint32_t tile_start,
+    uint32_t num_tiles_per_cycle) {
     using namespace ckernel;
-    constexpr uint32_t onetile = 1;
 
 #if BCAST_INPUT
 #define CB_PRE_BCAST cb_pre_rhs
@@ -34,14 +34,14 @@ ALWI void process_tile(
 #define CB_POST_OTHER cb_post_rhs
 #endif
 
-    PREPROCESS(BCAST_OP, CB_PRE_BCAST, CB_POST_BCAST, cb_out, onetile);
-    cb_wait_front(CB_POST_BCAST, onetile);
+    PREPROCESS(BCAST_OP, CB_PRE_BCAST, CB_POST_BCAST, cb_out, num_tiles_per_cycle);
+    cb_wait_front(CB_POST_BCAST, num_tiles_per_cycle);
 
     for (uint32_t j = tile_start; j < freq; ++j) {
-        PREPROCESS(OTHER_OP, CB_PRE_OTHER, CB_POST_OTHER, cb_out, onetile);
-        cb_wait_front(CB_POST_OTHER, onetile);
+        PREPROCESS(OTHER_OP, CB_PRE_OTHER, CB_POST_OTHER, cb_out, num_tiles_per_cycle);
+        cb_wait_front(CB_POST_OTHER, num_tiles_per_cycle);
 
-        cb_reserve_back(cb_out, onetile);
+        cb_reserve_back(cb_out, num_tiles_per_cycle);
 
 #if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)
         binary_op_specific_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
@@ -55,16 +55,18 @@ ALWI void process_tile(
         pack_tile(0, cb_out);
         tile_regs_release();
 
-        cb_push_back(cb_out, onetile);
-        cb_pop_front(CB_POST_OTHER, onetile);
+        cb_push_back(cb_out, num_tiles_per_cycle);
+        cb_pop_front(CB_POST_OTHER, num_tiles_per_cycle);
     }
-    cb_pop_front(CB_POST_BCAST, onetile);
+    cb_pop_front(CB_POST_BCAST, num_tiles_per_cycle);
 }
 
 void MAIN {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     uint32_t tile_freq = get_arg_val<uint32_t>(1);
     uint32_t tile_start = get_arg_val<uint32_t>(2);
+
+    constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
 
     if (num_tiles == 0) {
         return;
@@ -90,11 +92,20 @@ void MAIN {
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
-        process_tile(cb_pre_lhs, cb_post_lhs, cb_pre_rhs, cb_post_rhs, cb_out, tile_freq, tile_start);
+        process_tile(
+            cb_pre_lhs, cb_post_lhs, cb_pre_rhs, cb_post_rhs, cb_out, tile_freq, tile_start, num_tiles_per_cycle);
     }
 
     if (remaining_iterations > 0) {
-        process_tile(cb_pre_lhs, cb_post_lhs, cb_pre_rhs, cb_post_rhs, cb_out, remaining_iterations, tile_start);
+        process_tile(
+            cb_pre_lhs,
+            cb_post_lhs,
+            cb_pre_rhs,
+            cb_post_rhs,
+            cb_out,
+            remaining_iterations,
+            tile_start,
+            num_tiles_per_cycle);
     }
 }
 }  // namespace NAMESPACE
