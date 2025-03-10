@@ -80,7 +80,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: gh_pages_${{ inputs.version }}
-          path: ${{ github.workspace }}/docker-job/gh_pages/${{ inputs.version }}/
+          path: /work/gh_pages/${{ inputs.version }}/
           if-no-files-found: error
 
   deploy-docs:
