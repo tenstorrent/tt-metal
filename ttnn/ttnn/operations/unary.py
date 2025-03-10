@@ -140,6 +140,7 @@ TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn.square,
     ttnn.tan,
     ttnn.tanh,
+    ttnn.interleaved_complex_rotate90,
     # Unaries with fast_and_approximate_mode
     ttnn.exp,
     ttnn.erf,
@@ -731,4 +732,18 @@ def _golden_function_rdiv(input_tensor_a, value, *args, round_mode=None, **kwarg
 
 
 ttnn.attach_golden_function(ttnn.rdiv, golden_function=_golden_function_rdiv)
+
+
+def _golden_function_interleaved_complex_rotate90(input_tensor_a, *args, **kwargs):
+    import torch
+
+    x = input_tensor_a.reshape(*input_tensor_a.shape[:-1], -1, 2)
+    x_real, x_imag = x.chunk(2, dim=-1)
+    return torch.cat([-x_imag, x_real], dim=-1).flatten(-2)
+
+
+ttnn.attach_golden_function(
+    ttnn.interleaved_complex_rotate90, golden_function=_golden_function_interleaved_complex_rotate90
+)
+
 __all__ = []
