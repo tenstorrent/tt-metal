@@ -49,13 +49,9 @@ run_tg_llama3.1-70b_tests() {
   # Llama3.1-70B weights
   llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
 
-  LLAMA_DIR=$llama70b FAKE_DEVICE=TG pytest -n auto models/demos/llama3/tests/test_llama_attention.py ; fail+=$?
-  LLAMA_DIR=$llama70b FAKE_DEVICE=TG pytest -n auto models/demos/llama3/tests/test_llama_attention_prefill.py ; fail+=$?
-  LLAMA_DIR=$llama70b FAKE_DEVICE=TG pytest -n auto models/demos/llama3/tests/test_llama_embedding.py ; fail+=$?
-  LLAMA_DIR=$llama70b FAKE_DEVICE=TG pytest -n auto models/demos/llama3/tests/test_llama_mlp.py ; fail+=$?
-  LLAMA_DIR=$llama70b FAKE_DEVICE=TG pytest -n auto models/demos/llama3/tests/test_llama_rms_norm.py ; fail+=$?
-  LLAMA_DIR=$llama70b FAKE_DEVICE=TG pytest -n auto models/demos/llama3/tests/test_llama_decoder.py ; fail+=$?
-  LLAMA_DIR=$llama70b FAKE_DEVICE=TG pytest -n auto models/demos/llama3/tests/test_llama_decoder_prefill.py ; fail+=$?
+  LLAMA_DIR=$llama70b FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/tests/test_llama_attention.py ; fail+=$?
+  LLAMA_DIR=$llama70b FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/tests/test_llama_mlp.py ; fail+=$?
+  LLAMA_DIR=$llama70b FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/tests/test_llama_rms_norm.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -134,9 +130,6 @@ run_tg_tests() {
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric_sanity_wormhole_b0 --fabric_command 1 --board_type glx32 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --n_depth 3 --metal_fabric_init_level 1
   elif [[ "$1" == "llama3-70b" ]]; then
     run_tg_llama3.1-70b_tests
-
-  elif [[ "$1" == "llama3-small" ]]; then
-    run_tg_llama3-small_tests
 
   elif [[ "$1" == "prefetcher" ]]; then
     run_tg_prefetcher_tests
