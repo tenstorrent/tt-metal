@@ -102,9 +102,7 @@ jobs:
         timeout-minutes: 10
         with:
           name: gh_pages_${{ inputs.version }}
-      - name: LS
-        run: |
-          ls -all
+          path: gh_pages_${{ inputs.version }}
       - name: Deploy to GitHub Pages
         uses: JamesIves/github-pages-deploy-action@v4
         id: deployment
