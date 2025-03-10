@@ -36,8 +36,8 @@ run_llama_tg_perf_unit_tests() {
 
   echo "LOG_METAL: Running run_llama_tg_perf_unit_tests"
 
-  pytest models/demos/llama3/tests/test_ccl_async_perf_TG_llama.py --timeout 900; fail+=$?
-  pytest models/demos/llama3/tests/test_ring_matmul_perf_TG_llama.py --timeout 900; fail+=$?
+  pytest models/tt_transformers/tests/test_ccl_async_perf_TG_llama.py --timeout 900; fail+=$?
+  pytest models/tt_transformers/tests/test_ring_matmul_perf_TG_llama.py --timeout 900; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
