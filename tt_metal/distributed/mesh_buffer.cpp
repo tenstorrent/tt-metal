@@ -167,6 +167,8 @@ Buffer* MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const 
     return buffers_.at(device_coord).get();
 }
 
+Buffer* MeshBuffer::get_reference_buffer() const { return buffers_.values().front().get(); }
+
 DeviceAddr MeshBuffer::size() const {
     return std::visit(
         tt::stl::overloaded{
