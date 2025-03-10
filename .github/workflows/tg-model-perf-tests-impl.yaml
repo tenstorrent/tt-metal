@@ -33,9 +33,10 @@ jobs:
           }, # Sean Nijjar
           {
             name: "Llama TG Perf Unit Tests",
+            model-type: "LLM",
             arch: wormhole_b0,
             cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type llama_tg_perf_unit_tests --dispatch-mode ""',
-            timeout: 70,
+            timeout: 900,
             tracy: true,
             runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "bare-metal", "pipeline-perf"],
             owner_id: U071CKL4AFK
