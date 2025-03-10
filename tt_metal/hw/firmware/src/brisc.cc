@@ -30,6 +30,7 @@
 #include "debug/dprint.h"
 #include "debug/stack_usage.h"
 
+#include "debug/ring_buffer.h"
 // clang-format on
 
 uint8_t noc_index;
@@ -613,11 +614,12 @@ int main() {
 #if defined(ARCH_BLACKHOLE)
                 if (noc_mode == DM_DEDICATED_NOC) {
                     signal_dispatch_done(noc_index, cmd_buf, dispatch_addr, 0, post_atomic_increments);
-                    while (!ncrisc_noc_nonposted_atomics_flushed(noc_index));
                 } else {
                     signal_dispatch_done<DM_DYNAMIC_NOC>(
                         noc_index, cmd_buf, dispatch_addr, MEM_NOC_ATOMIC_RET_VAL_ADDR, post_atomic_increments);
+                    WAYPOINT("NSDW");
                     while (!ncrisc_dynamic_noc_nonposted_atomics_flushed(noc_index));
+                    WAYPOINT("NSDD");
                 }
 #else
                 signal_dispatch_done(noc_index, cmd_buf, dispatch_addr, 0, post_atomic_increments);
