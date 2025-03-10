@@ -37,7 +37,8 @@ inline void _llk_pack_untilize_configure_addrmod_()
 }
 
 template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim = block_ct_dim, bool diagonal = false>
-inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
+inline void _llk_pack_untilize_mop_config_(
+    const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4, bool narrow_row = false, std::uint32_t row_num_datums = TILE_C_DIM)
 {
     constexpr uint MEGAROW          = 1;
     constexpr uint ZERO_OUTPUT_FLAG = p_pacr::P_ZERO_OUTPUT_DISABLED;
@@ -47,7 +48,7 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
     // Last row of face needs to be handled differently depending on num_faces, block_ct and full_ct.
     const uint MOP_OUTER_LOOP = face_r_dim - 1;
 
-    const uint PACK_INTF_SEL = (num_faces > 1) ? p_pacr::TWO_INTFS_ACTIVE : p_pacr::SINGLE_INTF_ACTIVE;
+    const uint PACK_INTF_SEL = (narrow_row) ? p_pacr::SINGLE_INTF_ACTIVE : ((num_faces > 1) ? p_pacr::TWO_INTFS_ACTIVE : p_pacr::SINGLE_INTF_ACTIVE);
 
     bool outer_loop_valid = (MOP_OUTER_LOOP > 0) && (MOP_OUTER_LOOP < 128);
     bool inner_loop_valid = (MOP_INNER_LOOP > 0) && (MOP_INNER_LOOP < 128);
@@ -124,14 +125,19 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
     }
 }
 
-template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim = block_ct_dim, bool diagonal = false>
+template <
+    std::uint32_t block_ct_dim,
+    std::uint32_t full_ct_dim    = block_ct_dim,
+    bool diagonal                = false,
+    bool narrow_row              = false,
+    std::uint32_t row_num_datums = TILE_C_DIM>
 inline void _llk_pack_untilize_init_(
     const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
 {
     static_assert(!diagonal, "Diagonal not supported");
     _llk_pack_untilize_configure_addrmod_<diagonal>();
 
-    _llk_pack_untilize_mop_config_<block_ct_dim, full_ct_dim, diagonal>(face_r_dim, num_faces);
+    _llk_pack_untilize_mop_config_<block_ct_dim, full_ct_dim, diagonal>(face_r_dim, num_faces, narrow_row, row_num_datums);
 
     // Set CH0 Zstride = 2x16x16 faces, .z_src = {.incr = 1} jumps 2 faces
     uint x_stride       = (uint)(pack_src_format & 0x3) == (uint)DataFormat::Float32 ? 4 : (uint)(pack_src_format & 0x3) == (uint)DataFormat::Float16 ? 2 : 1;
@@ -146,7 +152,12 @@ inline void _llk_pack_untilize_init_(
     }
 }
 
-template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim = block_ct_dim, bool diagonal = false>
+template <
+    std::uint32_t block_ct_dim,
+    std::uint32_t full_ct_dim    = block_ct_dim,
+    bool diagonal                = false,
+    bool narrow_row              = false,
+    std::uint32_t row_num_datums = TILE_C_DIM>
 inline void _llk_pack_untilize_(
     const std::uint32_t address,
     const std::uint32_t pack_dst_format,
@@ -157,7 +168,7 @@ inline void _llk_pack_untilize_(
     // program_packer_untilized_destination<block_ct_dim, full_ct_dim, diagonal>(address, pack_dst_format);
     program_packer_destination(address);
     const std::uint32_t num_faces_per_rdim_tile = (num_faces > 2) ? 2 : 1;
-    const uint PACK_INTF_SEL                    = (num_faces > 1) ? p_pacr::TWO_INTFS_ACTIVE : p_pacr::SINGLE_INTF_ACTIVE;
+    const uint PACK_INTF_SEL = (narrow_row) ? p_pacr::SINGLE_INTF_ACTIVE : ((num_faces > 1) ? p_pacr::TWO_INTFS_ACTIVE : p_pacr::SINGLE_INTF_ACTIVE);
 
     TT_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0011); // reset ch0 zw counters
     TT_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0011); // reset ch0 xy counters
