@@ -70,7 +70,6 @@ Tensors run_with_autoformat(
     const OptionalConstTensors& optional_input_tensors = {},
     const OptionalTensors& optional_output_tensors = {},
     const float pad_value = 0,
-    const bool pad_c = false,
     ttnn::QueueId cq_id = ttnn::DefaultQueueId);
 
 template <typename ConcreteOperation>
@@ -80,12 +79,11 @@ inline auto run_with_autoformat(
     const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
     const std::vector<std::optional<Tensor>>& optional_output_tensors = {},
     const float pad_value = 0,
-    const bool pad_c = false,
     ttnn::QueueId cq_id = ttnn::DefaultQueueId) -> Tensors {
     using OutputTensors = ProgramOutputTensors<ConcreteOperation>;
     auto operation = DeviceOperation<Tensors>(concrete_op);
     return run_with_autoformat(
-        std::move(operation), input_tensors, optional_input_tensors, optional_output_tensors, pad_value, pad_c, cq_id);
+        std::move(operation), input_tensors, optional_input_tensors, optional_output_tensors, pad_value, cq_id);
 }
 
 Tensors run_with_autoformat(
@@ -97,6 +95,7 @@ Tensors run_with_autoformat(
     const std::vector<std::optional<FormatParams>>& optional_input_formatting = {},
     const OptionalTensors& optional_output_tensors = {},
     ttnn::QueueId cq_id = ttnn::DefaultQueueId);
+
 template <typename ConcreteOperation>
 inline auto run_with_autoformat(
     ConcreteOperation&& concrete_op,
