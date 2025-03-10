@@ -20,8 +20,6 @@ void kernel_main() {
     uint32_t out_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
 
     // padding args (WRITER)
-    const uint32_t last_num_blocks_h_dim = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t last_num_blocks_w_dim = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t out_num_nonzero_subblocks_h = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t out_last_num_nonzero_subblocks_h = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t out_last_subblock_h = get_arg_val<uint32_t>(rt_args_idx++);
@@ -32,6 +30,11 @@ void kernel_main() {
     const uint32_t out_last_subblock_w = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t padded_subblock_tiles_addr_skip = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t padded_block_tiles_w_skip = get_arg_val<uint32_t>(rt_args_idx++);
+
+#ifndef OUT_SHARDED
+    const uint32_t last_num_blocks_h_dim = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t last_num_blocks_w_dim = get_arg_val<uint32_t>(rt_args_idx++);
+#endif
 
     // COMPILE TIME ARGS
     // interleaved accessor args

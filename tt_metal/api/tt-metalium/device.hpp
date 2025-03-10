@@ -10,7 +10,6 @@
 
 #include "hostdevcommon/common_values.hpp"
 #include "work_executor_types.hpp"
-#include "basic_allocator.hpp"
 #include "l1_banking_allocator.hpp"
 #include "data_types.hpp"
 #include "program_device_map.hpp"
@@ -20,11 +19,14 @@
 #include "sub_device_manager.hpp"
 #include "sub_device_types.hpp"
 #include "span.hpp"
-#include "program_cache.hpp"
 
 namespace tt {
 
 namespace tt_metal {
+
+namespace program_cache::detail {
+class ProgramCache;
+}
 /*
 MemoryBlockTable is a list of memory blocks in the following format:
 [{"blockID": "0", "address": "0", "size": "0", "prevID": "0", "nextID": "0", "allocated": true}]
