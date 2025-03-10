@@ -21,7 +21,7 @@ void kernel_main() {
     const uint32_t num_local_W = get_arg_val<uint32_t>(26);
 
     constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
-#define dst_stick_size_is_pow2 get_compile_time_arg_val(4) == 1
+    constexpr bool dst_stick_size_is_pow2 = get_compile_time_arg_val(4) == 1;
 
     constexpr uint32_t cb_id = tt::CBIndex::c_0;
 
