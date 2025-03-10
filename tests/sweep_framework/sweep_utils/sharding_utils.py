@@ -10,7 +10,9 @@ import math
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import _gen_reshape_args_from_volume
 
 
-def gen_sharded_spec_unary(num_shapes, max_tensor_size_per_core=62 * 1024, layouts=["TILE_LAYOUT", "ROW_MAJOR_LAYOUT"]):
+def gen_sharded_spec_unary(
+    num_shapes, max_tensor_size_per_core=62 * 1024, layouts=["TILE_LAYOUT", "ROW_MAJOR_LAYOUT"], ranks=[4, 3, 2]
+):
     # device.compute_with_storage_grid_size()
     Y = 8
     X = 8
@@ -21,7 +23,7 @@ def gen_sharded_spec_unary(num_shapes, max_tensor_size_per_core=62 * 1024, layou
     spec_list = []
 
     for sharding_strategy, shard_orientation, rank, layout in itertools.product(
-        sharding_strategy_list, shard_orientation_list, [4, 3, 2], layouts
+        sharding_strategy_list, shard_orientation_list, ranks, layouts
     ):
         if sharding_strategy == "tensor_wh":
             tensor_hw_as_shard_shape = True
