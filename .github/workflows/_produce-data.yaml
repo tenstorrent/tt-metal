@@ -32,6 +32,7 @@ on:
       - "(T3K) T3000 perplexity tests"
       - "(T3K) T3000 profiler tests"
       - "(T3K) T3000 unit tests"
+      - "(T3K) T3000 fast tests"
       - "(TG) TG unit tests"
       - "(TG) TG demo tests"
       - "(TG) TG frequent tests"
