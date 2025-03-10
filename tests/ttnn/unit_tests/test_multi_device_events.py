@@ -52,10 +52,14 @@ def test_multi_device_events(t3k_mesh_device, shape):
         )
         # Convert torch tensors to TTNN Multi-Device Host Tensors
         ttnn_input_tensor_0 = ttnn.from_torch(
-            torch_input_tensor_0, layout=ttnn.TILE_LAYOUT, mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(t3k_mesh_device, dim=0)
+            torch_input_tensor_0,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(t3k_mesh_device, dim=0),
         )
         ttnn_input_tensor_1 = ttnn.from_torch(
-            torch_input_tensor_1, layout=ttnn.TILE_LAYOUT, mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(t3k_mesh_device, dim=0)
+            torch_input_tensor_1,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(t3k_mesh_device, dim=0),
         )
 
         # Copy TTNN host tensors into preallocated Mult-Device tensors, using data-movement CQ
