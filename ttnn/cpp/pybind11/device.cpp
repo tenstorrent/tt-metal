@@ -652,7 +652,15 @@ void device_module(py::module& m_device) {
         py::arg("device"),
         py::arg("cq_id") = std::nullopt,
         py::arg("sub_device_ids") = std::vector<SubDeviceId>());
-    m_device.def("DumpDeviceProfiler", [](MeshDevice* device) { DumpDeviceProfiler(device); }, py::arg("device"), R"doc(
+    m_device.def(
+        "DumpDeviceProfiler",
+        [](MeshDevice* mesh_device) {
+            for (auto device : mesh_device->get_devices()) {
+                DumpDeviceProfiler(device);
+            }
+        },
+        py::arg("device"),
+        R"doc(
         Dump device side profiling data.
 
         +------------------+----------------------------------+-----------------------+-------------+----------+

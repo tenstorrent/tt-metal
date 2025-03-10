@@ -521,7 +521,7 @@ void launch_on_mesh_device(
         TracyOpTTNNDevice(
             device_operation_t{},
             device_operation_id,
-            device->id(),
+            device->get_devices().at(0)->id(),
             first_program,
             operation_attributes,
             tensor_args,
@@ -544,6 +544,16 @@ void launch_on_mesh_device(
         if (tt::tt_metal::GraphTracker::instance().hook_program(program.get())) {
             return;
         }
+
+        TracyOpTTNNDevice(
+            device_operation_t{},
+            device_operation_id,
+            device->get_devices().at(0)->id(),
+            *program,
+            operation_attributes,
+            tensor_args,
+            tensor_return_value);
+
         auto mesh_device = dynamic_cast<tt::tt_metal::distributed::MeshDevice*>(device);
         TT_FATAL(mesh_device != nullptr, "Device is not a MeshDevice");
         auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
@@ -553,15 +563,6 @@ void launch_on_mesh_device(
             tt::tt_metal::distributed::MeshCoordinateRange(
                 {0, 0}, {mesh_device->num_rows() - 1, mesh_device->num_cols() - 1}));
         enqueue_mesh_workload(mesh_workload);
-
-        TracyOpTTNNDevice(
-            device_operation_t{},
-            device_operation_id,
-            device->id(),
-            *program,
-            operation_attributes,
-            tensor_args,
-            tensor_return_value);
     }
 }
 

@@ -230,6 +230,22 @@ AnyBuffer AnyBuffer::create(const tt::tt_metal::ShardedBufferConfig& config) {
     return MeshBuffer::create(mesh_config, local_config, mesh_device);
 }
 
+AnyBuffer AnyBuffer::create(const tt::tt_metal::InterleavedBufferConfig& config) {
+    auto mesh_device = dynamic_cast<MeshDevice*>(config.device);
+    if (!mesh_device) {
+        return AnyBuffer{CreateBuffer(config)};
+    }
+    MeshBufferConfig mesh_config = ReplicatedBufferConfig{
+        .size = config.size,
+    };
+    DeviceLocalBufferConfig local_config{
+        .page_size = config.page_size,
+        .buffer_type = config.buffer_type,
+        .buffer_layout = config.buffer_layout,
+    };
+    return MeshBuffer::create(mesh_config, local_config, mesh_device);
+}
+
 Buffer* AnyBuffer::get_buffer() const {
     return std::visit(
         tt::stl::overloaded{

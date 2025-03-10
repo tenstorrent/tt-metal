@@ -166,7 +166,7 @@ void bind_current_thread_to_free_cores(const std::unordered_set<uint32_t>& free_
 
 DevicePool* DevicePool::_inst = nullptr;
 
-void DevicePool::init_profiler_devices() const {
+void DevicePool::init_profiler() const {
 #if defined(TRACY_ENABLE)
     for (const auto& dev : this->get_all_active_devices()) {
         // For Galaxy init, we only need to loop over mmio devices
@@ -202,7 +202,8 @@ void DevicePool::initialize(
     size_t l1_small_size,
     size_t trace_region_size,
     const DispatchCoreConfig& dispatch_core_config,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap) noexcept {
+    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    bool init_profiler) noexcept {
     ZoneScoped;
     log_debug(tt::LogMetal, "DevicePool initialize");
     // Initialize the dispatch core manager, responsible for assigning dispatch cores
@@ -254,7 +255,9 @@ void DevicePool::initialize(
 
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true, target_mmio_ids);
     _inst->wait_for_fabric_master_router_sync();
-    _inst->init_profiler_devices();
+    if (init_profiler) {
+        _inst->init_profiler();
+    }
 }
 
 void DevicePool::initialize_device(IDevice* dev) const {
@@ -472,6 +475,17 @@ void DevicePool::unregister_worker_thread_for_device(IDevice* device) {
 }
 
 const std::unordered_set<std::thread::id>& DevicePool::get_worker_thread_ids() const { return this->worker_thread_ids; }
+
+void DevicePool::set_mesh_device(tt_metal::IDevice* device, std::weak_ptr<tt_metal::distributed::MeshDevice> mesh) {
+    device_to_mesh[device->id()] = std::move(mesh);
+}
+
+std::shared_ptr<tt_metal::distributed::MeshDevice> DevicePool::get_mesh_device(tt_metal::IDevice* device) const {
+    if (auto it = device_to_mesh.find(device->id()); it != device_to_mesh.end()) {
+        return it->second.lock();
+    }
+    return nullptr;
+}
 
 void DevicePool::init_firmware_on_active_devices() const {
     for (const auto& dev : this->get_all_active_devices()) {
