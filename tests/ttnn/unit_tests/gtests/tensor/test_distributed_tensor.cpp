@@ -22,6 +22,70 @@ TensorSpec get_tensor_spec(const ttnn::Shape& shape, DataType dtype) {
     return TensorSpec(shape, TensorLayout(dtype, Layout::ROW_MAJOR, MemoryConfig{}));
 }
 
+TEST_F(TensorDistributionTest, DeviceAggregate) {
+    const int num_devices = mesh_device_->num_devices();
+    std::vector<std::vector<float>> test_data(num_devices);
+    for (int i = 0; i < num_devices; i++) {
+        test_data[i].insert(test_data[i].end(), {i * 1.F, i * 2.F, i * 3.F});
+    }
+
+    std::vector<Tensor> tensors(num_devices);
+
+    for(int i = 0; i < num_devices; i++) {
+        tensors.push_back(Tensor::from_vector(
+            test_data[i], get_tensor_spec(ttnn::Shape{1, num_devices, 3, 1}, DataType::FLOAT32), mesh_device_.get()));
+    }
+
+    Tensor aggregated_tensor = aggregate_as_tensor(tensors, AllGatherTensor{});
+    EXPECT_TRUE(aggregated_tensor.storage_type() == StorageType::MULTI_DEVICE);
+
+    std::vector<float> test_data_1d;
+
+    for (std::vector<float> device : test_data) {
+        for (float datum : device) {
+            test_data_1d.push_back(datum);
+        }
+    }
+
+    std::vector<float> out_vector = aggregated_tensor.to_vector<float>();
+    EXPECT_EQ(out_vector, test_data_1d);
+}
+
+TEST_F(TensorDistributionTest, BorrowedAggregate) {
+    const int num_devices = mesh_device_->num_devices();
+    std::vector<std::vector<float>> test_data(num_devices);
+    for (int i = 0; i < num_devices; i++) {
+        test_data[i].insert(test_data[i].end(), {i * 1.F, i * 2.F, i * 3.F});
+    }
+
+    std::vector<Tensor> tensors(num_devices);
+    auto on_creation_callback = [] {};
+    auto on_destruction_callback = [] {};
+    for(int i = 0; i < num_devices; i++) {
+        tensors.push_back(Tensor(
+            BorrowedStorage{
+                tt::tt_metal::borrowed_buffer::Buffer(static_cast<float*>(test_data[i].data()), test_data[i].size()),
+                on_creation_callback,
+                on_destruction_callback},
+            ttnn::Shape{1, num_devices, 3, 1},
+            DataType::FLOAT32,
+            Layout::TILE));
+    }
+    Tensor aggregated_tensor = aggregate_as_tensor(tensors, AllGatherTensor{});
+    EXPECT_TRUE(aggregated_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST);
+
+    std::vector<float> test_data_1d;
+
+    for (std::vector<float> device : test_data) {
+        for (float datum : device) {
+            test_data_1d.push_back(datum);
+        }
+    }
+
+    std::vector<float> out_vector = aggregated_tensor.to_vector<float>();
+    EXPECT_EQ(out_vector, test_data_1d);
+}
+
 TEST_F(TensorDistributionTest, DistributeToDevice) {
     Tensor input_tensor = Tensor::from_vector(
         std::vector<float>{42.F, 13.F, -99.F}, get_tensor_spec(ttnn::Shape{1, 1, 1, 3}, DataType::FLOAT32));
