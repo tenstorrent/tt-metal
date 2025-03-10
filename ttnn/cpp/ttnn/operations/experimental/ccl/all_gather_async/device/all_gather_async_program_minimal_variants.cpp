@@ -142,6 +142,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         CreateCircularBuffer(program, sender_worker_core_range, cb_reserved_packet_header_config);
 
     // Tensor Info
+    const auto input_tensor_shape = input_tensor.get_padded_shape();
     const auto input_tensor_layout = input_tensor.buffer()->buffer_layout();
     const auto input_tensor_buffer_type = input_tensor.buffer()->buffer_type();
     const auto input_tensor_page_layout = input_tensor.layout();
@@ -172,6 +173,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         reader_kernel_config);
 
     // Writer
+    uint32_t tile_rows = input_tensor_shape[2] / 32;
+    uint32_t tile_cols_for_chip = input_tensor_shape[3] / 32;
     auto writer_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
     writer_kernel_config.compile_args = {
         ring_index,                                        // my_chip_id
@@ -183,7 +186,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         op_config.get_page_size(),                         // tensor0_page_size
         num_targets_forward,                               // num_targets_forward_direction
         num_targets_backward,                              // num_targets_backward_direction
-    };
+        dim,
+        ring_size,
+        tile_rows,
+        tile_cols_for_chip};
     log_trace(tt::LogOp, "Writer Compile Args:");
     for (const auto& arg : writer_kernel_config.compile_args) {
         log_trace(tt::LogOp, "\t{}", arg);
@@ -237,6 +243,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         uint32_t out_ready_sem_wait_value = ring_size * num_links;
         uint32_t output_tile_id_start = ring_index * input_tensor_num_pages + input_tile_id_start;
         uint32_t output_tile_id_end = ring_index * input_tensor_num_pages + input_tile_id_end;
+        if (dim == 3) {
+            output_tile_id_start = tile_cols_for_chip * ring_index;  // multi width tile for each chip
+            output_tile_id_end = ring_index + base_pages_per_worker * ring_size - (ring_size - 1);
+        }
         std::vector<uint32_t> writer_rt_args = {
             output_tensor.buffer()->address(),  // tensor_address0
             semaphore.address(),                // out_ready_sem_bank_addr (absolute address)
