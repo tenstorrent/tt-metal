@@ -192,7 +192,7 @@ std::vector<uint32_t> u32_from_u16_vector(const std::vector<uint16_t>& in) {
 }
 
 void print_vec_of_uint32_as_packed_bfloat16(
-    const std::vector<std::uint32_t>& vec, int num_tiles, std::string name, int tile_print_offset) {
+    const std::vector<std::uint32_t>& vec, int num_tiles, const std::string& name, int tile_print_offset) {
     int idx = 0;
     for (int i = 0; i < num_tiles; i++) {
         std::cout << name << " tile " << i + tile_print_offset << std::endl;
@@ -209,7 +209,8 @@ void print_vec_of_uint32_as_packed_bfloat16(
     }
 }
 
-void print_vec_of_bfloat16(const std::vector<bfloat16>& vec, int num_tiles, std::string name, int tile_print_offset) {
+void print_vec_of_bfloat16(
+    const std::vector<bfloat16>& vec, int num_tiles, const std::string& name, int tile_print_offset) {
     int idx = 0;
     for (int i = 0; i < num_tiles; i++) {
         std::cout << name << " tile " << i + tile_print_offset << std::endl;
@@ -224,7 +225,7 @@ void print_vec_of_bfloat16(const std::vector<bfloat16>& vec, int num_tiles, std:
     }
 }
 
-void print_vec(const std::vector<uint32_t>& vec, int num_tiles, std::string name, int tile_print_offset) {
+void print_vec(const std::vector<uint32_t>& vec, int num_tiles, const std::string& name, int tile_print_offset) {
     int idx = 0;
     for (int i = 0; i < num_tiles; i++) {
         std::cout << name << " tile " << i + tile_print_offset << std::endl;

@@ -88,12 +88,13 @@ std::vector<uint16_t> u16_from_u32_vector(const std::vector<uint32_t>& in);
 std::vector<uint32_t> u32_from_u16_vector(const std::vector<uint16_t>& in);
 
 void print_vec_of_uint32_as_packed_bfloat16(
-    const std::vector<std::uint32_t>& vec, int num_tiles, std::string name = "", int tile_print_offset = 0);
+    const std::vector<std::uint32_t>& vec, int num_tiles, const std::string& name = "", int tile_print_offset = 0);
 
 void print_vec_of_bfloat16(
-    const std::vector<bfloat16>& vec, int num_tiles, std::string name = "", int tile_print_offset = 0);
+    const std::vector<bfloat16>& vec, int num_tiles, const std::string& name = "", int tile_print_offset = 0);
 
-void print_vec(const std::vector<uint32_t>& vec, int num_tiles, std::string name = "", int tile_print_offset = 0);
+void print_vec(
+    const std::vector<uint32_t>& vec, int num_tiles, const std::string& name = "", int tile_print_offset = 0);
 
 std::vector<uint32_t> pack_bfloat16_vec_into_uint32_vec(const std::vector<bfloat16>& data);
 
