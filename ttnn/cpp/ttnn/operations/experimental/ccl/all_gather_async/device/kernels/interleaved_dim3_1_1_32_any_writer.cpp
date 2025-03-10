@@ -26,6 +26,10 @@ constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(5);
 constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(6);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(7);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(8);
+constexpr uint32_t dim = get_compile_time_arg_val(9);
+constexpr uint32_t ring_size = get_compile_time_arg_val(10);
+constexpr uint32_t tile_rows = get_compile_time_arg_val(11);
+constexpr uint32_t tile_cols_for_chip = get_compile_time_arg_val(12);
 
 /*
  * CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time)
@@ -60,6 +64,10 @@ void kernel_main() {
     DPRINT << "tensor0_page_size: " << (uint32_t)tensor0_page_size << "\n";
     DPRINT << "num_targets_forward_direction: " << (uint32_t)num_targets_forward_direction << "\n";
     DPRINT << "num_targets_backward_direction: " << (uint32_t)num_targets_backward_direction << "\n";
+    DPRINT << "dim: " << (uint32_t)dim << "\n";
+    DPRINT << "ring_size: " << (uint32_t)ring_size << "\n";
+    DPRINT << "tile_rows: " << (uint32_t)tile_rows << "\n";
+    DPRINT << "tile_cols_for_chip: " << (uint32_t)tile_cols_for_chip << "\n";
 
     DPRINT << "rt args: \n";
     DPRINT << "tensor_address0: " << (uint32_t)tensor_address0 << "\n";
@@ -120,33 +128,68 @@ void kernel_main() {
     DPRINT << "tensor -> CB: " << (uint32_t)cb0_id << "\n";
     DPRINT << "packet size in pages: " << (uint32_t)packet_size_in_pages << "\n";
     uint32_t tile_id = tile_id_start;
-    while (tile_id < tile_id_end) {
-        DPRINT << "tile_id: " << tile_id << "\n";
-        cb_wait_front(cb0_id, packet_size_in_pages);
-        size_t l1_read_addr = get_read_ptr(cb0_id);
-        uint32_t num_pages_to_read = std::min(tile_id_end - tile_id, packet_size_in_pages);
 
-        uint32_t contig_pages_advanced = 1;  // always 1 for interleaved
-        for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
-            uint64_t noc0_dest_noc_addr = get_noc_addr(tile_id, tensor0_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+    if (dim == 3) {
+        // tile_id for each chips/tiles
+        //            |        chip0          |       chip1           |
+        //            |  tile_cols_for_chip   |                       |
+        //            | id 0|    1|    2|    3|    4|    5|    6|    7|
+        // tile_rows  |    8|    9|   10|   11|   12|   13|   14|   15|
+        //            |   16|   17|   18|   19|   20|   21|   22|   23|
+        //            |   24|   25|   26|   27|   28|   29|   30|   31|
+        //
 
-            DPRINT << "j: " << j << "\n";
-            DPRINT << "noc0_dest_noc_addr: " << noc0_dest_noc_addr << "\n";
-            DPRINT << "tile_id: " << tile_id << "\n";
+        uint32_t height = 0;
+        uint32_t total = 0;
+        while (total < tile_rows * tile_cols_for_chip) {
+            cb_wait_front(cb0_id, packet_size_in_pages);
+            size_t l1_read_addr = get_read_ptr(cb0_id);
+            for (uint32_t j = 0; j < packet_size_in_pages; j++) {
+                uint64_t noc0_dest_noc_addr = get_noc_addr(tile_id, tensor0_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+                DPRINT << "j: " << j << "noc0_dest_noc_addr: " << noc0_dest_noc_addr << "tile_id: " << tile_id << "\n";
+                write_and_advance_local_read_address_for_fabric_write(
+                    noc0_dest_noc_addr,
+                    pkt_hdr_forward,
+                    pkt_hdr_backward,
+                    fabric_connection,
+                    l1_read_addr,
+                    tensor0_page_size);
 
-            write_and_advance_local_read_address_for_fabric_write(
-                noc0_dest_noc_addr,
-                pkt_hdr_forward,
-                pkt_hdr_backward,
-                fabric_connection,
-                l1_read_addr,
-                contig_pages_advanced * tensor0_page_size);
-
-            tile_id++;
+                tile_id++;
+                if (tile_id % tile_cols_for_chip == 0) {
+                    height++;
+                    tile_id = height * (tile_cols_for_chip * ring_size) + tile_id_start;
+                }
+                total++;
+            }
+            noc_async_writes_flushed();
+            cb_pop_front(cb0_id, packet_size_in_pages);
         }
-        noc_async_writes_flushed();
+    } else {
+        while (tile_id < tile_id_end) {
+            DPRINT << "tile_id: " << tile_id << "\n";
+            cb_wait_front(cb0_id, packet_size_in_pages);
+            size_t l1_read_addr = get_read_ptr(cb0_id);
+            uint32_t num_pages_to_read = std::min(tile_id_end - tile_id, packet_size_in_pages);
 
-        cb_pop_front(cb0_id, packet_size_in_pages);
+            uint32_t contig_pages_advanced = 1;  // always 1 for interleaved
+            for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
+                uint64_t noc0_dest_noc_addr = get_noc_addr(tile_id, tensor0_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+                DPRINT << "j: " << j << "noc0_dest_noc_addr: " << noc0_dest_noc_addr << "tile_id: " << tile_id << "\n";
+                write_and_advance_local_read_address_for_fabric_write(
+                    noc0_dest_noc_addr,
+                    pkt_hdr_forward,
+                    pkt_hdr_backward,
+                    fabric_connection,
+                    l1_read_addr,
+                    contig_pages_advanced * tensor0_page_size);
+
+                tile_id++;
+            }
+            noc_async_writes_flushed();
+
+            cb_pop_front(cb0_id, packet_size_in_pages);
+        }
     }
 
     // 2. mcast output ready semaphore
