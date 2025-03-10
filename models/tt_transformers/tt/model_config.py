@@ -117,6 +117,7 @@ class ModelArgs:
         self.is_70b = False
         self.from_hf_url = False  # updated below if true
         self.arch_name = ttnn.get_arch_name()
+        self.prefill_len_cutoff = 512 if self.arch_name == "blackhole" else 1024
 
         assert not os.getenv(
             "FAKE_DEVICE"
@@ -403,13 +404,13 @@ class ModelArgs:
             )
 
             self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
-                m=min(seq_len, 512) if self.arch_name == "blackhole" else min(seq_len, 1024),  # WH
+                m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
                 k=self.dim // self.cluster_shape[0],
                 n=self.hidden_dim // self.cluster_shape[1],
                 grid_size=mlp1_3_grid(seq_len),
             )
             self.model_config["PREFILL_MLP_W2_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
-                m=min(seq_len, 512) if self.arch_name == "blackhole" else min(seq_len, 1024),  # WH
+                m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
                 k=self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1),
                 n=self.dim,
                 grid_size=mlp2_grid(seq_len),
