@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@
 namespace ttnn {
 namespace operations::fused::normalization {
 
-ttnn::Tensor ExecuteRMSNorm::invoke(
+ttnn::Tensor ExecuteFusedRMSNorm::invoke(
     const ttnn::Tensor& input_tensor,
     const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
     const ttnn::ccl::Topology topology,
@@ -44,9 +44,5 @@ ttnn::Tensor ExecuteRMSNorm::invoke(
 }
 
 }  // namespace operations::fused::normalization
-
-constexpr auto rms_norm_post_all_gather = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::fused_rms_1_1_32_8192",
-    ttnn::operations::fused::normalization::ExecuteRMSNorm>();
 
 }  // namespace ttnn
