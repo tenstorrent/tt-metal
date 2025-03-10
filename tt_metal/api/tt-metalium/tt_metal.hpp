@@ -14,7 +14,6 @@
 #include "buffer.hpp"
 #include "profiler.hpp"
 #include "llrt/tt_cluster.hpp"
-#include "profiler_optional_metadata.hpp"
 
 namespace tt::tt_metal {
 inline namespace v0 {
@@ -221,10 +220,7 @@ void ProfilerSync(ProfilerSyncState state);
  * | satate        | Dumpprofiler various states                       | ProfilerDumpState |                  | False |
  * */
 void DumpDeviceProfileResults(
-    IDevice* device,
-    std::vector<CoreCoord>& worker_cores,
-    ProfilerDumpState = ProfilerDumpState::NORMAL,
-    const std::optional<ProfilerOptionalMetadata>& metadata = {});
+    IDevice* device, std::vector<CoreCoord>& worker_cores, ProfilerDumpState = ProfilerDumpState::NORMAL);
 
 /**
  * Traverse all cores and read device side profiler data and dump results into device side CSV log
@@ -236,7 +232,7 @@ void DumpDeviceProfileResults(
  * | device        | The device holding the program being profiled.    | Device * |                           | True |
  * | satate        | Dumpprofiler various states                       | ProfilerDumpState |                  | False |
  * */
-void DumpDeviceProfileResults(IDevice* device, ProfilerDumpState = ProfilerDumpState::NORMAL, const std::optional<ProfilerOptionalMetadata>& metadata = {});
+void DumpDeviceProfileResults(IDevice* device, ProfilerDumpState = ProfilerDumpState::NORMAL);
 
 /**
  * Set the directory for device-side CSV logs produced by the profiler instance in the tt-metal module
