@@ -1417,9 +1417,9 @@ TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TensixTestRandomizedProgram)
     uint32_t MAX_LOOP = 100;
     uint32_t page_size = 1024;
 
-    if (this->arch_ == tt::ARCH::BLACKHOLE) {
-        GTEST_SKIP();  // Running on second CQ is hanging on CI
-    }
+    //if (this->arch_ == tt::ARCH::BLACKHOLE) {
+    //    GTEST_SKIP();  // Running on second CQ is hanging on CI
+    //}
 
     // Make random
     auto random_seed = 0;  // (unsigned int)time(NULL);
