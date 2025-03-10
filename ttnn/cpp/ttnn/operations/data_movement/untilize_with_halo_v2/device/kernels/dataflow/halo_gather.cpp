@@ -54,8 +54,7 @@ template <
     bool is_block_sharded,
     bool is_width_sharded,
     bool is_read,
-    bool is_col_major,
-    bool blocking = false>
+    bool is_col_major>
 static inline void copy_stick(
     const GatherStep& step, uint64_t base_addr, uint32_t in_base_l1_addr, uint32_t out_base_l1_addr) {
     const uint16_t nsticks = step.nsticks;
@@ -107,8 +106,7 @@ template <
     bool is_block_sharded,
     bool is_width_sharded,
     bool is_read,
-    bool is_col_major,
-    bool blocking = false>
+    bool is_col_major>
 static inline uint16_t copy_block_sticks_async(
     const tt_l1_ptr uint16_t* config_data,      // entire config
     uint32_t config_data_offset,                // offset into config_data
@@ -138,14 +136,8 @@ static inline uint16_t copy_block_sticks_async(
     for (uint16_t step_offset = block_offset; step_offset < block_end_offset && step_offset < length;
          step_offset += GATHER_CONFIG_HEADER_NUM_ELEMENTS) {
         decode_gather_config_step(config_data, config_data_offset + step_offset, step);
-        copy_stick<
-            stick_nbytes,
-            input_aligned_page_size,
-            is_block_sharded,
-            is_width_sharded,
-            is_read,
-            is_col_major,
-            blocking>(step, base_addr, in_base_l1_addr, out_base_l1_addr);
+        copy_stick<stick_nbytes, input_aligned_page_size, is_block_sharded, is_width_sharded, is_read, is_col_major>(
+            step, base_addr, in_base_l1_addr, out_base_l1_addr);
     }
 
     // Return the new offset for the next block
@@ -192,8 +184,7 @@ static inline void copy_sticks_async(
                     is_block_sharded,
                     is_width_sharded,
                     is_read,
-                    is_col_major,
-                    blocking>(
+                    is_col_major>(
                     config_data,
                     config_data_offset,
                     block_id,
@@ -222,8 +213,7 @@ static inline void copy_sticks_async(
                     is_block_sharded,
                     is_width_sharded,
                     is_read,
-                    is_col_major,
-                    blocking>(step, base_addr, in_base_l1_addr, out_base_l1_addr);
+                    is_col_major>(step, base_addr, in_base_l1_addr, out_base_l1_addr);
             }
             config_data_offset += length;
         }

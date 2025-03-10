@@ -60,7 +60,7 @@ Tensor halo_op(
     const Tensor& input_tensor,
     const SlidingWindowConfig& config,
     uint32_t pad_val = 0x0,
-    bool remote_read = true,
+    bool remote_read = false,
     bool transpose_mcast = true,
     uint32_t reshard_num_cores_nhw = 0,
     const MemoryConfig& output_memory_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,

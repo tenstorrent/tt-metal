@@ -125,7 +125,6 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
         blocking_local_config_tensor, parallel_config_, is_block_sharded, device);
     auto blocking_remote_config_device_tensor = sliding_window::move_config_tensor_to_device(
         blocking_remote_config_tensor, parallel_config_, is_block_sharded, device);
-    tt::log_info("Created sine guys {} {}", blocking_local_config_device_tensor, blocking_remote_config_device_tensor);
 
     Program program = CreateProgram();
 
