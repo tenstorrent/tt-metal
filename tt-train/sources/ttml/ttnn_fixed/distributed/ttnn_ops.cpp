@@ -96,7 +96,7 @@ tt::tt_metal::Tensor scatter(const tt::tt_metal::Tensor& tensor, int dim) {
         scattered_tensors.push_back(sliced_tensor);
     }
     auto distributed_tensor = ttnn::distributed::create_multi_device_tensor(
-        scattered_tensors, ttnn::StorageType::MULTI_DEVICE, storage.strategy);
+        scattered_tensors, ttnn::StorageType::MULTI_DEVICE, storage.distribution_shape);
     return distributed_tensor;
 }
 
