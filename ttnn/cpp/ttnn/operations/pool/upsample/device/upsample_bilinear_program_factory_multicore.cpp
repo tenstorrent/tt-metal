@@ -149,7 +149,7 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
     uint32_t in_cb_id = CBIndex::c_0;
     uint32_t aligned_input_stick_nbytes = round_up_to_mul32(input_stick_nbytes);
     uint32_t in_cb_pagesize = aligned_input_stick_nbytes;
-    uint32_t in_cb_npages = halo_shard_shape[0];
+    uint32_t in_cb_npages = halo_shard_shape[0] * buffering_factor;
     CircularBufferConfig cb_src0_config =
         CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{in_cb_id, input_cb_data_format}})
             .set_page_size(in_cb_id, in_cb_pagesize)
@@ -194,7 +194,7 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
     uint32_t out_cb_id = CBIndex::c_16;
     uint32_t aligned_output_stick_nbytes = round_up_to_mul32(output_stick_nbytes);
     uint32_t out_cb_pagesize = aligned_output_stick_nbytes;
-    uint32_t out_cb_npages = output_nsticks_per_core;
+    uint32_t out_cb_npages = output_nsticks_per_core * buffering_factor;
     CircularBufferConfig out_cb_config =
         CircularBufferConfig(out_cb_pagesize * out_cb_npages, {{out_cb_id, output_cb_data_format}})
             .set_page_size(out_cb_id, out_cb_pagesize)

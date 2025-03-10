@@ -101,7 +101,8 @@ void kernel_main() {
     constexpr bool is_col_major = get_compile_time_arg_val(12) == 1;
     constexpr uint32_t is_width_sharded = get_compile_time_arg_val(13);
     constexpr uint32_t input_aligned_page_size = get_compile_time_arg_val(14);
-    constexpr bool is_reader = get_compile_time_arg_val(15);
+    constexpr bool is_reader = get_compile_time_arg_val(15);  // reader core fills the pad buffer and writer core waits
+                                                              // for that buffer to be filled before copying data.
 
     constexpr uint32_t elem_nbytes = sizeof(uint16_t);
     constexpr uint16_t pad_core_id = 0xFFFF;

@@ -470,7 +470,8 @@ std::vector<std::vector<std::vector<uint16_t>>> generate_halo_kernel_config_tens
         // Find max length
         size_t max_len = 0;
         for (const auto& [_, data] : config) {
-            max_len = std::max(max_len, 3 * (data.size() / 2 + 1));  // each key is 3, data is 3 * data.size()
+            max_len = std::max(max_len, 3 * (data.size() / 2 + 1));  // For split reader, each vector is ( 3 *
+                                                                     // data.size() / 2 + 1).
         }
         max_len += 6;  // account for the key tuple and null plug
 
@@ -511,9 +512,10 @@ std::vector<std::vector<std::vector<uint16_t>>> generate_halo_kernel_config_tens
         for (const auto& core_config : config) {
             size_t curr_len = 0;
             for (const auto& [key, subdata] : core_config) {
-                curr_len += 3 + (3 * (subdata.size() / 2 + 1));  // each key is len 3
+                curr_len += 3 + (3 * (subdata.size() / 2 + 1));  // For split reader,  3 for source[nocx, nocy, length]
+                                                                 // and each vector is ( 3 * data.size() / 2 + 1).
             }
-            max_len = std::max(max_len, curr_len);  // each key is 3, data is 3 * data.size()
+            max_len = std::max(max_len, curr_len);
         }
         max_len += 3;  // account for null plug
 
