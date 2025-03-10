@@ -95,7 +95,6 @@ def manage_config(name, value):
 
 
 from ttnn._ttnn.multi_device import (
-    get_device_tensor,
     get_device_tensors,
     aggregate_as_tensor,
     get_t3k_physical_device_ids_ring,
@@ -105,8 +104,6 @@ from ttnn._ttnn.events import (
     MeshEvent,
     record_event,
     wait_for_event,
-    record_mesh_event,
-    wait_for_mesh_event,
 )
 
 from ttnn._ttnn.operations.trace import (
@@ -115,10 +112,6 @@ from ttnn._ttnn.operations.trace import (
     end_trace_capture,
     execute_trace,
     release_trace,
-    begin_mesh_trace_capture,
-    end_mesh_trace_capture,
-    execute_mesh_trace,
-    release_mesh_trace,
 )
 
 from ttnn._ttnn.global_circular_buffer import (
@@ -131,7 +124,6 @@ from ttnn._ttnn.global_semaphore import (
     create_global_semaphore,
     get_global_semaphore_address,
     reset_global_semaphore_value,
-    create_global_semaphore_with_same_address,
 )
 
 from ttnn.types import (
@@ -197,7 +189,6 @@ from ttnn.device import (
     disable_and_clear_program_cache,
     manage_device,
     synchronize_device,
-    synchronize_mesh_device,
     dump_device_memory_state,
     get_memory_view,
     GetPCIeDeviceID,

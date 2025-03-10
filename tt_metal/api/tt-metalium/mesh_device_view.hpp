@@ -56,6 +56,7 @@ public:
     [[nodiscard]] DeviceView get_devices(const MeshShape& submesh_shape) const;
     [[nodiscard]] DeviceView get_devices() const;
     [[nodiscard]] size_t num_devices() const;
+    [[nodiscard]] const MeshCoordinateRange& coord_range() const;
 
     [[nodiscard]] bool empty() const noexcept;
     [[nodiscard]] size_t size() const noexcept;

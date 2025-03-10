@@ -83,6 +83,7 @@ run_t3000_ttnn_tests() {
   ./build/test/ttnn/unit_tests_ttnn_ccl
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/test_multi_device_trace.py ; fail+=$?
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/test_multi_device_events.py ; fail+=$?
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/operations/test_prefetcher.py::test_run_prefetcher_post_commit_multi_device ; fail+=$?
   pytest -n auto tests/ttnn/unit_tests/test_multi_device.py ; fail+=$?
   pytest -n auto tests/ttnn/unit_tests/test_multi_device_async.py ; fail+=$?
   pytest tests/ttnn/distributed/test_tensor_parallel_example_T3000.py ; fail+=$?
