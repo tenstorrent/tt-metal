@@ -109,12 +109,17 @@ class ModelOptimizations:
     def __init__(self, settings: dict = None):
         self._opt_settings = self._default_settings()
         self._names = {}
+        self._name_mixed_precision = "mixed"
         for key, enum_type in (("TensorPrecision", TensorGroup), ("OpFidelity", OpGroup)):
             self._opt_settings[key].update((settings or {}).get(key, {}))
             curr = self._opt_settings[key]
             self._names[key] = {
-                "full_name": ", ".join([f"{k.value}: {curr[k].value if curr[k] else 'orig'}" for k in list(enum_type)]),
-                "half_name": "_".join([f"{curr[k].value if curr[k] else 'orig'}" for k in list(enum_type)]),
+                "full_name": ", ".join(
+                    [f"{k.value}: {curr[k].value if curr[k] else self._name_mixed_precision}" for k in list(enum_type)]
+                ),
+                "half_name": "_".join(
+                    [f"{curr[k].value if curr[k] else self._name_mixed_precision}" for k in list(enum_type)]
+                ),
             }
 
         self._full_name = (
