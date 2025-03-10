@@ -85,24 +85,18 @@ std::vector<TensorSpec> GroupNorm::compute_output_specs(const std::vector<Tensor
     return std::visit(
         [&](const auto& program_config) -> std::vector<TensorSpec> {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
-            if constexpr (std::is_same_v<ProgramConfigType, GroupNormMultiCoreProgramConfig>) {
-                TT_FATAL(true, "unimplemented compute_output_specs for GroupNormMultiCore unsharded");
-                auto mem_config = this->output_mem_config;
-                return {TensorSpec(
-                    input_tensor.get_logical_shape(),
-                    TensorLayout(
-                        program_config.out_data_format, PageConfig(program_config.output_layout), mem_config))};
-            } else if constexpr (std::is_same_v<ProgramConfigType, GroupNormShardedMultiCoreProgramConfig>) {
-                if (program_config.inplace) {
+            if (program_config.inplace) {
+                if constexpr (std::is_same_v<ProgramConfigType, GroupNormShardedMultiCoreProgramConfig>) {
                     return {input_tensor.get_tensor_spec()};
+                } else {
+                    TT_FATAL(false, "inplace groupnorm not supported for unsharded tensors");
                 }
-                auto mem_config = this->output_mem_config;
-                mem_config.shard_spec = input_tensor.shard_spec();
-                return {TensorSpec(
-                    input_tensor.get_logical_shape(),
-                    TensorLayout(
-                        program_config.out_data_format, PageConfig(program_config.output_layout), mem_config))};
             }
+
+            auto mem_config = this->output_mem_config;
+            return {TensorSpec(
+                input_tensor.get_logical_shape(),
+                TensorLayout(program_config.out_data_format, PageConfig(program_config.output_layout), mem_config))};
         },
         this->program_config);
 }
@@ -112,15 +106,14 @@ std::vector<Tensor> GroupNorm::create_output_tensors(const std::vector<Tensor>& 
     return std::visit(
         [&](const auto& program_config) -> std::vector<Tensor> {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
-            if constexpr (std::is_same_v<ProgramConfigType, GroupNormMultiCoreProgramConfig>) {
-                TT_FATAL(true, "unimplemented compute_output_specs for GroupNormMultiCore unsharded");
-                return {create_device_tensor(this->compute_output_specs(input_tensors).at(0), input_tensor.device())};
-            } else if constexpr (std::is_same_v<ProgramConfigType, GroupNormShardedMultiCoreProgramConfig>) {
-                if (program_config.inplace) {
+            if (program_config.inplace) {
+                if constexpr (std::is_same_v<ProgramConfigType, GroupNormShardedMultiCoreProgramConfig>) {
                     return {input_tensor};
+                } else {
+                    TT_FATAL(false, "inplace groupnorm not supported for unsharded tensors");
                 }
-                return {create_device_tensor(this->compute_output_specs(input_tensors).at(0), input_tensor.device())};
             }
+            return {create_device_tensor(this->compute_output_specs(input_tensors).at(0), input_tensor.device())};
         },
         this->program_config);
 }
