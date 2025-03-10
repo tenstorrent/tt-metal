@@ -9,7 +9,6 @@
 #include <tt-metalium/rtoptions.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/control_plane.hpp>
-//#include <tt-metalium/cq_commands.hpp>
 //#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "test_common.hpp"
@@ -43,6 +42,9 @@ bool bidirectional_traffic;
 
 // benchmark test mode
 bool benchmark_mode;
+
+// push/pull buffer model
+bool push_mode;
 
 // Metal fabric initialization level
 // 0: No fabric initialization
@@ -140,7 +142,8 @@ typedef struct test_board {
         if (metal_fabric_init_level == 0) {
             tt::tt_metal::detail::InitializeFabricConfig(tt::FabricConfig::CUSTOM);
         } else if (metal_fabric_init_level == 1) {
-            tt::tt_metal::detail::InitializeFabricConfig(tt::FabricConfig::FABRIC_2D);
+            tt::tt_metal::detail::InitializeFabricConfig(
+                push_mode ? tt::FabricConfig::FABRIC_2D_PUSH : tt::FabricConfig::FABRIC_2D);
         }
         device_handle_map = tt::tt_metal::detail::CreateDevices(available_chip_ids);
         if (metal_fabric_init_level == 0) {
@@ -1440,6 +1443,7 @@ int main(int argc, char **argv) {
     bool fixed_async_wr_notif_addr = test_args::has_command_option(input_args, "--fixed_async_wr_notif_addr");
 
     benchmark_mode = test_args::has_command_option(input_args, "--benchmark");
+    push_mode = test_args::has_command_option(input_args, "--push_router");
     uint32_t packet_size_kb =
         test_args::get_command_option_uint32(input_args, "--packet_size_kb", default_packet_size_kb);
     uint32_t max_packet_size_words = packet_size_kb * 1024 / PACKET_WORD_SIZE_BYTES;
@@ -1457,6 +1461,9 @@ int main(int argc, char **argv) {
     uint32_t num_available_devices, num_allocated_devices = 0;
 
     std::map<string, string> defines;
+    if (!push_mode) {
+        defines["FVC_MODE_PULL"] = "";
+    }
 
     if (benchmark_mode) {
         prng_seed = 100;

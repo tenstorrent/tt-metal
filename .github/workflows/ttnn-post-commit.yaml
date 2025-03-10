@@ -9,9 +9,6 @@ on:
       runner-label:
         required: true
         type: string
-      docker-image:
-        required: true
-        type: string
       timeout:
         required: false
         type: number
@@ -20,12 +17,6 @@ on:
         required: false
         type: number
         default: 12
-      build-artifact-name:
-        required: true
-        type: string
-      wheel-artifact-name:
-        required: true
-        type: string
   workflow_dispatch:
     inputs:
       arch:
@@ -41,9 +32,6 @@ on:
           - N150
           - N300
           - BH
-      docker-image:
-        required: true
-        type: string
       timeout:
         required: false
         type: number
@@ -52,12 +40,6 @@ on:
         required: false
         type: number
         default: 12
-      build-artifact-name:
-        required: true
-        type: string
-      wheel-artifact-name:
-        required: true
-        type: string
 
 
 jobs:
@@ -70,131 +52,72 @@ jobs:
         os: ["ubuntu-20.04"]
         test-group:
           - name: ttnn group 1
-            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --exclude-warning-annotations --group 1 -m "not disable_fast_runtime_mode"
+            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 1 -m "not disable_fast_runtime_mode"
           - name: ttnn group 2
-            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --exclude-warning-annotations --group 2 -m "not disable_fast_runtime_mode"
+            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 2 -m "not disable_fast_runtime_mode"
           - name: ttnn group 3
-            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --exclude-warning-annotations --group 3 -m "not disable_fast_runtime_mode"
+            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 3 -m "not disable_fast_runtime_mode"
           - name: ttnn group 4
-            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --exclude-warning-annotations --group 4 -m "not disable_fast_runtime_mode"
+            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 4 -m "not disable_fast_runtime_mode"
           - name: ttnn group 5
-            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --exclude-warning-annotations --group 5 -m "not disable_fast_runtime_mode"
+            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 5 -m "not disable_fast_runtime_mode"
           - name: ttnn group 6
-            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --exclude-warning-annotations --group 6 -m "not disable_fast_runtime_mode"
+            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 6 -m "not disable_fast_runtime_mode"
           - name: ttnn group 7
-            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --exclude-warning-annotations --group 7 -m "not disable_fast_runtime_mode"
+            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 7 -m "not disable_fast_runtime_mode"
           - name: ttnn group 8
-            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --exclude-warning-annotations --group 8 -m "not disable_fast_runtime_mode"
+            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 8 -m "not disable_fast_runtime_mode"
           - name: ttnn group 9
-            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --exclude-warning-annotations --group 9 -m "not disable_fast_runtime_mode"
+            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 9 -m "not disable_fast_runtime_mode"
           - name: ttnn group 10
-            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --exclude-warning-annotations --group 10 -m "not disable_fast_runtime_mode"
+            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 10 -m "not disable_fast_runtime_mode"
           - name: ttnn group 11
-            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --exclude-warning-annotations --group 11 -m "not disable_fast_runtime_mode"
+            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 11 -m "not disable_fast_runtime_mode"
           - name: ttnn group 12
-            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --exclude-warning-annotations --group 12 -m "not disable_fast_runtime_mode"
+            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 12 -m "not disable_fast_runtime_mode"
           - name: ttnn fast runtime off
-            cmd: pytest tests/ttnn/unit_tests -xv --exclude-warning-annotations -m requires_fast_runtime_mode_off
+            cmd: pytest tests/ttnn/unit_tests -xv -m requires_fast_runtime_mode_off
             fast_runtime_mode_off: true
           - name: ttnn example tests
             cmd: ./tests/scripts/run_ttnn_examples.sh
+    name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
+    env:
+      LOGURU_LEVEL: INFO
     runs-on:
       - ${{ inputs.runner-label }}
       - "in-service"
-    name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
-    container:
-      image: ${{ inputs.docker-image }}
-      env:
-        TT_METAL_HOME: /work
-        PYTHONPATH: /work
-        LD_LIBRARY_PATH: /work/build/lib
-        ARCH_NAME: ${{ inputs.arch }}
-        LOGURU_LEVEL: INFO
-        GTEST_OUTPUT: xml:generated/test_reports/
-        DONT_USE_VIRTUAL_ENVIRONMENT: 1
-        GITHUB_ACTIONS: true
-      volumes:
-          - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-          - /dev/hugepages-1G:/dev/hugepages-1G
-          - /mnt/MLPerf:/mnt/MLPerf
-      options: "--device /dev/tenstorrent"
-
-    defaults:
-      run:
-        shell: bash
-        working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
+      - uses: actions/download-artifact@v4
+        timeout-minutes: 10
         with:
-          submodules: recursive
-          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
-      - name: ⬇️ Download Build
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ inputs.build-artifact-name }}
-          path: docker-job
-      - name: Extract files
-        run: tar -xvf ttm_any.tar
-      - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ inputs.wheel-artifact-name }}
-          path: docker-job
-      - name: Install Wheel
+          name: eager-dist-${{ matrix.os }}-any
+      - name: Set ttnn fast runtime if exists in config
+        if: ${{ matrix.test-group.fast_runtime_mode_off }}
         run: |
-          WHEEL_FILENAME=$(ls -1 *.whl)
-          pip3 install $WHEEL_FILENAME
-      - name: Run cpp post commit tests
+          echo "TTNN_CONFIG_OVERRIDES={\"enable_fast_runtime_mode\": false}" >> $GITHUB_ENV
+      - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
-        run: |
-          ${{ matrix.test-group.cmd }}
+        uses: ./.github/actions/docker-run
+        with:
+          docker_username: ${{ github.actor }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e ARCH_NAME=${{ inputs.arch }}
+            -e GITHUB_ACTIONS=true
+          run_args: |
+            WHEEL_FILENAME=$(ls -1 *.whl)
+            pip3 install --user $WHEEL_FILENAME
+            ${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: U06CXU895AP # Michael Chiou
-      - name: Cleanup
-        if: always()
-        run: |
-          # We are forced to checkout the repo into a subdir of the host's workdir; this pollutes the host
-          # with root-owned files.  Be sure to clean up after ourselves in case we're on a non-ephemeral runner.
-          echo "pre rm"
-          ls -al /__w/tt-metal/tt-metal
-          rm -rf /__w/tt-metal/tt-metal/docker-job
-          echo "post rm"
-          ls -al /__w/tt-metal/tt-metal
-
-    # steps:
-    #   - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
-    #   - uses: actions/download-artifact@v4
-    #     with:
-    #       name: eager-dist-${{ matrix.os }}-any
-    #   - name: Set ttnn fast runtime if exists in config
-    #     if: ${{ matrix.test-group.fast_runtime_mode_off }}
-    #     run: |
-    #       echo "TTNN_CONFIG_OVERRIDES={\"enable_fast_runtime_mode\": false}" >> $GITHUB_ENV
-    #   - name: ${{ matrix.test-group.name }} tests
-    #     timeout-minutes: ${{ inputs.timeout }}
-    #     uses: ./.github/actions/docker-run
-    #     with:
-    #       docker_username: ${{ github.actor }}
-    #       docker_password: ${{ secrets.GITHUB_TOKEN }}
-    #       docker_opts: |
-    #         -e ARCH_NAME=${{ inputs.arch }}
-    #         -e GITHUB_ACTIONS=true
-    #       run_args: |
-    #         WHEEL_FILENAME=$(ls -1 *.whl)
-    #         pip3 install --user $WHEEL_FILENAME
-    #         ${{ matrix.test-group.cmd }}
-    #   - uses: ./.github/actions/slack-report
-    #     if: ${{ failure() }}
-    #     with:
-    #       slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-    #       owner: U06CXU895AP # Michael Chiou
-    #   - uses: ./.github/actions/upload-artifact-with-job-uuid
-    #     if: ${{ !cancelled() }}
-    #     with:
-    #       path: |
-    #         generated/test_reports/
-    #       prefix: "test_reports_"
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          path: |
+            generated/test_reports/
+          prefix: "test_reports_"

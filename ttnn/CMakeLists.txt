@@ -202,6 +202,7 @@ set(TTNN_BASE_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/distributed/distributed_tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/distributed/distributed_tensor_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/graph/graph_processor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/graph/graph_argument_serializer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/graph/graph_trace_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/creation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/sharding_utilities.cpp
@@ -218,7 +219,6 @@ set(TENSOR_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/tensor_spec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/tensor_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/serialization.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/shape/shape.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/layout/alignment.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/layout/page_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/layout/tensor_layout.cpp
@@ -261,6 +261,8 @@ set(CCL_SRC_EXPERIMENTAL
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_gather_matmul/device/multi_core/all_gather_matmul_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_reduce/all_reduce.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_reduce/device/all_reduce_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device/all_reduce_async_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device/all_reduce_async_program_minimal_variants.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_program.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/reduce_scatter_async/reduce_scatter.cpp
@@ -275,11 +277,15 @@ set(TTNN_OP_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/core/compute_kernel/compute_kernel_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/conv/conv2d/conv2d.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/conv/conv2d/conv2d_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/conv/conv2d/conv2d_op_program_factory_common.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/conv/conv2d/device/conv2d_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/conv/conv2d/device/conv2d_op_sharded_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/conv/conv2d/device/conv2d_op_width_sharded_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/conv/conv_transpose2d/conv_transpose2d.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/conv/conv2d/prepare_conv2d_weights.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/conv3d/conv3d.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/conv3d/device/conv3d_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/conv3d/device/conv3d_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/core/core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/core/to_layout/to_layout_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/kv_cache/device/update_cache_op.cpp
@@ -353,9 +359,8 @@ set(TTNN_OP_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/untilize/device/untilize_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/untilize/device/untilize_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/untilize/untilize.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/untilize_with_halo_v2/device/untilize_with_halo_v2_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/untilize_with_halo_v2/device/untilize_with_halo_v2_program_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/untilize_with_halo_v2/untilize_with_halo_v2.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/sliding_window/halo/device/untilize_with_halo_v2_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/sliding_window/halo/device/untilize_with_halo_v2_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/untilize_with_unpadding_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/untilize_with_unpadding_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.cpp
@@ -379,6 +384,7 @@ set(TTNN_OP_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/complex_binary/device/complex_binary_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/complex_unary/device/complex_unary_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/complex_unary_backward/device/complex_unary_backward_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/quantization/quantization.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/unary/device/unary_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/unary/device/unary_sharded_program_factory.cpp
@@ -553,6 +559,7 @@ set(TTNN_OP_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/prod/device/prod_op_all.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/prod/prod.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/topk/device/topk_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/topk/topk.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/sliding_window/halo/halo.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/sliding_window/halo/device/halo_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/sliding_window/sliding_window.cpp
@@ -754,6 +761,7 @@ set(TTNN_SUBLIBRARIES
     ttnn/operations/eltwise/complex_binary
     ttnn/operations/eltwise/complex_unary
     ttnn/operations/eltwise/complex_unary_backward
+    ttnn/operations/eltwise/quantization
     ttnn/operations/eltwise/ternary
     ttnn/operations/eltwise/ternary_backward
     ttnn/operations/eltwise/unary
@@ -764,6 +772,7 @@ set(TTNN_SUBLIBRARIES
     ttnn/operations/experimental/auto_format
     ttnn/operations/experimental/ccl
     ttnn/operations/experimental/cnn
+    ttnn/operations/experimental/conv3d
     ttnn/operations/experimental/copy
     ttnn/operations/experimental/experimental_pybind
     ttnn/operations/experimental/matmul
@@ -849,9 +858,11 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/unsqueeze/unsqueeze_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/view/view_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/binary_ng/binary_ng_pybind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/quantization/quantization_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/embedding_backward/embedding_backward_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/examples/example_multiple_return/example_multiple_return_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/examples/examples_pybind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/conv3d/conv3d_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/cnn/convert_to_chw/convert_to_chw_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/copy/typecast/typecast_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/dropout/dropout_pybind.cpp
@@ -974,6 +985,7 @@ list(
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/global_circular_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/global_semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/device.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/fabric.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/profiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/pytensor.cpp

@@ -29,18 +29,7 @@ static Tensor manual_insertion(
         "Required shape volume ({}) must match old shape volume ({})",
         logical_shape.volume(),
         input_tensor.get_logical_volume());
-    auto device_buffer = input_tensor.device_buffer();
-    uint32_t size_in_bytes = device_buffer->size();
-    std::vector<uint16_t> data_vec;
-    const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
-        data_vec.resize(size_in_bytes / sizeof(uint16_t));
-        tt::tt_metal::tensor_impl::read_data_from_device_buffer<uint16_t>(
-            input_tensor.device()->command_queue(), device_buffer, data_vec.data(), true);
-    } else {
-        tt::tt_metal::tensor_impl::read_data_from_device_buffer<uint16_t>(device_buffer, data_vec);
-    }
-    auto owned_buffer = tt::tt_metal::owned_buffer::create<uint16_t>(std::move(data_vec));
+    auto owned_buffer = ttnn::detail::to_host_buffer<uint16_t>(input_tensor);
     auto output =
         Tensor(
             OwnedStorage{owned_buffer},

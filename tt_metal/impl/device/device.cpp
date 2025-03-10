@@ -7,6 +7,9 @@
 #include <string>
 #include <thread>
 #include <tt_align.hpp>
+#include <tt-metalium/dispatch_mem_map.hpp>
+#include <tt-metalium/program_cache.hpp>
+
 #include "tt_metal/deprecated/device.hpp"
 #include "common/core_assignment.hpp"
 #include <host_api.hpp>
@@ -1424,7 +1427,7 @@ void Device::replay_trace(
                 this->id_,
                 active_sub_device_manager->id());
             if constexpr (check) {
-                Trace::validate_instance(*trace_buffer);
+                trace_buffer->validate();
             }
             EnqueueTrace(this->command_queue(cq_id), tid, block_on_device);
         },

@@ -41,6 +41,8 @@ struct TraceBuffer {
 
     TraceBuffer(std::shared_ptr<TraceDescriptor> desc, std::shared_ptr<Buffer> buffer);
     ~TraceBuffer();
+
+    void validate();
 };
 
 }  // namespace tt::tt_metal

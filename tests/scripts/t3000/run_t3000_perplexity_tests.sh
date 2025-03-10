@@ -90,9 +90,9 @@ run_t3000_llama3_perplexity_tests_single_card() {
   llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
   llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
 
-  for FAKE_DEVICE in N150 N300; do
+  for MESH_DEVICE in N150 N300; do
     for LLAMA_DIR in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
-      FAKE_DEVICE=FAKE_DEVICE LLAMA_DIR=$LLAMA_DIR WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/tests/test_llama_accuracy.py --timeout=3600 ; fail+=$?
+      MESH_DEVICE=$MESH_DEVICE LLAMA_DIR=$LLAMA_DIR WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py --timeout=3600 ; fail+=$?
     done
   done
 
@@ -119,9 +119,9 @@ run_t3000_llama3_perplexity_tests_t3000() {
   llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
   llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
 
-  for FAKE_DEVICE in T3K; do
+  for MESH_DEVICE in T3K; do
     for LLAMA_DIR in "$llama1b" "$llama3b" "$llama8b" "$llama11b" "$llama70b"; do
-      FAKE_DEVICE=FAKE_DEVICE LLAMA_DIR=$LLAMA_DIR WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/tests/test_llama_accuracy.py --timeout=3600 ; fail+=$?
+      MESH_DEVICE=$MESH_DEVICE LLAMA_DIR=$LLAMA_DIR WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py --timeout=3600 ; fail+=$?
     done
   done
 

@@ -132,7 +132,8 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column_subgrid(
     std::vector<uint32_t> compute_args = {
         (uint32_t)nblocks_per_core,  // per_core_block_cnt
         (uint32_t)ntiles_per_block,  // per_block_ntiles
-    };
+        (uint32_t)src0_cb_index,
+        (uint32_t)output_cb_index};
 
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
@@ -317,11 +318,13 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
     std::vector<uint32_t> compute_args = {
         (uint32_t)nblocks_per_core,  // per_core_block_cnt
         (uint32_t)ntiles_per_block,  // per_block_ntiles
-    };
+        (uint32_t)src0_cb_index,
+        (uint32_t)output_cb_index};
     std::vector<uint32_t> compute_args_cliff = {
         (uint32_t)nblocks_per_core_cliff,
         (uint32_t)ntiles_per_block,  // per_block_ntiles
-    };
+        (uint32_t)src0_cb_index,
+        (uint32_t)output_cb_index};
 
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
@@ -738,6 +741,11 @@ operation::ProgramWithCallbacks untilize_multi_core(
     const std::optional<CoreRangeSet>& sub_core_grids) {
     tt::tt_metal::Program program{};
 
+    if (sub_core_grids.has_value()) {
+        return untilize_multi_core_parallelize_column_subgrid(
+            a, output, use_pack_untilize, fp32_dest_acc_en, sub_core_grids.value());
+    }
+
     bool src_sharded = a.memory_config().is_sharded();
     bool out_sharded = output.memory_config().is_sharded();
 
@@ -803,12 +811,8 @@ operation::ProgramWithCallbacks untilize_multi_core(
         if (!src_sharded and !out_sharded) {
             uint32_t ntiles_height = ntiles / ntiles_per_block;
             if (ntiles_height == 1) {
-                if (sub_core_grids.has_value()) {
-                    return untilize_multi_core_parallelize_column_subgrid(
-                        a, output, use_pack_untilize, fp32_dest_acc_en, sub_core_grids.value());
-                } else {
-                    return untilize_multi_core_parallelize_column(a, output, use_pack_untilize, fp32_dest_acc_en);
-                }
+                return untilize_multi_core_parallelize_column(a, output, use_pack_untilize, fp32_dest_acc_en);
+
             } else {
                 return untilize_single_core(a, output, use_pack_untilize, fp32_dest_acc_en);
             }
@@ -942,11 +946,13 @@ operation::ProgramWithCallbacks untilize_multi_core(
     std::vector<uint32_t> compute_args = {
         (uint32_t)nblocks_per_core,  // per_core_block_cnt
         (uint32_t)ntiles_per_block,  // per_block_ntiles
-    };
+        (uint32_t)src0_cb_index,
+        (uint32_t)output_cb_index};
     std::vector<uint32_t> compute_args_cliff = {
         (uint32_t)nblocks_per_core_cliff,
         (uint32_t)ntiles_per_block,  // per_block_ntiles
-    };
+        (uint32_t)src0_cb_index,
+        (uint32_t)output_cb_index};
 
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
@@ -1299,8 +1305,9 @@ operation::ProgramWithCallbacks untilize_single_core(
 
     std::vector<uint32_t> compute_args = {
         uint32_t(num_tiles / num_tiles_per_block),  // per_core_block_cnt
-        uint32_t(num_tiles_per_block)               // per_core_block_tile_cnt
-    };
+        uint32_t(num_tiles_per_block),              // per_core_block_tile_cnt
+        uint32_t(src0_cb_index),
+        uint32_t(output_cb_index)};
 
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");

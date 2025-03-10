@@ -313,7 +313,7 @@ uint32_t get_next_hop_router_noc_xy(packet_header_t* current_packet_header, uint
 
 inline bool send_gk_message(uint64_t dest_addr, packet_header_t* packet) {
     uint64_t noc_addr = dest_addr + offsetof(ctrl_chan_msg_buf, wrptr);
-    noc_fast_atomic_increment<DM_DYNAMIC_NOC>(
+    noc_fast_atomic_increment<DM_DEDICATED_NOC, true>(
         noc_index,
         NCRISC_AT_CMD_BUF,
         noc_addr,

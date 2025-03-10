@@ -91,14 +91,14 @@ Fused operation uses a different parallelization scheme internally depending on 
 
 
 #### 2.2.2 Decode mode specifics
-The cos/sin matrices, are generated in two slightly different ways, depending on the mode of operation. For *prefill* mode, the cos/sin matrices are computed once at intialization using the *prefill* sequence length, and then passed into the RoPE OP. However, in *decode* mode, since the position index of each user is updated from token-to-token, the cos/sin matrices must be updated across iterations. Here, we leverage our `TtLlamaRotarySetup` module, that can be used at each decode iteration to get the corresponding cos/sin matrices.
+The cos/sin matrices, are generated in two slightly different ways, depending on the mode of operation. For *prefill* mode, the cos/sin matrices are computed once at intialization using the *prefill* sequence length, and then passed into the RoPE OP. However, in *decode* mode, since the position index of each user is updated from token-to-token, the cos/sin matrices must be updated across iterations. Here, we leverage our `RotarySetup` module, that can be used at each decode iteration to get the corresponding cos/sin matrices.
 
-The following code sample shows how `TtLlamaRotarySetup` can be used in decode mode:
+The following code sample shows how `RotarySetup` can be used in decode mode:
 ```py
-from llama_rope import TtLlamaRotarySetup
+from models.tt_transformers.rope import RotarySetup
 
 # Step 1: Create the setup object
-rope_setup_decode = TtLlamaRotarySetup(
+rope_setup_decode = RotarySetup(
     mesh_device,
     head_dim,
     max_seq_len,
@@ -209,7 +209,7 @@ ttnn_gamma_rm = ttnn.as_tensor(
 
 The distributed implementation is designed for cases where activations are **sharded along the embedding dimension** across multiple devices. It ensures the correct computation of mean and variance across shards by leveraging cross-device communication. Both interleaved and width-sharded inputs are supported.
 
-##### 2.3.2.2.1 Steps to Perform Distributed Normalization on TT-Devices
+##### 2.3.1.2.1 Steps to Perform Distributed Normalization on TT-Devices
 
 1. **Compute Local Statistics** - Each device computes the required statistics (e.g., \(E[x]\), \(E[x^2]\)) locally on its shard of the input tensor.
    - For **RMSNorm**, only \(E[x^2]\) is required.
@@ -269,7 +269,7 @@ The distributed implementation is designed for cases where activations are **sha
 - Distributed Norm Op Code [[3]](https://github.com/tenstorrent/tt-metal/tree/main/ttnn/cpp/ttnn/operations/normalization/layernorm_distributed) [[4]](https://github.com/tenstorrent/tt-metal/tree/main/ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed)
 - Non-Distributed Norms Unit Tests [[5]](https://github.com/tenstorrent/tt-metal/blob/main/tests/tt_eager/python_api_testing/unit_testing/misc/test_layernorm_sharded.py) [[6]](https://github.com/tenstorrent/tt-metal/blob/main/tests/tt_eager/python_api_testing/unit_testing/misc/test_layernorm.py)
 - Distributed Norms Unit Tests [[7]](https://github.com/tenstorrent/tt-metal/blob/main/tests/ttnn/unit_tests/operations/test_distributed_layernorm.py) [[8]](https://github.com/tenstorrent/tt-metal/blob/main/tests/ttnn/unit_tests/operations/test_distributed_layernorm_sharded.py)
-- Distributed Norm in LLama3 [[9]](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tt/distributed_norm.py)
+- Distributed Norm in TT-Transformers [[9]](https://github.com/tenstorrent/tt-metal/blob/main/models/tt_transformers/tt/distributed_norm.py)
 
 ### 2.4 Attention
 
@@ -352,7 +352,7 @@ The attention module in prefill mode expects input shape `(1, bsz=1, seqlen, hid
 > [!NOTE]
 > `bsz=1` is required. For multiple batches, run prefill iteratively and populate the KV cache at `batch_id`.
 
-An end-to-end example of the prefill attention module is in the `models/demos/llama3/tt/llama_attention.py` file, under the `forward_prefill` method. In short, we break down the attention module in prefill mode into the following steps:
+An end-to-end example of the prefill attention module is in the [attention.py](../../models/tt_transformers/tt/attention.py) file, under the `forward_prefill` method. In short, we break down the attention module in prefill mode into the following steps:
 1. QKV projections matmuls.
    - We combine the QKV projection weights into a single tensor, and perform standard `ttnn.linear`. For example:
      ```python
@@ -423,7 +423,7 @@ An end-to-end example of the prefill attention module is in the `models/demos/ll
 ### 2.4.2 Attention Decode
 The attention module in decode mode expects input shape `(1, seqlen=1, bsz, hidden_dim)` and outputs a tensor of the same shape. Decode mode expects sequence length of one and parallelizes over batch size due to the auto-regressive nature of decoding.
 
-An end-to-end example of the decode attention module is in the `models/demos/llama3/tt/llama_attention.py` file, under the `forward_decode` method. The decode mode is broken down into the following steps:
+An end-to-end example of the decode attention module is in the [attention.py](../../models/tt_transformers/tt/attention.py) file, under the `forward_decode` method. The decode mode is broken down into the following steps:
 
 1. **QKV Projections Matmuls**
    - This works the same as in prefill mode, using `ttnn.linear`. Note that the input shape is `(1, 1, bsz, dim)` instead of `(1, 1, seqlen, dim)`.
@@ -526,7 +526,7 @@ In decode mode provide a list of current positions or a tensor. The tensor versi
 
 ### 2.5 MLP
 
-MLP for Llama models is implemented in the `TtLlamaMLP` module class. The tests are available in `test_llama_mlp.py`.
+MLP for Llama-style models is implemented in the `MLP` module class. The tests are available in [test_mlp.py](../../models/tt_transformers/tests/test_mlp.py).
 
 MLP performs the following operations on an input `x` where FF1, FF2, and FF3 are linear transformations (matmuls) with weights `w1`, `w2`, and `w3` respectively. Since FF1 and FF3 share the same inputs, their optimizations are shared as well:
 
@@ -540,10 +540,10 @@ y = FF2(w2_in)
 Let's dive into our implementation of MLP, and discuss what makes it performant across different WH systems.
 
 #### 2.5.1 Setup
-When used in the model by the `TtLlamaDecoder` module class, the MLP class is initialized at the start, where the weights for `w1`, `w2`, and `w3` are loaded and fractured across devices in specific schemes, as outlined in the [Multi-Device](#33-multi-device) section. Specifically, in n300 and T3000 systems the weights are 1D column fractured, and in TG systems the weights are 2D fractured.
+When used in the model by the `Decoder` module class, the MLP class is initialized at the start, where the weights for `w1`, `w2`, and `w3` are loaded and fractured across devices in specific schemes, as outlined in the [Multi-Device](#33-multi-device) section. Specifically, in n300 and T3000 systems the weights are 1D column fractured, and in TG systems the weights are 2D fractured.
 
 ```py
-self.feed_forward = TtLlamaMLP(
+self.feed_forward = MLP(
     mesh_device=mesh_device,
     args=args,
     state_dict=state_dict,
@@ -555,7 +555,7 @@ self.feed_forward = TtLlamaMLP(
 ```
 
 #### 2.5.2 Inputs
-At runtime, the `forward` function of `TtLlamaMLP` is called with either *'prefill'* or *'decode'* mode, with inputs replicated across devices, for all WH system configurations.
+At runtime, the `forward` function of `MLP` is called with either *'prefill'* or *'decode'* mode, with inputs replicated across devices, for all WH system configurations.
 > [!NOTE]
 > In the actual model, the input `ff_in` is the output of the `norm` step prior to MLP.
 
@@ -593,7 +593,7 @@ ff_in_memory_config = ttnn.DRAM_MEMORY_CONFIG
 > ```
 
 #### 2.5.3 Setting Up Program Configurations For Matmuls
-Depending on the mode of operation, the `forward` function of `TtLlamaMLP` instantiates different program configs for matmuls of FF1/FF3, and FF2.
+Depending on the mode of operation, the `forward` function of `MLP` instantiates different program configs for matmuls of FF1/FF3, and FF2.
 
 **Decode mode**
 
@@ -1078,7 +1078,7 @@ The intermediate activations in prefill mode are kept in DRAM, due to the large 
 
 ##### 3.2.1.1 Reshaping for Large Matrix Multiplications
 
-Please see the [attention source code](../../models/demos/llama3/tt/llama_attention.py) for reference.
+Please see the [attention source code](/../../models/tt_transformers/tt/attention.py) for reference.
 
 In prefill mode, when the input sequence length is very large, the model reshapes its input tensors to process sequences in smaller chunks in parallel for larger matmuls, such as `wqkv`, `wo` in the attention module, and `w1`, `w2`, `w3` in the MLP module. This reshaping prevents running out of memory in cases of long prefill sequence lengths. For example:
 
@@ -1356,15 +1356,15 @@ Where K and N are height and width of the weight tensor, DF is the data format m
 
 ##### 3.3.10 Examplary parallelization scheme: Llama3
 
-For our [Llama3 family of models](../../models/demos/llama3) we are using the following sharding schemes in our multi-device architectures:
+For our [Llama3 family of models](/../../models/tt_transformers) we are using the following sharding schemes in our multi-device architectures:
 
 | Matmul            | N300            | T3000           | TG              |
 |-------------------|-----------------|-----------------|-----------------|
-| [_QKV projection_](../../models/demos/llama3/tt/llama_attention.py) | Column Parallel | Column Parallel | 2D              |
-| [_Dense out_](../../models/demos/llama3/tt/llama_attention.py)  | Row Parallel    | Row Parallel    | 2D              |
-| [_FF1_](../../models/demos/llama3/tt/llama_mlp.py)             | Column Parallel | Column Parallel | 2D              |
-| [_FF3_](../../models/demos/llama3/tt/llama_mlp.py)             | Column Parallel | Column Parallel | 2D              |
-| [_FF2_](../../models/demos/llama3/tt/llama_mlp.py)             | Row Parallel    | Row Parallel    | 2D              |
+| [_QKV projection_](/../../models/tt_transformers/tt/llama_attention.py) | Column Parallel | Column Parallel | 2D              |
+| [_Dense out_](/../../models/tt_transformers/tt/llama_attention.py)  | Row Parallel    | Row Parallel    | 2D              |
+| [_FF1_](/../../models/tt_transformers/tt/llama_mlp.py)             | Column Parallel | Column Parallel | 2D              |
+| [_FF3_](/../../models/tt_transformers/tt/llama_mlp.py)             | Column Parallel | Column Parallel | 2D              |
+| [_FF2_](/../../models/tt_transformers/tt/llama_mlp.py)             | Row Parallel    | Row Parallel    | 2D              |
 
 
 ### 3.4 Continuous Batching
@@ -1471,7 +1471,7 @@ See [Matrix Engine](../matrix_engine/matrix_engine.md) for background on `comput
 #### 4.4.1 Memory Configs
 For the LLM context, memory configs are not as important in prefill mode, where activations are large due to the long sequence lengths. Memory configs should generally be DRAM interleaved; otherwise it wouldn't fit on L1. In prefill mode, each OP should consume DRAM interleaved inputs and produce DRAM interleaved outputs.
 
-Memory configs are most important in decode mode. For an operation like `ttnn.matmul`, both the activation and the output will be sharded according to their memory configs. Decode mode activations are of shape `[batch_size, hidden_size]` and should be width-sharded in L1 (sharding the `hidden_size` dimension). By keeping activations and outputs width-sharded in L1 we reduce DRAM traffic for better performance. The Llama3 codebase has examples of how to create a width-sharded memory config (see [Llama3 model config](../../models/demos/llama3/tt/model_config.py)).
+Memory configs are most important in decode mode. For an operation like `ttnn.matmul`, both the activation and the output will be sharded according to their memory configs. Decode mode activations are of shape `[batch_size, hidden_size]` and should be width-sharded in L1 (sharding the `hidden_size` dimension). By keeping activations and outputs width-sharded in L1 we reduce DRAM traffic for better performance. The TT-Transformers codebase has examples of how to create a width-sharded memory config (see [model config](/../../models/tt_transformers/tt/model_config.py)).
 
 ```python
 input_memcfg = ttnn.create_sharded_memory_config(
@@ -1561,7 +1561,7 @@ DRAM-sharded matmul should be used in decode mode, where activations are small a
 
 DRAM-Sharded matmul is used for all matmuls in decode mode. The activation and output are width-sharded in L1, and the weights width-sharded in DRAM.
 
-To use DRAM-Sharded matmul, create the weight memory config with this helper function: [`model_config.py`](../../models/demos/llama3/tt/model_config.py).
+To use DRAM-Sharded matmul, create the weight memory config with this helper function: [`model_config.py`](/../../models/tt_transformers/tt/model_config.py).
 
 ```python
 weights_memory_config = create_dram_sharded_mem_config(k=K, n=N)
@@ -1635,9 +1635,9 @@ The following is a list of metrics used to evaluate accuracy:
 - **Specialized Benchmark Eval Scores:** Metrics that evaluate specific capabilities of LLMs, such as MMLU for multitask language understanding, or BIG-bench for diverse general knowledge tasks.
 
 To thoroughly test the accuracy of a model, a bottom up approach is taken such that sub-modules are tested all the way up to the full token generation.
-- **Sub-module Unit Tests:** Each sub-module of the model should have its own test. For example, the [llama3 models](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/llama3) have a separate [MLP test](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tests/test_llama_mlp.py), [attention test](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tests/test_llama_attention.py), and [decoder layer test](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tests/test_llama_decoder.py). For each of these tests, the outputs produced by the TT implementation of the model are compared against those of the original reference model, typically from Hugging Face, on CPU for a small set of inputs. MLP, attention, and other small sub-modules should have a PCC of ~0.999, while a PCC of ~0.998 would be reasonable for a full decoder layer.
-- **Model-level Unit Tests:** In addition to the sub-module unit tests, there should also be unit tests for a full layer of the model with all sub-modules, and the full model comprising of all layers. For example, the [llama3 model test](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tests/test_llama_model.py) runs one or many layers of the model over multiple iterations and checks the PCC against the reference model. The full model PCC should be approximately ~0.99.
-- **Dataset Evaluation:** Once a model has been brought up with sufficient accuracy on the smaller unit tests, it should be tested on a larger set of prompts such as a full dataset or a subset of it. For example, the [Falcon7b perplexity test](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/falcon7b_common/tests/perplexity/test_perplexity_falcon.py) loads a subset of the [WikiText dataset](https://huggingface.co/datasets/Salesforce/wikitext) and computes several metrics (including perplexity and top-1/5 accuracy) for evaluating the TT model with respect to the ground truth from the dataset. The results of these metrics should be within a couple percentage points of difference to those obtained from running the evaluation with the reference model on CPU / GPU.
+- **Sub-module Unit Tests:** Each sub-module of the model should have its own test. For example, [tt-transformers](../../models/tt_transformers) has a separate [MLP test](../../models/tt_transformers/tests/test_mlp.py), [attention test](../../models/tt_transformers/tests/test_attention.py), and [decoder layer test](../../models/tt_transformers/tests/test_decoder.py). For each of these tests, the outputs produced by the TT implementation of the model are compared against those of the original reference model, typically from Hugging Face, on CPU for a small set of inputs. MLP, attention, and other small sub-modules should have a PCC of ~0.999, while a PCC of ~0.998 would be reasonable for a full decoder layer.
+- **Model-level Unit Tests:** In addition to the sub-module unit tests, there should also be unit tests for a full layer of the model with all sub-modules, and the full model comprising of all layers. For example, the [model test](../../models/tt_transformers/tests/test_model.py) runs one or many layers of the model over multiple iterations and checks the PCC against the reference model. The full model PCC should be approximately ~0.99.
+- **Dataset Evaluation:** Once a model has been brought up with sufficient accuracy on the smaller unit tests, it should be tested on a larger set of prompts such as a full dataset or a subset of it. For example, the [Falcon7b perplexity test](../../models/demos/falcon7b_common/tests/perplexity/test_perplexity_falcon.py) loads a subset of the [WikiText dataset](https://huggingface.co/datasets/Salesforce/wikitext) and computes several metrics (including perplexity and top-1/5 accuracy) for evaluating the TT model with respect to the ground truth from the dataset. The results of these metrics should be within a couple percentage points of difference to those obtained from running the evaluation with the reference model on CPU / GPU.
 
 #### 4.5.2 Debugging Accuracy
 
@@ -1713,7 +1713,7 @@ What to look for:
 
 #### 4.6.2 Host API
 
-Any overhead here is outside your control and in our experience is minimal. Use a C++ profiler or [Metal Profiler/Tracy](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/MetalProfiler/metal-profiler.md) with host stack traces enabled to see this time.
+Any overhead here is outside your control and in our experience is minimal. Use a C++ profiler or [Metal Profiler/Tracy](../MetalProfiler/metal-profiler.md) with host stack traces enabled to see this time.
 
 #### 4.6.3 Host-Device Communications
 
@@ -1755,7 +1755,7 @@ Then we can record an OP performance CSV file with Tracy. For the pytests, run t
 python -m tracy -r -p -v -m pytest path/to/test.py
 ```
 
-This produces a file with naming convention similar to `ops_perf_results_2024_11_01_15_33_18.csv`, this file is needed from the profiler. For more information see: [Metal Profiler tech report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/MetalProfiler/metal-profiler.md).
+This produces a file with naming convention similar to `ops_perf_results_2024_11_01_15_33_18.csv`, this file is needed from the profiler. For more information see: [Metal Profiler tech report](../MetalProfiler/metal-profiler.md).
 
 > [!Warning]:
 > Only use a single trace execution step when profiling. Profiler support with tracing is still a work-in-progress and more iterations will result in a `AssertionError: Device data mismatch error`.
@@ -1763,13 +1763,14 @@ This produces a file with naming convention similar to `ops_perf_results_2024_11
 > [!Note]
 > If you see errors while running tracy, try this device-only profiling process instead: run with `TT_METAL_DEVICE_PROFILER=1 pytest path/to/test.py`. After the run completes, run `tt_metal/tools/profiler/process_ops_logs.py --date` to generate the CSV file.
 
-This CSV file contains information recorded from all devices during program execution. To summarize, we run the `perf_report.py` tool:
+This CSV file contains information recorded from all devices during program execution. To summarize, we run the `tt-perf-report` tool:
 
 ```bash
-python models/perf/perf_report.py OPS_CSV_FILE
+pip install tt-perf-report
+tt-perf-report OPS_CSV_FILE
 ```
 
-For device performance we recommend looking at a single layer. You can do this by using `--id-range` or by changing your test to run only a single layer of the model. For more information see: [Performance Report Analysis Tool](https://github.com/tenstorrent/tt-metal/tree/main/models/perf). The Performance Report Analysis Tool document describes how to select specific ranges of OPs.
+For device performance we recommend looking at a single layer. You can do this by using `--id-range` or by changing your test to run only a single layer of the model. For more information see: [Performance Report Analysis Tool](https://github.com/tenstorrent/tt-perf-report). The Performance Report Analysis Tool document describes how to select specific ranges of OPs.
 
 **What makes a good performance test?**
 
@@ -1778,7 +1779,7 @@ Ideally you should run your model in as close to end-user form as possible, simp
 * Use tracing if you are using tracing in production.
 * Skip the first compilation iteration, it adds a one-time host overhead between OPs.
 * Run a single layer of the model; be aware of which OPs are run for every layer and which OPs run at the start and end, for example, embedding, final norm, and LM Head.
-* Add a tracy signpost, for example, `tracy.signpost("Performance pass")` before the part you want to record; this will be focused on by default by `perf_report.py`, saving you some work.
+* Add a tracy signpost, for example, `tracy.signpost("Performance pass")` before the part you want to record; this will be focused on by default by `tt-perf-report`, saving you some work.
 
 **What does such a report look like?**
 
@@ -1876,16 +1877,16 @@ self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
 
 #### 4.8.1 Llama3 Module and Test Differences
 
-In the current Llama3 model, the attention module class (`TtLlamaAttention`) implements two primary methods for attention computation: `forward_prefill` and `forward_decode`.
+In the current TT-Transformers code, the attention module class (`Attention`) implements two primary methods for attention computation: `forward_prefill` and `forward_decode`.
 To test these, we provide two separate attention test files, `test_attention_decode` and `test_attention_prefill`, which create the appropriate input tensors:
 - A tensor of size `(batch, dim)` in L1 for decode,
 - A tensor of size `(seqlen, dim)` in DRAM for prefill.
 
 Each attention test compares the attention module output and KV-cache correlation between the PyTorch host implementation and the TT-NN device implementation.
 
-The current version of the MLP module class (`TtLlamaMLP`) handles prefill and decode in the same file but has some technical differences, mentioned in the following section.
+The current version of the MLP module class (`MLP`) handles prefill and decode in the same file but has some technical differences, mentioned in the following section.
 
-The decoder module, which encapsulates both attention and MLP, and model module, which encapsulates the decoder and the remaining parts of the Llama3 model, also handle prefill and decode in the same file, but call the respective modes within the attention and MLP modules.
+The decoder module, which encapsulates both attention and MLP, and model module, which encapsulates the decoder and the remaining parts of the model, also handle prefill and decode in the same file, but call the respective modes within the attention and MLP modules.
 
 ### 4.9 Performance Testing
 ### 4.10 Common Pitfalls

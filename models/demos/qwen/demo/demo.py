@@ -378,8 +378,7 @@ def run_qwen_demo(
             pt_out.append(ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[0, 0, 0, :])
             ttnn.deallocate(tt_out)
         # Synchronize devices to ensure the profile captures the correct timing of all devices
-        for i in range(model_args.num_devices):
-            ttnn.synchronize_device(mesh_device.get_devices()[i])
+        ttnn.synchronize_device(mesh_device)
         profiler.end(f"inference_prefill", iteration=batch_idx)
         logger.info(f"Prefill finished")
 
@@ -416,8 +415,6 @@ def run_qwen_demo(
 
         # Create events
         profiler.start(f"compile_trace_{batch_idx}")
-        op_event = ttnn.create_event(mesh_device)
-        write_event = ttnn.create_event(mesh_device)
 
         current_pos = ttnn.from_torch(
             torch.tensor(decoding_pos, dtype=torch.int32),
@@ -492,7 +489,7 @@ def run_qwen_demo(
         logger.info(f"Starting decode loop...")
         profiler.start(f"inference_decode", iteration=batch_idx)
 
-        ttnn.record_event(1, write_event)
+        write_event = ttnn.record_event(mesh_device, 1)
         while users_decoding:
             if iteration == 0:  # First iteration also accounts for compile time
                 profiler.start(f"compile_decode", iteration=batch_idx)
@@ -501,14 +498,14 @@ def run_qwen_demo(
             # Execute trace
             ttnn.wait_for_event(0, write_event)
             ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
-            ttnn.record_event(0, op_event)
+            op_event = ttnn.record_event(mesh_device, 0)
 
             # Write to host
             ttnn.wait_for_event(1, op_event)
             tt_output_torch = ttnn.to_torch(
                 tt_out_tok.cpu(blocking=True, cq_id=1), mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)
             )[0, 0, 0, :batch_size]
-            ttnn.record_event(1, write_event)
+            write_event = ttnn.record_event(mesh_device, 1)
 
             # Save output token to print out later
             for user in range(batch_size):

@@ -23,6 +23,10 @@ run_perf_models_other() {
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/yolov4/tests/test_perf_yolo.py -m $test_marker
 
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/distilbert/tests/test_perf_distilbert.py -m $test_marker
+
+        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/whisper/tests/test_performance.py -m $test_marker
+
+        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/metal_BERT_large_11/tests -m $test_marker
     fi
 
     env pytest -n auto tests/ttnn/integration_tests/bert/test_performance.py -m $test_marker
@@ -30,10 +34,6 @@ run_perf_models_other() {
     env pytest -n auto models/demos/ttnn_falcon7b/tests -m $test_marker
 
     env pytest models/demos/distilbert/tests/test_perf_distilbert.py -m $test_marker
-
-    env pytest -n auto tests/ttnn/integration_tests/whisper/test_performance.py -m $test_marker
-
-    env pytest -n auto models/demos/metal_BERT_large_11/tests -m $test_marker
 
     env pytest -n auto models/demos/vgg/tests/test_perf_vgg.py -m $test_marker
 
@@ -83,70 +83,6 @@ run_perf_models_cnn_javelin() {
     env python3 models/perf/merge_perf_results.py
 }
 
-run_device_perf_models() {
-    set -eo pipefail
-    local test_marker=$1
-
-    env pytest models/demos/wormhole/stable_diffusion/tests -m $test_marker --timeout=600
-
-    env pytest models/demos/distilbert/tests -m $test_marker
-
-    env pytest models/demos/vgg/tests/ -m $test_marker
-
-    env pytest models/demos/convnet_mnist/tests/ -m $test_marker
-
-    env pytest models/demos/bert_tiny/tests/ -m $test_marker
-
-    env pytest models/demos/mnist/tests -m $test_marker
-
-    env pytest models/demos/squeezebert/tests -m $test_marker
-
-    env pytest models/demos/roberta/tests/ -m $test_marker
-
-    if [ "$tt_arch" == "grayskull" ]; then
-        #TODO(MO): Until #6560 is fixed, GS device profiler test are grouped with
-        #Model Device perf regression tests to make sure thy run on no-soft-reset BMs
-        tests/scripts/run_profiler_regressions.sh PROFILER_NO_RESET
-
-        env pytest models/demos/grayskull/resnet50/tests -m $test_marker
-
-        env pytest models/demos/metal_BERT_large_11/tests -m $test_marker
-
-        env pytest models/demos/ttnn_falcon7b/tests -m $test_marker --timeout=360
-
-        env pytest models/demos/bert/tests -m $test_marker
-    fi
-
-    if [ "$tt_arch" == "wormhole_b0" ]; then
-        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/resnet50/tests -m $test_marker
-
-        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/experimental/functional_unet/tests/test_unet_perf.py -m $test_marker
-
-        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/mamba/tests -m $test_marker
-
-        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/metal_BERT_large_11/tests -m $test_marker
-
-        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/falcon7b_common/tests -m $test_marker
-
-        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/bert_tiny/tests -m $test_marker
-
-        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/yolov4/tests/ -m $test_marker
-
-        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/distilbert/tests -m $test_marker
-    fi
-
-    ## Merge all the generated reports
-    env python3 models/perf/merge_device_perf_results.py
-}
-
-run_device_perf_ops() {
-    local test_marker=$1
-
-    env pytest tests/tt_eager/ops_device_perf/run_op_profiling.py -m $test_marker
-
-    env pytest tests/device_perf_tests/matmul_stagger/test_matmul_stagger.py -m $test_marker
-}
-
 main() {
     # Parse the arguments
     while [[ $# -gt 0 ]]; do
@@ -188,10 +124,7 @@ main() {
         exit 1
     fi
 
-    if [[ "$pipeline_type" == *"device_performance"* ]]; then
-        run_device_perf_models "$test_marker"
-        run_device_perf_ops "$test_marker"
-    elif [[ "$pipeline_type" == "llm_javelin_models_performance"* ]]; then
+    if [[ "$pipeline_type" == "llm_javelin_models_performance"* ]]; then
         run_perf_models_llm_javelin "$tt_arch" "$test_marker"
     elif [[ "$pipeline_type" == "cnn_javelin_models_performance"* ]]; then
         run_perf_models_cnn_javelin "$tt_arch" "$test_marker"
