@@ -225,7 +225,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
 
     KernelHandle reader_kernel_id0 = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/untilize_with_halo_v2/device/kernels/dataflow/halo_gather.cpp",
+        "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather.cpp",
         all_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_ct_args});
@@ -236,7 +236,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
 
     KernelHandle reader_kernel_id1 = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/untilize_with_halo_v2/device/kernels/dataflow/halo_gather.cpp",
+        "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather.cpp",
         all_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_ct_args});
