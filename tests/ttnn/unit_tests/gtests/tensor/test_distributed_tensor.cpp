@@ -41,8 +41,8 @@ TEST_F(TensorDistributionTest, DeviceAggregate) {
 
     std::vector<float> test_data_1d;
 
-    for (std::vector<float> device : test_data) {
-        for (float datum : device) {
+    for (std::vector<float>& device : test_data) {
+        for (float& datum : device) {
             test_data_1d.push_back(datum);
         }
     }
@@ -76,8 +76,8 @@ TEST_F(TensorDistributionTest, BorrowedAggregate) {
 
     std::vector<float> test_data_1d;
 
-    for (std::vector<float> device : test_data) {
-        for (float datum : device) {
+    for (std::vector<float>& device : test_data) {
+        for (float& datum : device) {
             test_data_1d.push_back(datum);
         }
     }
