@@ -25,7 +25,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build-deploy-docs:
+  build-docs:
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
@@ -85,9 +85,25 @@ jobs:
       - name: Prepare artifact - create root index
         run: |
           touch gh_pages/index.html
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gh_pages_${{ inputs.version }}
+          path: gh_pages/${{ inputs.version }}
+
+  deploy-docs:
+    needs: build-docs
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: gh_pages_${{ inputs.version }}
       - name: Install rsync 📚
         run: |
-          apt-get update && apt-get install -y rsync      
+          apt-get update && apt-get install -y rsync  
       - name: Deploy to GitHub Pages
         uses: JamesIves/github-pages-deploy-action@v4
         id: deployment
