@@ -43,7 +43,9 @@ def get_batch_sampler(temperature, top_p, tokenizer):
     return sample
 
 
-def create_multimodal_model(mesh_device, max_batch_size, max_seq_len, dtype=ttnn.bfloat16, use_paged_kv_cache=False, checkpoint=None):
+def create_multimodal_model(
+    mesh_device, max_batch_size, max_seq_len, dtype=ttnn.bfloat16, use_paged_kv_cache=False, checkpoint=None
+):
     from models.tt_transformers.tt.multimodal.llama_vision_model import CrossAttentionTransformer
     from models.tt_transformers.tt.model_config import ModelArgs
 
@@ -120,7 +122,7 @@ def prepare_generator_args(
     "data_parallel",
     [
         1,
-        # 4,
+        4,
     ],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 14951424, "num_command_queues": 2}], indirect=True)

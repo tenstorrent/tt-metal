@@ -328,7 +328,7 @@ def prepare_generator_args(
             1,  # data_parallel
         ),
         (  # Batch-1 run (Latency) - single user, small prompt
-            "models/demos/llama3/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             1024,  # max_seq_len
@@ -342,7 +342,7 @@ def prepare_generator_args(
             4,  # data_parallel
         ),
         (  # Batch-1 run (Latency) - single user, small prompt
-            "models/demos/llama3/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             1024,  # max_seq_len
@@ -356,7 +356,7 @@ def prepare_generator_args(
             8,  # data_parallel
         ),
         (  # Batch-32 run (Throughput) - 32 users, small prompt
-            "models/demos/llama3/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             1024,  # max_seq_len
@@ -370,7 +370,7 @@ def prepare_generator_args(
             4,  # data_parallel
         ),
         (  # CI Batch-1 run - Measures the performance of a single user over 4096 iterations
-            "models/demos/llama3/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             8192,  # max_seq_len
@@ -384,7 +384,7 @@ def prepare_generator_args(
             4,  # data_parallel
         ),
         (  # CI Batch-1 run - Measures the performance of a single user over 4096 iterations
-            "models/demos/llama3/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             8192,  # max_seq_len
