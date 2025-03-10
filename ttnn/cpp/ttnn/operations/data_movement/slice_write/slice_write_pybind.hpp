@@ -1,0 +1,63 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+
+#include "cpp/pybind11/decorators.hpp"
+
+#include "slice_write.hpp"
+
+namespace ttnn::operations::data_movement::detail {
+namespace py = pybind11;
+
+void bind_slice_write(py::module& module) {
+    auto doc =
+        R"doc(
+            Returns a sliced tensor. If the input tensor is on host, the slice will be performed on host, and if its on device it will be performed on device.
+
+            Args:
+                input_tensor: Input Tensor.
+                slice_start: Start indices of input tensor. Values along each dim must be < input_tensor_shape[i].
+                slice_end: End indices of input tensor. Values along each dim must be < input_tensor_shape[i].
+                slice_step: (Optional[List[int[tensor rank]]) Step size for each dim. Default is None, which works out be 1 for each dimension.
+
+            Keyword Args:
+                memory_config Memory Config of the output tensor
+                queue_id (uint8, optional) command queue id
+
+            Returns:
+                ttnn.Tensor: the output tensor.
+
+            Example:
+                >>> tensor = ttnn.slice_write
+                )doc";
+
+    // TODO: implementing the array version and overloading the pybind with all the possible array sizes is better than
+    // a vector with a fixed size default value
+    using OperationType = decltype(ttnn::slice_write);
+    ttnn::bind_registered_operation(
+        module,
+        ttnn::slice_write,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const OperationType& self,
+               const ttnn::Tensor& input_tensor,
+               const ttnn::Tensor& output_tensor,
+               const std::array<uint32_t, 4>& start,
+               const std::array<uint32_t, 4>& end,
+               const std::array<uint32_t, 4>& step,
+               QueueId queue_id) { return self(queue_id, input_tensor, output_tensor, start, end, step); },
+            py::arg("input_tensor"),
+            py::arg("output_tensor"),
+            py::arg("start"),
+            py::arg("end"),
+            py::arg("step"),
+            py::kw_only(),
+            py::arg("queue_id") = DefaultQueueId,
+        });
+}
+}  // namespace ttnn::operations::data_movement::detail
