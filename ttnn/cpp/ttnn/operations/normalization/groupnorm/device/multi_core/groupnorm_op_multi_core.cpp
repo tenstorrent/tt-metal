@@ -1427,7 +1427,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)is_dram(beta),
         (std::uint32_t)is_dram(input_mask),
         (std::uint32_t)gamma_beta_num_cols_tile_per_core,
-        (std::uint32_t)per_core_N,
+        (std::uint32_t)per_core_Mt,
+        (std::uint32_t)per_core_Nt,
         (std::uint32_t)per_core_N * datum_size_bytes,
         (std::uint32_t)per_core_Nt * TILE_WIDTH * datum_size_bytes,
         (std::uint32_t)num_groups_per_core,
@@ -1855,6 +1856,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     uint32_t input_mask_tile_start_id = 0;
     for (int i = 0; i < core_coords.size(); ++i) {
         auto core = core_coords[i];
+        uint32_t out_tile_start_id = in0_block_tiles * mcast_groups.size() * core.x + per_core_Nt * core.y;
 
         std::vector<uint32_t> writer_mcast_sender_args;
         writer_mcast_sender_args.push_back(packed_cinv_value);
@@ -1864,9 +1866,11 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         writer_mcast_sender_args.push_back(gamma_dram_addr);
         writer_mcast_sender_args.push_back(beta_dram_addr);
         writer_mcast_sender_args.push_back(input_mask_dram_addr);
+        writer_mcast_sender_args.push_back(out_tile_start_id);
         writer_mcast_sender_args.push_back(gamma_tile_start_id);
         writer_mcast_sender_args.push_back(beta_tile_start_id);
         writer_mcast_sender_args.push_back(input_mask_tile_start_id);
+        writer_mcast_sender_args.push_back(Wt);
         tt::tt_metal::SetRuntimeArgs(program, writer_kernels_id, core, writer_mcast_sender_args);
         writer_kernel_ids.push_back(writer_kernels_id);
 

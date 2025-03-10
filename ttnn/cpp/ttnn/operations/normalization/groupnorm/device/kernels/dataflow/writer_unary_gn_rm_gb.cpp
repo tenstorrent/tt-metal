@@ -7,7 +7,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
-// #include "debug/dprint.h"
+#include "debug/dprint.h"
 
 void kernel_main() {
     constexpr bool is_mcast_sender = get_compile_time_arg_val(0) == 1;
@@ -20,38 +20,52 @@ void kernel_main() {
 
     constexpr uint32_t num_cols_tile_gamma_beta = get_compile_time_arg_val(7);
 
-    constexpr uint32_t per_core_N = get_compile_time_arg_val(8);
-    constexpr uint32_t per_core_N_bytes = get_compile_time_arg_val(9);
-    constexpr uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(10);
+    constexpr uint32_t per_core_M = get_compile_time_arg_val(8);
+    constexpr uint32_t per_core_N = get_compile_time_arg_val(9);
+    constexpr uint32_t per_core_N_bytes = get_compile_time_arg_val(10);
+    constexpr uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(11);
 
-    constexpr uint32_t num_groups_per_core = get_compile_time_arg_val(11);
-    constexpr uint32_t num_batches_per_core = get_compile_time_arg_val(12);
-    constexpr uint32_t block_w = get_compile_time_arg_val(13);
+    constexpr uint32_t num_groups_per_core = get_compile_time_arg_val(12);
+    constexpr uint32_t num_batches_per_core = get_compile_time_arg_val(13);
+    constexpr uint32_t block_w = get_compile_time_arg_val(14);
 
-#define stick_size_is_pow2 get_compile_time_arg_val(14) == 1
+#define stick_size_is_pow2 get_compile_time_arg_val(15) == 1
 #if (stick_size_is_pow2)
-    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(15);
+    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(16);
 #else
-    constexpr uint32_t page_size = get_compile_time_arg_val(16);
+    constexpr uint32_t page_size = get_compile_time_arg_val(17);
 #endif
 
     const uint32_t out_addr = get_arg_val<uint32_t>(3);
     const uint32_t gamma_addr = get_arg_val<uint32_t>(4);
     const uint32_t beta_addr = get_arg_val<uint32_t>(5);
     const uint32_t input_mask_addr = get_arg_val<uint32_t>(6);
-    const uint32_t gamma_tile_start_id = get_arg_val<uint32_t>(7);
-    const uint32_t beta_tile_start_id = get_arg_val<uint32_t>(8);
-    const uint32_t input_mask_tile_start_id = get_arg_val<uint32_t>(9);
+    const uint32_t out_start_id = get_arg_val<uint32_t>(7);
+    const uint32_t gamma_tile_start_id = get_arg_val<uint32_t>(8);
+    const uint32_t beta_tile_start_id = get_arg_val<uint32_t>(9);
+    const uint32_t input_mask_tile_start_id = get_arg_val<uint32_t>(10);
+    const uint32_t num_channels_tiles = get_arg_val<uint32_t>(11);
 
     constexpr uint32_t cb_gamma = tt::CBIndex::c_5;
     constexpr uint32_t cb_beta = tt::CBIndex::c_6;
-    constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
     constexpr uint32_t cb_input_mask = tt::CBIndex::c_28;
+    constexpr uint32_t cb_in = tt::CBIndex::c_29;
 
     // constexpr uint32_t block_w = 4;
     const uint32_t single_tile_size_bytes = get_tile_size(cb_gamma);
     const uint32_t input_mask_single_tile_size_bytes = get_tile_size(cb_input_mask);
     const DataFormat input_mask_data_format = get_dataformat(cb_input_mask);
+
+    constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
+#ifdef UNTILIZE_OUT
+    constexpr uint32_t cb_out = tt::CBIndex::c_30;
+#else
+    constexpr uint32_t cb_out =
+        (fuse_gamma or fuse_beta)
+            ? (((fuse_gamma and not fuse_beta) or (not fuse_gamma and fuse_beta)) ? cb_in : cb_out0)
+            : cb_out0;
+#endif
+    const DataFormat out_data_format = get_dataformat(cb_out);
 
     // input mask
     const InterleavedAddrGenFast<input_mask_is_dram> mask = {
@@ -137,4 +151,20 @@ void kernel_main() {
             }
         }
     }
+
+    const InterleavedAddrGenFast<out_is_dram> dst_a = {
+        .bank_base_address = out_addr, .page_size = single_tile_size_bytes, .data_format = out_data_format};
+
+    // we want to read into cb_in0
+    uint32_t per_core_MN = per_core_M * per_core_N;
+    cb_wait_front(cb_out, per_core_MN);
+    uint32_t l1_read_addr = get_read_ptr(cb_out);
+    for (uint32_t mt = 0; mt < per_core_M; mt++) {
+        for (uint32_t nt = 0; nt < per_core_N; nt++) {
+            noc_async_write_tile(out_start_id + (mt * num_channels_tiles) + nt, dst_a, l1_read_addr);
+            l1_read_addr += single_tile_size_bytes;
+        }
+    }
+    noc_async_write_barrier();
+    cb_pop_front(cb_out, per_core_MN);
 }
