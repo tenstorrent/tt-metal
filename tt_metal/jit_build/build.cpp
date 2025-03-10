@@ -141,6 +141,13 @@ void JitBuildEnv::init(
             this->defines_ += "-DPROFILE_KERNEL=1 ";
         }
     }
+    if (tt::llrt::RunTimeOptions::get_instance().get_profiler_noc_events_enabled()) {
+        // force profiler on if noc events are being profiled
+        if (not tt::tt_metal::getDeviceProfilerState()) {
+            this->defines_ += "-DPROFILE_KERNEL=1 ";
+        }
+        this->defines_ += "-DPROFILE_NOC_EVENTS=1 ";
+    }
 
     if (tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
         this->defines_ += "-DWATCHER_ENABLED ";
@@ -178,20 +185,33 @@ void JitBuildEnv::init(
 
     // Includes
     // TODO(pgk) this list is insane
-    this->includes_ = string("") + "-I. " + "-I.. " + "-I" + this->root_ + " " + "-I" + this->root_ + "ttnn " + "-I" +
-                      this->root_ + "tt_metal " + "-I" + this->root_ + "tt_metal/include " + "-I" + this->root_ +
-                      "tt_metal/hw/inc " + "-I" + this->root_ + "tt_metal/hostdevcommon/api " + "-I" + this->root_ +
-                      "tt_metal/hw/inc/debug " + "-I" + this->root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ +
-                      " " + "-I" + this->root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/" +
-                      this->arch_name_ + "_defines " + "-I" + this->root_ + "tt_metal/hw/inc/" +
-                      this->aliased_arch_name_ + "/noc " + "-I" + this->root_ + "tt_metal/hw/ckernels/" +
-                      this->arch_name_ + "/metal/common " + "-I" + this->root_ + "tt_metal/hw/ckernels/" +
-                      this->arch_name_ + "/metal/llk_io " + "-I" + this->root_ + "tt_metal/third_party/tt_llk/tt_llk_" +
-                      this->arch_name_ + "/common/inc " +  // TODO(fixme) datamovement fw shouldn't read this
-                      "-I" + this->root_ + "tt_metal/api/" + this->aliased_arch_name_ + " " + "-I" + this->root_ +
-                      "tt_metal/api/" + this->aliased_arch_name_ + "/tt-metalium " + "-I" + this->root_ +
-                      "tt_metal/api/tt-metalium/ " + "-I" + this->root_ + "tt_metal/api/ " + "-I" + this->root_ +
-                      "tt_metal/third_party/tt_llk/tt_llk_" + this->arch_name_ + "/llk_lib ";
+    std::vector<std::string> includeDirs = {
+        ".",
+        "..",
+        root_,
+        root_ + "ttnn",
+        root_ + "tt_metal",
+        root_ + "tt_metal/include",
+        root_ + "tt_metal/hw/inc",
+        root_ + "tt_metal/hostdevcommon/api",
+        root_ + "tt_metal/hw/inc/debug",
+        root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_,
+        root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/" + this->arch_name_ + "_defines",
+        root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/noc",
+        root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/metal/common",
+        root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/metal/llk_io",
+        // TODO: datamovement fw shouldn't read this
+        root_ + "tt_metal/third_party/tt_llk/tt_llk_" + this->arch_name_ + "/common/inc",
+        root_ + "tt_metal/api/",
+        root_ + "tt_metal/api/tt-metalium/",
+        root_ + "tt_metal/third_party/tt_llk/tt_llk_" + this->arch_name_ + "/llk_lib"
+    };
+
+    std::ostringstream oss;
+    for (size_t i = 0; i < includeDirs.size(); ++i) {
+        oss << "-I" << includeDirs[i] << " ";
+    }
+    this->includes_ = oss.str();
 
     this->lflags_ = common_flags;
     this->lflags_ += "-fno-exceptions -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
