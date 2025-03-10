@@ -139,7 +139,7 @@ void kernel_main() {
         //            |   24|   25|   26|   27|   28|   29|   30|   31|
         //
 
-        uint32_t height = 0;
+        uint32_t row = 0;
         uint32_t total = 0;
         while (total < tile_rows * tile_cols_for_chip) {
             cb_wait_front(cb0_id, packet_size_in_pages);
@@ -157,8 +157,8 @@ void kernel_main() {
 
                 tile_id++;
                 if (tile_id % tile_cols_for_chip == 0) {
-                    height++;
-                    tile_id = height * (tile_cols_for_chip * ring_size) + tile_id_start;
+                    row++;
+                    tile_id = row * (tile_cols_for_chip * ring_size) + tile_id_start;
                 }
                 total++;
             }

@@ -245,7 +245,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         uint32_t output_tile_id_end = ring_index * input_tensor_num_pages + input_tile_id_end;
         if (dim == 3) {
             output_tile_id_start = tile_cols_for_chip * ring_index;  // multi width tile for each chip
-            output_tile_id_end = ring_index + base_pages_per_worker * ring_size - (ring_size - 1);
         }
         std::vector<uint32_t> writer_rt_args = {
             output_tensor.buffer()->address(),  // tensor_address0
