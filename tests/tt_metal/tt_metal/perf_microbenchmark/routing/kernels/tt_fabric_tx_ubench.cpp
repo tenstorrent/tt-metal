@@ -16,7 +16,7 @@
 using namespace tt::tt_fabric;
 
 uint32_t src_endpoint_id;
-// constexpr uint32_t src_endpoint_id = get_compile_time_arg_val(0);
+constexpr uint32_t data_mode = get_compile_time_arg_val(0);
 constexpr uint32_t num_dest_endpoints = get_compile_time_arg_val(1);
 constexpr uint32_t dest_endpoint_start_id = get_compile_time_arg_val(2);
 
@@ -115,12 +115,16 @@ void kernel_main() {
     zero_l1_buf(
         reinterpret_cast<tt_l1_ptr uint32_t*>(data_buffer_start_addr), data_buffer_size_words * PACKET_WORD_SIZE_BYTES);
 
+    // initalize client
+    fabric_endpoint_init<decltype(client_interface), RoutingType::ROUTING_TABLE>(client_interface, outbound_eth_chan);
+
     uint64_t data_words_sent = 0;
     uint32_t packet_count = 0;
 
     uint64_t dst_addr = ((uint64_t)noc_offset << 32 | target_address);
     if constexpr (mcast_data) {
         fabric_async_write_multicast_add_header(
+            client_interface,
             data_buffer_start_addr,  // source address in sender’s memory
             dest_device >> 16,
             dest_device & 0xFFFF,
@@ -131,7 +135,8 @@ void kernel_main() {
             n_depth,
             s_depth);
     } else {
-        fabric_async_write_add_header(
+        fabric_async_write_add_header<decltype(client_interface), (ClientDataMode)data_mode>(
+            client_interface,
             data_buffer_start_addr,  // source address in sender’s memory
             dest_device >> 16,
             dest_device & 0xFFFF,
@@ -139,9 +144,6 @@ void kernel_main() {
             max_packet_size_words * 16  // number of bytes to write to remote destination
         );
     }
-
-    // initalize client
-    fabric_endpoint_init<decltype(client_interface), RoutingType::ROUTING_TABLE>(client_interface, outbound_eth_chan);
 
     // notify the controller kernel that this worker is ready to proceed
     notify_traffic_controller();
@@ -152,10 +154,17 @@ void kernel_main() {
     while (*(volatile tt_l1_ptr uint32_t*)signal_address == 0);
 
 #ifdef FVC_MODE_PULL
-    fabric_setup_pull_request(
-        client_interface,           // fabric client interface
-        data_buffer_start_addr,     // source address in sender’s memory
-        max_packet_size_words * 16  // number of bytes to write to remote destination
+    uint32_t pull_size_bytes = max_packet_size_words * 16;
+    if constexpr (data_mode == ClientDataMode::RAW_DATA) {
+        // In raw data mode, client data buffer dones not contain packet header.
+        // Packet header is referenced from client interface header buffer.
+        // The Data to pull in this case is packet size - packet header.
+        pull_size_bytes -= PACKET_HEADER_SIZE_BYTES;
+    }
+    fabric_setup_pull_request<(ClientDataMode)data_mode>(
+        client_interface,        // fabric client interface
+        data_buffer_start_addr,  // source address in sender’s memory
+        pull_size_bytes          // number of bytes to write to remote destination
     );
 
     uint64_t start_timestamp = get_timestamp();
@@ -163,7 +172,11 @@ void kernel_main() {
     while (true) {
         client_interface->local_pull_request.pull_request.words_read = 0;
         if constexpr (mcast_data) {
-            fabric_async_write_multicast<AsyncWriteMode::SEND_PR, RoutingType::ROUTING_TABLE>(
+            fabric_async_write_multicast<
+                decltype(client_interface),
+                (ClientDataMode)data_mode,
+                AsyncWriteMode::SEND_PR,
+                RoutingType::ROUTING_TABLE>(
                 client_interface,
                 0,                       // the network plane to use for this transaction
                 data_buffer_start_addr,  // source address in sender’s memory
@@ -176,7 +189,7 @@ void kernel_main() {
                 n_depth,
                 s_depth);
         } else {
-            fabric_async_write<AsyncWriteMode::SEND_PR, RoutingType::ROUTING_TABLE>(
+            fabric_async_write<(ClientDataMode)data_mode, AsyncWriteMode::SEND_PR, RoutingType::ROUTING_TABLE>(
                 client_interface,
                 0,                       // the network plane to use for this transaction
                 data_buffer_start_addr,  // source address in sender’s memory
@@ -205,8 +218,8 @@ void kernel_main() {
     uint64_t start_timestamp = get_timestamp();
 
     while (true) {
-        fabric_async_write<AsyncWriteMode::PUSH>(
-            client_interface,
+        fabric_async_write<(ClientDataMode)data_mode, AsyncWriteMode::PUSH>(
+            (fabric_push_client_interface_t*)client_interface,
             0,                       // the network plane to use for this transaction
             data_buffer_start_addr,  // source address in sender’s memory
             dest_device >> 16,
