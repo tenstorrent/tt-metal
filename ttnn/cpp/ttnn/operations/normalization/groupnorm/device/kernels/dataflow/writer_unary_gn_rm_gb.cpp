@@ -13,33 +13,35 @@ void kernel_main() {
     constexpr bool is_mcast_sender = get_compile_time_arg_val(0) == 1;
     constexpr bool fuse_gamma = get_compile_time_arg_val(1) == 1;
     constexpr bool fuse_beta = get_compile_time_arg_val(2) == 1;
-    constexpr bool gamma_is_dram = get_compile_time_arg_val(3) == 1;
-    constexpr bool beta_is_dram = get_compile_time_arg_val(4) == 1;
-    constexpr bool input_mask_is_dram = get_compile_time_arg_val(5) == 1;
+    constexpr bool out_is_dram = get_compile_time_arg_val(3) == 1;
+    constexpr bool gamma_is_dram = get_compile_time_arg_val(4) == 1;
+    constexpr bool beta_is_dram = get_compile_time_arg_val(5) == 1;
+    constexpr bool input_mask_is_dram = get_compile_time_arg_val(6) == 1;
 
-    constexpr uint32_t num_cols_tile_gamma_beta = get_compile_time_arg_val(6);
+    constexpr uint32_t num_cols_tile_gamma_beta = get_compile_time_arg_val(7);
 
-    constexpr uint32_t per_core_N = get_compile_time_arg_val(7);
-    constexpr uint32_t per_core_N_bytes = get_compile_time_arg_val(8);
-    constexpr uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(9);
+    constexpr uint32_t per_core_N = get_compile_time_arg_val(8);
+    constexpr uint32_t per_core_N_bytes = get_compile_time_arg_val(9);
+    constexpr uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(10);
 
-    constexpr uint32_t num_groups_per_core = get_compile_time_arg_val(10);
-    constexpr uint32_t num_batches_per_core = get_compile_time_arg_val(11);
-    constexpr uint32_t block_w = get_compile_time_arg_val(12);
+    constexpr uint32_t num_groups_per_core = get_compile_time_arg_val(11);
+    constexpr uint32_t num_batches_per_core = get_compile_time_arg_val(12);
+    constexpr uint32_t block_w = get_compile_time_arg_val(13);
 
-#define stick_size_is_pow2 get_compile_time_arg_val(13) == 1
+#define stick_size_is_pow2 get_compile_time_arg_val(14) == 1
 #if (stick_size_is_pow2)
-    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(14);
+    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(15);
 #else
-    constexpr uint32_t page_size = get_compile_time_arg_val(14);
+    constexpr uint32_t page_size = get_compile_time_arg_val(16);
 #endif
 
-    const uint32_t gamma_addr = get_arg_val<uint32_t>(3);
-    const uint32_t beta_addr = get_arg_val<uint32_t>(4);
-    const uint32_t input_mask_addr = get_arg_val<uint32_t>(5);
-    const uint32_t gamma_tile_start_id = get_arg_val<uint32_t>(6);
-    const uint32_t beta_tile_start_id = get_arg_val<uint32_t>(7);
-    const uint32_t input_mask_tile_start_id = get_arg_val<uint32_t>(8);
+    const uint32_t out_addr = get_arg_val<uint32_t>(3);
+    const uint32_t gamma_addr = get_arg_val<uint32_t>(4);
+    const uint32_t beta_addr = get_arg_val<uint32_t>(5);
+    const uint32_t input_mask_addr = get_arg_val<uint32_t>(6);
+    const uint32_t gamma_tile_start_id = get_arg_val<uint32_t>(7);
+    const uint32_t beta_tile_start_id = get_arg_val<uint32_t>(8);
+    const uint32_t input_mask_tile_start_id = get_arg_val<uint32_t>(9);
 
     constexpr uint32_t cb_gamma = tt::CBIndex::c_5;
     constexpr uint32_t cb_beta = tt::CBIndex::c_6;

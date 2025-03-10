@@ -109,14 +109,14 @@ def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_group
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    # shard config
-    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
-    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-    shard_shape = N * H * W // grid_size.x, C // grid_size.y
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR)
-    sharded_mem_config = ttnn.MemoryConfig(
-        ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
-    )
+    # # shard config
+    # grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
+    # shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+    # shard_shape = N * H * W // grid_size.x, C // grid_size.y
+    # shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR)
+    # sharded_mem_config = ttnn.MemoryConfig(
+    #     ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    # )
     # input_tensor = ttnn.interleaved_to_sharded(input_tensor, sharded_mem_config, keep_l1_aligned=True)
 
     # groupnorm
@@ -126,13 +126,14 @@ def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_group
         input_mask=input_mask_tensor,
         weight=gamma_t,
         bias=beta_t,
-        memory_config=sharded_mem_config,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        output_layout=ttnn.ROW_MAJOR_LAYOUT,
         core_grid=grid_size,
         inplace=False,
     )
 
     # output tensor
-    output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG, is_l1_aligned=True)
+    #    output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG, is_l1_aligned=True)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 

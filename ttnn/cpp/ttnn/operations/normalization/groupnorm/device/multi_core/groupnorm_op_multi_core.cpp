@@ -1422,6 +1422,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         1,
         (std::uint32_t)gamma.has_value(),
         (std::uint32_t)beta.has_value(),
+        1,
         (std::uint32_t)is_dram(gamma),
         (std::uint32_t)is_dram(beta),
         (std::uint32_t)is_dram(input_mask),
@@ -1593,8 +1594,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
                 .set_page_size(in0_cb_index, in_single_tile_size);
         tt::tt_metal::CircularBufferConfig output_cb_config =
             tt::tt_metal::CircularBufferConfig(out_CB_size, {{output_cb_index, out_data_format}})
-                .set_page_size(output_cb_index, out_single_tile_size)
-                .set_globally_allocated_address(*output.buffer());
+                .set_page_size(output_cb_index, out_single_tile_size);
 
         cb_in0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in0_cb_config);
         cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
@@ -1860,6 +1860,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         writer_mcast_sender_args.push_back(packed_cinv_value);
         writer_mcast_sender_args.push_back(packed_winv_value);
         writer_mcast_sender_args.push_back(e.u);
+        writer_mcast_sender_args.push_back(out_dram_addr);
         writer_mcast_sender_args.push_back(gamma_dram_addr);
         writer_mcast_sender_args.push_back(beta_dram_addr);
         writer_mcast_sender_args.push_back(input_mask_dram_addr);
