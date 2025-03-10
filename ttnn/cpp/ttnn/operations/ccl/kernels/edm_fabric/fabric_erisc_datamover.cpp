@@ -260,16 +260,17 @@ struct TransactionIdCounter {
     uint8_t next_trid = 0;
 };
 
-template <size_t NUM_CHANNELS, size_t MAX_TRANSACTION_IDS>
+template <size_t NUM_CHANNELS, size_t MAX_TRANSACTION_IDS, size_t OFFSET>
 struct WriteTransactionIdTracker {
+    static constexpr uint8_t INVALID_TRID = OFFSET + MAX_TRANSACTION_IDS;
     static constexpr bool N_TRIDS_IS_POW2 = is_power_of_2(MAX_TRANSACTION_IDS);
     static constexpr bool N_CHANS_IS_POW2 = is_power_of_2(NUM_CHANNELS);
     static constexpr uint8_t TRID_POW2_MASK = MAX_TRANSACTION_IDS - 1;
     static constexpr bool BOTH_PARAMS_ARE_POW2 = N_TRIDS_IS_POW2 && N_CHANS_IS_POW2;
 
-    WriteTransactionIdTracker(uint8_t base_id) : base_id(base_id), invalid_trid(base_id + MAX_TRANSACTION_IDS) {
+    WriteTransactionIdTracker() {
         for (size_t i = 0; i < NUM_CHANNELS; i++) {
-            this->buffer_slot_trids[i] = this->invalid_trid;
+            this->buffer_slot_trids[i] = INVALID_TRID;
         }
     }
     FORCE_INLINE void set_buffer_slot_trid(uint8_t trid, tt::fabric::BufferIndex buffer_index) {
@@ -281,11 +282,11 @@ struct WriteTransactionIdTracker {
 
     FORCE_INLINE uint8_t update_buffer_slot_to_next_trid_and_advance_trid_counter(tt::fabric::BufferIndex buffer_index) {
         if constexpr (BOTH_PARAMS_ARE_POW2) {
-            uint8_t next_trid = this->base_id + (buffer_index & TRID_POW2_MASK);
+            uint8_t next_trid = OFFSET + buffer_index & TRID_POW2_MASK;
             this->trid_counter.increment();
             return next_trid;
         } else {
-            uint8_t next_trid = this->base_id + this->trid_counter.get();
+            uint8_t next_trid = OFFSET + this->trid_counter.get();
             this->buffer_slot_trids[buffer_index] = next_trid;
             this->trid_counter.increment();
             return next_trid;
@@ -294,13 +295,13 @@ struct WriteTransactionIdTracker {
 
     FORCE_INLINE void clear_trid_at_buffer_slot(tt::fabric::BufferIndex buffer_index) {
         if constexpr (!BOTH_PARAMS_ARE_POW2) {
-            this->buffer_slot_trids[buffer_index] = this->invalid_trid;
+            this->buffer_slot_trids[buffer_index] = INVALID_TRID;
         }
     }
 
     FORCE_INLINE uint8_t get_buffer_slot_trid(tt::fabric::BufferIndex buffer_index) const {
         if constexpr (BOTH_PARAMS_ARE_POW2) {
-            return this->base_id + (buffer_index & TRID_POW2_MASK);
+            return OFFSET + buffer_index & TRID_POW2_MASK;
         } else {
             return this->buffer_slot_trids[buffer_index];
         }
@@ -312,7 +313,7 @@ struct WriteTransactionIdTracker {
         } else {
             // TODO: should be able to remove compare against INVALID_TRID
             auto trid = this->get_buffer_slot_trid(buffer_index);
-            return trid == this->invalid_trid || ncrisc_noc_nonposted_write_with_transaction_id_sent(noc_index, trid);
+            return trid == INVALID_TRID || ncrisc_noc_nonposted_write_with_transaction_id_sent(noc_index, trid);
         }
     }
     FORCE_INLINE void all_buffer_slot_transactions_acked() const {
@@ -325,8 +326,6 @@ struct WriteTransactionIdTracker {
     private:
     std::array<uint8_t, NUM_CHANNELS> buffer_slot_trids;
     TransactionIdCounter<MAX_TRANSACTION_IDS> trid_counter;
-    const uint8_t base_id = 0;
-    const uint8_t invalid_trid = 0;
 
     // TODO: cleanup - only used for when both params are pow2, else above are used.
     uint8_t next_trid = 0;
@@ -800,7 +799,7 @@ FORCE_INLINE bool run_sender_channel_step(
     return did_something;
 };
 
-template <bool enable_packet_header_recording, bool enable_fabric_counters, uint8_t RECEIVER_NUM_BUFFERS, uint8_t SENDER_NUM_BUFFERS, size_t NUM_SENDER_CHANNELS, uint8_t to_receiver_pkts_sent_id>
+template <bool enable_packet_header_recording, bool enable_fabric_counters, uint8_t RECEIVER_NUM_BUFFERS, uint8_t SENDER_NUM_BUFFERS, size_t NUM_SENDER_CHANNELS, uint8_t to_receiver_pkts_sent_id, typename WriteTridTracker>
 FORCE_INLINE void run_receiver_channel_step(
     tt::fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS> &local_receiver_channel,
     std::array<tt::fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS> &remote_sender_channels,
@@ -809,7 +808,7 @@ FORCE_INLINE void run_receiver_channel_step(
     std::array<tt::fabric::ChannelBufferPointer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS> &remote_eth_sender_wrptrs,
     ReceiverChannelPointers<RECEIVER_NUM_BUFFERS> &receiver_channel_pointers,
     PacketHeaderRecorder &packet_header_recorder,
-    WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS, NUM_TRANSACTION_IDS> &receiver_channel_trid_tracker) {
+    WriteTridTracker &receiver_channel_trid_tracker) {
 
     auto &ack_ptr = receiver_channel_pointers.ack_ptr;
     auto pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
@@ -963,7 +962,8 @@ void run_fabric_edm_main_loop(
     std::array<volatile tt::fabric::EdmFabricSenderChannelCounters *, NUM_SENDER_CHANNELS> sender_channel_counters_ptrs,
     std::array<PacketHeaderRecorder, NUM_RECEIVER_CHANNELS> &receiver_channel_packet_recorders,
     std::array<PacketHeaderRecorder, NUM_SENDER_CHANNELS> &sender_channel_packet_recorders,
-    std::array<WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS, NUM_TRANSACTION_IDS>, NUM_RECEIVER_CHANNELS> &receiver_channel_trid_trackers) {
+    WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS, NUM_TRANSACTION_IDS, 0> &receiver_channel_0_trid_tracker,
+    WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS, NUM_TRANSACTION_IDS, NUM_TRANSACTION_IDS> &receiver_channel_1_trid_tracker) {
     // std::array<SenderState, NUM_SENDER_CHANNELS> sender_states = {
     //     SenderState::SENDER_WAIT_WORKER_HANDSHAKE, SenderState::SENDER_WAIT_WORKER_HANDSHAKE};
     // size_t sender_channel_index = 0;
@@ -1019,14 +1019,14 @@ void run_fabric_edm_main_loop(
                 remote_eth_sender_wrptrs,
                 receiver_channel_pointers[0],
                 receiver_channel_packet_recorders[0],
-                receiver_channel_trid_trackers[0]);
+                receiver_channel_0_trid_tracker);
             if constexpr (enable_ring_support) {
                 run_receiver_channel_step<enable_packet_header_recording, enable_fabric_counters, RECEIVER_NUM_BUFFERS, SENDER_NUM_BUFFERS, NUM_SENDER_CHANNELS, to_receiver_1_pkts_sent_id>(
                     local_receiver_channels[1], remote_sender_channels, downstream_edm_noc_interfaces, receiver_channel_counters_ptrs[1],
                     remote_eth_sender_wrptrs,
                     receiver_channel_pointers[1],
                     receiver_channel_packet_recorders[1],
-                    receiver_channel_trid_trackers[1]);
+                    receiver_channel_1_trid_tracker);
             }
 
             bool did_something_sender1 = run_sender_channel_step<enable_packet_header_recording, enable_fabric_counters, RECEIVER_NUM_BUFFERS, SENDER_NUM_BUFFERS, to_receiver_0_pkts_sent_id>(
@@ -1384,7 +1384,8 @@ void kernel_main() {
             reinterpret_cast<volatile tt_l1_ptr uint32_t *const>(connection_live_semaphore_ptr));
     }
 
-    std::array<WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS, NUM_TRANSACTION_IDS>, NUM_RECEIVER_CHANNELS> receiver_channel_trid_trackers = {0, NUM_TRANSACTION_IDS};
+    WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS, NUM_TRANSACTION_IDS, 0> receiver_channel_0_trid_tracker;
+    WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS, NUM_TRANSACTION_IDS, NUM_TRANSACTION_IDS> receiver_channel_1_trid_tracker;
 
     if (has_downstream_edm_vc0_buffer_connection) {
         for (auto& downstream_edm_noc_interface : downstream_edm_noc_interfaces) {
@@ -1417,7 +1418,8 @@ void kernel_main() {
         {sender_channel_0_counters_ptr, sender_channel_1_counters_ptr, sender_channel_2_counters_ptr},
         receiver_channel_packet_recorders,
         sender_channel_packet_recorders,
-        receiver_channel_trid_trackers);
+        receiver_channel_0_trid_tracker,
+        receiver_channel_1_trid_tracker);
 
     if constexpr (persistent_mode) {
         // we force these values to a non-zero value so that if we run the fabric back to back,
@@ -1428,9 +1430,8 @@ void kernel_main() {
     }
 
     // make sure all the noc transactions are acked before re-init the noc counters
-    for (auto& receiver_channel_trid_tracker : receiver_channel_trid_trackers) {
-        receiver_channel_trid_tracker.all_buffer_slot_transactions_acked();
-    }
+    receiver_channel_0_trid_tracker.all_buffer_slot_transactions_acked();
+    receiver_channel_1_trid_tracker.all_buffer_slot_transactions_acked();
 
     // re-init the noc counters as the noc api used is not incrementing them
     ncrisc_noc_counters_init();
