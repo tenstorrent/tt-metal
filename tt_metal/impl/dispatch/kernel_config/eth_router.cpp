@@ -83,7 +83,7 @@ void EthRouterKernel::GenerateStaticConfigs() {
 void EthRouterKernel::GenerateDependentConfigs() {
     if (as_mux_) {
         // Upstream, expect PRETETCH_Hs
-        TT_ASSERT(upstream_kernels_.size() <= MAX_SWITCH_FAN_IN && upstream_kernels_.size() > 0);
+        TT_ASSERT(upstream_kernels_.size() <= tt::packet_queue::MAX_SWITCH_FAN_IN && upstream_kernels_.size() > 0);
 
         // Downstream, expect US_TUNNELER_REMOTE
         TT_ASSERT(downstream_kernels_.size() == 1);
@@ -96,24 +96,25 @@ void EthRouterKernel::GenerateDependentConfigs() {
             TT_ASSERT(prefetch_kernel);
             dependent_config_.remote_tx_x[idx] = tunneler_kernel->GetVirtualCore().x;
             dependent_config_.remote_tx_y[idx] = tunneler_kernel->GetVirtualCore().y;
-            dependent_config_.remote_tx_queue_id[idx] = idx + MAX_SWITCH_FAN_IN * router_id;
-            dependent_config_.remote_tx_network_type[idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
+            dependent_config_.remote_tx_queue_id[idx] = idx + tt::packet_queue::MAX_SWITCH_FAN_IN * router_id;
+            dependent_config_.remote_tx_network_type[idx] = (uint32_t)tt::packet_queue::DispatchRemoteNetworkType::NOC0;
             dependent_config_.remote_tx_queue_start_addr_words[idx] =
                 tunneler_kernel->GetStaticConfig().in_queue_start_addr_words.value() +
-                (idx + router_id * MAX_SWITCH_FAN_IN) * tunneler_kernel->GetStaticConfig().in_queue_size_words.value();
+                (idx + router_id * tt::packet_queue::MAX_SWITCH_FAN_IN) *
+                    tunneler_kernel->GetStaticConfig().in_queue_size_words.value();
             dependent_config_.remote_tx_queue_size_words[idx] =
                 tunneler_kernel->GetStaticConfig().in_queue_size_words.value();
 
             dependent_config_.remote_rx_x[idx] = prefetch_kernel->GetVirtualCore().x;
             dependent_config_.remote_rx_y[idx] = prefetch_kernel->GetVirtualCore().y;
-            dependent_config_.remote_rx_network_type[idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
+            dependent_config_.remote_rx_network_type[idx] = (uint32_t)tt::packet_queue::DispatchRemoteNetworkType::NOC0;
 
             dependent_config_.input_packetize_upstream_sem[idx] =
                 prefetch_kernel->GetStaticConfig().my_downstream_cb_sem_id.value();
         }
 
-        uint32_t src_id_start = 0xA1 + router_id * MAX_SWITCH_FAN_IN;
-        uint32_t dst_id_start = 0xB1 + router_id * MAX_SWITCH_FAN_IN;
+        uint32_t src_id_start = 0xA1 + router_id * tt::packet_queue::MAX_SWITCH_FAN_IN;
+        uint32_t dst_id_start = 0xB1 + router_id * tt::packet_queue::MAX_SWITCH_FAN_IN;
         dependent_config_.input_packetize_src_endpoint = {
             src_id_start, src_id_start + 1, src_id_start + 2, src_id_start + 3};
         dependent_config_.input_packetize_dst_endpoint = {
@@ -129,11 +130,11 @@ void EthRouterKernel::GenerateDependentConfigs() {
             dependent_config_.remote_rx_y[idx] = us_tunneler_kernel->GetVirtualCore().y;
             // Queue id starts counting after the input VCs
             dependent_config_.remote_rx_queue_id[idx] = us_tunneler_kernel->GetRouterQueueIdOffset(this, false) + idx;
-            dependent_config_.remote_rx_network_type[idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
+            dependent_config_.remote_rx_network_type[idx] = (uint32_t)tt::packet_queue::DispatchRemoteNetworkType::NOC0;
         }
 
         // Downstream, expect PREFETCH_D/US_TUNNELER_REMOTE
-        TT_ASSERT(downstream_kernels_.size() <= MAX_SWITCH_FAN_OUT && downstream_kernels_.size() > 0);
+        TT_ASSERT(downstream_kernels_.size() <= tt::packet_queue::MAX_SWITCH_FAN_OUT && downstream_kernels_.size() > 0);
         std::vector<PrefetchKernel*> prefetch_kernels;
         EthTunnelerKernel* ds_tunneler_kernel = nullptr;
         for (auto k : downstream_kernels_) {
@@ -152,7 +153,8 @@ void EthRouterKernel::GenerateDependentConfigs() {
             dependent_config_.remote_tx_x[remote_idx] = prefetch_kernel->GetVirtualCore().x;
             dependent_config_.remote_tx_y[remote_idx] = prefetch_kernel->GetVirtualCore().y;
             dependent_config_.remote_tx_queue_id[remote_idx] = 0;  // Prefetch queue id always 0
-            dependent_config_.remote_tx_network_type[remote_idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
+            dependent_config_.remote_tx_network_type[remote_idx] =
+                (uint32_t)tt::packet_queue::DispatchRemoteNetworkType::NOC0;
             dependent_config_.remote_tx_queue_start_addr_words[remote_idx] =
                 prefetch_kernel->GetStaticConfig().cmddat_q_base.value() >> 4;
             dependent_config_.remote_tx_queue_size_words[remote_idx] =
@@ -170,7 +172,8 @@ void EthRouterKernel::GenerateDependentConfigs() {
                 dependent_config_.remote_tx_y[remote_idx] = ds_tunneler_kernel->GetVirtualCore().y;
                 dependent_config_.remote_tx_queue_id[remote_idx] =
                     ds_tunneler_kernel->GetRouterQueueIdOffset(this, true) + idx;
-                dependent_config_.remote_tx_network_type[remote_idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
+                dependent_config_.remote_tx_network_type[remote_idx] =
+                    (uint32_t)tt::packet_queue::DispatchRemoteNetworkType::NOC0;
                 dependent_config_.remote_tx_queue_start_addr_words[remote_idx] =
                     ds_tunneler_kernel->GetStaticConfig().in_queue_start_addr_words.value() +
                     ds_tunneler_kernel->GetStaticConfig().in_queue_size_words.value() *
@@ -230,7 +233,7 @@ void EthRouterKernel::CreateKernel() {
         compile_args[0] = 0xB1;
         // compile_args[21] = 84;
     }
-    for (int idx = 0; idx < MAX_SWITCH_FAN_OUT; idx++) {
+    for (int idx = 0; idx < tt::packet_queue::MAX_SWITCH_FAN_OUT; idx++) {
         if (dependent_config_.remote_tx_x[idx]) {
             compile_args[4 + idx] |= (dependent_config_.remote_tx_x[idx].value() & 0xFF);
             compile_args[4 + idx] |= (dependent_config_.remote_tx_y[idx].value() & 0xFF) << 8;
@@ -252,7 +255,7 @@ void EthRouterKernel::CreateKernel() {
             }
         }
     }
-    for (int idx = 0; idx < MAX_SWITCH_FAN_IN; idx++) {
+    for (int idx = 0; idx < tt::packet_queue::MAX_SWITCH_FAN_IN; idx++) {
         if (dependent_config_.remote_rx_x[idx]) {
             compile_args[16 + idx] |= (dependent_config_.remote_rx_x[idx].value() & 0xFF);
             compile_args[16 + idx] |= (dependent_config_.remote_rx_y[idx].value() & 0xFF) << 8;

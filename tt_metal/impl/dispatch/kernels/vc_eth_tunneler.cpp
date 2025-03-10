@@ -5,16 +5,18 @@
 #include "dataflow_api.h"
 #include "tt_metal/impl/dispatch/kernels/packet_queue.hpp"
 
+using tt::packet_queue::DispatchRemoteNetworkType;
+
 constexpr uint32_t endpoint_id_start_index = get_compile_time_arg_val(0);
 constexpr uint32_t tunnel_lanes = get_compile_time_arg_val(1);
 constexpr uint32_t in_queue_start_addr_words = get_compile_time_arg_val(2);
 constexpr uint32_t in_queue_size_words = get_compile_time_arg_val(3);
-constexpr uint32_t in_queue_size_bytes = in_queue_size_words * PACKET_WORD_SIZE_BYTES;
+constexpr uint32_t in_queue_size_bytes = in_queue_size_words * tt::packet_queue::PACKET_WORD_SIZE_BYTES;
 static_assert(is_power_of_2(in_queue_size_words), "in_queue_size_words must be a power of 2");
-static_assert(tunnel_lanes <= MAX_TUNNEL_LANES, "cannot have more than 2 tunnel directions.");
+static_assert(tunnel_lanes <= tt::packet_queue::MAX_TUNNEL_LANES, "cannot have more than 2 tunnel directions.");
 static_assert(tunnel_lanes, "tunnel directions cannot be 0. 1 => Unidirectional. 2 => Bidirectional");
 
-constexpr uint32_t remote_receiver_x[MAX_TUNNEL_LANES] =
+constexpr uint32_t remote_receiver_x[tt::packet_queue::MAX_TUNNEL_LANES] =
     {
         (get_compile_time_arg_val(4)  & 0xFF),
         (get_compile_time_arg_val(5)  & 0xFF),
@@ -28,7 +30,7 @@ constexpr uint32_t remote_receiver_x[MAX_TUNNEL_LANES] =
         (get_compile_time_arg_val(13) & 0xFF)
     };
 
-constexpr uint32_t remote_receiver_y[MAX_TUNNEL_LANES] =
+constexpr uint32_t remote_receiver_y[tt::packet_queue::MAX_TUNNEL_LANES] =
     {
         (get_compile_time_arg_val(4)  >> 8) & 0xFF,
         (get_compile_time_arg_val(5)  >> 8) & 0xFF,
@@ -42,7 +44,7 @@ constexpr uint32_t remote_receiver_y[MAX_TUNNEL_LANES] =
         (get_compile_time_arg_val(13) >> 8) & 0xFF
     };
 
-constexpr uint32_t remote_receiver_queue_id[MAX_TUNNEL_LANES] =
+constexpr uint32_t remote_receiver_queue_id[tt::packet_queue::MAX_TUNNEL_LANES] =
     {
         (get_compile_time_arg_val(4)  >> 16) & 0xFF,
         (get_compile_time_arg_val(5)  >> 16) & 0xFF,
@@ -56,7 +58,7 @@ constexpr uint32_t remote_receiver_queue_id[MAX_TUNNEL_LANES] =
         (get_compile_time_arg_val(13) >> 16) & 0xFF
     };
 
-constexpr DispatchRemoteNetworkType remote_receiver_network_type[MAX_TUNNEL_LANES] =
+constexpr DispatchRemoteNetworkType remote_receiver_network_type[tt::packet_queue::MAX_TUNNEL_LANES] =
     {
         static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(4)  >> 24) & 0xFF),
         static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(5)  >> 24) & 0xFF),
@@ -70,7 +72,7 @@ constexpr DispatchRemoteNetworkType remote_receiver_network_type[MAX_TUNNEL_LANE
         static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(13) >> 24) & 0xFF)
     };
 
-constexpr uint32_t remote_receiver_queue_start_addr_words[MAX_TUNNEL_LANES] =
+constexpr uint32_t remote_receiver_queue_start_addr_words[tt::packet_queue::MAX_TUNNEL_LANES] =
     {
         get_compile_time_arg_val(14),
         get_compile_time_arg_val(16),
@@ -84,7 +86,7 @@ constexpr uint32_t remote_receiver_queue_start_addr_words[MAX_TUNNEL_LANES] =
         get_compile_time_arg_val(32)
     };
 
-constexpr uint32_t remote_receiver_queue_size_words[MAX_TUNNEL_LANES] =
+constexpr uint32_t remote_receiver_queue_size_words[tt::packet_queue::MAX_TUNNEL_LANES] =
     {
         get_compile_time_arg_val(15),
         get_compile_time_arg_val(17),
@@ -109,7 +111,7 @@ static_assert(is_power_of_2(remote_receiver_queue_size_words[7]), "remote_receiv
 static_assert(is_power_of_2(remote_receiver_queue_size_words[8]), "remote_receiver_queue_size_words must be a power of 2");
 static_assert(is_power_of_2(remote_receiver_queue_size_words[9]), "remote_receiver_queue_size_words must be a power of 2");
 
-constexpr uint32_t remote_sender_x[MAX_TUNNEL_LANES] =
+constexpr uint32_t remote_sender_x[tt::packet_queue::MAX_TUNNEL_LANES] =
     {
         (get_compile_time_arg_val(34) & 0xFF),
         (get_compile_time_arg_val(35) & 0xFF),
@@ -123,7 +125,7 @@ constexpr uint32_t remote_sender_x[MAX_TUNNEL_LANES] =
         (get_compile_time_arg_val(43) & 0xFF)
     };
 
-constexpr uint32_t remote_sender_y[MAX_TUNNEL_LANES] =
+constexpr uint32_t remote_sender_y[tt::packet_queue::MAX_TUNNEL_LANES] =
     {
         (get_compile_time_arg_val(34) >> 8) & 0xFF,
         (get_compile_time_arg_val(35) >> 8) & 0xFF,
@@ -137,7 +139,7 @@ constexpr uint32_t remote_sender_y[MAX_TUNNEL_LANES] =
         (get_compile_time_arg_val(43) >> 8) & 0xFF
     };
 
-constexpr uint32_t remote_sender_queue_id[MAX_TUNNEL_LANES] =
+constexpr uint32_t remote_sender_queue_id[tt::packet_queue::MAX_TUNNEL_LANES] =
     {
         (get_compile_time_arg_val(34) >> 16) & 0xFF,
         (get_compile_time_arg_val(35) >> 16) & 0xFF,
@@ -151,7 +153,7 @@ constexpr uint32_t remote_sender_queue_id[MAX_TUNNEL_LANES] =
         (get_compile_time_arg_val(43) >> 16) & 0xFF
     };
 
-constexpr DispatchRemoteNetworkType remote_sender_network_type[MAX_TUNNEL_LANES] =
+constexpr tt::packet_queue::DispatchRemoteNetworkType remote_sender_network_type[tt::packet_queue::MAX_TUNNEL_LANES] =
     {
         static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(34) >> 24) & 0xFF),
         static_cast<DispatchRemoteNetworkType>((get_compile_time_arg_val(35) >> 24) & 0xFF),
@@ -175,8 +177,8 @@ tt_l1_ptr uint32_t* const kernel_status = reinterpret_cast<tt_l1_ptr uint32_t*>(
 constexpr uint32_t timeout_cycles = get_compile_time_arg_val(46);
 constexpr uint32_t inner_stop_mux_d_bypass = get_compile_time_arg_val(47);
 
-packet_input_queue_state_t input_queues[MAX_TUNNEL_LANES];
-using input_queue_network_sequence = NetworkTypeSequence<remote_sender_network_type[0],
+tt::packet_queue::packet_input_queue_state_t input_queues[tt::packet_queue::MAX_TUNNEL_LANES];
+using input_queue_network_sequence = tt::packet_queue::NetworkTypeSequence<remote_sender_network_type[0],
                                                          remote_sender_network_type[1],
                                                          remote_sender_network_type[2],
                                                          remote_sender_network_type[3],
@@ -186,7 +188,7 @@ using input_queue_network_sequence = NetworkTypeSequence<remote_sender_network_t
                                                          remote_sender_network_type[7],
                                                          remote_sender_network_type[8],
                                                          remote_sender_network_type[9]>;
-using input_queue_cb_mode_sequence = CBModeTypeSequence<false,
+using input_queue_cb_mode_sequence = tt::packet_queue::CBModeTypeSequence<false,
                                                         false,
                                                         false,
                                                         false,
@@ -197,8 +199,8 @@ using input_queue_cb_mode_sequence = CBModeTypeSequence<false,
                                                         false,
                                                         false>;
 
-packet_output_queue_state_t output_queues[MAX_TUNNEL_LANES];
-using output_queue_network_sequence = NetworkTypeSequence<remote_receiver_network_type[0],
+tt::packet_queue::packet_output_queue_state_t output_queues[tt::packet_queue::MAX_TUNNEL_LANES];
+using output_queue_network_sequence = tt::packet_queue::NetworkTypeSequence<remote_receiver_network_type[0],
                                                           remote_receiver_network_type[1],
                                                           remote_receiver_network_type[2],
                                                           remote_receiver_network_type[3],
@@ -208,7 +210,7 @@ using output_queue_network_sequence = NetworkTypeSequence<remote_receiver_networ
                                                           remote_receiver_network_type[7],
                                                           remote_receiver_network_type[8],
                                                           remote_receiver_network_type[9]>;
-using output_queue_cb_mode_sequence = CBModeTypeSequence<false,
+using output_queue_cb_mode_sequence = tt::packet_queue::CBModeTypeSequence<false,
                                                          false,
                                                          false,
                                                          false,
@@ -221,6 +223,13 @@ using output_queue_cb_mode_sequence = CBModeTypeSequence<false,
 
 #define SWITCH_THRESHOLD 16
 void kernel_main() {
+    using tt::packet_queue::PACKET_QUEUE_TEST_STARTED;
+    using tt::packet_queue::PQ_TEST_STATUS_INDEX;
+    using tt::packet_queue::PQ_TEST_MISC_INDEX;
+    using tt::packet_queue::write_kernel_status;
+    using tt::packet_queue::get_timestamp;
+    using tt::packet_queue::get_timestamp_32b;
+
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
     write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_STARTED);
@@ -253,11 +262,11 @@ void kernel_main() {
             &input_queues[i]);
     }
 
-    if (!wait_all_input_output_ready<input_queue_network_sequence,
+    if (!tt::packet_queue::wait_all_input_output_ready<input_queue_network_sequence,
                                      input_queue_cb_mode_sequence,
                                      output_queue_network_sequence,
                                      output_queue_cb_mode_sequence>(input_queues, output_queues, timeout_cycles)) {
-        write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_TIMEOUT);
+        write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, tt::packet_queue::PACKET_QUEUE_TEST_TIMEOUT);
         return;
     }
 
@@ -281,9 +290,9 @@ void kernel_main() {
         iter++;
         switch_counter++;
         all_outputs_finished = switch_counter >= SWITCH_THRESHOLD;
-        process_queues<input_queue_network_sequence, input_queue_cb_mode_sequence>([&]<auto input_network_type, auto input_cb_mode, auto sequence_i>(auto) -> bool {
-            using remote_input_networks = NetworkTypeSequence<remote_sender_network_type[sequence_i]>;
-            using remote_input_cb_modes = CBModeTypeSequence<false>;
+        tt::packet_queue::process_queues<input_queue_network_sequence, input_queue_cb_mode_sequence>([&]<auto input_network_type, auto input_cb_mode, auto sequence_i>(auto) -> bool {
+            using remote_input_networks = tt::packet_queue::NetworkTypeSequence<remote_sender_network_type[sequence_i]>;
+            using remote_input_cb_modes = tt::packet_queue::CBModeTypeSequence<false>;
 
             if (input_queues[sequence_i].template get_curr_packet_valid<input_cb_mode>()) {
                 bool full_packet_sent;
@@ -332,10 +341,10 @@ void kernel_main() {
 
     timeout = false;
     write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000002);
-    process_queues<output_queue_network_sequence, output_queue_cb_mode_sequence>([&]<auto network_type, auto cb_mode, auto sequence_i>(auto) -> bool {
+    tt::packet_queue::process_queues<output_queue_network_sequence, output_queue_cb_mode_sequence>([&]<auto network_type, auto cb_mode, auto sequence_i>(auto) -> bool {
         // inputs for this output queue
-        using remote_input_networks = NetworkTypeSequence<remote_sender_network_type[sequence_i]>;
-        using remote_input_cb_modes = CBModeTypeSequence<false>;
+        using remote_input_networks = tt::packet_queue::NetworkTypeSequence<remote_sender_network_type[sequence_i]>;
+        using remote_input_cb_modes = tt::packet_queue::CBModeTypeSequence<false>;
 
         if (!output_queues[sequence_i].template output_barrier<cb_mode, remote_input_networks, remote_input_cb_modes>(timeout_cycles)) {
             timeout = true;
@@ -347,10 +356,10 @@ void kernel_main() {
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
     write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000003);
 
-    set_64b_result(kernel_status, data_words_sent, PQ_TEST_WORD_CNT_INDEX);
-    set_64b_result(kernel_status, cycles_elapsed, PQ_TEST_CYCLES_INDEX);
-    set_64b_result(kernel_status, iter, PQ_TEST_ITER_INDEX);
+    tt::packet_queue::set_64b_result(kernel_status, data_words_sent, tt::packet_queue::PQ_TEST_WORD_CNT_INDEX);
+    tt::packet_queue::set_64b_result(kernel_status, cycles_elapsed, tt::packet_queue::PQ_TEST_CYCLES_INDEX);
+    tt::packet_queue::set_64b_result(kernel_status, iter, tt::packet_queue::PQ_TEST_ITER_INDEX);
 
-    write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_PASS);
+    write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, tt::packet_queue::PACKET_QUEUE_TEST_PASS);
     write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff00005);
 }
