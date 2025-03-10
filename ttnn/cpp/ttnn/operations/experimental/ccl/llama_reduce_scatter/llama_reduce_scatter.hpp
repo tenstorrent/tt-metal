@@ -15,13 +15,15 @@ struct ExecuteLlamaReduceScatter {
         const ttnn::Tensor& input_tensor,
         const int32_t dim,
         const global_semaphore::MultiDeviceGlobalSemaphore& cross_device_semaphore,
+        const SubDeviceId& subdevice_id,
+        const uint32_t cluster_axis,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
 };
 
 }  // namespace operations::experimental::ccl
 
 namespace experimental {
-constexpr auto llama_reduce_scatter = ttnn::register_operation_with_auto_launch_op<
+constexpr auto llama_reduce_scatter = ttnn::register_operation<
     "ttnn::experimental::llama_reduce_scatter",
     ttnn::operations::experimental::ccl::ExecuteLlamaReduceScatter>();
 }  // namespace experimental

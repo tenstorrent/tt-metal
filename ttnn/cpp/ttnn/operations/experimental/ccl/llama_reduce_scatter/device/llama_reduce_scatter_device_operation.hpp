@@ -20,8 +20,14 @@ namespace ttnn::operations::experimental::ccl {
 struct LlamaReduceScatterDeviceOperation {
     struct operation_attributes_t {
         const uint32_t dim;
-        const global_semaphore::MultiDeviceGlobalSemaphore cross_device_semaphore;
+        const std::optional<GlobalSemaphore> cross_device_semaphore;
+        const std::optional<SubDeviceId> subdevice_id;
+        const uint32_t ring_index;
+        const uint32_t cluster_axis;
         const MemoryConfig output_mem_config;
+        const uint32_t ring_devices;
+        std::optional<IDevice*> forward_device;
+        std::optional<IDevice*> backward_device;
     };
     struct tensor_args_t {
         const Tensor input_tensor;
@@ -36,9 +42,12 @@ struct LlamaReduceScatterDeviceOperation {
         struct shared_variables_t {
             tt::tt_metal::KernelHandle unary_reader_kernel_id;
             tt::tt_metal::KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::KernelHandle quaternary_reduce_reader_kernel_id;
+            tt::tt_metal::KernelHandle quaternary_reduce_writer_kernel_id;
             tt::tt_metal::KernelHandle compute_kernel_id;
             std::vector<uint32_t> cb_ids;
             CoreRangeSet core_range;
+            CoreRangeSet sender_core_range;
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
@@ -82,14 +91,20 @@ struct LlamaReduceScatterDeviceOperation {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const ttnn::Tensor& input_tensor,
         const int32_t dim,
-        const global_semaphore::MultiDeviceGlobalSemaphore& cross_device_semaphore,
+        const GlobalSemaphore semaphore,
+        const SubDeviceId subdevice_id,
+        const uint32_t ring_index,
+        const uint32_t cluster_axis,
+        std::optional<IDevice*>& forward_device,
+        std::optional<IDevice*>& backward_device,
+        const uint32_t ring_devices,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
 };
 }  // namespace ttnn::operations::experimental::ccl
 
 namespace ttnn::prim {
 // Register the operation with the ttnn::register_operation API to make it available to the user as ttnn::prim::example
-constexpr auto llama_reduce_scatter = ttnn::register_operation_with_auto_launch_op<
+constexpr auto llama_reduce_scatter = ttnn::register_operation<
     "ttnn::prim::llama_reduce_scatter",
     ttnn::operations::experimental::ccl::LlamaReduceScatterDeviceOperation>();
 }  // namespace ttnn::prim
