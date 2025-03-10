@@ -26,6 +26,7 @@ constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(5);
 constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(6);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(7);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(8);
+constexpr bool two_phase_release = get_compile_time_arg_val(9);
 
 /*
  * CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time)
@@ -39,7 +40,8 @@ void kernel_main() {
     size_t arg_idx = 0;
     // Load the input tensor spec
     address_t tensor_address0 = get_arg_val<address_t>(arg_idx++);
-    const size_t out_ready_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
+    const size_t out_ready_sem_bank_addr_wait = get_arg_val<uint32_t>(arg_idx++);
+    const size_t out_ready_sem_bank_addr_release = get_arg_val<uint32_t>(arg_idx++);
     uint32_t tile_id_start = get_arg_val<uint32_t>(arg_idx++);
     uint32_t tile_id_end = get_arg_val<uint32_t>(arg_idx++);
     bool wait_output_semaphore = get_arg_val<uint32_t>(arg_idx++);
@@ -47,6 +49,7 @@ void kernel_main() {
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t ring_size = get_arg_val<uint32_t>(arg_idx++);
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_idx);
 
@@ -67,10 +70,12 @@ void kernel_main() {
     DPRINT << "tile_id_end: " << (uint32_t)tile_id_end << "\n";
     DPRINT << "wait_output_semaphore: " << (uint32_t)wait_output_semaphore << "\n";
     DPRINT << "reset_global_semaphore: " << (uint32_t)reset_global_semaphore << "\n";
-    DPRINT << "out_ready_sem_bank_addr: " << (uint32_t)out_ready_sem_bank_addr << "\n";
+    DPRINT << "out_ready_sem_bank_addr_wait: " << (uint32_t)out_ready_sem_bank_addr_wait << "\n";
+    DPRINT << "out_ready_sem_bank_addr_release: " << (uint32_t)out_ready_sem_bank_addr_release << "\n";
     DPRINT << "out_ready_sem_noc0_x: " << (uint32_t)out_ready_sem_noc0_x << "\n";
     DPRINT << "out_ready_sem_noc0_y: " << (uint32_t)out_ready_sem_noc0_y << "\n";
     DPRINT << "out_ready_sem_wait_value: " << (uint32_t)out_ready_sem_wait_value << "\n";
+    DPRINT << "ring_size: " << (uint32_t)ring_size << "\n";
 
     DPRINT << "arg_for_fab: " << (uint32_t)arg_for_fab << "\n";
     DPRINT << "fabric_connection arg 0" << get_arg_val<uint32_t>(arg_for_fab++) << "\n";
@@ -149,48 +154,18 @@ void kernel_main() {
         cb_pop_front(cb0_id, packet_size_in_pages);
     }
 
-    // 2. mcast output ready semaphore
-    uint64_t out_ready_sem_noc_addr_in_pkt =
-        safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr, 0);
-    auto* pkt_hdr = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
-    pkt_hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-        out_ready_sem_noc_addr_in_pkt,
-        static_cast<uint16_t>(1),  // increment 1
-        32});
-    // Write the mcast packet (forward)
-    if (fabric_connection.has_forward_connection()) {
-        fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-        pkt_hdr->to_chip_multicast(
-            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_forward_direction)});
-        fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
-            packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
-    }
-    // Write the mcast packet (backward)
-    if (fabric_connection.has_backward_connection()) {
-        pkt_hdr->to_chip_multicast(
-            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
-        fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-        fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
-            packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
-    }
-    // increment locally
-    uint64_t out_ready_sem_noc_addr =
-        safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
-    noc_semaphore_inc(out_ready_sem_noc_addr, 1);
-    DPRINT << "inc done\n";
-
-    // 3. wait for mcast output ready semaphore
-    if (wait_output_semaphore) {
-        while (*reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr) < out_ready_sem_wait_value);
-        DPRINT << "waitval done\n";
-    }
-
-    // 4. global semaphore reset
-    if (reset_global_semaphore) {
-        const uint64_t dest_noc_addr = get_noc_addr(my_x[0], my_y[0], out_ready_sem_bank_addr);
-        noc_inline_dw_write(dest_noc_addr, 0);
-        DPRINT << "reset done\n";
-    }
+    ccl_barrier<two_phase_release>(
+        fabric_connection,
+        out_ready_sem_bank_addr_wait,
+        out_ready_sem_bank_addr_release,
+        out_ready_sem_wait_value,
+        out_ready_sem_noc0_x,
+        out_ready_sem_noc0_y,
+        packet_header_buffer_seminc,
+        num_targets_forward_direction,
+        num_targets_backward_direction,
+        wait_output_semaphore,
+        reset_global_semaphore);
 
     if (fabric_connection.is_logically_connected()) {
         fabric_connection.close();

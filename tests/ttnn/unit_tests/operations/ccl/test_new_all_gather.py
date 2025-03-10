@@ -69,28 +69,28 @@ def run_with_trace(
     num_links,
     output_mem_config,
     enable_persistent_fabric,
-    multi_device_global_semaphore,
+    multi_device_global_semaphore=None,
+    dynamic_alloc_semaphore=False,
+    cores=None,
     num_iter=20,
     subdevice_id=None,
 ):
+    assert (multi_device_global_semaphore is not None) or (
+        dynamic_alloc_semaphore and cores is not None
+    ), "Either multi_device_global_semaphore must be provided, or if dynamic_alloc_semaphore is True then cores must be provided."
     # Compile Run
     logger.info("Compiling model")
-    tt_out_tensor = ttnn.experimental.all_gather_async(
-        input_tensor_mesh,
-        dim,
-        multi_device_global_semaphore=multi_device_global_semaphore,
-        num_links=num_links,
-        memory_config=output_mem_config,
-        topology=all_gather_topology,
-        subdevice_id=subdevice_id,
-        enable_persistent_fabric_mode=enable_persistent_fabric,
-    )
-    ttnn.synchronize_device(mesh_device)
-
-    # Capture trace
-    logger.info("Capturing trace")
-    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    for i in range(num_iter):
+    if dynamic_alloc_semaphore:
+        tt_out_tensor = ttnn.experimental.all_gather_async(
+            input_tensor_mesh,
+            dim,
+            mesh_device=mesh_device,
+            cores=cores,
+            num_links=num_links,
+            memory_config=output_mem_config,
+            topology=all_gather_topology,
+        )
+    else:
         tt_out_tensor = ttnn.experimental.all_gather_async(
             input_tensor_mesh,
             dim,
@@ -101,6 +101,33 @@ def run_with_trace(
             subdevice_id=subdevice_id,
             enable_persistent_fabric_mode=enable_persistent_fabric,
         )
+    ttnn.synchronize_device(mesh_device)
+
+    # Capture trace
+    logger.info("Capturing trace")
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    for i in range(num_iter):
+        if dynamic_alloc_semaphore:
+            tt_out_tensor = ttnn.experimental.all_gather_async(
+                input_tensor_mesh,
+                dim,
+                mesh_device=mesh_device,
+                cores=cores,
+                num_links=num_links,
+                memory_config=output_mem_config,
+                topology=all_gather_topology,
+            )
+        else:
+            tt_out_tensor = ttnn.experimental.all_gather_async(
+                input_tensor_mesh,
+                dim,
+                multi_device_global_semaphore=multi_device_global_semaphore,
+                num_links=num_links,
+                memory_config=output_mem_config,
+                topology=all_gather_topology,
+                subdevice_id=subdevice_id,
+                enable_persistent_fabric_mode=enable_persistent_fabric,
+            )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(mesh_device)
 
@@ -139,7 +166,9 @@ def run_all_gather_impl(
     create_persistent_fabric=True,
     teardown_persistent_fabric=True,
     wrap_fabric_around_mesh=False,
+    dynamic_alloc_semaphore=False,
 ):
+    assert (use_cluster_axis_api and dynamic_alloc_semaphore) == False
     enable_persistent_fabric = True
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
@@ -173,9 +202,12 @@ def run_all_gather_impl(
         mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
-    ccl_semaphore_handles = [
-        create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
-    ]
+    if dynamic_alloc_semaphore:
+        ccl_semaphore_handles = [None]
+    else:
+        ccl_semaphore_handles = [
+            create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
+        ]
 
     logger.info(f"Output shape: {output_shape}")
     logger.info(f"dim: {dim}")
@@ -269,6 +301,8 @@ def run_all_gather_impl(
             output_mem_config,
             enable_persistent_fabric,
             multi_device_global_semaphore=ccl_semaphore_handles[0],
+            dynamic_alloc_semaphore=dynamic_alloc_semaphore,
+            cores=ccl_sub_device_crs,
             num_iter=num_iters,
             subdevice_id=worker_sub_device_id,
         )
@@ -290,16 +324,28 @@ def run_all_gather_impl(
                 )
 
             else:
-                tt_out_tensor = ttnn.experimental.all_gather_async(
-                    input_tensor_mesh_list[i],
-                    dim,
-                    multi_device_global_semaphore=ccl_semaphore_handles[i],
-                    num_links=num_links,
-                    memory_config=output_mem_config,
-                    topology=all_gather_topology,
-                    subdevice_id=worker_sub_device_id,
-                    enable_persistent_fabric_mode=enable_persistent_fabric,
-                )
+                if dynamic_alloc_semaphore:
+                    tt_out_tensor = ttnn.experimental.all_gather_async(
+                        input_tensor_mesh_list[i],
+                        dim,
+                        mesh_device=mesh_device,
+                        cores=ccl_sub_device_crs,
+                        num_links=num_links,
+                        memory_config=output_mem_config,
+                        topology=all_gather_topology,
+                    )
+                else:
+                    tt_out_tensor = ttnn.experimental.all_gather_async(
+                        input_tensor_mesh_list[i],
+                        dim,
+                        multi_device_global_semaphore=ccl_semaphore_handles[i],
+                        num_links=num_links,
+                        memory_config=output_mem_config,
+                        topology=all_gather_topology,
+                        subdevice_id=worker_sub_device_id,
+                        enable_persistent_fabric_mode=enable_persistent_fabric,
+                    )
+
             tt_out_tensor_list.append(tt_out_tensor)
 
         logger.info(f"Waiting for op")
@@ -364,6 +410,7 @@ def run_all_gather_impl(
 )
 @pytest.mark.parametrize("num_iters", [10])
 @pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("dynamic_alloc_semaphore", [False, True])
 def test_all_gather(
     t3k_mesh_device,
     # pcie_mesh_device,
@@ -378,6 +425,7 @@ def test_all_gather(
     use_program_cache,
     function_level_defaults,
     enable_async,
+    dynamic_alloc_semaphore,
 ):
     run_all_gather_impl(
         t3k_mesh_device,
@@ -396,6 +444,7 @@ def test_all_gather(
         create_persistent_fabric=True,
         teardown_persistent_fabric=True,
         mem_config=mem_config,
+        dynamic_alloc_semaphore=dynamic_alloc_semaphore,
     )
 
 
@@ -482,6 +531,7 @@ def test_all_gather(
 )
 @pytest.mark.parametrize("num_iters", [8])
 @pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("dynamic_alloc_semaphore", [True, False])
 def test_all_gather_sharded(
     t3k_mesh_device,
     num_devices,
@@ -499,6 +549,7 @@ def test_all_gather_sharded(
     output_shard_shape,
     output_shard_grid,
     tensor_mem_layout,
+    dynamic_alloc_semaphore,
 ):
     if num_links > 1:
         assert f"num_links > 1 not supported for sharded all gather test function which is currently using the t3k_mesh_device (and hence only has 1 link available for use)"
@@ -525,6 +576,7 @@ def test_all_gather_sharded(
         create_persistent_fabric=True,
         teardown_persistent_fabric=True,
         wrap_fabric_around_mesh=True,
+        dynamic_alloc_semaphore=dynamic_alloc_semaphore,
     )
 
 
