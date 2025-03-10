@@ -68,7 +68,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
-        uses: tenstorrent/tt-metal/.github/actions/workflow-status@${{ github.sha }}
+        uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "build"
           optional-jobs: "smoke-tests"
