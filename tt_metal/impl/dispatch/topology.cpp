@@ -62,7 +62,7 @@ constexpr noc_selection_t k_prefetcher_noc = {
 constexpr noc_selection_t k_dispatcher_noc = {
     .non_dispatch_noc = tt::tt_metal::NOC::NOC_0,
     .upstream_noc = tt::tt_metal::NOC::NOC_1,
-    .downstream_noc = dispatch_downstream_noc,
+    .downstream_noc = k_dispatch_downstream_noc,
 };
 
 //

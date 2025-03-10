@@ -13,7 +13,7 @@ constexpr uint32_t k_dispatch_max_downstream_kernels = 4;
 
 // NOC ID used by dispatch kernels to communicate with downstream cores. This parameter
 // is required when setting up Command Queue objects on host.
-static constexpr NOC dispatch_downstream_noc = NOC::NOC_0;
+constexpr NOC k_dispatch_downstream_noc = NOC::NOC_0;
 
 struct DispatchKernelNode {
     int id;

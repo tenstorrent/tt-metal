@@ -70,7 +70,7 @@ public:
         FDKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection) {
         auto& core_manager = tt::tt_metal::dispatch_core_manager::instance();  // Not thread safe
         TT_FATAL(
-            noc_selection.downstream_noc == tt::tt_metal::dispatch_downstream_noc,
+            noc_selection.downstream_noc == tt::tt_metal::k_dispatch_downstream_noc,
             "Invalid downstream NOC specified for Dispatcher kernel");
         TT_FATAL(
             noc_selection.upstream_noc != noc_selection.downstream_noc,
