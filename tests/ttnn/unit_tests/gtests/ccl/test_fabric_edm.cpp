@@ -13,6 +13,7 @@ int main(int argc, char** argv) {
     bool line_sync = std::stoi(argv[arg_idx++]);
     std::size_t line_size = std::stoi(argv[arg_idx++]);
     std::size_t packet_payload_size_bytes = std::stoi(argv[arg_idx++]);
+    bool ring_topology = std::stoi(argv[arg_idx++]);
 
     uint32_t min_test_num_devices = 8;
     if (tt::tt_metal::GetNumAvailableDevices() < min_test_num_devices) {
@@ -23,6 +24,7 @@ int main(int argc, char** argv) {
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_sync = line_sync;
     params.line_size = line_size;
+    params.ring_topology = ring_topology;
     RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params, packet_payload_size_bytes);
 }

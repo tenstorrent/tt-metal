@@ -22,8 +22,8 @@
 namespace tt::tt_fabric {
 
 struct FabricEriscDatamoverConfig {
-    static constexpr uint32_t num_sender_channels = 3;
-    static constexpr uint32_t num_receiver_channels = 2;
+    static constexpr std::size_t num_sender_channels = 3;
+    static constexpr std::size_t num_receiver_channels = 2;
     static constexpr bool constrain_to_power_of_2_buffer_slot_counts = true;
 
     static constexpr std::size_t field_size = 16;
@@ -88,7 +88,10 @@ struct FabricEriscDatamoverConfig {
     std::size_t available_channel_buffering_space;
 
     FabricEriscDatamoverConfig(
-        std::size_t channel_buffer_size_bytes, std::size_t sender_ratio_size, std::size_t receiver_ratio_size);
+        std::size_t channel_buffer_size_bytes,
+        std::size_t sender_ratio_size,
+        std::size_t receiver_ratio_size,
+        bool ring_topology = false);
 
     std::size_t channel_buffer_size_bytes = 0;
     std::size_t channel_buffer_size_bytes_with_channel_sync = 0;
@@ -100,6 +103,11 @@ struct FabricEriscDatamoverConfig {
 
     std::array<std::size_t, num_sender_channels> sender_channels_base_address;
     std::array<std::size_t, num_receiver_channels> receiver_channels_base_address;
+
+    std::size_t num_used_sender_channels = 0;
+    std::size_t num_used_receiver_channels = 0;
+
+    bool enable_ring_topology = false;
 
 private:
     FabricEriscDatamoverConfig();
@@ -241,6 +249,8 @@ public:
     bool enable_persistent_mode = false;
     bool build_in_worker_connection_mode = false;
     size_t firmware_context_switch_interval = default_firmware_context_switch_interval;
+    bool enable_first_level_ack = false;
+    bool fuse_receiver_flush_and_completion_ptr = true;
 };
 
 }  // namespace tt::tt_fabric

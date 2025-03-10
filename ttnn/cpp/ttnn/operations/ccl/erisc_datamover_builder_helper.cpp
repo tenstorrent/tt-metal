@@ -44,25 +44,23 @@ std::vector<CoreCoord> reorder_connected_sockets(
 }
 
 EdmLineFabricOpInterface::EdmLineFabricOpInterface(
-    const std::vector<tt::tt_metal::IDevice*>& device_sequence,
-    const std::vector<tt::tt_metal::Program*>& program_sequence,
+    const std::vector<IDevice*>& device_sequence,
+    const std::vector<Program*>& program_sequence,
     bool enable_persistent_mode,
     std::optional<size_t> desired_num_links,
-    bool build_in_worker_connection_mode) :
+    bool build_in_worker_connection_mode,
+    bool ring_topology) :
     device_sequence(device_sequence), programs(program_sequence) {
     static constexpr std::size_t edm_buffer_size =
         tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
         sizeof(tt::tt_fabric::PacketHeader);
-    const auto config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
+    const auto config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2, ring_topology);
     TT_ASSERT(device_sequence.size() == program_sequence.size());
 
     for (size_t i = 0; i < device_sequence.size(); i++) {
         log_trace(tt::LogOp, "device[{}] id={}", i, device_sequence[i]->id());
     }
-    size_t min_link_count = desired_num_links.value_or(std::numeric_limits<size_t>::max());
-    for (size_t hop = 0; hop < device_sequence.size() - 1; hop++) {
-        auto src_device = device_sequence[hop];
-        auto dest_device = device_sequence[hop + 1];
+    auto get_min_link_count = [&](IDevice* src_device, IDevice* dest_device, size_t min_link_count) {
         const auto& src_device_sockets = src_device->get_ethernet_sockets(dest_device->id());
         const auto& dest_device_sockets = dest_device->get_ethernet_sockets(src_device->id());
         if (src_device_sockets.size() > 0) {
@@ -71,83 +69,117 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
         if (src_device_sockets.size() > 0) {
             min_link_count = std::min(min_link_count, dest_device_sockets.size());
         }
+        return min_link_count;
+    };
+
+    size_t min_link_count = desired_num_links.value_or(std::numeric_limits<size_t>::max());
+    for (size_t hop = 0; hop < device_sequence.size() - 1; hop++) {
+        auto src_device = device_sequence[hop];
+        auto dest_device = device_sequence[hop + 1];
+        min_link_count = get_min_link_count(src_device, dest_device, min_link_count);
     }
+    if (ring_topology) {
+        auto src_device = device_sequence.back();
+        auto dest_device = device_sequence.front();
+        min_link_count = get_min_link_count(src_device, dest_device, min_link_count);
+    }
+
+    this->num_links = min_link_count;
+
+    auto build_edm_directions =
+        [&](IDevice* src_device, IDevice* dest_device, Program* src_program, Program* dest_program) {
+            const auto& src_device_sockets = src_device->get_ethernet_sockets(dest_device->id());
+            const auto& dest_device_sockets = dest_device->get_ethernet_sockets(src_device->id());
+            // re-order the connected_sockets based on virtual coords
+            auto reordered_src_device_sockets = reorder_connected_sockets(src_device, src_device_sockets);
+            auto reordered_dest_device_sockets = reorder_connected_sockets(dest_device, dest_device_sockets);
+
+            std::vector<CoreCoord> local_link_cores;
+            local_link_cores.reserve(reordered_src_device_sockets.size());
+            std::vector<CoreCoord> remote_link_cores;
+            remote_link_cores.reserve(reordered_dest_device_sockets.size());
+            std::copy_if(
+                reordered_src_device_sockets.begin(),
+                reordered_src_device_sockets.end(),
+                std::back_inserter(local_link_cores),
+                [src_device](const CoreCoord& core) { return src_device->is_active_ethernet_core(core, true); });
+            std::copy_if(
+                reordered_dest_device_sockets.begin(),
+                reordered_dest_device_sockets.end(),
+                std::back_inserter(remote_link_cores),
+                [dest_device](const CoreCoord& core) { return dest_device->is_active_ethernet_core(core, true); });
+
+            TT_ASSERT(local_link_cores.size() == remote_link_cores.size());
+
+            edm_builders_forward_direction[src_device->id()].reserve(local_link_cores.size());
+            edm_builders_backward_direction[dest_device->id()].reserve(local_link_cores.size());
+            for (size_t l = 0; l < this->num_links; l++) {
+                log_trace(
+                    tt::LogOp,
+                    "Building forward direction EDM on chip {} on link {}",
+                    src_device->id(),
+                    edm_builders_forward_direction[src_device->id()].size());
+                edm_builders_forward_direction[src_device->id()].push_back(
+                    tt::tt_fabric::FabricEriscDatamoverBuilder::build(
+                        src_device,
+                        *src_program,
+                        local_link_cores[l],
+                        src_device->id(),
+                        dest_device->id(),
+                        config,
+                        enable_persistent_mode,
+                        build_in_worker_connection_mode));
+
+                log_trace(
+                    tt::LogOp,
+                    "Building backward direction EDM on chip {} on link {}",
+                    dest_device->id(),
+                    edm_builders_backward_direction[dest_device->id()].size());
+                edm_builders_backward_direction[dest_device->id()].push_back(
+                    tt::tt_fabric::FabricEriscDatamoverBuilder::build(
+                        dest_device,
+                        *dest_program,
+                        remote_link_cores[l],
+                        dest_device->id(),
+                        src_device->id(),
+                        config,
+                        enable_persistent_mode,
+                        build_in_worker_connection_mode));
+            }
+        };
 
     tt::tt_fabric::FabricEriscDatamoverBuilder* a_builder = nullptr;
     // Construct the builders
     for (size_t hop = 0; hop < device_sequence.size() - 1; hop++) {
         auto src_device = device_sequence[hop];
         auto dest_device = device_sequence[hop + 1];
+        auto src_program = programs[hop];
+        auto dest_program = programs[hop + 1];
+        build_edm_directions(src_device, dest_device, src_program, dest_program);
+        // Move out of loop?
+        a_builder = &edm_builders_backward_direction[dest_device->id()].front();
+        this->buffer_size_bytes = a_builder->channel_buffer_size;
+    }
+    if (ring_topology) {
+        auto src_device = device_sequence.back();
+        auto dest_device = device_sequence.front();
+        auto src_program = programs.back();
+        auto dest_program = programs.front();
+        build_edm_directions(src_device, dest_device, src_program, dest_program);
 
-        const auto& src_device_sockets = src_device->get_ethernet_sockets(dest_device->id());
-        const auto& dest_device_sockets = dest_device->get_ethernet_sockets(src_device->id());
-        // re-order the connected_sockets based on virtual coords
-        auto reordered_src_device_sockets = reorder_connected_sockets(src_device, src_device_sockets);
-        auto reordered_dest_device_sockets = reorder_connected_sockets(dest_device, dest_device_sockets);
-
-        std::vector<CoreCoord> local_link_cores;
-        local_link_cores.reserve(reordered_src_device_sockets.size());
-        std::vector<CoreCoord> remote_link_cores;
-        remote_link_cores.reserve(reordered_dest_device_sockets.size());
-        std::copy_if(
-            reordered_src_device_sockets.begin(),
-            reordered_src_device_sockets.end(),
-            std::back_inserter(local_link_cores),
-            [src_device](const CoreCoord& core) { return src_device->is_active_ethernet_core(core, true); });
-        std::copy_if(
-            reordered_dest_device_sockets.begin(),
-            reordered_dest_device_sockets.end(),
-            std::back_inserter(remote_link_cores),
-            [dest_device](const CoreCoord& core) { return dest_device->is_active_ethernet_core(core, true); });
-
-        this->num_links = min_link_count;
-
-        TT_ASSERT(local_link_cores.size() == remote_link_cores.size());
-
-        edm_builders_forward_direction[src_device->id()].reserve(local_link_cores.size());
-        edm_builders_forward_direction[dest_device->id()].reserve(local_link_cores.size());
-        for (size_t l = 0; l < this->num_links; l++) {
-            log_trace(
-                tt::LogOp,
-                "Building forward direction EDM on chip {} on link {}",
-                src_device->id(),
-                edm_builders_forward_direction[src_device->id()].size());
-            edm_builders_forward_direction[src_device->id()].push_back(
-                tt::tt_fabric::FabricEriscDatamoverBuilder::build(
-                    device_sequence[hop],
-                    *programs[hop],
-                    local_link_cores[l],
-                    src_device->id(),
-                    dest_device->id(),
-                    config,
-                    enable_persistent_mode,
-                    build_in_worker_connection_mode));
-
-            log_trace(
-                tt::LogOp,
-                "Building backward direction EDM on chip {} on link {}",
-                dest_device->id(),
-                edm_builders_backward_direction[dest_device->id()].size());
-            edm_builders_backward_direction[dest_device->id()].push_back(
-                tt::tt_fabric::FabricEriscDatamoverBuilder::build(
-                    device_sequence[hop + 1],
-                    *programs[hop + 1],
-                    remote_link_cores[l],
-                    dest_device->id(),
-                    src_device->id(),
-                    config,
-                    enable_persistent_mode,
-                    build_in_worker_connection_mode));
-
-            a_builder = &edm_builders_backward_direction[dest_device->id()].front();
-        }
-
+        a_builder = &edm_builders_backward_direction[dest_device->id()].front();
         this->buffer_size_bytes = a_builder->channel_buffer_size;
     }
 
     if (!build_in_worker_connection_mode) {
-        // Establish local connections between EDMs on the same chips to establish the lin fabric
-        for (size_t i = 1; i < device_sequence.size() - 1; i++) {
+        // Establish local connections between EDMs on the same chips to establish the line fabric
+        uint32_t start_bidirectional_device_index = 1;
+        uint32_t end_bidirectional_device_index = device_sequence.size() - 1;
+        if (ring_topology) {
+            start_bidirectional_device_index = 0;
+            end_bidirectional_device_index = device_sequence.size();
+        }
+        for (size_t i = start_bidirectional_device_index; i < end_bidirectional_device_index; i++) {
             const size_t num_links = edm_builders_forward_direction.at(device_sequence[i]->id()).size();
             auto& forward_direction_edm = edm_builders_forward_direction.at(device_sequence[i]->id());
             auto& backward_direction_edm = edm_builders_backward_direction.at(device_sequence[i]->id());
@@ -169,12 +201,13 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     tt::tt_metal::Program* program,
     bool enable_persistent_mode,
     std::optional<size_t> desired_num_links,
-    bool build_in_worker_connection_mode) :
+    bool build_in_worker_connection_mode,
+    bool ring_topology) :
     device_sequence({local_device}), programs({program}) {
     static constexpr std::size_t edm_buffer_size =
         tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
         sizeof(tt::tt_fabric::PacketHeader);
-    const auto config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
+    const auto config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2, ring_topology);
 
     log_trace(tt::LogOp, "device id={}", local_device->id());
     log_trace(tt::LogOp, "EDM Fabric Factory ctor on device: {}", local_device->id());
@@ -295,8 +328,10 @@ EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_
     const std::vector<tt::tt_metal::IDevice*>& device_sequence,
     const std::vector<tt::tt_metal::Program*>& program_sequence,
     bool enable_persistent_mode,
-    std::optional<size_t> desired_num_links) {
-    return EdmLineFabricOpInterface(device_sequence, program_sequence, enable_persistent_mode, desired_num_links, true);
+    std::optional<size_t> desired_num_links,
+    bool ring_topology) {
+    return EdmLineFabricOpInterface(
+        device_sequence, program_sequence, enable_persistent_mode, desired_num_links, true, ring_topology);
 }
 
 EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
@@ -305,7 +340,8 @@ EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_
     tt::tt_metal::IDevice* backward_device,
     tt::tt_metal::Program* program,
     bool enable_persistent_mode,
-    std::optional<size_t> desired_num_links) {
+    std::optional<size_t> desired_num_links,
+    bool ring_topology) {
     return EdmLineFabricOpInterface(
         local_device,
         forward_device == nullptr ? std::nullopt : std::optional<tt::tt_metal::IDevice*>(forward_device),
@@ -313,7 +349,8 @@ EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_
         program,
         enable_persistent_mode,
         desired_num_links,
-        true);
+        true,
+        ring_topology);
 }
 
 void EdmLineFabricOpInterface::build_kernels() const {

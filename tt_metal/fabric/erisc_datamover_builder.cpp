@@ -101,9 +101,19 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig() {
 }
 
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
-    std::size_t channel_buffer_size_bytes, std::size_t sender_ratio_size, std::size_t receiver_ratio_size) :
+    std::size_t channel_buffer_size_bytes,
+    std::size_t sender_ratio_size,
+    std::size_t receiver_ratio_size,
+    bool ring_topology) :
     FabricEriscDatamoverConfig() {
-    for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_receiver_channels; i++) {
+    this->num_used_sender_channels = FabricEriscDatamoverConfig::num_sender_channels;
+    this->num_used_receiver_channels = FabricEriscDatamoverConfig::num_receiver_channels;
+    this->enable_ring_topology = ring_topology;
+    if (!ring_topology) {
+        this->num_used_sender_channels -= 1;
+        this->num_used_receiver_channels -= 1;
+    }
+    for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
         TT_FATAL(
             (receivers_completed_packet_header_cb_address[i] % eth_word_l1_alignment == 0),
             "receivers_completed_packet_header_cb_address[{}] {} must be aligned to {} bytes",
@@ -111,7 +121,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
             receivers_completed_packet_header_cb_address[i],
             eth_word_l1_alignment);
     }
-    for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_sender_channels; i++) {
+    for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
         TT_FATAL(
             (senders_completed_packet_header_cb_address[i] % eth_word_l1_alignment == 0),
             "senders_completed_packet_header_cb_address[{}] {} must be aligned to {} bytes",
@@ -145,8 +155,9 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     }
     TT_FATAL(
         std::unordered_set<size_t>(
-            sender_channels_buffer_index_address.begin(), sender_channels_buffer_index_address.end())
-                .size() == sender_channels_buffer_index_address.size(),
+            sender_channels_buffer_index_address.begin(),
+            sender_channels_buffer_index_address.begin() + this->num_used_sender_channels)
+                .size() == this->num_used_sender_channels,
         "FabricEriscDatamoverConfig was constructed with illegal buffer index address");
 
     const size_t min_buffer_size =
@@ -158,8 +169,12 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         min_buffer_size);
 
     // TODO: Review
-    constexpr size_t default_pow2_num_sender_buffer_slots = 4;
-    constexpr size_t default_pow2_num_receiver_buffer_slots = 8;
+    size_t default_pow2_num_sender_buffer_slots = 8;
+    size_t default_pow2_num_receiver_buffer_slots = 16;
+    if (ring_topology) {
+        default_pow2_num_sender_buffer_slots /= 2;
+        default_pow2_num_receiver_buffer_slots /= 2;
+    }
 
     const std::size_t channel_buffer_size_with_channel_sync =
         channel_buffer_size_bytes +
@@ -167,8 +182,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
 
     const size_t next_lowest_power_of_2_buffer_slot_count = this->channel_buffer_size_bytes = channel_buffer_size_bytes;
     this->channel_buffer_size_bytes_with_channel_sync = channel_buffer_size_with_channel_sync;
-    const std::size_t total_ratio_count = FabricEriscDatamoverConfig::num_sender_channels * sender_ratio_size +
-                                          FabricEriscDatamoverConfig::num_receiver_channels * receiver_ratio_size;
+    const std::size_t total_ratio_count =
+        this->num_used_sender_channels * sender_ratio_size + this->num_used_receiver_channels * receiver_ratio_size;
 
     auto buffer_initializer = [available_channel_buffering_space = this->available_channel_buffering_space,
                                total_ratio_count,
@@ -188,7 +203,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         }
     };
 
-    for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_sender_channels; i++) {
+    for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
         buffer_initializer(
             this->sender_channels_size_bytes[i],
             this->sender_channels_num_buffers[i],
@@ -202,7 +217,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
             channel_buffer_size_with_channel_sync,
             this->sender_channels_size_bytes[i]);
     }
-    for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_receiver_channels; i++) {
+    for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
         buffer_initializer(
             this->receiver_channels_size_bytes[i],
             this->receiver_channels_num_buffers[i],
@@ -218,12 +233,12 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     }
 
     uint32_t buffer_addr = buffer_region_start;
-    for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_sender_channels; i++) {
+    for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
         this->sender_channels_base_address[i] = buffer_addr;
         buffer_addr += this->sender_channels_size_bytes[i];
         log_trace(tt::LogOp, "Sender {} channel_start: {}", i, this->sender_channels_base_address[i]);
     }
-    for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_receiver_channels; i++) {
+    for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
         this->receiver_channels_base_address[i] = buffer_addr;
         buffer_addr += this->receiver_channels_size_bytes[i];
         log_trace(tt::LogOp, "Receiver {} channel_start: {}", i, this->receiver_channels_base_address[i]);
@@ -231,8 +246,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
 
     log_trace(tt::LogOp, "Available channel buffering space: {}", this->available_channel_buffering_space);
 
-    static constexpr size_t total_num_channels =
-        FabricEriscDatamoverConfig::num_sender_channels + FabricEriscDatamoverConfig::num_receiver_channels;
+    const size_t total_num_channels = this->num_used_sender_channels + this->num_used_receiver_channels;
     const size_t max_channel_buffer_size = (available_channel_buffering_space / total_num_channels) -
                                            FabricEriscDatamoverConfig::eth_channel_sync_size -
                                            sizeof(tt::tt_fabric::PacketHeader);
@@ -240,22 +254,27 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         channel_buffer_size_bytes <= max_channel_buffer_size,
         "Specified size of `channel_buffer_size_bytes` was too large. Maximum allowable size is {} B",
         max_channel_buffer_size);
-    for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_sender_channels; i++) {
+    for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
         TT_FATAL(
             this->sender_channels_size_bytes[i] > 0,
             "Internal error when computing `sender_channels_size_bytes[{}]` which was computed to be size 0",
             i);
     }
-    for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_receiver_channels; i++) {
+    for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
         TT_FATAL(
             this->receiver_channels_size_bytes[i] > 0,
             "Internal error when computing `receiver_channels_size_bytes[{}]` which was computed to be size 0",
             i);
     }
     TT_FATAL(
-        std::accumulate(this->sender_channels_size_bytes.begin(), this->sender_channels_size_bytes.end(), 0) +
+        std::accumulate(
+            this->sender_channels_size_bytes.begin(),
+            this->sender_channels_size_bytes.begin() + this->num_used_sender_channels,
+            0) +
                 std::accumulate(
-                    this->receiver_channels_size_bytes.begin(), this->receiver_channels_size_bytes.end(), 0) <=
+                    this->receiver_channels_size_bytes.begin(),
+                    this->receiver_channels_size_bytes.begin() + this->num_used_receiver_channels,
+                    0) <=
             this->available_channel_buffering_space,
         "Internal error when computing channel sizes. Total channel size exceeds available space");
     TT_FATAL(
@@ -376,22 +395,25 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const
     const bool is_handshake_master = this->my_chip_id < this->peer_chip_id;
     TT_ASSERT(this->my_chip_id != this->peer_chip_id);
     TT_ASSERT(
-        this->sender_channels_num_buffers[0] ==
-        this->sender_channels_num_buffers[1]);  //, "Implementation expects sender_channels_num_buffers[0] and
-                                                // sender_channels_num_buffers[1] to be the same for now");
-    log_trace(tt::LogTest, "Sender 0 num buffers: {}", this->sender_channels_num_buffers[0]);
-    log_trace(tt::LogTest, "Sender 0 channel address: {}", this->local_sender_channels_buffer_address[0]);
-    log_trace(tt::LogTest, "Sender 1 num buffers: {}", this->sender_channels_num_buffers[1]);
-    log_trace(tt::LogTest, "Sender 1 channel address: {}", this->local_sender_channels_buffer_address[1]);
-    log_trace(tt::LogTest, "Sender 2 num buffers: {}", this->sender_channels_num_buffers[2]);
-    log_trace(tt::LogTest, "Sender 2 channel address: {}", this->local_sender_channels_buffer_address[2]);
-    log_trace(tt::LogTest, "Receiver 0 num buffers: {}", this->receiver_channels_num_buffers[0]);
-    log_trace(tt::LogTest, "Receiver 0 channel address: {}", this->local_receiver_channels_buffer_address[0]);
-    log_trace(tt::LogTest, "Receiver 1 num buffers: {}", this->receiver_channels_num_buffers[1]);
-    log_trace(tt::LogTest, "Receiver 1 channel address: {}", this->local_receiver_channels_buffer_address[1]);
+        std::unordered_set<size_t>(
+            sender_channels_num_buffers.begin(), sender_channels_num_buffers.begin() + config.num_used_sender_channels)
+                .size() == 1,
+        "Implementation expects sender_channels_num_buffers to all be the same for now");
+
+    for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_sender_channels; i++) {
+        log_trace(tt::LogTest, "Sender {} num buffers: {}", i, this->sender_channels_num_buffers[i]);
+        log_trace(tt::LogTest, "Sender {} channel address: {}", i, this->local_sender_channels_buffer_address[i]);
+    }
+    for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_receiver_channels; i++) {
+        log_trace(tt::LogTest, "Receiver {} num buffers: {}", i, this->receiver_channels_num_buffers[i]);
+        log_trace(tt::LogTest, "Receiver {} channel address: {}", i, this->local_receiver_channels_buffer_address[i]);
+    }
 
     return std::vector<uint32_t>{
         this->firmware_context_switch_interval,
+        this->enable_first_level_ack,
+        this->fuse_receiver_flush_and_completion_ptr,
+        config.enable_ring_topology,
         is_handshake_master,
         this->handshake_address,
         this->channel_buffer_size,
