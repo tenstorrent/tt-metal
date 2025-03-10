@@ -5,6 +5,7 @@
 #include "cpp/ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/hal_exp.hpp>
+#include "cpp/ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::tt_metal::experimental;
 
@@ -76,37 +77,45 @@ PermuteDeviceOperation::MultiCoreRowInvariant::cached_program_t PermuteDeviceOpe
             .set_page_size(src0_cb_index, input_rm_page_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    uint32_t N = operation_attributes.dims.size();
+    uint32_t rank = operation_attributes.dims.size();
 
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram, N, input_rm_page_size, num_rows};
+
+    std::map<string, string> reader_defines, writer_defines;
+    auto readerStructTmpArgs = std::make_tuple();
+    auto readerStructString = instantiate("PermuteReaderStruct", readerStructTmpArgs, src_is_dram, input_rm_page_size);
+    reader_defines["PERMUTE_READER_STRUCT"] = readerStructString;
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/"
         "reader_permute_interleaved_rm_row_invariant.cpp",
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt::tt_metal::ReaderDataMovementConfig({}, reader_defines));
 
+    auto output_strides = detail::get_row_strides(output_tensor.get_logical_shape());
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)dst_is_dram, N, output_rm_page_size, num_rows};
+    auto writerStructTmpArgs = std::make_tuple(rank);
+    auto writerStructString = instantiate(
+        "PermuteWriterStruct",
+        writerStructTmpArgs,
+        dst_is_dram,
+        output_rm_page_size,
+        num_rows,
+        input_tensor.get_logical_shape(),
+        operation_attributes.dims,
+        output_strides);
+    writer_defines["PERMUTE_WRITER_STRUCT"] = writerStructString;
+
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/"
         "writer_permute_interleaved_rm_row_invariant.cpp",
         all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        tt::tt_metal::WriterDataMovementConfig({}, writer_defines));
 
     std::vector<uint32_t> reader_runtime_args = {src_buffer->address(), 0, 0};
-
-    auto input_shape_view = input_tensor.get_logical_shape().view();
-    auto output_strides = detail::get_row_strides(output_tensor.get_logical_shape());  // in anticipation of RM padding
-
     std::vector<uint32_t> writer_runtime_args = {dst_buffer->address(), 0, 0};
-    writer_runtime_args.insert(writer_runtime_args.end(), input_shape_view.begin(), input_shape_view.end());
-    writer_runtime_args.insert(
-        writer_runtime_args.end(), operation_attributes.dims.begin(), operation_attributes.dims.end());
-    writer_runtime_args.insert(writer_runtime_args.end(), output_strides.begin(), output_strides.end());
 
     auto cores = corerange_to_cores(all_cores, std::nullopt);
     uint32_t start_row = 0;
@@ -210,7 +219,7 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
     uint32_t W = input_tensor.get_logical_shape()[-1];
     uint32_t W_stride = output_strides[x_dim];
 
-    uint32_t N = operation_attributes.dims.size();
+    uint32_t rank = operation_attributes.dims.size();
     uint32_t num_rows = input_tensor.volume() / input_tensor.get_logical_shape()[-1];
 
     // treat the input tensor as 3D with rows * x_blocks * w_blocks
@@ -244,7 +253,7 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {
         (uint32_t)src_is_dram,
-        N,
+        rank,
         input_cb_page_size,
         num_rows,
         x_dim,
@@ -266,7 +275,7 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)dst_is_dram,
-        N,
+        rank,
         output_cb_page_size,
         num_rows,
 

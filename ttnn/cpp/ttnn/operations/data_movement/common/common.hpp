@@ -5,6 +5,7 @@
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 
+#include "cpp/ttnn/tensor/shape/shape.hpp"
 #include "cpp/ttnn/tensor/types.hpp"
 #include "cpp/ttnn/tensor/tensor.hpp"
 
@@ -190,6 +191,220 @@ std::pair<uint32_t, std::array<uint32_t, 2>> tensor_coord_to_height_sharded_coor
     const std::span<const uint32_t>& tensor_shape,
     const std::span<const uint32_t>& shard_shape,
     const std::span<const uint32_t>& tensor_coord);
+
+uint32_t l1_space_post_allocation(const TensorSpec& tensor_spec, IDevice* device);
+
+//----------------------------------------------------------------------
+// Non-templated function definitions (all inline)
+
+inline std::string stringify(char value) { return std::string("'") + value + "'"; }
+
+inline std::string stringify(const char* s) { return std::string(s); }
+
+inline std::string stringify(const std::string& s) { return s; }
+
+inline std::string stringify(tt::DataFormat data_format) {
+    switch (data_format) {
+        case tt::DataFormat::Float32: return "float";
+        case tt::DataFormat::UInt8: return "uint8_t";
+        case tt::DataFormat::UInt16: return "uint16_t";
+        case tt::DataFormat::UInt32: return "uint32_t";
+        case tt::DataFormat::Int8: return "int8_t";
+        case tt::DataFormat::Int32: return "int32_t";
+        default: TT_FATAL(false, "Unsupported data format for string conversion"); return "";
+    }
+}
+
+inline std::string stringify(DataType data_type) {
+    switch (data_type) {
+        case DataType::FLOAT32: return "float";
+        case DataType::UINT32: return "uint32_t";
+        case DataType::UINT8: return "uint8_t";
+        case DataType::UINT16: return "uint16_t";
+        case DataType::INT32: return "int32_t";
+        default: TT_FATAL(false, "Unsupported data type for string conversion"); return "";
+    }
+}
+
+inline bool validate_instantiation_string(const std::string& s) {
+    int paren = 0, angle = 0, curly = 0;
+    for (char c : s) {
+        if (c == '(') {
+            ++paren;
+        } else if (c == ')') {
+            --paren;
+        } else if (c == '<') {
+            ++angle;
+        } else if (c == '>') {
+            --angle;
+        } else if (c == '{') {
+            ++curly;
+        } else if (c == '}') {
+            --curly;
+        }
+        if (paren < 0 || angle < 0 || curly < 0) {
+            return false;
+        }
+    }
+    return (paren == 0 && angle == 0 && curly == 0);
+}
+
+//----------------------------------------------------------------------
+// Template function definitions
+
+// For integral types (except char)
+template <typename T>
+inline std::enable_if_t<std::is_integral_v<T> && !std::is_same_v<T, char>, std::string> stringify(const T& value) {
+    return std::to_string(value);
+}
+
+// For floating point types
+template <typename T>
+inline std::enable_if_t<std::is_floating_point_v<T>, std::string> stringify(const T& value) {
+    return std::to_string(value);
+}
+
+// ----------------------------------------------------------------------
+// Primitive types for template argument conversion
+enum class PrimType {
+    INT,
+    INT8,
+    INT16,
+    INT32,
+    INT64,
+    UINT8,
+    UINT16,
+    UINT32,
+    UINT64,
+    FLOAT16,
+    FLOAT32,
+    BOOL,
+    CHAR,
+    VOID
+};
+
+// For primitive types
+inline std::string stringify(PrimType prim_type) {
+    switch (prim_type) {
+        case PrimType::INT: return "int";
+        case PrimType::INT8: return "int8_t";
+        case PrimType::INT16: return "int16_t";
+        case PrimType::INT32: return "int32_t";
+        case PrimType::INT64: return "int64_t";
+        case PrimType::UINT8: return "uint8_t";
+        case PrimType::UINT16: return "uint16_t";
+        case PrimType::UINT32: return "uint32_t";
+        case PrimType::UINT64: return "uint64_t";
+        case PrimType::FLOAT16: return "float16_t";
+        case PrimType::FLOAT32: return "float";
+        case PrimType::BOOL: return "bool";
+        case PrimType::CHAR: return "char";
+        case PrimType::VOID: return "void";
+        default: {
+            TT_FATAL(false, "Unsupported primitive type for string conversion");
+        }
+    }
+}
+
+// For C-style arrays.
+template <typename T, std::size_t N>
+inline std::string stringify(const T (&arr)[N]) {
+    std::string result = "{";
+    for (std::size_t i = 0; i < N; ++i) {
+        result += stringify(arr[i]);
+        if (i != N - 1) {
+            result += ", ";
+        }
+    }
+    result += "}";
+    return result;
+}
+
+// For std::array.
+template <typename T, std::size_t N>
+inline std::string stringify(const std::array<T, N>& arr) {
+    std::string result = "{";
+    for (std::size_t i = 0; i < arr.size(); ++i) {
+        result += stringify(arr[i]);
+        if (i != arr.size() - 1) {
+            result += ", ";
+        }
+    }
+    result += "}";
+    return result;
+}
+
+// For generic containers (excluding std::string and C-style arrays).
+template <
+    typename Container,
+    typename = std::enable_if_t<
+        std::
+            is_same_v<decltype(std::begin(std::declval<Container>())), decltype(std::end(std::declval<Container>()))> &&
+        !std::is_same_v<Container, std::string> && !std::is_array_v<Container>>>
+inline std::string stringify(const Container& container) {
+    std::string result = "{";
+    bool first = true;
+    for (const auto& elem : container) {
+        if (!first) {
+            result += ", ";
+        }
+        result += stringify(elem);
+        first = false;
+    }
+    result += "}";
+    return result;
+}
+
+inline std::string stringify(const tt::tt_metal::Shape& shape) { return stringify(shape.view()); }
+
+//----------------------------------------------------------------------
+// Tuple-to-vector conversion for template arguments.
+
+template <typename T>
+inline std::string to_template_arg_string(const T& arg) {
+    if constexpr (std::is_same_v<std::decay_t<T>, std::string>) {
+        return arg;
+    } else {
+        return stringify(arg);
+    }
+}
+
+template <typename Tuple, std::size_t... I>
+inline std::vector<std::string> tuple_to_vector_of_strings_impl(const Tuple& tup, std::index_sequence<I...>) {
+    return {to_template_arg_string(std::get<I>(tup))...};
+}
+
+template <typename Tuple>
+inline std::vector<std::string> tuple_to_vector_of_strings(const Tuple& tup) {
+    return tuple_to_vector_of_strings_impl(tup, std::make_index_sequence<std::tuple_size_v<std::decay_t<Tuple>>>{});
+}
+
+// Instantiate using an explicit struct name.
+template <typename Tuple, typename... Args>
+inline std::string instantiate(
+    const std::string& structName, const Tuple& templateArgsTuple, const Args&... constructorArgs) {
+    auto templateArgs = tuple_to_vector_of_strings(templateArgsTuple);
+    for (const auto& arg : templateArgs) {
+        TT_FATAL(!arg.empty(), "Template argument string should not be empty");
+    }
+    std::string result = structName;
+    if (!templateArgs.empty()) {
+        result += "<";
+        for (size_t i = 0; i < templateArgs.size(); ++i) {
+            result += templateArgs[i];
+            if (i != templateArgs.size() - 1) {
+                result += ", ";
+            }
+        }
+        result += ">";
+    }
+    result += "(";
+    bool first = true;
+    ((result += (first ? "" : ", ") + stringify(constructorArgs), first = false), ...);
+    result += ")";
+    TT_FATAL(validate_instantiation_string(result), "Generated instantiation string is not syntactically valid");
+    return result;
+}
 
 }  // namespace data_movement
 }  // namespace operations
