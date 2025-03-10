@@ -250,7 +250,10 @@ Buffer* AnyBuffer::get_buffer() const {
     return std::visit(
         tt::stl::overloaded{
             [](const std::shared_ptr<Buffer>& buffer) { return buffer.get(); },
-            [](const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer) {
+            [](const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer) -> Buffer* {
+                if (!mesh_buffer->is_allocated()) {
+                    return nullptr;
+                }
                 auto shape = mesh_buffer->device()->shape();
                 return mesh_buffer->get_device_buffer(*distributed::MeshCoordinateRange(shape).begin());
             }},
