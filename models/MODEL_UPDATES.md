@@ -6,52 +6,51 @@
 
 ## March 10, 2025
 
-### [QwQ-32B](demos/llama3)
+### [QwQ-32B](tt_transformers)
 - Added support for QwQ-32B on QuietBox.
 
 ## February 24, 2025
 
-### [DeepSeek R1 Distill Llama 3.3 70B](demos/llama3)
+### [DeepSeek R1 Distill Llama 3.3 70B](tt_transformers)
 - Added support for DeepSeek R1 Distill Llama 3.3 70B on QuietBox.
 
-### [Qwen 2.5](demos/llama3)
+### [Qwen 2.5](tt_transformers)
 - Added support for Qwen2.5-7B on N300 and Qwen2.5-72B on QuietBox.
 
-### [Llama 3.1/3.2](demos/llama3)
+### [Llama 3.1/3.2](tt_transformers)
 > **Note:** This feature is available as of release [v0.56.0-rc37](https://github.com/tenstorrent/tt-metal/tree/v0.56.0-rc37)
-- Overhauled the demo script (now called [simple_text_demo.py](demos/llama3/demo/simple_text_demo.py)) to use a simplified causal generation interface.
+- Overhauled the demo script (now called [simple_text_demo.py](tt_transformers/demo/simple_text_demo.py)) to use a simplified causal generation interface.
 - Added support for custom input argument overrides to the demo.
 
 ## February 10, 2025
 
-### [Llama 3.1/3.2](demos/llama3)
+### [Llama 3.1/3.2](tt_transformers)
 > **Note:** This feature is available as of release [v0.56.0-rc16](https://github.com/tenstorrent/tt-metal/tree/v0.56.0-rc16)
 - Added support for loading HuggingFace model formats (previously loaded Meta checkpoint formats), which will also enable easier adoption of future derivative models.
 
-### [Llama 3.2-11B-Vision](demos/llama3)
+### [Llama 3.2-11B-Vision](tt_transformers)
 - Added support for processing text-only prompts to the model and the [vLLM fork](https://github.com/tenstorrent/vllm/tree/dev/tt_metal).
 
 ## January 13, 2025
 
-### [Llama 3.1/3.2](demos/llama3)
 - Integrated Llama3 models (1B/3B/8B/11B/70B) into [vLLM fork](https://github.com/tenstorrent/vllm/tree/dev/tt_metal) for all compatible Tenstorrent devices (N150/N300/QuietBox/Galaxy).
 - Enabled prefill with the maximum context length (131072) when running the Llama3 text models on smaller devices (N150/N300) via chunked prefill.
 
 ## December 16, 2024
 
-### [Llama 3.1/3.2](demos/llama3)
+### [Llama 3.1/3.2](tt_transformers)
 - Added support for batch size 32 and the maximum context length (131072 tokens).
 - Added full hardware compatibilty for the 1B/3B/8B/11B/70B models (all models are now compatible with N150, N300, QuietBox, Galaxy except for 70B which is only supported on QuietBox and Galaxy due to its large size).
 
 ## December 2, 2024
 
-### [Llama 3.1/3.2](demos/llama3)
+### [Llama 3.1/3.2](tt_transformers)
 - Improved the decode performance of the 1B/3B/8B/11B text models (for 8B, increased from ~23 t/s/u to ~28 t/s/u) by using BFP4 weights (instead of BFP8) for FF1 and FF3 in the MLP.
 - Added the option to specify custom model configurations, with two defaults for performance and accuracy already provided.
 
 ## November 18, 2024
 
-### [Llama 3.2 - 1B/3B/11B](demos/llama3)
+### [Llama 3.2 - 1B/3B/11B](tt_transformers)
 - Created a new shared codebase for the Llama3 family of models, with newly added support for Llama3.2-1B/3B/11B.
 
 ### [Llama 3/3.1 - 70B](demos/t3000/llama3_70b)
