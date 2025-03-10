@@ -30,7 +30,7 @@ After setting up the environment correctly, run a demo to test the environment.
   - Most transformer based models can be run by changing the tensor dimensions of llama3 and can be added as a new model configuration to the existing codebase. For other models, make a copy of the model codebase for advanced changes.
   - Modify modules with model dimensions as needed.
   - First use a single device for simpler bring-up if models can fit on that single device; Wormhole has 12 GB DRAM storage and can support models of up to roughly 12B parameters in BFP8. If possible, use a smaller version of the model that fits on a single device. The model can be scaled up in size and on more devices.
- 
+
 > [!NOTE]
 > In the llama3 demo implementation the decode stage supports batch=32. Each row is a separate user in 32x32 tiles used by the TT-Metalium stack. The prefill stage supports batch=1 where rows map to different iput tokens. Because prefill is compute-bound, multiple batches do not benefit performance. See [Converting Torch Model to TT-NN](https://docs.tenstorrent.com/docs-test/ttnn/latest/ttnn/converting_torch_model_to_ttnn.html) for model conversion.
 
@@ -56,7 +56,7 @@ After setting up the environment correctly, run a demo to test the environment.
     - Meaningful and coherent.
     - Similar to reference model tokens.
     - Measure the top1/top5 accuracy of the generated tokens w.r.t. to the reference tokens.
-   
+
 > [!NOTE]
 > Due to differences in floating point arithmetic and non-linear approximations, tokens may not be exact matches.
 
