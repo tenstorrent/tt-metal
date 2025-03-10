@@ -491,7 +491,8 @@ void kernel_main() {
                 (test_producer.current_packet_header.routing.packet_size_bytes + PACKET_WORD_SIZE_BYTES - 1) >> 4;
             uint32_t curr_data_words_sent = test_producer.pull_data_from_fvc_buffer<FVC_MODE_ENDPOINT>();
 #else
-            curr_packet_size = ((test_producer.packet_word_0[0] & 0x3FFFFFFF) + PACKET_WORD_SIZE_BYTES - 1) >> 4;
+            volatile uint32_t* header_word_0 = (volatile uint32_t*)test_producer.get_local_buffer_read_addr();
+            curr_packet_size = ((header_word_0[0] & 0x3FFFFFFF) + PACKET_WORD_SIZE_BYTES - 1) >> 4;
             uint32_t curr_data_words_sent = test_producer.push_data_to_eth_router<FVC_MODE_ENDPOINT>();
 #endif
             curr_packet_words_sent += curr_data_words_sent;
