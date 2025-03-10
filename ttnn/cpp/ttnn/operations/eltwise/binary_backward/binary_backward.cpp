@@ -545,8 +545,7 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardRsub::invoke(
     std::optional<Tensor> other_grad) {
     std::vector<std::optional<ttnn::Tensor>> result = {std::nullopt, std::nullopt};
 
-    preallocated_tensors_check(
-        input_grad, other_grad, input, other, {are_required_outputs[0], are_required_outputs[1]});
+    preallocated_tensors_check(input_grad, other_grad, grad, grad, {are_required_outputs[0], are_required_outputs[1]});
     if (are_required_outputs.at(0)) {
         ttnn::neg(queue_id, grad, output_mem_config, input_grad);
         result[0] = input_grad;
