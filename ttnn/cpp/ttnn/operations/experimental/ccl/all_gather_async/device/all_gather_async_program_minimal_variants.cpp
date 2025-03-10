@@ -173,8 +173,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         reader_kernel_config);
 
     // Writer
-    uint32_t tile_rows = input_tensor_shape[2] / 32;
-    uint32_t tile_cols_for_chip = input_tensor_shape[3] / 32;
+    bool last_dim = dim == input_tensor_shape.rank() - 1;
+    uint32_t tile_rows = input_tensor_shape[dim - 1] / 32;
+    uint32_t tile_cols_for_chip = input_tensor_shape[dim] / 32;
     auto writer_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
     writer_kernel_config.compile_args = {
         ring_index,                                        // my_chip_id
@@ -186,10 +187,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         op_config.get_page_size(),                         // tensor0_page_size
         num_targets_forward,                               // num_targets_forward_direction
         num_targets_backward,                              // num_targets_backward_direction
-        dim,
-        ring_size,
-        tile_rows,
-        tile_cols_for_chip};
+        last_dim,                                          // dim
+        tile_cols_for_chip                                 // tile_cols_for_chip
+    };
     log_trace(tt::LogOp, "Writer Compile Args:");
     for (const auto& arg : writer_kernel_config.compile_args) {
         log_trace(tt::LogOp, "\t{}", arg);
@@ -243,8 +243,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         uint32_t out_ready_sem_wait_value = ring_size * num_links;
         uint32_t output_tile_id_start = ring_index * input_tensor_num_pages + input_tile_id_start;
         uint32_t output_tile_id_end = ring_index * input_tensor_num_pages + input_tile_id_end;
-        if (dim == 3) {
+        if (last_dim) {
             output_tile_id_start = tile_cols_for_chip * ring_index;  // multi width tile for each chip
+            output_tile_id_end = tile_rows * tile_cols_for_chip;
         }
         std::vector<uint32_t> writer_rt_args = {
             output_tensor.buffer()->address(),  // tensor_address0
@@ -256,6 +257,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
             drain_sync_core.x,                  // out_ready_sem_noc0_x
             drain_sync_core.y,                  // out_ready_sem_noc0_y
             out_ready_sem_wait_value,           // out_ready_sem_wait_value
+            ring_size,                          // ring_size
         };
         log_trace(tt::LogOp, "Writer Runtime Args:");
         for (const auto& arg : writer_rt_args) {

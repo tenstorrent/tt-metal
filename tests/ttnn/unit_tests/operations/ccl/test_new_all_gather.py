@@ -347,6 +347,32 @@ def run_all_gather_impl(
         # (4, 1, [1, 1, 32, 32768], 3, ttnn.TILE_LAYOUT),
         # (4, 1, [1, 1, 2048, 16384], 3, ttnn.TILE_LAYOUT),
         (4, 1, [1, 1, 32, 1280], 3, ttnn.TILE_LAYOUT),
+        # # Mixtral, Decode	[1,1,32,4096]	[1,1,256,4096]	2	bfp8	Interleaved, L1, Tile	8
+        (8, 1, [1, 1, 256, 4096], 2, ttnn.TILE_LAYOUT),
+        # # Mixtra, Prefill	[1,1,32,4096]	[1,8,32,4096]	1	bfp8	Interleaved, L1, Tile	8
+        (8, 1, [1, 8, 32, 4096], 1, ttnn.TILE_LAYOUT),
+        # Mixtra, Prefill	[1,1,128,4096]	[1,8,128,4096]	1	bfp8	Interleaved, L1, Tile	8
+        (8, 1, [1, 8, 128, 4096], 1, ttnn.TILE_LAYOUT),
+        # Mixtra, Prefill	[1,1,1024,4096]	[1,8,1024,4096]	1	bfp8	Interleaved, L1, Tile	8
+        (8, 1, [1, 8, 1024, 4096], 1, ttnn.TILE_LAYOUT),
+        # #  Mixtra, Prefill	[1,1,8192,4096]	[1,8,8192,4096]	1	bfp8	Interleaved, L1, Tile	8
+        (8, 1, [1, 8, 8192, 4096], 1, ttnn.TILE_LAYOUT),
+        # Mixtra, Prefill	[1,1,32768,4096] [1,8,32768,4096]	1	bfp8	Interleaved, L1, Tile	8
+        (8, 1, [1, 8, 32768, 4096], 1, ttnn.TILE_LAYOUT),
+        # Llama 8B, N300	[1,1,128,2048]	[1,1,128,4096]	2	bf16	3	Interleaved, Tile	2
+        (2, 1, [1, 1, 128, 4096], 3, ttnn.TILE_LAYOUT),
+        # Llama 8B, N300	[32,2048]	[32,4096]	2	bf16	3	Interleaved, Tile	2
+        (2, 1, [1, 1, 32, 4096], 3, ttnn.TILE_LAYOUT),
+        # Llama 8B, N300	[32,64128]	[32,128256]	2	bfp8	3	Interleaved, Tile	2
+        (2, 1, [1, 1, 32, 128256], 3, ttnn.TILE_LAYOUT),
+        # T3K Falcon 40, Decode	[32,4096]	[32,32768]	3			8
+        (8, 1, [1, 1, 32, 32768], 3, ttnn.TILE_LAYOUT),
+        # T3K Falcon 40, Decode	[1,1,32,1024]	[1,1,32,8192]	3			8
+        (8, 1, [1, 1, 32, 8192], 3, ttnn.TILE_LAYOUT),
+        # T3K Falcon 40, Prefill	[2048, 1024]	[2048, 8192]	8		3	Interleaved
+        (8, 1, [1, 1, 2048, 8192], 3, ttnn.TILE_LAYOUT),
+        # T3K Falcon 40, Prefill	[2048,4096]	[2048,32768]			Interleaved	8
+        (8, 1, [1, 1, 2048, 32768], 3, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
