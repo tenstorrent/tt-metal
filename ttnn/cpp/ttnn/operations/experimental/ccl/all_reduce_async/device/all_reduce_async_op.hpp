@@ -46,7 +46,7 @@ struct AllReduceAsync {
         MemoryConfig output_mem_config,
         ccl::Topology topology,
         GlobalSemaphore semaphore,
-        std::optional<SubDeviceId>& sub_device_id,
+        std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
         bool enable_persistent_fabric_mode) :
         forward_device(forward_device),
         backward_device(backward_device),

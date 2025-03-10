@@ -4,6 +4,7 @@
 
 #include <random>
 
+#include <tt-metalium/env_lib.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -577,6 +578,22 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
         }
     }
     ReleaseTrace(mesh_device_.get(), trace_id);
+}
+
+TEST_F(MeshTraceTestSuite, MeshTraceAsserts) {
+    auto random_seed = 10;
+    uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
+    log_info(tt::LogTest, "Using Test Seed: {}", seed);
+    srand(seed);
+    MeshCoordinateRange all_devices(mesh_device_->shape());
+    auto workload = std::make_shared<MeshWorkload>();
+    auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+        1, mesh_device_->compute_with_storage_grid_size(), seed);
+    AddProgramToMeshWorkload(*workload, std::move(*programs[0]), all_devices);
+    auto trace_id = BeginTraceCapture(mesh_device_.get(), 0);
+    EXPECT_THROW(EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, true), std::runtime_error);
+    EXPECT_THROW(Finish(mesh_device_->mesh_command_queue()), std::runtime_error);
+    EndTraceCapture(mesh_device_.get(), 0, trace_id);
 }
 
 }  // namespace

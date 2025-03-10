@@ -121,7 +121,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{src0_cb_index, df}})
             .set_page_size(src0_cb_index, l1_scratch_cb_page_size_bytes);
-    CBHandle cb_src0_workers = CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
+    tt::tt_metal::CBHandle cb_src0_workers =
+        tt::tt_metal::CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_CB_index = tt::CBIndex::c_3;
     static constexpr auto num_packet_headers_storable = 8;
@@ -132,7 +133,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
             {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
             .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
     auto reserved_packet_header_CB_handle =
-        CreateCircularBuffer(program, sender_worker_core_range, cb_reserved_packet_header_config);
+        tt::tt_metal::CreateCircularBuffer(program, sender_worker_core_range, cb_reserved_packet_header_config);
 
     // Reduction kernel setup
     auto all_cores = output_tensor_cores.merge(sender_worker_core_range);
@@ -282,8 +283,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     tt::tt_metal::SetRuntimeArgs(program, reduction_kernel_id, output_tensor_cores, reduction_kernel_rt_args);
 
     // KERNEL CREATION
-    tt::tt_metal::NOC reader_noc = NOC::NOC_1;
-    tt::tt_metal::NOC writer_noc = NOC::NOC_0;
+    tt::tt_metal::NOC reader_noc = tt::tt_metal::NOC::NOC_1;
+    tt::tt_metal::NOC writer_noc = tt::tt_metal::NOC::NOC_0;
     // Reader
     std::vector<uint32_t> reader_compile_args = {
         ring_index,                 // my_chip_id
@@ -296,8 +297,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device/kernels/dataflow/"
         "worker_reader.cpp",
         sender_worker_core_range,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1, .noc = reader_noc, .compile_args = reader_compile_args});
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = reader_noc,
+            .compile_args = reader_compile_args});
 
     // Writer
     std::vector<uint32_t> writer_compile_args = {
@@ -316,8 +319,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device/kernels/dataflow/"
         "worker_writer.cpp",
         sender_worker_core_range,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0, .noc = writer_noc, .compile_args = writer_compile_args});
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = writer_noc,
+            .compile_args = writer_compile_args});
 
     // Kernel Runtime Args
     for (uint32_t link = 0; link < num_links; link++) {
@@ -388,7 +393,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
             if (mcast_range_contains_self) {
                 num_mcast_cores -= 1;
             }
-            if (writer_noc == NOC::NOC_1) {
+            if (writer_noc == tt::tt_metal::NOC::NOC_1) {
                 std::swap(start_core, end_core);
             }
             mcast_start_x.push_back(start_core.x);

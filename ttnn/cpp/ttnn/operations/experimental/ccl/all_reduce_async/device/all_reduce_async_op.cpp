@@ -165,7 +165,7 @@ const tt::tt_metal::operation::Hash AllReduceAsync::compute_program_hash(
     auto input_dtype = input_tensors[0].get_dtype();
     auto input_memory_config = input_tensors[0].memory_config();
 
-    return operation::hash_operation<AllReduceAsync>(
+    return tt::tt_metal::operation::hash_operation<AllReduceAsync>(
         this->num_links,
         this->ring_size,
         this->ring_index,
@@ -199,10 +199,10 @@ Tensor all_reduce_async(
     auto devices = input_tensor.get_workers();
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
+    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
     std::vector<GlobalSemaphore> semaphores = multi_device_global_semaphore.global_semaphores;
 
-    operation::launch_op(
+    tt::tt_metal::operation::launch_op(
         [num_preferred_links,
          memory_config,
          mesh_view,
@@ -227,7 +227,7 @@ Tensor all_reduce_async(
             const auto& input_tensor = input_tensors.at(0);
             const auto& buffer_tensor = input_tensors.at(1);
 
-            return operation::run(
+            return tt::tt_metal::operation::run(
                 ttnn::ccl::all_reduce_detail::create_all_reduce_async_struct(
                     input_device_tensor,
                     num_preferred_links.has_value() ? num_preferred_links.value() : 1,
