@@ -743,11 +743,12 @@ DeviceStorage replicate_to_mesh_buffer(
     mesh_device->mesh_command_queue(*cq_id).enqueue_write_mesh_buffer(
         mesh_buffer, data_to_write.data(), /*blocking=*/false);
 
-    std::map<distributed::MeshCoordinate, TensorSpec> specs;
+    std::vector<std::pair<distributed::MeshCoordinate, TensorSpec>> specs;
+    specs.reserve(mesh_device->shape().mesh_size());
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
-        specs.emplace(coord, tensor_spec);
+        specs.push_back(std::make_pair(coord, tensor_spec));
     }
-    return DeviceStorage(mesh_buffer, specs, ReplicateTensor());
+    return DeviceStorage(mesh_buffer, ReplicateTensor(), std::move(specs));
 }
 
 template <typename T>
@@ -776,13 +777,14 @@ DeviceStorage shard_to_mesh_buffer(
         }
     }();
 
-    std::map<distributed::MeshCoordinate, TensorSpec> specs;
+    std::vector<std::pair<distributed::MeshCoordinate, TensorSpec>> specs;
+    specs.reserve(storage.buffers.size());
     auto shard_coord = coord_range.begin();
     for (int i = 0; i < storage.buffers.size(); ++shard_coord, i++) {
         TensorSpec shard_tensor_spec(
             storage.specs[i].logical_shape(),
             storage.specs[i].tensor_layout().with_memory_config(tensor_spec.memory_config()));
-        specs.emplace(*shard_coord, shard_tensor_spec);
+        specs.push_back(std::make_pair(*shard_coord, shard_tensor_spec));
         const auto& shard_host_buffer = storage.buffers[i];
 
         const auto& shard_buffer = mesh_buffer->get_device_buffer(*shard_coord);
@@ -806,7 +808,7 @@ DeviceStorage shard_to_mesh_buffer(
 
     mesh_device->mesh_command_queue(*cq_id).enqueue_write_shards(mesh_buffer, shard_data_transfers, /*blocking=*/false);
 
-    return DeviceStorage(mesh_buffer, specs, storage.strategy);
+    return DeviceStorage(mesh_buffer, storage.strategy, std::move(specs));
 }
 
 template <typename T>
