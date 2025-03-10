@@ -14,11 +14,8 @@
 #include "program_impl.hpp"
 #include "profiler_state.hpp"
 #include "common.hpp"
-#include "profiler_optional_metadata.hpp"
 #include "tracy/TracyTTDevice.hpp"
 #include "common/TracyTTDeviceData.hpp"
-
-#include <nlohmann/json.hpp>
 
 using std::chrono::duration;
 using std::chrono::duration_cast;
@@ -64,24 +61,11 @@ private:
     // Iterate through all zone source locations and generate hash
     void generateZoneSourceLocationsHashes();
 
-    // serialize all noc trace data into per-op json trace files
-    void serializeJsonNocTraces(
-        const nlohmann::ordered_json& noc_trace_json_log, const std::filesystem::path& output_dir, chip_id_t device_id);
-
-    void emitCSVHeader(
-        std::ofstream& log_file_ofs, const tt::ARCH& device_architecture, int device_core_frequency) const;
-
-    // translates potentially-virtual coordinates recorded on Device into physical coordinates
-    CoreCoord getPhysicalAddressFromVirtual(chip_id_t device_id, const CoreCoord& c) const;
-
     // Dumping profile result to file
-    void logPacketData(
-        std::ofstream& log_file_ofs,
-        nlohmann::ordered_json& noc_trace_json_log,
+    void dumpResultToFile(
         uint32_t runID,
         uint32_t runHostID,
-        const std::string& opname,
-        chip_id_t device_id,
+        int device_id,
         CoreCoord core,
         int core_flat,
         int risc_num,
@@ -89,49 +73,9 @@ private:
         uint32_t timer_id,
         uint64_t timestamp);
 
-    // logs packet data to CSV file
-    void logPacketDataToCSV(
-        std::ofstream& log_file_ofs,
-        chip_id_t device_id,
-        int core_x,
-        int core_y,
-        const std::string_view risc_name,
-        uint32_t timer_id,
-        uint64_t timestamp,
-        uint64_t data,
-        uint32_t run_id,
-        uint32_t run_host_id,
-        const std::string_view opname,
-        const std::string_view zone_name,
-        kernel_profiler::PacketTypes packet_type,
-        uint64_t source_line,
-        const std::string_view source_file);
-
-    // dump noc trace related profile data to json file
-    void logNocTracePacketDataToJson(
-        nlohmann::ordered_json& noc_trace_json_log,
-        chip_id_t device_id,
-        int core_x,
-        int core_y,
-        const std::string_view risc_name,
-        uint32_t timer_id,
-        uint64_t timestamp,
-        uint64_t data,
-        uint32_t run_id,
-        uint32_t run_host_id,
-        const std::string_view opname,
-        const std::string_view zone_name,
-        kernel_profiler::PacketTypes packet_type,
-        uint64_t source_line,
-        const std::string_view source_file);
-
     // Helper function for reading risc profile results
     void readRiscProfilerResults(
-        IDevice* device,
-        const CoreCoord& worker_core,
-        const std::optional<ProfilerOptionalMetadata>& metadata,
-        std::ofstream& log_file_ofs,
-        nlohmann::ordered_json& noc_trace_json_log);
+        IDevice* device, CoreCoord& worker_core);
 
     // Push device results to tracy
     void pushTracyDeviceResults();
@@ -156,18 +100,20 @@ public:
     // DRAM Vector
     std::vector<uint32_t> profile_buffer;
 
-    // Device events
+    //Device events
     std::set<tracy::TTDeviceEvent> device_events;
 
     std::set<tracy::TTDeviceEvent> device_sync_events;
 
     std::set<tracy::TTDeviceEvent> device_sync_new_events;
 
-    // shift
+    //shift
     int64_t shift = 0;
 
-    // frequency scale
+    //frequency scale
     double freqScale = 1.0;
+
+    uint32_t my_device_id = 0;
 
     // Freshen device logs
     void freshDeviceLog();
@@ -182,8 +128,7 @@ public:
     void dumpResults(
         IDevice* device,
         const std::vector<CoreCoord>& worker_cores,
-        ProfilerDumpState state = ProfilerDumpState::NORMAL,
-        const std::optional<ProfilerOptionalMetadata>& metadata = {});
+        ProfilerDumpState state = ProfilerDumpState::NORMAL);
 };
 
 }  // namespace tt_metal
