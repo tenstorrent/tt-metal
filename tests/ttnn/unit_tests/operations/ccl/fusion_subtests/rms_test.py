@@ -6,6 +6,7 @@ import torch
 import pytest
 from loguru import logger
 import ttnn
+import math
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
@@ -15,91 +16,24 @@ from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
 )
 
 
-def run_with_trace(
-    mesh_device,
-    all_gather_topology,
-    input_tensor_mesh,
-    dim,
-    num_links,
-    output_mem_config,
-    enable_persistent_fabric,
-    multi_device_global_semaphore,
-    num_iter=20,
-    subdevice_id=None,
-):
-    # Compile Run
-    logger.info("Compiling model")
-    tt_out_tensor = ttnn.experimental.all_gather_async(
-        input_tensor_mesh,
-        dim,
-        multi_device_global_semaphore=multi_device_global_semaphore,
-        num_links=num_links,
-        memory_config=output_mem_config,
-        topology=all_gather_topology,
-        subdevice_id=subdevice_id,
-        enable_persistent_fabric_mode=enable_persistent_fabric,
-    )
-    ttnn.synchronize_device(mesh_device)
-
-    # Capture trace
-    logger.info("Capturing trace")
-    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    for i in range(num_iter):
-        tt_out_tensor = ttnn.experimental.all_gather_async(
-            input_tensor_mesh,
-            dim,
-            multi_device_global_semaphore=multi_device_global_semaphore,
-            num_links=num_links,
-            memory_config=output_mem_config,
-            topology=all_gather_topology,
-            subdevice_id=subdevice_id,
-            enable_persistent_fabric_mode=enable_persistent_fabric,
-        )
-    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-    ttnn.synchronize_device(mesh_device)
-
-    # Run the op
-    logger.info("Starting Trace perf test...")
-    ttnn.execute_trace(mesh_device, trace_id, blocking=False)
-    ttnn.release_trace(mesh_device, trace_id)
-    ttnn.synchronize_device(mesh_device)
-
-    return tt_out_tensor
-
-
 def run_rms_fuse_impl(
     mesh_device,
     num_devices,
-    output_shape,
-    dim,
+    elements_per_batch,
     num_links,
-    input_dtype,
-    layout,
     use_program_cache,
     function_level_defaults,
-    input_shard_shape,
     input_shard_grid,
+    output_shard_grid,
     all_gather_topology,
     num_iters=1,
     enable_async=False,
     trace_mode=False,
-    output_shard_shape=None,
-    output_shard_grid=None,
-    tensor_mem_layout=None,
+    input_dtype=ttnn.bfloat8_b,
+    layout=ttnn.TILE_LAYOUT,
+    topology=ttnn.Topology.Linear,
 ):
-    enable_persistent_fabric = True
-    if num_iters < 1:
-        pytest.fail("num_iters must be >= 1")
-    # Use Async mode based on test input config
-    mesh_device.enable_async(enable_async)
-
-    if enable_async:
-        logger.info(f"Using Async Mode for All Gather Op Dispatch")
-
-    compute_grid_size = mesh_device.compute_with_storage_grid_size()
-    ccl_sub_device_crs = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-    )
+    ccl_sub_device_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
     worker_sub_device = ttnn.SubDevice(
         [
             ccl_sub_device_crs,
@@ -112,135 +46,131 @@ def run_rms_fuse_impl(
         [worker_sub_device],
         0,
         0,
-        enable_persistent_fabric,
+        True,
         wrap_fabric_around_mesh=True,
     )
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
+    torch.manual_seed(4321)
+    num_cores = input_shard_grid.num_cores()
+    total_cores = num_cores * num_devices
+    padded_dim_per_core = int(math.ceil(elements_per_batch / total_cores / 32) * 32)
+    padded_dim = padded_dim_per_core * total_cores
 
-    # create global semaphore handles
-    ccl_semaphore_handles = [
-        create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
-    ]
+    size_per_device = padded_dim // num_devices
+    print(total_cores)
+    print(num_cores)
+    print(padded_dim_per_core)
+    print(padded_dim)
+    print(num_devices)
+    print(size_per_device)
+    input_shape = (1, 1, 32, padded_dim)
+    print(input_shape)
+    input_memory_config = ttnn.create_sharded_memory_config(
+        shape=(
+            32,
+            padded_dim_per_core,
+        ),
+        core_grid=input_shard_grid,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
 
-    ### For sharded all gather only
-    if bool(input_shard_shape) != bool(input_shard_grid) and bool(tensor_mem_layout) != bool(input_shard_grid):
-        pytest.fail(
-            "Both input_shard_shape, shard_grid, and tensor_mem_layout must be provided together or all must be None"
-        )
-    if input_shard_shape and input_shard_grid:
-        input_shard_spec = ttnn.ShardSpec(
-            input_shard_grid,
-            input_shard_shape,
-            ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        input_mem_config = ttnn.MemoryConfig(
-            tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec
-        )
-        if output_shard_shape is None:
-            assert (
-                output_shard_grid is None
-            ), "output_shard_grid must not be provided if output_shard_shape is not provided"
-            output_shard_shape = list(input_shard_shape)
-            if dim == len(output_shape) - 1:
-                output_shard_shape[1] *= num_devices
-            else:
-                output_shard_shape[0] *= num_devices
-            output_shard_spec = ttnn.ShardSpec(
-                input_shard_grid,
-                output_shard_shape,
-                ttnn.ShardOrientation.ROW_MAJOR,
-            )
-            output_mem_config = ttnn.MemoryConfig(
-                tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=output_shard_spec
-            )
-        else:
-            assert output_shard_grid is not None, "output_shard_grid must be provided if output_shard_shape is provided"
-            output_shard_spec = ttnn.ShardSpec(
-                output_shard_grid,
-                output_shard_shape,
-                ttnn.ShardOrientation.ROW_MAJOR,
-            )
-            output_mem_config = ttnn.MemoryConfig(
-                tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=output_shard_spec
-            )
-    ###
+    input_tensor_torch = torch.randn(input_shape)
+    gamma_torch = torch.randn((1, 1, 1, input_shape[3]))
 
-    input_tensor_mesh_list = []
-    output_tensor_goldens_list = []
+    print(mesh_device.shape)
+    input_tensor = ttnn.as_tensor(
+        input_tensor_torch,
+        dtype=input_dtype,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device=mesh_device, dims=(None, 3), mesh_shape=list(ttnn.MeshShape(1, num_devices))
+        ),
+        layout=layout,
+        memory_config=input_memory_config,
+    )
+    gamma_tensor = ttnn.as_tensor(
+        gamma_torch.reshape([1, 1, padded_dim // 32, 32]),
+        dtype=input_dtype,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device=mesh_device, dims=(None, 2), mesh_shape=list(ttnn.MeshShape(1, num_devices))
+        ),
+        layout=layout,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
 
-    for i in range(num_iters):
-        output_tensor = torch.rand(output_shape).bfloat16()
-        output_tensor_goldens_list.append(output_tensor)
-        input_tensors = torch.chunk(output_tensor, num_devices, dim)
-        tt_input_tensors = []
-        for i, t in enumerate(input_tensors):
-            tt_input_tensors.append(
-                ttnn.Tensor(t, input_dtype).to(layout).to(mesh_device.get_devices()[i], input_mem_config)
-            )
-            logger.info(f"using device {mesh_device.get_devices()[i].id()}")
+    print((size_per_device // num_cores) // 32)
 
-        input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
+    layer_norm_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(1, 1),
+        subblock_w=1,
+        block_h=1,
+        block_w=(size_per_device // num_cores) // 32,
+        inplace=False,
+    )
+    print("Made the ln config\n")
 
-        input_tensor_mesh_list.append(input_tensor_mesh)
+    tt_stats = ttnn.rms_norm_pre_all_gather(input_tensor, program_config=layer_norm_config)
+    print("Ran pre-all-gather")
+    ccl_semaphore = ttnn.create_global_semaphore(mesh_device, input_shard_grid, 0)
+    print(tt_stats)
+    ag_memory_config = ttnn.create_sharded_memory_config(
+        shape=(
+            32,
+            256,
+        ),
+        core_grid=input_shard_grid,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tt_stats = ttnn.experimental.all_gather_async(
+        tt_stats,
+        3,
+        ccl_semaphore,
+        num_links=1,
+        topology=ttnn.Topology.Linear,
+        enable_persistent_fabric_mode=True,
+        memory_config=ag_memory_config,
+    )
+    ttnn.synchronize_device(mesh_device)
+    print("Ran all-gather")
+    print(tt_stats)
+    output_pad_width = math.ceil(padded_dim_per_core / num_devices / 32) * 32
+    if output_shard_grid is None:
+        output_shard_grid = input_shard_grid
+    padded_out_w = math.ceil(input_shape[3] / num_devices / output_shard_grid.num_cores() / 32) * 32
+    output_memory_config = ttnn.create_sharded_memory_config(
+        shape=(
+            input_shape[0] * input_shape[1] * input_shape[2],
+            output_pad_width * 8,
+        ),
+        core_grid=output_shard_grid,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
 
-    tt_out_tensor_list = []
-    if trace_mode:
-        tt_out_tensor = run_with_trace(
-            mesh_device,
-            all_gather_topology,
-            input_tensor_mesh_list[0],
-            dim,
-            num_links,
-            output_mem_config,
-            enable_persistent_fabric,
-            multi_device_global_semaphore=ccl_semaphore_handles[0],
-            num_iter=num_iters,
-            subdevice_id=worker_sub_device_id,
-        )
-        tt_out_tensor_list.append(tt_out_tensor)
-    else:
-        for i in range(num_iters):
-            tt_out_tensor = ttnn.experimental.all_gather_async(
-                input_tensor_mesh_list[i],
-                dim,
-                multi_device_global_semaphore=ccl_semaphore_handles[i],
-                num_links=num_links,
-                memory_config=output_mem_config,
-                topology=all_gather_topology,
-                subdevice_id=worker_sub_device_id,
-                enable_persistent_fabric_mode=enable_persistent_fabric,
-            )
-            tt_out_tensor_list.append(tt_out_tensor)
+    tt_out = ttnn.rms_norm_post_all_gather(
+        input_tensor,
+        epsilon=1e-05,
+        weight=gamma_tensor,
+        program_config=layer_norm_config,
+        stats=tt_stats,
+        memory_config=output_memory_config,
+        dtype=ttnn.bfloat8_b,
+    )
 
-        logger.info(f"Waiting for op")
-        ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
-        logger.info(f"Done op")
+    tt_out_torch = ttnn.to_torch(
+        tt_out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 3), mesh_shape=(8, 4))
+    )[0].unsqueeze(0)
 
-    passed = True
-    for tensor_index in range(len(tt_out_tensor_list)):
-        tt_out_tensor = tt_out_tensor_list[tensor_index]
-        output_tensor = output_tensor_goldens_list[tensor_index]
-        for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
-            tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
-            logger.info(f"Checking for device {t.device().id()}")
+    ref_lnorm = rms_norm(input_tensor_torch, [3], gamma_torch, torch.zeros_like(gamma_torch), 1e-5)
+    passing, output = comp_pcc(tt_out_torch, ref_lnorm, 0.999)
+    logger.info(output)
+    mesh_device.reset_sub_device_stall_group()
+    teardown_fabric_interface(mesh_device)
 
-            if input_dtype == ttnn.bfloat16:
-                eq, output = comp_equal(tt_output_tensor, output_tensor)
-            else:
-                eq, output = comp_pcc(tt_output_tensor, output_tensor)
-            if not eq:
-                logger.error(f"output mismatch for tensor {i}")
-                passed = False
-
-    for i in range(num_devices):
-        assert (
-            mesh_device.get_devices()[i].num_program_cache_entries() == 1
-            or mesh_device.get_devices()[i].num_program_cache_entries() == num_iters
-        ), f"Device {i} has {mesh_device.get_devices()[i].num_program_cache_entries()} program cache entries"
-
-    if enable_persistent_fabric:
-        mesh_device.reset_sub_device_stall_group()
-        teardown_fabric_interface(mesh_device)
-
-    if not passed:
-        assert eq, f"{i} FAILED: {output}"
+    assert passing

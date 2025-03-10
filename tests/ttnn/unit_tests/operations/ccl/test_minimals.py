@@ -361,68 +361,44 @@ def test_all_gather_only(
 # Enumerate the post-commit cases explicitly
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
-    "num_devices, output_shape, dim, layout, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
+    "num_devices, elements_per_batch, input_shard_grid, output_shard_grid",
     [
         # RMS NORM ALL GATHER FUSION
         (
-            4,
-            [1, 1, 32, 128],
-            3,
-            ttnn.TILE_LAYOUT,
-            (32, 32),
+            8,
+            16384,
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
             None,
-            None,
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ),
     ],
 )
 @pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize(
-    "input_dtype",
-    [
-        ttnn.bfloat16,
-        ttnn.bfloat8_b,
-    ],
-)
 @pytest.mark.parametrize("num_iters", [8])
 @pytest.mark.parametrize("enable_async", [True])
 def test_rms_fuse(
     t3k_mesh_device,
     num_devices,
-    output_shape,
-    dim,
+    elements_per_batch,
     num_links,
-    input_dtype,
-    layout,
     num_iters,
     use_program_cache,
     function_level_defaults,
     enable_async,
-    input_shard_shape,
     input_shard_grid,
-    output_shard_shape,
     output_shard_grid,
-    tensor_mem_layout,
 ):
     run_rms_fuse_impl(
         t3k_mesh_device,
         num_devices,
-        output_shape,
-        dim,
+        elements_per_batch,
         num_links,
-        input_dtype,
-        layout,
         use_program_cache,
         function_level_defaults,
-        input_shard_shape,
         input_shard_grid,
-        all_gather_topology=ttnn.Topology.Linear,
+        output_shard_grid,
+        ttnn.Topology.Linear,
         num_iters=num_iters,
         enable_async=enable_async,
-        output_shard_shape=output_shard_shape,
-        output_shard_grid=output_shard_grid,
-        tensor_mem_layout=tensor_mem_layout,
     )
 
 
