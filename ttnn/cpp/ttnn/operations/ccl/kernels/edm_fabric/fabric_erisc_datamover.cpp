@@ -282,7 +282,7 @@ struct WriteTransactionIdTracker {
 
     FORCE_INLINE uint8_t update_buffer_slot_to_next_trid_and_advance_trid_counter(tt::fabric::BufferIndex buffer_index) {
         if constexpr (BOTH_PARAMS_ARE_POW2) {
-            uint8_t next_trid = OFFSET + buffer_index & TRID_POW2_MASK;
+            uint8_t next_trid = OFFSET + (buffer_index & TRID_POW2_MASK);
             this->trid_counter.increment();
             return next_trid;
         } else {
@@ -301,7 +301,7 @@ struct WriteTransactionIdTracker {
 
     FORCE_INLINE uint8_t get_buffer_slot_trid(tt::fabric::BufferIndex buffer_index) const {
         if constexpr (BOTH_PARAMS_ARE_POW2) {
-            return OFFSET + buffer_index & TRID_POW2_MASK;
+            return OFFSET + (buffer_index & TRID_POW2_MASK);
         } else {
             return this->buffer_slot_trids[buffer_index];
         }
