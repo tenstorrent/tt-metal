@@ -1,5 +1,3 @@
-#include <algorithm>
-
 #include "gelu_backward_program_factory.hpp"
 #include "gelu_backward_device_operation_types.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -16,18 +14,19 @@ GeluBackwardProgramFactory::cached_program_t GeluBackwardProgramFactory::create(
     using namespace tt;
     using namespace tt::tt_metal;
 
-    using namespace tt;
-    using namespace tt::tt_metal;
-
-    const auto& input = tensor_args.input;
+    const auto& input = tensor_args.input;              // src0
+    const auto& grad_output = tensor_args.grad_output;  // src1
 
     tt::tt_metal::Program program{};
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
-    tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
-    uint32_t single_tile_size_output = tt::tt_metal::detail::TileSize(cb_data_format_output);
+    tt::DataFormat src0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    uint32_t src0_single_tile_size = tt::tt_metal::detail::TileSize(src0_cb_data_format);
+    tt::DataFormat src1_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(grad_output.get_dtype());
+    uint32_t src1_single_tile_size = tt::tt_metal::detail::TileSize(src1_cb_data_format);
+    tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    uint32_t dst_single_tile_size = tt::tt_metal::detail::TileSize(dst_cb_data_format);
 
+    // NOTE: There is an assumption that number of tiles in grad_output is the same as in input
     uint32_t num_tiles = input.volume() / tt::constants::TILE_HW;
 
     tt::tt_metal::IDevice* device = input.device();
@@ -38,33 +37,45 @@ GeluBackwardProgramFactory::cached_program_t GeluBackwardProgramFactory::create(
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles);
 
-    uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_tiles = 2;
+    uint32_t src0_cb_index = tt::CBIndex::c_0;
     tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
-            .set_page_size(src0_cb_index, single_tile_size);
+        tt::tt_metal::CircularBufferConfig(
+            num_input_tiles * src0_single_tile_size, {{src0_cb_index, src0_cb_data_format}})
+            .set_page_size(src0_cb_index, src0_single_tile_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    uint32_t output_cb_index = tt::CBIndex::c_2;
+    uint32_t src1_cb_index = tt::CBIndex::c_1;
+    tt::tt_metal::CircularBufferConfig cb_src1_config =
+        tt::tt_metal::CircularBufferConfig(
+            num_input_tiles * src1_single_tile_size, {{src1_cb_index, src1_cb_data_format}})
+            .set_page_size(src1_cb_index, src1_single_tile_size);
+    auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+
     uint32_t num_output_tiles = 2;
+    uint32_t output_cb_index = tt::CBIndex::c_2;
     tt::tt_metal::CircularBufferConfig cb_output_config =
         tt::tt_metal::CircularBufferConfig(
-            num_output_tiles * single_tile_size_output, {{output_cb_index, cb_data_format_output}})
-            .set_page_size(output_cb_index, single_tile_size_output);
+            num_output_tiles * dst_single_tile_size, {{output_cb_index, dst_cb_data_format}})
+            .set_page_size(output_cb_index, dst_single_tile_size);
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
-    auto src_buffer = input.buffer();
+    auto src0_buffer = input.buffer();
+    auto src1_buffer = input.buffer();
 
     auto dst_buffer = output.buffer();
 
-    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram};
+    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src1_is_dram = src1_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_is_dram, (uint32_t)src1_is_dram, 0};
+
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
 
-    tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::KernelHandle binary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/unary_backward/device/gelu_backward/kernels/dataflow/"
+        "reader_binary_diff_length.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -74,51 +85,25 @@ GeluBackwardProgramFactory::cached_program_t GeluBackwardProgramFactory::create(
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    std::vector<uint32_t> compute_kernel_args_group_1 = {
-        num_tiles_per_core_group_1,  // per_core_block_cnt
-        1                            // per_core_block_size
-    };
+    bool fp32_dest_acc_en = (dst_cb_data_format == tt::DataFormat::Float32) ||
+                            (dst_cb_data_format == tt::DataFormat::Int32) ||
+                            (dst_cb_data_format == tt::DataFormat::UInt32);
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    if (args.preserve_fp32_precision) {
-        unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-    }
+    unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    unpack_to_dest_mode[src1_cb_index] = UnpackToDestMode::UnpackToDestFp32;
 
     const std::map<std::string, std::string> unary_defines = {
-        {"SFPU_OP_EXP_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "exp_tile_init(); exp_tile(0);"}};
+        {"BINOP_INIT", "add_binary_tile_init();"}, {"BINARY_SFPU_OP", "add_binary_tile(i*2, i*2+1);"}};
 
-    auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
+    auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp",
-        core_group_1,
+        "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_sfpu_kernel.cpp",
+        all_cores,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
-            .fp32_dest_acc_en = args.fp32_dest_acc_en,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
             .unpack_to_dest_mode = unpack_to_dest_mode,
-            .bfp8_pack_precise = args.bfp8_pack_precise,
-            .math_approx_mode = false,
-            .compile_args = compute_kernel_args_group_1,
             .defines = unary_defines});
-
-    if (!core_group_2.ranges().empty()) {
-        std::vector<uint32_t> compute_kernel_args_group_2 = {
-            num_tiles_per_core_group_2,  // per_core_block_cnt
-            1                            // per_core_block_size
-        };
-
-        auto eltwise_unary_kernel_group_2_id = tt::tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp",
-            core_group_2,
-            tt::tt_metal::ComputeConfig{
-                .math_fidelity = MathFidelity::HiFi4,
-                .fp32_dest_acc_en = args.fp32_dest_acc_en,
-                .unpack_to_dest_mode = unpack_to_dest_mode,
-                .bfp8_pack_precise = args.bfp8_pack_precise,
-                .math_approx_mode = false,
-                .compile_args = compute_kernel_args_group_2,
-                .defines = unary_defines});
-    }
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -132,7 +117,12 @@ GeluBackwardProgramFactory::cached_program_t GeluBackwardProgramFactory::create(
         }
 
         tt::tt_metal::SetRuntimeArgs(
-            program, unary_reader_kernel_id, core, {src_buffer->address(), num_tiles_per_core, num_tiles_written});
+            program,
+            binary_reader_kernel_id,
+            core,
+            {src0_buffer->address(), src1_buffer->address(), num_tiles_per_core, num_tiles_written, 0, 0, num_cores_y});
+
+        tt::tt_metal::SetRuntimeArgs(program, compute_kernel_id, core, {num_tiles_per_core, 1});
 
         tt::tt_metal::SetRuntimeArgs(
             program, unary_writer_kernel_id, core, {dst_buffer->address(), num_tiles_per_core, num_tiles_written});
@@ -140,7 +130,8 @@ GeluBackwardProgramFactory::cached_program_t GeluBackwardProgramFactory::create(
     }
 
     return cached_program_t{
-        std::move(program), {unary_reader_kernel_id, unary_writer_kernel_id, num_cores, num_cores_y}};
+        std::move(program),
+        {binary_reader_kernel_id, compute_kernel_id, unary_writer_kernel_id, num_cores, num_cores_y}};
 }
 
 void GeluBackwardProgramFactory::override_runtime_arguments(
@@ -152,6 +143,7 @@ void GeluBackwardProgramFactory::override_runtime_arguments(
 
     auto& shared_vars = cached_program.shared_variables;
     auto& gelu_bw_reader_kernel_id = shared_vars.gelu_bw_reader_kernel_id;
+    auto& gelu_bw_compute_kernel_id = shared_vars.gelu_bw_compute_kernel_id;
     auto& gelu_bw_writer_kernel_id = shared_vars.gelu_bw_writer_kernel_id;
     auto& program = cached_program.program;
 
@@ -159,24 +151,49 @@ void GeluBackwardProgramFactory::override_runtime_arguments(
     uint32_t num_cores_y = shared_vars.num_cores_y;
 
     const auto& input = tensor_args.input;
-    auto src_buffer = input.buffer();
+    const auto& grad_output = tensor_args.grad_output;
+    auto src0_buffer = input.buffer();
+    auto src1_buffer = grad_output.buffer();
     auto dst_buffer = output.buffer();
 
     // Only update buffer addresses
     auto& reader_runtime_args = GetRuntimeArgs(program, gelu_bw_reader_kernel_id);
+    auto& compute_runtime_args = GetRuntimeArgs(program, gelu_bw_compute_kernel_id);
     auto& writer_runtime_args = GetRuntimeArgs(program, gelu_bw_writer_kernel_id);
 
-    for (uint32_t i = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+    uint32_t num_tiles = input.volume() / tt::constants::TILE_HW;
+    tt::tt_metal::IDevice* device = input.device();
 
-        {
-            auto& runtime_args = reader_runtime_args[core.x][core.y];
-            runtime_args[0] = src_buffer->address();
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto [_, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles);
+
+    for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
+        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        uint32_t num_tiles_per_core = 0;
+        if (core_group_1.contains(core)) {
+            num_tiles_per_core = num_tiles_per_core_group_1;
+        } else if (core_group_2.contains(core)) {
+            num_tiles_per_core = num_tiles_per_core_group_2;
+        } else {
+            TT_ASSERT(false, "Core not in specified core ranges");
         }
-        {
-            auto& runtime_args = writer_runtime_args[core.x][core.y];
-            runtime_args[0] = dst_buffer->address();
-        }
+
+        // Update reader args
+        reader_runtime_args[core.x][core.y][0] = src0_buffer->address();
+        reader_runtime_args[core.x][core.y][1] = src1_buffer->address();
+        reader_runtime_args[core.x][core.y][2] = num_tiles_per_core;
+        reader_runtime_args[core.x][core.y][3] = num_tiles_written;
+
+        // Update compute args
+        compute_runtime_args[core.x][core.y][0] = num_tiles_per_core;
+
+        // Update writer args
+        writer_runtime_args[core.x][core.y][0] = dst_buffer->address();
+        writer_runtime_args[core.x][core.y][1] = num_tiles_per_core;
+        writer_runtime_args[core.x][core.y][2] = num_tiles_written;
+
+        num_tiles_written += num_tiles_per_core;
     }
 }
 

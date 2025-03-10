@@ -129,6 +129,7 @@ tensor_return_value_t GeluBackwardDeviceOperation::create_output_tensors(
 tt::stl::hash::hash_t GeluBackwardDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
+    const auto& grad_output = tensor_args.grad_output;
     const auto& input_shape = input_tensor.get_padded_shape();
 
     auto program_factory = select_program_factory(args, tensor_args);
@@ -137,6 +138,8 @@ tt::stl::hash::hash_t GeluBackwardDeviceOperation::compute_program_hash(
         program_factory.index(),
         input_tensor.dtype(),
         std::get<DeviceStorage>(input_tensor.storage()).memory_config(),
+        grad_output.dtype(),
+        std::get<DeviceStorage>(grad_output.storage()).memory_config(),
         input_shape.volume());
 
     return hash;
@@ -149,20 +152,10 @@ GeluBackwardDeviceOperation::invoke(
     const string& approximate,
     DataType output_dtype,
     const MemoryConfig& output_memory_config,
-    bool fp32_dest_acc_en,
-    bool preserve_fp32_precision,
-    bool bfp8_pack_precise,
     const std::optional<Tensor>& preallocated_output) {
     return {
         operation_attributes_t{
-            .output_dtype = output_dtype,
-            .output_memory_config = output_memory_config,
-            .approximate = approximate,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .preserve_fp32_precision = preserve_fp32_precision,
-            .bfp8_pack_precise = bfp8_pack_precise
-
-        },
+            .output_dtype = output_dtype, .output_memory_config = output_memory_config, .approximate = approximate},
         tensor_args_t{.grad_output = grad_output, .input = input, .preallocated_input_grad = preallocated_output}};
 }
 
