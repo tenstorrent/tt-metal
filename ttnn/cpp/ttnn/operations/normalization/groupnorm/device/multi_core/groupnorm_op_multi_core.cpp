@@ -1552,7 +1552,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     bool math_approx_mode = true;
     auto mcast_sender_compute_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm_sharded_v2.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp",
         mcast_sender_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = fidelity,
@@ -1562,7 +1562,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             .defines = eltwise_binary_defines});
     auto mcast_receiver_compute_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm_sharded_v2.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp",
         mcast_receiver_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = fidelity,
