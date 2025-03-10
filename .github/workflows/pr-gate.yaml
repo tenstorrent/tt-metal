@@ -39,6 +39,7 @@ jobs:
       version: "22.04"
 
   smoke-tests:
+    if: github.event_name == 'merge_group'
     needs: build
     strategy:
       fail-fast: false
