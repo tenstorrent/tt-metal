@@ -102,9 +102,6 @@ jobs:
         timeout-minutes: 10
         with:
           name: gh_pages_${{ inputs.version }}
-      - name: Install rsync 📚
-        run: |
-          apt-get update && apt-get install -y rsync  
       - name: Deploy to GitHub Pages
         uses: JamesIves/github-pages-deploy-action@v4
         id: deployment
