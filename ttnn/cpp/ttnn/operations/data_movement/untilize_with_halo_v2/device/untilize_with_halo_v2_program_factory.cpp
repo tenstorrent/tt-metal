@@ -267,6 +267,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_ct_args});
 
     reader_ct_args[0] = cb_indices.padding_config_cb_id2;
+    // Change order of cbs so that in case if total(local_config1 and local_config2)local writes and
+    // total(remote_config1 and remote_config2) remote writes both are odd, load is better balanced.
     reader_ct_args[1] = cb_indices.local_config_cb_id1;
     reader_ct_args[2] = cb_indices.remote_config_cb_id2;
     reader_ct_args[15] = false;
