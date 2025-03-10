@@ -9,7 +9,7 @@ namespace tt {
 
 namespace tt_metal {
 
-constexpr uint32_t kernel_config_entry_count = 8;
+constexpr uint32_t kernel_config_entry_count = 16;
 
 WorkerConfigBufferMgr::WorkerConfigBufferMgr() { entries_.resize(kernel_config_entry_count); }
 

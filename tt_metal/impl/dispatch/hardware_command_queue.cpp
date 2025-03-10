@@ -26,6 +26,10 @@
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 
 namespace tt::tt_metal {
+
+namespace program_dispatch {
+void PrintProgram(Program* program, IDevice* device);
+}
 namespace {
 
 Buffer& get_buffer_object(const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer) {
@@ -273,6 +277,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     TT_FATAL(sub_device_ids.size() == 1, "Programs must be executed on a single sub-device");
     // Finalize Program: Compute relative offsets for data structures (semaphores, kernel binaries, etc) in L1
     program_dispatch::finalize_program_offsets(program, device_);
+    bool first_send = false;
 
     if (program.get_program_binary_status(device_->id()) == ProgramBinaryStatus::NotSent) {
         // Write program binaries to device if it hasn't previously been cached
@@ -286,12 +291,16 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
                 false);
         }
         program.set_program_binary_status(device_->id(), ProgramBinaryStatus::InFlight);
+        first_send = true;
     }
     // Lower the program to device: Generate dispatch commands.
     // Values in these commands will get updated based on kernel config ring
     // buffer state at runtime.
     program.generate_dispatch_commands(device_);
     program.set_last_used_command_queue_for_testing(this);
+    if (first_send) {
+        program_dispatch::PrintProgram(&program, device_);
+    }
 
 #ifdef DEBUG
     if (tt::llrt::RunTimeOptions::get_instance().get_validate_kernel_binaries()) {

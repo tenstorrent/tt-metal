@@ -80,6 +80,9 @@ void assemble_runtime_args_commands(
 void initialize_worker_config_buf_mgr(WorkerConfigBufferMgr& config_buffer_mgr);
 
 void reserve_space_in_kernel_config_buffer(
+    uint32_t device_id,
+    uint32_t program_id,
+    void* program_ptr,
     WorkerConfigBufferMgr& config_buffer_mgr,
     const std::vector<uint32_t>& program_config_sizes,
     ProgramBinaryStatus program_binary_status,

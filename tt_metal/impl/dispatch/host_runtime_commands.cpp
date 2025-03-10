@@ -137,6 +137,9 @@ void EnqueueProgramCommand::process() {
     }
     // Reserve space for this program in the kernel config ring buffer
     program_dispatch::reserve_space_in_kernel_config_buffer(
+        device->id(),
+        program.get_runtime_id(),
+        &program,
         this->config_buffer_mgr,
         program.get_program_config_sizes(),
         program.get_program_binary_status(device->id()),
