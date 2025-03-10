@@ -1,11 +1,9 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 #include <core/ttnn_all_includes.hpp>
-
-#include "core/tt_tensor_utils.hpp"
 
 namespace ttml::ttnn_fixed {
 tt::tt_metal::Tensor matmul(
