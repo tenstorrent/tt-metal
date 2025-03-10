@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstring>
 #include <vector>
 #include <optional>
 #include <functional>
@@ -102,7 +103,7 @@ bfloat16 bfloat16_identity_transform(const bfloat16& input);
 
 std::vector<bfloat16> unpack_uint32_vec_into_bfloat16_vec(
     const std::vector<std::uint32_t>& data,
-    std::function<bfloat16(const bfloat16&)> transform = bfloat16_identity_transform);
+    const std::function<bfloat16(const bfloat16&)>& transform = bfloat16_identity_transform);
 
 // Equality functions
 bool equal_within_n_sig_figs(float a, float b, int n);
@@ -115,5 +116,5 @@ bool is_close(float a, float b, float rtol = 0.01f, float atol = 0.001f);
 bool packed_uint32_t_vector_comparison(
     const std::vector<uint32_t>& vec_a,
     const std::vector<uint32_t>& vec_b,
-    std::function<bool(float, float)> comparison_function,
+    const std::function<bool(float, float)>& comparison_function,
     int* argfail = nullptr);
