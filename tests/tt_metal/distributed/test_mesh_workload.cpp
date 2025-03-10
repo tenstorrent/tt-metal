@@ -4,7 +4,7 @@
 
 #include <random>
 
-#include <tt-metalium/env_lib.hpp>
+#include "env_lib.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
