@@ -352,6 +352,13 @@ void syncDeviceDevice(chip_id_t device_id_sender, chip_id_t device_id_receiver) 
     }
 
     if (device_sender != nullptr and device_receiver != nullptr) {
+        if (auto mesh_sender = DevicePool::instance().get_mesh_device(device_sender)) {
+            return;
+        }
+        if (auto mesh_receiver = DevicePool::instance().get_mesh_device(device_receiver)) {
+            return;
+        }
+
         constexpr std::uint16_t sample_count = 240;
         constexpr std::uint16_t sample_size = 16;
         constexpr std::uint16_t channel_count = 1;
@@ -405,35 +412,11 @@ void syncDeviceDevice(chip_id_t device_id_sender, chip_id_t device_id_receiver) 
             throw e;
         }
 
-        if (auto mesh_sender = DevicePool::instance().get_mesh_device(device_sender)) {
-            auto device_coord = mesh_sender->get_view().find_device(device_sender->id());
-            distributed::MeshWorkload workload;
-            workload.add_program(
-                distributed::MeshCoordinateRange(device_coord, device_coord), std::move(program_sender));
-            distributed::EnqueueMeshWorkload(mesh_sender->mesh_command_queue(), workload, false);
-        } else {
-            tt_metal::EnqueueProgram(device_sender->command_queue(), program_sender, false);
-        }
-        if (auto mesh_receiver = DevicePool::instance().get_mesh_device(device_receiver)) {
-            auto device_coord = mesh_receiver->get_view().find_device(device_receiver->id());
-            distributed::MeshWorkload workload;
-            workload.add_program(
-                distributed::MeshCoordinateRange(device_coord, device_coord), std::move(program_receiver));
-            distributed::EnqueueMeshWorkload(mesh_receiver->mesh_command_queue(), workload, false);
-        } else {
-            tt_metal::EnqueueProgram(device_receiver->command_queue(), program_receiver, false);
-        }
+        tt_metal::EnqueueProgram(device_sender->command_queue(), program_sender, false);
+        tt_metal::EnqueueProgram(device_receiver->command_queue(), program_receiver, false);
 
-        if (auto mesh_sender = DevicePool::instance().get_mesh_device(device_sender)) {
-            mesh_sender->mesh_command_queue().finish();
-        } else {
-            tt_metal::Finish(device_sender->command_queue());
-        }
-        if (auto mesh_receiver = DevicePool::instance().get_mesh_device(device_receiver)) {
-            mesh_receiver->mesh_command_queue().finish();
-        } else {
-            tt_metal::Finish(device_receiver->command_queue());
-        }
+        tt_metal::Finish(device_sender->command_queue());
+        tt_metal::Finish(device_receiver->command_queue());
 
         CoreCoord sender_core = {eth_sender_core.x, eth_sender_core.y};
         std::vector<CoreCoord> sender_cores = {
