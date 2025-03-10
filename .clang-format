@@ -1,4 +1,5 @@
 ---
+# Foobar
 Language:        Cpp
 # BasedOnStyle:  Google
 AccessModifierOffset: -4
