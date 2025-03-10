@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 #include <memory>
+#include <random>
 
 #include <tt-metalium/env_lib.hpp>
 #include <tt-metalium/allocator.hpp>
