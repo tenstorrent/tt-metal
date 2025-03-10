@@ -533,13 +533,6 @@ void device_module(py::module& m_device) {
     m_device.def("DisablePersistentKernelCache", &tt::tt_metal::detail::DisablePersistentKernelCache, R"doc(
         Disables kernel compilation cache from being persistent across runs
     )doc");
-    m_device.def("EnableCompilationReports", &tt::tt_metal::detail::EnableCompilationReports, R"doc(
-        Enables tt-metal to generate reports of compilation statistics
-    )doc");
-    m_device.def("DisableCompilationReports", &tt::tt_metal::detail::DisableCompilationReports, R"doc(
-        Disables generation of compilation statistics reports in tt-metal
-    )doc");
-
     m_device.def("EnableMemoryReports", &tt::tt_metal::detail::EnableMemoryReports, R"doc(
         Enables tt-metal to generate reports of memory allocation statistics
     )doc");
