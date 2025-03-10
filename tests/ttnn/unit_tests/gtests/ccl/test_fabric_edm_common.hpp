@@ -2240,6 +2240,9 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
             unicast_forward = true;
             mcast_fwd_hops = tt::div_up(line_size - 1, 2);
             mcast_bwd_hops = line_size - 1 - mcast_fwd_hops;
+            if (i % 2 == 0) {
+                std::swap(mcast_fwd_hops, mcast_bwd_hops);
+            }
             unicast_hops = mcast_fwd_hops;
         } else {
             backward_device = i == 0 ? nullptr : devices[i - 1];
