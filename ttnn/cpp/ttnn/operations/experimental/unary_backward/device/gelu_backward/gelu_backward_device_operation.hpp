@@ -39,9 +39,6 @@ struct GeluBackwardDeviceOperation {
         const string& approximate,
         DataType output_dtype,
         const MemoryConfig& output_memory_config,
-        bool fp32_dest_acc_en,
-        bool preserve_fp32_precision,
-        bool bfp8_pack_precise,
         const std::optional<Tensor>& preallocated_input_grad);
 };
 
