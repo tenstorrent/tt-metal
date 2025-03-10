@@ -183,17 +183,17 @@ void kernel_main() {
     }
 #else
     // we want to read into cb_in0
-    const int onetile = 1;
     uint32_t l1_write_addr = get_write_ptr(cb_in0);
+    uint32_t per_core_MN = per_core_M * per_core_N;
+    cb_reserve_back(cb_in0, per_core_MN);
     for (uint32_t mt = 0; mt < per_core_M; mt++) {
         for (uint32_t nt = 0; nt < per_core_N; nt++) {
-            cb_reserve_back(cb_in0, onetile);
             noc_async_read_tile(start_id + (mt * num_channels_tiles) + nt, src_a, l1_write_addr);
             l1_write_addr += src0_tile_bytes;
             noc_async_read_barrier();
-            cb_push_back(cb_in0, onetile);
         }
     }
+    cb_push_back(cb_in0, per_core_MN);
 #endif
 
     uint32_t l1_read_addr_ex_par = get_read_ptr(cb_ex_partial);
