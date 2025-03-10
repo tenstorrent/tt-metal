@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import torch
 import ttnn
-from ttnn import ReplicateTensorToMesh
+from ttnn import replicate_tensor_to_mesh_mapper
 from models.experimental.grok.tt.grok_common import LightweightModule
 
 
@@ -43,7 +43,7 @@ class TtRMSNorm(LightweightModule):
             layout=self.model_config["NORM_W_LAYOUT_TILE"],
             memory_config=self.model_config["NORM_WEIGHTS_MEMCFG"],
             cache_file_name=cache_name,
-            mesh_mapper=ReplicateTensorToMesh(mesh_device),
+            ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
@@ -88,7 +88,7 @@ class TtRMSNormSharded(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             memory_config=self.model_config["NORM_WEIGHTS_MEMCFG"],
             cache_file_name=cache_name,
-            mesh_mapper=ReplicateTensorToMesh(mesh_device),
+            ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
 
     def forward(self, x: ttnn.Tensor, out_sharded=False) -> ttnn.Tensor:

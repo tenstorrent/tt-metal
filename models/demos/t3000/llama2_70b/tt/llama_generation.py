@@ -5,7 +5,7 @@
 import math
 import torch
 import ttnn
-from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
+from ttnn import ConcatMeshToTensor, replicate_tensor_to_mesh_mapper
 
 from loguru import logger
 

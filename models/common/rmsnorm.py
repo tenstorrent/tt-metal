@@ -80,7 +80,7 @@ class RMSNorm(LightweightModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=weight_memory_config,
             cache_file_name=cache_name,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(device) if is_mesh_device else None,
         )
 
         if self.is_distributed:

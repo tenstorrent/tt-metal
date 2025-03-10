@@ -546,7 +546,7 @@ def test_reshape_zero_element(input_shape, output_shape, layout, ttnn_reshape, u
 )
 def test_reshape_replicated_tensor(mesh_device, input_shape, output_shape):
     torch_input_tensor = torch.randn(input_shape)
-    mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    mesh_mapper = ttnn.replicate_tensor_to_mesh_mapper(mesh_device)
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=mesh_mapper, device=mesh_device
     )

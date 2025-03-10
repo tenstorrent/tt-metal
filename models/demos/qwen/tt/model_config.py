@@ -503,9 +503,9 @@ class TtModelArgs:
         x: (batch, seq, dim)
         """
         mesh_mapper = (
-            ttnn.ReplicateTensorToMesh(self.mesh_device)
+            ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device)
             if force_replicated
-            else ttnn.ShardTensorToMesh(self.mesh_device, dim=-1)
+            else ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=-1)
         )
 
         if len(x.shape) == 3:
@@ -559,9 +559,9 @@ class TtModelArgs:
         x_1BSH = x_bsh.unsqueeze(0)
 
         mesh_mapper = (
-            ttnn.ReplicateTensorToMesh(self.mesh_device)
+            ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device)
             if force_replicated
-            else ttnn.ShardTensorToMesh(self.mesh_device, dim=-1)
+            else ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=-1)
         )
 
         # input goes to DRAM

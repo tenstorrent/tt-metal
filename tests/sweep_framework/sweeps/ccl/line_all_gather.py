@@ -12,7 +12,7 @@ from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_ti
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_case
-from ttnn import ShardTensorToMesh
+from ttnn import shard_tensor_to_mesh_mapper
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -104,7 +104,7 @@ def run(
     input_tensor = torch.rand(input_shape).bfloat16()
 
     ttnn_tensor = ttnn.from_torch(
-        input_tensor, tile=ttnn.Tile(tile), mesh_mapper=ShardTensorToMesh(t3k_mesh_device, dim=dim)
+        input_tensor, tile=ttnn.Tile(tile), ttnn.shard_tensor_to_mesh_mapper(t3k_mesh_device, dim=dim)
     )
     input_tensor_mesh = ttnn.to_device(ttnn_tensor, t3k_mesh_device)
 

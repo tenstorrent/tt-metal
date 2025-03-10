@@ -6,7 +6,7 @@ import pytest
 import torch
 from loguru import logger
 import ttnn
-from ttnn import ShardTensorToMesh
+from ttnn import shard_tensor_to_mesh_mapper
 from models.demos.falcon7b_common.tt.falcon_mlp import TtFalconMLPDecode, TtFalconMLPPrefill
 from models.demos.falcon7b_common.tt.model_config import get_model_config
 from models.demos.falcon7b_common.tests.test_utils import load_hf_model, tt_from_torch, get_num_devices
@@ -79,7 +79,7 @@ def run_test_FalconMLP_inference(
         dtype=model_config["DEFAULT_DTYPE"],
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
+        mesh_mapper=shard_tensor_to_mesh_mapper(mesh_device, dim=0),
     )
 
     tt_out = tt_FalconMLP_model(tt_mlp_input)
