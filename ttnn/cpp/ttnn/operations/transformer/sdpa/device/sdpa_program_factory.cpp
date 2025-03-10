@@ -437,7 +437,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.get_dtype());
     tt::DataFormat mask_df = attn_mask.has_value()
                                  ? tt::tt_metal::datatype_to_dataformat_converter(attn_mask.value().get_dtype())
-                                 : tt::DataFormat::Float16_b;
+                                 : tt::DataFormat::Bfp4_b;
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
     tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
     tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
@@ -479,8 +479,8 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     // Only create mask buffer if it's going to be used
     if (use_provided_mask or is_causal or use_padded_mask) {
         // attn_mask input
-        auto c_in3_config = CircularBufferConfig(mask_tiles * mask_tile_size, {{tt::CB::c_in3, mask_df}})
-                                .set_page_size(tt::CB::c_in3, mask_tile_size);
+        auto c_in3_config = CircularBufferConfig(mask_tiles * mask_tile_size, {{tt::CBIndex::c_3, mask_df}})
+                                .set_page_size(tt::CBIndex::c_3, mask_tile_size);
         auto cb_in3_id = CreateCircularBuffer(program, core_grid, c_in3_config);
     }
 

@@ -173,93 +173,155 @@ void fill_tile(uint32_t cb_id, uint32_t tile_id, uint32_t val) {
 }
 
 template <uint32_t tile_bytes>
-void fill_diagonal_tile(uint32_t cb_id, uint32_t tile_id, uint32_t partial_val) {
-    /*
-    We want to fill cur_pos_in_tile + 1 to the end
-    */
-
+inline void fill_diagonal_tile_bfp4(uint32_t cb_id, uint32_t tile_id) {
+    // Clear the tile first
     fill_tile<tile_bytes>(cb_id, tile_id, 0);
 
-    const uint16_t datum_val = partial_val >> 16;
-    volatile tt_l1_ptr uint16_t* uint16_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
+    constexpr uint32_t NEG_INF_EXP = 0xFFFFFFFF;
+    constexpr uint32_t NEG_INF_MANT = 0xFFFFFFFF;  // All mantissas set to 0xF
+    constexpr uint32_t bf4_mant_per_uint32 = 8;    // 8 mantissas per uint32
+    constexpr uint32_t bf4_exp_per_uint32 = 4;     // 4 exponents per uint32
+
+    constexpr uint32_t uint32_datums_per_face_row = tt::constants::FACE_WIDTH / bf4_mant_per_uint32;
+    constexpr uint32_t uint32_datums_per_face = (tt::constants::FACE_HW) / bf4_mant_per_uint32;
+    constexpr uint32_t uint32_exp_per_face = tt::constants::FACE_HEIGHT / bf4_exp_per_uint32;
+
     volatile tt_l1_ptr uint32_t* uint32_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
 
-    constexpr uint32_t uint16_datums_per_face_row = tt::constants::FACE_WIDTH;
-    constexpr uint32_t uint32_datums_per_face_row = tt::constants::FACE_WIDTH / 2;
-    constexpr uint32_t uint32_datums_per_face = (tt::constants::FACE_HW) / 2;
-    // Fill diagonal faces with diagonal -inf
-    for (uint32_t k = 0; k < 4; k += 3) {
-        uint32_t uint16_face_idx = k << 8;
-        uint32_t uint32_face_idx = k << 7;
-        for (uint32_t r = 0; r < uint16_datums_per_face_row; ++r) {
-            const uint32_t col_start = r + 1;
-            const uint32_t col_start_uint32 = (col_start + 1) >> 1;
-            if ((col_start) % 2 == 1) {
-                uint16_ptr[uint16_face_idx + r * uint16_datums_per_face_row + col_start] = datum_val;
+    // Fill all exponents with NEG_INF_EXP
+    for (uint32_t i = 0; i < uint32_exp_per_face * 4; i++) {
+        uint32_ptr[i] = NEG_INF_EXP;
+    }
+
+    // Calculate face offsets in uint32 words
+    constexpr uint32_t face0_offset = uint32_exp_per_face * 4;
+    constexpr uint32_t face1_offset = face0_offset + uint32_datums_per_face;
+    constexpr uint32_t face2_offset = face1_offset + uint32_datums_per_face;
+    constexpr uint32_t face3_offset = face2_offset + uint32_datums_per_face;
+
+    // Process face 0 and face 3 (diagonal faces)
+    for (uint32_t face_idx = 0; face_idx < 4; face_idx += 3) {
+        uint32_t face_offset = (face_idx == 0) ? face0_offset : face3_offset;
+
+        for (uint32_t row = 0; row < tt::constants::FACE_HEIGHT; row++) {
+            uint32_t diag_col = row;                                   // Diagonal position is at (row, row)
+            uint32_t diag_group_idx = diag_col / bf4_mant_per_uint32;  // Which uint32 group contains diagonal
+            uint32_t pos_in_group = diag_col % bf4_mant_per_uint32;    // Position within the group
+            uint32_t row_offset = row * uint32_datums_per_face_row;
+
+            // Process the uint32 containing the diagonal element
+            // Create mask where positions after diagonal are 0xF (upper triangle)
+            uint32_t diag_mask = 0;
+            for (uint32_t i = pos_in_group + 1; i < bf4_mant_per_uint32; i++) {
+                diag_mask |= 0xF << (i * 4);
             }
-            for (uint32_t c = col_start_uint32; c < uint32_datums_per_face_row; ++c) {
-                uint32_ptr[uint32_face_idx + r * uint32_datums_per_face_row + c] = partial_val;
+            uint32_ptr[face_offset + row_offset + diag_group_idx] = diag_mask;
+
+            // Fill all uint32s to the right of diagonal with -inf (0xFFFFFFFF)
+            for (uint32_t col_group = diag_group_idx + 1; col_group < uint32_datums_per_face_row; col_group++) {
+                uint32_ptr[face_offset + row_offset + col_group] = NEG_INF_MANT;
             }
         }
     }
 
-    // Fill face 1 with full -inf
-    uint32_t uint32_face_idx = 1 << 7;
-    for (uint32_t j = 0; j < uint32_datums_per_face; j++) {
-        uint32_ptr[uint32_datums_per_face + j] = partial_val;
+    // Fill face 1 completely with -inf
+    for (uint32_t i = 0; i < uint32_datums_per_face; i++) {
+        uint32_ptr[face1_offset + i] = NEG_INF_MANT;
     }
+
+    // Face 2 is all zeros (already set by fill_tile at the beginning)
 }
 
 template <uint32_t tile_bytes>
-void fill_vertical_tile(uint32_t cb_id, uint32_t tile_id, uint32_t unpad_col_in_tile, uint32_t partial_val) {
+void fill_vertical_tile_bfp4(uint32_t cb_id, uint32_t tile_id, uint32_t unpad_col_in_tile) {
     /*
-    This tile should be set such that tile[:, unpad_col_in_tile:] = partial_val
+    This tile should be set such that tile[:, unpad_col_in_tile:] = -inf
+    For block float 4 format where 8 mantissas are packed per uint32
     */
 
     // Prefill with zeros (fast)
     fill_tile<tile_bytes>(cb_id, tile_id, 0);
 
-    const uint16_t datum_val = partial_val >> 16;
-    volatile tt_l1_ptr uint16_t* uint16_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
+    constexpr uint32_t NEG_INF_EXP = 0xFFFFFFFF;
+    constexpr uint32_t NEG_INF_MANT = 0xFFFFFFFF;  // All mantissas set to 0xF
+    constexpr uint32_t bf4_mant_per_uint32 = 8;    // 8 mantissas per uint32
+    constexpr uint32_t bf4_exp_per_uint32 = 4;     // 4 exponents per uint32
+
+    constexpr uint32_t uint32_datums_per_face_row = tt::constants::FACE_WIDTH / bf4_mant_per_uint32;
+    constexpr uint32_t uint32_datums_per_face = (tt::constants::FACE_HW) / bf4_mant_per_uint32;
+    constexpr uint32_t uint32_exp_per_face = tt::constants::FACE_HEIGHT / bf4_exp_per_uint32;
+
     volatile tt_l1_ptr uint32_t* uint32_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
 
-    constexpr uint32_t uint16_datums_per_face_row = tt::constants::FACE_WIDTH;
-    constexpr uint32_t uint32_datums_per_face_row = tt::constants::FACE_WIDTH / 2;
-    constexpr uint32_t uint32_datums_per_face = (tt::constants::FACE_HW) / 2;
-    // Fill cols unpad_col_in_tile: with partial_val
-    // Start with left faces
-    if (unpad_col_in_tile < uint16_datums_per_face_row) {
-        const uint32_t unpad_col_in_tile_uint32 = (unpad_col_in_tile + 1) >> 1;
-        for (uint32_t k = 0; k < 4; k += 2) {
-            uint32_t uint16_face_idx = k << 8;
-            uint32_t uint32_face_idx = k << 7;
-            for (uint32_t r = 0; r < uint16_datums_per_face_row; ++r) {
-                if ((unpad_col_in_tile) % 2 == 1) {
-                    uint16_ptr[uint16_face_idx + r * uint16_datums_per_face_row + unpad_col_in_tile] = datum_val;
+    // Calculate face offsets in uint32 words
+    constexpr uint32_t exp_section_size = uint32_exp_per_face * 4;
+    constexpr uint32_t face0_offset = exp_section_size;
+    constexpr uint32_t face1_offset = face0_offset + uint32_datums_per_face;
+    constexpr uint32_t face2_offset = face1_offset + uint32_datums_per_face;
+    constexpr uint32_t face3_offset = face2_offset + uint32_datums_per_face;
+
+    // First, handle the exponents for rows that need -inf
+    // We need to set the exponents to NEG_INF_EXP for all rows
+    for (uint32_t i = 0; i < exp_section_size; i++) {
+        uint32_ptr[i] = NEG_INF_EXP;
+    }
+
+    // Process left faces (0 and 2)
+    if (unpad_col_in_tile < tt::constants::FACE_WIDTH) {
+        const uint32_t unpad_col_group = unpad_col_in_tile / bf4_mant_per_uint32;
+        const uint32_t unpad_col_pos = unpad_col_in_tile % bf4_mant_per_uint32;
+
+        for (uint32_t k = 0; k < 4; k += 2) {  // Face 0 and 2
+            uint32_t face_offset = (k == 0) ? face0_offset : face2_offset;
+
+            for (uint32_t r = 0; r < tt::constants::FACE_HEIGHT; ++r) {
+                uint32_t row_offset = r * uint32_datums_per_face_row;
+
+                // Handle the uint32 containing the boundary column
+                if (unpad_col_pos > 0) {
+                    uint32_t mask = 0;
+                    for (uint32_t i = unpad_col_pos; i < bf4_mant_per_uint32; i++) {
+                        mask |= 0xF << (i * 4);
+                    }
+                    uint32_ptr[face_offset + row_offset + unpad_col_group] = mask;
                 }
-                for (uint32_t c = unpad_col_in_tile_uint32; c < uint32_datums_per_face_row; ++c) {
-                    uint32_ptr[uint32_face_idx + r * uint32_datums_per_face_row + c] = partial_val;
+
+                // Fill all uint32s to the right of the boundary
+                for (uint32_t c = unpad_col_group + (unpad_col_pos > 0 ? 1 : 0); c < uint32_datums_per_face_row; ++c) {
+                    uint32_ptr[face_offset + row_offset + c] = NEG_INF_MANT;
                 }
             }
         }
     }
 
+    // Process right faces (1 and 3)
     const uint32_t unpad_col_in_right_face =
-        (unpad_col_in_tile < uint16_datums_per_face_row) ? 0 : unpad_col_in_tile - uint16_datums_per_face_row;
-    const uint32_t unpad_col_in_right_face_uint32 = (unpad_col_in_right_face + 1) >> 1;
-    for (uint32_t k = 1; k < 4; k += 2) {
-        uint32_t uint16_face_idx = k << 8;
-        uint32_t uint32_face_idx = k << 7;
-        for (uint32_t r = 0; r < uint16_datums_per_face_row; ++r) {
-            if ((unpad_col_in_right_face) % 2 == 1) {
-                uint16_ptr[uint16_face_idx + r * uint16_datums_per_face_row + unpad_col_in_right_face] = datum_val;
+        (unpad_col_in_tile < tt::constants::FACE_WIDTH) ? 0 : unpad_col_in_tile - tt::constants::FACE_WIDTH;
+    const uint32_t unpad_col_in_right_group = unpad_col_in_right_face / bf4_mant_per_uint32;
+    const uint32_t unpad_col_in_right_pos = unpad_col_in_right_face % bf4_mant_per_uint32;
+
+    for (uint32_t k = 1; k < 4; k += 2) {  // Face 1 and 3
+        uint32_t face_offset = (k == 1) ? face1_offset : face3_offset;
+
+        for (uint32_t r = 0; r < tt::constants::FACE_HEIGHT; ++r) {
+            uint32_t row_offset = r * uint32_datums_per_face_row;
+
+            // Handle the uint32 containing the boundary column
+            if (unpad_col_in_right_pos > 0) {
+                uint32_t mask = 0;
+                for (uint32_t i = unpad_col_in_right_pos; i < bf4_mant_per_uint32; i++) {
+                    mask |= 0xF << (i * 4);
+                }
+                uint32_ptr[face_offset + row_offset + unpad_col_in_right_group] = mask;
             }
-            for (uint32_t c = unpad_col_in_right_face_uint32; c < uint32_datums_per_face_row; ++c) {
-                uint32_ptr[uint32_face_idx + r * uint32_datums_per_face_row + c] = partial_val;
+
+            // Fill all uint32s to the right of the boundary
+            for (uint32_t c = unpad_col_in_right_group + (unpad_col_in_right_pos > 0 ? 1 : 0);
+                 c < uint32_datums_per_face_row;
+                 ++c) {
+                uint32_ptr[face_offset + row_offset + c] = NEG_INF_MANT;
             }
         }
     }
@@ -268,7 +330,7 @@ void fill_vertical_tile(uint32_t cb_id, uint32_t tile_id, uint32_t unpad_col_in_
 template <uint32_t cb_mask_in>
 void generate_causal_mask(uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, uint32_t q_chunk, uint32_t k_chunk) {
     uint32_t mask_size_tiles = Sq_chunk_t * Sk_chunk_t;
-    constexpr uint32_t NEG_INF = 0xFF80FF80;
+    constexpr uint32_t NEG_INF_BLOCK = 0xFFFFFFFF;  // block-float with exp and mantissa filled with ones should be -inf
     cb_reserve_back(cb_mask_in, mask_size_tiles);
 
     uint32_t write_ptr_base = get_write_ptr(cb_mask_in);
@@ -294,14 +356,14 @@ void generate_causal_mask(uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, uint32_t q_c
                 }
             } else if (global_k_tile == global_q_tile) {
                 if (diag_tile_idx == -1) {
-                    fill_diagonal_tile<tile_bytes>(cb_mask_in, in_mask_tile_id, NEG_INF);
+                    fill_diagonal_tile_bfp4<tile_bytes>(cb_mask_in, in_mask_tile_id);
                     diag_tile_idx = in_mask_tile_id;
                 } else {
                     copy_tile<tile_bytes>(noc_write_addr_base, write_ptr_base, diag_tile_idx, in_mask_tile_id);
                 }
             } else {
                 if (inf_tile_idx == -1) {
-                    fill_tile<tile_bytes>(cb_mask_in, in_mask_tile_id, NEG_INF);
+                    fill_tile<tile_bytes>(cb_mask_in, in_mask_tile_id, NEG_INF_BLOCK);
                     inf_tile_idx = in_mask_tile_id;
                 } else {
                     copy_tile<tile_bytes>(noc_write_addr_base, write_ptr_base, inf_tile_idx, in_mask_tile_id);
@@ -316,7 +378,7 @@ void generate_causal_mask(uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, uint32_t q_c
 template <uint32_t cb_mask_in>
 void generate_noncausal_padded_mask(uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, uint32_t unpadded_Sk) {
     uint32_t mask_size_tiles = Sq_chunk_t * Sk_chunk_t;
-    constexpr uint32_t NEG_INF = 0xFF80FF80;
+    constexpr uint32_t NEG_INF_BLOCK = 0xFFFFFFFF;  // block-float with exp and mantissa filled with ones should be -inf
     cb_reserve_back(cb_mask_in, mask_size_tiles);
 
     uint32_t write_ptr_base = get_write_ptr(cb_mask_in);
@@ -347,14 +409,14 @@ void generate_noncausal_padded_mask(uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, ui
                 }
             } else if (do_inf) {
                 if (inf_tile_idx == -1) {
-                    fill_tile<tile_bytes>(cb_mask_in, in_mask_tile_id, NEG_INF);
+                    fill_tile<tile_bytes>(cb_mask_in, in_mask_tile_id, NEG_INF_BLOCK);
                     inf_tile_idx = in_mask_tile_id;
                 } else {
                     copy_tile<tile_bytes>(noc_write_addr_base, write_ptr_base, inf_tile_idx, in_mask_tile_id);
                 }
             } else {
                 if (vertical_tile_idx == -1) {
-                    fill_vertical_tile<tile_bytes>(cb_mask_in, in_mask_tile_id, unpad_col_in_tile, NEG_INF);
+                    fill_vertical_tile_bfp4<tile_bytes>(cb_mask_in, in_mask_tile_id, unpad_col_in_tile);
                     vertical_tile_idx = in_mask_tile_id;
                 } else {
                     copy_tile<tile_bytes>(noc_write_addr_base, write_ptr_base, vertical_tile_idx, in_mask_tile_id);
