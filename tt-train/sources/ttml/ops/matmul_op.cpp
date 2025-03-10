@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,6 @@
 
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
-#include "fmt/base.h"
 #include "ttnn_fixed/matmuls.hpp"
 
 namespace ttml::ops {
@@ -17,7 +16,6 @@ autograd::TensorPtr matmul_op(
     out->set_value(res);
 
     autograd::GradFunction grad = [a, b, out, transpose_a, transpose_b]() {
-
         auto [a_grad, b_grad] =
             ttnn_fixed::matmul_backward(a->get_value(), b->get_value(), out->get_grad(), transpose_a, transpose_b);
         a->add_grad(a_grad);
