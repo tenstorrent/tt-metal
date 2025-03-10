@@ -14,13 +14,17 @@ from models.demos.yolov4.tests.yolov4_perfomant_webdemo import Yolov4Trace2CQ
 
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+    "device_params", [{"l1_small_size": 32768, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype",
     ((1, ttnn.bfloat16, ttnn.bfloat16),),
 )
 @pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
+@pytest.mark.parametrize(
+    "is_320_res",
+    [True, False],
+)
 def test_run_yolov4_trace_2cqs_inference(
     device,
     use_program_cache,
@@ -29,6 +33,7 @@ def test_run_yolov4_trace_2cqs_inference(
     weight_dtype,
     enable_async_mode,
     model_location_generator,
+    is_320_res,
 ):
     yolov4_trac2_2cq = Yolov4Trace2CQ()
 
@@ -37,13 +42,18 @@ def test_run_yolov4_trace_2cqs_inference(
         batch_size,
         act_dtype,
         weight_dtype,
+        is_320_res=is_320_res,
         model_location_generator=None,
     )
 
     inference_iter_count = 10
     inference_time_iter = []
     for iter in range(0, inference_iter_count):
-        input_shape = (1, 3, 320, 320)
+        if is_320_res:
+            input_shape = (1, 3, 320, 320)
+        else:
+            input_shape = (1, 3, 640, 640)
+
         torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
         n, c, h, w = torch_input_tensor.shape
         torch_input_tensor = torch_input_tensor.permute(0, 2, 3, 1)
