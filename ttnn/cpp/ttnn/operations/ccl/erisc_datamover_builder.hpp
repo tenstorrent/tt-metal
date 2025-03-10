@@ -29,8 +29,8 @@ namespace ttnn {
 namespace ccl {
 
 struct FabricEriscDatamoverConfig {
-    static constexpr uint32_t num_sender_channels = 3;
-    static constexpr uint32_t num_receiver_channels = 2;
+    static constexpr std::size_t num_sender_channels = 3;
+    static constexpr std::size_t num_receiver_channels = 2;
     static constexpr bool constrain_to_power_of_2_buffer_slot_counts = true;
 
     static constexpr std::size_t field_size = 16;
@@ -94,7 +94,10 @@ struct FabricEriscDatamoverConfig {
     std::size_t available_channel_buffering_space;
 
     FabricEriscDatamoverConfig(
-        std::size_t channel_buffer_size_bytes, std::size_t sender_ratio_size, std::size_t receiver_ratio_size);
+        std::size_t channel_buffer_size_bytes,
+        std::size_t sender_ratio_size,
+        std::size_t receiver_ratio_size,
+        bool ring_topology = false);
 
     std::size_t channel_buffer_size_bytes = 0;
     std::size_t channel_buffer_size_bytes_with_channel_sync = 0;
@@ -106,6 +109,11 @@ struct FabricEriscDatamoverConfig {
 
     std::array<std::size_t, num_sender_channels> sender_channels_base_address;
     std::array<std::size_t, num_receiver_channels> receiver_channels_base_address;
+
+    std::size_t num_used_sender_channels = 0;
+    std::size_t num_used_receiver_channels = 0;
+
+    bool enable_ring_topology = false;
 
 private:
     FabricEriscDatamoverConfig();
@@ -245,6 +253,8 @@ public:
     bool enable_persistent_mode = false;
     bool build_in_worker_connection_mode = false;
     size_t firmware_context_switch_interval = default_firmware_context_switch_interval;
+    bool enable_first_level_ack = false;
+    bool fuse_receiver_flush_and_completion_ptr = true;
 };
 
 class EdmLineFabricOpInterface {
@@ -263,7 +273,8 @@ public:
         const std::vector<tt::tt_metal::Program*>& program_sequence,
         bool enable_persistent_mode,
         std::optional<size_t> desired_num_links = std::nullopt,
-        bool build_in_worker_connection_mode = false);
+        bool build_in_worker_connection_mode = false,
+        bool ring_topology = false);
 
     // Invocable per chip if we want to collectively build the fabric by building this separately per chip
     // (and implicitly building the fabric that way)
@@ -274,20 +285,23 @@ public:
         tt::tt_metal::Program* program,
         bool enable_persistent_mode,
         std::optional<size_t> desired_num_links,
-        bool build_in_worker_connection_mode = false);
+        bool build_in_worker_connection_mode = false,
+        bool ring_topology = false);
 
     static EdmLineFabricOpInterface build_program_builder_worker_connection_fabric(
         const std::vector<tt::tt_metal::IDevice*>& device_sequence,
         const std::vector<tt::tt_metal::Program*>& program_sequence,
         bool enable_persistent_mode,
-        std::optional<size_t> desired_num_links = std::nullopt);
+        std::optional<size_t> desired_num_links = std::nullopt,
+        bool ring_topology = false);
     static EdmLineFabricOpInterface build_program_builder_worker_connection_fabric(
         tt::tt_metal::IDevice* local_device,
         tt::tt_metal::IDevice* forward_device,
         tt::tt_metal::IDevice* backward_device,
         tt::tt_metal::Program* program,
         bool enable_persistent_mode,
-        std::optional<size_t> desired_num_links = std::nullopt);
+        std::optional<size_t> desired_num_links = std::nullopt,
+        bool ring_topology = false);
 
     // Will create a connection adapter for a worker which can be used to pass args to the worker kernel talking to the
     // corresponding fabric endpoint. This interface will guarantee unique connections only so requesting more unique
