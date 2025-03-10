@@ -36,6 +36,9 @@ struct DisptachMetaData {
 
     // Worker's runtime id
     uint32_t worker_runtime_id = 0;
+
+    // dispatch command subtype.
+    std::string cmd_subtype = "";
 };
 
 class DeviceProfiler {
