@@ -101,6 +101,12 @@ static Tensor arange_impl(
             OwnedStorage{owned_buffer}, ttnn::Shape{1, 1, 1, static_cast<uint32_t>(size)}, data_type, Layout::ROW_MAJOR)
             .to_layout(layout);
     if (device.has_value()) {
+        auto devices = device->get_devices();
+        if (devices.size() == 1) {
+            if (auto mesh_device = dynamic_cast<MeshDevice*>(devices[0])) {
+                return output.to_device(mesh_device, output_mem_config);
+            }
+        }
         output = output.to_device(device->get_devices(), output_mem_config);
     }
     return output;
@@ -125,6 +131,11 @@ static Tensor full_impl(
     if (!optional_output_tensor.has_value()) {
         auto output = Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
         if (!devices.empty()) {
+            if (devices.size() == 1) {
+                if (auto mesh_device = dynamic_cast<MeshDevice*>(devices[0])) {
+                    return output.to_device(mesh_device, output_mem_config);
+                }
+            }
             output = output.to_device(devices, output_mem_config);
         }
         return output;
@@ -324,6 +335,10 @@ struct Empty {
         const Layout& layout,
         ttnn::AnyDevice device,
         const MemoryConfig& memory_config) {
+        if (auto mesh_device = device.get_mesh_device()) {
+            return allocate_tensor_on_mesh(
+                TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), memory_config)), mesh_device);
+        }
         return allocate_tensor_on_devices(
             TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), memory_config)), device.get_devices());
     }
@@ -336,11 +351,22 @@ struct EmptyLike {
         const std::optional<Layout>& layout = std::nullopt,
         detail::OptionalAnyDevice device_arg = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        const std::vector<IDevice*>& devices =
-            device_arg.has_value() ? device_arg->get_devices() : tensor.get_workers(/*blocking=*/true);
         Layout layout_value = layout.value_or(tensor.get_layout());
         DataType dtype_value = dtype.value_or(tensor.get_dtype());
         MemoryConfig mem_cfg = memory_config.value_or(tensor.memory_config());
+        std::vector<IDevice*> devices;
+        if (device_arg.has_value()) {
+            devices = device_arg->get_devices();
+        } else {
+            auto tensor_device = tensor.device();
+            if (auto mesh_device = dynamic_cast<MeshDevice*>(tensor_device)) {
+                return allocate_tensor_on_mesh(
+                    TensorSpec(
+                        tensor.get_logical_shape(), TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg)),
+                    mesh_device);
+            }
+            devices = tensor.get_workers(/*blocking=*/true);
+        }
         return allocate_tensor_on_devices(
             TensorSpec(tensor.get_logical_shape(), TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg)),
             devices);

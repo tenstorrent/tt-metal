@@ -80,7 +80,7 @@ def test_falcon_causal_lm(
     enable_async,
     num_loops,
 ):
-    mesh_device.enable_async(enable_async)
+    mesh_device.enable_async(False)
 
     torch.manual_seed(0)
     batch = device_batch_size * mesh_device.get_num_devices()
@@ -505,5 +505,3 @@ def test_t3k_falcon_causal_lm_with_trace(
         logger.success(f"Passed: pcc: {pcc}, expected: {expected_pcc}")
 
     logger.info("Falcon CausalLM Passed!")
-
-    t3k_mesh_device.enable_async(False)

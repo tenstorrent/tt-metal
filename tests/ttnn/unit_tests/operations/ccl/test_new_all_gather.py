@@ -11,7 +11,6 @@ from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
     create_and_load_sub_device_manager_with_fabric_interface,
     teardown_fabric_interface,
-    create_global_semaphore_with_same_address,
 )
 
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather_TG_post_commit import (
@@ -177,9 +176,7 @@ def run_all_gather_impl(
         mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
-    ccl_semaphore_handles = [
-        create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
-    ]
+    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
 
     logger.info(f"Output shape: {output_shape}")
     logger.info(f"dim: {dim}")

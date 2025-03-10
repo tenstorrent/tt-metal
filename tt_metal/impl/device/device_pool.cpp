@@ -597,7 +597,7 @@ bool DevicePool::close_device(chip_id_t device_id) {
     return pass;
 }
 
-void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
+void DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_synchronize) {
     // Ordered, because we need to shutdown tunnels from the farthest to the closest.
     std::vector<chip_id_t> devices_to_close;
 
@@ -633,15 +633,16 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
     // the main thread will modify device state while the CCL is running on device.
     // On TG - this should not be done on MMIO mapped devices, since we don't run
     // any workloads on them
-    for (const auto& dev_id : devices_to_close) {
-        auto dev = tt::DevicePool::instance().get_active_device(dev_id);
-        if (tt::Cluster::instance().is_galaxy_cluster() and dev->is_mmio_capable()) {
-            continue;
+    if (!skip_synchronize) {
+        for (const auto& dev_id : devices_to_close) {
+            auto dev = tt::DevicePool::instance().get_active_device(dev_id);
+            if (tt::Cluster::instance().is_galaxy_cluster() and dev->is_mmio_capable()) {
+                continue;
+            }
+            dev->synchronize();  // Synchronize worker queue
+            Synchronize(dev);    // Synchronize device
         }
-        dev->synchronize();  // Synchronize worker queue
-        Synchronize(dev);    // Synchronize device
     }
-
     // Terminate fabric routers
     FabricConfig fabric_config = tt::Cluster::instance().get_fabric_config();
     if (fabric_config == FabricConfig::FABRIC_2D || fabric_config == FabricConfig::FABRIC_2D_PUSH) {
