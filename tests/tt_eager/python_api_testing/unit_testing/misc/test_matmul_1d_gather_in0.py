@@ -15,6 +15,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 import random
 import math
 from models.utility_functions import is_wormhole_b0, is_grayskull, is_wormhole_b0, is_blackhole
+from tracy import signpost
 
 
 random.seed(10)
@@ -116,6 +117,41 @@ PREFETCHER_NOC1_GRID = [
     (2, 4),
     (2, 5),
     (2, 9),
+]
+
+LM_HEAD_32_GRID = [
+    (1, 0),
+    (1, 1),
+    (1, 2),
+    (1, 3),
+    (1, 4),
+    (1, 5),
+    (1, 6),
+    (1, 7),
+    (1, 8),
+    (1, 9),
+    (2, 0),
+    (2, 1),
+    (2, 2),
+    (2, 3),
+    (2, 4),
+    (2, 5),
+    (2, 6),
+    (2, 7),
+    (2, 8),
+    (2, 9),
+    (3, 0),
+    (3, 1),
+    (3, 2),
+    (3, 3),
+    (3, 4),
+    (3, 5),
+    (3, 6),
+    (3, 7),
+    (3, 8),
+    (3, 9),
+    (5, 0),
+    (5, 1),
 ]
 
 
@@ -308,6 +344,7 @@ def run_multi_core_matmul_1d(
             dst_full_sync_en=True,
         )
 
+    signpost("start")
     for _ in range(num_iters):
         output_t = ttnn.matmul(
             in0_t,
@@ -316,6 +353,7 @@ def run_multi_core_matmul_1d(
             memory_config=output_sharded_mem_config,
             compute_kernel_config=compute_kernel_config,
         )
+    signpost("stop")
 
     tt_out = ttnn.to_torch(output_t)
     pt_out = in0 @ in1
@@ -737,4 +775,145 @@ def test_multi_core_matmul_1d_gs(
         use_arbitrary_cores,
         num_iters,
         pcc_threshold=0.96,
+    )
+
+
+@pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
+@pytest.mark.parametrize(
+    "B, M, K, N, in0_dtype, in1_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid, in1_is_dram_interleaved",
+    [
+        (
+            1,
+            32,
+            2048,
+            1280,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            ttnn.MathFidelity.HiFi2,
+            True,
+            True,
+            PREFETCHER_NOC1_GRID,
+            False,
+        ),
+        (
+            1,
+            32,
+            1280,
+            2048,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            ttnn.MathFidelity.HiFi2,
+            True,
+            True,
+            PREFETCHER_NOC1_GRID,
+            False,
+        ),
+        (
+            1,
+            32,
+            2048,
+            3584,
+            ttnn.bfloat8_b,
+            ttnn.bfloat4_b,
+            ttnn.MathFidelity.LoFi,
+            True,
+            True,
+            PREFETCHER_NOC1_GRID,
+            False,
+        ),
+        (
+            1,
+            32,
+            3584,
+            2048,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            ttnn.MathFidelity.HiFi2,
+            True,
+            True,
+            PREFETCHER_NOC1_GRID,
+            False,
+        ),
+        (
+            1,
+            32,
+            2048,
+            16 * 1024,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            ttnn.MathFidelity.HiFi2,
+            True,
+            True,
+            LM_HEAD_32_GRID,
+            True,
+        ),
+    ],
+    ids=[
+        "qkv",
+        "do",
+        "ff13",
+        "ff2",
+        "lm_head",
+    ],
+)
+@pytest.mark.parametrize(
+    "num_iters",
+    [50],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [pytest.param((2, 2), id="2x2_grid")], indirect=True)
+def test_matmul_1d_ring_llama_perf(
+    mesh_device,
+    in0_dtype,
+    in1_dtype,
+    fidelity,
+    has_bias,
+    fp32_acc_mode,
+    packer_l1_acc,
+    B,
+    M,
+    K,
+    N,
+    grid,
+    in1_is_dram_interleaved,
+    num_iters,
+    use_program_cache,
+    function_level_defaults,
+):
+    device = mesh_device.get_device(mesh_device.get_device_ids()[0])
+    # Only run these tests on unharvested TG
+    device_grid = (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y)
+    if device_grid != (7, 10):
+        pytest.skip("Skipping test_run_prefetcher because it only works with a 7x10 grid")
+
+    if in1_is_dram_interleaved:
+        hop_grid = None
+    else:
+        hop_grid = [
+            (3, 6),
+        ]
+
+    run_multi_core_matmul_1d(
+        device,
+        in0_dtype,
+        in1_dtype,
+        fidelity,
+        has_bias,
+        fp32_acc_mode,
+        packer_l1_acc,
+        B,
+        M,
+        K,
+        N,
+        None,  # activation,
+        grid,
+        True,
+        num_iters,
+        use_physical_to_logical_mapping=False,
+        hop_grid=hop_grid,
+        in1_is_dram_interleaved=in1_is_dram_interleaved,
     )
