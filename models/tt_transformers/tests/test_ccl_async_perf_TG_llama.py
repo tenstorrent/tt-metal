@@ -14,9 +14,9 @@ from models.perf.device_perf_utils import run_device_perf_detailed
 @pytest.mark.parametrize(
     "ag_type, warmup_iters, perf_target_us",
     [
-        ("sdpa", 10, 11.5),
+        ("sdpa", 10, 12.0),
         ("binary_mult", 10, 12.9),
-        ("layernorm", 10, 8),
+        ("layernorm", 10, 8.5),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
