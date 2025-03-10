@@ -112,6 +112,7 @@ TT_METAL_SLOW_DISPATCH_TEST_ENTRIES = (
 )
 
 TT_METAL_FAST_DISPATCH_TEST_ENTRIES = (
+    TestEntry("tt_metal/tests/unit_tests_noc", "unit_tests_noc"),
     TestEntry("tt_metal/tests/test_eltwise_binary", "test_eltwise_binary"),
     # TestEntry(
     #     "tt_metal/tests/test_matmul_multi_core_multi_dram",
