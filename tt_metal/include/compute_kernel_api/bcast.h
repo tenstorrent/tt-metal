@@ -20,6 +20,8 @@
 #include "llk_pack_common.h"
 #endif
 
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+
 namespace ckernel {
 
 template <BroadcastType bcast_type>
@@ -325,19 +327,19 @@ ALWI void add_bcast_scalar_init_short(uint32_t icb0, uint32_t icb1) {
  * correctly.
  */
 ALWI void mul_tiles_bcast_scalar_init_short(uint32_t icb0, uint32_t icb1) {
-    MATH(DeviceZoneScopedN("MUL_BLOCK_BCAST_SCALAR_INPLACE_INIT MATH"));
-    UNPACK(DeviceZoneScopedN("MUL_BLOCK_BCAST_SCALAR_INPLACE_INIT UNPACK"));
+    // MATH(DeviceZoneScopedN("MUL_BLOCK_BCAST_SCALAR_INPLACE_INIT MATH"));
+    // UNPACK(DeviceZoneScopedN("MUL_BLOCK_BCAST_SCALAR_INPLACE_INIT UNPACK"));
     MATH((llk_math_eltwise_binary_init<ELWMUL, BroadcastType::SCALAR, MATH_FIDELITY>()));  // TODO(AP)
     // FIXME: API Update needed in compute kernel?
-    UNPACK((llk_unpack_AB_init<BroadcastType::SCALAR>(icb0, icb1)));
+    UNPACK((llk_unpack_AB_init<BroadcastType::SCALAR, true /* reuse_b */>(icb0, icb1)));
 }
 
 /**
  * Performs a broadcast-multiply of a tile from icb0[itile0] with a scalar encoded as a tile from icb1[itile1].
  */
 ALWI void mul_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
-    MATH(DeviceZoneScopedN("MUL_BLOCK_BCAST_SCALAR_INPLACE MATH"));
-    UNPACK(DeviceZoneScopedN("MUL_BLOCK_BCAST_SCALAR_INPLACE UNPACK"));
+    // MATH(DeviceZoneScopedN("MUL_BLOCK_BCAST_SCALAR_INPLACE MATH"));
+    // UNPACK(DeviceZoneScopedN("MUL_BLOCK_BCAST_SCALAR_INPLACE UNPACK"));
     MATH((llk_math_eltwise_binary<
           ELWMUL,
           BroadcastType::SCALAR,

@@ -5,6 +5,7 @@
 #pragma once
 
 #include "common_globals.h"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 
 namespace ckernel {
 
@@ -42,7 +43,7 @@ namespace ckernel {
 // clang-format on
 template <bool out_of_order_output = false>
 ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_index = 0) {
-    PACK(DeviceZoneScopedN("PACK_TILE"));
+    // PACK(DeviceZoneScopedN("PACK_TILE"));
     PACK((llk_pack<out_of_order_output, false, DST_ACCUM_MODE>(ifrom_dst, icb, output_tile_index)));
 }
 
