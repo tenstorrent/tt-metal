@@ -62,7 +62,7 @@ parameters = {
         "input_b_dtype": [ttnn.bfloat16],
         "output_dtype": [ttnn.bfloat8_b],
         "input_layout": [ttnn.TILE_LAYOUT],
-        "compute_kernel_config": [None],
+        "compute_kernel_config": ["default"],
     }
     for n in range(0, 4096, 384)
 }
@@ -84,6 +84,8 @@ def run_matmul(
     input_layout,
     compute_kernel_config,
 ) -> list:
+    if compute_kernel_config == "default":
+        compute_kernel_config = None
     (
         batch_sizes,
         m_size,
