@@ -625,7 +625,7 @@ void InitDeviceProfiler(IDevice* device) {
 #endif
 }
 
-void DumpDeviceProfileResults(IDevice* device, ProfilerDumpState state, const std::optional<ProfilerOptionalMetadata>& metadata) {
+void DumpDeviceProfileResults(IDevice* device, ProfilerDumpState state) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
     std::vector<CoreCoord> workerCores;
@@ -640,8 +640,8 @@ void DumpDeviceProfileResults(IDevice* device, ProfilerDumpState state, const st
         auto virtualCore = device->virtual_core_from_logical_core(core, CoreType::ETH);
         workerCores.push_back(virtualCore);
     }
-    device->push_work([device, workerCores, state, metadata]() mutable {
-        DumpDeviceProfileResults(device, workerCores, state, metadata);
+    device->push_work([device, workerCores, state]() mutable {
+        DumpDeviceProfileResults(device, workerCores, state);
         if (deviceDeviceTimePair.find(device->id()) != deviceDeviceTimePair.end() and
             state == ProfilerDumpState::CLOSE_DEVICE_SYNC) {
             for (auto& connected_device : deviceDeviceTimePair.at(device->id())) {
@@ -654,7 +654,7 @@ void DumpDeviceProfileResults(IDevice* device, ProfilerDumpState state, const st
 #endif
 }
 
-void DumpDeviceProfileResults(IDevice* device, std::vector<CoreCoord>& worker_cores, ProfilerDumpState state, const std::optional<ProfilerOptionalMetadata>& metadata) {
+void DumpDeviceProfileResults(IDevice* device, std::vector<CoreCoord>& worker_cores, ProfilerDumpState state) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
     std::string name = fmt::format("Device Dump {}", device->id());
@@ -740,7 +740,7 @@ void DumpDeviceProfileResults(IDevice* device, std::vector<CoreCoord>& worker_co
                 }
             }
             tt_metal_device_profiler_map.at(device_id).setDeviceArchitecture(device->arch());
-            tt_metal_device_profiler_map.at(device_id).dumpResults(device, worker_cores, state, metadata);
+            tt_metal_device_profiler_map.at(device_id).dumpResults(device, worker_cores, state);
 
             if (state == ProfilerDumpState::LAST_CLOSE_DEVICE) {
                 // Process is ending, no more device dumps are coming, reset your ref on the buffer so deallocate is the
