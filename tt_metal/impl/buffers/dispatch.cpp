@@ -6,6 +6,7 @@
 #include "assert.hpp"
 #include "dispatch.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
+#include "tt_metal/impl/dispatch/topology.hpp"
 
 #include <tt-metalium/command_queue_interface.hpp>
 #include "tt_metal/impl/dispatch/device_command.hpp"

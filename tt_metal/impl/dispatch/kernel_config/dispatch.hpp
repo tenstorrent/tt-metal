@@ -1,8 +1,11 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+
 #pragma once
+
 #include "fd_kernel.hpp"
+#include "tt_metal/impl/dispatch/topology.hpp"
 
 typedef struct dispatch_static_config {
     std::optional<uint32_t> dispatch_cb_base;  // 0
