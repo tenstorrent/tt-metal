@@ -57,7 +57,16 @@ def profile_results(is_unicast, num_mcasts, num_unicasts, line_size, packet_size
 
 
 def run_fabric_edm(
-    is_unicast, num_mcasts, num_unicasts, num_links, num_op_invocations, line_sync, line_size, packet_size, expected_bw
+    is_unicast,
+    num_mcasts,
+    num_unicasts,
+    num_links,
+    num_op_invocations,
+    line_sync,
+    line_size,
+    packet_size,
+    ring_topology,
+    expected_bw,
 ):
     logger.warning("removing file profile_log_device.csv")
     os.system(f"rm -rf {os.environ['TT_METAL_HOME']}/generated/profiler/.logs/profile_log_device.csv")
@@ -70,7 +79,8 @@ def run_fabric_edm(
                 {num_op_invocations} \
                 {int(line_sync)} \
                 {line_size} \
-                {packet_size} "
+                {packet_size} \
+                {int(ring_topology)}"
     rc = os.system(cmd)
     if rc != 0:
         if os.WEXITSTATUS(rc) == 1:
@@ -91,12 +101,21 @@ def run_fabric_edm(
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [4])
 @pytest.mark.parametrize("packet_size", [4096])
+@pytest.mark.parametrize("ring_topology", [False])
 @pytest.mark.parametrize(
     "expected_bw",
     [6.7],
 )
 def test_fabric_edm_mcast_bw(
-    num_mcasts, num_unicasts, num_links, num_op_invocations, line_sync, line_size, packet_size, expected_bw
+    num_mcasts,
+    num_unicasts,
+    num_links,
+    num_op_invocations,
+    line_sync,
+    line_size,
+    packet_size,
+    ring_topology,
+    expected_bw,
 ):
     run_fabric_edm(
         False,
@@ -107,6 +126,7 @@ def test_fabric_edm_mcast_bw(
         line_sync,
         line_size,
         packet_size,
+        ring_topology,
         expected_bw,
     )
 
@@ -118,12 +138,21 @@ def test_fabric_edm_mcast_bw(
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [2])
 @pytest.mark.parametrize("packet_size", [4096])
+@pytest.mark.parametrize("ring_topology", [False])
 @pytest.mark.parametrize(
     "expected_bw",
     [8.4],
 )
 def test_fabric_edm_unicast_bw(
-    num_mcasts, num_unicasts, num_links, num_op_invocations, line_sync, line_size, packet_size, expected_bw
+    num_mcasts,
+    num_unicasts,
+    num_links,
+    num_op_invocations,
+    line_sync,
+    line_size,
+    packet_size,
+    ring_topology,
+    expected_bw,
 ):
     run_fabric_edm(
         True,
@@ -134,5 +163,6 @@ def test_fabric_edm_unicast_bw(
         line_sync,
         line_size,
         packet_size,
+        ring_topology,
         expected_bw,
     )

@@ -24,9 +24,6 @@
 
 using ttnn::ccl::WorkerXY;
 
-static constexpr bool enable_first_level_ack = false;
-static constexpr bool fuse_receiver_flush_and_completion_ptr = true;
-
 /*
 
 The fabric Erisc Data Mover (EDM) is a component that can be used to build *very* simple linear topology fabrics.
@@ -515,6 +512,10 @@ get_compile_time_arg_val(0);
 0;
 #endif
 
+static constexpr bool enable_first_level_ack = get_compile_time_arg_val(1);
+static constexpr bool fuse_receiver_flush_and_completion_ptr = get_compile_time_arg_val(2);
+static constexpr bool enable_ring_support = get_compile_time_arg_val(3);
+
 static constexpr size_t ETH_BYTES_TO_WORDS_SHIFT = 4;
 static constexpr size_t NUM_SENDER_CHANNELS = 3;
 static constexpr size_t NUM_RECEIVER_CHANNELS = 2;
@@ -838,7 +839,13 @@ FORCE_INLINE void run_receiver_channel_step(
         volatile auto packet_header = local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index);
 
         ROUTING_FIELDS_TYPE cached_routing_fields = const_cast<PACKET_HEADER_TYPE*>(packet_header)->routing_fields;
-        auto& downstream_edm_interface = downstream_edm_interfaces[extract_vc(cached_routing_fields)];
+        uint32_t vc;
+        if constexpr (enable_ring_support) {
+            vc = extract_vc(cached_routing_fields);
+        } else {
+            vc = 0;
+        }
+        auto& downstream_edm_interface = downstream_edm_interfaces[vc];
         bool can_send_to_all_local_chip_receivers =
             can_forward_packet_completely(
                 cached_routing_fields, downstream_edm_interface);
@@ -1013,12 +1020,14 @@ void run_fabric_edm_main_loop(
                 receiver_channel_pointers[0],
                 receiver_channel_packet_recorders[0],
                 receiver_channel_trid_trackers[0]);
-            run_receiver_channel_step<enable_packet_header_recording, enable_fabric_counters, RECEIVER_NUM_BUFFERS, SENDER_NUM_BUFFERS, NUM_SENDER_CHANNELS, to_receiver_1_pkts_sent_id>(
-                local_receiver_channels[1], remote_sender_channels, downstream_edm_noc_interfaces, receiver_channel_counters_ptrs[1],
-                remote_eth_sender_wrptrs,
-                receiver_channel_pointers[1],
-                receiver_channel_packet_recorders[1],
-                receiver_channel_trid_trackers[1]);
+            if constexpr (enable_ring_support) {
+                run_receiver_channel_step<enable_packet_header_recording, enable_fabric_counters, RECEIVER_NUM_BUFFERS, SENDER_NUM_BUFFERS, NUM_SENDER_CHANNELS, to_receiver_1_pkts_sent_id>(
+                    local_receiver_channels[1], remote_sender_channels, downstream_edm_noc_interfaces, receiver_channel_counters_ptrs[1],
+                    remote_eth_sender_wrptrs,
+                    receiver_channel_pointers[1],
+                    receiver_channel_packet_recorders[1],
+                    receiver_channel_trid_trackers[1]);
+            }
 
             bool did_something_sender1 = run_sender_channel_step<enable_packet_header_recording, enable_fabric_counters, RECEIVER_NUM_BUFFERS, SENDER_NUM_BUFFERS, to_receiver_0_pkts_sent_id>(
                 local_sender_channels[1],
@@ -1029,15 +1038,18 @@ void run_fabric_edm_main_loop(
                 sender_channel_packet_recorders[1],
                 channel_connection_established[1],
                 1);
-            bool did_something_sender2 = run_sender_channel_step<enable_packet_header_recording, enable_fabric_counters, RECEIVER_NUM_BUFFERS, SENDER_NUM_BUFFERS, to_receiver_1_pkts_sent_id>(
-                local_sender_channels[2],
-                local_sender_channel_worker_interfaces[2],
-                outbound_to_receiver_channel_pointers[1], // High VC
-                remote_receiver_channels[1],
-                sender_channel_counters_ptrs[2],
-                sender_channel_packet_recorders[2],
-                channel_connection_established[2],
-                2);
+            bool did_something_sender2 = false;
+            if constexpr (enable_ring_support) {
+                did_something_sender2 = run_sender_channel_step<enable_packet_header_recording, enable_fabric_counters, RECEIVER_NUM_BUFFERS, SENDER_NUM_BUFFERS, to_receiver_1_pkts_sent_id>(
+                    local_sender_channels[2],
+                    local_sender_channel_worker_interfaces[2],
+                    outbound_to_receiver_channel_pointers[1], // High VC
+                    remote_receiver_channels[1],
+                    sender_channel_counters_ptrs[2],
+                    sender_channel_packet_recorders[2],
+                    channel_connection_established[2],
+                    2);
+            }
 
             did_something = did_something || did_something_sender0 || did_something_sender1 || did_something_sender2;
         }
@@ -1059,8 +1071,8 @@ void kernel_main() {
     //
     // COMMON CT ARGS (not specific to sender or receiver)
     //
-    static constexpr bool is_handshake_sender = get_compile_time_arg_val(1) != 0;
-    static constexpr size_t handshake_addr = get_compile_time_arg_val(2);
+    static constexpr bool is_handshake_sender = get_compile_time_arg_val(4) != 0;
+    static constexpr size_t handshake_addr = get_compile_time_arg_val(5);
     *reinterpret_cast<volatile uint32_t*>(handshake_addr) = 0;
     auto eth_transaction_ack_word_addr = handshake_addr + sizeof(eth_channel_sync_t);
 
@@ -1086,23 +1098,23 @@ void kernel_main() {
     // the size of one of the buffers within a sender channel
     // For example if `channel_buffer_size` = 4k, with `SENDER_NUM_BUFFERS` = 2
     // then the total amount of buffering for that
-    static constexpr size_t channel_buffer_size = get_compile_time_arg_val(3);
+    static constexpr size_t channel_buffer_size = get_compile_time_arg_val(6);
 
-    static constexpr size_t SENDER_NUM_BUFFERS = get_compile_time_arg_val(4);
-    static constexpr size_t RECEIVER_NUM_BUFFERS = get_compile_time_arg_val(5);
-    static constexpr size_t local_sender_0_channel_address = get_compile_time_arg_val(6);
-    static constexpr size_t local_sender_channel_0_connection_info_addr = get_compile_time_arg_val(7);
-    static constexpr size_t local_sender_1_channel_address = get_compile_time_arg_val(8);
-    static constexpr size_t local_sender_channel_1_connection_info_addr = get_compile_time_arg_val(9);
-    static constexpr size_t local_sender_2_channel_address = get_compile_time_arg_val(10);
-    static constexpr size_t local_sender_channel_2_connection_info_addr = get_compile_time_arg_val(11);
-    static constexpr size_t local_receiver_0_channel_buffer_address = get_compile_time_arg_val(12);
-    static constexpr size_t remote_receiver_0_channel_buffer_address = get_compile_time_arg_val(13);
-    static constexpr size_t local_receiver_1_channel_buffer_address = get_compile_time_arg_val(14);
-    static constexpr size_t remote_receiver_1_channel_buffer_address = get_compile_time_arg_val(15);
-    static constexpr size_t remote_sender_0_channel_address = get_compile_time_arg_val(16);
-    static constexpr size_t remote_sender_1_channel_address = get_compile_time_arg_val(17);
-    static constexpr size_t remote_sender_2_channel_address = get_compile_time_arg_val(18);
+    static constexpr size_t SENDER_NUM_BUFFERS = get_compile_time_arg_val(7);
+    static constexpr size_t RECEIVER_NUM_BUFFERS = get_compile_time_arg_val(8);
+    static constexpr size_t local_sender_0_channel_address = get_compile_time_arg_val(9);
+    static constexpr size_t local_sender_channel_0_connection_info_addr = get_compile_time_arg_val(10);
+    static constexpr size_t local_sender_1_channel_address = get_compile_time_arg_val(11);
+    static constexpr size_t local_sender_channel_1_connection_info_addr = get_compile_time_arg_val(12);
+    static constexpr size_t local_sender_2_channel_address = get_compile_time_arg_val(13);
+    static constexpr size_t local_sender_channel_2_connection_info_addr = get_compile_time_arg_val(14);
+    static constexpr size_t local_receiver_0_channel_buffer_address = get_compile_time_arg_val(15);
+    static constexpr size_t remote_receiver_0_channel_buffer_address = get_compile_time_arg_val(16);
+    static constexpr size_t local_receiver_1_channel_buffer_address = get_compile_time_arg_val(17);
+    static constexpr size_t remote_receiver_1_channel_buffer_address = get_compile_time_arg_val(18);
+    static constexpr size_t remote_sender_0_channel_address = get_compile_time_arg_val(19);
+    static constexpr size_t remote_sender_1_channel_address = get_compile_time_arg_val(20);
+    static constexpr size_t remote_sender_2_channel_address = get_compile_time_arg_val(21);
 
     DPRINT << "SENDER_NUM_BUFFERS: " << (uint32_t)SENDER_NUM_BUFFERS << "\n";
     DPRINT << "RECEIVER_NUM_BUFFERS: " << (uint32_t)RECEIVER_NUM_BUFFERS << "\n";
@@ -1122,31 +1134,31 @@ void kernel_main() {
 
     // TODO: CONVERT TO SEMAPHORE
     volatile auto termination_signal_ptr =
-        reinterpret_cast<volatile tt::fabric::TerminationSignal *>(get_compile_time_arg_val(19));
+        reinterpret_cast<volatile tt::fabric::TerminationSignal *>(get_compile_time_arg_val(22));
     // In persistent mode, we must rely on static addresses for our local semaphores that are locally
     // initialized, rather than metal device APIs. This way different subdevice programs can reliably
     // resolve the semaphore addresses on the EDM core
-    static constexpr bool persistent_mode = get_compile_time_arg_val(20) != 0;
+    static constexpr bool persistent_mode = get_compile_time_arg_val(23) != 0;
 
     // Per-channel counters
-    static constexpr bool enable_fabric_counters = get_compile_time_arg_val(21) != 0;
-    static constexpr size_t receiver_channel_0_counters_address = get_compile_time_arg_val(22);
-    static constexpr size_t receiver_channel_1_counters_address = get_compile_time_arg_val(23);
-    static constexpr size_t sender_channel_0_counters_address = get_compile_time_arg_val(24);
-    static constexpr size_t sender_channel_1_counters_address = get_compile_time_arg_val(25);
-    static constexpr size_t sender_channel_2_counters_address = get_compile_time_arg_val(26);
+    static constexpr bool enable_fabric_counters = get_compile_time_arg_val(24) != 0;
+    static constexpr size_t receiver_channel_0_counters_address = get_compile_time_arg_val(25);
+    static constexpr size_t receiver_channel_1_counters_address = get_compile_time_arg_val(26);
+    static constexpr size_t sender_channel_0_counters_address = get_compile_time_arg_val(27);
+    static constexpr size_t sender_channel_1_counters_address = get_compile_time_arg_val(28);
+    static constexpr size_t sender_channel_2_counters_address = get_compile_time_arg_val(29);
 
-    static constexpr bool enable_packet_header_recording = get_compile_time_arg_val(27) != 0;
-    static constexpr size_t receiver_0_completed_packet_header_cb_address = get_compile_time_arg_val(28);
-    static constexpr size_t receiver_0_completed_packet_header_cb_size_headers = get_compile_time_arg_val(29);
-    static constexpr size_t receiver_1_completed_packet_header_cb_address = get_compile_time_arg_val(30);
-    static constexpr size_t receiver_1_completed_packet_header_cb_size_headers = get_compile_time_arg_val(31);
-    static constexpr size_t sender_0_completed_packet_header_cb_address = get_compile_time_arg_val(32);
-    static constexpr size_t sender_0_completed_packet_header_cb_size_headers = get_compile_time_arg_val(33);
-    static constexpr size_t sender_1_completed_packet_header_cb_address = get_compile_time_arg_val(34);
-    static constexpr size_t sender_1_completed_packet_header_cb_size_headers = get_compile_time_arg_val(35);
-    static constexpr size_t sender_2_completed_packet_header_cb_address = get_compile_time_arg_val(36);
-    static constexpr size_t sender_2_completed_packet_header_cb_size_headers = get_compile_time_arg_val(37);
+    static constexpr bool enable_packet_header_recording = get_compile_time_arg_val(30) != 0;
+    static constexpr size_t receiver_0_completed_packet_header_cb_address = get_compile_time_arg_val(31);
+    static constexpr size_t receiver_0_completed_packet_header_cb_size_headers = get_compile_time_arg_val(32);
+    static constexpr size_t receiver_1_completed_packet_header_cb_address = get_compile_time_arg_val(33);
+    static constexpr size_t receiver_1_completed_packet_header_cb_size_headers = get_compile_time_arg_val(34);
+    static constexpr size_t sender_0_completed_packet_header_cb_address = get_compile_time_arg_val(35);
+    static constexpr size_t sender_0_completed_packet_header_cb_size_headers = get_compile_time_arg_val(36);
+    static constexpr size_t sender_1_completed_packet_header_cb_address = get_compile_time_arg_val(37);
+    static constexpr size_t sender_1_completed_packet_header_cb_size_headers = get_compile_time_arg_val(38);
+    static constexpr size_t sender_2_completed_packet_header_cb_address = get_compile_time_arg_val(39);
+    static constexpr size_t sender_2_completed_packet_header_cb_size_headers = get_compile_time_arg_val(40);
 
     std::array<PacketHeaderRecorder, NUM_SENDER_CHANNELS> sender_channel_packet_recorders{
         PacketHeaderRecorder(
