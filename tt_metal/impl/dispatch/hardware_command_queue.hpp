@@ -27,8 +27,6 @@ public:
 
     ~HWCommandQueue() override;
 
-    const CoreCoord& virtual_enqueue_program_dispatch_core() const override;
-
     void record_begin(const uint32_t tid, const std::shared_ptr<TraceDescriptor>& ctx) override;
     void record_end() override;
 
@@ -36,9 +34,6 @@ public:
         bool reset_launch_msg_state,
         uint32_t num_sub_devices,
         const vector_memcpy_aligned<uint32_t>& go_signal_noc_data) override;
-
-    void set_go_signal_noc_data_and_dispatch_sems(
-        uint32_t num_dispatch_sems, const vector_memcpy_aligned<uint32_t>& noc_mcast_unicast_data) override;
 
     uint32_t id() const override;
     std::optional<uint32_t> tid() const override;

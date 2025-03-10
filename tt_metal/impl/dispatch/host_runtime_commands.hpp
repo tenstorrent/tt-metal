@@ -96,22 +96,6 @@ public:
     constexpr bool has_side_effects() { return true; }
 };
 
-class EnqueueTerminateCommand : public Command {
-private:
-    uint32_t command_queue_id;
-    IDevice* device;
-    SystemMemoryManager& manager;
-
-public:
-    EnqueueTerminateCommand(uint32_t command_queue_id, IDevice* device, SystemMemoryManager& manager);
-
-    void process();
-
-    EnqueueCommandType type() { return EnqueueCommandType::TERMINATE; }
-
-    constexpr bool has_side_effects() { return false; }
-};
-
 }  // namespace tt::tt_metal
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::EnqueueCommandType& type);

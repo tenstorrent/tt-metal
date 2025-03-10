@@ -14,6 +14,7 @@
 #include "tt_metal/impl/buffers/dispatch.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
+#include "tt_metal/impl/sub_device/dispatch.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 #include "tt_metal/common/thread_pool.hpp"
 #include "tt_cluster.hpp"
@@ -72,17 +73,10 @@ void MeshCommandQueue::populate_read_descriptor_queue() {
 }
 
 void MeshCommandQueue::populate_virtual_program_dispatch_core() {
-    int device_idx = 0;
-    for (auto device : this->mesh_device_->get_devices()) {
-        if (device_idx) {
-            TT_FATAL(
-                this->dispatch_core_ == device->virtual_program_dispatch_core(this->id_),
-                "Expected Dispatch Cores to match across devices in a Mesh");
-        } else {
-            this->dispatch_core_ = device->virtual_program_dispatch_core(this->id_);
-        }
-        device_idx++;
-    }
+    auto dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
+    CoreType dispatch_core_type = dispatch_core_config.get_core_type();
+    dispatch_core_ = mesh_device_->virtual_core_from_logical_core(
+        DispatchQueryManager::instance().enqueue_program_dispatch_core(id_), dispatch_core_type);
 }
 
 void MeshCommandQueue::populate_dispatch_core_type() {
@@ -665,15 +659,16 @@ void MeshCommandQueue::read_completion_queue_event(MeshReadEventDescriptor& read
 void MeshCommandQueue::reset_worker_state(
     bool reset_launch_msg_state, uint32_t num_sub_devices, const vector_memcpy_aligned<uint32_t>& go_signal_noc_data) {
     for (auto device : mesh_device_->get_devices()) {
-        program_dispatch::reset_worker_dispatch_state_on_device(
+        subdevice_dispatch::reset_worker_dispatch_state_on_device(
             mesh_device_,
             device->sysmem_manager(),
             id_,
             this->virtual_program_dispatch_core(),
             expected_num_workers_completed_,
             reset_launch_msg_state);
-        program_dispatch::set_num_worker_sems_on_dispatch(mesh_device_, device->sysmem_manager(), id_, num_sub_devices);
-        program_dispatch::set_go_signal_noc_data_on_dispatch(
+        subdevice_dispatch::set_num_worker_sems_on_dispatch(
+            mesh_device_, device->sysmem_manager(), id_, num_sub_devices);
+        subdevice_dispatch::set_go_signal_noc_data_on_dispatch(
             mesh_device_, go_signal_noc_data, device->sysmem_manager(), id_);
     }
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
@@ -843,6 +838,12 @@ void MeshCommandQueue::record_end() {
     ordered_mesh_trace_md_.clear();
     for (auto device : mesh_device_->get_devices()) {
         device->sysmem_manager().set_bypass_mode(/*enable*/ false, /*clear*/ true);
+    }
+}
+
+void MeshCommandQueue::terminate() {
+    for (auto device : mesh_device_->get_devices()) {
+        program_dispatch::issue_terminate_command(device->sysmem_manager(), id_);
     }
 }
 

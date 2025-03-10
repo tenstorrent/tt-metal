@@ -34,6 +34,8 @@ public:
     const std::vector<CoreCoord>& get_logical_storage_cores(uint32_t device_id) const;
     const std::vector<CoreCoord>& get_logical_dispatch_cores(uint32_t device_id) const;
     tt_cxy_pair get_dispatch_core(uint8_t cq_id) const;
+    tt_cxy_pair get_dispatch_s_core(uint8_t cq_id) const;
+    tt_cxy_pair enqueue_program_dispatch_core(uint8_t cq_id) const;
 
 private:
     void reset(uint8_t num_hw_cqs);
@@ -47,6 +49,7 @@ private:
     // Make this mutable, since this is JIT populated
     // through a const instance when queried
     mutable std::vector<tt_cxy_pair> dispatch_cores_;
+    mutable std::vector<tt_cxy_pair> dispatch_s_cores_;
     mutable std::mutex modifier_mutex;
 };
 

@@ -777,11 +777,6 @@ SubDeviceManagerId MeshDevice::get_active_sub_device_manager_id() const {
 SubDeviceManagerId MeshDevice::get_default_sub_device_manager_id() const {
     return sub_device_manager_tracker_->get_default_sub_device_manager()->id();
 }
-CoreCoord MeshDevice::virtual_program_dispatch_core(uint8_t cq_id) const {
-    return validate_and_get_reference_value(scoped_devices_->root_devices(), [cq_id](const auto& device) {
-        return device->virtual_program_dispatch_core(cq_id);
-    });
-}
 const std::vector<SubDeviceId>& MeshDevice::get_sub_device_ids() const {
     return sub_device_manager_tracker_->get_active_sub_device_manager()->get_sub_device_ids();
 }

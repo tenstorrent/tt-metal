@@ -207,6 +207,7 @@ public:
     void drain_events_from_completion_queue();
     void verify_reported_events_after_draining(const MeshEvent& event);
     void finish(tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+    void terminate();
     void reset_worker_state(
         bool reset_launch_msg_state,
         uint32_t num_sub_devices,

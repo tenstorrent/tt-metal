@@ -63,6 +63,36 @@ tt_cxy_pair dispatch_core(uint8_t cq_id) {
     return dispatch_core;
 }
 
+tt_cxy_pair dispatch_s_core(uint8_t cq_id) {
+    tt_cxy_pair dispatch_s_core = tt_cxy_pair(0, 0, 0);
+    std::optional<tt_cxy_pair> first_dispatch_s_core = std::nullopt;
+    for (chip_id_t device_id = 0; device_id < tt::Cluster::instance().number_of_devices(); device_id++) {
+        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
+        bool is_mmio_device = tt::Cluster::instance().get_associated_mmio_device(device_id) == device_id;
+        bool is_galaxy_cluster = tt::Cluster::instance().is_galaxy_cluster();
+        bool is_allocated = dispatch_core_mgr::instance().is_dispatcher_s_core_allocated(device_id, channel, cq_id);
+        // DispatchS core is not allocated or this is an MMIO device on a TG system, skip.
+        // Ony TG, local dispatch cores are allocated on MMIO devices, but are not used
+        // since programs are not run on these devices. The placement of these cores is
+        // irrelevant for the runtime layer, since these are not used. Hence, these are
+        // skipped.
+        if ((is_mmio_device and is_galaxy_cluster) or not is_allocated) {
+            continue;
+        }
+        dispatch_s_core = dispatch_core_mgr::instance().dispatcher_s_core(device_id, channel, cq_id);
+        if (not first_dispatch_s_core.has_value()) {
+            first_dispatch_s_core = dispatch_s_core;
+        } else {
+            TT_FATAL(
+                dispatch_s_core.x == first_dispatch_s_core.value().x and
+                    dispatch_s_core.y == first_dispatch_s_core.value().y,
+                "Expected the Dispatch Cores to be consistent across physical devices");
+        }
+    }
+    TT_FATAL(first_dispatch_s_core.has_value(), "Could not find the dispatch_s core for {}", cq_id);
+    return dispatch_s_core;
+}
+
 tt::tt_metal::DispatchQueryManager* inst = nullptr;
 
 }  // namespace
@@ -123,6 +153,27 @@ tt_cxy_pair DispatchQueryManager::get_dispatch_core(uint8_t cq_id) const {
         }
     }
     return dispatch_cores_[cq_id];
+}
+
+tt_cxy_pair DispatchQueryManager::get_dispatch_s_core(uint8_t cq_id) const {
+    std::scoped_lock<std::mutex> lock(modifier_mutex);
+    if (dispatch_s_cores_.empty()) {
+        for (auto cq = 0; cq < num_hw_cqs_; cq++) {
+            // Populate when queried. Statically allocating at
+            // the start of the process causes the dispatch core
+            // order to change, which leads to lower performance
+            // with ethernet dispatch.
+            dispatch_s_cores_.push_back(dispatch_s_core(cq));
+        }
+    }
+    return dispatch_s_cores_[cq_id];
+}
+
+tt_cxy_pair DispatchQueryManager::enqueue_program_dispatch_core(uint8_t cq_id) const {
+    if (dispatch_s_enabled_) {
+        return get_dispatch_s_core(cq_id);
+    }
+    return get_dispatch_core(cq_id);
 }
 
 DispatchQueryManager::DispatchQueryManager(uint8_t num_hw_cqs) { this->reset(num_hw_cqs); }

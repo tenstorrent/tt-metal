@@ -173,39 +173,6 @@ void EnqueueProgramCommand::process() {
     program.set_program_binary_status(device->id(), ProgramBinaryStatus::Committed);
 }
 
-EnqueueTerminateCommand::EnqueueTerminateCommand(
-    uint32_t command_queue_id, IDevice* device, SystemMemoryManager& manager) :
-    command_queue_id(command_queue_id), device(device), manager(manager) {}
-
-void EnqueueTerminateCommand::process() {
-    // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_TERMINATE
-    // CQ_PREFETCH_CMD_TERMINATE
-    uint32_t cmd_sequence_sizeB = hal.get_alignment(HalMemType::HOST);
-
-    // dispatch and prefetch terminate commands each needs to be a separate fetch queue entry
-    void* cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
-    HugepageDeviceCommand dispatch_d_command_sequence(cmd_region, cmd_sequence_sizeB);
-    dispatch_d_command_sequence.add_dispatch_terminate(DispatcherSelect::DISPATCH_MASTER);
-    this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->command_queue_id);
-    this->manager.fetch_queue_reserve_back(this->command_queue_id);
-    this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id);
-    if (DispatchQueryManager::instance().dispatch_s_enabled()) {
-        // Terminate dispatch_s if enabled
-        cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
-        HugepageDeviceCommand dispatch_s_command_sequence(cmd_region, cmd_sequence_sizeB);
-        dispatch_s_command_sequence.add_dispatch_terminate(DispatcherSelect::DISPATCH_SLAVE);
-        this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->command_queue_id);
-        this->manager.fetch_queue_reserve_back(this->command_queue_id);
-        this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id);
-    }
-    cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
-    HugepageDeviceCommand prefetch_command_sequence(cmd_region, cmd_sequence_sizeB);
-    prefetch_command_sequence.add_prefetch_terminate();
-    this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->command_queue_id);
-    this->manager.fetch_queue_reserve_back(this->command_queue_id);
-    this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id);
-}
-
 inline namespace v0 {
 
 void EnqueueWriteBuffer(

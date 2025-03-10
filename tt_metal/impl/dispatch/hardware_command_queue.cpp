@@ -23,6 +23,7 @@
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
+#include "tt_metal/impl/sub_device/dispatch.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 
 namespace tt::tt_metal {
@@ -56,26 +57,12 @@ HWCommandQueue::HWCommandQueue(IDevice* device, uint32_t id, NOC noc_index, uint
         // Galaxy puts 4 devices per host channel until umd can provide one channel per device.
         this->size_B = this->size_B / 4;
     }
-
-    CoreCoord enqueue_program_dispatch_core;
-    CoreType core_type = dispatch_core_manager::instance().get_dispatch_core_type(device_->id());
-    if (this->device_->num_hw_cqs() == 1 or core_type == CoreType::WORKER) {
-        // dispatch_s exists with this configuration. Workers write to dispatch_s
-        enqueue_program_dispatch_core = dispatch_core_manager::instance().dispatcher_s_core(device_->id(), channel, id);
-    } else {
-        if (device_->is_mmio_capable()) {
-            enqueue_program_dispatch_core =
-                dispatch_core_manager::instance().dispatcher_core(device_->id(), channel, id);
-        } else {
-            enqueue_program_dispatch_core =
-                dispatch_core_manager::instance().dispatcher_d_core(device_->id(), channel, id);
-        }
-    }
-    this->virtual_enqueue_program_dispatch_core_ =
-        device_->virtual_core_from_logical_core(enqueue_program_dispatch_core, core_type);
+    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device_->id());
+    this->virtual_enqueue_program_dispatch_core_ = device_->virtual_core_from_logical_core(
+        DispatchQueryManager::instance().enqueue_program_dispatch_core(id_), dispatch_core_type);
 
     tt_cxy_pair completion_q_writer_location =
-        dispatch_core_manager::instance().completion_queue_writer_core(device_->id(), channel, this->id_);
+        dispatch_core_manager::instance().completion_queue_writer_core(device_->id(), channel, id_);
 
     this->completion_queue_writer_core_ = CoreCoord(completion_q_writer_location.x, completion_q_writer_location.y);
 
@@ -99,15 +86,15 @@ void HWCommandQueue::reset_worker_state(
     TT_FATAL(!this->manager.get_bypass_mode(), "Cannot reset worker state during trace capture");
     // TODO: This could be further optimized by combining all of these into a single prefetch entry
     // Currently each one will be pushed into its own prefetch entry
-    program_dispatch::reset_worker_dispatch_state_on_device(
+    subdevice_dispatch::reset_worker_dispatch_state_on_device(
         device_,
         this->manager,
         id_,
         this->virtual_enqueue_program_dispatch_core_,
         this->expected_num_workers_completed,
         reset_launch_msg_state);
-    program_dispatch::set_num_worker_sems_on_dispatch(device_, this->manager, id_, num_sub_devices);
-    program_dispatch::set_go_signal_noc_data_on_dispatch(device_, go_signal_noc_data, this->manager, id_);
+    subdevice_dispatch::set_num_worker_sems_on_dispatch(device_, this->manager, id_, num_sub_devices);
+    subdevice_dispatch::set_go_signal_noc_data_on_dispatch(device_, go_signal_noc_data, this->manager, id_);
     // expected_num_workers_completed is reset on the dispatcher, as part of this step - this must be reflected
     // on host, along with the config_buf_manager being reset, since we wait for all programs across SubDevices
     // to complete as part of resetting the worker state
@@ -116,12 +103,6 @@ void HWCommandQueue::reset_worker_state(
     if (reset_launch_msg_state) {
         this->manager.reset_worker_launch_message_buffer_state(num_sub_devices);
     }
-}
-
-void HWCommandQueue::set_go_signal_noc_data_and_dispatch_sems(
-    uint32_t num_dispatch_sems, const vector_memcpy_aligned<uint32_t>& noc_mcast_unicast_data) {
-    program_dispatch::set_num_worker_sems_on_dispatch(device_, this->manager, id_, num_dispatch_sems);
-    program_dispatch::set_go_signal_noc_data_on_dispatch(device_, noc_mcast_unicast_data, this->manager, id_);
 }
 
 HWCommandQueue::~HWCommandQueue() {
@@ -518,10 +499,6 @@ void HWCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
     }
 }
 
-const CoreCoord& HWCommandQueue::virtual_enqueue_program_dispatch_core() const {
-    return this->virtual_enqueue_program_dispatch_core_;
-}
-
 void HWCommandQueue::record_begin(const uint32_t tid, const std::shared_ptr<TraceDescriptor>& ctx) {
     // Clear host dispatch state, since when trace runs we will reset the launch_msg_ring_buffer,
     // worker_config_buffer, etc.
@@ -575,10 +552,9 @@ void HWCommandQueue::record_end() {
 
 void HWCommandQueue::terminate() {
     ZoneScopedN("HWCommandQueue_terminate");
-    TT_FATAL(!this->manager.get_bypass_mode(), "Terminate cannot be used with tracing");
-    tt::log_debug(tt::LogDispatch, "Terminating dispatch kernels for command queue {}", this->id_);
-    auto command = EnqueueTerminateCommand(this->id_, this->device_, this->manager);
-    this->enqueue_command(command, false, {});
+    tt::log_debug(tt::LogDispatch, "Terminating dispatch kernels for command queue {}", id_);
+    program_dispatch::issue_terminate_command(this->manager, id_);
+    ;
 }
 
 WorkerConfigBufferMgr& HWCommandQueue::get_config_buffer_mgr(uint32_t index) { return config_buffer_mgr[index]; }

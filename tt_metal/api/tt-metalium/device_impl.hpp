@@ -189,7 +189,6 @@ public:
     void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
     void load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
     void clear_loaded_sub_device_manager() override;
-    CoreCoord virtual_program_dispatch_core(uint8_t cq_id) const override;
     const std::vector<SubDeviceId> &get_sub_device_ids() const override;
     const std::vector<SubDeviceId> &get_sub_device_stall_group() const override;
     void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) override;

@@ -38,6 +38,7 @@
 
 #include "impl/dispatch/topology.hpp"
 #include "impl/dispatch/hardware_command_queue.hpp"
+#include "tt_metal/impl/sub_device/dispatch.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 
 #include "work_executor.hpp"
@@ -933,10 +934,17 @@ void Device::init_command_queue_device() {
         }
     }
     // Set num_worker_sems and go_signal_noc_data on dispatch for the default sub device config
-    for (auto& hw_cq : this->command_queues_) {
-        hw_cq->set_go_signal_noc_data_and_dispatch_sems(
-            sub_device_manager_tracker_->get_active_sub_device_manager()->num_sub_devices(),
-            sub_device_manager_tracker_->get_active_sub_device_manager()->noc_mcast_unicast_data());
+    for (uint8_t cq_id = 0; cq_id < command_queues_.size(); cq_id++) {
+        subdevice_dispatch::set_num_worker_sems_on_dispatch(
+            this,
+            *sysmem_manager_,
+            cq_id,
+            sub_device_manager_tracker_->get_active_sub_device_manager()->num_sub_devices());
+        subdevice_dispatch::set_go_signal_noc_data_on_dispatch(
+            this,
+            sub_device_manager_tracker_->get_active_sub_device_manager()->noc_mcast_unicast_data(),
+            *sysmem_manager_,
+            cq_id);
     }
 }
 
@@ -1543,10 +1551,6 @@ uint8_t Device::noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data,
     } else {
         return 0;
     }
-}
-
-CoreCoord Device::virtual_program_dispatch_core(uint8_t cq_id) const {
-    return this->command_queues_[cq_id]->virtual_enqueue_program_dispatch_core();
 }
 
 SubDeviceManagerId Device::get_active_sub_device_manager_id() const {
