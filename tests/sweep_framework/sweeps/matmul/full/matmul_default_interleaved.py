@@ -30,7 +30,7 @@ parameters = {
         "input_b_dtype": [ttnn.bfloat8_b],
         "output_dtype": [ttnn.bfloat16],
         "input_layout": [ttnn.TILE_LAYOUT],
-        "compute_kernel_config": ["default"],
+        "compute_kernel_config": [None],
     }
 }
 
@@ -51,8 +51,6 @@ def run_matmul(
     input_layout,
     compute_kernel_config,
 ) -> list:
-    if compute_kernel_config == "default":
-        compute_kernel_config = None
     input_shape_a = (*batch_sizes, m_size, k_size)
     input_shape_b = (k_size, n_size)
     if batch_matrix_multiply:

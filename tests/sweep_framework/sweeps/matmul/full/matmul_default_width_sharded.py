@@ -52,7 +52,7 @@ parameters = {
         "input_b_dtype": [ttnn.bfloat16],
         "output_dtype": [ttnn.bfloat8_b],
         "input_layout": [ttnn.TILE_LAYOUT],
-        "compute_kernel_config": ["default"],
+        "compute_kernel_config": [None],
     }
 }
 
@@ -73,8 +73,6 @@ def run_matmul(
     input_layout,
     compute_kernel_config,
 ) -> list:
-    if compute_kernel_config == "default":
-        compute_kernel_config = None
     k_size, per_core_width, num_cores_width = width_sharded_specs
     total_height = functools.reduce(operator.mul, batch_sizes) * m_size
 

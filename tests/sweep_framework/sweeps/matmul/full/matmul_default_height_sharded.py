@@ -61,7 +61,7 @@ parameters = {
         # "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         # "output_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.TILE_LAYOUT],
-        "compute_kernel_config": ["default"],
+        "compute_kernel_config": [None],
     }
 }
 
@@ -81,8 +81,6 @@ def run_matmul(
     input_layout,
     compute_kernel_config,
 ) -> list:
-    if compute_kernel_config == "default":
-        compute_kernel_config = None
     batch_sizes, m_size, per_core_height, num_cores_height = height_sharded_specs
 
     core_grid = device.compute_with_storage_grid_size()
