@@ -79,12 +79,6 @@ jobs:
         run: |
           mkdir gh_pages
           mv docs/build/html gh_pages/${{ inputs.version }}
-      - name: Prepare artifact - create .nojekyll
-        run: |
-          touch gh_pages/.nojekyll
-      - name: Prepare artifact - create root index
-        run: |
-          touch gh_pages/index.html
       - uses: actions/upload-artifact@v4
         with:
           name: gh_pages_${{ inputs.version }}
@@ -99,6 +93,8 @@ jobs:
         shell: bash
     steps:
       - name: ⬇️ Checkout
+        # This is needed by the pages-deploy action so 
+        # that the folder is initialized for .git
         uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         timeout-minutes: 10
@@ -106,14 +102,14 @@ jobs:
           name: gh_pages_${{ inputs.version }}
           path: gh_pages/${{ inputs.version }}
       - name: Deploy to GitHub Pages
-        uses: JamesIves/github-pages-deploy-action@v4
         if: ${{ github.ref == 'refs/heads/main' }}
+        uses: JamesIves/github-pages-deploy-action@v4
         id: deployment
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           branch: gh-pages
           target-folder: ${{ inputs.version }}
-          folder: gh_pages/${{ inputs.version }}
+          folder: ./gh_pages/${{ inputs.version }}
           force: false
       - name: Delete artifact if deployment failed
         # When the deployment API call fails, the artifacts are not cleaned up correctly
