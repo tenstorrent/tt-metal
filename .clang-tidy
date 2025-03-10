@@ -185,5 +185,7 @@ Checks: >
 CheckOptions:
   - key: readability-function-cognitive-complexity.IgnoreMacros
     value: true
+  - key: portability-simd-intrinsics.Suggest
+    value: true
 
 FormatStyle: 'file'
