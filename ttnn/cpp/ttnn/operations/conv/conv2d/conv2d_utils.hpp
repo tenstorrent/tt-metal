@@ -58,12 +58,6 @@ sliding_window::ParallelConfig determine_output_parallel_config(
     uint32_t out_channels,
     bool is_mm_conv);
 
-sliding_window::ParallelConfig determine_output_parallel_config(
-    const sliding_window::ParallelConfig& input_parallel_config,
-    const CoreCoord& compute_grid_size,
-    uint32_t out_channels,
-    bool is_mm_conv);
-
 uint32_t get_num_cores_nhw_from_parallel_config(const sliding_window::ParallelConfig& pconfig);
 
 uint32_t get_num_cores_channels_from_parallel_config(const sliding_window::ParallelConfig& pconfig);
