@@ -20,7 +20,7 @@
 #include <tt_metal.hpp>
 #include "dprint_server.hpp"
 #include "impl/debug/watcher_server.hpp"
-#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
+#include "tt_metal/impl/dispatch/topology.hpp"
 #include <utils.hpp>
 #include "llrt.hpp"
 #include <dev_msgs.h>
@@ -902,7 +902,7 @@ void Device::init_command_queue_host() {
     command_queues_.reserve(num_hw_cqs());
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
         command_queues_.push_back(
-            std::make_unique<HWCommandQueue>(this, cq_id, dispatch_downstream_noc, completion_queue_reader_core_));
+            std::make_unique<HWCommandQueue>(this, cq_id, k_dispatch_downstream_noc, completion_queue_reader_core_));
     }
 }
 

@@ -251,7 +251,7 @@ std::vector<uint32_t> pack_bfloat16_vec_into_uint32_vec(const std::vector<bfloat
 bfloat16 bfloat16_identity_transform(const bfloat16& input) { return input; }
 
 std::vector<bfloat16> unpack_uint32_vec_into_bfloat16_vec(
-    const std::vector<std::uint32_t>& data, std::function<bfloat16(const bfloat16&)> transform) {
+    const std::vector<std::uint32_t>& data, const std::function<bfloat16(const bfloat16&)>& transform) {
     std::vector<bfloat16> result;
     for (auto i = 0; i < data.size(); i++) {
         auto unpacked = unpack_two_bfloat16_from_uint32(data[i]);
@@ -315,7 +315,7 @@ bool is_close(float a, float b, float rtol, float atol) {
 bool packed_uint32_t_vector_comparison(
     const std::vector<uint32_t>& vec_a,
     const std::vector<uint32_t>& vec_b,
-    std::function<bool(float, float)> comparison_function,
+    const std::function<bool(float, float)>& comparison_function,
     int* argfail) {
     if (vec_a.size() != vec_b.size()) {
         std::cout << "Sizes don't match, returning false" << std::endl;

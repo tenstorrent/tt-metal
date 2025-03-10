@@ -142,6 +142,20 @@ class Pipeline(BaseModel):
     orchestrator: Optional[str] = Field(None, description="CI/CD pipeline orchestration platform.")
     jobs: List[Job] = []
 
+    # Model validator to check the unique combination constraint
+    @model_validator(mode="before")
+    def check_unique_jobs(cls, values):
+        jobs = values.get("jobs", [])
+        seen_combinations = set()
+
+        for job in jobs:
+            # for each pipeline, the job constraint is (name, job_submission_ts, job_start_ts, job_end_ts)
+            job_combination = (job.name, job.job_submission_ts, job.job_start_ts, job.job_end_ts)
+            if job_combination in seen_combinations:
+                raise ValueError(f"Duplicate job combination found: {job_combination}")
+            seen_combinations.add(job_combination)
+        return values
+
 
 class BenchmarkMeasurement(BaseModel):
     """
