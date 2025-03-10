@@ -168,10 +168,6 @@ void DispatchKernel::GenerateStaticConfigs() {
 }
 
 void DispatchKernel::GenerateDependentConfigs() {
-    TT_FATAL(
-        noc_selection_.non_dispatch_noc != DispatchQueryManager::instance().go_signal_noc(),
-        "Dispatch noc_selection_ must NOT be equal to go_signal_noc in DispatchQueryManager. Reason: Dispatch is using "
-        "stateful APIs. Using the same NOC will cause collisions.");
     if (static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
         // Upstream
         TT_ASSERT(upstream_kernels_.size() == 1);
