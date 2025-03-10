@@ -93,7 +93,7 @@ jobs:
         shell: bash
     steps:
       - name: ⬇️ Checkout
-        # This is needed by the pages-deploy action so 
+        # This is needed by the pages-deploy action so
         # that the folder is initialized for .git
         uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
