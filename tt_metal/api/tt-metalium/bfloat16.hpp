@@ -6,6 +6,7 @@
 
 #include <vector>
 #include <optional>
+#include <functional>
 
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/span.hpp>
@@ -47,7 +48,7 @@ public:
     bfloat16 operator*(const bfloat16 rhs) const { return bfloat16(this->to_float() * rhs.to_float()); }
 };
 
-inline std::ostream& operator<<(std::ostream& os, const bfloat16& bfp16) {
+std::ostream& operator<<(std::ostream& os, const bfloat16& bfp16) {
     os << bfp16.to_uint16();
     return os;
 }

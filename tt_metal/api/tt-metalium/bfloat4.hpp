@@ -21,7 +21,7 @@ constexpr int log2(int n) {
     return log;
 }
 
-std::vector<uint32_t> pack_fp32_vec_as_bfp4_tiles
+std::vector<uint32_t> pack_fp32_vec_as_bfp4_tiles(
     tt::stl::Span<const float> fp32_vec,
     bool row_major_input,
     bool is_exp_a,

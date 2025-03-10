@@ -187,7 +187,7 @@ uint32_t convert_bfp_to_u32(tt::DataFormat bfp_format, uint8_t data, uint8_t sha
     return out_num;
 }
 
-template <tt::DataFormat BfpFormat, bool truncate_bfp_mantissa = false>
+template <tt::DataFormat BfpFormat, bool truncate_bfp_mantissa>
 uint8_t convert_u32_to_bfp(uint32_t input, uint32_t shared_exp, bool is_exp_a) {
     TT_ASSERT(
         BfpFormat == tt::DataFormat::Bfp2 || BfpFormat == tt::DataFormat::Bfp4 || BfpFormat == tt::DataFormat::Bfp8 ||
@@ -417,12 +417,22 @@ std::vector<uint32_t> pack_fp32_vec_as_bfp_tiles(
 
 // Explicit instantiations
 // clang-format off
-template uint8_t convert_u32_to_bfp<tt::DataFormat::Bfp2>(uint32_t input, uint32_t shared_exp, bool is_exp_a);
-template uint8_t convert_u32_to_bfp<tt::DataFormat::Bfp4>(uint32_t input, uint32_t shared_exp, bool is_exp_a);
-template uint8_t convert_u32_to_bfp<tt::DataFormat::Bfp8>(uint32_t input, uint32_t shared_exp, bool is_exp_a);
-template uint8_t convert_u32_to_bfp<tt::DataFormat::Bfp2_b>(uint32_t input, uint32_t shared_exp, bool is_exp_a);
-template uint8_t convert_u32_to_bfp<tt::DataFormat::Bfp4_b>(uint32_t input, uint32_t shared_exp, bool is_exp_a);
-template uint8_t convert_u32_to_bfp<tt::DataFormat::Bfp8_b>(uint32_t input, uint32_t shared_exp, bool is_exp_a);
+
+// truncate_bfp_mantissa = false
+template uint8_t convert_u32_to_bfp<tt::DataFormat::Bfp2, false>(uint32_t input, uint32_t shared_exp, bool is_exp_a);
+template uint8_t convert_u32_to_bfp<tt::DataFormat::Bfp4, false>(uint32_t input, uint32_t shared_exp, bool is_exp_a);
+template uint8_t convert_u32_to_bfp<tt::DataFormat::Bfp8, false>(uint32_t input, uint32_t shared_exp, bool is_exp_a);
+template uint8_t convert_u32_to_bfp<tt::DataFormat::Bfp2_b, false>(uint32_t input, uint32_t shared_exp, bool is_exp_a);
+template uint8_t convert_u32_to_bfp<tt::DataFormat::Bfp4_b, false>(uint32_t input, uint32_t shared_exp, bool is_exp_a);
+template uint8_t convert_u32_to_bfp<tt::DataFormat::Bfp8_b, false>(uint32_t input, uint32_t shared_exp, bool is_exp_a);
+
+// truncate_bfp_mantissa = true
+template uint8_t convert_u32_to_bfp<tt::DataFormat::Bfp2, true>(uint32_t input, uint32_t shared_exp, bool is_exp_a);
+template uint8_t convert_u32_to_bfp<tt::DataFormat::Bfp4, true>(uint32_t input, uint32_t shared_exp, bool is_exp_a);
+template uint8_t convert_u32_to_bfp<tt::DataFormat::Bfp8, true>(uint32_t input, uint32_t shared_exp, bool is_exp_a);
+template uint8_t convert_u32_to_bfp<tt::DataFormat::Bfp2_b, true>(uint32_t input, uint32_t shared_exp, bool is_exp_a);
+template uint8_t convert_u32_to_bfp<tt::DataFormat::Bfp4_b, true>(uint32_t input, uint32_t shared_exp, bool is_exp_a);
+template uint8_t convert_u32_to_bfp<tt::DataFormat::Bfp8_b, true>(uint32_t input, uint32_t shared_exp, bool is_exp_a);
 
 template uint32_t create_packed_bfp_packed_as_u32<tt::DataFormat::Bfp2>(const std::vector<uint32_t>& u32_vec, uint32_t shared_exp, bool is_exp_a);
 template uint32_t create_packed_bfp_packed_as_u32<tt::DataFormat::Bfp4>(const std::vector<uint32_t>& u32_vec, uint32_t shared_exp, bool is_exp_a);

@@ -250,8 +250,7 @@ std::vector<uint32_t> pack_bfloat16_vec_into_uint32_vec(const std::vector<bfloat
 bfloat16 bfloat16_identity_transform(const bfloat16& input) { return input; }
 
 std::vector<bfloat16> unpack_uint32_vec_into_bfloat16_vec(
-    const std::vector<std::uint32_t>& data,
-    std::function<bfloat16(const bfloat16&)> transform = bfloat16_identity_transform) {
+    const std::vector<std::uint32_t>& data, std::function<bfloat16(const bfloat16&)> transform) {
     std::vector<bfloat16> result;
     for (auto i = 0; i < data.size(); i++) {
         auto unpacked = unpack_two_bfloat16_from_uint32(data[i]);
@@ -297,7 +296,7 @@ bool equal_within_n_sig_figs(float a, float b, int n) {
 bool equal_within_absolute_tolerance(float a, float b, float tol) { return std::abs(a - b) < tol; }
 
 // this follows the implementation of numpy's is_close
-bool is_close(float a, float b, float rtol = 0.01f, float atol = 0.001f) {
+bool is_close(float a, float b, float rtol, float atol) {
     // the idea is near zero we want absolute tolerance since relative doesn't make sense
     // (consider 1e-6f and 1.1e-6f)
     // elsewhere (not near zero) we want relative tolerance
