@@ -4,6 +4,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <random>
+
 #include "command_queue_fixture.hpp"
 #include "multi_command_queue_fixture.hpp"
 #include "random_program_fixture.hpp"
