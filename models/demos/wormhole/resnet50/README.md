@@ -24,7 +24,7 @@ This demo includes preprocessing, postprocessing and inference time for batch si
 
 + Our second demo is designed to run ImageNet dataset, run this with
 ```python
-WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/wormhole/resnet50/demo/demo.py::test_demo_imagenet
+WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/wormhole/resnet50/demo/demo.py::test_demo_trace_with_imagenet
 ```
 - The 16 refers to batch size here and 100 is the number of iterations(batches), hence the model will process 100 batches of size 16, total of 1600 images.
 - Note that the first time the model is run, ImageNet images must be downloaded from huggingface and stored in  `models/demos/ttnn_resnet/demo/images/`; therefore you need to login to huggingface using your token: `huggingface-cli login` or by setting the token with the command `export HF_TOKEN=<token>`
