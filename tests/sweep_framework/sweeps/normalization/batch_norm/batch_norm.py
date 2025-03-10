@@ -24,7 +24,7 @@ random.seed(0)
 
 parameters = {
     "BN_Testing": {
-        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 16),
+        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [2, 4, 64, 64], 4),
         "input_dtype": [ttnn.bfloat16, ttnn.float32],
         "input_layout": [ttnn.TILE_LAYOUT],
         "input_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
