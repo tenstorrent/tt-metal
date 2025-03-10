@@ -6,6 +6,7 @@
 #include <tt-metalium/dispatch_mem_map.hpp>
 #include <tt-metalium/dispatch_core_manager.hpp>
 #include <tt-metalium/command_queue_common.hpp>
+#include <tt-metalium/memcpy.hpp>
 
 #include <tt-metalium/launch_message_ring_buffer_state.hpp>
 #include <tt-metalium/tt_align.hpp>
@@ -341,7 +342,7 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
     }
 }
 
-uint32_t completion_queue_wait_front(const uint8_t cq_id, volatile bool& exit_condition) const {
+uint32_t SystemMemoryManager::completion_queue_wait_front(const uint8_t cq_id, volatile bool& exit_condition) const {
     uint32_t write_ptr_and_toggle;
     uint32_t write_ptr;
     uint32_t write_toggle;
@@ -415,7 +416,7 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
     this->prefetch_q_dev_ptrs[cq_id] += sizeof(DispatchSettings::prefetch_q_entry_type);
 }
 
-WorkerLaunchMessageBufferState& get_worker_launch_message_buffer_state() {
+SystemMemoryManager::WorkerLaunchMessageBufferState& SystemMemoryManager::get_worker_launch_message_buffer_state() {
     return this->worker_launch_message_buffer_state;
 }
 

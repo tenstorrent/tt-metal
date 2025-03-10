@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/dispatch_settings.hpp>
-#include <tt-metalium/dev_msgs.h"
+#include <tt-metalium/dev_msgs.h>
 #include <cstdint>
 #include <hal.hpp>
 #include <tt_cluster.hpp>
@@ -25,7 +25,7 @@ static_assert(
     "Fix the value in dispatch_settings.hpp");
 
 namespace {
-namespace CMAKE_UNIQUE_NAMESPACE {
+
 struct DispatchSettingsContainerKey {
     CoreType core_type;
     uint32_t num_hw_cqs;
@@ -50,7 +50,6 @@ DispatchSettingsContainer& get_store() {
     static DispatchSettingsContainer store;
     return store;
 }
-}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 DispatchSettings DispatchSettings::worker_defaults(const tt::Cluster& cluster, const uint32_t num_hw_cqs) {
@@ -157,9 +156,9 @@ DispatchSettings& DispatchSettings::build() {
 
 // Returns the settings for a core type and number hw cqs. The values can be modified, but customization must occur
 // before command queue kernels are created.
-static DispatchSettings& DispatchSettings::get(const CoreType& core_type, const uint32_t num_hw_cqs) {
+DispatchSettings& DispatchSettings::get(const CoreType& core_type, const uint32_t num_hw_cqs) {
     DispatchSettingsContainerKey k{core_type, num_hw_cqs};
-    auto& store = CMAKE_UNIQUE_NAMESPACE::get_store();
+    auto& store = get_store();
     if (!store.contains(k)) {
         TT_THROW(
             "DispatchSettings is not initialized for CoreType {}, {} CQs",
@@ -170,9 +169,9 @@ static DispatchSettings& DispatchSettings::get(const CoreType& core_type, const 
 }
 
 // Reset the settings
-static void DispatchSettings::initialize(const tt::Cluster& cluster) {
+void DispatchSettings::initialize(const tt::Cluster& cluster) {
     static constexpr std::array<CoreType, 2> k_SupportedCoreTypes{CoreType::ETH, CoreType::WORKER};
-    auto& store = CMAKE_UNIQUE_NAMESPACE::get_store();
+    auto& store = get_store();
     for (const auto& core_type : k_SupportedCoreTypes) {
         for (uint32_t hw_cqs = 1; hw_cqs <= MAX_NUM_HW_CQS; ++hw_cqs) {
             DispatchSettingsContainerKey k{core_type, hw_cqs};
@@ -182,8 +181,8 @@ static void DispatchSettings::initialize(const tt::Cluster& cluster) {
 }
 
 // Reset the settings for a core type and number hw cqs to the provided settings
-static void DispatchSettings::initialize(const DispatchSettings& other) {
-    auto& store = CMAKE_UNIQUE_NAMESPACE::get_store();
+void DispatchSettings::initialize(const DispatchSettings& other) {
+    auto& store = get_store();
     DispatchSettingsContainerKey k{other.core_type_, other.num_hw_cqs_};
     store[k] = other;
 }
