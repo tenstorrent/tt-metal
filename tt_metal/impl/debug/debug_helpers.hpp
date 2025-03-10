@@ -6,6 +6,7 @@
 
 #include <set>
 
+#include <tt-metalium/dev_msgs.h>
 #include "hostdevcommon/dprint_common.h"
 #include <device.hpp>
 
