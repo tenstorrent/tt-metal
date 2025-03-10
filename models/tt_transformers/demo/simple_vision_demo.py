@@ -86,7 +86,7 @@ def create_multimodal_model(mesh_device, max_batch_size, max_seq_len, dtype=ttnn
     ],
     ids=["batch1-notrace", "batch1-trace", "batch32-trace", "batch4-trace-with-text-prompts"],
 )
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 14951424, "num_command_queues": 2}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 14951424, "num_command_queues": 1}], indirect=True)
 def test_multimodal_demo_text(
     mesh_device,
     warmup_iters,
