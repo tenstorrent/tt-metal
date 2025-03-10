@@ -16,6 +16,10 @@ from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
 )
 
 
+def rms_norm(x, dim, gamma, beta, eps):
+    return x * torch.rsqrt(x.pow(2).mean([-i for i in range(1, len(dim) + 1)], keepdim=True) + eps) * gamma + beta
+
+
 def run_rms_fuse_impl(
     mesh_device,
     num_devices,
@@ -32,6 +36,7 @@ def run_rms_fuse_impl(
     input_dtype=ttnn.bfloat8_b,
     layout=ttnn.TILE_LAYOUT,
     topology=ttnn.Topology.Linear,
+    epsilon=1e-05,
 ):
     ccl_sub_device_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
     worker_sub_device = ttnn.SubDevice(
@@ -57,14 +62,7 @@ def run_rms_fuse_impl(
     padded_dim = padded_dim_per_core * total_cores
 
     size_per_device = padded_dim // num_devices
-    print(total_cores)
-    print(num_cores)
-    print(padded_dim_per_core)
-    print(padded_dim)
-    print(num_devices)
-    print(size_per_device)
     input_shape = (1, 1, 32, padded_dim)
-    print(input_shape)
     input_memory_config = ttnn.create_sharded_memory_config(
         shape=(
             32,
@@ -79,7 +77,6 @@ def run_rms_fuse_impl(
     input_tensor_torch = torch.randn(input_shape)
     gamma_torch = torch.randn((1, 1, 1, input_shape[3]))
 
-    print(mesh_device.shape)
     input_tensor = ttnn.as_tensor(
         input_tensor_torch,
         dtype=input_dtype,
@@ -91,17 +88,22 @@ def run_rms_fuse_impl(
         memory_config=input_memory_config,
     )
     gamma_tensor = ttnn.as_tensor(
-        gamma_torch.reshape([1, 1, padded_dim // 32, 32]),
-        dtype=input_dtype,
+        gamma_torch.reshape(
+            [
+                1,
+                1,
+                padded_dim // 32,
+                32,
+            ]
+        ),
+        dtype=ttnn.bfloat16,
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device=mesh_device, dims=(None, 2), mesh_shape=list(ttnn.MeshShape(1, num_devices))
         ),
-        layout=layout,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-
-    print((size_per_device // num_cores) // 32)
 
     layer_norm_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=(1, 1),
@@ -110,12 +112,9 @@ def run_rms_fuse_impl(
         block_w=(size_per_device // num_cores) // 32,
         inplace=False,
     )
-    print("Made the ln config\n")
 
     tt_stats = ttnn.rms_norm_pre_all_gather(input_tensor, program_config=layer_norm_config)
-    print("Ran pre-all-gather")
     ccl_semaphore = ttnn.create_global_semaphore(mesh_device, input_shard_grid, 0)
-    print(tt_stats)
     ag_memory_config = ttnn.create_sharded_memory_config(
         shape=(
             32,
@@ -136,8 +135,6 @@ def run_rms_fuse_impl(
         memory_config=ag_memory_config,
     )
     ttnn.synchronize_device(mesh_device)
-    print("Ran all-gather")
-    print(tt_stats)
     output_pad_width = math.ceil(padded_dim_per_core / num_devices / 32) * 32
     if output_shard_grid is None:
         output_shard_grid = input_shard_grid
@@ -155,7 +152,7 @@ def run_rms_fuse_impl(
 
     tt_out = ttnn.rms_norm_post_all_gather(
         input_tensor,
-        epsilon=1e-05,
+        epsilon=epsilon,
         weight=gamma_tensor,
         program_config=layer_norm_config,
         stats=tt_stats,
@@ -167,10 +164,10 @@ def run_rms_fuse_impl(
         tt_out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 3), mesh_shape=(8, 4))
     )[0].unsqueeze(0)
 
-    ref_lnorm = rms_norm(input_tensor_torch, [3], gamma_torch, torch.zeros_like(gamma_torch), 1e-5)
+    ref_lnorm = rms_norm(input_tensor_torch, [3], gamma_torch, torch.zeros_like(gamma_torch), epsilon)
     passing, output = comp_pcc(tt_out_torch, ref_lnorm, 0.999)
     logger.info(output)
+
     mesh_device.reset_sub_device_stall_group()
     teardown_fabric_interface(mesh_device)
-
     assert passing

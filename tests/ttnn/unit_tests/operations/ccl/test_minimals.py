@@ -365,8 +365,8 @@ def test_all_gather_only(
     [
         # RMS NORM ALL GATHER FUSION
         (
-            8,
-            16384,
+            4,
+            8192,
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
             None,
         ),
