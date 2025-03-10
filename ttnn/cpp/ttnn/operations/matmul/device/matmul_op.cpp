@@ -1426,10 +1426,10 @@ void Matmul::validate(
 
     TT_FATAL(optional_input_tensors.size() == 1, "Error");
 
+    const auto output_tensor_spec = this->compute_output_specs(input_tensors, {}, optional_input_tensors).at(0);
     if (is_optional_output_tensor) {
         const auto& optional_output_tensor_c = optional_output_tensors.at(0);
         const auto& optional_output_tensor_shape = optional_output_tensor_c->get_logical_shape();
-        const auto output_tensor_spec = this->compute_output_specs(input_tensors, {}, optional_input_tensors).at(0);
         TT_FATAL(
             optional_output_tensor_shape == output_tensor_spec.logical_shape(),
             "Shape of Optional Output Tensor {} doesnt match Output Tensor {}",
@@ -1445,6 +1445,23 @@ void Matmul::validate(
             "Memory config mismatch between optional output tensor {} & output "
             "tensor {}",
             optional_output_tensor_c->memory_config(),
+            this->output_mem_config);
+    } else {
+        TT_FATAL(
+            output_tensor_spec.memory_config().memory_layout == this->output_mem_config.memory_layout,
+            "Mismatch between computed {} and provided {} mem config memory layout",
+            output_tensor_spec.memory_config().memory_layout,
+            this->output_mem_config.memory_layout);
+        TT_FATAL(
+            output_tensor_spec.memory_config().buffer_type == this->output_mem_config.buffer_type,
+            "Mismatch between computed {} and provided {} mem config buffer type",
+            output_tensor_spec.memory_config().buffer_type,
+            this->output_mem_config.buffer_type);
+        // Needs to be an assert, there are too many existing models not specifying shard spec correctly.
+        TT_ASSERT(
+            output_tensor_spec.memory_config() == this->output_mem_config,
+            "Mismatch between computed {} and provided {} mem config",
+            output_tensor_spec.memory_config(),
             this->output_mem_config);
     }
 
