@@ -210,8 +210,9 @@ std::pair<bool, bool> MeshBuffer::replicated_dims() const {
     return this->global_shard_spec().replicated_dims();
 }
 
-AnyBuffer::AnyBuffer(std::shared_ptr<Buffer> buffer) : buffer_(std::move(buffer)) {}
-AnyBuffer::AnyBuffer(std::shared_ptr<MeshBuffer> buffer) : buffer_(std::move(buffer)) {}
+AnyBuffer::AnyBuffer(std::shared_ptr<Buffer> buffer) : buffer_(buffer.get()), holder_(std::move(buffer)) {}
+AnyBuffer::AnyBuffer(std::shared_ptr<MeshBuffer> buffer) :
+    buffer_(buffer->get_device_buffer()), holder_(std::move(buffer)) {}
 
 AnyBuffer AnyBuffer::create(const tt::tt_metal::ShardedBufferConfig& config) {
     auto mesh_device = dynamic_cast<MeshDevice*>(config.device);
@@ -246,25 +247,16 @@ AnyBuffer AnyBuffer::create(const tt::tt_metal::InterleavedBufferConfig& config)
     return MeshBuffer::create(mesh_config, local_config, mesh_device);
 }
 
-Buffer* AnyBuffer::get_buffer() const {
-    return std::visit(
-        tt::stl::overloaded{
-            [](const std::shared_ptr<Buffer>& buffer) { return buffer.get(); },
-            [](const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer) -> Buffer* {
-                if (!mesh_buffer->is_allocated()) {
-                    return nullptr;
-                }
-                auto shape = mesh_buffer->device()->shape();
-                return mesh_buffer->get_device_buffer(*distributed::MeshCoordinateRange(shape).begin());
-            }},
-        buffer_);
-}
+Buffer* AnyBuffer::get_buffer() const { return buffer_; }
 
-bool AnyBuffer::is_mesh_buffer() const { return std::holds_alternative<std::shared_ptr<MeshBuffer>>(buffer_); }
+bool AnyBuffer::is_mesh_buffer() const { return get_mesh_buffer() != nullptr; }
 
 std::shared_ptr<MeshBuffer> AnyBuffer::get_mesh_buffer() const {
-    if (auto mesh_buffer = std::get_if<std::shared_ptr<MeshBuffer>>(&buffer_)) {
-        return *mesh_buffer;
+    if (auto mesh_buffer_ptr = std::get_if<std::shared_ptr<MeshBuffer>>(&holder_)) {
+        auto mesh_buffer = *mesh_buffer_ptr;
+        if (mesh_buffer->is_allocated()) {
+            return mesh_buffer;
+        }
     }
     return nullptr;
 }

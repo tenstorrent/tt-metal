@@ -174,7 +174,8 @@ private:
     AnyBuffer(std::shared_ptr<Buffer> buffer);
     AnyBuffer(std::shared_ptr<MeshBuffer> buffer);
 
-    std::variant<std::shared_ptr<Buffer>, std::shared_ptr<distributed::MeshBuffer>> buffer_;
+    Buffer* buffer_ = nullptr;
+    std::variant<std::shared_ptr<Buffer>, std::shared_ptr<distributed::MeshBuffer>> holder_;
 };
 
 }  // namespace tt::tt_metal::distributed
