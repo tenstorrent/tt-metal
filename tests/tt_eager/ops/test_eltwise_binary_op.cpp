@@ -34,15 +34,16 @@ Tensor host_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b)
 }
 
 template <auto HostFunction, typename DeviceFunction, typename... Args>
-bool run_test(const ttnn::SimpleShape& shape, const DeviceFunction& device_function, IDevice* device, Args... args) {
+bool run_test(const ttnn::Shape& shape, const DeviceFunction& device_function, IDevice* device, Args... args) {
     auto input_tensor_a = ttnn::random::random(shape, DataType::BFLOAT16);
     auto input_tensor_b = ttnn::random::random(shape, DataType::BFLOAT16);
 
     auto host_output = HostFunction(input_tensor_a, input_tensor_b);
-    auto device_output =
-        device_function(input_tensor_a.to(Layout::TILE).to(device), input_tensor_b.to(Layout::TILE).to(device))
-            .cpu()
-            .to(Layout::ROW_MAJOR);
+    auto device_output = device_function(
+                             input_tensor_a.to_layout(Layout::TILE).to_device(device),
+                             input_tensor_b.to_layout(Layout::TILE).to_device(device))
+                             .cpu()
+                             .to_layout(Layout::ROW_MAJOR);
 
     return ttnn::allclose<bfloat16>(host_output, device_output, args...);
 }
@@ -55,51 +56,51 @@ int main() {
     auto device = tt::tt_metal::CreateDevice(device_id);
 
     {
-        ttnn::SimpleShape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
+        ttnn::Shape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
         auto allclose = run_test<host_function<std::plus<float>>>(shape, ttnn::add, device);
         TT_FATAL(allclose, "Error");
     }
 
     {
-        ttnn::SimpleShape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
+        ttnn::Shape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
         auto allclose = run_test<host_function<std::minus<float>>>(shape, ttnn::subtract, device);
         TT_FATAL(allclose, "Error");
     }
 
     {
-        ttnn::SimpleShape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
+        ttnn::Shape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
         auto allclose = run_test<host_function<std::multiplies<float>>>(shape, ttnn::multiply, device, 1e-2f, 1e-3f);
         TT_FATAL(allclose, "Error");
     }
 
     auto run_binary_ops = [&] {
         {
-            ttnn::SimpleShape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
+            ttnn::Shape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
             auto allclose = run_test<host_function<std::plus<float>>>(shape, ttnn::add, device);
             TT_FATAL(allclose, "Error");
         }
 
         {
-            ttnn::SimpleShape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
+            ttnn::Shape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
             auto allclose = run_test<host_function<std::minus<float>>>(shape, ttnn::subtract, device);
             TT_FATAL(allclose, "Error");
         }
 
         {
-            ttnn::SimpleShape shape({1, 1, tt::constants::TILE_HEIGHT * 2, tt::constants::TILE_WIDTH * 2});
+            ttnn::Shape shape({1, 1, tt::constants::TILE_HEIGHT * 2, tt::constants::TILE_WIDTH * 2});
             auto allclose = run_test<host_function<std::plus<float>>>(shape, ttnn::add, device);
             TT_FATAL(allclose, "Error");
         }
 
         {
-            ttnn::SimpleShape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
+            ttnn::Shape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
             auto allclose =
                 run_test<host_function<std::multiplies<float>>>(shape, ttnn::multiply, device, 1e-2f, 1e-3f);
             TT_FATAL(allclose, "Error");
         }
 
         {
-            ttnn::SimpleShape shape({1, 1, tt::constants::TILE_HEIGHT * 4, tt::constants::TILE_WIDTH * 4});
+            ttnn::Shape shape({1, 1, tt::constants::TILE_HEIGHT * 4, tt::constants::TILE_WIDTH * 4});
             auto allclose = run_test<host_function<std::plus<float>>>(shape, ttnn::add, device);
             TT_FATAL(allclose, "Error");
         }
@@ -111,8 +112,9 @@ int main() {
     run_binary_ops();
 
     // Allocate a tensor to show that the addresses aren't cached
-    auto input_tensor =
-        ttnn::random::uniform(bfloat16(0.0f), bfloat16(0.0f), SimpleShape({1, 1, 32, 32})).to(Layout::TILE).to(device);
+    auto input_tensor = ttnn::random::uniform(bfloat16(0.0f), bfloat16(0.0f), ttnn::Shape({1, 1, 32, 32}))
+                            .to_layout(Layout::TILE)
+                            .to_device(device);
 
     run_binary_ops();
 

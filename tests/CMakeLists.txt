@@ -8,9 +8,10 @@ target_link_libraries(
         pthread
         gmock_main
         nlohmann_json::nlohmann_json
-        magic_enum
+        magic_enum::magic_enum
         fmt::fmt-header-only
         span
+        small_vector
 )
 
 if(TT_METAL_BUILD_TESTS)

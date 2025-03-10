@@ -8,9 +8,8 @@
 #include <vector>
 
 #include "mesh_config.hpp"
-#include "mesh_device.hpp"
-#include "device.hpp"
-
+#include "mesh_coord.hpp"
+#include "indestructible.hpp"
 namespace tt::tt_metal::distributed {
 
 // SystemMesh creates a virtualization over the physical devices in the system.
@@ -21,7 +20,8 @@ private:
     class Impl;  // Forward declaration only
     std::unique_ptr<Impl> pimpl_;
     SystemMesh();
-    ~SystemMesh();
+
+    friend class tt::stl::Indestructible<SystemMesh>;
 
 public:
     static SystemMesh& instance();
@@ -30,16 +30,15 @@ public:
     SystemMesh(SystemMesh&&) = delete;
     SystemMesh& operator=(SystemMesh&&) = delete;
 
+    // Returns the shape of the system mesh
     const MeshShape& get_shape() const;
-    size_t get_num_devices() const;
 
-    // Gets the physical device ID for a given logical row and column index
-    chip_id_t get_physical_device_id(size_t logical_row_idx, size_t logical_col_idx) const;
+    // Returns the physical device ID for a given logical row and column index
+    chip_id_t get_physical_device_id(const MeshCoordinate& coord) const;
 
-    // Get the physical device IDs mapped to a MeshDevice
+    // Returns the physical device IDs mapped to a MeshDevice
     std::vector<chip_id_t> get_mapped_physical_device_ids(const MeshDeviceConfig& config) const;
     std::vector<chip_id_t> request_available_devices(const MeshDeviceConfig& config) const;
-    void register_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device, const std::vector<IDevice*>& devices);
 };
 
 }  // namespace tt::tt_metal::distributed

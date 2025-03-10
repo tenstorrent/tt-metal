@@ -18,8 +18,8 @@ size_t round_up(size_t value, size_t multiple) {
 };
 
 Alignment legacyShapeToAlignment(
-    const ttnn::SimpleShape& logical_shape,
-    const ttnn::SimpleShape& legacy_padded_shape,
+    const ttnn::Shape& logical_shape,
+    const ttnn::Shape& legacy_padded_shape,
     const PageConfig& page_config,
     const MemoryConfig& memory_config) {
     if (logical_shape == legacy_padded_shape) {
@@ -102,7 +102,7 @@ void validate_shard_spec(const TensorLayout& tensor_layout) {
         const auto& physical_shard_shape = tensor_layout.get_physical_shard_shape();
         const auto& tile_shape = tensor_layout.get_tile().get_tile_shape();
         // TODO (issue #17060): Flip to TT_FATAL
-        TT_ASSERT(
+        TT_FATAL(
             (physical_shard_shape.height() % tile_shape[0] == 0 && physical_shard_shape.width() % tile_shape[1] == 0),
             "Physical shard shape {} must be tile {} sized!",
             physical_shard_shape,
@@ -125,27 +125,22 @@ TensorLayout::TensorLayout(
     CMAKE_UNIQUE_NAMESPACE::validate_shard_spec(*this);
 }
 
-TensorLayout TensorLayout::fromLegacyPaddedShape(
-    DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const ttnn::Shape& legacy_shape) {
-    return TensorLayout(
-        dtype,
-        page_config,
-        memory_config,
-        CMAKE_UNIQUE_NAMESPACE::legacyShapeToAlignment(
-            legacy_shape.logical_shape(), legacy_shape.padded_shape(), page_config, memory_config));
-}
-
 TensorLayout TensorLayout::fromPaddedShape(
     DataType dtype,
     const PageConfig& page_config,
     const MemoryConfig& memory_config,
-    const ttnn::SimpleShape& logical_shape,
-    const ttnn::SimpleShape& padded_shape) {
+    const ttnn::Shape& logical_shape,
+    const ttnn::Shape& padded_shape) {
     return TensorLayout(
         dtype,
         page_config,
         memory_config,
         CMAKE_UNIQUE_NAMESPACE::legacyShapeToAlignment(logical_shape, padded_shape, page_config, memory_config));
+}
+
+TensorLayout TensorLayout::restore_from_serialized(
+    DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment) {
+    return TensorLayout(dtype, page_config, memory_config, alignment);
 }
 
 void TensorLayout::initialize_alignment() {
@@ -166,7 +161,7 @@ void TensorLayout::initialize_alignment() {
     alignment_ = Alignment(std::move(result));
 }
 
-std::optional<ShardSpecBuffer> TensorLayout::compute_shard_spec_buffer(const ttnn::SimpleShape& shape) const {
+std::optional<ShardSpecBuffer> TensorLayout::compute_shard_spec_buffer(const ttnn::Shape& shape) const {
     if (!memory_config_.is_sharded()) {
         return std::nullopt;
     }
@@ -189,7 +184,7 @@ std::optional<ShardSpecBuffer> TensorLayout::compute_shard_spec_buffer(const ttn
         page_shape.height());
     const auto width_in_pages = physical_size.width() / page_shape.width();
     const auto height_in_pages = physical_size.height() / page_shape.height();
-    const std::array<uint32_t, 2> tensor2d_shape{height_in_pages, width_in_pages};
+    const std::array<uint32_t, 2> tensor2d_shape_in_pages{height_in_pages, width_in_pages};
 
     auto shard_spec = memory_config_.shard_spec.value();
 
@@ -203,11 +198,11 @@ std::optional<ShardSpecBuffer> TensorLayout::compute_shard_spec_buffer(const ttn
         default: TT_THROW("Unsupported shard mode {} in compute_shard_spec_buffer!", shard_spec.mode);
     }
 
-    ShardSpecBuffer shard_spec_buffer(shard_spec, std::array<uint32_t, 2>(page_shape), tensor2d_shape);
+    ShardSpecBuffer shard_spec_buffer(shard_spec, std::array<uint32_t, 2>(page_shape), tensor2d_shape_in_pages);
     return shard_spec_buffer;
 }
 
-size_t TensorLayout::compute_packed_buffer_size_bytes(const ttnn::SimpleShape& shape) const {
+size_t TensorLayout::compute_packed_buffer_size_bytes(const ttnn::Shape& shape) const {
     const Shape2D physical_size = compute_physical_shape(shape);
     const Shape2D page_shape = compute_page_shape(physical_size);
     const auto width_remainder = physical_size.width() % page_shape.width();
@@ -227,7 +222,7 @@ size_t TensorLayout::compute_packed_buffer_size_bytes(const ttnn::SimpleShape& s
     return page_count * page_size_bytes;
 }
 
-size_t TensorLayout::compute_page_size_bytes(const ttnn::SimpleShape& shape) const {
+size_t TensorLayout::compute_page_size_bytes(const ttnn::Shape& shape) const {
     const auto physical_size = compute_physical_shape(shape);
     const auto page_shape = compute_page_shape(physical_size);
     return compute_page_size_bytes(page_shape);
@@ -241,7 +236,8 @@ Shape2D TensorLayout::get_logical_shard_shape() const {
     TT_FATAL(
         memory_config_.shard_spec.has_value(), "Shard spec must have value for TensorLayout::get_logical_shard_shape!");
 
-    // Shape in shard spec will always represent logical shard shape in either mode
+    // In physical mode, shape in shard spec is logical shard shape if no padding
+    // Otherwise, not possible to infer logical shard shape in general
     return Shape2D(memory_config_.shard_spec.value().shape);
 }
 
@@ -281,7 +277,7 @@ Shape2D TensorLayout::get_physical_shard_shape() const {
     }
 }
 
-Shape2D TensorLayout::compute_logical_2d_shape(const ttnn::SimpleShape& shape) const {
+Shape2D TensorLayout::compute_logical_2d_shape(const ttnn::Shape& shape) const {
     if (shape.rank() < 2) {
         return Shape2D{1, shape[-1]};
     }
@@ -293,7 +289,7 @@ Shape2D TensorLayout::compute_logical_2d_shape(const ttnn::SimpleShape& shape) c
     return Shape2D{height, width};
 }
 
-Shape2D TensorLayout::compute_physical_shape(const ttnn::SimpleShape& shape) const {
+Shape2D TensorLayout::compute_physical_shape(const ttnn::Shape& shape) const {
     const int rank = static_cast<int>(shape.rank());
     const int alignment_rank = static_cast<int>(alignment_.size());
 
@@ -368,7 +364,7 @@ Shape2D TensorLayout::compute_page_shape(const Shape2D& physical_size) const {
     return page_config_.get_page_shape(physical_size, dtype_, memory_config_, physical_shard_shape);
 }
 
-Strides TensorLayout::compute_strides(const ttnn::SimpleShape& logical_shape) const {
+Strides TensorLayout::compute_strides(const ttnn::Shape& logical_shape) const {
     const int rank = static_cast<int>(logical_shape.rank());
     const int alignment_rank = static_cast<int>(alignment_.size());
     Strides strides(rank, 1);
@@ -382,7 +378,7 @@ Strides TensorLayout::compute_strides(const ttnn::SimpleShape& logical_shape) co
     return strides;
 }
 
-ttnn::SimpleShape TensorLayout::compute_padded_shape(const ttnn::SimpleShape& shape) const {
+ttnn::Shape TensorLayout::compute_padded_shape(const ttnn::Shape& shape) const {
     ttnn::SmallVector<uint32_t> padded_shape(std::max(shape.rank(), alignment_.size()));
     int rank_index = static_cast<int>(shape.rank()) - 1;
     int alignment_index = static_cast<int>(alignment_.size()) - 1;
@@ -416,7 +412,7 @@ ttnn::SimpleShape TensorLayout::compute_padded_shape(const ttnn::SimpleShape& sh
     for (; rank_index >= 0; rank_index--, padded_shape_index--) {
         padded_shape[padded_shape_index] = shape[rank_index];
     }
-    return ttnn::SimpleShape(std::move(padded_shape));
+    return ttnn::Shape(std::move(padded_shape));
 }
 
 }  // namespace tt::tt_metal

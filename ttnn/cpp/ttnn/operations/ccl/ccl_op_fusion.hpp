@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_impl.hpp>
 
 namespace ttnn {

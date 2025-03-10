@@ -8,7 +8,7 @@
 
 #include <tt-metalium/graph_tracking.hpp>
 #include <tracy/Tracy.hpp>
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
@@ -54,8 +54,6 @@ auto extract_args_to_vector(args_t&&... args) {
 template <typename operation_t, typename execute_on_worker_thread_return_t, typename... args_t>
 inline auto create_async_output_tensors(
     const Tensors& inputs, const OptionalConstTensors& optional_inputs, args_t&&... args) {
-    bool enable_autoformat_device = false;
-
     constexpr bool custom_create_async_outputs =
         requires(const operation_t& t) { t.create_async_output_tensors(inputs, optional_inputs); };
 
@@ -72,15 +70,14 @@ inline auto create_async_output_tensors(
 
         return operation_t::create_async_optional_output_tensors(std::forward<decltype(args)>(args)...);
     } else if constexpr (std::is_same_v<std::decay_t<execute_on_worker_thread_return_t>, Tensor>) {
-        return std::vector{Tensor(
-            tt::tt_metal::operation::get_workers_for_op_output(inputs, optional_inputs, enable_autoformat_device))};
+        return std::vector{Tensor(tt::tt_metal::operation::get_workers_for_op_output(inputs, optional_inputs))};
 
     } else if constexpr (detail::is_homogenous_tuple<execute_on_worker_thread_return_t, Tensor>()) {
         Tensors output_tensors;
         output_tensors.reserve(std::tuple_size_v<execute_on_worker_thread_return_t>);
         for (auto index = 0; index < std::tuple_size_v<execute_on_worker_thread_return_t>; index++) {
-            output_tensors.emplace_back(Tensor(
-                tt::tt_metal::operation::get_workers_for_op_output(inputs, optional_inputs, enable_autoformat_device)));
+            output_tensors.emplace_back(
+                Tensor(tt::tt_metal::operation::get_workers_for_op_output(inputs, optional_inputs)));
         }
         return output_tensors;
     } else {
@@ -108,6 +105,9 @@ auto map_launch_op_args_to_execute_on_worker_thread_args(
                        &optional_output_tensor_index,
                        &optional_output_tensors](auto&& arg) {
         using T = std::decay_t<decltype(arg)>;
+        if constexpr (std::is_same_v<T, std::vector<Tensor>>) {
+            return input_tensors;
+        }
         if constexpr (std::is_same_v<T, Tensor>) {
             return input_tensors.at(input_tensor_index++);
         } else if constexpr (std::is_same_v<T, std::optional<const Tensor>>) {
@@ -201,6 +201,15 @@ concept PrimitiveOperationConcept = device_operation::DeviceOperationConcept<ope
 template <typename operation_t>
 concept CompositeOperationConcept = !PrimitiveOperationConcept<operation_t>;
 
+template <typename Op, typename... Args>
+concept HasInvoke = requires {
+    { Op::invoke(std::declval<Args>()...) };
+};
+
+template <typename T, typename... Args>
+concept FirstArgIs =
+    sizeof...(Args) > 0 && std::same_as<std::decay_t<std::tuple_element_t<0, std::tuple<Args&&...>>>, T>;
+
 template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t, bool auto_launch_op>
 struct registered_operation_t {
     static constexpr auto is_primitive = PrimitiveOperationConcept<operation_t>;
@@ -216,9 +225,48 @@ struct registered_operation_t {
         return detail::python_fully_qualified_name(std::string{cpp_fully_qualified_name});
     }
 
+    // --- operator() Overloads ---
+
+    // (1) Overload when the first argument is a QueueId.
+    template <typename First, typename... Rest>
+        requires std::same_as<std::decay_t<First>, QueueId>
+    auto operator()(First&& first, Rest&&... rest) const {
+        return traced_invoke(std::forward<First>(first), std::forward<Rest>(rest)...);
+    }
+
+    // (2a) Overload when no QueueId is provided AND the operation is invocable without a QueueId.
+    template <typename... Args>
+        requires(sizeof...(Args) == 0 || (!FirstArgIs<QueueId, Args...> && HasInvoke<operation_t, Args && ...>))
+    auto operator()(Args&&... args) const {
+        return traced_invoke(std::forward<Args>(args)...);
+    }
+
+    // (2b) Overload when no QueueId is provided but the operation is NOT invocable without a QueueId,
+    // so we inject DefaultQueueId.
+    template <typename... Args>
+        requires(
+            sizeof...(Args) == 0 || (!FirstArgIs<QueueId, Args...> && !HasInvoke<operation_t, Args && ...> &&
+                                     HasInvoke<operation_t, QueueId, Args && ...>))
+    auto operator()(Args&&... args) const {
+        return traced_invoke(DefaultQueueId, std::forward<Args>(args)...);
+    }
+
+private:
+    template <typename... args_t>
+    auto traced_invoke(args_t&&... args) const {
+        tt::log_debug(tt::LogOp, "Started C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
+        tt::tt_metal::GraphTracker::instance().track_function_start(cpp_fully_qualified_name, args...);
+
+        auto output = invoke(std::forward<args_t>(args)...);
+
+        tt::tt_metal::GraphTracker::instance().track_function_end(output);
+        tt::log_debug(tt::LogOp, "Finished C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
+        return output;
+    }
+
     template <typename... args_t>
         requires PrimitiveOperationConcept<operation_t>
-    auto invoke(uint8_t queue_id, args_t&&... args) const {
+    auto invoke(QueueId queue_id, args_t&&... args) const {
         static_assert(
             requires { operation_t::invoke(std::forward<decltype(args)>(args)...); },
             "Primitive Operation must implement operator() method to be invoked.");
@@ -232,6 +280,12 @@ struct registered_operation_t {
         requires(PrimitiveOperationConcept<operation_t>)
     auto invoke(args_t&&... args) const {
         return invoke(DefaultQueueId, std::forward<args_t>(args)...);
+    }
+
+    template <typename... args_t>
+        requires(CompositeOperationConcept<operation_t>)
+    auto invoke(args_t&&... args) const {
+        return invoke_composite(std::forward<args_t>(args)...);
     }
 
     template <typename... args_t>
@@ -253,9 +307,24 @@ struct registered_operation_t {
 
         using execute_on_worker_thread_return_t = decltype(operation_t::invoke(args...));
 
-        const Tensors input_tensors = detail::extract_args_to_vector<ttnn::Tensor>(args...);
+        Tensors single_input_tensor = detail::extract_args_to_vector<ttnn::Tensor>(args...);
         const OptionalConstTensors optional_input_tensors =
             detail::extract_args_to_vector<std::optional<const ttnn::Tensor>>(args...);
+        std::vector<std::vector<ttnn::Tensor>> vec_input_tensors =
+            detail::extract_args_to_vector<std::vector<ttnn::Tensor>>(args...);
+        if (!(single_input_tensor.empty() || vec_input_tensors.empty())) {
+            TT_THROW(
+                "Only one of single_input_tensor or vec_input_tensors can be specified."
+                "Ensure that your invoke function does not have both Tensor and std::vector<Tensor> as input "
+                "parameters");
+        }
+        if (single_input_tensor.empty() && vec_input_tensors.size() > 1) {
+            TT_THROW(
+                "You have more than one std::vector<Tensor> input parameters in the invoke. Only one vector is "
+                "allowed");
+        }
+
+        auto& input_tensors = !vec_input_tensors.empty() ? vec_input_tensors[0] : single_input_tensor;
 
         auto output_tensors = detail::create_async_output_tensors<operation_t, execute_on_worker_thread_return_t>(
             input_tensors, optional_input_tensors, args...);
@@ -263,7 +332,6 @@ struct registered_operation_t {
         const OptionalTensors optional_output_tensors =
             detail::extract_args_to_vector<std::optional<ttnn::Tensor>>(args...);
 
-        bool enable_autoformat = false;
         tt::tt_metal::operation::launch_op(
             [args...](
                 const Tensors& input_tensors,
@@ -281,8 +349,7 @@ struct registered_operation_t {
             input_tensors,
             output_tensors,
             optional_input_tensors,
-            optional_output_tensors,
-            enable_autoformat);
+            optional_output_tensors);
 
         if constexpr (std::is_same_v<std::decay_t<execute_on_worker_thread_return_t>, Tensor>) {
             return output_tensors.at(0);
@@ -299,30 +366,6 @@ struct registered_operation_t {
                 "vector of "
                 "Tensor(s).");
         }
-    }
-
-    template <typename... args_t>
-        requires(CompositeOperationConcept<operation_t>)
-    auto invoke(args_t&&... args) const {
-        return invoke_composite(std::forward<args_t>(args)...);
-    }
-
-    template <typename... args_t>
-    auto operator()(args_t&&... args) const {
-        tt::log_debug(tt::LogOp, "Started   C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
-        tt::tt_metal::GraphTracker::instance().track_function_start(cpp_fully_qualified_name, args...);
-        auto output = invoke(std::forward<args_t>(args)...);
-
-        // Should every output tensor be tracked?
-        /*
-        if (GraphTracker::instance().is_enabled()) {
-            output = tt::stl::reflection::transform_object_of_type<Tensor>(tt::tt_metal::set_tensor_id, output);
-        }
-        */
-
-        tt::tt_metal::GraphTracker::instance().track_function_end(output);
-        tt::log_debug(tt::LogOp, "Finished  C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
-        return output;
     }
 };
 
@@ -392,13 +435,6 @@ template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
 constexpr auto register_operation_with_auto_launch_op() {
     return register_operation_impl<cpp_fully_qualified_name, operation_t, true>();
 }
-
-namespace detail {
-template <auto lambda_t>
-struct lambda_operation_t {
-    static auto invoke(auto&&... args) { return lambda_t(std::forward<decltype(args)>(args)...); }
-};
-}  // namespace detail
 
 }  // namespace decorators
 

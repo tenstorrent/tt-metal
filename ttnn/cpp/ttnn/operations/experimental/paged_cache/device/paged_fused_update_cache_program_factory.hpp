@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include "ttnn/operations/cb_utils.hpp"
@@ -11,7 +10,7 @@
 
 namespace ttnn::operations::experimental::paged_cache::detail {
 
-operation::ProgramWithCallbacks paged_fused_update_cache_multi_core(
+tt::tt_metal::operation::ProgramWithCallbacks paged_fused_update_cache_multi_core(
     const Tensor& cache_tensor1,
     const Tensor& input_tensor1,
     const Tensor& cache_tensor2,

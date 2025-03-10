@@ -12,12 +12,31 @@ permissions:
 
 jobs:
   build-artifact:
+    needs: create-tag
+    strategy:
+      matrix:
+        config:
+          - version: "20.04"
+            publish-artifact: true
+          - version: "22.04"
+            publish-artifact: false
     uses: ./.github/workflows/build-artifact.yaml
+    with:
+      version: ${{ matrix.config.version }}
+      distro: ubuntu
+      publish-artifact: ${{ matrix.config.publish-artifact }}
+      build-wheel: true
     secrets: inherit
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
     with:
       tracy: true
+  test-wheels:
+    needs: build-artifact
+    uses: ./.github/workflows/_test-wheels-impl.yaml
+    with:
+      from-precompiled: true
+    secrets: inherit
   single-card-demos:
     needs: build-artifact
     uses: ./.github/workflows/single-card-demo-tests-impl.yaml
@@ -86,6 +105,7 @@ jobs:
         run: cat CHANGELOG.txt
       - name: Upload changelog as artifact
         uses: actions/upload-artifact@v4
+        timeout-minutes: 10
         with:
           name: changelog
           path: CHANGELOG.txt
@@ -118,25 +138,9 @@ jobs:
         with:
           name: release-notes
           path: RELEASE_NOTES.txt
-  build-wheels:
-    needs: create-tag
-    strategy:
-      matrix:
-        os: [ubuntu-20.04]
-    uses: ./.github/workflows/_build-wheels-impl.yaml
-    with:
-      os: ${{ matrix.os }}
-      from-precompiled: false
   # Candidate for breaking up
   create-and-upload-draft-release:
-    needs: [
-      create-tag,
-      create-release-notes,
-      build-wheels,
-    ]
-    strategy:
-      matrix:
-        os: [ubuntu-20.04]
+    needs: [create-tag, create-release-notes, build-artifact, test-wheels, single-card-demos]
     # May accidentally create two releases without restricting to 1 job
     concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
@@ -149,10 +153,14 @@ jobs:
         uses: qmonnet/git-archive-all-action@791fb850881cf58b1d1fcc9b06c01940080bba0a
         with:
           output-files: tt-metalium.tar.gz
-      - name: Download eager Python packages
+      - name: Download eager 20.04 Python packages
         uses: actions/download-artifact@v4
         with:
-          name: eager-dist-${{ matrix.os }}-any
+          name: eager-dist-ubuntu-20.04-any
+      - name: Download eager 22.04 Python packages
+        uses: actions/download-artifact@v4
+        with:
+          name: eager-dist-ubuntu-22.04-any
       - name: Create VERSION
         run: echo ${{ needs.create-tag.outputs.version }} > VERSION
       - name : Download release notes
@@ -186,12 +194,14 @@ jobs:
           fail_on_unmatched_files: true
   create-docker-release-image:
     needs: [
+      build-artifact,
       create-tag,
       create-and-upload-draft-release
     ]
     uses: ./.github/workflows/publish-release-image.yaml
     secrets: inherit
     with:
+      base-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
       version: ${{ needs.create-tag.outputs.version }}
       is_major_version:  ${{ needs.get-params.outputs.is-release-candidate !='true' && needs.get-params.outputs.should-create-release == 'true' }}
   release-docs:
@@ -201,7 +211,7 @@ jobs:
       create-and-upload-draft-release
     ]
     if: ${{ needs.get-params.outputs.is-release-candidate !='true' && needs.get-params.outputs.should-create-release == 'true' }}
-    uses: ./.github/workflows/docs-release.yaml
+    uses: ./.github/workflows/docs-latest-public.yaml
     with:
       version: ${{ needs.create-tag.outputs.version }}
     secrets: inherit

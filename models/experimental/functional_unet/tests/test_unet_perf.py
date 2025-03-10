@@ -49,7 +49,7 @@ def test_unet_perf_device(batch: int, groups: int, expected_device_perf_fps: flo
 )
 @pytest.mark.parametrize(
     "batch, groups, iterations, expected_compile_time, expected_throughput",
-    ((1, 2, 128, 25.0, 830.0),),
+    ((1, 2, 128, 25.0, 835.0),),
 )
 def test_unet_trace_perf(
     batch: int,
@@ -92,8 +92,8 @@ def test_unet_trace_perf(
 @pytest.mark.parametrize(
     "batch, groups, iterations, expected_compile_time, expected_throughput, use_async_mode",
     (
-        (1, 2, 128, 25.0, 1220.0, True),
-        (1, 2, 128, 25.0, 1650.0, False),
+        (1, 2, 128, 25.0, 1450.0, True),
+        (1, 2, 128, 25.0, 1660.0, False),
     ),
 )
 def test_unet_trace_perf_multi_device(
@@ -123,7 +123,7 @@ def test_unet_trace_perf_multi_device(
     total_num_samples = result.batch * result.groups * result.num_devices
     expected_inference_time = total_num_samples / expected_throughput
     prep_perf_report(
-        model_name="unet_shallow-trace_2cq_same_io-multi_device",
+        model_name=model_name,
         batch_size=total_num_samples,
         inference_and_compile_time=result.inference_and_compile_time,
         inference_time=result.inference_time,

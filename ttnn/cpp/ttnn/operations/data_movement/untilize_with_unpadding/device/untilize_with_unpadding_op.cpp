@@ -72,12 +72,12 @@ std::vector<ttnn::TensorSpec> UntilizeWithUnpadding::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     SmallVector<uint32_t> out_shape;
     const auto& input_tensor_a = input_tensors.at(0);
-    auto rank = input_tensor_a.get_padded_shape().rank();
+    size_t rank = input_tensor_a.logical_shape().rank();
     out_shape.reserve(rank);
     for (uint32_t i = 0; i < rank; i++) {
         out_shape.push_back(this->output_tensor_end[i] + 1);
     }
-    SimpleShape output_shape(std::move(out_shape));
+    Shape output_shape(std::move(out_shape));
 
     DataType output_dtype =
         input_tensor_a.get_dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor_a.get_dtype();
@@ -107,13 +107,20 @@ operation::ProgramWithCallbacks UntilizeWithUnpadding::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-    if (input_tensors.at(0).memory_config().is_sharded() || this->use_multicore) {
-        return detail::untilize_with_unpadding_multi_core(
+    if (input_tensors.at(0).memory_config().is_sharded()) {
+        return detail::untilize_with_unpadding_multi_core_sharded(
             input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
-    } else {
+    }
+    if (!this->use_multicore) {
         return detail::untilize_with_unpadding_single_core(
             input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
     }
+    if (!this->enough_space_height) {
+        return detail::untilize_with_unpadding_multi_core_block_interleaved(
+            input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
+    }
+    return detail::untilize_with_unpadding_multi_core_interleaved(
+        input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
 }
 
 }  // namespace ttnn::operations::data_movement

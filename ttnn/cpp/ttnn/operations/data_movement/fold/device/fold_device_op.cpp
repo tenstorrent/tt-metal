@@ -17,7 +17,7 @@ Fold::program_factory_t Fold::select_program_factory(
 void validate_fold(const std::vector<Tensor>& input_tensors, bool is_sharded, uint32_t stride_h, uint32_t stride_w) {
     const Tensor& input_tensor = input_tensors.at(0);
 
-    const Shape& input_shape = Shape(input_tensor.get_padded_shape());
+    const auto input_shape = input_tensor.get_padded_shape();
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Fold: Expect input tensor to be stored on device.");
     TT_FATAL(input_tensor.buffer() != nullptr, "Fold: Expect input tensor to be allocated on a device buffer.");
@@ -49,9 +49,9 @@ void Fold::validate_on_program_cache_hit(const operation_attributes_t& op_attr, 
 Fold::spec_return_value_t Fold::compute_output_specs(
     const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
     auto input_tensor = tensors.input_tensor;
-    const ttnn::SimpleShape input_shape = input_tensor.get_logical_shape();
+    const ttnn::Shape input_shape = input_tensor.get_logical_shape();
     // we concatenate (stride_h sticks in H-dim) * (stride_w in W-dim) into 1 stick along C-dim
-    ttnn::SimpleShape output_shape(
+    ttnn::Shape output_shape(
         {1,
          1,
          input_shape[0] * input_shape[1] * input_shape[2] / (op_attr.stride_h * op_attr.stride_w),
@@ -63,12 +63,15 @@ Fold::spec_return_value_t Fold::compute_output_specs(
         mem_config.shard_spec->shape[1] *= op_attr.stride_h * op_attr.stride_w;
 
         return {TensorSpec(
-            output_shape, TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), mem_config))};
+            output_shape,
+            tt::tt_metal::TensorLayout(
+                input_tensor.get_dtype(), tt::tt_metal::PageConfig(input_tensor.get_layout()), mem_config))};
     }
 
     return {TensorSpec(
         output_shape,
-        TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::ROW_MAJOR), input_tensor.memory_config()))};
+        tt::tt_metal::TensorLayout(
+            input_tensor.get_dtype(), tt::tt_metal::PageConfig(Layout::ROW_MAJOR), input_tensor.memory_config()))};
 }
 
 Fold::tensor_return_value_t Fold::create_output_tensors(
@@ -80,7 +83,7 @@ std::tuple<Fold::operation_attributes_t, Fold::tensor_args_t> Fold::invoke(
     const ttnn::Tensor& input_tensor,
     uint32_t stride_h,
     uint32_t stride_w,
-    const std::optional<const ttnn::SimpleShape>& output_shape,
+    const std::optional<const ttnn::Shape>& output_shape,
     uint32_t pad_c,
     uint32_t pad_h,
     uint32_t pad_w) {

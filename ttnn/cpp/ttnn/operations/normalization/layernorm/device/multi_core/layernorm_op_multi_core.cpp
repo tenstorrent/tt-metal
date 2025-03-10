@@ -15,6 +15,7 @@
 
 using uint32_t = std::uint32_t;
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 namespace ttnn::operations::normalization {
 
@@ -306,8 +307,8 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     CreateCircularBuffer(program, all_cores, cb_out0_config);
     if (!rms_norm) {
         CircularBufferConfig cb_intermed1_config =
-            CircularBufferConfig(im1_t * single_tile_size, {{tt::CBIndex::c_25, cb_data_format}})
-                .set_page_size(tt::CBIndex::c_25, single_tile_size);
+            CircularBufferConfig(im1_t * single_tile_size, {{tt::CBIndex::c_18, cb_data_format}})
+                .set_page_size(tt::CBIndex::c_18, single_tile_size);
         CreateCircularBuffer(program, all_cores, cb_intermed1_config);
     }
     CircularBufferConfig cb_in2_config =
@@ -319,8 +320,8 @@ operation::ProgramWithCallbacks layernorm_multi_core(
             .set_page_size(tt::CBIndex::c_3, bfloat16_tile_size);
     CreateCircularBuffer(program, all_cores, cb_in3_config);
     CircularBufferConfig cb_intermed2_config =
-        CircularBufferConfig(im2_t * single_tile_size, {{tt::CBIndex::c_26, cb_data_format}})
-            .set_page_size(tt::CBIndex::c_26, single_tile_size);
+        CircularBufferConfig(im2_t * single_tile_size, {{tt::CBIndex::c_19, cb_data_format}})
+            .set_page_size(tt::CBIndex::c_19, single_tile_size);
     CreateCircularBuffer(program, all_cores, cb_intermed2_config);
     if (!(rms_norm && !b.has_value())) {
         CircularBufferConfig cb_intermed0_config =
@@ -329,17 +330,17 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         CreateCircularBuffer(program, all_cores, cb_intermed0_config);
     }
     CircularBufferConfig c_intermed3_config =
-        CircularBufferConfig(im3_t * single_tile_size, {{tt::CBIndex::c_27, cb_data_format}})
-            .set_page_size(tt::CBIndex::c_27, single_tile_size);
+        CircularBufferConfig(im3_t * single_tile_size, {{tt::CBIndex::c_20, cb_data_format}})
+            .set_page_size(tt::CBIndex::c_20, single_tile_size);
     CreateCircularBuffer(program, all_cores, c_intermed3_config);
     CircularBufferConfig c_intermed4_config =
-        CircularBufferConfig(im4_t * single_tile_size, {{tt::CBIndex::c_28, cb_data_format}})
-            .set_page_size(tt::CBIndex::c_28, single_tile_size);
+        CircularBufferConfig(im4_t * single_tile_size, {{tt::CBIndex::c_21, cb_data_format}})
+            .set_page_size(tt::CBIndex::c_21, single_tile_size);
     CreateCircularBuffer(program, all_cores, c_intermed4_config);
     if (gamma.has_value() || beta.has_value()) {
         CircularBufferConfig c_intermed5_config =
-            CircularBufferConfig(im5_t * single_tile_size, {{tt::CBIndex::c_29, cb_data_format}})
-                .set_page_size(tt::CBIndex::c_29, single_tile_size);
+            CircularBufferConfig(im5_t * single_tile_size, {{tt::CBIndex::c_22, cb_data_format}})
+                .set_page_size(tt::CBIndex::c_22, single_tile_size);
         CreateCircularBuffer(program, all_cores, c_intermed5_config);
     }
     if (gamma.has_value()) {
@@ -361,8 +362,8 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         // used as x b is buffered into c_in1
         if (!rms_norm) {
             CircularBufferConfig c_intermed6_config =
-                CircularBufferConfig(im6_t * single_tile_size, {{tt::CBIndex::c_30, cb_data_format}})
-                    .set_page_size(tt::CBIndex::c_30, single_tile_size);
+                CircularBufferConfig(im6_t * single_tile_size, {{tt::CBIndex::c_23, cb_data_format}})
+                    .set_page_size(tt::CBIndex::c_23, single_tile_size);
             CreateCircularBuffer(program, all_cores, c_intermed6_config);
         }
         // c_in1 is input buffer for b
@@ -478,6 +479,9 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     bool is_pre_all_gather = distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER;
     bool is_post_all_gather = distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER;
 
+    uint32_t block_wt_resharded = output.shard_spec().value().shape[1] / TILE_WIDTH;
+    bool skip_write_back = output.shard_spec().value() == a.shard_spec().value();
+
     ////////////////////////////////////////////////////////////////////////////
     //                            Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -583,6 +587,28 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     }
     uint32_t num_subblocks_w = block_wt / subblock_wt;
 
+    // Get all storage cores
+    ShardSpec output_shard_spec = output.shard_spec().value();
+    bool output_row_wise = output_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
+
+    CoreRangeSet all_storage_cores = output_shard_spec.grid;
+    CoreRangeSet all_worker_and_storage_cores = all_storage_cores.merge(a.shard_spec().value().grid);
+    std::vector<uint32_t> storage_core_noc_x;
+    std::vector<uint32_t> storage_core_noc_y;
+    std::vector<CoreCoord> storage_core_coords =
+        corerange_to_cores(all_storage_cores, all_storage_cores.num_cores(), row_wise = output_row_wise);
+    for (auto core : storage_core_coords) {
+        storage_core_noc_x.push_back((std::uint32_t)device->worker_core_from_logical_core(core).x);
+        storage_core_noc_y.push_back((std::uint32_t)device->worker_core_from_logical_core(core).y);
+
+        tt::log_debug(
+            "Storage core: ({}, {}), physical coords: ({}, {})",
+            core.x,
+            core.y,
+            storage_core_noc_x.back(),
+            storage_core_noc_y.back());
+    }
+
     // get sharded addr
     auto in0_addr = a.buffer()->address();
     uint32_t in1_addr;
@@ -663,6 +689,10 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         out_CB_size = pre_all_gather_stats_block_tiles * out_single_tile_size;
     } else {
         out_CB_size = in0_block_tiles * out_single_tile_size;
+    }
+    uint32_t out_reshard_CB_size = out_CB_size;
+    if (is_post_all_gather && !skip_write_back) {
+        out_reshard_CB_size = block_wt_resharded * block_ht * out_single_tile_size;
     }
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -952,6 +982,11 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
 
+    if (is_post_all_gather && !skip_write_back) {
+        reader_noc = NOC::NOC_0;
+        writer_noc = NOC::NOC_1;
+    }
+
     // reader kernel
     std::string sender_reader_kernel_file =
         "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
@@ -1015,16 +1050,19 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     if (rms_norm) {
         writer_defines["RMSNORM"] = 1;
     }
+    if (skip_write_back) {
+        writer_defines["SKIP_WRITE_BACK"] = "1";
+    }
     // writer compile time args
     std::vector<uint32_t> writer_mcast_sender_compile_time_args = {
-        1,
+        1,  // is_all_to_all_worker
         (std::uint32_t)gamma.has_value(),
         (std::uint32_t)beta.has_value(),
         (std::uint32_t)is_dram(gamma),
         (std::uint32_t)is_dram(beta),
         (std::uint32_t)block_wt};
     std::vector<uint32_t> writer_mcast_receiver_compile_time_args = {
-        0,
+        0,  // is_all_to_all_worker
         (std::uint32_t)gamma.has_value(),
         (std::uint32_t)beta.has_value(),
         (std::uint32_t)is_dram(gamma),
@@ -1070,6 +1108,19 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     writer_mcast_sender_compile_time_args.push_back(beta_cb_data_format == tt::DataFormat::Float32);
     writer_mcast_receiver_compile_time_args.push_back(gamma_cb_data_format == tt::DataFormat::Float32);
     writer_mcast_receiver_compile_time_args.push_back(beta_cb_data_format == tt::DataFormat::Float32);
+
+    // write back compile time args
+    writer_mcast_sender_compile_time_args.push_back(block_wt * out_single_tile_size);  // out_tensor_stride_w_bytes
+    writer_mcast_sender_compile_time_args.push_back(
+        block_wt_resharded * out_single_tile_size);  // out_reshard_tensor_stride_w_bytes: how many bytes to skip to get
+                                                     // to the next data chunk
+    writer_mcast_sender_compile_time_args.push_back(block_ht);  // height in tiles
+
+    writer_mcast_receiver_compile_time_args.push_back(block_wt * out_single_tile_size);  // out_tensor_stride_w_bytes
+    writer_mcast_receiver_compile_time_args.push_back(
+        block_wt_resharded * out_single_tile_size);  // out_reshard_tensor_stride_w_bytes: how many bytes to skip to get
+                                                     // to the next data chunk
+    writer_mcast_receiver_compile_time_args.push_back(block_ht);  // height in tiles
 
     // writer kernel
     bool use_row_major_kernel = (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) or
@@ -1248,7 +1299,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     auto cb_x = tt::tt_metal::CreateCircularBuffer(program, all_cores, x_cb_config);
     // xmm
     uint32_t xmm_cb_index;
-    xmm_cb_index = tt::CBIndex::c_25;
+    xmm_cb_index = tt::CBIndex::c_18;
     tt::tt_metal::CircularBufferConfig xmm_cb_config =
         tt::tt_metal::CircularBufferConfig(xmm_CB_size, {{xmm_cb_index, cb_data_format}})
             .set_page_size(xmm_cb_index, single_tile_size);
@@ -1299,7 +1350,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     auto cb_ex_global = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_global_cb_config);
     // ex2pe
     uint32_t cb_ex2pe_index;
-    cb_ex2pe_index = tt::CBIndex::c_27;
+    cb_ex2pe_index = tt::CBIndex::c_20;
     tt::tt_metal::CircularBufferConfig ex2pe_cb_config =
         tt::tt_metal::CircularBufferConfig(ex2pe_CB_size, {{cb_ex2pe_index, cb_data_format}})
             .set_page_size(cb_ex2pe_index, single_tile_size);
@@ -1317,31 +1368,46 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         cb_stats = tt::tt_metal::CreateCircularBuffer(program, sender_cores, stats_cb_config);
         // cb_stats_reduced
         uint32_t cb_stats_reduced_index;
-        cb_stats_reduced_index = tt::CBIndex::c_28;
+        cb_stats_reduced_index = tt::CBIndex::c_21;
         tt::tt_metal::CircularBufferConfig stats_reduced_cb_config =
             tt::tt_metal::CircularBufferConfig(stats_reduced_cb_size, {{cb_stats_reduced_index, cb_data_format}})
                 .set_page_size(cb_stats_reduced_index, single_tile_size);
         auto cb_stats_reduced = tt::tt_metal::CreateCircularBuffer(program, sender_cores, stats_reduced_cb_config);
 
         // cb_var
-        uint32_t cb_var_index = tt::CBIndex::c_26;
+        uint32_t cb_var_index = tt::CBIndex::c_19;
         tt::tt_metal::CircularBufferConfig cb_var_config =
             tt::tt_metal::CircularBufferConfig(ex_global_CB_size, {{cb_var_index, cb_data_format}})
                 .set_page_size(cb_var_index, single_tile_size);
         auto cb_var_global = tt::tt_metal::CreateCircularBuffer(program, sender_cores, cb_var_config);
     }
+
     // out
     uint32_t output_cb_index = tt::CBIndex::c_16;
     tt::tt_metal::CircularBufferConfig output_cb_config =
         tt::tt_metal::CircularBufferConfig(out_CB_size, {{output_cb_index, out_data_format}})
-            .set_page_size(output_cb_index, out_single_tile_size)
-            .set_globally_allocated_address(*output.buffer());
+            .set_page_size(output_cb_index, out_single_tile_size);
+    if (!is_post_all_gather || skip_write_back) {
+        output_cb_config = output_cb_config.set_globally_allocated_address(*output.buffer());
+    }
     CBHandle cb_output = 0;
     if (is_pre_all_gather) {
         cb_output = tt::tt_metal::CreateCircularBuffer(program, sender_cores, output_cb_config);
     } else {
         cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
     }
+
+    uint32_t output_reshard_cb_index = tt::CBIndex::c_17;
+    tt::tt_metal::CircularBufferConfig output_reshard_cb_config =
+        tt::tt_metal::CircularBufferConfig(out_reshard_CB_size, {{output_reshard_cb_index, out_data_format}})
+            .set_page_size(output_reshard_cb_index, out_single_tile_size);
+    CBHandle cb_output_reshard = 0;
+    if (is_post_all_gather && !skip_write_back) {
+        output_reshard_cb_config = output_reshard_cb_config.set_globally_allocated_address(*output.buffer());
+        cb_output_reshard =
+            tt::tt_metal::CreateCircularBuffer(program, all_worker_and_storage_cores, output_reshard_cb_config);
+    }
+
     const auto& cores = corerange_to_cores(all_cores, all_cores.num_cores(), row_wise = row_wise);
 
     // Runtime Args
@@ -1381,8 +1447,15 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         last_core_width_index = cores.size() - 1;
     }
 
+    // For write back calculation
+    uint32_t current_storage_core = 0;
+    uint32_t current_storage_core_offset = 0;
+
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const auto& core = cores[i];
+
+        tt::log_debug("core: {}, {}", core.x, core.y);
+
         uint32_t height_index = 0, width_index = 0;
         if (mcast_1d) {
             height_index = 0;
@@ -1565,6 +1638,67 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             tt::tt_metal::SetRuntimeArgs(program, reader_mcast_receiver_kernels_id, core, mcast_receiver_args);
         }
 
+        // Compute write back rt args
+
+        std::vector<uint32_t> write_back_writer_args;
+
+        if (is_post_all_gather) {
+            uint32_t num_storage_cores = all_storage_cores.num_cores();
+
+            write_back_writer_args.push_back(
+                current_storage_core_offset * out_single_tile_size);  // storage_core_start_offset
+
+            uint32_t current_worker_num_segments_to_write_back = 0;
+            uint32_t worker_core_current_offset = 0;
+
+            while (worker_core_current_offset <
+                   block_wt) {  // Continue until all worker core data has been written to corresponding storage cores
+                uint32_t num_tiles_available_at_current_storage_core = block_wt_resharded - current_storage_core_offset;
+                uint32_t num_tiles_left_on_current_worker_core = block_wt - worker_core_current_offset;
+                uint32_t num_tiles_to_write_back =
+                    std::min(num_tiles_left_on_current_worker_core, num_tiles_available_at_current_storage_core);
+                current_worker_num_segments_to_write_back += 1;
+
+                tt::log_debug(
+                    "New segment for worker core {}, Worker core offset: {}, Storage core offset: {}, Num tiles to "
+                    "write "
+                    "back: {}",
+                    i,
+                    worker_core_current_offset,
+                    current_storage_core_offset,
+                    num_tiles_to_write_back);
+
+                write_back_writer_args.push_back(
+                    num_tiles_to_write_back * out_single_tile_size);  // num_bytes_to_write_back
+                write_back_writer_args.push_back(
+                    storage_core_noc_x[current_storage_core]);  // current_storage_core_noc_x
+                write_back_writer_args.push_back(
+                    storage_core_noc_y[current_storage_core]);  // current_storage_core_noc_y
+
+                worker_core_current_offset += num_tiles_to_write_back;
+                current_storage_core_offset += num_tiles_to_write_back;
+
+                if (current_storage_core_offset >= block_wt_resharded) {
+                    current_storage_core += 1;        // Move to next storage core
+                    current_storage_core_offset = 0;  // Reset offset on new storage core
+
+                    TT_ASSERT(
+                        current_storage_core <= num_storage_cores,
+                        "current_storage_core {} is exceeding number of storage cores {}",
+                        current_storage_core,
+                        num_storage_cores);
+                }
+            }
+            TT_ASSERT(
+                worker_core_current_offset == block_wt,
+                "All worker core data should be written, but worker_core_current_offset {} != block_wt {}",
+                worker_core_current_offset,
+                block_wt);
+
+            write_back_writer_args.insert(write_back_writer_args.begin(), current_worker_num_segments_to_write_back);
+        }
+
+        // Set writer runtime args
         if ((not use_two_stage_reduce and width_index < num_cores_all_to_all) or
             (use_two_stage_reduce and width_index_two_stage < num_cores_all_to_all_first_stage)) {
             std::vector<uint32_t> writer_mcast_sender_args;
@@ -1585,6 +1719,11 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             writer_mcast_sender_args.push_back(beta_dram_addr);
             writer_mcast_sender_args.push_back(gamma_tile_start_id);
             writer_mcast_sender_args.push_back(beta_tile_start_id);
+
+            // Add args for write back (reshard)
+            writer_mcast_sender_args.insert(
+                writer_mcast_sender_args.end(), write_back_writer_args.begin(), write_back_writer_args.end());
+
             tt::tt_metal::SetRuntimeArgs(program, writer_mcast_sender_kernels_id, core, writer_mcast_sender_args);
             writer_kernel_ids.push_back(writer_mcast_sender_kernels_id);
         } else {
@@ -1596,6 +1735,11 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             writer_mcast_receiver_args.push_back(beta_dram_addr);
             writer_mcast_receiver_args.push_back(gamma_tile_start_id);
             writer_mcast_receiver_args.push_back(beta_tile_start_id);
+
+            // Add args for write back (reshard)
+            writer_mcast_receiver_args.insert(
+                writer_mcast_receiver_args.end(), write_back_writer_args.begin(), write_back_writer_args.end());
+
             tt::tt_metal::SetRuntimeArgs(program, writer_mcast_receiver_kernels_id, core, writer_mcast_receiver_args);
             writer_kernel_ids.push_back(writer_mcast_receiver_kernels_id);
         }

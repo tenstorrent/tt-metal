@@ -16,7 +16,7 @@
 #include <tt-metalium/test_tiles.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "ttnn/any_device.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/storage.hpp"
@@ -36,7 +36,8 @@ namespace distributed {
 class MeshDevice;
 }
 
-struct Tensor {
+class Tensor {
+public:
     struct TensorAttributes : public std::enable_shared_from_this<TensorAttributes> {
         Storage storage;
         TensorSpec tensor_spec;
@@ -81,7 +82,6 @@ struct Tensor {
 
     // Tensor gets worker queue handle through the device
     std::vector<IDevice*> workers = {};
-    bool deallocate_through_destructor = false;
 
     // ======================================================================================
     //                                  Hi Level APIs
@@ -90,14 +90,14 @@ struct Tensor {
 
     Tensor(
         Storage storage,
-        const ttnn::SimpleShape& shape,
+        const ttnn::Shape& shape,
         DataType dtype,
         Layout layout,
         const std::optional<Tile>& tile = std::nullopt);
     Tensor(
         Storage storage,
-        const ttnn::SimpleShape& logical_shape,
-        const ttnn::SimpleShape& padded_shape,
+        const ttnn::Shape& logical_shape,
+        const ttnn::Shape& padded_shape,
         DataType dtype,
         Layout layout,
         const std::optional<Tile>& tile = std::nullopt);
@@ -123,7 +123,6 @@ struct Tensor {
             perform_cleanup_for_async_mode();
             this->workers = std::move(other.workers);
             this->tensor_attributes = std::move(other.tensor_attributes);
-            this->deallocate_through_destructor = std::move(other.deallocate_through_destructor);
         }
         return *this;
     }
@@ -145,12 +144,29 @@ struct Tensor {
     // elements have to match `spec`; block float formats such as BFLOAT8_B and BFLOAT4_B require `T` equal `float`.
     //
     // The data in the buffer is copied into a tensor with an owned storage.
-    //
-    // TODO: add support for returning a tensor with borrowed storage based off the buffer.
-    // TODO: handle tilization and padding in face of sharding.
     template <typename T>
     static Tensor from_span(
         tt::stl::Span<const T> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt);
+
+    // Creates a `Tensor` with storage "borrowed" from the buffer of elements of type `T`.
+    //
+    // The primary use case for this API is to interop with Python, where `on_creation_callback` and
+    // `on_destruction_callback` are specified to be called when the tensor storage is created and destroyed (when
+    // making copies of Tensor object):
+    //
+    // py::object py_tensor = ...;
+    // auto on_creation_callback = [t = py_tensor] { t.inc_ref(); };
+    // auto on_destruction_callback = [t = py_tensor] { t.dec_ref(); };
+    //
+    // When working in C++, prefer creating owned tensors, and retaining a reference to the internal buffer, if
+    // necessary.
+    template <typename T>
+    static Tensor from_borrowed_data(
+        tt::stl::Span<T> buffer,
+        const ttnn::Shape& shape,
+        const std::function<void()>& on_creation_callback,
+        const std::function<void()>& on_destruction_callback,
+        const std::optional<Tile>& tile = std::nullopt);
 
     // Same as `from_span`, but operates on a vector instead.
     template <typename T>
@@ -159,8 +175,8 @@ struct Tensor {
         return from_span(tt::stl::Span<const T>(buffer), spec, device);
     }
 
-    // Same as `from_vector`, but takes in an rvalue. No copies will be made, if the target layout is row-major, and no
-    // type conversion is needed.
+    // Same as `from_vector`, but takes in an rvalue. No copies will be made, if the target layout is row-major,
+    // physical shape matches logical shape, and no type conversion is needed.
     template <typename T>
     static Tensor from_vector(
         std::vector<T>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt);
@@ -170,42 +186,37 @@ struct Tensor {
     // the `Tensor`; block float formats such as BFLOAT8_B and BFLOAT4_B require `T` equal `float`.
     //
     // If the tensor resides on a device, it will be brough back to host.
-    //
-    // TODO: handle tilization and padding in face of sharding.
     template <typename T>
     std::vector<T> to_vector() const;
 
-    Tensor to(
+    Tensor to_device(
         IDevice* target_device,
         const MemoryConfig& mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
-        uint8_t cq_id = ttnn::DefaultQueueId) const;
+        ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
 
-    Tensor to(
+    Tensor to_device(
         distributed::MeshDevice* mesh_device,
         const MemoryConfig& mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
-        uint8_t cq_id = ttnn::DefaultQueueId) const;
+        ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
 
-    Tensor to(
+    Tensor to_device(
         const std::vector<IDevice*>& workers,
         const MemoryConfig& mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
-        uint8_t cq_id = ttnn::DefaultQueueId) const;
+        ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
 
-    Tensor to(Layout target_layout, IDevice* worker = nullptr) const;
+    Tensor to_layout(Layout target_layout, IDevice* worker = nullptr) const;
 
-    Tensor to(Layout target_layout, distributed::MeshDevice* mesh_device) const;
+    Tensor to_layout(Layout target_layout, distributed::MeshDevice* mesh_device) const;
 
-    Tensor pad(
-        const ttnn::SimpleShape& output_padded_shape,
-        const ttnn::SimpleShape& input_tensor_start,
-        float pad_value) const;
+    Tensor pad(const ttnn::Shape& output_padded_shape, const ttnn::Shape& input_tensor_start, float pad_value) const;
 
-    Tensor cpu(bool blocking = true, uint8_t cq_id = ttnn::DefaultQueueId) const;
+    Tensor cpu(bool blocking = true, ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
 
-    Tensor unpad(const ttnn::SimpleShape& output_tensor_start, const ttnn::SimpleShape& output_tensor_end) const;
+    Tensor unpad(const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) const;
 
     Tensor pad_to_tile(float pad_value) const;
 
-    Tensor unpad_from_tile(const ttnn::SimpleShape& output_tensor_shape) const;
+    Tensor unpad_from_tile(const ttnn::Shape& output_tensor_shape) const;
 
     const std::string write_to_string() const;
     void print() const;
@@ -216,42 +227,34 @@ struct Tensor {
     // ======================================================================================
     //                                  Low Level APIs
     // ======================================================================================
-    Tensor reshape(const ttnn::SimpleShape& new_shape) const;
     Tensor reshape(const ttnn::Shape& new_shape) const;
+    Tensor reshape(const ttnn::Shape& new_logical_shape, const ttnn::Shape& new_padded_shape) const;
     // ======================================================================================
     //                                      Getters
     // ======================================================================================
     const Storage& get_storage() const;
     DataType get_dtype() const;
     Layout get_layout() const;
-    const ttnn::SimpleShape& get_logical_shape() const;
-    const ttnn::SimpleShape& get_padded_shape() const;
+    const ttnn::Shape& get_logical_shape() const;
+    const ttnn::Shape& get_padded_shape() const;
     const TensorSpec& get_tensor_spec() const;
-
-    ttnn::Shape get_shape() const;
-    tt::tt_metal::Padding get_padding() const;
 
     // ======================================================================================
     // Non-Blocking Getters. Query attributes directly, without waiting for worker completion
     // ======================================================================================
-    inline const Storage& storage() const { return this->tensor_attributes->storage; };
-    inline ttnn::Shape shape() const { return this->tensor_attributes->tensor_spec.shape(); };
-    inline const ttnn::SimpleShape& logical_shape() const {
-        return this->tensor_attributes->tensor_spec.logical_shape();
-    };
-    inline const ttnn::SimpleShape& padded_shape() const {
-        return this->tensor_attributes->tensor_spec.padded_shape();
-    };
-    inline DataType dtype() const { return this->tensor_attributes->tensor_spec.tensor_layout().get_data_type(); };
-    inline Layout layout() const { return this->tensor_attributes->tensor_spec.tensor_layout().get_layout(); };
-    inline const TensorSpec& tensor_spec() const { return this->tensor_attributes->tensor_spec; }
+    const Storage& storage() const { return this->tensor_attributes->storage; };
+    const ttnn::Shape& logical_shape() const { return this->tensor_attributes->tensor_spec.logical_shape(); };
+    const ttnn::Shape& padded_shape() const { return this->tensor_attributes->tensor_spec.padded_shape(); };
+    DataType dtype() const { return this->tensor_attributes->tensor_spec.tensor_layout().get_data_type(); };
+    Layout layout() const { return this->tensor_attributes->tensor_spec.tensor_layout().get_layout(); };
+    const TensorSpec& tensor_spec() const { return this->tensor_attributes->tensor_spec; }
 
     // ======================================================================================
     //                                      Setters
     // ======================================================================================
-    inline void set_storage(const Storage& storage) { this->tensor_attributes->storage = storage; }
+    void set_storage(const Storage& storage) { this->tensor_attributes->storage = storage; }
     // We intend to remove this API once we migrate all ops to compute_output_specs, and provide TensorSpec at creation
-    inline void set_tensor_spec(const TensorSpec& tensor_spec) {
+    void set_tensor_spec(const TensorSpec& tensor_spec) {
         this->tensor_attributes->tensor_spec = tensor_spec;
         this->tensor_attributes->metadata_populated = true;
     }
@@ -259,7 +262,9 @@ struct Tensor {
     //                                      Extra Helper Functions
     // ======================================================================================
     StorageType storage_type() const;
-    const ttnn::SimpleShape strides() const;
+    bool is_host_tensor() const;
+    bool is_device_tensor() const;
+    const ttnn::Shape strides() const;
     uint32_t volume() const;
 
     // todo: rename volume to get_volume to indicate that its blocking
@@ -302,7 +307,7 @@ struct Tensor {
             storage_type);
         return std::get<DeviceStorage>(this->get_storage()).get_buffer().get();
     }
-    DeviceBuffer device_buffer() const { return std::get<DeviceStorage>(this->get_storage()).get_buffer(); }
+    std::shared_ptr<Buffer> device_buffer() const { return std::get<DeviceStorage>(this->get_storage()).get_buffer(); }
 
     IDevice* device() const {
         if (this->storage_type() == tt::tt_metal::StorageType::DEVICE) {
@@ -334,7 +339,7 @@ struct Tensor {
     std::vector<uint32_t> host_page_ordering();
 
     // Main Thread - Wait for all workers in this tensor to populate the entire tensor
-    inline void wait_for_tensor_data_populated() const {
+    void wait_for_tensor_data_populated() const {
         // Stall until all the workers for this tensor
         // have populated the full tensor
         while (this->tensor_attributes->num_workers_completed < this->tensor_attributes->num_shards_to_be_populated) {
@@ -342,7 +347,7 @@ struct Tensor {
     }
 
     // Main Thread - Wait for the first worker in this tensor to populate the global metadata fields
-    inline void wait_for_tensor_metadata_populated() const {
+    void wait_for_tensor_metadata_populated() const {
         // First worker is responsible for updating all metadata fields
         // Stall until this worker is done
         while (not this->tensor_attributes->metadata_populated) {
@@ -351,21 +356,12 @@ struct Tensor {
 
 private:
     void init(Storage storage, TensorSpec tensor_spec);
+    void deallocate_impl(bool force, bool deallocation_through_destructor);
 };
 
 Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device);
 
 [[deprecated]]
-Tensor create_device_tensor(
-    const ttnn::SimpleShape& shape,
-    DataType dtype,
-    Layout layout,
-    IDevice* device,
-    const MemoryConfig& memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
-    const std::optional<Tile>& tile = std::nullopt);
-
-// TODO: Remove once ALL ops switch over to return ttnn::SimpleShape in compute_output_shapes
-[[deprecated("Use create_device_tensor(const TensorSpec&, IDevice*) instead")]]
 Tensor create_device_tensor(
     const ttnn::Shape& shape,
     DataType dtype,
@@ -399,7 +395,11 @@ void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& reg
 void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
 
 Tensor allocate_tensor_on_devices(const TensorSpec& spec, const std::vector<IDevice*>& devices);
-void write_tensor(const Tensor& host_tensor, Tensor device_tensor, uint8_t cq_id = ttnn::DefaultQueueId);
+
+// Allocates a tensor on a mesh device through mesh buffer.
+Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
+
+void write_tensor(const Tensor& host_tensor, Tensor device_tensor, ttnn::QueueId cq_id = ttnn::DefaultQueueId);
 
 Tensor set_tensor_id(const Tensor& tensor);
 

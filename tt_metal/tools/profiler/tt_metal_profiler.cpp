@@ -7,7 +7,6 @@
 
 #include <hal.hpp>
 #include <host_api.hpp>
-#include <dprint_server.hpp>
 
 #include <profiler.hpp>
 #include "hostdevcommon/profiler_common.h"
@@ -18,6 +17,10 @@
 #include <device.hpp>
 #include <device_pool.hpp>
 #include <tt_cluster.hpp>
+
+#include "llrt.hpp"
+
+#include "dprint_server.hpp"
 
 namespace tt {
 
@@ -348,6 +351,10 @@ void syncDeviceDevice(chip_id_t device_id_sender, chip_id_t device_id_receiver) 
         chip_id_t device_id_receiver_curr = std::numeric_limits<chip_id_t>::max();
         while ((device_id_receiver != device_id_receiver_curr) and (eth_sender_core_iter != active_eth_cores.end())) {
             eth_sender_core = *eth_sender_core_iter;
+            if (not tt::Cluster::instance().is_ethernet_link_up(device_sender->id(), eth_sender_core)) {
+                eth_sender_core_iter++;
+                continue;
+            }
             std::tie(device_id_receiver_curr, eth_receiver_core) =
                 device_sender->get_connected_ethernet_core(eth_sender_core);
             eth_sender_core_iter++;
@@ -464,6 +471,9 @@ void ProfilerSync(ProfilerSyncState state) {
                 tt_xy_pair receiver_eth_core;
                 bool doSync = true;
                 for (auto& sender_eth_core : active_eth_cores) {
+                    if (not tt::Cluster::instance().is_ethernet_link_up(sender_device_id, sender_eth_core)) {
+                        continue;
+                    }
                     doSync = false;
                     std::tie(receiver_device_id, receiver_eth_core) =
                         sender_device->get_connected_ethernet_core(sender_eth_core);
@@ -586,7 +596,7 @@ void InitDeviceProfiler(IDevice* device) {
             }
         }
 
-        uint32_t dramBankCount = tt::Cluster::instance().get_soc_desc(device_id).get_num_dram_channels();
+        uint32_t dramBankCount = tt::Cluster::instance().get_soc_desc(device_id).get_num_dram_views();
         uint32_t coreCountPerDram =
             tt::Cluster::instance().get_soc_desc(device_id).profiler_ceiled_core_count_perf_dram_bank;
 

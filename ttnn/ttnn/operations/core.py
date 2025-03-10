@@ -92,8 +92,8 @@ def _preprocess_golden_function_inputs(args, kwargs):
     input_tensor, args, kwargs = ttnn.reflection.pop_argument("input_tensor", args, kwargs)
     shape, args, kwargs = ttnn.reflection.pop_argument("shape", args, kwargs)
     shape = _preprocess_shape(input_tensor.shape, shape)
-    input_tensor = input_tensor.reshape(input_tensor.shape.with_tile_padding())
-    return (ttnn.to_torch(input_tensor), tuple(shape.with_tile_padding()), *args), kwargs
+    input_tensor = input_tensor.reshape(input_tensor.padded_shape)
+    return (ttnn.to_torch(input_tensor), tuple(shape), *args), kwargs
 
 
 def _golden_function(input_tensor, shape: Union[ttnn.Shape, Tuple[int, ...]]) -> ttnn.Tensor:
@@ -107,9 +107,8 @@ def _postprocess_golden_function_outputs(output, args, kwargs):
     shape, args, kwargs = ttnn.reflection.pop_argument("shape", args, kwargs)
     shape = _preprocess_shape(input_tensor.shape, shape)
 
-    shape_with_tile_padding = shape.with_tile_padding()
     if tensor.layout == ttnn.TILE_LAYOUT:
-        *_, height, width = shape_with_tile_padding
+        *_, height, width = shape
         if height % ttnn.TILE_SIZE != 0 or width % ttnn.TILE_SIZE != 0:
             raise RuntimeError(
                 "ttnn.reshape: cannot reshape a tensor with TILE_LAYOUT to a shape that is not a multiple of TILE_SIZE on height and width!"
@@ -195,14 +194,16 @@ def from_torch(
         if memory_config.shard_spec.mode == ttnn.ShardMode.LOGICAL:
             return ttnn.Tensor(tensor, dtype, device, layout, memory_config, tile)
 
-    shape_with_padding = None
+    logical_shape = None
+    padded_shape = None
     if dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b:
         if layout != ttnn.TILE_LAYOUT:
             raise RuntimeError("ttnn.from_torch: bfloat8_b/bfloat4_b requires TILE_LAYOUT!")
         # Tilize tensor
-        tensor = ttnn.from_torch(tensor, layout=ttnn.TILE_LAYOUT, tile=tile, pad_value=pad_value)
-        shape_with_padding = tensor.shape
-        tensor = tensor.reshape(tensor.shape.with_tile_padding())
+        tensor = ttnn.from_torch(tensor, layout=ttnn.TILE_LAYOUT, tile=tile, pad_value=pad_value, mesh_mapper=None)
+        logical_shape = tensor.shape
+        padded_shape = tensor.padded_shape
+        tensor = tensor.reshape(tensor.padded_shape)
         tensor = ttnn.to_torch(tensor)
 
     if memory_config is not None:
@@ -235,8 +236,8 @@ def from_torch(
             memory_config = ttnn.DRAM_MEMORY_CONFIG
         tensor = ttnn.to_device(tensor, device, memory_config=memory_config, cq_id=cq_id)
 
-    if shape_with_padding is not None and shape_with_padding != tensor.shape and mesh_mapper is None:
-        tensor = ttnn.reshape(tensor, shape_with_padding)
+    if logical_shape is not None and logical_shape != tensor.shape and mesh_mapper is None:
+        tensor = ttnn.reshape(tensor, logical_shape, padded_shape)
 
     return tensor
 
@@ -311,24 +312,14 @@ def to_torch(
         raise RuntimeError("ttnn.to_torch: Shard spec must not be None for sharded tensors")
 
     if memory_config.is_sharded() and memory_config.shard_spec.mode == ttnn.ShardMode.LOGICAL:
-        tensor = tensor.to_torch_with_logical_shape()
+        tensor = tensor.to_torch()
     else:
         if (tensor.layout != ttnn.ROW_MAJOR_LAYOUT) and not (
             tensor.dtype == ttnn.bfloat8_b or tensor.dtype == ttnn.bfloat4_b
         ):
             tensor = tensor.to(ttnn.ROW_MAJOR_LAYOUT, device)
 
-        shape_without_tile_padding = tuple(tensor.shape)
-        logical_shape_rank = len(tensor.logical_shape)
-
         tensor = tensor.to_torch()
-        slices = [slice(None, x) for x in shape_without_tile_padding]
-        tensor = tensor[slices]
-
-        while len(tensor.shape) > logical_shape_rank:
-            if tensor.shape[0] != 1:
-                raise RuntimeError("ttnn: Unable to squeeze to desired rank!")
-            tensor = tensor.squeeze(0)
 
     if torch_rank is not None:
         while len(tensor.shape) > torch_rank:
@@ -459,13 +450,15 @@ def _golden_function(tensor, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.clone, golden_function=_golden_function)
 
 
-def _golden_function(input_tensor):
+def _golden_function(input_tensor, *args, **kwargs):
     return input_tensor
 
 
 ttnn.register_python_operation(name="ttnn.reallocate", golden_function=_golden_function)(
     ttnn._ttnn.operations.core.reallocate
 )
+
+ttnn.attach_golden_function(ttnn.reallocate, golden_function=_golden_function)
 
 
 @ttnn.register_python_operation(name="ttnn.load_tensor")
@@ -632,6 +625,10 @@ def as_tensor(
 
         cache_file_name = f"{cache_file_name}{storage_type}_dtype_{dtype_name}_layout_{layout_name}.bin"
 
+        cache_path = pathlib.Path(cache_file_name)
+        if not cache_path.exists() or not cache_path.is_file():
+            return from_torch_and_dump(tensor, dtype, layout, cache_file_name, mesh_mapper)
+
         try:
             tensor = ttnn._ttnn.tensor.load_tensor(cache_file_name, device=device)
             if tuple(tensor.shape) != tuple(tensor.shape):
@@ -640,7 +637,8 @@ def as_tensor(
                 )
                 tensor = from_torch_and_dump(tensor, dtype, layout, cache_file_name, mesh_mapper)
             logger.debug(f"Loaded cache for {cache_file_name} of shape {tensor.shape}")
-        except (FileNotFoundError, RuntimeError):
+        except RuntimeError as e:
+            logger.warning(f"Failed to load cache for {cache_file_name}: {e}")
             tensor = from_torch_and_dump(tensor, dtype, layout, cache_file_name, mesh_mapper)
         return tensor
 

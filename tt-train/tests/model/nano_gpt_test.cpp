@@ -30,6 +30,7 @@ protected:
 };
 
 using ttml::autograd::TensorPtr;
+using namespace ttml;
 
 using DatasetSample = std::pair<std::span<const uint32_t>, std::span<const uint32_t>>;
 // tokens, targets, mask
@@ -126,10 +127,10 @@ void train_test(bool use_moreh_adamw = false, bool memory_efficient = false) {
             auto end_timer = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
             fmt::print("dataloader host only step time {} ms\n", (double)duration / 1000.);
-            auto data_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, DataType::UINT32>(
-                data, ttml::core::create_shape({batch_size, 1, 1, sequence_length}), device, Layout::ROW_MAJOR));
-            auto targets_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<int32_t, DataType::INT32>(
-                targets, ttnn::SimpleShape({batch_size * sequence_length}), device));
+            auto data_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+                data, ttml::core::create_shape({batch_size, 1, 1, sequence_length}), device, ttnn::Layout::ROW_MAJOR));
+            auto targets_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<int32_t, ttnn::DataType::INT32>(
+                targets, ttnn::Shape({batch_size * sequence_length}), device));
             end_timer = std::chrono::high_resolution_clock::now();
             duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
             fmt::print("dataloader step time {} ms\n", (double)duration / 1000.);

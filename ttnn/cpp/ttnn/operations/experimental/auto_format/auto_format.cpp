@@ -7,9 +7,7 @@
 #include <utility>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/data_movement/clone/clone.hpp"
-#include "ttnn/operations/data_movement/data_transfer/data_transfer.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
@@ -18,13 +16,11 @@
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-using namespace tt::tt_metal;
-
 namespace ttnn::operations::experimental::auto_format {
 
 Tensor AutoFormat::move_tensor_to_device(const Tensor& input, IDevice* device, const MemoryConfig& mem_config) {
     if (input.storage_type() != StorageType::DEVICE) {
-        return ttnn::data_transfer_to_device(input, device, mem_config);
+        return input.to_device(device, mem_config);
     } else {
         return input;
     }
@@ -32,7 +28,7 @@ Tensor AutoFormat::move_tensor_to_device(const Tensor& input, IDevice* device, c
 
 Tensor AutoFormat::move_tensor_to_mem_config(const Tensor& input, const MemoryConfig& mem_config) {
     if (input.storage_type() != StorageType::DEVICE) {
-        return ttnn::data_transfer_to_device(input, AutoFormat::GetDefaultDevice(), mem_config);
+        return input.to_device(AutoFormat::GetDefaultDevice(), mem_config);
     } else if (input.memory_config() != mem_config) {
         return ttnn::clone(input, std::nullopt, mem_config, std::nullopt);
     } else {
@@ -48,7 +44,7 @@ Tensor AutoFormat::move_tensor_to_device_and_pad(
     const Tensor& input, IDevice* device, Layout target_layout, std::optional<MemoryConfig> target_mem_config) {
     using namespace tt::constants;
     const auto device_shape = input.get_padded_shape();
-    const SimpleShape new_device_shape(
+    const Shape new_device_shape(
         {device_shape[0],
          device_shape[1],
          (device_shape[-2] % TILE_HEIGHT != 0 ? (device_shape[-2] / TILE_HEIGHT + 1) * TILE_HEIGHT : device_shape[-2]),
@@ -60,7 +56,7 @@ Tensor AutoFormat::move_tensor_to_device_and_pad(
 Tensor AutoFormat::format_input_tensor(
     const Tensor& input,
     IDevice* device,
-    const ttnn::SimpleShape& padded_shape,
+    const ttnn::Shape& padded_shape,
     float pad_value,
     Layout target_layout,
     std::optional<MemoryConfig> target_mem_config) {
@@ -71,7 +67,7 @@ Tensor AutoFormat::format_input_tensor(
         return AutoFormat::move_tensor_to_device(input, device);
     }
 
-    MemoryConfig mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
+    MemoryConfig mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
     if (target_mem_config.has_value()) {
         mem_config = target_mem_config.value();
     } else if (input.storage_type() == StorageType::DEVICE) {
@@ -93,7 +89,7 @@ Tensor AutoFormat::format_input_tensor(
         } else if (!convert_layout && pad_input) {
             if (formatted_input.get_layout() == Layout::ROW_MAJOR || formatted_input.get_layout() == Layout::TILE) {
                 return ttnn::pad(
-                    0,
+                    DefaultQueueId,
                     (const ttnn::Tensor)formatted_input,
                     padded_shape.to_array_4D(),
                     tt::tt_metal::Array4D({0, 0, 0, 0}),
@@ -114,7 +110,7 @@ Tensor AutoFormat::format_input_tensor(
             } else if (formatted_input.get_layout() == Layout::TILE && target_layout == Layout::ROW_MAJOR) {
                 formatted_input = ttnn::untilize(formatted_input, mem_config);
                 return ttnn::pad(
-                    0,
+                    DefaultQueueId,
                     (const ttnn::Tensor)formatted_input,
                     padded_shape.to_array_4D(),
                     tt::tt_metal::Array4D({0, 0, 0, 0}),
@@ -124,13 +120,13 @@ Tensor AutoFormat::format_input_tensor(
             }
         }
         // Fall back to host conversions
-        formatted_input = ttnn::data_transfer_to_host(formatted_input);
+        formatted_input = formatted_input.cpu();
     }
 
     // Host side conversions
     if (pad_input) {
         if (formatted_input.get_layout() != Layout::ROW_MAJOR) {
-            formatted_input = formatted_input.to(Layout::ROW_MAJOR);
+            formatted_input = formatted_input.to_layout(Layout::ROW_MAJOR);
             convert_layout = formatted_input.get_layout() != target_layout;
         }
         formatted_input = ttnn::pad(
@@ -141,7 +137,7 @@ Tensor AutoFormat::format_input_tensor(
     }
 
     if (convert_layout) {
-        formatted_input = formatted_input.to(target_layout);
+        formatted_input = formatted_input.to_layout(target_layout);
     }
 
     return AutoFormat::move_tensor_to_device(formatted_input, device, mem_config);
@@ -149,7 +145,7 @@ Tensor AutoFormat::format_input_tensor(
 
 Tensor AutoFormat::format_output_tensor(
     const Tensor& output,
-    const ttnn::SimpleShape& shape,
+    const ttnn::Shape& shape,
     IDevice* device,
     Layout target_layout,
     std::optional<MemoryConfig> target_mem_config) {
@@ -159,7 +155,7 @@ Tensor AutoFormat::format_output_tensor(
     if (!unpad_output && !convert_layout) {
         return output;
     }
-    MemoryConfig mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
+    MemoryConfig mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
     if (target_mem_config.has_value()) {
         mem_config = target_mem_config.value();
     } else if (output.storage_type() == StorageType::DEVICE) {
@@ -189,13 +185,13 @@ Tensor AutoFormat::format_output_tensor(
                 auto ends = std::array<uint32_t, 4>({shape[0], shape[1], shape[2], shape[3]});
                 auto step = std::array<uint32_t, 4>({1, 1, 1, 1});
 
-                formatted_output = ttnn::slice(DefaultQueueId, formatted_output, begins, ends, step, mem_config);
+                formatted_output = ttnn::slice(formatted_output, begins, ends, step, mem_config);
                 return formatted_output;
                 // Output is tile but shape cannot be tile. We leave in RM
             } else if (formatted_output.get_layout() == Layout::TILE && AutoFormat::legal_rm_shape(shape)) {
                 formatted_output = ttnn::untilize_with_unpadding(
                     formatted_output,
-                    SmallVector<uint32_t>({shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}),
+                    ttnn::Shape({shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}),
                     mem_config);
                 return formatted_output;
             }
@@ -204,7 +200,7 @@ Tensor AutoFormat::format_output_tensor(
                 AutoFormat::legal_rm_shape(shape)) {
                 formatted_output = ttnn::untilize_with_unpadding(
                     formatted_output,
-                    SmallVector<uint32_t>({shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}),
+                    ttnn::Shape({shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}),
                     mem_config);
                 return formatted_output;
             } else if (
@@ -213,20 +209,20 @@ Tensor AutoFormat::format_output_tensor(
                 auto begins = std::array<uint32_t, 4>({0, 0, 0, 0});
                 auto ends = std::array<uint32_t, 4>({shape[0], shape[1], shape[2], shape[3]});
                 auto step = std::array<uint32_t, 4>({1, 1, 1, 1});
-                formatted_output = ttnn::slice(DefaultQueueId, formatted_output, begins, ends, step, mem_config);
+                formatted_output = ttnn::slice(formatted_output, begins, ends, step, mem_config);
                 formatted_output = ttnn::tilize(formatted_output, mem_config);
                 return formatted_output;
             }
         }
         // Fall back to host conversions
-        formatted_output = ttnn::data_transfer_to_host(formatted_output);
+        formatted_output = formatted_output.cpu();
     }
 
     // Host side conversions
     if (unpad_output) {
         // Requires RM for unpad
         if (formatted_output.get_layout() != Layout::ROW_MAJOR) {
-            formatted_output = formatted_output.to(Layout::ROW_MAJOR);
+            formatted_output = formatted_output.to_layout(Layout::ROW_MAJOR);
             convert_layout = formatted_output.get_layout() != target_layout;
         }
         auto begins = std::array<uint32_t, 4>({0, 0, 0, 0});
@@ -239,10 +235,10 @@ Tensor AutoFormat::format_output_tensor(
         // Default to RM layout if we can't match the formatted_input layout
         if (target_layout == Layout::TILE && !AutoFormat::legal_tile_shape(formatted_output.get_padded_shape())) {
             if (formatted_output.get_layout() != Layout::ROW_MAJOR) {
-                formatted_output = formatted_output.to(Layout::ROW_MAJOR);
+                formatted_output = formatted_output.to_layout(Layout::ROW_MAJOR);
             }
         } else {
-            formatted_output = formatted_output.to(target_layout);
+            formatted_output = formatted_output.to_layout(target_layout);
         }
     }
 

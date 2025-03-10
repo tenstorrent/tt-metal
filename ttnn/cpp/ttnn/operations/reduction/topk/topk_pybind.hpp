@@ -2,15 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#pragma once
-
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
-
-#include "cpp/pybind11/decorators.hpp"
-
-#include "topk.hpp"
-#include <optional>
+#include "ttnn/operations/reduction/topk/topk.hpp"
+#include "pybind11/decorators.hpp"
 
 namespace ttnn::operations::reduction::detail {
 namespace py = pybind11;
@@ -62,13 +55,13 @@ void bind_reduction_topk_operation(py::module& module) {
         ttnn::pybind_overload_t{
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
-               const uint16_t k,
+               const uint32_t k,
                const int8_t dim,
                const bool largest,
                const bool sorted,
                std::optional<std::tuple<ttnn::Tensor, ttnn::Tensor>> optional_output_tensors,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(queue_id, input_tensor, k, dim, largest, sorted, memory_config, optional_output_tensors);
             },
             py::arg("input_tensor").noconvert(),
@@ -79,7 +72,7 @@ void bind_reduction_topk_operation(py::module& module) {
             py::kw_only(),
             py::arg("out") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 }  // namespace ttnn::operations::reduction::detail

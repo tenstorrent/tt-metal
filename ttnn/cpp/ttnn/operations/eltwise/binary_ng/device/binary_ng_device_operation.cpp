@@ -37,6 +37,9 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
         case BITWISE_XOR:
         case BITWISE_AND:
         case BITWISE_OR: return (a == INT32 && b == INT32);
+        case QUANT:
+        case REQUANT:
+        case DEQUANT:
         case POWER: return true;
         default: return false;
     }
@@ -103,11 +106,16 @@ SubtileBroadcastType get_subtile_broadcast_type(uint32_t a_h, uint32_t a_w, uint
 }
 
 tt::stl::hash::hash_t BinaryNgDeviceOperation::operation_attributes_t::to_hash() const {
+    // TODO: a more generalized way to skip the hashing of an UnaryWithParam?
+    // Don't hash the quantization scale, otherwise we build the kernel for each different scale
+    const bool is_quant_op = (binary_op_type == BinaryOpType::QUANT) or (binary_op_type == BinaryOpType::DEQUANT) or
+                             (binary_op_type == BinaryOpType::REQUANT);
+
     return tt::stl::hash::hash_objects_with_default_seed(
         binary_op_type,
         lhs_activations,
         rhs_activations,
-        post_activations,
+        is_quant_op ? ttnn::SmallVector<unary::UnaryWithParam>{} : post_activations,
         memory_config,
         get_dtype(),
         compute_kernel_config,
@@ -119,12 +127,58 @@ DataType BinaryNgDeviceOperation::operation_attributes_t::get_dtype() const {
     return this->dtype.value_or(this->input_dtype);
 }
 
+void validate_sharding(
+    TensorMemoryLayout memory_layout_x,
+    const ShardSpec& shard_spec_x,
+    TensorMemoryLayout memory_layout_y,
+    const ShardSpec& shard_spec_y,
+    SubtileBroadcastType subtile_broadcast_type) {
+    TT_FATAL(memory_layout_x == memory_layout_y, "Operands to eltwise binary need to have the same memory layout");
+
+    switch (subtile_broadcast_type) {
+        case SubtileBroadcastType::NONE:
+            TT_FATAL(shard_spec_x == shard_spec_y, "Operands to eltwise binary need to have the same shard spec");
+            break;
+        case SubtileBroadcastType::COL_A:
+        case SubtileBroadcastType::COL_B:
+            TT_FATAL(
+                memory_layout_x == TensorMemoryLayout::HEIGHT_SHARDED,
+                "Operands to eltwise binary must be height sharded when broadcasting on W");
+            TT_FATAL(
+                memory_layout_y == TensorMemoryLayout::HEIGHT_SHARDED,
+                "Operands to eltwise binary must be height sharded when broadcasting on W");
+            TT_FATAL(
+                shard_spec_x.shape[0] == shard_spec_y.shape[0],
+                "Operands to eltwise binary need to have the same"
+                "shard height when broadcasting on W");
+            break;
+        default: TT_THROW("Invalid subtile broadcast type for sharding validation");
+    }
+}
+
 void BinaryNgDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // We don't support sharding for now
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
     const auto& output_tensor = tensor_args.output_tensor;
+
+    auto nd_support = [](const auto& shape) {
+        bool valid = true;
+        for (int i = -5; i >= -shape.rank(); --i) {
+            if (shape[i] != 1) {
+                valid = false;
+                break;
+            }
+        }
+        return valid;
+    };
+
+    TT_FATAL(nd_support(input_tensor_a.get_logical_shape()), "Tensor a does not support 5D or more");
+
+    if (input_tensor_b.has_value()) {
+        TT_FATAL(nd_support(input_tensor_b->get_logical_shape()), "Tensor b does not support 5D or more");
+    }
 
     TT_FATAL(
         input_tensor_b.has_value() != attributes.scalar.has_value(), "Either the tensor b or scalar should be set");
@@ -172,28 +226,28 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
     // Validate that all shard specs match
     if (tensor_a_sharded) {
         if (tensor_b_sharded) {
-            TT_FATAL(
-                input_tensor_a.memory_config().memory_layout == input_tensor_b->memory_config().memory_layout,
-                "Operands to eltwise binary need to have the same memory layout");
-            TT_FATAL(
-                input_tensor_a.shard_spec().value() == input_tensor_b->shard_spec().value(),
-                "Operands to eltwise binary need to have the same shard spec");
+            validate_sharding(
+                input_tensor_a.memory_config().memory_layout,
+                *input_tensor_a.shard_spec(),
+                input_tensor_b->memory_config().memory_layout,
+                *input_tensor_b->shard_spec(),
+                attributes.subtile_broadcast_type);
         }
         if (output_sharded) {
-            TT_FATAL(
-                input_tensor_a.memory_config().memory_layout == attributes.memory_config.memory_layout,
-                "LHS operand and output to eltwise binary need to have the same memory layout");
-            TT_FATAL(
-                input_tensor_a.shard_spec().value() == attributes.memory_config.shard_spec.value(),
-                "LHS operand and output to eltwise binary need to have the same shard spec");
+            validate_sharding(
+                input_tensor_a.memory_config().memory_layout,
+                *input_tensor_a.shard_spec(),
+                attributes.memory_config.memory_layout,
+                *attributes.memory_config.shard_spec,
+                attributes.subtile_broadcast_type);
         }
     } else if (tensor_b_sharded and output_sharded) {
-        TT_FATAL(
-            input_tensor_b->memory_config().memory_layout == attributes.memory_config.memory_layout,
-            "RHS operand and output to eltwise binary need to have the same memory layout");
-        TT_FATAL(
-            input_tensor_b->shard_spec().value() == attributes.memory_config.shard_spec.value(),
-            "RHS operand and output to eltwise binary need to have the same shard spec");
+        validate_sharding(
+            input_tensor_b->memory_config().memory_layout,
+            *input_tensor_b->shard_spec(),
+            attributes.memory_config.memory_layout,
+            *attributes.memory_config.shard_spec,
+            attributes.subtile_broadcast_type);
     }
 }
 
@@ -212,11 +266,12 @@ void BinaryNgDeviceOperation::validate_on_program_cache_hit(
     }
 
     const auto& input_shape_a = input_tensor_a.get_logical_shape();
-    const auto input_shape_b = input_tensor_b.has_value() ? input_tensor_b->get_logical_shape() : ttnn::Shape{1, 1};
+    const auto input_shape_b = input_tensor_b.has_value() ? input_tensor_b->get_logical_shape() : ttnn::Shape({1, 1});
 
     const int rank_a = input_shape_a.rank();
     const int rank_b = input_shape_b.rank();
     const int larger_rank = std::max(rank_a, rank_b);
+
     for (int i = -1; i >= -larger_rank; --i) {
         auto a_dim = (i >= -rank_a) ? input_shape_a[i] : 1;
         auto b_dim = (i >= -rank_b) ? input_shape_b[i] : 1;
@@ -227,10 +282,20 @@ void BinaryNgDeviceOperation::validate_on_program_cache_hit(
             a_dim,
             b_dim);
 
-        if (has_shard_spec) {
+        if (i <= -5) {
+            TT_FATAL(
+                a_dim == 1 && b_dim == 1,
+                "Broadcasting rule violation for 5D {}, dim a: {}, dim b: {}",
+                i,
+                a_dim,
+                b_dim);
+        }
+
+        if (has_shard_spec and i != -1) {
             TT_FATAL(
                 a_dim == b_dim,
-                "Cannot broadcast sharded tensors, violation for rank {}, dim a: {}, dim b: {}",
+                "Cannot broadcast sharded tensors on dims other than W, violation for rank {}, dim a: {}, dim b: "
+                "{}",
                 i,
                 a_dim,
                 b_dim);
@@ -245,7 +310,7 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto input_shape_a = input_tensor_a.logical_shape();
     const auto& tensor_b = tensor_args.input_tensor_b;
-    const auto input_shape_b = tensor_b.has_value() ? tensor_b->logical_shape() : ttnn::SimpleShape{};
+    const auto input_shape_b = tensor_b.has_value() ? tensor_b->logical_shape() : ttnn::Shape{};
 
     const int rank_a = input_shape_a.rank();
     const int rank_b = input_shape_b.rank();
@@ -268,7 +333,7 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
                 output_shape[i + larger_rank] = dim_a + dim_b - 1;
             }
         }
-        return ttnn::SimpleShape(output_shape);
+        return ttnn::Shape(output_shape);
     };
 
     auto output_shape = compute_broadcasted_output(input_shape_a, input_shape_b);
@@ -284,17 +349,8 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
     }
 
     if (attributes.memory_config.is_sharded()) {
-        ShardSpec shard_spec{CoreRangeSet(), {0, 0}};
-        if (input_tensor_a.memory_config().is_sharded()) {
-            shard_spec = input_tensor_a.shard_spec().value();
-        } else if (tensor_b.has_value() and tensor_b->memory_config().is_sharded()) {
-            shard_spec = tensor_b->shard_spec().value();
-        } else {
-            shard_spec = attributes.memory_config.shard_spec.value();
-        }
-        auto memory_config = attributes.memory_config;
-        memory_config.shard_spec = shard_spec;
-        return TensorSpec(output_shape, TensorLayout(attributes.get_dtype(), PageConfig(Layout::TILE), memory_config));
+        return TensorSpec(
+            output_shape, TensorLayout(attributes.get_dtype(), PageConfig(Layout::TILE), attributes.memory_config));
     }
 
     return TensorSpec(
@@ -369,10 +425,10 @@ BinaryNgDeviceOperation::invoke(
         input_tensor_b.get_logical_shape()[-2],
         input_tensor_b.get_logical_shape()[-1]);
 
-    DataType dtype1 = input_tensor_a.get_dtype();
-    DataType dtype2 = input_tensor_a.get_dtype();
+    DataType dtype_a = input_tensor_a.get_dtype();
+    DataType dtype_b = input_tensor_b.get_dtype();
     bool device_check = input_tensor_a.device()->arch() != tt::ARCH::GRAYSKULL;
-    bool is_sfpu_op = (utils::is_binary_sfpu_op(binary_op_type, dtype1, dtype2) && device_check);
+    bool is_sfpu_op = (utils::is_binary_sfpu_op(binary_op_type, dtype_a, dtype_b) && device_check);
 
     return {
         operation_attributes_t{
@@ -381,8 +437,7 @@ BinaryNgDeviceOperation::invoke(
             {rhs_activations.begin(), rhs_activations.end()},
             {post_activations.begin(), post_activations.end()},
             std::nullopt,
-            memory_config.value_or(
-                output_tensor.has_value() ? output_tensor->memory_config() : input_tensor_a.memory_config()),
+            memory_config.value_or(output_tensor.has_value() ? output_tensor->memory_config() : MemoryConfig{}),
             input_tensor_a.get_dtype(),
             output_dtype,
             get_worker_grid(input_tensor_a, &input_tensor_b, output_tensor),
@@ -403,9 +458,9 @@ BinaryNgDeviceOperation::invoke(
     tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
     tt::stl::Span<const unary::UnaryWithParam> post_activations) {
-    DataType dtype1 = input_tensor_a.get_dtype();
+    DataType dtype_a = input_tensor_a.get_dtype();
     bool device_check = input_tensor_a.device()->arch() != tt::ARCH::GRAYSKULL;
-    bool is_sfpu_op = (utils::is_binary_sfpu_op(binary_op_type, dtype1, dtype1) && device_check);
+    bool is_sfpu_op = (utils::is_binary_sfpu_op(binary_op_type, dtype_a, dtype_a) && device_check);
     return {
         operation_attributes_t{
             binary_op_type,
@@ -413,8 +468,7 @@ BinaryNgDeviceOperation::invoke(
             {rhs_activations.begin(), rhs_activations.end()},
             {post_activations.begin(), post_activations.end()},
             scalar,
-            memory_config.value_or(
-                output_tensor.has_value() ? output_tensor->memory_config() : input_tensor_a.memory_config()),
+            memory_config.value_or(output_tensor.has_value() ? output_tensor->memory_config() : MemoryConfig{}),
             input_tensor_a.get_dtype(),
             output_dtype,
             get_worker_grid(input_tensor_a, nullptr, output_tensor),

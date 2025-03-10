@@ -2,8 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-import math
 import ttnn
 import torch
 import torch.nn as nn
@@ -11,11 +9,10 @@ from tqdm import tqdm
 from models.demos.llama3.tt.llama_decoder import TtTransformerBlock
 from models.common.rmsnorm import RMSNorm
 import ttnn
-from typing import Optional
 from models.common.lightweightmodule import LightweightModule
 from models.demos.llama3.tt.distributed_norm import DistributedNorm
 from models.demos.llama3.tt.lm_head import LMHead
-from models.demos.llama3.tt.llama_common import copy_host_to_device, get_prefill_rot_mat, HostEmbedding
+from models.demos.llama3.tt.llama_common import copy_host_to_device
 from models.demos.llama3.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.llama3.tt.llama_embedding import TtLlamaEmbedding
 
@@ -56,8 +53,8 @@ class TtTransformer(LightweightModule):
             args.head_dim,
             args.max_seq_len,
             args.rope_theta,
-            args.use_scaled_rope,
             args.rope_scaling_factor,
+            args.orig_context_len,
         )
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 
@@ -87,6 +84,7 @@ class TtTransformer(LightweightModule):
                 is_distributed=self.args.is_distributed_norm,
                 sharded_program_config=self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"],
                 sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"],
+                ccl_topology=self.args.ccl_topology(),
             ),
             args,
             args.is_galaxy,
@@ -120,14 +118,8 @@ class TtTransformer(LightweightModule):
         tokens_embd = self.embd(tokens)
         tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
 
-        tt_rot_mats_prefill = get_prefill_rot_mat(
-            self.args.head_dim,
-            self.args.max_seq_len,
-            self.mesh_device,
-            seq_len=S,
-            scale_factor=self.args.rope_scaling_factor,
-            start_pos=start_pos,
-        )
+        # Slice the rot mats to the prefill seqlen
+        tt_rot_mats_prefill = [self.rope_setup.cos_matrix[:, :, :S, :], self.rope_setup.sin_matrix[:, :, :S, :]]
 
         if page_table is not None:
             tt_page_table = ttnn.from_torch(
@@ -174,8 +166,10 @@ class TtTransformer(LightweightModule):
         assert current_pos.shape[0] == B, "Batch size mismatch"
         assert B == self.args.max_batch_size, "Batch size must be equal to max_batch_size"
 
+        # Necessary padding to be full tile sized when on device
+        tokens = torch.nn.functional.pad(tokens.view(-1), (0, 32 - len(tokens)), "constant", 0)
         tokens = ttnn.from_torch(
-            tokens.view(-1),
+            tokens,
             device=None,
             dtype=ttnn.uint32,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
@@ -242,23 +236,21 @@ class TtTransformer(LightweightModule):
         )[0, 0, last_token_idx, : self.vocab_size]
         return logits
 
-    def process_output_decode(self, tt_out, B, S=1):
+    def process_output_decode(self, tt_out, B, S=1, argmax_on_device=False):
         """
-        Input is ttnn device tensor of logits. Output is torch logits tensor
+        Input is ttnn device tensor of logits. Output is torch logits tensor or the generated token if argmax on device
         """
-        if self.args.num_devices > 1:
-            if self.args.is_galaxy:
-                tt_out = ttnn.all_gather(
-                    tt_out,
-                    dim=3,
-                    num_links=2,
-                    cluster_axis=0,
-                    mesh_device=self.mesh_device,
-                    topology=ttnn.Topology.Linear,
-                )
-            else:
-                tt_out = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=ttnn.Topology.Linear)
-        tt_out = ttnn.untilize(tt_out, use_multicore=True)
+        if argmax_on_device:
+            tt_out = ttnn.to_torch(
+                tt_out,  # tt_out.cpu(blocking=True, cq_id=1),
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    self.mesh_device,
+                    dims=(3, 1) if self.args.is_galaxy else (1, -1),
+                    mesh_shape=self.args.cluster_shape,
+                ),
+            )[0, 0, 0, :B]
+            return tt_out
+
         if self.args.num_devices > 1:
             tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
         else:
@@ -301,6 +293,7 @@ class TtTransformer(LightweightModule):
         rot_mats,
         page_table=None,
         kv_cache=None,
+        argmax_on_device=False,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -314,9 +307,31 @@ class TtTransformer(LightweightModule):
             page_table=page_table,
             kv_cache=kv_cache,
         )
-        # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
-        if not self.args.is_galaxy:
-            tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
+
+        # Gather the output across all devices and untilize the tensor (for argmax)
+        if self.args.num_devices > 1:
+            if self.args.is_galaxy:
+                tt_logits = ttnn.all_gather(
+                    tt_logits,
+                    dim=3,
+                    num_links=2,
+                    cluster_axis=0,
+                    mesh_device=self.mesh_device,
+                    topology=self.args.ccl_topology(),
+                )
+            else:
+                tt_logits = ttnn.all_gather(tt_logits, dim=3, num_links=1, topology=self.args.ccl_topology())
+        tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
+
+        if argmax_on_device:
+            tt_logits = ttnn.argmax(  # TODO Add multicore support to batch > 1
+                tt_logits, dim=3, use_multicore=False if self.args.max_batch_size > 1 else True  # ,output_tensor=tokens
+            )
+        else:
+            # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
+            if not self.args.is_galaxy:
+                tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
+
         return tt_logits
 
     def forward(

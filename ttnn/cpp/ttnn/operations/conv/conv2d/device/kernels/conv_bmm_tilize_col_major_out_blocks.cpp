@@ -40,24 +40,19 @@ inline void tilize_in(
     tilize_uninit(in_cb_id, out_cb_id);
 }  // tilize_in()
 
-template <uint32_t out_subblock_w, uint32_t out_block_w, bool is_non_tile_height>
+template <uint32_t out_subblock_w, uint32_t out_block_w>
 inline void reblock_and_untilize(
     uint32_t num_out_subblocks_in_col,
     uint32_t out_subblock_num_tiles,
     uint32_t out_subblock_h,
-    uint32_t output_rows_h,
     uint32_t interm_cb_id,
     uint32_t out_cb_id) {
-    constexpr bool is_non_tile_height_ = is_non_tile_height;
-    uint32_t TILE_SIZE = is_non_tile_height_ ? 32 : out_block_w;
     uint32_t num_tiles_in_row_of_subblocks = mulsi3(out_subblock_num_tiles, num_out_subblocks_in_col);
     cb_wait_front(interm_cb_id, num_tiles_in_row_of_subblocks);
     uint32_t within_block_index = 0;
     for (uint32_t h = 0; h < out_subblock_h; h++) {
         uint32_t block_offset = 0;
-        uint32_t out_sub_block_rows_h = output_rows_h <= TILE_SIZE ? output_rows_h : TILE_SIZE;
-        uint32_t rows_to_copy = is_non_tile_height_ ? out_sub_block_rows_h : 16;
-        cb_reserve_back(out_cb_id, out_sub_block_rows_h);
+        cb_reserve_back(out_cb_id, out_block_w);
         for (uint32_t n = 0; n < num_out_subblocks_in_col; n++) {
             tile_regs_acquire();
             for (uint32_t w = 0; w < out_subblock_w; w++) {
@@ -66,12 +61,11 @@ inline void reblock_and_untilize(
             }
             tile_regs_commit();
             tile_regs_wait();
-            pack_untilize_dst<out_subblock_w, out_block_w>(out_cb_id, 1, n, rows_to_copy);
+            pack_untilize_dst<out_subblock_w, out_block_w>(out_cb_id, 1, n);
             tile_regs_release();
             block_offset += out_subblock_num_tiles;
         }
-        cb_push_back(out_cb_id, out_sub_block_rows_h);
-        output_rows_h -= out_sub_block_rows_h;
+        cb_push_back(out_cb_id, out_block_w);
         within_block_index += out_subblock_w;
     }
     cb_pop_front(interm_cb_id, num_tiles_in_row_of_subblocks);
@@ -99,32 +93,27 @@ void MAIN {
     constexpr uint32_t out_subblock_num_tiles = get_compile_time_arg_val(13);  // out_subblock_h * out_subblock_w;
     constexpr bool tilize_in0 = get_compile_time_arg_val(14);
     constexpr bool untilize_out = get_compile_time_arg_val(15);
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(17);
-    uint32_t output_rows_h = get_compile_time_arg_val(18);
-    constexpr bool is_non_tile_height = get_compile_time_arg_val(19);
+    constexpr uint32_t in0_cb_id = get_compile_time_arg_val(18);
+    constexpr uint32_t in1_cb_id = get_compile_time_arg_val(19);
+    constexpr uint32_t in0_pretilize_cb_id = get_compile_time_arg_val(20);
+    constexpr uint32_t in0_cb_second_reader_id = get_compile_time_arg_val(21);
+    constexpr uint32_t matmul_partials_cb = get_compile_time_arg_val(22);
+    constexpr uint32_t tilized_in0_cb_id = get_compile_time_arg_val(23);
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(24);
 
 #ifdef WIDTH_SHARDED
-    constexpr uint32_t in0_nblocks_w_tilize = get_compile_time_arg_val(20);
+    constexpr uint32_t in0_nblocks_w_tilize = get_compile_time_arg_val(26);
 #endif
 
     constexpr uint32_t out_block_num_tiles = in0_num_subblocks * in1_num_subblocks * out_subblock_num_tiles;
     constexpr uint32_t out_block_w = in1_block_w;
     constexpr bool spill = in0_num_blocks_w > 1;
 
-    // CB indices
-    constexpr uint32_t in0_cb_id = tt::CBIndex::c_0;
-    constexpr uint32_t in1_cb_id = tt::CBIndex::c_1;
-    constexpr uint32_t in0_pretilize_cb_id = tt::CBIndex::c_6;
-    constexpr uint32_t in0_cb_second_reader_id = tt::CBIndex::c_7;
-    constexpr uint32_t matmul_partials_cb = tt::CBIndex::c_24;
-    constexpr uint32_t tilized_in0_cb_id = tt::CBIndex::c_25;
-    // constexpr uint32_t untilize_mode_reblock_cb                 = tt::CBIndex::c_26;
-
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? matmul_partials_cb : out_cb_id;
 
 #ifdef FUSE_BIAS
     constexpr uint32_t bias_ntiles_w = get_compile_time_arg_val(16);
-    constexpr uint32_t bias_cb_id = tt::CBIndex::c_2;
+    constexpr uint32_t bias_cb_id = get_compile_time_arg_val(17);
     uint32_t bias_block_offset = 0;
     constexpr uint32_t mm_out_cb_id = matmul_partials_cb;
 #else
@@ -439,19 +428,9 @@ void MAIN {
 #endif
                 pack_untilize_dst_init_short<out_subblock_w, out_block_w>(out_cb_id);
                 copy_tile_to_dst_init_short(matmul_partials_cb);
-                uint32_t curr_tile_output_rows_h = 0;
-                uint32_t TILE_SIZE = is_non_tile_height ? 32 : out_block_w;
-                TILE_SIZE = TILE_SIZE * out_subblock_h;
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
-                    curr_tile_output_rows_h = output_rows_h < TILE_SIZE ? output_rows_h : TILE_SIZE;
-                    reblock_and_untilize<out_subblock_w, out_block_w, is_non_tile_height>(
-                        in1_num_subblocks,
-                        out_subblock_num_tiles,
-                        out_subblock_h,
-                        curr_tile_output_rows_h,
-                        matmul_partials_cb,
-                        out_cb_id);
-                    output_rows_h -= curr_tile_output_rows_h;
+                    reblock_and_untilize<out_subblock_w, out_block_w>(
+                        in1_num_subblocks, out_subblock_num_tiles, out_subblock_h, matmul_partials_cb, out_cb_id);
                 }
                 pack_untilize_uninit(matmul_partials_cb);
             }
@@ -464,6 +443,9 @@ void MAIN {
 
                 if constexpr (!tilize_in0) {
                     mm_block_init_short(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+#ifdef PACK_RELU
+                    PACK((llk_pack_relu_config(ReluType::NO_RELU)));
+#endif
                 }
             }
         }  // for in0_num_blocks_h

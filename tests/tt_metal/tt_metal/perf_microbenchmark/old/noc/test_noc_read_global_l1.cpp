@@ -11,8 +11,9 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/test_tiles.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "test_common.hpp"
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/dprint_server.hpp>
+#include "dprint_server.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include <tt-metalium/device.hpp>
 

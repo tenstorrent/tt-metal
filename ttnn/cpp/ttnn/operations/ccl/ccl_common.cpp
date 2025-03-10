@@ -12,8 +12,12 @@
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 
+#include "tt-metalium/hal_exp.hpp"
+
 namespace ttnn {
 namespace ccl {
+
+using namespace tt::tt_metal::experimental;
 
 void SyncModeSpec::add_signal(uint32_t sem_id, uint32_t wait_count) {
     this->sem_ids.push_back(sem_id);
@@ -178,14 +182,14 @@ CclOpTensorConfig::CclOpTensorConfig(Tensor const& tensor) :
         this->page_size = this->tile.get_tile_size(this->df);
         this->tile_size = this->tile.get_tile_hw();
     } else {
-        this->tile = Tile({32, 32});
+        this->tile = tt::tt_metal::Tile({32, 32});
         this->page_size = tensor.buffer()->page_size();
         this->tile_size = 1024;
     }
 }
 uint32_t CclOpTensorConfig::get_page_size() const { return this->page_size; }
 uint32_t CclOpTensorConfig::get_tile_size() const { return this->tile_size; }
-Tile CclOpTensorConfig::get_tile() const { return this->tile; }
+tt::tt_metal::Tile CclOpTensorConfig::get_tile() const { return this->tile; }
 
 uint32_t CclOpTensorConfig::get_buffer_start_address() const { return this->buffer_start_address; }
 
@@ -195,7 +199,7 @@ CclOpInterleavedTensorConfig::CclOpInterleavedTensorConfig(Tensor const& input_t
 CclOpShardedTensorConfig::CclOpShardedTensorConfig(Tensor const& tensor) :
     CclOpTensorConfig(tensor), shard_spec(tensor.shard_spec().value()) {}
 
-ShardSpec const& CclOpShardedTensorConfig::get_shard_spec() const { return this->shard_spec; }
+const tt::tt_metal::ShardSpec& CclOpShardedTensorConfig::get_shard_spec() const { return this->shard_spec; }
 
 std::unique_ptr<CclOpTensorConfig> CclOpTensorConfig::build_all_gather_tensor_config(Tensor const& tensor) {
     if (tensor.is_sharded()) {
@@ -206,15 +210,15 @@ std::unique_ptr<CclOpTensorConfig> CclOpTensorConfig::build_all_gather_tensor_co
 }
 
 void generate_edm_kernels_for_ring_or_linear_topology(
-    tt::tt_metal::Program& program,
-    IDevice const* device,
-    RingTopology const& topology_config,
-    std::vector<ccl::EriscDatamoverBuilder> const& clockwise_edm_builders,
-    std::vector<ccl::EriscDatamoverBuilder> const& counter_clockwise_edm_builders,
+    Program& program,
+    const IDevice* device,
+    const RingTopology& topology_config,
+    const std::vector<ccl::EriscDatamoverBuilder>& clockwise_edm_builders,
+    const std::vector<ccl::EriscDatamoverBuilder>& counter_clockwise_edm_builders,
     std::optional<uint32_t> receiver_device_id,
     std::optional<uint32_t> sender_device_id) {
-    auto sender_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(tt::Cluster::instance().arch());
-    auto receiver_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(tt::Cluster::instance().arch());
+    auto sender_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(hal::get_arch());
+    auto receiver_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(hal::get_arch());
     uint32_t sender_socket_idx = 0;
     uint32_t receiver_socket_idx = 0;
     if (receiver_device_id == sender_device_id) {
@@ -259,13 +263,14 @@ void generate_edm_kernels_for_ring_or_linear_topology(
 }
 
 template <typename EDMBuilder>
-KernelHandle generate_edm_kernel_impl(
-    tt::tt_metal::Program& program,
-    IDevice const* device,
-    EDMBuilder const& edm_builder,
-    std::string const& kernel_path,
-    CoreCoord const& eth_core,
-    NOC noc_id) {
+tt::tt_metal::KernelHandle generate_edm_kernel_impl(
+    Program& program,
+    const IDevice* device,
+    const EDMBuilder& edm_builder,
+    const std::string& kernel_path,
+    const CoreCoord& eth_core,
+    tt::tt_metal::NOC noc_id,
+    std::optional<tt::tt_metal::KernelBuildOptLevel> opt_level = std::nullopt) {
     edm_builder.dump_to_log();
 
     std::vector<uint32_t> const edm_kernel_rt_args = edm_builder.get_runtime_args();
@@ -277,11 +282,15 @@ KernelHandle generate_edm_kernel_impl(
         log_trace(tt::LogOp, "\t{}", s);
     }
 
+    auto kernel_config = tt::tt_metal::EthernetConfig{.noc = noc_id, .compile_args = eth_sender_ct_args};
+    if (opt_level.has_value()) {
+        kernel_config.opt_level = opt_level.value();
+    }
     auto eth_sender_kernel = tt::tt_metal::CreateKernel(
         program,
         kernel_path,
         eth_core,
-        tt::tt_metal::EthernetConfig{.noc = noc_id, .compile_args = eth_sender_ct_args});
+        kernel_config);
 
     tt::tt_metal::SetRuntimeArgs(program, eth_sender_kernel, eth_core, edm_kernel_rt_args);
 
@@ -295,27 +304,28 @@ KernelHandle generate_edm_kernel_impl(
     return eth_sender_kernel;
 }
 
-KernelHandle generate_edm_kernel(
-    tt::tt_metal::Program& program,
-    IDevice const* device,
-    ccl::FabricEriscDatamoverBuilder const& edm_builder,
-    CoreCoord const& eth_core,
-    NOC noc_id) {
+tt::tt_metal::KernelHandle generate_edm_kernel(
+    Program& program,
+    const IDevice* device,
+    const ccl::FabricEriscDatamoverBuilder& edm_builder,
+    const CoreCoord& eth_core,
+    tt::tt_metal::NOC noc_id) {
     return generate_edm_kernel_impl(
         program,
         device,
         edm_builder,
         "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_erisc_datamover.cpp",
         eth_core,
-        noc_id);
+        noc_id,
+        tt::tt_metal::KernelBuildOptLevel::O3);
 }
 
-KernelHandle generate_edm_kernel(
-    tt::tt_metal::Program& program,
-    IDevice const* device,
-    ccl::EriscDatamoverBuilder const& edm_builder,
-    CoreCoord const& eth_core,
-    NOC noc_id) {
+tt::tt_metal::KernelHandle generate_edm_kernel(
+    Program& program,
+    const IDevice* device,
+    const ccl::EriscDatamoverBuilder& edm_builder,
+    const CoreCoord& eth_core,
+    tt::tt_metal::NOC noc_id) {
     return generate_edm_kernel_impl(
         program, device, edm_builder, "ttnn/cpp/ttnn/operations/ccl/kernels/edm/erisc_datamover.cpp", eth_core, noc_id);
 }
@@ -323,7 +333,7 @@ KernelHandle generate_edm_kernel(
 ccl::EriscDatamoverBuilder create_erisc_datamover_builder(
     std::size_t num_channels,
     uint32_t page_size,
-    std::size_t num_buffers_per_channel,
+    size_t num_buffers_per_channel,
     ccl::EriscDataMoverBufferSharingMode buffer_sharing_mode,
     ccl::EriscDataMoverTerminationMode termination_mode) {
     ccl::EriscDatamoverConfig config;
@@ -589,7 +599,7 @@ RingReduceScatterBaseTensorSlicer<DERIVED_SLICER_T>::create_worker_slice_shapes_
 }
 
 std::vector<tt_xy_pair> RingReduceScatterTensorSlicer::create_worker_slice_shapes_for_tile_layout(
-    const ttnn::SimpleShape& tensor_shape,
+    const ttnn::Shape& tensor_shape,
     const tt_xy_pair& tensor_slice_shape_in_tiles,
     uint32_t num_workers,
     uint32_t max_slice_size_in_pages,
@@ -795,7 +805,7 @@ std::vector<tt_xy_pair> RingReduceScatterTensorSlicer::create_worker_slice_shape
 }
 
 std::vector<tt_xy_pair> RingReduceScatterWrappedTensorSlicer::create_worker_slice_shapes_for_tile_layout(
-    const ttnn::SimpleShape& tensor_shape,
+    const ttnn::Shape& tensor_shape,
     const tt_xy_pair& tensor_slice_shape_in_tiles,
     uint32_t num_workers,
     uint32_t max_slice_size_in_pages,
@@ -1206,7 +1216,7 @@ std::vector<tt_xy_pair> GenericWrappedTensorSlicer::compute_worker_slice_offsets
 }
 
 std::vector<tt_xy_pair> GenericWrappedTensorSlicer::create_worker_slice_shapes_for_tile_layout(
-    const ttnn::SimpleShape& tensor_shape,
+    const ttnn::Shape& tensor_shape,
     const tt_xy_pair& tensor_slice_shape_in_tiles,
     uint32_t num_workers,
     uint32_t max_slice_size_in_pages,

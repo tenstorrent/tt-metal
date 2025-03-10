@@ -18,7 +18,7 @@ bool SimpleL1ReadOnly(IDevice* device, size_t local_address, size_t byte_size) {
     std::vector<uint32_t> inputs =
         generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
     std::vector<uint32_t> outputs;
-    CoreCoord bank0_logical_core = device->logical_core_from_bank_id(0);
+    CoreCoord bank0_logical_core = device->allocator()->get_logical_core_from_bank_id(0);
     writeL1Backdoor(device, bank0_logical_core, local_address, inputs);
     readL1Backdoor(device, bank0_logical_core, local_address, byte_size, outputs);
     bool pass = (inputs == outputs);
@@ -31,7 +31,7 @@ bool SimpleL1WriteOnly(IDevice* device, size_t local_address, size_t byte_size) 
     std::vector<uint32_t> inputs =
         generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
     std::vector<uint32_t> outputs;
-    CoreCoord bank0_logical_core = device->logical_core_from_bank_id(0);
+    CoreCoord bank0_logical_core = device->allocator()->get_logical_core_from_bank_id(0);
     writeL1Backdoor(device, bank0_logical_core, local_address, inputs);
     readL1Backdoor(device, bank0_logical_core, local_address, byte_size, outputs);
     bool pass = (inputs == outputs);
@@ -63,7 +63,7 @@ bool SimpleTiledL1WriteCBRead(
             .set_page_size(cb_index, page_size);
     auto l1_cb = tt_metal::CreateCircularBuffer(program, core, l1_cb_config);
     std::map<std::string, std::string> defines = {{"INTERFACE_WITH_L1", "1"}};
-    uint32_t bank_id = device->bank_ids_from_logical_core(BufferType::L1, core)[0];
+    uint32_t bank_id = device->allocator()->get_bank_ids_from_logical_core(tt_metal::BufferType::L1, core)[0];
     auto reader_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/direct_reader_unary.cpp",
@@ -118,10 +118,12 @@ bool SimpleTiledL1WriteCBRead(
 
 }  // namespace tt::test::buffer::detail
 
+namespace tt::tt_metal {
+
 TEST_F(DeviceFixture, TestSimpleL1BufferReadOnlyLo) {
     for (unsigned int id = 0; id < num_devices_; id++) {
-        size_t lo_address =
-            this->devices_.at(id)->l1_size_per_core() - this->devices_.at(id)->bank_size(tt::tt_metal::BufferType::L1);
+        size_t lo_address = this->devices_.at(id)->l1_size_per_core() -
+                            this->devices_.at(id)->allocator()->get_bank_size(tt::tt_metal::BufferType::L1);
         ASSERT_TRUE(SimpleL1ReadOnly(this->devices_.at(id), lo_address, 4));
         ASSERT_TRUE(SimpleL1ReadOnly(this->devices_.at(id), lo_address, 8));
         ASSERT_TRUE(SimpleL1ReadOnly(this->devices_.at(id), lo_address, 16));
@@ -143,8 +145,8 @@ TEST_F(DeviceFixture, TestSimpleL1BufferReadOnlyHi) {
 }
 TEST_F(DeviceFixture, TestSimpleL1BufferWriteOnlyLo) {
     for (unsigned int id = 0; id < num_devices_; id++) {
-        size_t lo_address =
-            this->devices_.at(id)->l1_size_per_core() - this->devices_.at(id)->bank_size(tt::tt_metal::BufferType::L1);
+        size_t lo_address = this->devices_.at(id)->l1_size_per_core() -
+                            this->devices_.at(id)->allocator()->get_bank_size(tt::tt_metal::BufferType::L1);
         ASSERT_TRUE(SimpleL1WriteOnly(this->devices_.at(id), lo_address, 4));
         ASSERT_TRUE(SimpleL1WriteOnly(this->devices_.at(id), lo_address, 8));
         ASSERT_TRUE(SimpleL1WriteOnly(this->devices_.at(id), lo_address, 16));
@@ -237,3 +239,5 @@ TEST_F(DeviceFixture, TensixTestBufferL1ReadWriteTileHi) {
             this->devices_.at(id), {2, 2}, hi_address + 8 * 1024, hi_address + 16 * 1024, 6 * 1024));
     }
 }
+
+}  // namespace tt::tt_metal

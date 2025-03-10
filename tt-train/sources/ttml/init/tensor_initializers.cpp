@@ -11,7 +11,8 @@
 #include "core/tt_tensor_utils.hpp"
 #include "cpu_initializers.hpp"
 namespace ttml::init {
-void uniform_init(ttml::autograd::TensorPtr& t, const ttnn::SimpleShape& shape, UniformRange range) {
+
+void uniform_init(ttml::autograd::TensorPtr& t, const ttnn::Shape& shape, UniformRange range) {
     auto* device = &autograd::ctx().get_device();
     assert(device);
     size_t volume = shape.volume();
@@ -21,7 +22,7 @@ void uniform_init(ttml::autograd::TensorPtr& t, const ttnn::SimpleShape& shape, 
     t->set_value(ttml::core::from_vector(vec, shape, device));
 }
 
-void normal_init(ttml::autograd::TensorPtr& t, const ttnn::SimpleShape& shape, NormalParams params) {
+void normal_init(ttml::autograd::TensorPtr& t, const ttnn::Shape& shape, NormalParams params) {
     auto* device = &autograd::ctx().get_device();
     assert(device);
     size_t volume = shape.volume();
@@ -30,12 +31,12 @@ void normal_init(ttml::autograd::TensorPtr& t, const ttnn::SimpleShape& shape, N
     t->set_value(ttml::core::from_vector(vec, shape, device));
 }
 
-void constant_init(ttml::autograd::TensorPtr& t, const ttnn::SimpleShape& shape, float value) {
+void constant_init(ttml::autograd::TensorPtr& t, const ttnn::Shape& shape, float value) {
     auto* device = &autograd::ctx().get_device();
     t->set_value(core::full(shape, value, device));
 }
 
-void xavier_uniform_init(ttml::autograd::TensorPtr& t, const ttnn::SimpleShape& shape, FanParams params) {
+void xavier_uniform_init(ttml::autograd::TensorPtr& t, const ttnn::Shape& shape, FanParams params) {
     auto* device = &autograd::ctx().get_device();
     assert(device);
     size_t volume = shape.volume();
@@ -45,7 +46,7 @@ void xavier_uniform_init(ttml::autograd::TensorPtr& t, const ttnn::SimpleShape& 
     t->set_value(ttml::core::from_vector(vec, shape, device));
 }
 
-void xavier_normal_init(ttml::autograd::TensorPtr& t, const ttnn::SimpleShape& shape, FanParams params) {
+void xavier_normal_init(ttml::autograd::TensorPtr& t, const ttnn::Shape& shape, FanParams params) {
     auto* device = &autograd::ctx().get_device();
     assert(device);
     size_t volume = shape.volume();
@@ -55,7 +56,7 @@ void xavier_normal_init(ttml::autograd::TensorPtr& t, const ttnn::SimpleShape& s
     t->set_value(ttml::core::from_vector(vec, shape, device));
 }
 
-void kaiming_uniform_init(ttml::autograd::TensorPtr& t, const ttnn::SimpleShape& shape, int fan_in) {
+void kaiming_uniform_init(ttml::autograd::TensorPtr& t, const ttnn::Shape& shape, int fan_in) {
     auto* device = &autograd::ctx().get_device();
     assert(device);
     size_t volume = shape.volume();
@@ -65,7 +66,7 @@ void kaiming_uniform_init(ttml::autograd::TensorPtr& t, const ttnn::SimpleShape&
     t->set_value(ttml::core::from_vector(vec, shape, device));
 }
 
-void kaiming_normal_init(ttml::autograd::TensorPtr& t, const ttnn::SimpleShape& shape, int fan_out) {
+void kaiming_normal_init(ttml::autograd::TensorPtr& t, const ttnn::Shape& shape, int fan_out) {
     auto* device = &autograd::ctx().get_device();
     assert(device);
     size_t volume = shape.volume();

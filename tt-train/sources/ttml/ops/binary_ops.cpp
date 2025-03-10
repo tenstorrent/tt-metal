@@ -16,6 +16,7 @@
 #include "autograd/graph.hpp"
 #include "autograd/graph_utils.hpp"
 #include "autograd/tensor.hpp"
+#include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
@@ -23,23 +24,33 @@ namespace ttml::ops {
 
 namespace {
 
-bool is_batch_broadcasted(const autograd::TensorPtr& a, const ttnn::Tensor& grad) {
-    auto a_shape = a->get_value().get_logical_shape();
-    auto b_shape = grad.get_logical_shape();
-    if (a_shape.rank() != b_shape.rank()) {
+bool was_broadcasted(const autograd::TensorPtr& input, const ttnn::Tensor& grad) {
+    auto input_shape = input->get_value().get_logical_shape();
+    auto grad_shape = grad.get_logical_shape();
+    if (input_shape.rank() != grad_shape.rank()) {
         return false;
     }
-    for (size_t i = 1; i < a_shape.size(); ++i) {
-        if (a_shape[i] != b_shape[i]) {
-            return false;
+
+    for (size_t i = 0; i < input_shape.size(); ++i) {
+        if (input_shape[i] != grad_shape[i]) {
+            return true;
         }
     }
 
-    if (a_shape[0] == 1 && b_shape[0] != 1) {
-        return true;
+    return false;
+}
+
+ttnn::SmallVector<int64_t> get_broadcast_dimensions(const autograd::TensorPtr& input, const ttnn::Tensor& grad) {
+    ttnn::SmallVector<int64_t> broadcast_dims;
+    auto input_shape = input->get_value().get_logical_shape();
+    auto grad_shape = grad.get_logical_shape();
+    for (size_t i = 0; i < input_shape.size(); ++i) {
+        if (input_shape[i] != grad_shape[i]) {
+            broadcast_dims.push_back(static_cast<int64_t>(i));
+        }
     }
 
-    return false;
+    return broadcast_dims;
 }
 
 }  // namespace
@@ -55,16 +66,28 @@ autograd::TensorPtr operator+(const autograd::TensorPtr& a, const autograd::Auto
 autograd::TensorPtr operator+(const autograd::TensorPtr& a, const autograd::TensorPtr& b) {
     auto out = autograd::create_tensor();
 
-    out->set_value(ttnn::add(a->get_value(), b->get_value()));
+    out->set_value(ttnn::experimental::add(a->get_value(), b->get_value()));
     autograd::GradFunction grad = [a, b, out]() {
-        if (is_batch_broadcasted(a, out->get_grad())) {
-            a->add_grad(ttnn_fixed::sum_over_dim(out->get_grad(), /* axis */ 0));
+        if (was_broadcasted(a, out->get_grad())) {
+            a->add_grad(ttnn::moreh_sum(
+                out->get_grad(),
+                get_broadcast_dimensions(a, out->get_grad()),
+                /* keep_dim */ true,
+                /* output_tensor */ std::nullopt,
+                /* memory_config_arg */ std::nullopt,
+                core::ComputeKernelConfig::precise()));
         } else {
             a->add_grad(out->get_grad());
         }
 
-        if (is_batch_broadcasted(b, out->get_grad())) {
-            b->add_grad(ttnn_fixed::sum_over_dim(out->get_grad(), /* axis */ 0));
+        if (was_broadcasted(b, out->get_grad())) {
+            b->add_grad(ttnn::moreh_sum(
+                out->get_grad(),
+                get_broadcast_dimensions(b, out->get_grad()),
+                /* keep_dim */ true,
+                /* output_tensor */ std::nullopt,
+                /* memory_config_arg */ std::nullopt,
+                core::ComputeKernelConfig::precise()));
         } else {
             b->add_grad(out->get_grad());
         }

@@ -26,7 +26,6 @@ jobs:
       matrix:
         os: ${{ fromJson(inputs.from-precompiled && '["ubuntu-20.04"]' || '["ubuntu-20.04", "ubuntu-22.04"]') }}
         runner-hw-info: [
-          {arch: grayskull},
           {arch: wormhole_b0}
         ]
     runs-on: ${{ matrix.os }}
@@ -36,6 +35,7 @@ jobs:
         with:
           os: ${{ matrix.os }}
       - uses: actions/download-artifact@v4
+        timeout-minutes: 10
         with:
           name: eager-dist-${{ matrix.os }}-any
       - name: Set up end-to-end tests environment
@@ -46,29 +46,3 @@ jobs:
           source tests/end_to_end_tests/env/bin/activate
           cd tests/end_to_end_tests
           pytest -c conftest.py . -m eager_host_side
-  test-wheels-silicon:
-    strategy:
-      matrix:
-        # We only have this for non-Docker silicon runners right now
-        os: [ubuntu-20.04]
-        runner-hw-info: [
-          {arch: grayskull, type: E150},
-          {arch: wormhole_b0, type: N150},
-          {arch: wormhole_b0, type: N300}
-        ]
-    runs-on: ["cloud-virtual-machine", "${{ matrix.runner-hw-info.type }}", "in-service"]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: eager-dist-${{ matrix.os }}-any
-      - name: Set up end-to-end tests environment
-        run: ./tests/scripts/set_up_end_to_end_tests_env.sh
-      - name: Activate env and run release tests - silicon
-        timeout-minutes: 2
-        shell: bash
-        run: |
-          source tests/end_to_end_tests/env/bin/activate
-          python3 -m ttnn.examples.usage.run_op_on_device
-          cd tests/end_to_end_tests
-          pytest -c conftest.py . -m eager_package_silicon

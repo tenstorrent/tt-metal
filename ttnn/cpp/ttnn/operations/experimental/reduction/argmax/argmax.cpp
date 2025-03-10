@@ -29,8 +29,8 @@ Tensor create_mask(const Tensor& input_a, const std::optional<MemoryConfig>& out
 Tensor ArgmaxOperation::invoke(
     const Tensor& input_t, int64_t _dim, bool all, const std::optional<MemoryConfig>& output_mem_config) {
     auto output_memory_config = output_mem_config.value_or(input_t.memory_config());
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_t}))};
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_t}))};
+    tt::tt_metal::operation::launch_op(
         [_dim, all, output_memory_config](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -68,7 +68,7 @@ Tensor ArgmaxOperation::invoke(
                             output_memory_config);
                         max_tensor = ttnn::add(max_tensor, max_val, std::nullopt, output_memory_config);
                     }
-                    tindex = tindex.to(input_a.device());
+                    tindex = tindex.to_device(input_a.device());
                     max_val.deallocate();
                     Tensor cmp_results = ttnn::eq(input_a, max_tensor, std::nullopt, output_memory_config);
                     Tensor max_indices = ttnn::multiply(cmp_results, tindex, std::nullopt, output_memory_config);
@@ -119,7 +119,7 @@ Tensor ArgmaxOperation::invoke(
                             input_a.device(),
                             output_memory_config);
                     }
-                    tindex = tindex.to(input_a.device());
+                    tindex = tindex.to_device(input_a.device());
                     Tensor max_indices = ttnn::multiply(cmp_results, tindex, std::nullopt, output_memory_config);
                     cmp_results.deallocate();
                     Tensor midx = full_like(max_indices, size);

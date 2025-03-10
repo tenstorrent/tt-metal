@@ -17,14 +17,13 @@
 #include "datasets/dataloader.hpp"
 #include "datasets/in_memory_token_dataset.hpp"
 #include "datasets/utils.hpp"
+#include "models/distributed/gpt2.hpp"
 #include "models/gpt2.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/adamw.hpp"
-#include "optimizers/sgd.hpp"
 #include "tokenizers/bpe_tokenizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
-#include "ttnn_fixed/trivial_ttnn_ops.hpp"
 #include "utils.hpp"
 
 /* WANDB BLocks this signal.
@@ -34,6 +33,50 @@ void signal_handler(int signum) {
     std::cout << "\nInterrupt signal (" << signum << ") received.\n";
     wandbcpp::finish();
     exit(signum);
+}
+
+using Model = std::variant<
+    std::shared_ptr<ttml::models::gpt2::Transformer>,
+    std::shared_ptr<ttml::models::distributed::gpt2::DistributedTransformer>>;
+
+void model_to_eval(Model &model) {
+    std::visit([](auto &model) { model->eval(); }, model);
+}
+
+void model_to_train(Model &model) {
+    std::visit([](auto &model) { model->train(); }, model);
+}
+
+ttml::autograd::TensorPtr run_model(
+    Model &model, const ttml::autograd::TensorPtr &data, const ttml::autograd::TensorPtr &mask) {
+    return std::visit([&data, &mask](auto &model) { return (*model)(data, mask); }, model);
+}
+
+ttml::serialization::NamedParameters get_model_parameters(Model &model) {
+    return std::visit([](auto &model) { return model->parameters(); }, model);
+}
+
+uint64_t get_number_of_parameters(Model &model, bool enable_tp) {
+    auto *device = &ttml::autograd::ctx().get_device();
+    auto num_devices = static_cast<uint32_t>(device->num_devices());
+
+    auto contains = [](const std::string &str, const std::string &substr) {
+        return str.find(substr) != std::string::npos;
+    };
+
+    auto parameters = get_model_parameters(model);
+    uint64_t num_params = 0;
+    for (const auto &[name, tensor_ptr] : parameters) {
+        auto tensor = tensor_ptr->get_value();
+        auto params_in_tensor = tensor.get_logical_volume();
+        if (enable_tp && (contains(name, "fc") || contains(name, "linear"))) {
+            num_params += params_in_tensor * num_devices;
+        } else {
+            num_params += params_in_tensor;
+        }
+    }
+
+    return num_params;
 }
 
 using ttml::autograd::TensorPtr;
@@ -180,19 +223,20 @@ inline uint32_t sample_with_strategy(
     return static_cast<uint32_t>(vocab_size - 1);
 }
 
-template <typename Model, typename Tokenizer>
+template <typename Tokenizer>
 void generate(
-    const std::shared_ptr<Model> &model,
+    Model &model,
     const Tokenizer &tokenizer,
     uint32_t max_sequence_length,
     uint32_t num_heads,
     uint32_t tokens_to_generate = 1024U,
+    bool enable_tp = false,
     // Additional sampling params:
     float temperature = 1.0F,
     float repetition_penalty = 1.0F,
     int top_k = -1,
     float top_p = 1.0F) {
-    model->eval();  // set model to eval mode if needed
+    model_to_eval(model);
 
     std::string prompt;
     fmt::print("Enter a prompt: ");
@@ -206,22 +250,23 @@ void generate(
 
     // In case you need a pad token
     auto pad_token_id = 0U;
-
-    auto vocab_size = round_up_to_tile(tokenizer.get_vocab_size());
+    auto original_vocab_size = tokenizer.get_vocab_size();
+    auto *device = &ttml::autograd::ctx().get_device();
+    auto num_devices = static_cast<uint32_t>(device->num_devices());
+    // this is workaround for tensor parallel case, we need to have vocab size divisible by 32 per device
+    auto vocab_size = round_up_to_tile(original_vocab_size, (enable_tp ? num_devices : 1U) * 32U);
 
     // Build mask (causal) for attention
     std::vector<float> mask;
-    mask.reserve(static_cast<size_t>(max_sequence_length * max_sequence_length * num_heads));
-    for (uint32_t head = 0; head < num_heads; ++head) {
-        for (uint32_t i = 0; i < max_sequence_length; ++i) {
-            for (uint32_t j = 0; j < max_sequence_length; ++j) {
-                mask.push_back(i >= j ? 1.0F : 0.0F);
-            }
+    mask.reserve(static_cast<size_t>(max_sequence_length * max_sequence_length));
+    for (uint32_t i = 0; i < max_sequence_length; ++i) {
+        for (uint32_t j = 0; j < max_sequence_length; ++j) {
+            mask.push_back(i >= j ? 1.0F : 0.0F);
         }
     }
-    auto *device = &ttml::autograd::ctx().get_device();
+
     auto mask_tensor = ttml::autograd::create_tensor(ttml::core::from_vector(
-        mask, ttml::core::create_shape({1, num_heads, max_sequence_length, max_sequence_length}), device));
+        mask, ttml::core::create_shape({1, 1, max_sequence_length, max_sequence_length}), device));
 
     // Prepare a padded buffer for the prompt
     std::vector<uint32_t> prompt_tokens_padded(max_sequence_length, pad_token_id);
@@ -246,15 +291,15 @@ void generate(
             prompt_tokens_padded[i - start_idx] = prompt_tokens[i];
         }
         auto prompt_tokens_padded_size = static_cast<uint32_t>(prompt_tokens_padded.size());
-        auto prompt_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, DataType::UINT32>(
+        auto prompt_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
             prompt_tokens_padded,
             ttml::core::create_shape({1, 1, 1, prompt_tokens_padded_size}),
             device,
-            Layout::ROW_MAJOR));
+            ttnn::Layout::ROW_MAJOR));
 
         // Forward pass
         // 'output' shape is presumably [batch=1, 1, seq_len, vocab_size] or something similar
-        auto output = (*model)(prompt_tensor, mask_tensor);
+        auto output = run_model(model, prompt_tensor, mask_tensor);
 
         // Convert last position's logits to a std::vector
         auto output_vector = ttml::core::to_vector(output->get_value());
@@ -272,7 +317,7 @@ void generate(
 
         // Now we do advanced sampling from these logits
         uint32_t next_token_id = sample_with_strategy(
-            std::span<float>(logits_ptr, vocab_size),
+            std::span<float>(logits_ptr, original_vocab_size),
             prompt_tokens,  // entire history for repetition penalty
             temperature,
             repetition_penalty,
@@ -290,7 +335,7 @@ void generate(
     }
 
     fmt::print("\n*******************\n");
-    model->train();  // return model to train mode if needed
+    model_to_train(model);  // return model to train mode if needed
 }
 
 struct EvalConfig {
@@ -374,18 +419,26 @@ int main(int argc, char **argv) {
     argv = app.ensure_utf8(argv);
 
     std::string config_name = std::string(CONFIGS_FOLDER) + "/training_shakespear_nanogpt.yaml";
+    std::string run_name = "";
     bool is_eval = false;
     bool add_time_to_name = true;
     bool enable_wandb = true;
     bool ddp = false;
+    bool enable_tp = false;
     app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
     app.add_option("-e,--eval", is_eval, "Is evaluation")->default_val(is_eval);
     app.add_option("-t,--add_time_to_name", add_time_to_name, "Add time to run name")->default_val(add_time_to_name);
     app.add_option("-w,--wandb", enable_wandb, "Enable wandb logging")->default_val(enable_wandb);
     app.add_option("-d,--ddp", ddp, "Enable DDP")->default_val(ddp);
+    app.add_option("-p,--tp", enable_tp, "Enable TP")->default_val(enable_tp);
+    app.add_option("-n,--name", run_name, "Run name")->default_val(run_name);
     CLI11_PARSE(app, argc, argv);
 
-    initialize_device(ddp);
+    if (ddp && enable_tp) {
+        throw std::logic_error("DDP and TP cannot be enabled at the same time. Disable DDP or TP.");
+    }
+
+    initialize_device(ddp, enable_tp);
 
     if (enable_wandb) {
         auto result = signal(SIGINT, signal_handler);
@@ -399,8 +452,18 @@ int main(int argc, char **argv) {
     TrainingConfig config = parse_config(yaml_config);
     EvalConfig eval_config = parse_eval_config(yaml_config);
 
+    if (enable_tp) {
+        if (!config.model_path.empty()) {
+            throw std::runtime_error("Save and load is not supported with Tensor Parallel model");
+        }
+
+        if (is_eval) {
+            throw std::runtime_error("Evaluation is not supported with Tensor Parallel model");
+        }
+    }
+
     if (enable_wandb) {
-        wandbcpp::init({.project = config.project_name, .name = generate_run_name(config, add_time_to_name)});
+        wandbcpp::init({.project = config.project_name, .name = generate_run_name(run_name, config, add_time_to_name)});
         wandbcpp::update_config({
             {"model", "transformer"},
             {"num_heads", static_cast<int>(config.transformer_config.num_heads)},
@@ -477,28 +540,14 @@ int main(int argc, char **argv) {
     CachedHostData cached_data;
     std::vector<float> mask;
     auto num_heads = config.transformer_config.num_heads;
-    mask.reserve((size_t)config.batch_size * sequence_length * sequence_length * num_heads);
-    for (int sample_idx = 0; sample_idx < config.batch_size; ++sample_idx) {
-        for (int head = 0; head < num_heads; ++head) {
-            for (int i = 0; i < sequence_length; ++i) {
-                for (int j = 0; j < sequence_length; ++j) {
-                    mask.push_back(i >= j ? 1.0F : 0.0F);
-                }
-            }
+    mask.reserve(sequence_length * sequence_length);
+    for (int i = 0; i < sequence_length; ++i) {
+        for (int j = 0; j < sequence_length; ++j) {
+            mask.push_back(i >= j ? 1.0F : 0.0F);
         }
     }
-
-    if (ddp) {
-        ttml::core::XTensorToMeshVariant<float> float_composer =
-            ttml::core::ShardXTensorToMesh<float>(device->shape(), 0);
-        xt::xarray<float> mask_xtensor =
-            xt::adapt(mask, {config.batch_size, num_heads, sequence_length, sequence_length});
-        cached_data.masks_tensor =
-            ttml::autograd::create_tensor(ttml::core::from_xtensor(mask_xtensor, device, float_composer));
-    } else {
-        cached_data.masks_tensor = ttml::autograd::create_tensor(ttml::core::from_vector(
-            mask, ttml::core::create_shape({config.batch_size, num_heads, sequence_length, sequence_length}), device));
-    }
+    cached_data.masks_tensor = ttml::autograd::create_tensor(
+        ttml::core::from_vector(mask, ttml::core::create_shape({1, 1, sequence_length, sequence_length}), device));
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
         [sequence_length, num_heads, device, &cached_data, ddp](std::vector<DatasetSample> &&samples) {
@@ -525,21 +574,26 @@ int main(int argc, char **argv) {
                     auto data_xtensor = xt::adapt(data, {batch_size, 1U, 1U, sequence_length});
                     auto data_composer = ttml::core::ShardXTensorToMesh<uint32_t>(device->shape(), 0);
                     auto data_tensor =
-                        ttml::autograd::create_tensor(ttml::core::from_xtensor<uint32_t, DataType::UINT32>(
-                            data_xtensor, device, data_composer, Layout::ROW_MAJOR));
+                        ttml::autograd::create_tensor(ttml::core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
+                            data_xtensor, device, data_composer, ttnn::Layout::ROW_MAJOR));
 
                     auto targets_xtensor = xt::adapt(targets, {batch_size * sequence_length});
                     auto targets_composer = ttml::core::ShardXTensorToMesh<int32_t>(device->shape(), 0);
-                    auto targets_tt_tensor =
-                        ttml::core::from_xtensor<int32_t, DataType::INT32>(targets_xtensor, device, targets_composer);
+                    auto targets_tt_tensor = ttml::core::from_xtensor<int32_t, ttnn::DataType::INT32>(
+                        targets_xtensor, device, targets_composer);
                     auto targets_tensor = ttml::autograd::create_tensor(targets_tt_tensor);
                     return {data_tensor, targets_tensor};
                 }
 
-                auto data_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, DataType::UINT32>(
-                    data, ttml::core::create_shape({batch_size, 1, 1, sequence_length}), device, Layout::ROW_MAJOR));
-                auto targets_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<int32_t, DataType::INT32>(
-                    targets, ttnn::SimpleShape({batch_size * sequence_length}), device));
+                auto data_tensor =
+                    ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+                        data,
+                        ttml::core::create_shape({batch_size, 1, 1, sequence_length}),
+                        device,
+                        ttnn::Layout::ROW_MAJOR));
+                auto targets_tensor =
+                    ttml::autograd::create_tensor(ttml::core::from_vector<int32_t, ttnn::DataType::INT32>(
+                        targets, ttnn::Shape({batch_size * sequence_length}), device));
                 return {data_tensor, targets_tensor};
             };
 
@@ -554,8 +608,17 @@ int main(int argc, char **argv) {
     auto train_dataloader = DataLoader(dataset, /* batch_size */ config.batch_size, /* shuffle */ true, collate_fn);
 
     fmt::print("Overriding vocab size to be divisible by 32\n");
-    config.transformer_config.vocab_size = round_up_to_tile(tokenizer->get_vocab_size());
-    auto model = ttml::models::gpt2::create(config.transformer_config);
+    auto num_devices = static_cast<uint32_t>(device->num_devices());
+    // this is workaround for tensor parallel case, we need to have vocab size divisible by 32 per device
+    config.transformer_config.vocab_size =
+        round_up_to_tile(tokenizer->get_vocab_size(), (enable_tp ? num_devices : 1U) * 32U);
+
+    Model model;
+    if (enable_tp) {
+        model = ttml::models::distributed::gpt2::create(config.transformer_config);
+    } else {
+        model = ttml::models::gpt2::create(config.transformer_config);
+    }
 
     auto adamw_params = ttml::optimizers::AdamWConfig();
     adamw_params.lr = config.learning_rate;
@@ -565,12 +628,15 @@ int main(int argc, char **argv) {
     fmt::print("    Learning rate: {}\n", adamw_params.lr);
     fmt::print("    Weight decay: {}\n", adamw_params.weight_decay);
     fmt::print("    Use Kahan summation: {}\n", adamw_params.use_kahan_summation);
+
+    fmt::print("Number of parameters: {}\n", get_number_of_parameters(model, enable_tp));
+
     auto select_optimizer = [&model,
                              &adamw_params](bool use_moreh_adamw) -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
         if (use_moreh_adamw) {
-            return std::make_unique<ttml::optimizers::MorehAdamW>(model->parameters(), adamw_params);
+            return std::make_unique<ttml::optimizers::MorehAdamW>(get_model_parameters(model), adamw_params);
         } else {
-            return std::make_unique<ttml::optimizers::AdamW>(model->parameters(), adamw_params);
+            return std::make_unique<ttml::optimizers::AdamW>(get_model_parameters(model), adamw_params);
         }
     };
 
@@ -591,6 +657,7 @@ int main(int argc, char **argv) {
                 config.transformer_config.max_sequence_length,
                 num_heads,
                 sequence_length,
+                enable_tp,
                 eval_config.temperature,
                 eval_config.repetition_penalty,
                 eval_config.top_k,
@@ -624,7 +691,7 @@ int main(int argc, char **argv) {
             if (gradient_accumulator_helper.should_zero_grad()) {
                 optimizer->zero_grad();
             }
-            auto output = (*model)(features, masks);
+            auto output = run_model(model, features, masks);
             auto loss = ttml::ops::nll_loss(output, target);
             loss = gradient_accumulator_helper.scale(loss);
             float loss_float = get_loss_value(loss);
@@ -635,14 +702,19 @@ int main(int argc, char **argv) {
             auto samples = features->get_value().get_logical_shape()[0];
             gradient_accumulator_helper.update(loss_float, samples);
 
-            // synchronize gradients for multi-device case, no-op if single device
-            auto parameters = model->parameters();
-            ttml::core::distributed::synchronize_parameters(parameters);
-            if (config.use_clip_grad_norm) {
-                ttml::core::clip_grad_norm(parameters, config.clip_grad_norm_max_norm);
-            }
-
             if (gradient_accumulator_helper.should_step()) {
+                // synchronize gradients for multi-device case, no-op if single device
+                auto parameters = get_model_parameters(model);
+                if (!enable_tp) {
+                    ttml::core::distributed::synchronize_parameters(parameters);
+                }
+
+                if (config.use_clip_grad_norm) {
+                    if (enable_tp) {
+                        throw std::logic_error("Clip grad norm is not supported with TP");
+                    }
+                    ttml::core::clip_grad_norm(parameters, config.clip_grad_norm_max_norm);
+                }
                 optimizer->step();
                 scheduler->step();
                 auto global_step = optimizer->get_steps();

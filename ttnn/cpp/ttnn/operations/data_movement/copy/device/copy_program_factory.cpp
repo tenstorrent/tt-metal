@@ -4,11 +4,9 @@
 
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/util.hpp>
-#include <tt-metalium/host_api.hpp>
 #include "copy_device_operation.hpp"
 #include "ttnn/operations/math.hpp"
 
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <algorithm>

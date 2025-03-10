@@ -17,8 +17,8 @@ inline __attribute__((always_inline)) void fill_pad_cb_with_val(
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_sticks_per_core_read = get_arg_val<uint32_t>(1);
-    uint32_t num_read_per_barrier = get_arg_val<uint32_t>(2);
+    uint32_t num_sticks_per_core = get_arg_val<uint32_t>(1);
+    uint32_t num_sticks_per_barrier = get_arg_val<uint32_t>(2);
     uint32_t start_id = get_arg_val<uint32_t>(3);
     uint32_t front_pad_n = get_arg_val<uint32_t>(4);
     uint32_t front_pad_c = get_arg_val<uint32_t>(5);
@@ -42,6 +42,8 @@ void kernel_main() {
 
 #define not_pad_by_zero get_compile_time_arg_val(13) == 1
 #define front_padding get_compile_time_arg_val(9)
+#define unaligned get_compile_time_arg_val(22) == 1
+
 #if (not_pad_by_zero)
     constexpr uint32_t packed_pad_value = get_compile_time_arg_val(14);
     constexpr uint32_t row_major_min_bytes = get_compile_time_arg_val(15);
@@ -84,16 +86,16 @@ void kernel_main() {
 
     uint32_t i_stick = start_id;
     uint32_t curr_c = start_dim_offset[2], curr_h = start_dim_offset[1], curr_n = start_dim_offset[3];
-    for (uint32_t iter = 0; iter < num_sticks_per_core_read; ++iter) {
-        cb_reserve_back(cb_in0, num_read_per_barrier);
+    for (uint32_t iter = 0; iter < num_sticks_per_core;) {
+        cb_reserve_back(cb_in0, num_sticks_per_barrier);
         uint32_t l1_write_addr = get_write_ptr(cb_in0);
 
-        for (uint32_t i = 0; i < num_read_per_barrier; ++i) {
+        for (uint32_t i = 0; i < num_sticks_per_barrier && iter < num_sticks_per_core; ++i, ++iter) {
             bool read_stick = (curr_h >= front_pad_h and curr_h < H) and (curr_c >= front_pad_c and curr_c < C) and
                               (curr_n >= front_pad_n and curr_n < N);
             uint64_t read_noc_addr = get_noc_addr(i_stick, s);
             noc_async_read(pad_val_noc_addr, l1_write_addr, stick_size_padded);
-
+            noc_async_read_barrier();
             if (read_stick) {
 #if (front_padding)
                 // Read noc into cb_pad_align l1
@@ -104,7 +106,13 @@ void kernel_main() {
                     (void*)(get_read_ptr(cb_pad_align)),
                     (size_t)(stick_size_bytes));
 #else
+#if (unaligned)
+                noc_async_read(read_noc_addr, get_write_ptr(cb_pad_align), stick_size_bytes);
+                noc_async_read_barrier();
+                noc_async_read(pad_align_noc_addr, l1_write_addr, stick_size_bytes);
+#else
                 noc_async_read(read_noc_addr, l1_write_addr, stick_size_bytes);
+#endif
 #endif
                 i_stick++;
             }
@@ -120,6 +128,6 @@ void kernel_main() {
             }
         }
         noc_async_read_barrier();
-        cb_push_back(cb_in0, num_read_per_barrier);
+        cb_push_back(cb_in0, num_sticks_per_barrier);
     }
 }

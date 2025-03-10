@@ -10,9 +10,9 @@
 #include <tt-metalium/test_tiles.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/command_queue.hpp>
-#include <tt-metalium/llrt.hpp>
+#include "llrt.hpp"
 
-using namespace tt;
+namespace tt::tt_metal {
 
 inline std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, int N) {
     if (N == K) {
@@ -154,3 +154,5 @@ inline bool move_tiles_to_dram(
     EnqueueWriteBuffer(cq, buffer, tiles, false);
     return pass;
 }
+
+}  // namespace tt::tt_metal

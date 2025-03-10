@@ -37,11 +37,6 @@ uint32_t configure_crta_offsets_for_kernel_groups(
     std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_offsets,
     std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_sizes);
 
-// Compute relative offsets (wrt the start of the kernel config ring buffer) and sizes of all
-// program data structures in L1. Will be used when assembling dispatch commands for this program
-template <typename T>
-void finalize_program_offsets(T& workload_type, IDevice* device);
-
 uint32_t finalize_rt_args(
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
@@ -82,9 +77,6 @@ void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDevi
 void assemble_runtime_args_commands(
     ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device);
 
-void assemble_device_commands(
-    ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device, SubDeviceId sub_device_id);
-
 void initialize_worker_config_buf_mgr(WorkerConfigBufferMgr& config_buffer_mgr);
 
 void reserve_space_in_kernel_config_buffer(
@@ -118,9 +110,27 @@ void write_program_command_sequence(
 
 KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle);
 
-template <typename WorkloadType, typename DeviceType>
-uint32_t program_base_addr_on_core(
-    WorkloadType& workload, DeviceType generic_device, HalProgrammableCoreType programmable_core_type);
+void reset_config_buf_mgrs_and_expected_workers(
+    std::array<WorkerConfigBufferMgr, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>& config_buffer_mgrs,
+    std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed,
+    uint32_t num_entries_to_reset);
+
+void reset_worker_dispatch_state_on_device(
+    IDevice* device,
+    SystemMemoryManager& manager,
+    uint8_t cq_id,
+    CoreCoord dispatch_core,
+    const std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed,
+    bool reset_launch_msg_state);
+
+void set_num_worker_sems_on_dispatch(
+    IDevice* device, SystemMemoryManager& manager, uint8_t cq_id, uint32_t num_worker_sems);
+
+void set_go_signal_noc_data_on_dispatch(
+    IDevice* device,
+    const vector_memcpy_aligned<uint32_t>& go_signal_noc_data,
+    SystemMemoryManager& manager,
+    uint8_t cq_id);
 
 }  // namespace program_dispatch
 

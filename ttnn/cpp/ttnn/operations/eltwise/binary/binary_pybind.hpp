@@ -160,7 +160,7 @@ void bind_binary_operation(
                const std::optional<ttnn::Tensor>& output_tensor,
                const std::optional<unary::FusedActivations>& activations,
                const std::optional<unary::UnaryWithParam>& input_tensor_a_activation,
-               const uint8_t& queue_id) -> ttnn::Tensor {
+               QueueId queue_id) -> ttnn::Tensor {
                 return self(
                     queue_id,
                     input_tensor_a,
@@ -179,7 +179,7 @@ void bind_binary_operation(
             py::arg("output_tensor") = std::nullopt,
             py::arg("activations") = std::nullopt,
             py::arg("input_tensor_a_activation") = std::nullopt,
-            py::arg("queue_id") = 0},
+            py::arg("queue_id") = DefaultQueueId},
 
         // tensor and tensor
         ttnn::pybind_overload_t{
@@ -191,7 +191,7 @@ void bind_binary_operation(
                const std::optional<ttnn::Tensor>& output_tensor,
                const std::optional<unary::FusedActivations>& activations,
                const std::optional<unary::UnaryWithParam>& input_tensor_a_activation,
-               uint8_t queue_id) -> ttnn::Tensor {
+               QueueId queue_id) -> ttnn::Tensor {
                 return self(
                     queue_id,
                     input_tensor_a,
@@ -210,7 +210,7 @@ void bind_binary_operation(
             py::arg("output_tensor") = std::nullopt,
             py::arg("activations") = std::nullopt,
             py::arg("input_tensor_a_activation") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 template <typename binary_operation_t>
@@ -283,7 +283,7 @@ void bind_binary_unary_operation(
                const float scalar,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               const uint8_t& queue_id) -> ttnn::Tensor {
+               QueueId queue_id) -> ttnn::Tensor {
                 return self(queue_id, input_tensor_a, scalar, memory_config, output_tensor);
             },
             py::arg("input_tensor_a"),
@@ -291,7 +291,7 @@ void bind_binary_unary_operation(
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0},
+            py::arg("queue_id") = DefaultQueueId},
 
         // tensor and tensor
         ttnn::pybind_overload_t{
@@ -303,7 +303,7 @@ void bind_binary_unary_operation(
                const std::optional<ttnn::Tensor>& output_tensor,
                const std::optional<unary::FusedActivations>& activations,
                const std::optional<unary::UnaryWithParam>& input_tensor_a_activation,
-               uint8_t queue_id) -> ttnn::Tensor {
+               QueueId queue_id) -> ttnn::Tensor {
                 return self(
                     queue_id,
                     input_tensor_a,
@@ -322,7 +322,7 @@ void bind_binary_unary_operation(
             py::arg("output_tensor") = std::nullopt,
             py::arg("activations") = std::nullopt,
             py::arg("input_tensor_a_activation") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 template <typename binary_operation_t>
@@ -393,7 +393,7 @@ void bind_bitwise_binary_ops_operation(
                const int32_t scalar,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               const uint8_t& queue_id) -> ttnn::Tensor {
+               QueueId queue_id) -> ttnn::Tensor {
                 return self(queue_id, input_tensor_a, scalar, memory_config, output_tensor);
             },
             py::arg("input_tensor_a"),
@@ -401,7 +401,7 @@ void bind_bitwise_binary_ops_operation(
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0},
+            py::arg("queue_id") = DefaultQueueId},
 
         // tensor and tensor
         ttnn::pybind_overload_t{
@@ -410,7 +410,7 @@ void bind_bitwise_binary_ops_operation(
                const ttnn::Tensor& input_tensor_b,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               uint8_t queue_id) -> ttnn::Tensor {
+               QueueId queue_id) -> ttnn::Tensor {
                 return self(
                     queue_id,
                     input_tensor_a,
@@ -423,7 +423,7 @@ void bind_bitwise_binary_ops_operation(
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 template <typename binary_operation_t>
@@ -896,7 +896,7 @@ void bind_div(
                const std::optional<std::string> round_mode,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               uint8_t queue_id) -> ttnn::Tensor {
+               QueueId queue_id) -> ttnn::Tensor {
                 return self(
                     queue_id, input_tensor_a, input_tensor_b, accurate_mode, round_mode, memory_config, output_tensor);
             },
@@ -917,7 +917,7 @@ void bind_div(
                const std::optional<std::string> round_mode,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               uint8_t queue_id) -> ttnn::Tensor {
+               QueueId queue_id) -> ttnn::Tensor {
                 return self(queue_id, input_tensor_a, value, accurate_mode, round_mode, memory_config, output_tensor);
             },
             py::arg("input_tensor_a"),
@@ -1322,7 +1322,7 @@ void bind_power(py::module& module, const binary_operation_t& operation, const s
                uint32_t exponent,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<Tensor>& output_tensor,
-               const uint8_t queue_id) -> ttnn::Tensor {
+               const QueueId queue_id) -> ttnn::Tensor {
                 return self(queue_id, input_tensor, exponent, memory_config, output_tensor);
             },
             py::arg("input_tensor"),
@@ -1330,7 +1330,7 @@ void bind_power(py::module& module, const binary_operation_t& operation, const s
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0},
+            py::arg("queue_id") = DefaultQueueId},
 
         // float exponent
         ttnn::pybind_overload_t{
@@ -1339,7 +1339,7 @@ void bind_power(py::module& module, const binary_operation_t& operation, const s
                float exponent,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<Tensor> output_tensor,
-               const uint8_t queue_id) -> ttnn::Tensor {
+               const QueueId queue_id) -> ttnn::Tensor {
                 return self(queue_id, input_tensor, exponent, memory_config, output_tensor);
             },
             py::arg("input_tensor"),
@@ -1356,7 +1356,7 @@ void bind_power(py::module& module, const binary_operation_t& operation, const s
                const Tensor& exponent,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<Tensor> output_tensor,
-               const uint8_t queue_id) -> ttnn::Tensor {
+               const QueueId queue_id) -> ttnn::Tensor {
                 return self(queue_id, input_tensor, exponent, memory_config, output_tensor);
             },
             py::arg("input_tensor"),
@@ -1373,7 +1373,7 @@ void bind_power(py::module& module, const binary_operation_t& operation, const s
                const Tensor& exponent,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<Tensor> output_tensor,
-               const uint8_t queue_id) -> ttnn::Tensor {
+               const QueueId queue_id) -> ttnn::Tensor {
                 return self(queue_id, input, exponent, memory_config, output_tensor);
             },
             py::arg("input"),
@@ -1631,7 +1631,11 @@ void py_module(py::module& module) {
         R"doc(Computes atan2 :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor}_i = \arctan\left(\frac{\mathrm{input\_tensor\_a}_i}{\mathrm{input\_tensor\_b}_i}\right)
         )doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B)doc",
+        R"doc(2, 3, 4)doc",
+        R"doc(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device))doc",
+        R"doc(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device))doc",
+        R"doc(Input arguments for the atan2 function are in the format (y, x))doc");
 
     detail::bind_binary_operation(
         module,
@@ -1825,7 +1829,9 @@ void py_module(py::module& module) {
         R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_power(
-        module, ttnn::pow, R"doc(When :attr:`exponent` is a Tensor, supported dtypes are: BFLOAT16, FLOAT32)doc");
+        module,
+        ttnn::pow,
+        R"doc(When :attr:`exponent` is a Tensor, supported dtypes are: BFLOAT16, FLOAT32. Both input tensors should be of same dtype.)doc");
 }
 
 }  // namespace binary

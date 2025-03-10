@@ -1,126 +1,218 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/data_movement/repeat/repeat.hpp"
+#include <functional>
 
-#include "device/repeat_op.hpp"
-#include <tt-metalium/math.hpp>
-#include "ttnn/common/constants.hpp"
-#include "ttnn/decorators.hpp"
-#include "ttnn/operations/data_movement/pad/pad.hpp"
-#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/operations/data_movement/tilize/tilize.hpp"
-#include "ttnn/operations/data_movement/untilize/untilize.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
+
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
+#include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
+#include "ttnn/operations/data_movement/view/view.hpp"
+#include "ttnn/operations/functions.hpp"
 #include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
+#include "device/repeat_device_operation.hpp"
+#include "repeat.hpp"
 
 namespace ttnn::operations::data_movement {
 
-ttnn::Tensor RepeatOperation::invoke(
-    uint8_t queue_id,
-    const ttnn::Tensor& input_tensor,
-    const Shape& repeat_dims,
-    const std::optional<MemoryConfig>& memory_config_arg) {
-    auto padded_input_shape = input_tensor.get_padded_shape();
-    auto logical_input_shape = input_tensor.get_logical_shape();
-    auto input_rank = logical_input_shape.rank();
+namespace detail {
 
-    auto repeated_logical_shape = logical_input_shape;
-    for (uint32_t dim = 0; dim < input_rank; ++dim) {
-        repeated_logical_shape[dim] *= repeat_dims[dim];
+struct UpperRepeatDims {
+    static constexpr uint32_t collapsed_upper = 0;
+    static constexpr uint32_t repeat = 1;
+    static constexpr uint32_t collapsed_lower = 2;
+    static constexpr uint32_t page_size = 3;
+};
+struct LastRepeatDims {
+    static constexpr uint32_t collapsed_upper = 0;
+    static constexpr uint32_t repeat = 1;
+};
+
+ttnn::Tensor repeat_upper_dims_rm(
+    const ttnn::Tensor& tensor,
+    const uint32_t dim,
+    const uint32_t repetitions,
+    QueueId queue_id,
+    const MemoryConfig& output_mem_config) {
+    // collapse upper dims to 4D or append 1s
+    // collapse lower dims or insert 1s
+    // op
+    // un-collaps to expected size
+
+    // figure out the shape of the input tensor for the op. dims before and after rep dim get collapsed, not including
+    // page size.
+    const auto& input_shape = tensor.get_logical_shape();
+    ttnn::SmallVector<uint32_t> collapsed_shape_vector(4);
+
+    collapsed_shape_vector[UpperRepeatDims::collapsed_upper] =
+        std::accumulate(input_shape.cbegin(), input_shape.cbegin() + dim, 1, std::multiplies<uint32_t>());
+    collapsed_shape_vector[UpperRepeatDims::repeat] = input_shape[dim];
+    collapsed_shape_vector[UpperRepeatDims::collapsed_lower] =
+        std::accumulate(input_shape.cbegin() + dim + 1, input_shape.cend() - 1, 1, std::multiplies<uint32_t>());
+    collapsed_shape_vector[UpperRepeatDims::page_size] = input_shape[-1];
+
+    // use ttnn::view to check logic
+    auto input_tensor = ttnn::view(tensor, ttnn::Shape(collapsed_shape_vector));
+
+    constexpr bool is_final_dim = false;
+    auto out_tensor =
+        tt::tt_metal::operation::run(
+            RepeatDeviceOperation{repetitions, is_final_dim, output_mem_config}, {input_tensor}, {}, {}, queue_id)
+            .at(0);
+    auto expected_shape = input_shape;
+    expected_shape[dim] *= repetitions;
+
+    return ttnn::view(out_tensor, ttnn::Shape(expected_shape));
+}
+
+ttnn::Tensor repeat_last_dim_rm(
+    const ttnn::Tensor& tensor, const uint32_t repetitions, QueueId queue_id, const MemoryConfig& output_mem_config) {
+    // collapse to 2D
+    // op
+    // un-collapse
+    const auto& input_shape = tensor.get_logical_shape();
+    ttnn::SmallVector<uint32_t> collapsed_shape_vector(2);
+
+    collapsed_shape_vector[0] =
+        std::accumulate(input_shape.cbegin(), input_shape.cend() - 1, 1, std::multiplies<uint32_t>());
+    collapsed_shape_vector[1] = input_shape[-1];
+
+    // use ttnn:view
+    auto input_tensor = ttnn::view(tensor, ttnn::Shape(collapsed_shape_vector));
+
+    constexpr bool is_final_dim = true;
+    auto out_tensor =
+        tt::tt_metal::operation::run(
+            RepeatDeviceOperation{repetitions, is_final_dim, output_mem_config}, {input_tensor}, {}, {}, queue_id)
+            .at(0);
+
+    auto expected_shape = input_shape;
+    expected_shape[-1] *= repetitions;
+
+    return ttnn::view(out_tensor, ttnn::Shape(expected_shape));
+}
+
+std::tuple<ttnn::Tensor, ttnn::SmallVector<uint32_t>> match_input_rank(
+    const ttnn::Tensor& tensor, const SmallVector<uint32_t>& repetition_vector) {
+    auto working_tensor = tensor;
+    const auto& input_shape = working_tensor.get_logical_shape();
+    SmallVector<uint32_t> working_repetition_vector;
+
+    const auto total_reps =
+        std::accumulate(repetition_vector.cbegin(), repetition_vector.cend(), 1, std::multiplies<uint_fast32_t>());
+
+    if (input_shape.rank() < repetition_vector.size()) {
+        ttnn::SmallVector<uint32_t> new_shape_vec(repetition_vector.size(), 1);
+        std::copy_backward(input_shape.cbegin(), input_shape.cend(), new_shape_vec.end());
+        working_tensor = ttnn::view(working_tensor, ttnn::Shape(new_shape_vec));
+        working_repetition_vector = std::move(repetition_vector);
+    }
+    // torch actually throws an error if the repetition rank is smaller than the tensor rank but it seems reasonable to
+    // handle it
+    else if (repetition_vector.size() < input_shape.rank()) {
+        working_repetition_vector.resize(input_shape.rank(), 1);
+        std::copy_backward(repetition_vector.cbegin(), repetition_vector.cend(), working_repetition_vector.end());
     }
 
-    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
-    tt::tt_metal::operation::launch_op(
-        [&input_rank, &input_tensor, &repeat_dims, &memory_config_arg, &padded_input_shape](
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<std::optional<Tensor>>& optional_output_tensors) -> std::vector<Tensor> {
-            auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
-            TT_FATAL(repeat_dims.rank() == input_rank, "Number of repeat dims must be equal to number of tensor dims");
-            Tensor output = input_tensor;
-            for (uint32_t dim = 0; dim < repeat_dims.size(); ++dim) {
-                if (repeat_dims[dim] == 1) {
-                    continue;
-                }
-                TT_FATAL(repeat_dims[dim] > 0, "Number of repetitions along a dim must be greater than 0");
-                if (input_tensor.get_layout() == Layout::ROW_MAJOR && dim == input_rank - 1) {
-                    TT_FATAL(
-                        (padded_input_shape[dim] * input_tensor.element_size()) % input_tensor.buffer()->alignment() ==
-                            0,
-                        "Current repeat implementation requires last dim ({}) to be aligned to {} repeating on last "
-                        "dim",
-                        (padded_input_shape[dim] * input_tensor.element_size()),
-                        input_tensor.buffer()->alignment());
-                }
-                auto outputs = operation::run_without_autoformat(
-                    RepeatDeviceOperation{dim, repeat_dims[dim], memory_config}, {output});
-                TT_FATAL(
-                    outputs.size() == 1,
-                    "ttnn.repeat: expected 1 output tensor from run_without_autoformat, but got {}",
-                    outputs.size());
-                output = outputs[0];
-            }
-            return {output};
-        },
-        {},
-        output_tensors);
-    TT_FATAL(output_tensors.size() == 1, "ttnn.repeat: expected 1 output tensor, but got {}", output_tensors.size());
-    if (input_tensor.get_layout() != Layout::ROW_MAJOR && logical_input_shape != padded_input_shape) {
-        auto zero_indices = ttnn::SmallVector<uint32_t>(input_rank, 0);
-        auto end_indices = ttnn::SmallVector<uint32_t>(repeated_logical_shape.cbegin(), repeated_logical_shape.cend());
-        auto step = ttnn::SmallVector<uint32_t>(input_rank, 1);
+    else {
+        working_repetition_vector = std::move(repetition_vector);
+    }
 
-        if (repeated_logical_shape.volume() % tt::constants::TILE_HW != 0) {
-            // volume of the repeated tensor doesn't fit neatly into tiles.
-            // slice/tilize don't support padding to tiled on the output for
-            // now, so we need to perform the slice in row-major then re-tilize
-            // ourselves.
-            auto rm_output = ttnn::untilize(output_tensors[0]);
-            auto sliced_output =
-                ttnn::slice(rm_output, zero_indices, end_indices, step, input_tensor.memory_config(), std::nullopt);
+    TT_ASSERT(working_tensor.get_logical_volume() == tensor.get_logical_volume());
+    TT_ASSERT(
+        std::accumulate(
+            working_repetition_vector.cbegin(),
+            working_repetition_vector.cend(),
+            1,
+            std::multiplies<uint_fast32_t>()) == total_reps);
 
-            auto sliced_logical_shape = sliced_output.get_logical_shape();
-            auto sliced_padded_shape = sliced_output.get_padded_shape();
+    return std::tie(working_tensor, working_repetition_vector);
+}
+}  // namespace detail
 
-            if (sliced_padded_shape.volume() % tt::constants::TILE_HW == 0) {
-                // slice preserved tile padding for us, so we can just tilize now.
-                auto tiled_output = ttnn::tilize(sliced_output, input_tensor.memory_config());
-                return tiled_output;
-            }
+ttnn::Tensor RepeatOperation::invoke(
+    const ttnn::Tensor& tensor,
+    const ttnn::SmallVector<uint32_t>& provided_repetition_vector,
+    const std::optional<MemoryConfig>& provided_output_mem_config,
+    QueueId queue_id) {
+    auto [working_tensor, repetition_vector] = detail::match_input_rank(tensor, provided_repetition_vector);
+    MemoryConfig output_mem_config = provided_output_mem_config.value_or(tensor.memory_config());
+    auto working_output_mem_config = output_mem_config;
 
-            auto padded_height = tt::round_up(sliced_padded_shape[-2], tt::constants::TILE_HEIGHT);
-            auto padded_width = tt::round_up(sliced_padded_shape[-1], tt::constants::TILE_WIDTH);
-            TT_ASSERT(input_rank >= 2, "ttnn.repeat: rank of tiled input tensor must be >= 2");
-            uint32_t num_non_hw_dims = input_rank - 2u;
-            auto padding_vec = ttnn::SmallVector<std::pair<uint32_t, uint32_t>>(num_non_hw_dims, {0, 0});
-            padding_vec.reserve(input_rank);
-            padding_vec.emplace_back(0, padded_height - sliced_padded_shape[-2]);
-            padding_vec.emplace_back(0, padded_width - sliced_padded_shape[-1]);
+    if (std::any_of(repetition_vector.cbegin(), repetition_vector.cend(), [](auto x) { return x == 0; })) {
+        const auto& shape = working_tensor.get_logical_shape();
+        std::transform(
+            shape.cbegin(),
+            shape.cend(),
+            repetition_vector.cbegin(),
+            repetition_vector.begin(),
+            std::multiplies<uint32_t>());
+        return tensor.reshape(ttnn::Shape(repetition_vector));
+    }
 
-            constexpr bool pad_use_multicore = true;
-            auto padded_output = ttnn::pad(queue_id, sliced_output, padding_vec, 0.0f, pad_use_multicore, std::nullopt);
-            auto tiled_output = ttnn::tilize(padded_output, input_tensor.memory_config());
+    TT_FATAL(working_tensor.get_logical_shape().rank() > 0, "repeat does not support rank 0 tensors");
 
-            auto padded_to_tiled_shape =
-                ttnn::Shape(sliced_logical_shape.view(), tiled_output.get_padded_shape().view());
-            return ttnn::reshape(tiled_output, padded_to_tiled_shape);
-        } else {
-            return ttnn::slice(
-                output_tensors[0], zero_indices, end_indices, step, input_tensor.memory_config(), std::nullopt);
+    // nothing to do!
+    if (std::all_of(repetition_vector.cbegin(), repetition_vector.cend(), [](auto x) { return x == 1; })) {
+        return tensor;
+    }
+
+    // Sharded -> interleaved
+    if (tensor.memory_config().is_sharded()) {
+        auto working_memory_config = tensor.memory_config();
+        working_memory_config.memory_layout = TensorMemoryLayout::INTERLEAVED;
+        working_tensor = ttnn::sharded_to_interleaved(queue_id, tensor, working_memory_config, std::nullopt);
+    }
+    if (working_output_mem_config.is_sharded()) {
+        working_output_mem_config.memory_layout = TensorMemoryLayout::INTERLEAVED;
+    }
+
+    // tiled -> RM
+    if (working_tensor.layout() == ttnn::TILE_LAYOUT) {
+        working_tensor =
+            ttnn::to_layout(working_tensor, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (IDevice*)nullptr);
+    }
+
+    // loop over dims in repetition vector, backwards because repeat pages first is faster
+    for (auto it = repetition_vector.crbegin(); it != repetition_vector.crend(); ++it) {
+        // no op for unit repetitions
+        if (*it == 1) {
+            continue;
+        }
+        // if last dim
+        if (it == repetition_vector.crbegin()) {
+            working_tensor = detail::repeat_last_dim_rm(working_tensor, *it, queue_id, working_output_mem_config);
+        }
+        // if not last dim
+        else {
+            auto i = repetition_vector.crend() - it - 1;  // forward index
+            working_tensor = detail::repeat_upper_dims_rm(working_tensor, i, *it, queue_id, working_output_mem_config);
         }
     }
-    return output_tensors[0];
+
+    // RM -> OG page layout
+    if (tensor.layout() == ttnn::TILE_LAYOUT) {
+        working_tensor =
+            ttnn::to_layout(working_tensor, ttnn::TILE_LAYOUT, tensor.get_dtype(), std::nullopt, (IDevice*)nullptr);
+    }
+
+    // Interleaved to OG mem layout
+    if (output_mem_config.is_sharded()) {
+        working_tensor = ttnn::interleaved_to_sharded(queue_id, working_tensor, output_mem_config, std::nullopt);
+    }
+
+    return working_tensor;
 }
 
-ttnn::Tensor RepeatOperation::invoke(
-    const ttnn::Tensor& input_tensor, const Shape& repeat_dims, const std::optional<MemoryConfig>& memory_config) {
-    return invoke(DefaultQueueId, input_tensor, repeat_dims, memory_config);
-}
-
-ttnn::Tensor RepeatOperation::invoke(const ttnn::Tensor& input_tensor, const Shape& repeat_dims) {
-    return invoke(DefaultQueueId, input_tensor, repeat_dims, std::nullopt);
+ttnn::Tensor RepeatOperation::invoke(const ttnn::Tensor& input_tensor, const ttnn::Shape& repeat_dims) {
+    return RepeatOperation::invoke(
+        input_tensor, SmallVector<uint32_t>(repeat_dims.cbegin(), repeat_dims.cend()), std::nullopt, DefaultQueueId);
 }
 
 }  // namespace ttnn::operations::data_movement

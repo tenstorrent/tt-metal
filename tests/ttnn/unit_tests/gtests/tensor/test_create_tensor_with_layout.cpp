@@ -18,12 +18,12 @@
 
 namespace {
 struct Inputs {
-    ttnn::SimpleShape shape;
+    ttnn::Shape shape;
     TensorLayout layout;
 };
 
 struct Expected {
-    ttnn::SimpleShape padded_shape;
+    ttnn::Shape padded_shape;
 };
 
 struct CreateTensorParams {
@@ -55,18 +55,18 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(
         CreateTensorParams{
             Inputs{
-                .shape = ttnn::SimpleShape({1, 1, 32, 32}),
+                .shape = ttnn::Shape({1, 1, 32, 32}),
                 .layout = TensorLayout(DataType::BFLOAT16, Layout::TILE, DefaultMemoryConfig)},
-            Expected{.padded_shape = ttnn::SimpleShape({1, 1, 32, 32})}},
+            Expected{.padded_shape = ttnn::Shape({1, 1, 32, 32})}},
 
         CreateTensorParams{
             Inputs{
-                .shape = ttnn::SimpleShape({1, 1, 16, 10}),
+                .shape = ttnn::Shape({1, 1, 16, 10}),
                 .layout = TensorLayout(DataType::BFLOAT16, Layout::TILE, DefaultMemoryConfig)},
-            Expected{.padded_shape = ttnn::SimpleShape({1, 1, 32, 32})}},
+            Expected{.padded_shape = ttnn::Shape({1, 1, 32, 32})}},
 
         CreateTensorParams{
             Inputs{
-                .shape = ttnn::SimpleShape({1, 1, 16, 10}),
+                .shape = ttnn::Shape({1, 1, 16, 10}),
                 .layout = TensorLayout(DataType::BFLOAT16, Layout::ROW_MAJOR, DefaultMemoryConfig)},
-            Expected{.padded_shape = ttnn::SimpleShape({1, 1, 16, 10})}}));
+            Expected{.padded_shape = ttnn::Shape({1, 1, 16, 10})}}));

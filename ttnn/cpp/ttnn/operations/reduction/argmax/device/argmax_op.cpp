@@ -55,10 +55,10 @@ std::vector<TensorSpec> ArgMax::compute_output_specs(
     }
 
     const auto& input_tensor = input_tensors[0];
-    ttnn::SimpleShape output_shape({1, 1, 1, 1});
+    ttnn::Shape output_shape({1, 1, 1, 1});
     if (this->dim.has_value()) {
         auto input_shape = input_tensors[0].get_logical_shape();
-        output_shape = ttnn::SimpleShape{input_shape[0], input_shape[1], 1, input_shape[2]};
+        output_shape = ttnn::Shape{input_shape[0], input_shape[1], 1, input_shape[2]};
     }
     return {
         TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(input_tensor.get_layout()), output_mem_config))};
@@ -79,7 +79,7 @@ operation::ProgramWithCallbacks ArgMax::create_program(
     const auto& output_tensor = output_tensors.at(0);
     const auto normalized_dim = dim.has_value() ? *dim + input_tensor.get_padded_shape().rank() * (*dim < 0) : dim;
     if (use_multicore) {
-        return detail::argmax_multi_core(input_tensor, output_tensor, normalized_dim);
+        return detail::argmax_multi_core(input_tensor, output_tensor, normalized_dim, sub_core_grids);
     }
     return detail::argmax_single_core(input_tensor, output_tensor, normalized_dim);
 }

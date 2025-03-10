@@ -8,7 +8,6 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
-#include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 #include "ttnn/decorators.hpp"
@@ -16,7 +15,7 @@
 namespace tt {
 namespace tt_metal {
 
-operation::ProgramWithCallbacks rotary_embedding_multi_core(
+tt::tt_metal::operation::ProgramWithCallbacks rotary_embedding_multi_core(
     const Tensor& input,
     const Tensor& cos,
     const Tensor& sin,

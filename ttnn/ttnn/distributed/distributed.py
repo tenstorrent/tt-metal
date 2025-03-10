@@ -18,7 +18,6 @@ def get_mesh_device_core_grid(mesh_device):
 MeshDevice = ttnn._ttnn.multi_device.MeshDevice
 MeshDevice.core_grid = property(get_mesh_device_core_grid)
 DispatchCoreType = ttnn._ttnn.device.DispatchCoreType
-MeshType = ttnn._ttnn.multi_device.MeshType
 
 
 def _get_rich_table(
@@ -139,9 +138,8 @@ def open_mesh_device(
     trace_region_size: int = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE,
     num_command_queues: int = 1,
     dispatch_core_config: ttnn.DispatchCoreConfig = ttnn.DispatchCoreConfig(),
-    offset: ttnn.MeshOffset = ttnn.MeshOffset(row=0, col=0),
+    offset: Optional[ttnn.MeshCoordinate] = None,
     physical_device_ids: List[int] = [],
-    mesh_type: "MeshType" = MeshType.RowMajor,
 ):
     """
     Open a mesh device with the specified configuration.
@@ -152,9 +150,8 @@ def open_mesh_device(
         trace_region_size (int, optional): Size of the trace region. Defaults to ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE.
         num_command_queues (int, optional): Number of command queues. Defaults to 1.
         dispatch_core_type (int, optional): Type of dispatch core. Defaults to DispatchCoreType.WORKER.
-        offset (ttnn.MeshOffset, optional): Offset in logical mesh coordinates for the mesh device. Defaults to (0, 0).
+        offset (ttnn.MeshCoordinate, optional): Offset in logical mesh coordinates for the mesh device. Defaults to None.
         physical_device_ids (List[int], optional): List of physical device IDs to use. Defaults to [].
-        mesh_type (MeshType, optional): Defines type of mesh requested. Type imposes connectivity constraints and defines device iteration order.
 
     Returns:
         ttnn._ttnn.multi_device.MeshDevice: The opened mesh device.
@@ -168,7 +165,6 @@ def open_mesh_device(
         dispatch_core_config=dispatch_core_config,
         offset=offset,
         physical_device_ids=physical_device_ids,
-        mesh_type=mesh_type,
     )
 
 
@@ -193,25 +189,6 @@ def create_mesh_device(*args, **kwargs):
         yield mesh_device
     finally:
         close_mesh_device(mesh_device)
-
-
-def synchronize_devices(
-    devices: Union["ttnn.Device", "ttnn.MeshDevice"],
-    queue_id: Optional[int] = ttnn.DefaultQueueId,
-    sub_device_ids: List[ttnn.SubDeviceId] = [],
-) -> None:
-    """
-    synchronize_devices(devices: Union[ttnn.Device, ttnn.MeshDevice], queue_id: Optional[int] = None, sub_device_ids: List[ttnn.SubDeviceId] = []) -> None:
-
-    Synchronize the devices with host by waiting for all operations to complete.
-    If queue_id is provided then only the operations associated with that queue_id are waited for,
-    otherwise operations for all command queues are waited on.
-    """
-    if isinstance(devices, ttnn.Device):
-        ttnn._ttnn.device.synchronize_device(devices, queue_id, sub_device_ids)
-    else:
-        for device in devices.get_device_ids():
-            ttnn._ttnn.device.synchronize_device(devices.get_device(device), queue_id, sub_device_ids)
 
 
 class TensorToMesh:
@@ -444,18 +421,6 @@ class ConcatMeshToTensor(MeshToTensor):
             ttnn.to_torch(tt_input_tensor, mesh_composer=None) for tt_input_tensor in ttnn.get_device_tensors(tensor)
         ]
         return torch.cat(device_shards_converted_to_torch, dim=self.concat_dim)
-
-
-# TODO: #15061 - Remove this function, as it does not abide to the MeshToTensor interface.
-# Instead, lift this implementation to the caller.
-class ListMeshToTensor(MeshToTensor):
-    def __init__(self, mesh_device: MeshDevice):
-        self.mesh_device = mesh_device
-
-    def compose(self, tensor: ttnn.Tensor) -> List["torch.Tensor"]:
-        return [
-            ttnn.to_torch(tt_input_tensor, mesh_composer=None) for tt_input_tensor in ttnn.get_device_tensors(tensor)
-        ]
 
 
 @contextlib.contextmanager

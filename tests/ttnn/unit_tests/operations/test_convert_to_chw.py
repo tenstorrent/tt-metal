@@ -36,7 +36,7 @@ def test_convert_to_chw(device, C, HW, core_grid):
     input_tensor = ttnn.to_device(input_tensor, device, input_memory_config)
 
     output_memory_config = ttnn.create_sharded_memory_config(
-        [1, 1, 32, HW], core_grid, ttnn.ShardStrategy.WIDTH, ttnn.ShardOrientation.ROW_MAJOR
+        [1, 1, C, HW], core_grid, ttnn.ShardStrategy.WIDTH, ttnn.ShardOrientation.ROW_MAJOR
     )
     actual = ttnn.experimental.convert_to_chw(input_tensor, memory_config=output_memory_config)
 

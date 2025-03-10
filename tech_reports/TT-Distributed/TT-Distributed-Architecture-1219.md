@@ -223,10 +223,6 @@ struct MeshConfig {
 
     // Offset into Logical Device Coordinate Space
     MeshOffset offset;
-
-    // TODO: consider whether this should be automatically inferred.
-    // Interpret as e.g. {Ring, Line}
-    MeshType type;
 };
 
 // Class exposing host and device dispatch state
@@ -298,7 +294,6 @@ class MeshDevice {
 
    // - Common Interface between {Device, MeshDevice}
    uint32_t get_num_worker_cores() const;
-   uint32_t get_l1_small_size();
    int num_dram_channels() const;
    uint32_t l1_size_per_core() const;
    uint32_t dram_size_per_channel() const;
@@ -987,8 +982,8 @@ Below, we include snippets from both the TT-Mesh and TT-Metal examples to illust
 *Specify MeshConfig when creating two Virtual Meshes on a Physical Mesh.*
 
 ```cpp
-MeshConfig mesh_config_0 = MeshConfig{.shape = virtual_mesh_shape, .offset = {0, 0}, .type=mesh_type};
-MeshConfig mesh_config_1 = MeshConfig{.shape = virtual_mesh_shape, .offset = {0, 4}, .type=mesh_type};
+MeshConfig mesh_config_0 = MeshConfig{.shape = virtual_mesh_shape, .offset = {0, 0}};
+MeshConfig mesh_config_1 = MeshConfig{.shape = virtual_mesh_shape, .offset = {0, 4}};
 
 DeviceHandle virtual_mesh_0 = CreateMeshDevice(mesh_config_0, 2 /* num_command_queues */, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE);
 DeviceHandle virtual_mesh_0 = CreateMeshDevice(mesh_config_1, 2 /* num_command_queues */, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE);
@@ -2301,9 +2296,6 @@ CoreCoord Device::grid_size() const;
 // Get the Tensix Grid Size for this device. Queries SOC Descriptor + harvesting info + system type.
 CoreCoord Device::logical_grid_size() const;
 
-// Get the devices connected to this device. Relies on UMD for the cluster descriptor
-std::unordered_set<chip_id_t> Device::get_ethernet_connected_device_ids();
-
 // Get the worker core grid-size on this device. Queries SOC Descriptor + harvesting info + system type + core descriptor.
 CoreCoord Device::compute_with_storage_grid_size() const;
 
@@ -2337,7 +2329,6 @@ bool Device::is_mmio_capable() const;
 const metal_SocDescriptor& tt_cluster::get_soc_desc(chip_id_t chip) const;
 
 // Get harvesting information for this chip
-uint32_t tt_cluster::get_harvested_rows(chip_id_t chip) const;
 uint32_t tt_cluster::get_harvesting_mask(chip_id_t chip) const;
 
 // Get the clock frequency for this chip

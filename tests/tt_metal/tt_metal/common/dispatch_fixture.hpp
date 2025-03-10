@@ -12,7 +12,9 @@
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/device_pool.hpp>
-#include <tt-metalium/llrt.hpp>
+#include "llrt.hpp"
+
+namespace tt::tt_metal {
 
 // A dispatch-agnostic test fixture
 class DispatchFixture : public ::testing::Test {
@@ -129,3 +131,5 @@ protected:
         }
     }
 };
+
+}  // namespace tt::tt_metal

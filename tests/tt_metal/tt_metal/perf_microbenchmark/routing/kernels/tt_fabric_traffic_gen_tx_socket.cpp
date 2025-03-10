@@ -5,10 +5,10 @@
 // clang-format off
 #include "dataflow_api.h"
 #include "debug/dprint.h"
-#include "tt_fabric/hw/inc/tt_fabric.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
-#include "tt_fabric/hw/inc/tt_fabric_interface.h"
-#include "tt_fabric/hw/inc/tt_fabric_api.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 // clang-format on
 
 using namespace tt::tt_fabric;
@@ -66,13 +66,13 @@ uint32_t max_packet_size_mask;
 
 auto input_queue_state = select_input_queue<pkt_dest_size_choice>();
 volatile local_pull_request_t* local_pull_request = (volatile local_pull_request_t*)(data_buffer_start_addr - 1024);
-volatile tt_l1_ptr fabric_router_l1_config_t* routing_table =
-    reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(routing_table_start_addr);
-volatile fabric_client_interface_t* client_interface = (volatile fabric_client_interface_t*)client_interface_addr;
+volatile tt_l1_ptr fabric_router_l1_config_t* routing_table;
+volatile tt_l1_ptr fabric_pull_client_interface_t* client_interface =
+    (volatile tt_l1_ptr fabric_pull_client_interface_t*)client_interface_addr;
 volatile tt_l1_ptr chan_req_buf* client_pull_req_buf =
     reinterpret_cast<tt_l1_ptr chan_req_buf*>(client_pull_req_buf_addr);
 
-fvc_producer_state_t test_producer __attribute__((aligned(16)));
+fvc_inbound_pull_state_t test_producer __attribute__((aligned(16)));
 fvcc_inbound_state_t fvcc_test_producer __attribute__((aligned(16)));
 
 uint64_t xy_local_addr;
@@ -328,43 +328,36 @@ bool test_buffer_handler(socket_handle_t* socket_handle) {
 }
 
 void kernel_main() {
-    tt_fabric_init();
-
     // TODO: refactor
     src_endpoint_id = get_arg_val<uint32_t>(0);
     noc_offset = get_arg_val<uint32_t>(1);
-    uint32_t router_x = get_arg_val<uint32_t>(2);
-    uint32_t router_y = get_arg_val<uint32_t>(3);
-    dest_device = get_arg_val<uint32_t>(4);
+    uint32_t routing_plane = get_arg_val<uint32_t>(2);
+    dest_device = get_arg_val<uint32_t>(3);
 
     if (ASYNC_WR == test_command) {
         target_address = get_arg_val<uint32_t>(5);
     }
 
-    uint64_t router_config_addr = NOC_XY_ADDR(router_x, router_y, eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
-    noc_async_read_one_packet(
-        router_config_addr, routing_table_start_addr, sizeof(tt::tt_fabric::fabric_router_l1_config_t));
-    noc_async_read_barrier();
-
     zero_l1_buf(test_results, test_results_size_bytes);
-    test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_STARTED;
-    test_results[PQ_TEST_STATUS_INDEX + 1] = (uint32_t)local_pull_request;
+    test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_STARTED;
+    test_results[TT_FABRIC_STATUS_INDEX + 1] = (uint32_t)local_pull_request;
 
-    test_results[PQ_TEST_MISC_INDEX] = 0xff000000;
-    test_results[PQ_TEST_MISC_INDEX + 1] = 0xcc000000 | src_endpoint_id;
+    test_results[TT_FABRIC_MISC_INDEX] = 0xff000000;
+    test_results[TT_FABRIC_MISC_INDEX + 1] = 0xcc000000 | src_endpoint_id;
 
     zero_l1_buf(
         reinterpret_cast<tt_l1_ptr uint32_t*>(data_buffer_start_addr), data_buffer_size_words * PACKET_WORD_SIZE_BYTES);
     zero_l1_buf((uint32_t*)local_pull_request, sizeof(local_pull_request_t));
     zero_l1_buf((uint32_t*)&packet_header, sizeof(packet_header_t));
-    zero_l1_buf((uint32_t*)client_interface, sizeof(fabric_client_interface_t));
-    zero_l1_buf((uint32_t*)client_pull_req_buf, sizeof(chan_req_buf));
-    client_interface->gk_interface_addr = ((uint64_t)gk_interface_addr_h << 32) | gk_interface_addr_l;
-    client_interface->gk_msg_buf_addr = client_interface->gk_interface_addr + offsetof(gatekeeper_info_t, gk_msg_buf);
-    client_interface->pull_req_buf_addr = xy_local_addr | client_pull_req_buf_addr;
 
-    // make sure fabric node gatekeeper is available.
-    fabric_endpoint_init();
+    // initalize client
+    tt_fabric_init();
+    fabric_endpoint_init<RoutingType::ROUTING_TABLE>(client_interface, gk_interface_addr_l, gk_interface_addr_h);
+    routing_table = reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(
+        client_interface->routing_tables_l1_offset + sizeof(fabric_router_l1_config_t) * routing_plane);
+
+    zero_l1_buf((uint32_t*)client_pull_req_buf, sizeof(chan_req_buf));
+    client_interface->pull_req_buf_addr = xy_local_addr | client_pull_req_buf_addr;
 
     if constexpr (pkt_dest_size_choice == pkt_dest_size_choices_t::RANDOM) {
         input_queue_state.init(src_endpoint_id, prng_seed);
@@ -394,7 +387,7 @@ void kernel_main() {
     // once tt_fabric kernels have been launched on all the test devices.
     while (*(volatile tt_l1_ptr uint32_t*)signal_address == 0);
 
-    test_results[PQ_TEST_MISC_INDEX] = 0xff000001;
+    test_results[TT_FABRIC_MISC_INDEX] = 0xff000001;
 
     uint64_t data_words_sent = 0;
     uint64_t iter = 0;
@@ -411,6 +404,7 @@ void kernel_main() {
     uint32_t packet_count = 0;
 
     socket_handle_t* socket_handle = fabric_socket_open(
+        client_interface_addr,  // client interface address
         3,                      // the network plane to use for this socket
         2,                      // Temporal epoch for which the socket is being opened
         1,                      // Socket Id to open
@@ -485,9 +479,9 @@ void kernel_main() {
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
 
     uint64_t num_packets = input_queue_state.get_num_packets();
-    set_64b_result(test_results, data_words_sent, PQ_TEST_WORD_CNT_INDEX);
-    set_64b_result(test_results, cycles_elapsed, PQ_TEST_CYCLES_INDEX);
-    set_64b_result(test_results, iter, PQ_TEST_ITER_INDEX);
+    set_64b_result(test_results, data_words_sent, TT_FABRIC_WORD_CNT_INDEX);
+    set_64b_result(test_results, cycles_elapsed, TT_FABRIC_CYCLES_INDEX);
+    set_64b_result(test_results, iter, TT_FABRIC_ITER_INDEX);
     set_64b_result(test_results, total_data_words, TX_TEST_IDX_TOT_DATA_WORDS);
     set_64b_result(test_results, num_packets, TX_TEST_IDX_NPKT);
     set_64b_result(test_results, zero_data_sent_iter, TX_TEST_IDX_ZERO_DATA_WORDS_SENT_ITER);
@@ -495,13 +489,13 @@ void kernel_main() {
     set_64b_result(test_results, many_data_sent_iter, TX_TEST_IDX_MANY_DATA_WORDS_SENT_ITER);
 
     if (test_producer.packet_corrupted) {
-        test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_BAD_HEADER;
-        test_results[PQ_TEST_MISC_INDEX] = packet_count;
+        test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_BAD_HEADER;
+        test_results[TT_FABRIC_MISC_INDEX] = packet_count;
     } else if (!timeout) {
-        test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_PASS;
-        test_results[PQ_TEST_MISC_INDEX] = packet_count;
+        test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_PASS;
+        test_results[TT_FABRIC_MISC_INDEX] = packet_count;
     } else {
-        test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_TIMEOUT;
+        test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_TIMEOUT;
         set_64b_result(test_results, words_flushed, TX_TEST_IDX_WORDS_FLUSHED);
     }
 }

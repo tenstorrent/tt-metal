@@ -6,24 +6,10 @@ from loguru import logger
 
 import torch
 import pytest
-from models.utility_functions import (
-    is_wormhole_b0,
-    skip_for_grayskull,
-    is_grayskull,
-    is_wormhole_b0,
-    skip_for_wormhole_b0,
-    is_x2_harvested,
-    is_blackhole,
-    skip_for_blackhole,
-    is_blackhole,
-)
-from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc, check_with_pcc_without_tensor_printout
+from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 import ttnn
 
 
-@skip_for_grayskull()
-@skip_for_blackhole()
-# @skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override",
     (
@@ -164,7 +150,8 @@ def test_prepare_conv_weights(
     tt_weight_tensor_formatted = ttnn.prepare_conv_weights(
         weight_tensor=tt_weight_tensor,
         weights_format="OIHW",
-        input_memory_config=tt_input_tensor.memory_config(),
+        input_memory_config=ttnn.L1_MEMORY_CONFIG,
+        has_bias=has_bias,
         **conv_kwargs,
     )
     tt_bias_tensor_formatted = (
@@ -197,9 +184,6 @@ def test_prepare_conv_weights(
     assert passing
 
 
-@skip_for_grayskull()
-@skip_for_blackhole()
-# @skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override",
     (

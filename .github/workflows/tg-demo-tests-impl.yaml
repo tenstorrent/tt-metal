@@ -9,11 +9,11 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { name: "TG Llama3 demo tests", arch: wormhole_b0, model: llama3, timeout: 180, owner_id: U06F3ER8X9A}, # Stuti Raizada
+          # Deleting for now - LLM team will put in a new version soon
+          # { name: "TG Llama3 demo tests", arch: wormhole_b0, model: llama3, timeout: 180, owner_id: U06F3ER8X9A}, # Stuti Raizada
           { name: "TG Falcon7b demo tests", arch: wormhole_b0, model: falcon7b, timeout: 120, owner_id: U05RWH3QUPM}, # Salar Hosseini
         ]
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.test-group.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
@@ -29,6 +29,7 @@ jobs:
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - uses: actions/download-artifact@v4
+        timeout-minutes: 10
         with:
           name: TTMetal_build_any
       - name: Extract files
@@ -46,3 +47,10 @@ jobs:
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: ${{ matrix.test-group.owner_id }}
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          path: |
+            generated/test_reports/
+          prefix: "test_reports_"

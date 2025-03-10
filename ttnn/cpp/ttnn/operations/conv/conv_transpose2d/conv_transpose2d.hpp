@@ -18,7 +18,7 @@ using Result = std::tuple<ttnn::Tensor, OutputHeight, OutputWidth, ttnn::Tensor,
 
 struct ConvTranpose2dOperation {
     static Result invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
         IDevice* device,
@@ -40,7 +40,7 @@ struct ConvTranpose2dOperation {
         bool mirror_kernel = true);
 
     static Result invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
         MeshDevice* device,

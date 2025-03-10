@@ -128,45 +128,58 @@ NlpCreateHeadsDeviceOperation::spec_return_value_t NlpCreateHeadsDeviceOperation
         head_dim = (head_dim / TILE_WIDTH + 1) * TILE_WIDTH;
     }
 
-    const SimpleShape q_output_shape({input_shape[0], operation_attributes.num_q_heads, sequence_length, head_dim});
-    const SimpleShape v_output_shape({input_shape[0], operation_attributes.num_kv_heads, sequence_length, head_dim});
-    const SimpleShape k_output_shape =
+    const Shape q_output_shape({input_shape[0], operation_attributes.num_q_heads, sequence_length, head_dim});
+    const Shape v_output_shape({input_shape[0], operation_attributes.num_kv_heads, sequence_length, head_dim});
+    const Shape k_output_shape =
         operation_attributes.transpose_k_heads
-            ? SimpleShape({input_shape[0], operation_attributes.num_kv_heads, head_dim, sequence_length})
+            ? Shape({input_shape[0], operation_attributes.num_kv_heads, head_dim, sequence_length})
             : v_output_shape;
 
     if (operation_attributes.output_mem_config.is_sharded()) {
         auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
-        auto q_shard_grid = num_cores_to_corerangeset(operation_attributes.num_q_heads, core_grid, true);
-        ShardSpec q_shard_spec{q_shard_grid, {TILE_HEIGHT, operation_attributes.head_dim}};
+        auto q_shard_grid = tt::tt_metal::num_cores_to_corerangeset(operation_attributes.num_q_heads, core_grid, true);
+        tt::tt_metal::ShardSpec q_shard_spec{q_shard_grid, {TILE_HEIGHT, operation_attributes.head_dim}};
         auto q_mem_config = operation_attributes.output_mem_config;
         q_mem_config.shard_spec = q_shard_spec;
-        auto kv_shard_grid = num_cores_to_corerangeset(operation_attributes.num_kv_heads, core_grid, true);
-        ShardSpec kv_shard_spec{kv_shard_grid, {TILE_HEIGHT, operation_attributes.head_dim}};
+        auto kv_shard_grid =
+            tt::tt_metal::num_cores_to_corerangeset(operation_attributes.num_kv_heads, core_grid, true);
+        tt::tt_metal::ShardSpec kv_shard_spec{kv_shard_grid, {TILE_HEIGHT, operation_attributes.head_dim}};
         auto kv_mem_config = operation_attributes.output_mem_config;
         kv_mem_config.shard_spec = kv_shard_spec;
         return {
             TensorSpec(
                 q_output_shape,
-                TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), q_mem_config)),
+                tt::tt_metal::TensorLayout(
+                    input_tensor.get_dtype(), tt::tt_metal::PageConfig(input_tensor.get_layout()), q_mem_config)),
             TensorSpec(
                 k_output_shape,
-                TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), kv_mem_config)),
+                tt::tt_metal::TensorLayout(
+                    input_tensor.get_dtype(), tt::tt_metal::PageConfig(input_tensor.get_layout()), kv_mem_config)),
             TensorSpec(
                 v_output_shape,
-                TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), kv_mem_config))};
+                tt::tt_metal::TensorLayout(
+                    input_tensor.get_dtype(), tt::tt_metal::PageConfig(input_tensor.get_layout()), kv_mem_config))};
     }
 
     return {
         TensorSpec(
             q_output_shape,
-            TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), operation_attributes.output_mem_config)),
+            tt::tt_metal::TensorLayout(
+                input_tensor.get_dtype(),
+                tt::tt_metal::PageConfig(Layout::TILE),
+                operation_attributes.output_mem_config)),
         TensorSpec(
             k_output_shape,
-            TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), operation_attributes.output_mem_config)),
+            tt::tt_metal::TensorLayout(
+                input_tensor.get_dtype(),
+                tt::tt_metal::PageConfig(Layout::TILE),
+                operation_attributes.output_mem_config)),
         TensorSpec(
             v_output_shape,
-            TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), operation_attributes.output_mem_config))};
+            tt::tt_metal::TensorLayout(
+                input_tensor.get_dtype(),
+                tt::tt_metal::PageConfig(Layout::TILE),
+                operation_attributes.output_mem_config))};
 }
 
 NlpCreateHeadsDeviceOperation::tensor_return_value_t NlpCreateHeadsDeviceOperation::create_output_tensors(

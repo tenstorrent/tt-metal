@@ -57,7 +57,7 @@ TEST_F(DeviceFixture, TensixTestCircularBuffersSequentiallyPlaced) {
         CoreRangeSet cr_set({cr});
 
         std::map<uint8_t, uint32_t> expected_addresses;
-        auto expected_cb_addr = devices_.at(id)->get_base_allocator_addr(HalMemType::L1);
+        auto expected_cb_addr = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1);
         for (uint8_t cb_id = 0; cb_id < NUM_CIRCULAR_BUFFERS; cb_id++) {
             CircularBufferConfig config1 = CircularBufferConfig(cb_config.page_size, {{cb_id, cb_config.data_format}})
                                                .set_page_size(cb_id, cb_config.page_size);
@@ -88,7 +88,7 @@ TEST_F(DeviceFixture, TensixTestCircularBufferSequentialAcrossAllCores) {
 
         uint32_t max_num_cbs = 0;
         for (const auto& [core, num_cbs] : core_to_num_cbs) {
-            auto expected_cb_addr = devices_.at(id)->get_base_allocator_addr(HalMemType::L1);
+            auto expected_cb_addr = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1);
             max_num_cbs = std::max(max_num_cbs, num_cbs);
             std::map<uint8_t, uint32_t> expected_addresses;
             for (uint32_t buffer_id = 0; buffer_id < num_cbs; buffer_id++) {
@@ -106,7 +106,7 @@ TEST_F(DeviceFixture, TensixTestCircularBufferSequentialAcrossAllCores) {
         CoreRangeSet cr_set({cr});
 
         auto expected_multi_core_address =
-            devices_.at(id)->get_base_allocator_addr(HalMemType::L1) + (max_num_cbs * cb_config.page_size);
+            devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1) + (max_num_cbs * cb_config.page_size);
         uint8_t multicore_buffer_idx = NUM_CIRCULAR_BUFFERS - 1;
         CircularBufferConfig config2 =
             CircularBufferConfig(cb_config.page_size, {{multicore_buffer_idx, cb_config.data_format}})
@@ -179,14 +179,15 @@ TEST_F(DeviceFixture, TensixTestCircularBuffersAndL1BuffersCollision) {
         auto l1_buffer = CreateBuffer(buff_config);
 
         // L1 buffer is entirely in bank 0
-        auto core = l1_buffer->logical_core_from_bank_id(0);
+        auto core = l1_buffer->allocator()->get_logical_core_from_bank_id(0);
         CoreRange cr(core, core);
         CoreRangeSet cr_set({cr});
         initialize_program(program, cr_set);
 
-        uint32_t num_pages = (l1_buffer->address() - devices_.at(id)->get_base_allocator_addr(HalMemType::L1)) /
-                                 NUM_CIRCULAR_BUFFERS / page_size +
-                             1;
+        uint32_t num_pages =
+            (l1_buffer->address() - devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1)) /
+                NUM_CIRCULAR_BUFFERS / page_size +
+            1;
         CBConfig cb_config = {.num_pages = num_pages};
         for (uint32_t buffer_id = 0; buffer_id < NUM_CIRCULAR_BUFFERS; buffer_id++) {
             CircularBufferConfig config1 =
@@ -213,7 +214,7 @@ TEST_F(DeviceFixture, TensixTestValidUpdateCircularBufferSize) {
         const uint32_t core0_num_cbs = 2;
         std::map<CoreCoord, std::map<uint8_t, uint32_t>> golden_addresses_per_core;
         std::vector<CBHandle> cb_ids;
-        uint32_t l1_unreserved_base = devices_.at(id)->get_base_allocator_addr(HalMemType::L1);
+        uint32_t l1_unreserved_base = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1);
         auto expected_cb_addr = l1_unreserved_base;
         for (uint32_t buffer_idx = 0; buffer_idx < core0_num_cbs; buffer_idx++) {
             CircularBufferConfig config1 =
@@ -249,7 +250,7 @@ TEST_F(DeviceFixture, TensixTestInvalidUpdateCircularBufferSize) {
         const uint32_t core0_num_cbs = 2;
         std::map<CoreCoord, std::map<uint8_t, uint32_t>> golden_addresses_per_core;
         std::vector<CBHandle> cb_ids;
-        auto expected_cb_addr = devices_.at(id)->get_base_allocator_addr(HalMemType::L1);
+        auto expected_cb_addr = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1);
         for (uint32_t buffer_idx = 0; buffer_idx < core0_num_cbs; buffer_idx++) {
             CircularBufferConfig config1 =
                 CircularBufferConfig(cb_config.page_size, {{buffer_idx, cb_config.data_format}})
@@ -289,7 +290,7 @@ TEST_F(DeviceFixture, TensixTestUpdateCircularBufferAddress) {
         const uint32_t core0_num_cbs = 2;
         std::map<CoreCoord, std::map<uint8_t, uint32_t>> golden_addresses_per_core;
         std::vector<CBHandle> cb_ids;
-        auto expected_cb_addr = devices_.at(id)->get_base_allocator_addr(HalMemType::L1);
+        auto expected_cb_addr = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1);
         for (uint32_t buffer_idx = 0; buffer_idx < core0_num_cbs; buffer_idx++) {
             CircularBufferConfig config1 =
                 CircularBufferConfig(cb_config.page_size, {{buffer_idx, cb_config.data_format}})
@@ -323,7 +324,7 @@ TEST_F(DeviceFixture, TensixTestUpdateCircularBufferPageSize) {
         std::map<CoreCoord, std::map<uint8_t, uint32_t>> golden_addresses_per_core;
         std::map<CoreCoord, std::map<uint8_t, uint32_t>> golden_num_pages_per_core;
         std::vector<CBHandle> cb_ids;
-        auto expected_cb_addr = devices_.at(id)->get_base_allocator_addr(HalMemType::L1);
+        auto expected_cb_addr = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1);
         for (uint32_t buffer_idx = 0; buffer_idx < core0_num_cbs; buffer_idx++) {
             CircularBufferConfig config1 =
                 CircularBufferConfig(cb_config.page_size, {{buffer_idx, cb_config.data_format}})
@@ -476,11 +477,11 @@ TEST_F(DeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
         EXPECT_EQ(src_vec, result_vec);
 
         std::vector<uint32_t> input_cb_data;
-        uint32_t cb_address = devices_.at(id)->get_base_allocator_addr(HalMemType::L1);
+        uint32_t cb_address = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1);
         detail::ReadFromDeviceL1(
             this->devices_.at(id),
             core,
-            devices_.at(id)->get_base_allocator_addr(HalMemType::L1),
+            devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1),
             buffer_size,
             input_cb_data);
         EXPECT_EQ(src_vec, input_cb_data);

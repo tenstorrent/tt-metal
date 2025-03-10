@@ -15,6 +15,15 @@ on:
           required: true
           type: string
           default: 'BH'
+      build-type:
+        required: false
+        default: Release
+        type: choice
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - CI
   schedule:
     - cron: "0 */2 * * *"
   # Pause this since not enough runners to support every commit to main
@@ -37,13 +46,27 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
     with:
-      os: "ubuntu-22.04-amd64"
-  build-wheels:
-    needs: build-artifact
-    uses: ./.github/workflows/_build-wheels-impl.yaml
+      build-type: ${{ inputs.build-type || 'Release' }}
+      build-wheel: true
+      version: "22.04"
+  build-artifact-profiler:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
     with:
-      os: "ubuntu-22.04"
-      from-precompiled: true
+      build-type: ${{ inputs.build-type || 'Release' }}
+      build-wheel: true
+      tracy: true
+      version: "20.04"
+  run-profiler-regression:
+    needs: build-artifact-profiler
+    uses: ./.github/workflows/run-profiler-regression.yaml
+    secrets: inherit
+    with:
+      arch: "blackhole"
+      runner-label: ${{ inputs.runner-label || 'BH' }}
+      docker-image: ${{ needs.build-artifact-profiler.outputs.ci-build-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
   umd-unit-tests:
     secrets: inherit
     uses: ./.github/workflows/umd-unit-tests.yaml
@@ -60,7 +83,7 @@ jobs:
       timeout: 30
       os: "ubuntu-22.04"
   fd-unit-tests:
-    needs: build-wheels
+    needs: build-artifact
     uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
     secrets: inherit
     with:
@@ -88,9 +111,6 @@ jobs:
 #   build-docs:
 #     needs: build-artifact
 #     uses: ./.github/workflows/docs-latest-public.yaml
-#     secrets: inherit
-#   build:
-#     uses: ./.github/workflows/build.yaml
 #     secrets: inherit
   # We used to use this for post-commit, but we didn't have enough runners
   # to support the number of developers running this workflow

@@ -4,26 +4,28 @@
 
 #pragma once
 
-#include "ttnn/tensor/shape/small_vector.hpp"
+#include <span>
+#include <tt-metalium/small_vector.hpp>
+
 #include "ttnn/tensor/tensor.hpp"
 #include <ttnn/tensor/xtensor/xtensor_all_includes.hpp>
 
 namespace ttnn::experimental::xtensor {
 
-// Returns the shape of the xtensor as `ttnn::SimpleShape`.
+// Returns the shape of the xtensor as `ttnn::Shape`.
 template <typename E>
-ttnn::SimpleShape get_shape_from_xarray(const E& xarr) {
+ttnn::Shape get_shape_from_xarray(const E& xarr) {
     ttnn::SmallVector<uint32_t> shape_dims;
     for (size_t i = 0; i < xarr.shape().size(); ++i) {
         shape_dims.push_back(xarr.shape()[i]);
     }
-    return ttnn::SimpleShape(shape_dims);
+    return ttnn::Shape(shape_dims);
 }
 
 // Converts a span to an xtensor view.
 // IMPORTANT: the lifetime of the returned xtensor view is tied to the lifetime of the underlying buffer.
 template <typename T>
-xt::xarray<T> span_to_xtensor_view(tt::stl::Span<const T> buffer, const ttnn::SimpleShape& shape) {
+xt::xarray<T> span_to_xtensor_view(tt::stl::Span<const T> buffer, const ttnn::Shape& shape) {
     std::vector<size_t> shape_vec(shape.cbegin(), shape.cend());
     return xt::adapt(buffer.data(), buffer.size(), xt::no_ownership(), shape_vec);
 }
@@ -31,7 +33,7 @@ xt::xarray<T> span_to_xtensor_view(tt::stl::Span<const T> buffer, const ttnn::Si
 // Converts a span to an xtensor view.
 // IMPORTANT: the lifetime of the returned xtensor view is tied to the lifetime of the underlying buffer.
 template <typename T>
-xt::xarray<T> span_to_xtensor_view(std::span<T> buffer, const ttnn::SimpleShape& shape) {
+xt::xarray<T> span_to_xtensor_view(std::span<T> buffer, const ttnn::Shape& shape) {
     std::vector<size_t> shape_vec(shape.cbegin(), shape.cend());
     return xt::adapt(buffer.data(), buffer.size(), xt::no_ownership(), shape_vec);
 }

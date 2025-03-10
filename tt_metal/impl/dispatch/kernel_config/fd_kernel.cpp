@@ -5,8 +5,9 @@
 #include "fd_kernel.hpp"
 #include <host_api.hpp>
 #include <tt_metal.hpp>
-#include <dprint_server.hpp>
+#include "dprint_server.hpp"
 
+#include "kernel_types.hpp"
 #include "prefetch.hpp"
 #include "dispatch.hpp"
 #include "dispatch_s.hpp"
@@ -134,7 +135,8 @@ void FDKernel::configure_kernel_variant(
                                            : tt::tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = noc_selection_.non_dispatch_noc,
                 .compile_args = compile_args,
-                .defines = defines});
+                .defines = defines,
+                .opt_level = KernelBuildOptLevel::Os});
     } else {
         tt::tt_metal::CreateKernel(
             *program_,
@@ -144,6 +146,7 @@ void FDKernel::configure_kernel_variant(
                 .eth_mode = is_active_eth_core ? Eth::SENDER : Eth::IDLE,
                 .noc = noc_selection_.non_dispatch_noc,
                 .compile_args = compile_args,
-                .defines = defines});
+                .defines = defines,
+                .opt_level = KernelBuildOptLevel::Os});
     }
 }

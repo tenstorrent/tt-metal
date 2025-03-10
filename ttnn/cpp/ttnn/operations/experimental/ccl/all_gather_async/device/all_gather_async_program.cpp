@@ -27,6 +27,7 @@
 #include <type_traits>
 #include <ranges>
 #include <optional>
+
 using namespace tt::constants;
 
 namespace ttnn {
@@ -73,13 +74,18 @@ static void print_tensor_slice(const ttnn::ccl::v2::TensorSlice& slice_v2) {
 }
 
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
-    size_t num_links, size_t num_workers_per_link, bool persistent_fabric_mode, IDevice* device) {
+    size_t num_links,
+    size_t num_workers_per_link,
+    bool persistent_fabric_mode,
+    IDevice* device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
     CoreRangeSet sender_worker_core_range;
     if (persistent_fabric_mode) {
         const size_t num_workers_preferred = num_workers_per_link * num_links;
-        const auto available_cores =
-            device->worker_cores(HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().at(0));
+        const auto available_cores = device->worker_cores(
+            tt::tt_metal::HalProgrammableCoreType::TENSIX,
+            sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
         if (available_cores.num_cores() < num_workers_preferred) {
             log_warning(
                 tt::LogOp,
@@ -120,7 +126,7 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
 // For ring all-gather, we can send sub-sections of input tensor in opposite directions
 // For linear all-gather though, we must ensure we send full tensors in BOTH directions
 //   (in other words, disable the "bidirectional" send flag)
-operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
+tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     const Tensor& input_tensor,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
@@ -131,6 +137,7 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     const uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore semaphore,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode) {
     tt::tt_metal::Program program{};
     const bool enable_async_output_tensor = false;
@@ -150,9 +157,19 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     std::optional<ttnn::ccl::EdmLineFabricOpInterface> local_fabric_handle =
         enable_persistent_fabric_mode
             ? ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
-                  device, forward_device, backward_device, &program, enable_persistent_fabric_mode, num_links)
+                  device,
+                  forward_device.value_or(nullptr),
+                  backward_device.value_or(nullptr),
+                  &program,
+                  enable_persistent_fabric_mode,
+                  num_links)
             : ccl::EdmLineFabricOpInterface(
-                  device, forward_device, backward_device, &program, enable_persistent_fabric_mode, num_links);
+                  device,
+                  forward_device.value_or(nullptr),
+                  backward_device.value_or(nullptr),
+                  &program,
+                  enable_persistent_fabric_mode,
+                  num_links);
 
     LineTopology line_topology(ring_size, ring_index);
 
@@ -174,7 +191,7 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
     const auto [sender_worker_core_range, sender_worker_cores] =
-        choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, device);
+        choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, device, sub_device_id);
 
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = local_fabric_handle->get_edm_buffer_size_bytes();
@@ -186,7 +203,7 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{src0_cb_index, df}})
             .set_page_size(src0_cb_index, l1_scratch_cb_page_size_bytes);
-    CBHandle cb_src0_workers = CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
+    tt::tt_metal::CBHandle cb_src0_workers = CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
 
     // Create Tensor slicer
     // read the entire input tensor (partition size = 1, partition index = 0)
@@ -208,7 +225,7 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     );
 
     // KERNEL CREATION
-    KernelHandle worker_sender_reader_kernel_id =
+    tt::tt_metal::KernelHandle worker_sender_reader_kernel_id =
         ttnn::ccl::worker_detail::generate_multi_command_stream_kernel_ct_args(
             program,
             {src0_cb_index},
@@ -218,7 +235,7 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
             1,  // num_command_streams
             device->id());
 
-    KernelHandle worker_sender_writer_kernel_id =
+    tt::tt_metal::KernelHandle worker_sender_writer_kernel_id =
         ttnn::ccl::worker_detail::generate_multi_command_stream_kernel_ct_args(
             program,
             {src0_cb_index},

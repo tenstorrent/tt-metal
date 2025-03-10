@@ -9,7 +9,7 @@
 #include "ttnn/run_operation.hpp"
 #include <variant>
 
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
@@ -36,8 +36,8 @@ struct NlpCreateHeadsDeviceOperation {
 
     struct Interleaved {
         struct shared_variables_t {
-            KernelHandle reader_kernel_id;
-            KernelHandle writer_kernel_id;
+            tt::tt_metal::KernelHandle reader_kernel_id;
+            tt::tt_metal::KernelHandle writer_kernel_id;
             std::size_t num_cores;
             std::size_t num_cores_y;
             bool read_from_input_tensor_kv;
@@ -59,14 +59,14 @@ struct NlpCreateHeadsDeviceOperation {
 
     struct Sharded {
         struct shared_variables_t {
-            KernelHandle reader_kernel_id;
-            KernelHandle writer_kernel_id;
+            tt::tt_metal::KernelHandle reader_kernel_id;
+            tt::tt_metal::KernelHandle writer_kernel_id;
             std::size_t num_cores;
             std::size_t num_cores_y;
             bool read_from_input_tensor_kv;
-            CBHandle cb_q_output;
-            CBHandle cb_k_output;
-            CBHandle cb_v_output;
+            tt::tt_metal::CBHandle cb_q_output;
+            tt::tt_metal::CBHandle cb_k_output;
+            tt::tt_metal::CBHandle cb_v_output;
             std::vector<CoreCoord> cores;
             uint32_t head_size;
             uint32_t per_risc0_out_q_heads;

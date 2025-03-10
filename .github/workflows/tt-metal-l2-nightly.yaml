@@ -1,0 +1,89 @@
+name: "Nightly tt-metal L2 tests"
+
+on:
+  workflow_call:
+    inputs:
+      arch:
+        required: true
+        type: string
+      runner-label:
+        required: true
+        type: string
+      timeout:
+        required: false
+        type: number
+        default: 120
+  workflow_dispatch:
+    inputs:
+      arch:
+        required: true
+        type: choice
+        options:
+          - wormhole_b0
+          - blackhole
+      runner-label:
+        required: true
+        type: choice
+        options:
+          - N150
+          - N300
+          - BH
+      timeout:
+        required: false
+        type: number
+        default: 120
+  schedule:
+    - cron: "0 22 * * *"
+
+jobs:
+  build:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+    with:
+      build-wheel: true
+  test:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ["ubuntu-20.04"]
+        test-group:
+          - name: ttnn nightly tests
+            cmd: pytest tests/ttnn/nightly/unit_tests -xv -m "not disable_fast_runtime_mode"
+    name: ${{ matrix.test-group.name }}
+    env:
+      LOGURU_LEVEL: INFO
+    runs-on:
+      - ${{ inputs.runner-label || 'N150' }}
+      - "in-service"
+    steps:
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
+      - uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: eager-dist-${{ matrix.os }}-any
+      - name: ${{ matrix.test-group.name }} tests
+        timeout-minutes: ${{ fromJSON(inputs.timeout) || '120' }}
+        uses: ./.github/actions/docker-run
+        with:
+          docker_username: ${{ github.actor }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e ARCH_NAME=${{ inputs.arch || 'wormhole_b0' }}
+            -e GITHUB_ACTIONS=true
+          run_args: |
+            WHEEL_FILENAME=$(ls -1 *.whl)
+            pip3 install --user $WHEEL_FILENAME
+            ${{ matrix.test-group.cmd }}
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          path: |
+            generated/test_reports/
+          prefix: "test_reports_"
+      - uses: ./.github/actions/slack-report
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: U06Q7ESTFEV # Borys Bradel

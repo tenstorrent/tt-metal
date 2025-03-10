@@ -53,6 +53,10 @@ OPS_CSV_HEADER = [
     "OP TO OP LATENCY [ns]",
     "DEVICE FW DURATION [ns]",
     "DEVICE KERNEL DURATION [ns]",
+    "DEVICE KERNEL DURATION PER CORE MIN [ns]",
+    "DEVICE KERNEL DURATION PER CORE MAX [ns]",
+    "DEVICE KERNEL DURATION PER CORE AVG [ns]",
+    "DEVICE KERNEL FIRST TO LAST START [ns]",
     "DEVICE BRISC KERNEL DURATION [ns]",
     "DEVICE NCRISC KERNEL DURATION [ns]",
     "DEVICE TRISC0 KERNEL DURATION [ns]",
@@ -349,10 +353,11 @@ def append_device_data(ops, traceReplays, logFolder):
                             cores.add(core)
                 deviceOp["core_usage"] = {"count": len(cores), "cores": [str(core) for core in cores]}
                 deviceOp["device_time"] = {
-                    analysis: data["series"] for analysis, data in deviceOpTime["analysis"].items()
+                    analysis: {"series": data["series"], "stats": data["stats"]}
+                    for analysis, data in deviceOpTime["analysis"].items()
                 }
                 for analysis, data in deviceOp["device_time"].items():
-                    for sample in data:
+                    for sample in data["series"]:
                         sample["duration_ns"] = sample["duration_cycles"] * 1000 / freq
             traceOps = {}
 
@@ -422,7 +427,8 @@ def get_device_data_generate_report(
                             cores.add(core)
                 deviceOp["core_usage"] = {"count": len(cores), "cores": [str(core) for core in cores]}
                 deviceOp["device_time"] = {
-                    analysis: data["series"] for analysis, data in deviceOpTime["analysis"].items()
+                    analysis: {"series": data["series"], "stats": data["stats"]}
+                    for analysis, data in deviceOpTime["analysis"].items()
                 }
 
                 if "run_host_id" in timeID.keys():
@@ -430,15 +436,26 @@ def get_device_data_generate_report(
                 else:
                     deviceOp["global_call_count"] = i
                 for analysis, data in deviceOp["device_time"].items():
-                    for sample in data:
+                    for sample in data["series"]:
                         sample["duration_ns"] = sample["duration_cycles"] * 1000 / freq
                 deviceOps[device].append(deviceOp)
 
                 rowDict = {csv_header_format("global_call_count"): deviceOp["global_call_count"]}
-                for analysis, analysisData in deviceOp["device_time"].items():
-                    headerField = f"{csv_header_format(analysis)} [ns]"
-                    assert len(analysisData) == 1, "Unexpected device data format"
-                    rowDict[headerField] = f"{analysisData[0]['duration_ns']:.0f}"
+                for analysis, data in deviceOp["device_time"].items():
+                    analysisData = data["series"]
+                    analysisStats = data["stats"]
+                    if "core" in analysis:
+                        assert len(analysisData) >= 1, "Unexpected device data format"
+                        headerField = f"{csv_header_format(analysis)} MIN [ns]"
+                        rowDict[headerField] = f"{analysisStats['Min']:.0f}"
+                        headerField = f"{csv_header_format(analysis)} MAX [ns]"
+                        rowDict[headerField] = f"{analysisStats['Max']:.0f}"
+                        headerField = f"{csv_header_format(analysis)} AVG [ns]"
+                        rowDict[headerField] = f"{analysisStats['Average']:.0f}"
+                    else:
+                        headerField = f"{csv_header_format(analysis)} [ns]"
+                        assert len(analysisData) == 1, "Unexpected device data format"
+                        rowDict[headerField] = f"{analysisData[0]['duration_ns']:.0f}"
                     if analysis == "device_fw_duration":
                         rowDict["DEVICE FW START CYCLE"] = analysisData[0]["start_cycle"]
                         rowDict["DEVICE FW END CYCLE"] = analysisData[0]["end_cycle"]
@@ -646,10 +663,21 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
                 if "device_time" in opData.keys():
                     assert "device_id" in opData.keys(), "Op has device data without device_id"
                     deviceID = opData["device_id"]
-                    for analysis, analysisData in opData["device_time"].items():
-                        headerField = f"{csv_header_format(analysis)} [ns]"
-                        assert len(analysisData) == 1, "Unexpected device data format"
-                        rowDict[headerField] = f"{analysisData[0]['duration_ns']:.0f}"
+                    for analysis, data in opData["device_time"].items():
+                        analysisData = data["series"]
+                        analysisStats = data["stats"]
+                        if "core" in analysis:
+                            assert len(analysisData) >= 1, "Unexpected device data format"
+                            headerField = f"{csv_header_format(analysis)} MIN [ns]"
+                            rowDict[headerField] = f"{analysisStats['Min']:.0f}"
+                            headerField = f"{csv_header_format(analysis)} MAX [ns]"
+                            rowDict[headerField] = f"{analysisStats['Max']:.0f}"
+                            headerField = f"{csv_header_format(analysis)} AVG [ns]"
+                            rowDict[headerField] = f"{analysisStats['Average']:.0f}"
+                        else:
+                            headerField = f"{csv_header_format(analysis)} [ns]"
+                            assert len(analysisData) == 1, "Unexpected device data format"
+                            rowDict[headerField] = f"{analysisData[0]['duration_ns']:.0f}"
                         if analysis == "device_fw_duration":
                             rowDict["DEVICE FW START CYCLE"] = analysisData[0]["start_cycle"]
                             rowDict["DEVICE FW END CYCLE"] = analysisData[0]["end_cycle"]
@@ -678,8 +706,8 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
                     add_io_data(opData["output_tensors"], "OUTPUT")
 
                 if "performance_model" in opData.keys():
-                    rowDict["PM IDEAL [ns]"] = opData["performance_model"]["compute_ns"]
-                    rowDict["PM COMPUTE [ns]"] = opData["performance_model"]["ideal_ns"]
+                    rowDict["PM IDEAL [ns]"] = opData["performance_model"]["ideal_ns"]
+                    rowDict["PM COMPUTE [ns]"] = opData["performance_model"]["compute_ns"]
                     rowDict["PM BANDWIDTH [ns]"] = opData["performance_model"]["bandwidth_ns"]
                     rowDict["PM REQ I BW"] = opData["performance_model"]["input_bws"]
                     rowDict["PM REQ O BW"] = opData["performance_model"]["output_bws"]

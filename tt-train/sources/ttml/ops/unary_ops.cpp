@@ -50,6 +50,20 @@ autograd::TensorPtr gelu(const autograd::TensorPtr& tensor) {
     return out;
 }
 
+autograd::TensorPtr silu(const autograd::TensorPtr& tensor) {
+    auto out = autograd::create_tensor(ttnn::silu(tensor->get_value()));
+    autograd::GradFunction grad = [tensor, out]() {
+        auto res = ttnn::silu_bw(out->get_grad(), tensor->get_value());
+        assert(res.size() == 1U && "Silu backward should return only one gradient");
+        tensor->add_grad(res.front().value());
+    };
+
+    auto links = autograd::get_links(tensor);
+    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+
+    return out;
+}
+
 autograd::TensorPtr log_softmax(const autograd::TensorPtr& tensor, int dim) {
     auto log_softmax = ttnn_fixed::log_softmax(tensor->get_value(), dim);
     auto out = autograd::create_tensor(log_softmax);
@@ -72,7 +86,7 @@ autograd::TensorPtr log_softmax_moreh(const autograd::TensorPtr& tensor, int dim
         ttnn::operations::moreh::moreh_softmax::MorehSoftmaxOp::LOGSOFTMAX,
         ttnn::operations::moreh::moreh_softmax::MorehSoftmaxOpParallelizationStrategy::NONE,
         /* output_mem_config */ std::nullopt,
-        /* compute_kernel_config */ core::ComputeKernelConfig::precise());
+        /* compute_kernel_config */ core::ComputeKernelConfig::softmax());
     auto out = autograd::create_tensor(log_softmax);
 
     autograd::GradFunction grad = [tensor, out, dim]() {

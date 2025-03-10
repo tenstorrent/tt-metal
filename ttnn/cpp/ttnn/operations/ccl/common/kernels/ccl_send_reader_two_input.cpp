@@ -57,118 +57,79 @@ constexpr uint32_t cb1_id = get_compile_time_arg_val(9);
 #endif
 #endif
 
-struct sharded_addrgen_fields {
-    bool is_sharded = false;
-    uint8_t tensor_shard_grid_height = 0;
-    uint8_t tensor_shard_grid_width = 0;
-    uint8_t tensor_shard_grid_start_y_logical = 0;
-    uint8_t tensor_shard_grid_start_x_logical = 0;
-    uint32_t tensor_shard_pages_per_shard_y = 0;
-    uint32_t tensor_shard_pages_per_shard_x = 0;
-    bool tensor_shard_grid_transposed = 0;
-};
-
 #ifdef TENSOR0_SHARDED_MEM_LAYOUT
 #ifdef SINGLE_TENSOR
 // SINGLE INPUT MODE - SHARDED
-constexpr sharded_addrgen_fields in0_sharded_addrgen_fields = {
-    true,
-    get_compile_time_arg_val(6),
-    get_compile_time_arg_val(7),
-    get_compile_time_arg_val(8),
-    get_compile_time_arg_val(9),
-    get_compile_time_arg_val(10),
-    get_compile_time_arg_val(11),
-    get_compile_time_arg_val(12) != 0};
+    using Tensor0ShardInfo = ShardedInfo<
+        get_compile_time_arg_val(6),
+        get_compile_time_arg_val(7),
+        get_compile_time_arg_val(8),
+        get_compile_time_arg_val(9),
+        get_compile_time_arg_val(10),
+        get_compile_time_arg_val(11),
+        get_compile_time_arg_val(12)>;
 #else
 // TWO INPUT MODE
-constexpr sharded_addrgen_fields in0_sharded_addrgen_fields = {
-    true,
-    get_compile_time_arg_val(10),
-    get_compile_time_arg_val(11),
-    get_compile_time_arg_val(12),
-    get_compile_time_arg_val(13),
-    get_compile_time_arg_val(14),
-    get_compile_time_arg_val(15),
-    get_compile_time_arg_val(16) != 0};
+    using Tensor0ShardInfo = ShardedInfo<
+        get_compile_time_arg_val(10),
+        get_compile_time_arg_val(11),
+        get_compile_time_arg_val(12),
+        get_compile_time_arg_val(13),
+        get_compile_time_arg_val(14),
+        get_compile_time_arg_val(15),
+        get_compile_time_arg_val(16)>;
 
 #endif
-static_assert(
-    in0_sharded_addrgen_fields.tensor_shard_grid_height > 0,
-    "Misconfigured sharded addrgen fields for tensor0. Field \"tensor_shard_grid_height\" was resolved to 0 but it "
-    "must not be 0.");
-static_assert(
-    in0_sharded_addrgen_fields.tensor_shard_grid_width > 0,
-    "Misconfigured sharded addrgen fields for tensor0. Field \"tensor_shard_grid_width\" was resolved to 0 but it must "
-    "not be 0.");
-static_assert(
-    in0_sharded_addrgen_fields.tensor_shard_pages_per_shard_y > 0,
-    "Misconfigured sharded addrgen fields for tensor0. Field \"tensor_shard_pages_per_shard_y\" was resolved to 0 but "
-    "it must not be 0.");
-static_assert(
-    in0_sharded_addrgen_fields.tensor_shard_pages_per_shard_x > 0,
-    "Misconfigured sharded addrgen fields for tensor0. Field \"tensor_shard_pages_per_shard_x\" was resolved to 0 but "
-    "it must not be 0.");
+constexpr Tensor0ShardInfo test_object {};
+static_assert(test_object.number_of_cores > 0, "Misconfigured sharded addrgen fields for tensor0. Field \"number_of_cores\" was resolved to 0 but it must not be 0.");
+static_assert(test_object.page_size_jump > 0, "Misconfigured sharded addrgen fields for tensor0. Field \"page_size_jump\" was resolved to 0 but it must not be 0.");
+static_assert(test_object.pages_per_tensor_row > 0, "Misconfigured sharded addrgen fields for tensor0. Field \"pages_per_tensor_row\" was resolved to 0 but it must not be 0.");
 #else
-constexpr sharded_addrgen_fields in0_sharded_addrgen_fields = {false, 0, 0, 0, 0, 0, 0, 0};
+using Tensor0ShardInfo = ShardedInfo<0,0,0,0,0,0,0>;
 #endif
 
 #ifndef SINGLE_TENSOR
 #if defined(TENSOR1_SHARDED_MEM_LAYOUT)
 #if defined(TENSOR0_SHARDED_MEM_LAYOUT)
-constexpr sharded_addrgen_fields in1_sharded_addrgen_fields = {
-    true,
-    get_compile_time_arg_val(17),
-    get_compile_time_arg_val(18),
-    get_compile_time_arg_val(19),
-    get_compile_time_arg_val(20),
-    get_compile_time_arg_val(21),
-    get_compile_time_arg_val(22),
-    get_compile_time_arg_val(23) != 0};
+  using Tensor1ShardInfo = ShardedInfo<
+        get_compile_time_arg_val(17),
+        get_compile_time_arg_val(18),
+        get_compile_time_arg_val(19),
+        get_compile_time_arg_val(20),
+        get_compile_time_arg_val(21),
+        get_compile_time_arg_val(22),
+        get_compile_time_arg_val(23)>;
 #else
 // Then we are only consuming ct args for second operand and we resume from operation 8
-constexpr sharded_addrgen_fields in1_sharded_addrgen_fields = {
-    true,
-    get_compile_time_arg_val(10),
-    get_compile_time_arg_val(11),
-    get_compile_time_arg_val(12),
-    get_compile_time_arg_val(13),
-    get_compile_time_arg_val(14),
-    get_compile_time_arg_val(15),
-    get_compile_time_arg_val(16) != 0};
+    using Tensor1ShardInfo = ShardedInfo<
+        get_compile_time_arg_val(10),
+        get_compile_time_arg_val(11),
+        get_compile_time_arg_val(12),
+        get_compile_time_arg_val(13),
+        get_compile_time_arg_val(14),
+        get_compile_time_arg_val(15),
+        get_compile_time_arg_val(16)>;
 #endif
 
-static_assert(
-    in1_sharded_addrgen_fields.tensor_shard_grid_height > 0,
-    "Misconfigured sharded addrgen fields for tensor1. Field \"tensor_shard_grid_height\" was resolved to 0 but it "
-    "must not be 0.");
-static_assert(
-    in1_sharded_addrgen_fields.tensor_shard_grid_width > 0,
-    "Misconfigured sharded addrgen fields for tensor1. Field \"tensor_shard_grid_width\" was resolved to 0 but it must "
-    "not be 0.");
-static_assert(
-    in1_sharded_addrgen_fields.tensor_shard_pages_per_shard_y > 0,
-    "Misconfigured sharded addrgen fields for tensor1. Field \"tensor_shard_pages_per_shard_y\" was resolved to 0 but "
-    "it must not be 0.");
-static_assert(
-    in1_sharded_addrgen_fields.tensor_shard_pages_per_shard_x > 0,
-    "Misconfigured sharded addrgen fields for tensor1. Field \"tensor_shard_pages_per_shard_x\" was resolved to 0 but "
-    "it must not be 0.");
+constexpr Tensor1ShardInfo test_object2 {};
+static_assert(test_object2.number_of_cores > 0, "Misconfigured sharded addrgen fields for tensor1. Field \"number_of_cores\" was resolved to 0 but it must not be 0.");
+static_assert(test_object2.page_size_jump > 0, "Misconfigured sharded addrgen fields for tensor1. Field \"page_size_jump\" was resolved to 0 but it must not be 0.");
+static_assert(test_object2.pages_per_tensor_row > 0, "Misconfigured sharded addrgen fields for tensor1. Field \"pages_per_tensor_row\" was resolved to 0 but it must not be 0.");
 #else
-constexpr sharded_addrgen_fields in1_sharded_addrgen_fields = {0, 0, 0, 0, 0, 0, 0, 0};
+typedef ShardedInfo<0,0,0,0,0,0,0> Tensor1ShardInfo;
 #endif
 #endif
 
 template <
     tt::tt_metal::TensorMemoryLayout tensor_layout,
     tt::tt_metal::BufferType buffer_type,
-    tt::tt_metal::Layout page_layout>
-FORCE_INLINE auto build_source_address_generator(
+    tt::tt_metal::Layout page_layout,
+    typename ShardingInfoType>
+auto build_source_address_generator(
     std::size_t& arg_idx,
     address_t tensor_address,
     std::size_t page_size,
-    const sharded_addrgen_fields& tensor_sharded_addrgen_fields,
-    uint32_t cb_id_in) -> typename source_tensor_addrgen<tensor_layout, buffer_type, page_layout>::type {
+    uint32_t cb_id_in) {
     constexpr bool is_sharded = is_sharded_tensor_layout(tensor_layout);
     constexpr bool is_interleaved = tensor_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
     constexpr bool is_tile_page_layout = page_layout == tt::tt_metal::Layout::TILE;
@@ -178,50 +139,34 @@ FORCE_INLINE auto build_source_address_generator(
         "Only sharded and interleaved tensor layouts are supported but the unified address generator. A tensor layout "
         "not matching TensorMemoryLayout::WIDTH_SHARDED, TensorMemoryLayout::HEIGHT_SHARDED, "
         "TensorMemoryLayout::BLOCK_SHARDED, or TensorMemoryLayout::INTERLEAVED was specified.");
-
-    using addrgen_type = typename source_tensor_addrgen<tensor_layout, buffer_type, page_layout>::type;
-
     bool addrgen_enabled = get_arg_val<uint32_t>(arg_idx++) != 0;
     if constexpr (tensor_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
         if constexpr (is_row_major_layout) {
-            return addrgen_type{.bank_base_address = tensor_address, .page_size = page_size};
+            InterleavedAddrGen<buffer_type ==BufferType::DRAM > ret_val = {
+                .bank_base_address = tensor_address, .page_size = page_size};
+            return ret_val;
         } else {
-            return addrgen_type{
+            InterleavedAddrGenFast<buffer_type ==BufferType::DRAM> ret_val = {
                 .bank_base_address = tensor_address, .page_size = page_size, .data_format = get_dataformat(cb_id_in)};
+            return ret_val;
         }
     } else if constexpr (
         tensor_layout == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED ||
         tensor_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED ||
         tensor_layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
-        // We don't use these args at the moment but we keep them here for now to avoid a rewrite in the very
-        // near future where we'll want to support custom shard grid.
-        uint8_t input_shard_grid_nrows = 0;
-        uint8_t input_shard_grid_ncols = 0;
-        uint32_t* input_shard_grid_row_map = nullptr;
-        uint32_t* input_shard_grid_col_map = nullptr;
-        if (addrgen_enabled) {
-            input_shard_grid_nrows = get_arg_val<uint32_t>(arg_idx++);
-            input_shard_grid_row_map = reinterpret_cast<uint32_t*>(get_arg_addr(arg_idx));
-            arg_idx += input_shard_grid_nrows;
-            input_shard_grid_ncols = get_arg_val<uint32_t>(arg_idx++);
-            input_shard_grid_col_map = reinterpret_cast<uint32_t*>(get_arg_addr(arg_idx));
-            arg_idx += input_shard_grid_ncols;
+        const auto [mapping_table, rt_increment] = experimental::shard_addr_gen_utils::get_shard_map<ShardingInfoType>(get_arg_addr(arg_idx));
+        if (addrgen_enabled)
+        {
+            arg_idx += rt_increment;
         }
-
-        return tt::tt_metal::address_generators::build_sharded_addr_gen<tensor_layout>(
-            tt::tt_metal::address_generators::VirtualCoordWormholeWorkerToNocLookup(),
-            typename tt::tt_metal::address_generators::DeviceShardSpecTypeGetter<tensor_layout>::type(
-                tensor_sharded_addrgen_fields.tensor_shard_pages_per_shard_y,
-                tensor_sharded_addrgen_fields.tensor_shard_pages_per_shard_x,
-                tensor_sharded_addrgen_fields.tensor_shard_grid_height,
-                tensor_sharded_addrgen_fields.tensor_shard_grid_width,
-                tensor_sharded_addrgen_fields.tensor_shard_grid_start_y_logical,
-                tensor_sharded_addrgen_fields.tensor_shard_grid_start_x_logical,
-                tensor_sharded_addrgen_fields.tensor_shard_grid_transposed),
-            page_size,
-            tensor_address);
+        experimental::ShardedAddrGen<ShardingInfoType> ret_val = {
+            .bank_base_address = tensor_address, .shard_array=mapping_table};
+        return ret_val;
     } else {
         ASSERT(false);
+        InterleavedAddrGen<buffer_type ==BufferType::DRAM > ret_val = {
+                .bank_base_address = tensor_address, .page_size = page_size};
+        return ret_val;
     }
 }
 
@@ -263,7 +208,7 @@ void update_ccl_command(
 
 template <typename Addrgen>
 struct command_context_t final {
-    FORCE_INLINE command_context_t(
+    command_context_t(
         FabricConnectionManager& fabric_connection,
         Addrgen& addrgen,
         uint16_t num_commands,
@@ -324,7 +269,7 @@ struct command_context_t final {
 
     FORCE_INLINE bool current_command_active() const { return populated; }
 
-    FORCE_INLINE void fetch_next_command() {
+    void fetch_next_command() {
         populated = true;
 
         this->current_cmd_header = ttnn::ccl::cmd::CclCommandHeader::from_uint32(get_arg_val<uint32_t>(arg_idx++));
@@ -471,7 +416,7 @@ void update_ccl_command(
 }
 
 template <typename Addrgen>
-FORCE_INLINE void try_advance_inline_write_or_atomic_inc(command_context_t<Addrgen>& cmd_ctx) {
+void try_advance_inline_write_or_atomic_inc(command_context_t<Addrgen>& cmd_ctx) {
     const size_t value = cmd_ctx.cmd_specific_ctx.inline_value_ctx.value;
     const size_t dest_bank_addr = cmd_ctx.dest_addr_info.address;
     bool is_remote_atomic_inc_over_fabric = cmd_ctx.command_requires_fabric();
@@ -487,52 +432,42 @@ FORCE_INLINE void try_advance_inline_write_or_atomic_inc(command_context_t<Addrg
                                     ? my_y[0]
                                     : cmd_ctx.core_desc_info.core_desc_args.noc_unicast.y;
 
+    bool write_local = !is_remote_atomic_inc_over_fabric;
     if (is_remote_atomic_inc_over_fabric) {
         ASSERT(cmd_ctx.core_desc_type == ttnn::ccl::cmd::CclCommandCoreDescriptorType::NOC_XY);
-        // For now, we won't skip if we are waiting for space from fabric
-        // since we assume the other command stream will need to wait anyways
-        bool can_write_into_fabric = true;
-        if (!can_write_into_fabric) {
-            return;
-        }
 
         ASSERT(cmd_ctx.packet_header_buffer_addr != 0);
-        auto* pkt_hdr = reinterpret_cast<tt::fabric::PacketHeader*>(cmd_ctx.packet_header_buffer_addr);
+        auto* pkt_hdr = reinterpret_cast<PACKET_HEADER_TYPE *>(cmd_ctx.packet_header_buffer_addr);
+
+        uint64_t dest_noc_addr_for_pkt = safe_get_noc_addr(dest_noc0_x, dest_noc0_y, dest_bank_addr, 0);
         if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC) {
-            pkt_hdr->to_atomic_inc();
+            pkt_hdr->to_noc_unicast_atomic_inc(
+                tt::fabric::NocUnicastAtomicIncCommandHeader{dest_noc_addr_for_pkt, static_cast<uint16_t>(value), 32});
         } else {
-            pkt_hdr->to_write();
+            pkt_hdr->to_noc_unicast_inline_write(
+                tt::fabric::NocUnicastInlineWriteCommandHeader{dest_noc_addr_for_pkt, static_cast<uint16_t>(value)});
         }
-#ifdef DEBUG_PRINT_ENABLED
-        pkt_hdr->reserved2 = my_chip_id;
-#endif
-        pkt_hdr->to_noc_unicast_atomic_inc(tt::fabric::NocUnicastAtomicIncCommandHeader{
-            dest_bank_addr,
-            static_cast<uint16_t>(value),
-            32,
-            static_cast<uint8_t>(dest_noc0_x),
-            static_cast<uint8_t>(dest_noc0_y)});
 
         switch (cmd_ctx.current_cmd_header.dest_type) {
             case ttnn::ccl::cmd::CclCommandDestType::CHIP_UNICAST: {
-                pkt_hdr->to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{
-                    cmd_ctx.current_cmd_header.get_unicast_dest_args().distance_in_hops});
+                pkt_hdr->to_chip_unicast(cmd_ctx.current_cmd_header.get_unicast_dest_args().distance_in_hops);
 
                 auto& fabric_connection = cmd_ctx.current_cmd_header.get_unicast_dest_args().is_forward_direction
                                               ? cmd_ctx.fabric_connection.get_forward_connection()
                                               : cmd_ctx.fabric_connection.get_backward_connection();
                 fabric_connection.wait_for_empty_write_slot();
                 fabric_connection.send_payload_flush_blocking_from_address(
-                    cmd_ctx.packet_header_buffer_addr, sizeof(tt::fabric::PacketHeader));
+                    cmd_ctx.packet_header_buffer_addr, sizeof(PACKET_HEADER_TYPE));
             } break;
             case ttnn::ccl::cmd::CclCommandDestType::CHIP_MULTICAST: {
+                write_local = true;
                 const auto& mcast_args = cmd_ctx.current_cmd_header.get_multicast_dest_args();
                 if (cmd_ctx.fabric_connection.has_forward_connection()) {
-                    cmd_ctx.fabric_connection.get_forward_connection().wait_for_empty_write_slot();
                     pkt_hdr->to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{
                         1, static_cast<uint8_t>(mcast_args.num_targets_forward_direction)});
+                    cmd_ctx.fabric_connection.get_forward_connection().wait_for_empty_write_slot();
                     cmd_ctx.fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
-                        cmd_ctx.packet_header_buffer_addr, sizeof(tt::fabric::PacketHeader));
+                        cmd_ctx.packet_header_buffer_addr, sizeof(PACKET_HEADER_TYPE));
                 }
 
                 // Write the mcast packet (backward)
@@ -541,14 +476,7 @@ FORCE_INLINE void try_advance_inline_write_or_atomic_inc(command_context_t<Addrg
                         1, static_cast<uint8_t>(mcast_args.num_targets_backward_direction)});
                     cmd_ctx.fabric_connection.get_backward_connection().wait_for_empty_write_slot();
                     cmd_ctx.fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
-                        cmd_ctx.packet_header_buffer_addr, sizeof(tt::fabric::PacketHeader));
-                }
-
-                uint64_t dest_noc_addr = safe_get_noc_addr(dest_noc0_x, dest_noc0_y, dest_bank_addr);
-                if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC) {
-                    noc_semaphore_inc(dest_noc_addr, value);
-                } else if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::RAW_INLINE_WRITE_BYTES) {
-                    noc_inline_dw_write(dest_noc_addr, value);
+                        cmd_ctx.packet_header_buffer_addr, sizeof(PACKET_HEADER_TYPE));
                 }
 
             } break;
@@ -558,8 +486,9 @@ FORCE_INLINE void try_advance_inline_write_or_atomic_inc(command_context_t<Addrg
             } break;
         };
 
-    } else {
-        const uint64_t dest_noc_addr = get_noc_addr(dest_noc0_x, dest_noc0_y, dest_bank_addr);
+    }
+    if (write_local) {
+        uint64_t dest_noc_addr = get_noc_addr(dest_noc0_x, dest_noc0_y, dest_bank_addr);
         if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC) {
             noc_semaphore_inc(dest_noc_addr, value);
         } else if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::RAW_INLINE_WRITE_BYTES) {
@@ -570,7 +499,7 @@ FORCE_INLINE void try_advance_inline_write_or_atomic_inc(command_context_t<Addrg
 
 #ifndef NO_TENSOR_MODE
 template <tt::tt_metal::TensorMemoryLayout TENSOR_LAYOUT, tt::tt_metal::Layout MEM_LAYOUT, typename Addrgen>
-FORCE_INLINE void try_advance_read_tensor_to_cb(command_context_t<Addrgen>& cmd_ctx) {
+void try_advance_read_tensor_to_cb(command_context_t<Addrgen>& cmd_ctx) {
     if (!cb_pages_reservable_at_back(cmd_ctx.cb_id, cmd_ctx.packet_size_in_pages)) {
         return;
     }
@@ -588,7 +517,7 @@ FORCE_INLINE void try_advance_read_tensor_to_cb(command_context_t<Addrgen>& cmd_
     uint32_t l1_write_addr = l1_write_addr_base;
 
     for (uint16_t i = 0; i < max_pages_readable; i += contig_pages_advanced) {
-        const auto [noc_addr, contig_pages_] = get_noc_addr_and_contiguous_pages<TENSOR_LAYOUT, MEM_LAYOUT>(
+        const auto [noc_addr, contig_pages_] = get_noc_addr_and_contiguous_pages<TENSOR_LAYOUT,MEM_LAYOUT>(
             cmd_specific_ctx.curr_tile_id,
             cmd_specific_ctx.offset_into_worker_slice,
             cmd_ctx.command_tensor.worker_start_offset_in_slice,
@@ -621,24 +550,18 @@ FORCE_INLINE void try_advance_read_tensor_to_cb(command_context_t<Addrgen>& cmd_
 }
 #endif
 
-FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
+void write_and_advance_local_read_address_for_fabric_write(
     uint64_t noc0_dest_noc_addr,
     size_t packet_header_buffer_addr,
     const ttnn::ccl::cmd::CclCommandHeader& current_cmd_header,
     FabricConnectionManager& fabric_connection,
     size_t& l1_read_addr,
     uint32_t payload_size_bytes) {
-    const auto [dest_noc_xy, dest_addr] = get_noc_address_components(noc0_dest_noc_addr);
     const size_t payload_l1_address = l1_read_addr;
 
-    auto pkt_hdr = reinterpret_cast<volatile tt::fabric::PacketHeader*>(packet_header_buffer_addr);
-#ifdef DEBUG_PRINT_ENABLED
-    pkt_hdr->reserved2 = my_chip_id;
-#endif
+    auto pkt_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE *>(packet_header_buffer_addr);
 
-    size_t packet_send_size_bytes = payload_size_bytes + sizeof(tt::fabric::PacketHeader);
-    pkt_hdr->to_write()->to_noc_unicast(tt::fabric::NocUnicastCommandHeader{
-        dest_addr, packet_send_size_bytes, static_cast<uint8_t>(dest_noc_xy.x), static_cast<uint8_t>(dest_noc_xy.y)});
+    pkt_hdr->to_noc_unicast_write(tt::fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, payload_size_bytes);
 
     switch (current_cmd_header.dest_type) {
         case ttnn::ccl::cmd::CclCommandDestType::CHIP_UNICAST: {
@@ -646,14 +569,17 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
             auto& fabric_conn = unicast_args.is_forward_direction ? fabric_connection.get_forward_connection()
                                                                   : fabric_connection.get_backward_connection();
 
-            pkt_hdr->to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{unicast_args.distance_in_hops});
+            pkt_hdr->to_chip_unicast(unicast_args.distance_in_hops);
+
             fabric_conn.wait_for_empty_write_slot();
             fabric_conn.send_payload_without_header_non_blocking_from_address(l1_read_addr, payload_size_bytes);
-            fabric_conn.send_payload_flush_blocking_from_address((uint32_t)pkt_hdr, sizeof(tt::fabric::PacketHeader));
+            fabric_conn.send_payload_flush_blocking_from_address((uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
         } break;
         case ttnn::ccl::cmd::CclCommandDestType::CHIP_MULTICAST: {
+            const auto [dest_noc_xy, dest_addr] = get_noc_address_components(noc0_dest_noc_addr);
+            uint64_t dest_noc_addr = safe_get_noc_addr(static_cast<uint8_t>(dest_noc_xy.x), static_cast<uint8_t>(dest_noc_xy.y), dest_addr);
             noc_async_write(
-                payload_l1_address, safe_get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr), payload_size_bytes);
+                payload_l1_address, dest_noc_addr, payload_size_bytes);
             const auto& mcast_args = current_cmd_header.get_multicast_dest_args();
             if (fabric_connection.has_forward_connection()) {
                 pkt_hdr->to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{
@@ -662,7 +588,7 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
                 fabric_connection.get_forward_connection().send_payload_without_header_non_blocking_from_address(
                     l1_read_addr, payload_size_bytes);
                 fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
-                    (uint32_t)pkt_hdr, sizeof(tt::fabric::PacketHeader));
+                    (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
             }
 
             if (fabric_connection.has_backward_connection()) {
@@ -672,7 +598,7 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
                 fabric_connection.get_backward_connection().send_payload_without_header_non_blocking_from_address(
                     l1_read_addr, payload_size_bytes);
                 fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
-                    (uint32_t)pkt_hdr, sizeof(tt::fabric::PacketHeader));
+                    (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
             }
         } break;
         default: {
@@ -692,8 +618,8 @@ FORCE_INLINE void write_payload_then_advance_read_address(
     size_t& l1_read_addr,
     size_t payload_size_bytes) {
     static_assert(
-        ((sizeof(tt::fabric::PacketHeader) - 1) & sizeof(tt::fabric::PacketHeader)) == 0,
-        "sizeof(sizeof(tt::fabric::PacketHeader)) is not a power of two which violates the below assertion");
+        is_power_of_2(sizeof(PACKET_HEADER_TYPE)),
+        "sizeof(PACKET_HEADER_TYPE) is not a power of two which violates the below assertion");
 
     switch (current_cmd_header.dest_type) {
         case ttnn::ccl::cmd::CclCommandDestType::CHIP_UNICAST: [[fallthrough]];
@@ -725,7 +651,7 @@ FORCE_INLINE void write_payload_then_advance_read_address(
 // based on command type so we can avoid the perf overhead of the branching that would otherwise
 // be required.
 template <tt::tt_metal::TensorMemoryLayout TENSOR_LAYOUT, tt::tt_metal::Layout MEM_LAYOUT, typename Addrgen>
-FORCE_INLINE void try_advance_write_tensor_from_cb(command_context_t<Addrgen>& cmd_ctx) {
+void try_advance_write_tensor_from_cb(command_context_t<Addrgen>& cmd_ctx) {
     if (!cb_pages_available_at_front(cmd_ctx.cb_id, cmd_ctx.packet_size_in_pages)) {
         return;
     }
@@ -748,13 +674,13 @@ FORCE_INLINE void try_advance_write_tensor_from_cb(command_context_t<Addrgen>& c
         // However, if we're writing locally, then we need to actually write using `noc_index` based coordinates.
         // This can lead to a discrepancy, so to stay consistent, we always generate noc0 based addresses here
         // so we can reliably translate to `noc_index` based addresses writing locally, inside the write function
-        const auto [noc0_dest_noc_addr, contig_pages_] =
-            get_noc_addr_and_contiguous_pages_for_fabric_write<TENSOR_LAYOUT, MEM_LAYOUT>(
+        auto const [noc0_dest_noc_addr, contig_pages_] =
+            get_noc_addr_and_contiguous_pages_for_fabric_write<TENSOR_LAYOUT,MEM_LAYOUT>(
                 cmd_specific_ctx.curr_tile_id,
-                cmd_specific_ctx.offset_into_worker_slice,
-                cmd_ctx.command_tensor.worker_start_offset_in_slice,
-                cmd_ctx.tensor_addrgen,
-                cmd_ctx.command_tensor.tensor_slice_shape);
+            cmd_specific_ctx.offset_into_worker_slice,
+            cmd_ctx.command_tensor.worker_start_offset_in_slice,
+            cmd_ctx.tensor_addrgen,
+            cmd_ctx.command_tensor.tensor_slice_shape);
         contig_pages_advanced = std::min<uint16_t>(contig_pages_, max_pages_writable);
         contig_pages_advanced = std::min<uint16_t>(cmd_ctx.packet_size_in_pages - i, contig_pages_);
 
@@ -803,7 +729,7 @@ FORCE_INLINE static ttnn::ccl::cmd::noc_transfer_info advance_to_next_noc_transa
     return noc_transfer_info;
 }
 
-FORCE_INLINE static void try_advance_noc_read_burst(
+static void try_advance_noc_read_burst(
     noc_transfer_burst_context& noc_burst_ctx, uint32_t cb_id, uint32_t packet_size_in_pages, arg_idx_t& arg_idx) {
     if (!cb_pages_reservable_at_back(cb_id, packet_size_in_pages)) {
         return;
@@ -860,7 +786,7 @@ static void try_advance_noc_write_burst(
 }
 
 template <tt::tt_metal::TensorMemoryLayout TENSOR_LAYOUT, tt::tt_metal::Layout MEM_LAYOUT, typename Addrgen>
-FORCE_INLINE void try_advance(command_context_t<Addrgen>& cmd_ctx) {
+void try_advance(command_context_t<Addrgen>& cmd_ctx) {
     switch (cmd_ctx.current_cmd_header.code) {
         case ttnn::ccl::cmd::CclCommandCode::STREAM_TENSOR_TO_EDM:  // STREAM TENSOR TO CB
 #ifndef NO_TENSOR_MODE
@@ -983,8 +909,9 @@ void kernel_main() {
 
     auto tensor0_addrgen =
 #ifndef NO_TENSOR_MODE
-        build_source_address_generator<tensor0_layout, buffer0_type, tensor0_page_layout>(
-            arg_idx, tensor_address0, tensor0_page_size, in0_sharded_addrgen_fields, cb0_id);
+        build_source_address_generator
+            <tensor0_layout, buffer0_type, tensor0_page_layout,Tensor0ShardInfo>
+            (arg_idx, tensor_address0, tensor0_page_size, cb0_id);
 #else
         no_addrgen{};
 #endif
@@ -992,8 +919,9 @@ void kernel_main() {
 #if !defined(SINGLE_INPUT_MODE)
     auto tensor1_addrgen =
 #if !defined(NO_TENSOR_MODE) && !defined(SINGLE_TENSOR)
-        build_source_address_generator<tensor1_layout, buffer1_type, tensor1_page_layout>(
-            arg_idx, tensor_address1, tensor1_page_size, in1_sharded_addrgen_fields, cb1_id);
+        build_source_address_generator
+            <tensor1_layout, buffer1_type, tensor1_page_layout, Tensor1ShardInfo>
+            (arg_idx, tensor_address1, tensor1_page_size, cb1_id);
 #else
         no_addrgen{};
 #endif
@@ -1005,7 +933,7 @@ void kernel_main() {
     cb_reserve_back(reserved_packet_header_cb_id, num_packet_headers_storable);
     auto packet_header_buffer_addr0 = get_write_ptr(reserved_packet_header_cb_id);
     auto packet_header_buffer_addr1 =
-        packet_header_buffer_addr0 + (num_packet_headers_storable >> 2) * sizeof(tt::fabric::PacketHeader);
+        packet_header_buffer_addr0 + (num_packet_headers_storable >> 2) * sizeof(PACKET_HEADER_TYPE);
 
     auto operand_0_cmd_ctx = command_context_t(
         fabric_connection,

@@ -5,7 +5,7 @@ file(
     LIST_DIRECTORIES true
     *.hpp
     *.cpp
-) # I am a bad person
+) # I am a really bad person
 
 # Check if Metalium::Metal target exists
 # If it does not exist, assume that we are building with tt-train as top level project
@@ -27,6 +27,7 @@ if(NOT TARGET Metalium::Metal)
         "$ENV{TT_METAL_HOME}/tt_metal/third_party/umd/device/api"
         "$ENV{TT_METAL_HOME}/tt_metal/hostdevcommon/api"
         "$ENV{TT_METAL_HOME}/tt_metal/include"
+        "$ENV{TT_METAL_HOME}/tt_metal/tt_stl"
         # TTNN
         "$ENV{TT_METAL_HOME}/ttnn"
         "$ENV{TT_METAL_HOME}/ttnn/cpp"
@@ -103,7 +104,7 @@ target_link_libraries(
         Metalium::TTNN
         Python::Python
         fmt::fmt-header-only
-        magic_enum
+        magic_enum::magic_enum
         yaml-cpp::yaml-cpp
         xtensor
         xtensor-blas

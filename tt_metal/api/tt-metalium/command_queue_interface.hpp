@@ -6,6 +6,8 @@
 #include <climits>
 #include <magic_enum/magic_enum.hpp>
 #include <mutex>
+#include <tt-metalium/tt_align.hpp>
+#include <unordered_map>
 
 #include "cq_commands.hpp"
 #include "dispatch_core_manager.hpp"
@@ -14,9 +16,8 @@
 #include "hal.hpp"
 #include "dispatch_settings.hpp"
 #include "helpers.hpp"
-
-// FIXME: Don't do this in header files
-using namespace tt::tt_metal;
+#include "buffer.hpp"
+#include "umd/device/tt_core_coordinates.h"
 
 namespace tt::tt_metal {
 
@@ -43,96 +44,74 @@ enum class CommandQueueHostAddrType : uint8_t {
     UNRESERVED = 4
 };
 
-// Contains constants related to FD
 //
-// Deprecated note: for constant values, use tt::tt_metal::dispatch::DispatchConstants instead.
+// Dispatch Memory Map
+// Assigns each CommandQueueDeviceAddrType in a linear
+// order. The size of each address type and L1 base is
+// set by DispatchSettings.
 //
-//
-struct [[deprecated]] dispatch_constants {
+class DispatchMemMap {
 public:
-    dispatch_constants& operator=(const dispatch_constants&) = delete;
-    dispatch_constants& operator=(dispatch_constants&& other) noexcept = delete;
-    dispatch_constants(const dispatch_constants&) = delete;
-    dispatch_constants(dispatch_constants&& other) noexcept = delete;
+    DispatchMemMap& operator=(const DispatchMemMap&) = delete;
+    DispatchMemMap& operator=(DispatchMemMap&& other) noexcept = delete;
+    DispatchMemMap(const DispatchMemMap&) = delete;
+    DispatchMemMap(DispatchMemMap&& other) noexcept = delete;
 
-    static const dispatch_constants& get(const CoreType& core_type, const uint32_t num_hw_cqs = 0) {
-        if (num_hw_cqs > 0 && (num_hw_cqs != hw_cqs || core_type != last_core_type || !inst)) {
-            hw_cqs = num_hw_cqs;
-            last_core_type = core_type;
-            inst = std::unique_ptr<dispatch_constants>(new dispatch_constants(core_type, hw_cqs));
+    //
+    // Returns the instance. The instance is reset if the core_type and/or num_hw_cqs changed from
+    // the last call. The memory region sizes can be configured using DispatchSettings.
+    //
+    // If the settings changed, then force_reinit_with_settings will recreate the instance with
+    // the settings for the given core_type / num_hw_cqs.
+    //
+    static const DispatchMemMap& get(
+        const CoreType& core_type, const uint32_t num_hw_cqs = 0, const bool force_reinit_with_settings = false) {
+        auto& instance = get_instance();
+
+        if (num_hw_cqs > 0 && (core_type != instance.last_core_type || num_hw_cqs != instance.hw_cqs) ||
+            force_reinit_with_settings) {
+            instance.reset(core_type, num_hw_cqs);
         }
 
-        TT_FATAL(hw_cqs > 0, "Command Queue is not initialized.");
-        return *inst;
+        TT_FATAL(
+            instance.hw_cqs > 0,
+            "Command Queue is not initialized. Call DispatchMemMap::get with non zero num_hw_cqs.");
+        return instance;
     }
 
-    using prefetch_q_entry_type = uint16_t;
+    uint32_t prefetch_q_entries() const { return settings.prefetch_q_entries_; }
 
-    static constexpr uint8_t MAX_NUM_HW_CQS = 2;
-    // Currently arbitrary, can be adjusted as needed at the cost of more L1 memory
-    static constexpr uint32_t DISPATCH_MESSAGE_ENTRIES = 16;
-    static constexpr uint32_t DISPATCH_MESSAGES_MAX_OFFSET =
-        std::numeric_limits<decltype(go_msg_t::dispatch_message_offset)>::max();
-    static_assert(
-        dispatch_constants::DISPATCH_MESSAGE_ENTRIES <=
-        sizeof(decltype(CQDispatchCmd::notify_dispatch_s_go_signal.index_bitmask)) * CHAR_BIT);
-    // Currently arbitrary, can be adjusted as needed at the cost of more static memory
-    static constexpr uint32_t DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES = 64;
-    static constexpr uint32_t GO_SIGNAL_BITS_PER_TXN_TYPE = 4;
-    static constexpr uint32_t GO_SIGNAL_MAX_TXNS_PER_TYPE = 1 << GO_SIGNAL_BITS_PER_TXN_TYPE - 1;
+    uint32_t prefetch_q_size() const { return settings.prefetch_q_size_; }
 
-    static constexpr uint32_t PREFETCH_Q_LOG_MINSIZE = 4;
-
-    static constexpr uint32_t LOG_TRANSFER_PAGE_SIZE = 12;
-    static constexpr uint32_t TRANSFER_PAGE_SIZE = 1 << LOG_TRANSFER_PAGE_SIZE;
-
-    static constexpr uint32_t DISPATCH_BUFFER_LOG_PAGE_SIZE = 12;
-    static constexpr uint32_t DISPATCH_BUFFER_SIZE_BLOCKS = 4;
-    // dispatch_s CB page size is 256 bytes. This should currently be enough to accomodate all commands that
-    // are sent to it or change as needed.
-    static constexpr uint32_t DISPATCH_S_BUFFER_LOG_PAGE_SIZE = 8;
-
-    static constexpr uint32_t PREFETCH_D_BUFFER_LOG_PAGE_SIZE = 12;
-    static constexpr uint32_t PREFETCH_D_BUFFER_BLOCKS = 4;
-
-    static constexpr uint32_t EVENT_PADDED_SIZE = 16;
-    // When page size of buffer to write/read exceeds MAX_PREFETCH_COMMAND_SIZE, the PCIe aligned page size is broken
-    // down into equal sized partial pages BASE_PARTIAL_PAGE_SIZE denotes the initial partial page size to use, it is
-    // incremented by PCIe alignment until page size can be evenly split
-    static constexpr uint32_t BASE_PARTIAL_PAGE_SIZE = 4096;
-
-    uint32_t prefetch_q_entries() const { return prefetch_q_entries_; }
-
-    uint32_t prefetch_q_size() const { return prefetch_q_size_; }
-
-    uint32_t max_prefetch_command_size() const { return max_prefetch_command_size_; }
+    uint32_t max_prefetch_command_size() const { return settings.prefetch_max_cmd_size_; }
 
     uint32_t cmddat_q_base() const { return cmddat_q_base_; }
 
-    uint32_t cmddat_q_size() const { return cmddat_q_size_; }
+    uint32_t cmddat_q_size() const { return settings.prefetch_cmddat_q_size_; }
 
     uint32_t scratch_db_base() const { return scratch_db_base_; }
 
-    uint32_t scratch_db_size() const { return scratch_db_size_; }
+    uint32_t scratch_db_size() const { return settings.prefetch_scratch_db_size_; }
 
     uint32_t dispatch_buffer_block_size_pages() const { return dispatch_buffer_block_size_pages_; }
 
     uint32_t dispatch_buffer_base() const { return dispatch_buffer_base_; }
 
-    uint32_t dispatch_buffer_pages() const { return dispatch_buffer_pages_; }
+    uint32_t dispatch_buffer_pages() const { return settings.dispatch_pages_; }
 
-    uint32_t prefetch_d_buffer_size() const { return prefetch_d_buffer_size_; }
+    uint32_t prefetch_d_buffer_size() const { return settings.prefetch_d_buffer_size_; }
 
-    uint32_t prefetch_d_buffer_pages() const { return prefetch_d_buffer_pages_; }
+    uint32_t prefetch_d_buffer_pages() const { return settings.prefetch_d_pages_; }
 
-    uint32_t mux_buffer_size(uint8_t num_hw_cqs = 1) const { return prefetch_d_buffer_size_ / num_hw_cqs; }
+    uint32_t mux_buffer_size(uint8_t num_hw_cqs = 1) const { return settings.tunneling_buffer_size_ / num_hw_cqs; }
 
-    uint32_t mux_buffer_pages(uint8_t num_hw_cqs = 1) const { return prefetch_d_buffer_pages_ / num_hw_cqs; }
+    uint32_t mux_buffer_pages(uint8_t num_hw_cqs = 1) const { return settings.tunneling_buffer_pages_ / num_hw_cqs; }
 
-    uint32_t dispatch_s_buffer_size() const { return dispatch_s_buffer_size_; }
+    uint32_t dispatch_s_buffer_size() const { return settings.dispatch_s_buffer_size_; }
 
     uint32_t dispatch_s_buffer_pages() const {
-        return dispatch_s_buffer_size_ / (1 << tt::tt_metal::dispatch::DispatchConstants::DISPATCH_S_BUFFER_LOG_PAGE_SIZE);
+        return settings.dispatch_s_buffer_size_ /
+               (1 << tt::tt_metal::DispatchSettings::DISPATCH_S_BUFFER_LOG_PAGE_SIZE);
     }
 
     uint32_t get_device_command_queue_addr(const CommandQueueDeviceAddrType& device_addr_type) const {
@@ -147,33 +126,36 @@ public:
     }
 
     uint32_t get_dispatch_message_offset(uint32_t index) const {
-        TT_ASSERT(index < tt::tt_metal::dispatch::DispatchConstants::DISPATCH_MESSAGE_ENTRIES);
+        TT_ASSERT(index < tt::tt_metal::DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
         uint32_t offset = index * hal.get_alignment(HalMemType::L1);
         return offset;
     }
 
 private:
-    dispatch_constants(const CoreType& core_type, const uint32_t num_hw_cqs) {
-        using namespace tt::tt_metal::dispatch;
+    DispatchMemMap() = default;
 
-        // TODO: This is hardcoded to use defaults for now
-        const auto settings = DispatchSettings::defaults(core_type, tt::Cluster::instance(), num_hw_cqs);
-        prefetch_q_entries_ = settings.prefetch_q_entries_;
-        max_prefetch_command_size_ = settings.prefetch_max_cmd_size_;
-        cmddat_q_size_ = settings.prefetch_cmddat_q_size_;
-        scratch_db_size_ = settings.prefetch_scratch_db_size_;
-        prefetch_d_buffer_size_ = settings.prefetch_d_buffer_size_;
-        dispatch_s_buffer_size_ = settings.dispatch_s_buffer_size_;
+    static DispatchMemMap& get_instance() {
+        static DispatchMemMap instance;
+        return instance;
+    }
+
+    // Reset the instance using the settings for the core_type and num_hw_cqs.
+    void reset(const CoreType& core_type, const uint32_t num_hw_cqs) {
+        const auto dispatch_settings = DispatchSettings::get(core_type, num_hw_cqs);
+        this->settings = dispatch_settings;
+        last_core_type = settings.core_type_;
+        hw_cqs = settings.num_hw_cqs_;
+
         const auto dispatch_buffer_block_size = settings.dispatch_size_;
-        const auto [l1_base, l1_size] = get_device_l1_info(core_type);
+        const auto [l1_base, l1_size] = get_device_l1_info(settings.core_type_);
         const auto pcie_alignment = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::HOST);
         const auto l1_alignment = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::L1);
 
-        TT_ASSERT(cmddat_q_size_ >= 2 * max_prefetch_command_size_);
-        TT_ASSERT(scratch_db_size_ % 2 == 0);
+        TT_ASSERT(settings.prefetch_cmddat_q_size_ >= 2 * settings.prefetch_max_cmd_size_);
+        TT_ASSERT(settings.prefetch_scratch_db_size_ % 2 == 0);
         TT_ASSERT((dispatch_buffer_block_size & (dispatch_buffer_block_size - 1)) == 0);
         TT_ASSERT(
-            DispatchConstants::DISPATCH_MESSAGE_ENTRIES <= DispatchConstants::DISPATCH_MESSAGES_MAX_OFFSET / l1_alignment + 1,
+            DispatchSettings::DISPATCH_MESSAGE_ENTRIES <= DispatchSettings::DISPATCH_MESSAGES_MAX_OFFSET / l1_alignment + 1,
             "Number of dispatch message entries exceeds max representable offset");
 
         uint8_t num_dev_cq_addrs = magic_enum::enum_count<CommandQueueDeviceAddrType>();
@@ -201,24 +183,21 @@ private:
                 device_cq_addrs_[dev_addr_idx - 1] + device_cq_addr_sizes_[dev_addr_idx - 1];
             CommandQueueDeviceAddrType dev_addr_type = magic_enum::enum_value<CommandQueueDeviceAddrType>(dev_addr_idx);
             if (dev_addr_type == CommandQueueDeviceAddrType::UNRESERVED) {
-                device_cq_addrs_[dev_addr_idx] = align_addr(device_cq_addrs_[dev_addr_idx], pcie_alignment);
+                device_cq_addrs_[dev_addr_idx] = align(device_cq_addrs_[dev_addr_idx], pcie_alignment);
             }
         }
 
-        prefetch_q_size_ = prefetch_q_entries_ * sizeof(prefetch_q_entry_type);
         uint32_t prefetch_dispatch_unreserved_base =
             device_cq_addrs_[tt::utils::underlying_type<CommandQueueDeviceAddrType>(
                 CommandQueueDeviceAddrType::UNRESERVED)];
-        cmddat_q_base_ = prefetch_dispatch_unreserved_base + align_size(prefetch_q_size_, pcie_alignment);
-        scratch_db_base_ = cmddat_q_base_ + align_size(cmddat_q_size_, pcie_alignment);
-
-        TT_ASSERT(scratch_db_base_ + scratch_db_size_ < l1_size);
-        dispatch_buffer_base_ = align_addr(prefetch_dispatch_unreserved_base, 1 << DispatchConstants::DISPATCH_BUFFER_LOG_PAGE_SIZE);
-        dispatch_buffer_pages_ = dispatch_buffer_block_size / (1 << DispatchConstants::DISPATCH_BUFFER_LOG_PAGE_SIZE);
-        dispatch_buffer_block_size_pages_ = dispatch_buffer_pages_ / settings.dispatch_pages_per_block_;
+        cmddat_q_base_ = prefetch_dispatch_unreserved_base + round_size(settings.prefetch_q_size_, pcie_alignment);
+        scratch_db_base_ = cmddat_q_base_ + round_size(settings.prefetch_cmddat_q_size_, pcie_alignment);
+        dispatch_buffer_base_ = align(prefetch_dispatch_unreserved_base, 1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE);
+        dispatch_buffer_block_size_pages_ = settings.dispatch_pages_ / DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS;
         const uint32_t dispatch_cb_end = dispatch_buffer_base_ + settings.dispatch_size_;
+
+        TT_ASSERT(scratch_db_base_ + settings.prefetch_scratch_db_size_ < l1_size);
         TT_ASSERT(dispatch_cb_end < l1_size);
-        prefetch_d_buffer_pages_ = settings.prefetch_d_pages_;
     }
 
     std::pair<uint32_t, uint32_t> get_device_l1_info(const CoreType& core_type) const {
@@ -241,23 +220,17 @@ private:
         return {l1_base, l1_size};
     }
 
-    uint32_t prefetch_q_entries_;
-    uint32_t prefetch_q_size_;
-    uint32_t max_prefetch_command_size_;
     uint32_t cmddat_q_base_;
-    uint32_t cmddat_q_size_;
     uint32_t scratch_db_base_;
-    uint32_t scratch_db_size_;
     uint32_t dispatch_buffer_base_;
+
     uint32_t dispatch_buffer_block_size_pages_;
-    uint32_t dispatch_buffer_pages_;
-    uint32_t prefetch_d_buffer_size_;
-    uint32_t prefetch_d_buffer_pages_;
-    uint32_t dispatch_s_buffer_size_;
     std::vector<uint32_t> device_cq_addrs_;
-    static inline std::unique_ptr<dispatch_constants> inst;
-    static inline uint32_t hw_cqs;
-    static inline CoreType last_core_type = CoreType::WORKER;
+
+    DispatchSettings settings;
+
+    uint32_t hw_cqs{0}; // 0 means uninitialized
+    CoreType last_core_type{CoreType::WORKER};
 };
 
 /// @brief Get offset of the command queue relative to its channel
@@ -274,85 +247,21 @@ inline uint16_t get_umd_channel(uint16_t channel) { return channel & 0x3; }
 /// @param cq_size uint32_t size of the command queue
 /// @return uint32_t absolute offset
 inline uint32_t get_absolute_cq_offset(uint16_t channel, uint8_t cq_id, uint32_t cq_size) {
-    using namespace tt::tt_metal::dispatch;
-
-    return (DispatchConstants::MAX_HUGEPAGE_SIZE * get_umd_channel(channel)) + ((channel >> 2) * DispatchConstants::MAX_DEV_CHANNEL_SIZE) +
+    return (DispatchSettings::MAX_HUGEPAGE_SIZE * get_umd_channel(channel)) + ((channel >> 2) * DispatchSettings::MAX_DEV_CHANNEL_SIZE) +
            get_relative_cq_offset(cq_id, cq_size);
 }
 
 template <bool addr_16B>
-inline uint32_t get_cq_issue_rd_ptr(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_size) {
-    uint32_t recv;
-    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(chip_id);
-    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(chip_id);
-    uint32_t channel_offset = (channel >> 2) * tt::tt_metal::dispatch::DispatchConstants::MAX_DEV_CHANNEL_SIZE;
-    CoreType core_type = tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_type(chip_id);
-    uint32_t issue_q_rd_ptr =
-        dispatch_constants::get(core_type).get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_RD);
-    tt::Cluster::instance().read_sysmem(
-        &recv,
-        sizeof(uint32_t),
-        issue_q_rd_ptr + channel_offset + get_relative_cq_offset(cq_id, cq_size),
-        mmio_device_id,
-        channel);
-    if (not addr_16B) {
-        return recv << 4;
-    }
-    return recv;
-}
+uint32_t get_cq_issue_rd_ptr(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_size);
 
 template <bool addr_16B>
-inline uint32_t get_cq_issue_wr_ptr(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_size) {
-    uint32_t recv;
-    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(chip_id);
-    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(chip_id);
-    CoreType core_type = tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_type(chip_id);
-    uint32_t issue_q_wr_ptr =
-        dispatch_constants::get(core_type).get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
-    tt::Cluster::instance().read_sysmem(
-        &recv, sizeof(uint32_t), issue_q_wr_ptr + get_relative_cq_offset(cq_id, cq_size), mmio_device_id, channel);
-    if (not addr_16B) {
-        return recv << 4;
-    }
-    return recv;
-}
+uint32_t get_cq_issue_wr_ptr(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_size);
 
 template <bool addr_16B>
-inline uint32_t get_cq_completion_wr_ptr(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_size) {
-    uint32_t recv;
-    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(chip_id);
-    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(chip_id);
-    uint32_t channel_offset = (channel >> 2) * tt::tt_metal::dispatch::DispatchConstants::MAX_DEV_CHANNEL_SIZE;
-    CoreType core_type = tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_type(chip_id);
-    uint32_t completion_q_wr_ptr =
-        dispatch_constants::get(core_type).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
-    tt::Cluster::instance().read_sysmem(
-        &recv,
-        sizeof(uint32_t),
-        completion_q_wr_ptr + channel_offset + get_relative_cq_offset(cq_id, cq_size),
-        mmio_device_id,
-        channel);
-    if (not addr_16B) {
-        return recv << 4;
-    }
-    return recv;
-}
+uint32_t get_cq_completion_wr_ptr(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_size);
 
 template <bool addr_16B>
-inline uint32_t get_cq_completion_rd_ptr(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_size) {
-    uint32_t recv;
-    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(chip_id);
-    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(chip_id);
-    CoreType core_type = tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_type(chip_id);
-    uint32_t completion_q_rd_ptr =
-        dispatch_constants::get(core_type).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_RD);
-    tt::Cluster::instance().read_sysmem(
-        &recv, sizeof(uint32_t), completion_q_rd_ptr + get_relative_cq_offset(cq_id, cq_size), mmio_device_id, channel);
-    if (not addr_16B) {
-        return recv << 4;
-    }
-    return recv;
-}
+uint32_t get_cq_completion_rd_ptr(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_size);
 
 struct SystemMemoryCQInterface {
     // CQ is split into issue and completion regions
@@ -363,8 +272,8 @@ struct SystemMemoryCQInterface {
     SystemMemoryCQInterface(uint16_t channel, uint8_t cq_id, uint32_t cq_size, uint32_t cq_start) :
         cq_start(cq_start),
         command_completion_region_size(
-            (((cq_size - cq_start) / dispatch_constants::TRANSFER_PAGE_SIZE) / 4) *
-            dispatch_constants::TRANSFER_PAGE_SIZE),
+            (((cq_size - cq_start) / DispatchSettings::TRANSFER_PAGE_SIZE) / 4) *
+            DispatchSettings::TRANSFER_PAGE_SIZE),
         command_issue_region_size((cq_size - cq_start) - this->command_completion_region_size),
         issue_fifo_size(command_issue_region_size >> 4),
         issue_fifo_limit(
@@ -434,100 +343,11 @@ private:
     bool bypass_enable;
     std::vector<uint32_t> bypass_buffer;
     uint32_t bypass_buffer_write_offset;
-    std::array<LaunchMessageRingBufferState, dispatch_constants::DISPATCH_MESSAGE_ENTRIES>
+    std::array<LaunchMessageRingBufferState, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>
         worker_launch_message_buffer_state;
 
 public:
-    SystemMemoryManager(chip_id_t device_id, uint8_t num_hw_cqs) :
-        device_id(device_id),
-        num_hw_cqs(num_hw_cqs),
-        fast_write_callable(tt::Cluster::instance().get_fast_pcie_static_tlb_write_callable(device_id)),
-        bypass_enable(false),
-        bypass_buffer_write_offset(0) {
-        using namespace tt::tt_metal::dispatch;
-
-        this->completion_byte_addrs.resize(num_hw_cqs);
-        this->prefetcher_cores.resize(num_hw_cqs);
-        this->prefetch_q_writers.reserve(num_hw_cqs);
-        this->prefetch_q_dev_ptrs.resize(num_hw_cqs);
-        this->prefetch_q_dev_fences.resize(num_hw_cqs);
-
-        // Split hugepage into however many pieces as there are CQs
-        chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
-        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
-        char* hugepage_start = (char*)tt::Cluster::instance().host_dma_address(0, mmio_device_id, channel);
-        hugepage_start += (channel >> 2) * DispatchConstants::MAX_DEV_CHANNEL_SIZE;
-        this->cq_sysmem_start = hugepage_start;
-
-        // TODO(abhullar): Remove env var and expose sizing at the API level
-        char* cq_size_override_env = std::getenv("TT_METAL_CQ_SIZE_OVERRIDE");
-        if (cq_size_override_env != nullptr) {
-            uint32_t cq_size_override = std::stoi(string(cq_size_override_env));
-            this->cq_size = cq_size_override;
-        } else {
-            this->cq_size = tt::Cluster::instance().get_host_channel_size(mmio_device_id, channel) / num_hw_cqs;
-            if (tt::Cluster::instance().is_galaxy_cluster()) {
-                // We put 4 galaxy devices per huge page since number of hugepages available is less than number of
-                // devices.
-                this->cq_size = this->cq_size / DispatchConstants::DEVICES_PER_UMD_CHANNEL;
-            }
-        }
-        this->channel_offset = DispatchConstants::MAX_HUGEPAGE_SIZE * get_umd_channel(channel) + (channel >> 2) * DispatchConstants::MAX_DEV_CHANNEL_SIZE;
-
-        CoreType core_type = tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_type(device_id);
-        uint32_t completion_q_rd_ptr = dispatch_constants::get(core_type).get_device_command_queue_addr(
-            CommandQueueDeviceAddrType::COMPLETION_Q_RD);
-        uint32_t prefetch_q_base =
-            dispatch_constants::get(core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
-        uint32_t cq_start =
-            dispatch_constants::get(core_type).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
-        for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
-            tt_cxy_pair prefetcher_core =
-                tt::tt_metal::dispatch_core_manager::instance().prefetcher_core(device_id, channel, cq_id);
-            auto prefetcher_virtual = tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(prefetcher_core.chip, CoreCoord(prefetcher_core.x, prefetcher_core.y), core_type);
-            this->prefetcher_cores[cq_id] = tt_cxy_pair(prefetcher_core.chip, prefetcher_virtual.x, prefetcher_virtual.y);
-            this->prefetch_q_writers.emplace_back(
-                tt::Cluster::instance().get_static_tlb_writer(this->prefetcher_cores[cq_id]));
-
-            tt_cxy_pair completion_queue_writer_core =
-                tt::tt_metal::dispatch_core_manager::instance().completion_queue_writer_core(device_id, channel, cq_id);
-            auto completion_queue_writer_virtual =
-                tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(
-                    completion_queue_writer_core.chip,
-                    CoreCoord(completion_queue_writer_core.x, completion_queue_writer_core.y),
-                    core_type);
-
-            const std::tuple<uint32_t, uint32_t> completion_interface_tlb_data =
-                tt::Cluster::instance()
-                    .get_tlb_data(tt_cxy_pair(
-                        completion_queue_writer_core.chip,
-                        completion_queue_writer_virtual.x,
-                        completion_queue_writer_virtual.y))
-                    .value();
-            auto [completion_tlb_offset, completion_tlb_size] = completion_interface_tlb_data;
-            this->completion_byte_addrs[cq_id] = completion_tlb_offset + completion_q_rd_ptr % completion_tlb_size;
-
-            this->cq_interfaces.push_back(SystemMemoryCQInterface(channel, cq_id, this->cq_size, cq_start));
-            // Prefetch queue acts as the sync mechanism to ensure that issue queue has space to write, so issue queue
-            // must be as large as the max amount of space the prefetch queue can specify Plus 1 to handle wrapping Plus
-            // 1 to allow us to start writing to issue queue before we reserve space in the prefetch queue
-            TT_FATAL(
-                dispatch_constants::get(core_type, num_hw_cqs).max_prefetch_command_size() *
-                        (dispatch_constants::get(core_type, num_hw_cqs).prefetch_q_entries() + 2) <=
-                    this->get_issue_queue_size(cq_id),
-                "Issue queue for cq_id {} has size of {} which is too small",
-                cq_id,
-                this->get_issue_queue_size(cq_id));
-            this->cq_to_event.push_back(0);
-            this->cq_to_last_completed_event.push_back(0);
-            this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
-            this->prefetch_q_dev_fences[cq_id] =
-                prefetch_q_base + dispatch_constants::get(core_type, num_hw_cqs).prefetch_q_entries() *
-                                      sizeof(dispatch_constants::prefetch_q_entry_type);
-        }
-        std::vector<std::mutex> temp_mutexes(num_hw_cqs);
-        cq_to_event_locks.swap(temp_mutexes);
-    }
+    SystemMemoryManager(chip_id_t device_id, uint8_t num_hw_cqs);
 
     uint32_t get_next_event(const uint8_t cq_id) {
         cq_to_event_locks[cq_id].lock();
@@ -640,7 +460,7 @@ public:
         uint32_t issue_q_write_ptr = this->get_issue_queue_write_ptr(cq_id);
 
         const uint32_t command_issue_limit = this->get_issue_queue_limit(cq_id);
-        if (issue_q_write_ptr + tt::tt_metal::dispatch::align_addr(cmd_size_B, tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::HOST)) >
+        if (issue_q_write_ptr + align(cmd_size_B, tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::HOST)) >
             command_issue_limit) {
             this->wrap_issue_queue_wr_ptr(cq_id);
             issue_q_write_ptr = this->get_issue_queue_write_ptr(cq_id);
@@ -680,38 +500,7 @@ public:
     }
 
     // TODO: RENAME issue_queue_stride ?
-    void issue_queue_push_back(uint32_t push_size_B, const uint8_t cq_id) {
-        if (this->bypass_enable) {
-            this->bypass_buffer_write_offset += push_size_B;
-            return;
-        }
-
-        // All data needs to be PCIE_ALIGNMENT aligned
-        uint32_t push_size_16B =
-            tt::tt_metal::dispatch::align_addr(push_size_B, tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::HOST)) >> 4;
-
-        SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
-        CoreType core_type = tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_type(this->device_id);
-        uint32_t issue_q_wr_ptr =
-            dispatch_constants::get(core_type).get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
-
-        if (cq_interface.issue_fifo_wr_ptr + push_size_16B >= cq_interface.issue_fifo_limit) {
-            cq_interface.issue_fifo_wr_ptr = (cq_interface.cq_start + cq_interface.offset) >> 4;  // In 16B words
-            cq_interface.issue_fifo_wr_toggle = not cq_interface.issue_fifo_wr_toggle;            // Flip the toggle
-        } else {
-            cq_interface.issue_fifo_wr_ptr += push_size_16B;
-        }
-
-        // Also store this data in hugepages, so if a hang happens we can see what was written by host.
-        chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->device_id);
-        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device_id);
-        tt::Cluster::instance().write_sysmem(
-            &cq_interface.issue_fifo_wr_ptr,
-            sizeof(uint32_t),
-            issue_q_wr_ptr + get_relative_cq_offset(cq_id, this->cq_size),
-            mmio_device_id,
-            channel);
-    }
+    void issue_queue_push_back(uint32_t push_size_B, const uint8_t cq_id);
 
     uint32_t completion_queue_wait_front(const uint8_t cq_id, volatile bool& exit_condition) const {
         uint32_t write_ptr_and_toggle;
@@ -728,26 +517,7 @@ public:
         return write_ptr_and_toggle;
     }
 
-    void send_completion_queue_read_ptr(const uint8_t cq_id) const {
-        const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
-
-        uint32_t read_ptr_and_toggle =
-            cq_interface.completion_fifo_rd_ptr | (cq_interface.completion_fifo_rd_toggle << 31);
-        this->fast_write_callable(this->completion_byte_addrs[cq_id], 4, (uint8_t*)&read_ptr_and_toggle);
-
-        // Also store this data in hugepages in case we hang and can't get it from the device.
-        chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->device_id);
-        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device_id);
-        CoreType core_type = tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_type(this->device_id);
-        uint32_t completion_q_rd_ptr =
-            dispatch_constants::get(core_type).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_RD);
-        tt::Cluster::instance().write_sysmem(
-            &read_ptr_and_toggle,
-            sizeof(uint32_t),
-            completion_q_rd_ptr + get_relative_cq_offset(cq_id, this->cq_size),
-            mmio_device_id,
-            channel);
-    }
+    void send_completion_queue_read_ptr(const uint8_t cq_id) const;
 
     void wrap_issue_queue_wr_ptr(const uint8_t cq_id) {
         if (this->bypass_enable) {
@@ -765,7 +535,7 @@ public:
     }
 
     void completion_queue_pop_front(uint32_t num_pages_read, const uint8_t cq_id) {
-        uint32_t data_read_B = num_pages_read * dispatch_constants::TRANSFER_PAGE_SIZE;
+        uint32_t data_read_B = num_pages_read * DispatchSettings::TRANSFER_PAGE_SIZE;
         uint32_t data_read_16B = data_read_B >> 4;
 
         SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
@@ -779,72 +549,39 @@ public:
         this->send_completion_queue_read_ptr(cq_id);
     }
 
-    void fetch_queue_reserve_back(const uint8_t cq_id) {
-        if (this->bypass_enable) {
-            return;
-        }
-
-        CoreType core_type = tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_type(device_id);
-        const uint32_t prefetch_q_rd_ptr =
-            dispatch_constants::get(core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD);
-
-        // Helper to wait for fetch queue space, if needed
-        uint32_t fence;
-        auto wait_for_fetch_q_space = [&]() {
-            // Loop until space frees up
-            while (this->prefetch_q_dev_ptrs[cq_id] == this->prefetch_q_dev_fences[cq_id]) {
-                tt::Cluster::instance().read_core(
-                    &fence, sizeof(uint32_t), this->prefetcher_cores[cq_id], prefetch_q_rd_ptr);
-                this->prefetch_q_dev_fences[cq_id] = fence;
-            }
-        };
-
-        wait_for_fetch_q_space();
-
-        // Wrap FetchQ if possible
-        uint32_t prefetch_q_base =
-            dispatch_constants::get(core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
-        uint32_t prefetch_q_limit =
-            prefetch_q_base + dispatch_constants::get(core_type, num_hw_cqs).prefetch_q_entries() *
-                                  sizeof(dispatch_constants::prefetch_q_entry_type);
-        if (this->prefetch_q_dev_ptrs[cq_id] == prefetch_q_limit) {
-            this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
-            wait_for_fetch_q_space();
-        }
-    }
+    void fetch_queue_reserve_back(const uint8_t cq_id);
 
     void fetch_queue_write(uint32_t command_size_B, const uint8_t cq_id, bool stall_prefetcher = false) {
         CoreType dispatch_core_type =
             tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_type(this->device_id);
-        uint32_t max_command_size_B =
-            dispatch_constants::get(dispatch_core_type, num_hw_cqs).max_prefetch_command_size();
+        uint32_t max_command_size_B = DispatchMemMap::get(dispatch_core_type, num_hw_cqs).max_prefetch_command_size();
         TT_ASSERT(
             command_size_B <= max_command_size_B,
             "Generated prefetcher command of size {} B exceeds max command size {} B",
             command_size_B,
             max_command_size_B);
         TT_ASSERT(
-            (command_size_B >> dispatch_constants::PREFETCH_Q_LOG_MINSIZE) < 0xFFFF,
+            (command_size_B >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE) < 0xFFFF,
             "FetchQ command too large to represent");
         if (this->bypass_enable) {
             return;
         }
         tt_driver_atomics::sfence();
-        dispatch_constants::prefetch_q_entry_type command_size_16B =
-            command_size_B >> dispatch_constants::PREFETCH_Q_LOG_MINSIZE;
+        DispatchSettings::prefetch_q_entry_type command_size_16B =
+            command_size_B >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE;
 
         // stall_prefetcher is used for enqueuing traces, as replaying a trace will hijack the cmd_data_q
         // so prefetcher fetches multiple cmds that include the trace cmd, they will be corrupted by trace pulling data
         // from DRAM stall flag prevents pulling prefetch q entries that occur after the stall entry Stall flag for
         // prefetcher is MSB of FetchQ entry.
         if (stall_prefetcher) {
-            command_size_16B |= (1 << ((sizeof(dispatch_constants::prefetch_q_entry_type) * 8) - 1));
+            command_size_16B |= (1 << ((sizeof(DispatchSettings::prefetch_q_entry_type) * 8) - 1));
         }
         this->prefetch_q_writers[cq_id].write(this->prefetch_q_dev_ptrs[cq_id], command_size_16B);
-        this->prefetch_q_dev_ptrs[cq_id] += sizeof(dispatch_constants::prefetch_q_entry_type);
+        this->prefetch_q_dev_ptrs[cq_id] += sizeof(DispatchSettings::prefetch_q_entry_type);
     }
 
-    std::array<LaunchMessageRingBufferState, dispatch_constants::DISPATCH_MESSAGE_ENTRIES>&
+    std::array<LaunchMessageRingBufferState, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>&
     get_worker_launch_message_buffer_state() {
         return this->worker_launch_message_buffer_state;
     }

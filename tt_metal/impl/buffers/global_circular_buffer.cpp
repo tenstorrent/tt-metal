@@ -18,6 +18,8 @@
 #include <hal.hpp>
 #include <tt_align.hpp>
 
+#include "tt_cluster.hpp"
+
 namespace tt::tt_metal {
 
 namespace v1 {
@@ -30,7 +32,7 @@ GlobalCircularBuffer::GlobalCircularBuffer(
     uint32_t size,
     BufferType buffer_type) :
     device_(device), sender_receiver_core_mapping_(sender_receiver_core_mapping), size_(size) {
-    TT_FATAL(this->device_ != nullptr, "Device cannot be null");
+    TT_FATAL(device_ != nullptr, "Device cannot be null");
     uint32_t num_sender_cores = sender_receiver_core_mapping.size();
     uint32_t num_receiver_cores = 0;
     uint32_t max_num_receivers_per_sender = 0;
@@ -39,14 +41,14 @@ GlobalCircularBuffer::GlobalCircularBuffer(
     for (const auto& [sender_core, receiver_cores] : sender_receiver_core_mapping) {
         num_receiver_cores += receiver_cores.num_cores();
         sender_cores.emplace_back(sender_core);
-        this->receiver_cores_ = this->receiver_cores_.merge(receiver_cores);
+        receiver_cores_ = receiver_cores_.merge(receiver_cores);
         max_num_receivers_per_sender = std::max(max_num_receivers_per_sender, receiver_cores.num_cores());
     }
-    this->sender_cores_ = CoreRangeSet(sender_cores);
-    TT_FATAL(num_sender_cores == this->sender_cores_.num_cores(), "Duplicate sender cores found");
-    TT_FATAL(num_receiver_cores == this->receiver_cores_.num_cores(), "Duplicate receiver cores found");
-    this->all_cores_ = this->sender_cores_.merge(this->receiver_cores_);
-    TT_FATAL(this->all_cores_.num_cores() == num_sender_cores + num_receiver_cores, "Duplicate cores found");
+    sender_cores_ = CoreRangeSet(sender_cores);
+    TT_FATAL(num_sender_cores == sender_cores_.num_cores(), "Duplicate sender cores found");
+    TT_FATAL(num_receiver_cores == receiver_cores_.num_cores(), "Duplicate receiver cores found");
+    all_cores_ = sender_cores_.merge(receiver_cores_);
+    TT_FATAL(all_cores_.num_cores() == num_sender_cores + num_receiver_cores, "Duplicate cores found");
     this->setup_cb_buffers(buffer_type, max_num_receivers_per_sender);
 }
 
@@ -54,20 +56,20 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
     TT_FATAL(
         buffer_type == BufferType::L1 or buffer_type == BufferType::L1_SMALL,
         "Global circular buffer can only be created for L1 buffer types");
-    uint32_t num_cores = this->all_cores_.num_cores();
+    uint32_t num_cores = all_cores_.num_cores();
 
-    auto shard_parameters =
-        ShardSpecBuffer(this->all_cores_, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1});
+    auto shard_parameters = ShardSpecBuffer(all_cores_, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1});
 
-    uint32_t cb_buffer_size = this->size_ * num_cores;
-    this->cb_buffer_ = Buffer::create(
-        this->device_,
-        cb_buffer_size,
-        this->size_,
-        buffer_type,
-        TensorMemoryLayout::HEIGHT_SHARDED,
-        shard_parameters,
-        std::nullopt);
+    uint32_t cb_buffer_size = size_ * num_cores;
+    ShardedBufferConfig cb_buffer_shard_config = {
+        .device = device_,
+        .size = cb_buffer_size,
+        .page_size = size_,
+        .buffer_type = buffer_type,
+        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+        .shard_parameters = shard_parameters,
+    };
+    cb_buffer_ = CreateBuffer(cb_buffer_shard_config);
 
     auto l1_alignment = hal.get_alignment(HalMemType::L1);
     // is_sender, receiver_val, fifo_start_addr, fifo_size, fifo_ptr, noc_xy coords, and pages_sent
@@ -76,27 +78,28 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
     auto cb_config_page_size = tt::align((num_config_elements + num_noc_xy_words) * sizeof(uint32_t), l1_alignment) +
                                2 * max_num_receivers_per_sender * l1_alignment;
     uint32_t cb_config_size = cb_config_page_size * num_cores;
-    this->cb_config_buffer_ = Buffer::create(
-        this->device_,
-        cb_config_size,
-        cb_config_page_size,
-        buffer_type,
-        TensorMemoryLayout::HEIGHT_SHARDED,
-        shard_parameters,
-        std::nullopt);
+    ShardedBufferConfig cb_config_buffer_shard_config = {
+        .device = device_,
+        .size = cb_config_size,
+        .page_size = cb_config_page_size,
+        .buffer_type = buffer_type,
+        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+        .shard_parameters = std::move(shard_parameters),
+    };
+    cb_config_buffer_ = CreateBuffer(cb_config_buffer_shard_config);
 
     // Write the config buffer to the device
     // Only block for the slow dispatch case
-    auto* device = this->device_;
+    auto* device = device_;
     device->push_work([device,
                        cb_config_size,
                        cb_config_page_size,
                        num_noc_xy_words,
                        l1_alignment,
-                       buffer_address = this->cb_buffer_->address(),
-                       cb_config_buffer = this->cb_config_buffer_,
-                       size = this->size_,
-                       sender_receiver_core_mapping = this->sender_receiver_core_mapping_] {
+                       buffer_address = cb_buffer_->address(),
+                       cb_config_buffer = cb_config_buffer_,
+                       size = size_,
+                       sender_receiver_core_mapping = sender_receiver_core_mapping_] {
         auto config_buffer_address = cb_config_buffer->address();
         const auto& core_to_core_id = cb_config_buffer->get_buffer_page_mapping()->core_to_core_id_;
         std::vector<uint32_t> cb_config_host_buffer(cb_config_size / sizeof(uint32_t), 0);
@@ -144,22 +147,22 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
     });
 }
 
-const Buffer& GlobalCircularBuffer::cb_buffer() const { return *this->cb_buffer_; }
+const Buffer& GlobalCircularBuffer::cb_buffer() const { return *cb_buffer_; }
 
-const CoreRangeSet& GlobalCircularBuffer::sender_cores() const { return this->sender_cores_; }
+const CoreRangeSet& GlobalCircularBuffer::sender_cores() const { return sender_cores_; }
 
-const CoreRangeSet& GlobalCircularBuffer::receiver_cores() const { return this->receiver_cores_; }
+const CoreRangeSet& GlobalCircularBuffer::receiver_cores() const { return receiver_cores_; }
 
-const CoreRangeSet& GlobalCircularBuffer::all_cores() const { return this->all_cores_; }
+const CoreRangeSet& GlobalCircularBuffer::all_cores() const { return all_cores_; }
 
-DeviceAddr GlobalCircularBuffer::buffer_address() const { return this->cb_buffer_->address(); }
+DeviceAddr GlobalCircularBuffer::buffer_address() const { return cb_buffer_->address(); }
 
-DeviceAddr GlobalCircularBuffer::config_address() const { return this->cb_config_buffer_->address(); }
+DeviceAddr GlobalCircularBuffer::config_address() const { return cb_config_buffer_->address(); }
 
-uint32_t GlobalCircularBuffer::size() const { return this->size_; }
+uint32_t GlobalCircularBuffer::size() const { return size_; }
 
 const std::vector<std::pair<CoreCoord, CoreRangeSet>>& GlobalCircularBuffer::sender_receiver_core_mapping() const {
-    return this->sender_receiver_core_mapping_;
+    return sender_receiver_core_mapping_;
 }
 
 }  // namespace experimental

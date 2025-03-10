@@ -2,6 +2,11 @@
 # not be available during environment installation. We recommend setuptools
 # and wheel before installing this requirements.txt file.
 
+loguru
+
+# For github workflow unit test failure annotations
+pytest-github-actions-annotate-failures==0.3.0
+
 # During dep resolution, black may install platformdirs >=4.0.0, which is
 # a breaking dependency for virtualenv installed by pre-commit. virtualenv
 # requires <4.0.0 platformdirs, so we're pinning platformdirs here
@@ -19,6 +24,9 @@ mypy==1.9.0
 
 # For sweep testing
 -r ../../tests/sweep_framework/requirements-sweeps.txt
+
+# For all Llama3 demo tests
+git+https://github.com/tenstorrent/llama-models.git@tt_metal_tag
 
 # testing
 pytest==7.2.2
@@ -60,3 +68,5 @@ blobfile==2.1.1 # Required for llama3
 numpy>=1.24.4,<2
 huggingface-hub==0.25.2
 pydantic==2.9.2 # Required for Superset benchmarking
+fiftyone==0.25.2 # Required for Yolo benchmarking
+jiwer==3.0.5 # Required for speech recognition evaluation

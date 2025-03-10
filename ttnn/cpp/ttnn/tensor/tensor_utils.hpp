@@ -12,36 +12,7 @@
 namespace tt {
 
 namespace tt_metal {
-const ttnn::SimpleShape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape);
-
-// TODO: Remove this once we switch to SimpleShape .volume()
-static std::size_t compute_volume(const tt::tt_metal::LegacyShape& shape) {
-    size_t volume = 1;
-    for (auto index = 0; index < shape.rank(); index++) {
-        volume *= shape[index];
-    }
-    return volume;
-}
-
-static ttnn::SmallVector<uint32_t> compute_strides(const ttnn::SimpleShape& shape) {
-    if (shape.rank() == 0) {
-        return {};
-    }
-
-    auto num_elements = shape.volume();
-    ttnn::SmallVector<uint32_t> strides;
-    for (std::int32_t index = 0; index < shape.rank(); index++) {
-        if (shape[index] == 0) {
-            // Insert 0 to indicate no memory access for this dimension
-            strides.push_back(0);
-            continue;
-        }
-
-        num_elements /= shape[index];
-        strides.push_back(num_elements);
-    }
-    return strides;
-}
+const ttnn::Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape);
 
 static int compute_flat_indices(tt::stl::Span<const int> indices, tt::stl::Span<const uint32_t> strides) {
     int flat_index = 0;
@@ -51,7 +22,7 @@ static int compute_flat_indices(tt::stl::Span<const int> indices, tt::stl::Span<
     return flat_index;
 };
 
-static std::size_t compute_buffer_size(const ttnn::SimpleShape& shape, DataType data_type, const Tile& tile) {
+static std::size_t compute_buffer_size(const ttnn::Shape& shape, DataType data_type, const Tile& tile) {
     const size_t volume = shape.volume();
     auto tile_hw = tile.get_tile_hw();
     if (data_type == DataType::BFLOAT8_B) {
@@ -110,12 +81,8 @@ Tensor copy_borrowed_tensor_in_async_mode(IDevice* worker, const Tensor& tensor)
 
 inline bool is_tensor_on_device(const ttnn::Tensor& tensor) { return tensor.storage_type() == StorageType::DEVICE; }
 
-inline bool is_tensor_on_multi_device(const ttnn::Tensor& tensor) {
-    return tensor.storage_type() == StorageType::MULTI_DEVICE;
-}
-
 inline bool is_tensor_on_device_or_multidevice(const ttnn::Tensor& tensor) {
-    return is_tensor_on_device(tensor) or is_tensor_on_multi_device(tensor);
+    return tensor.storage_type() == StorageType::DEVICE || tensor.storage_type() == StorageType::MULTI_DEVICE;
 }
 
 template <class T>

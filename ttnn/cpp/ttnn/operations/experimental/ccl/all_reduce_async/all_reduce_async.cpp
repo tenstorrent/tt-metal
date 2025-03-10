@@ -10,10 +10,10 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-uint32_t find_scatter_dim(const ttnn::SimpleShape& input_tensor_padded_shape, size_t num_workers) {
+uint32_t find_scatter_dim(const ttnn::Shape& input_tensor_padded_shape, size_t num_workers) {
     // iterate until we find a dimension that is divisible by num_workers
     TT_FATAL(input_tensor_padded_shape.size() == 4, "Expected input tensor to have 4 dimensions");
-    ttnn::SimpleShape input_tensor_shape_in_tiles{
+    ttnn::Shape input_tensor_shape_in_tiles{
         input_tensor_padded_shape[0],
         input_tensor_padded_shape[1],
         input_tensor_padded_shape[2] / tt::constants::TILE_HEIGHT,
@@ -40,7 +40,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     ttnn::ccl::Topology topology,
     const std::optional<size_t> num_preferred_links,
-    std::optional<SubDeviceId> worker_subdevice_id_opt) {
+    std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) {
     MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
     uint32_t dim = find_scatter_dim(input_tensor.get_padded_shape(), input_tensor.get_workers().size());
     ttnn::Tensor scattered_tensor = ttnn::operations::experimental::ccl::reduce_scatter(
@@ -75,7 +75,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     ttnn::ccl::Topology topology,
     const std::optional<size_t> num_preferred_links,
-    std::optional<SubDeviceId> worker_subdevice_id_opt) {
+    std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) {
     MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
     const auto mesh_view = mesh_device.get_view();
     std::vector<IDevice*> devices =

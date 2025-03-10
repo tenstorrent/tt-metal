@@ -1,4 +1,4 @@
-name: "[deprecated] Build TT-Metalium across all configs"
+name: "Build TT-Metalium across all configs"
 
 on:
   workflow_call:
@@ -14,5 +14,36 @@ permissions:
 
 jobs:
   build:
-    uses: ./.github/workflows/build.yaml
+    uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
+    strategy:
+      matrix:
+        config:
+          - version: "20.04"
+            toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+            build-type: "Debug"
+            publish-artifact: false
+          - version: "20.04"
+            toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+            build-type: "RelWithDebInfo"
+            publish-artifact: false
+          - version: "22.04"
+            toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+            build-type: "Release"
+            publish-artifact: false
+          - version: "22.04"
+            toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
+            build-type: "Release"
+            publish-artifact: false
+            skip-tt-train: true
+          - version: "22.04"
+            toolchain: "cmake/x86_64-linux-gcc-12-toolchain.cmake"
+            build-type: "Release"
+            publish-artifact: false
+            skip-tt-train: true
+    with:
+      version: ${{ matrix.config.version }}
+      toolchain: ${{ matrix.config.toolchain }}
+      build-type: ${{ matrix.config.build-type }}
+      publish-artifact: ${{ matrix.config.publish-artifact }}
+      skip-tt-train: ${{ matrix.config.skip-tt-train || false }}

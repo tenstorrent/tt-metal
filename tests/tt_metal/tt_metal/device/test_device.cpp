@@ -9,6 +9,8 @@
 #include <tt-metalium/host_api.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 
+namespace tt::tt_metal {
+
 using namespace tt;
 using namespace tt::test_utils;
 
@@ -77,7 +79,7 @@ bool dram_ping(
 TEST_F(DeviceFixture, PingAllLegalDramChannels) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         {
-            size_t start_byte_address = devices_.at(id)->get_base_allocator_addr(HalMemType::DRAM);
+            size_t start_byte_address = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::DRAM);
             ASSERT_TRUE(unit_tests::basic::device::dram_ping(
                 devices_.at(id), 4, start_byte_address, devices_.at(id)->num_dram_channels()));
             ASSERT_TRUE(unit_tests::basic::device::dram_ping(
@@ -111,7 +113,7 @@ TEST_F(DeviceFixture, PingAllLegalDramChannels) {
 TEST_F(DeviceFixture, PingIllegalDramChannels) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         auto num_channels = devices_.at(id)->num_dram_channels() + 1;
-        size_t start_byte_address = devices_.at(id)->get_base_allocator_addr(HalMemType::DRAM);
+        size_t start_byte_address = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::DRAM);
         ;
         ASSERT_ANY_THROW(unit_tests::basic::device::dram_ping(devices_.at(id), 4, start_byte_address, num_channels));
     }
@@ -120,7 +122,7 @@ TEST_F(DeviceFixture, PingIllegalDramChannels) {
 TEST_F(DeviceFixture, TensixPingAllLegalL1Cores) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         {
-            size_t start_byte_address = devices_.at(id)->get_base_allocator_addr(HalMemType::L1);
+            size_t start_byte_address = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1);
             ASSERT_TRUE(unit_tests::basic::device::l1_ping(
                 devices_.at(id), 4, start_byte_address, devices_.at(id)->logical_grid_size()));
             ASSERT_TRUE(unit_tests::basic::device::l1_ping(
@@ -157,7 +159,7 @@ TEST_F(DeviceFixture, TensixPingIllegalL1Cores) {
         auto grid_size = devices_.at(id)->logical_grid_size();
         grid_size.x++;
         grid_size.y++;
-        size_t start_byte_address = devices_.at(id)->get_base_allocator_addr(HalMemType::L1);
+        size_t start_byte_address = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1);
         ASSERT_ANY_THROW(unit_tests::basic::device::l1_ping(devices_.at(id), 4, start_byte_address, grid_size));
     }
 }
@@ -171,22 +173,23 @@ TEST_F(DeviceFixture, TensixPingIllegalL1Cores) {
 // Purpose of this test is to ensure that L1 reader/writer APIs do not target harvested cores
 TEST_F(DeviceFixture, TensixValidateKernelDoesNotTargetHarvestedCores) {
     for (unsigned int id = 0; id < num_devices_; id++) {
-        uint32_t num_l1_banks = this->devices_.at(id)->num_banks(BufferType::L1);
+        uint32_t num_l1_banks = devices_.at(id)->allocator()->get_num_banks(BufferType::L1);
         std::vector<uint32_t> host_input(1);
         std::map<uint32_t, uint32_t> bank_id_to_value;
         uint32_t l1_address = this->devices_.at(id)->l1_size_per_core() - 2048;
         for (uint32_t bank_id = 0; bank_id < num_l1_banks; bank_id++) {
             host_input[0] = bank_id + 1;
             bank_id_to_value[bank_id] = host_input.at(0);
-            CoreCoord logical_core = this->devices_.at(id)->logical_core_from_bank_id(bank_id);
-            uint32_t write_address = l1_address + this->devices_.at(id)->bank_offset(BufferType::L1, bank_id);
+            CoreCoord logical_core = this->devices_.at(id)->allocator()->get_logical_core_from_bank_id(bank_id);
+            uint32_t write_address =
+                l1_address + this->devices_.at(id)->allocator()->get_bank_offset(BufferType::L1, bank_id);
             tt_metal::detail::WriteToDeviceL1(this->devices_.at(id), logical_core, write_address, host_input);
         }
 
         tt_metal::Program program = tt_metal::CreateProgram();
         string kernel_name = "tests/tt_metal/tt_metal/test_kernels/misc/ping_legal_l1s.cpp";
         CoreCoord logical_target_core(0, 0);
-        uint32_t intermediate_l1_addr = devices_.at(id)->get_base_allocator_addr(HalMemType::L1);
+        uint32_t intermediate_l1_addr = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1);
         uint32_t size_bytes = host_input.size() * sizeof(uint32_t);
         tt_metal::KernelHandle kernel_id = tt_metal::CreateKernel(
             program,
@@ -201,8 +204,9 @@ TEST_F(DeviceFixture, TensixValidateKernelDoesNotTargetHarvestedCores) {
 
         std::vector<uint32_t> output;
         for (uint32_t bank_id = 0; bank_id < num_l1_banks; bank_id++) {
-            CoreCoord logical_core = this->devices_.at(id)->logical_core_from_bank_id(bank_id);
-            uint32_t read_address = l1_address + this->devices_.at(id)->bank_offset(BufferType::L1, bank_id);
+            CoreCoord logical_core = this->devices_.at(id)->allocator()->get_logical_core_from_bank_id(bank_id);
+            uint32_t read_address =
+                l1_address + this->devices_.at(id)->allocator()->get_bank_offset(BufferType::L1, bank_id);
             tt_metal::detail::ReadFromDeviceL1(this->devices_.at(id), logical_core, read_address, size_bytes, output);
             ASSERT_TRUE(output.size() == host_input.size());
             uint32_t expected_value =
@@ -240,10 +244,11 @@ TEST_F(DeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
     EXPECT_TRUE(device->is_mmio_capable());
     CoreCoord logical_core(0, 0);
 
-    uint32_t base_l1_src_address = device->get_base_allocator_addr(HalMemType::L1) + hal.get_alignment(HalMemType::L1);
-    // This is a slow dispatch test dispatch core type is needed to query dispatch_constants
+    uint32_t base_l1_src_address =
+        device->allocator()->get_base_allocator_addr(HalMemType::L1) + hal.get_alignment(HalMemType::L1);
+    // This is a slow dispatch test dispatch core type is needed to query DispatchMemMap
     uint32_t base_pcie_dst_address =
-        dispatch_constants::get(CoreType::WORKER).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED) +
+        DispatchMemMap::get(CoreType::WORKER).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED) +
         hal.get_alignment(HalMemType::L1);
 
     uint32_t size_bytes = 2048 * 128;
@@ -271,3 +276,5 @@ TEST_F(DeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
 
     EXPECT_EQ(src, result);
 }
+
+}  // namespace tt::tt_metal

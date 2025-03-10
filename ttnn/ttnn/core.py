@@ -42,6 +42,11 @@ def is_sharded(tensor) -> bool:
 
 
 get_memory_config = ttnn._ttnn.core.get_memory_config
+light_metal_begin_capture = ttnn._ttnn.core.light_metal_begin_capture
+light_metal_end_capture = ttnn._ttnn.core.light_metal_end_capture
+
+# Add LightMetalReplay binding
+LightMetalReplay = ttnn._ttnn.core.LightMetalReplay
 
 
 def num_cores_to_corerangeset(
@@ -80,11 +85,11 @@ def has_tile_padding(tensor, *, dim=None):
     if dim is not None:
         rank = tensor.shape.rank
         dim = dim if dim >= 0 else rank + dim
-        return tensor.shape[dim] != tensor.shape.with_tile_padding()[dim]
+        return tensor.shape[dim] != tensor.padded_shape[dim]
 
     if len(tensor.shape) > 1:
         *_, h, w = tensor.shape
-        *_, h_padded, w_padded = tensor.shape.with_tile_padding()
+        *_, h_padded, w_padded = tensor.padded_shape
         return h != h_padded or w != w_padded
     return False
 

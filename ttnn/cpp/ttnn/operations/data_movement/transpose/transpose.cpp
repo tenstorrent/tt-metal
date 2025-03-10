@@ -3,23 +3,24 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/run_operation.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/decorators.hpp"
 #include "device/transpose_op.hpp"
+#include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "cpp/ttnn/operations/copy.hpp"
-#include "cpp/ttnn/operations/data_movement/pad/pad.hpp"
-#include "cpp/ttnn/operations/data_movement/slice/slice.hpp"
 
 #include <tt-metalium/hal_exp.hpp>
-
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::operations::data_movement {
 
 namespace detail {
+
+using namespace tt::tt_metal::experimental;
+using namespace tt;
+using namespace tt::tt_metal::operation;
 
 inline Tensor transpose_(
     const Tensor& a,
@@ -58,7 +59,7 @@ inline Tensor transpose_(
             break;
         default: break;
     }
-    return operation::run(Transpose{transpose_dim, output_mem_config, pad_value}, {a}).at(0);
+    return tt::tt_metal::operation::run(Transpose{transpose_dim, output_mem_config, pad_value}, {a}).at(0);
 }
 
 ttnn::Tensor transpose_nd(
@@ -80,7 +81,7 @@ ttnn::Tensor transpose_nd(
 }  // namespace detail
 
 ttnn::Tensor ExecuteTranspose::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const int64_t& dim1,
     const int64_t& dim2,
@@ -108,8 +109,8 @@ ttnn::Tensor ExecuteTranspose::invoke(
         input_unsqueezed.get_dtype() == DataType::BFLOAT8_B and !bfloat8_supported and !input_unsqueezed.is_sharded();
     Tensor input_typecasted = typecast ? ttnn::typecast(input_unsqueezed, DataType::BFLOAT16) : input_unsqueezed;
 
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_typecasted}))};
-    operation::launch_with_autoformat(
+    std::vector<Tensor> output_tensors = {Tensor(detail::get_workers_for_op_output({input_typecasted}))};
+    detail::launch_with_autoformat(
         [normalized_dim1, normalized_dim2, memory_config_arg, pad_value](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,

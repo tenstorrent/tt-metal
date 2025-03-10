@@ -33,7 +33,7 @@ void calc_numeric_stable(
     reconfig_data_format(cb_in, cb_bcast_scaler);
     cb_reserve_back(cb_max, 1);
     cb_wait_front(cb_bcast_scaler, 1);
-    reduce_init_delta<false, PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_max, cb_in, cb_bcast_scaler);
+    reduce_init_delta<false, PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_in, cb_bcast_scaler, cb_max);
     for (uint32_t wt = 0; wt < Wt; wt++) {
         cb_wait_front(cb_in, wt + 1);
         constexpr uint32_t bcast_scaler0 = 0;
@@ -75,7 +75,7 @@ void MAIN {
     const uint32_t ndst = get_arg_val<uint32_t>(3);
     const uint32_t start_ht = get_arg_val<uint32_t>(4);
     const uint32_t mask_padded_data = get_arg_val<uint32_t>(5);
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_24);
+    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_6);
 
     constexpr uint32_t onetile = 1;
     // reserve one tile for zeros on cb_in2
@@ -86,14 +86,14 @@ void MAIN {
     constexpr auto cb_fused_scale = tt::CBIndex::c_3;
     constexpr auto cb_fused_attn = tt::CBIndex::c_4;
     constexpr auto cb_mask_padded = tt::CBIndex::c_5;
-    constexpr auto cb_exps = tt::CBIndex::c_24;
-    constexpr auto cb_scale_mask = tt::CBIndex::c_27;
-    constexpr auto cb_recipsumexps = tt::CBIndex::c_25;
+    constexpr auto cb_exps = tt::CBIndex::c_6;
+    constexpr auto cb_scale_mask = tt::CBIndex::c_9;
+    constexpr auto cb_recipsumexps = tt::CBIndex::c_7;
     constexpr auto cb_in0 = tt::CBIndex::c_0;
-    constexpr auto cb_out0 = tt::CBIndex::c_16;
+    constexpr auto cb_out0 = tt::CBIndex::c_11;
 #ifdef NUMERIC_STABLE
-    constexpr auto cb_max = tt::CBIndex::c_26;
-    constexpr auto cb_x = tt::CBIndex::c_28;
+    constexpr auto cb_max = tt::CBIndex::c_8;
+    constexpr auto cb_x = tt::CBIndex::c_10;
 #else
     constexpr auto cb_x = cb_exps;
 #endif
@@ -132,7 +132,7 @@ void MAIN {
 #endif
 
 #ifdef CAUSAL_MASK
-        add_tiles_init();
+        add_tiles_init(cb_scale_mask, cb_fused_attn);
 #else
         add_bcast_rows_init_short(cb_scale_mask, cb_fused_attn);
 #endif
@@ -256,7 +256,7 @@ void MAIN {
 
         ACQ();
         cb_reserve_back(cb_recipsumexps, onetile);
-        reduce_init_delta<false>(cb_recipsumexps, cb_exps, cb_bcast_scaler);
+        reduce_init_delta<false>(cb_exps, cb_bcast_scaler, cb_recipsumexps);
         for (uint32_t wt = 0; wt < Wt; wt++) {
             cb_wait_front(cb_exps, wt + 1);        // must be a cumulative wait for correctness
             constexpr uint32_t bcast_scaler0 = 0;  // 0th index from bcast_scaler CB

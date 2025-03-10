@@ -19,7 +19,7 @@ struct MorehMeanBackwardOperation {
     struct operation_attributes_t {
         const ttnn::SmallVector<int64_t> dims;
         const bool keepdim;
-        const std::optional<Shape> input_grad_shape;
+        const std::optional<ttnn::Shape> input_grad_shape;
         const MemoryConfig memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
     };
@@ -33,8 +33,8 @@ struct MorehMeanBackwardOperation {
 
     struct MorehMeanBackwardFactory {
         struct shared_variables_t {
-            KernelHandle unary_reader_kernel_id;
-            KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::KernelHandle unary_reader_kernel_id;
+            tt::tt_metal::KernelHandle unary_writer_kernel_id;
             std::uint32_t num_cores_to_be_used;
             std::uint32_t num_cores_y;
         };
@@ -65,7 +65,7 @@ struct MorehMeanBackwardOperation {
         const Tensor& output_grad,
         const ttnn::SmallVector<int64_t>& dims,
         const bool keepdim,
-        const std::optional<Shape>& input_grad_shape,
+        const std::optional<ttnn::Shape>& input_grad_shape,
         const std::optional<Tensor>& input_grad,
         const std::optional<MemoryConfig>& memory_config,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);

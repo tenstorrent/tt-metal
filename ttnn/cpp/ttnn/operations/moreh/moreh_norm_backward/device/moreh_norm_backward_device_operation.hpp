@@ -10,8 +10,8 @@
 #define DEFINE_PROGRAM_FACTORY(FactoryName)                                                 \
     struct FactoryName {                                                                    \
         struct shared_variables_t {                                                         \
-            KernelHandle reader_kernels_id;                                                 \
-            KernelHandle writer_kernels_id;                                                 \
+            tt::tt_metal::KernelHandle reader_kernels_id;                                   \
+            tt::tt_metal::KernelHandle writer_kernels_id;                                   \
             std::size_t num_cores_to_be_used;                                               \
             std::size_t num_cores_y;                                                        \
         };                                                                                  \
@@ -30,8 +30,8 @@
 namespace ttnn::operations::moreh::moreh_norm_backward {
 
 std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(float p);
-void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::SimpleShape& shape);
-ttnn::SimpleShape get_output_grad_shape(
+void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& shape);
+ttnn::Shape get_output_grad_shape(
     const Tensor& output_grad, const Tensor& input_grad, const ttnn::SmallVector<int64_t>& dims, const bool& keepdim);
 
 struct MorehNormBackwardOperation {

@@ -12,11 +12,14 @@
 #include "logger.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "test_common.hpp"
 #include <tt-metalium/rtoptions.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/event.hpp>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device.hpp>
+
+#include "tt_cluster.hpp"
 
 constexpr uint32_t DEFAULT_ITERATIONS = 1000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 2;
@@ -49,6 +52,7 @@ bool hammer_pcie_g = false;
 bool hammer_pcie_type_g = false;
 bool test_write = false;
 bool linked = false;
+uint32_t nop_count_g = 0;
 
 void init(int argc, char** argv) {
     std::vector<std::string> input_args(argv, argv + argc);
@@ -88,6 +92,7 @@ void init(int argc, char** argv) {
         log_info(LogTest, " -hp: hammer hugepage PCIe memory while executing (for PCIe test)");
         log_info(LogTest, " -hpt:hammer hugepage PCIe hammer type: 0:32bit writes 1:128bit non-temporal writes");
         log_info(LogTest, "  -psrta: pass page size as a runtime argument (default compile time define)");
+        log_info(LogTest, " -nop: time loop of <n> nops");
         exit(0);
     }
 
@@ -110,6 +115,8 @@ void init(int argc, char** argv) {
     page_size_g = test_args::get_command_option_uint32(input_args, "-p", DEFAULT_PAGE_SIZE);
     page_size_as_runtime_arg_g = test_args::has_command_option(input_args, "-psrta");
     read_one_packet_g = test_args::has_command_option(input_args, "-o");
+    nop_count_g = test_args::get_command_option_uint32(input_args, "-nop", 0);
+
     if (read_one_packet_g && page_size_g > 8192) {
         log_info(LogTest, "Page size must be <= 8K for read_one_packet\n");
         exit(-1);
@@ -201,7 +208,7 @@ int main(int argc, char** argv) {
             case 0:
             default: {
                 src_mem = "FROM_PCIE";
-                vector<CoreCoord> pcie_cores = soc_d.get_pcie_cores();
+                vector<tt::umd::CoreCoord> pcie_cores = soc_d.get_cores(CoreType::PCIE, soc_d.get_umd_coord_system());
                 TT_ASSERT(pcie_cores.size() > 0);
                 noc_addr_x = pcie_cores[0].x;
                 noc_addr_y = pcie_cores[0].y;
@@ -209,7 +216,7 @@ int main(int argc, char** argv) {
             } break;
             case 1: {
                 src_mem = "FROM_DRAM";
-                vector<CoreCoord> dram_cores = soc_d.get_dram_cores();
+                vector<tt::umd::CoreCoord> dram_cores = soc_d.get_cores(CoreType::DRAM, soc_d.get_umd_coord_system());
                 TT_ASSERT(dram_cores.size() > dram_channel_g);
                 noc_addr_x = dram_cores[dram_channel_g].x;
                 noc_addr_y = dram_cores[dram_channel_g].y;
@@ -270,7 +277,9 @@ int main(int argc, char** argv) {
             {"LINKED", std::to_string(linked)},
             {"NUM_MCAST_DESTS", std::to_string(num_mcast_dests)},
             {"MCAST_NOC_END_ADDR_X", std::to_string(mcast_noc_addr_end_x)},
-            {"MCAST_NOC_END_ADDR_Y", std::to_string(mcast_noc_addr_end_y)}};
+            {"MCAST_NOC_END_ADDR_Y", std::to_string(mcast_noc_addr_end_y)},
+            {"NOP_COUNT", std::to_string(nop_count_g)},
+        };
         if (!page_size_as_runtime_arg_g) {
             defines.insert(std::pair<string, string>("PAGE_SIZE", std::to_string(page_size_g)));
         }
@@ -361,7 +370,7 @@ int main(int argc, char** argv) {
                 uint32_t offset = 0;
                 uint32_t page = 0;
                 uint32_t* pcie_base = (uint32_t*)host_pcie_base + pcie_offset / sizeof(uint32_t);
-                uint32_t l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
+                uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
                 while (!done) {
                     if (hammer_write_reg_g) {
                         tt::Cluster::instance().write_reg(&addr, tt_cxy_pair(device->id(), w), l1_unreserved_base);
@@ -396,8 +405,8 @@ int main(int argc, char** argv) {
             vec.resize(page_size_g / sizeof(uint32_t));
 
             CoreType core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
-            uint32_t dispatch_l1_unreserved_base = dispatch_constants::get(core_type).get_device_command_queue_addr(
-                CommandQueueDeviceAddrType::UNRESERVED);
+            uint32_t dispatch_l1_unreserved_base =
+                DispatchMemMap::get(core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
             for (int i = 0; i < warmup_iterations_g; i++) {
                 if (source_mem_g == 4) {
                     tt::Cluster::instance().read_core(

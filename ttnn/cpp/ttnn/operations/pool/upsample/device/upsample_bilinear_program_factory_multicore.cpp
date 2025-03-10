@@ -4,6 +4,8 @@
 
 #include <math.h>
 
+#include "tt-metalium/circular_buffer.hpp"
+#include "tt-metalium/circular_buffer_types.hpp"
 #include "upsample_op.hpp"
 #include "ttnn/operations/math.hpp"
 
@@ -50,7 +52,7 @@ Tensor HaloTensorCreation(const Tensor& input) {
         .is_bilinear = true};
 
     const auto& input_shape = input.get_logical_shape();
-    SimpleShape new_shape({1, 1, input_shape[0] * input_shape[1] * input_shape[2], input_shape[3]});
+    Shape new_shape({1, 1, input_shape[0] * input_shape[1] * input_shape[2], input_shape[3]});
     input_tensor = ttnn::reshape(input_tensor, new_shape);
 
     auto halo_output = ttnn::halo(
@@ -59,13 +61,13 @@ Tensor HaloTensorCreation(const Tensor& input) {
     return halo_output;
 }
 
-operation::ProgramWithCallbacks bilinear_multi_core(
+tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
     const Tensor& input,
     Tensor& output,
     const uint32_t scale_factor_h,
     const uint32_t scale_factor_w,
     const DeviceComputeKernelConfig compute_kernel_config) {
-    Program program = CreateProgram();
+    Program program = tt::tt_metal::CreateProgram();
     IDevice* device = input.device();
 
     auto input_shape = input.get_padded_shape();
@@ -137,6 +139,10 @@ operation::ProgramWithCallbacks bilinear_multi_core(
     auto halo_shard_shape = halo_in.shard_spec().value().shape;
 
     // CBs
+    using tt::tt_metal::CBHandle;
+    using tt::tt_metal::CircularBuffer;
+    using tt::tt_metal::CircularBufferConfig;
+
     uint32_t buffering_factor = 2;
 
     // input data is in a sharded CB
@@ -261,14 +267,14 @@ operation::ProgramWithCallbacks bilinear_multi_core(
         output_nsticks_per_core,  // loop count with blocks
     };
 
-    auto reader_kernel =
-        CreateKernel(program, reader_kernel_fname, all_cores, ReaderDataMovementConfig(reader_compile_time_args));
-    auto writer_kernel =
-        CreateKernel(program, writer_kernel_fname, all_cores, WriterDataMovementConfig(writer_compile_time_args));
+    auto reader_kernel = CreateKernel(
+        program, reader_kernel_fname, all_cores, tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+    auto writer_kernel = CreateKernel(
+        program, writer_kernel_fname, all_cores, tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     TT_FATAL(fp32_dest_acc_en == false, "fp32_dest_acc_en as true not supported. #12787 issue raised");
-    auto reduce_op = ReduceOpMath::SUM;
-    auto reduce_dim = ReduceOpDim::H;
-    auto compute_config = ComputeConfig{
+    auto reduce_op = tt::tt_metal::ReduceOpMath::SUM;
+    auto reduce_dim = tt::tt_metal::ReduceOpDim::H;
+    auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .math_approx_mode = math_approx_mode,

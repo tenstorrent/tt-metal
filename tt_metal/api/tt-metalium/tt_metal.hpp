@@ -13,6 +13,7 @@
 #include "dispatch_core_manager.hpp"
 #include "buffer.hpp"
 #include "profiler.hpp"
+#include "llrt/tt_cluster.hpp"
 
 namespace tt::tt_metal {
 inline namespace v0 {
@@ -26,6 +27,10 @@ namespace detail {
 bool DispatchStateCheck(bool isFastDispatch);
 
 bool InWorkerThread();
+inline bool InMainThread() { return not InWorkerThread(); }
+
+// Call before CreateDevices to enable fabric, which uses all free ethernet cores
+void InitializeFabricConfig(FabricConfig fabric_config);
 
 std::map<chip_id_t, IDevice*> CreateDevices(
     // TODO: delete this in favour of DevicePool
@@ -111,7 +116,7 @@ void ReadShard(Buffer& buffer, uint8_t* host_buffer, const uint32_t& core_id);
  */
 template <typename DType>
 void ReadShard(Buffer& buffer, std::vector<DType>& host_buffer, const uint32_t& core_id) {
-    host_buffer.resize(buffer.page_size() * buffer.shard_spec().size());
+    host_buffer.resize(buffer.page_size() * buffer.shard_spec().num_pages());
     ReadShard(buffer, reinterpret_cast<uint8_t*>(host_buffer.data()), core_id);
 }
 
@@ -159,7 +164,7 @@ void CompileProgram(IDevice* device, Program& program, bool fd_bootloader_mode =
  * | program             | The program holding the runtime args                                   | const Program & | |
  * Yes      |
  */
-void WriteRuntimeArgsToDevice(IDevice* device, Program& program);
+void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool fd_bootloader_mode = false);
 
 // Configures a given device with a given program.
 // - Loads all kernel binaries into L1s of assigned Tensix cores
@@ -326,13 +331,14 @@ bool WriteRegToDevice(IDevice* device, const CoreCoord& logical_core, uint32_t a
  * fit L1 buffer                         | Yes      |
  */
 bool ReadFromDeviceL1(
-    IDevice* device, const CoreCoord& logical_core, uint32_t address, uint32_t size, std::vector<uint32_t>& host_buffer);
+    IDevice* device,
+    const CoreCoord& logical_core,
+    uint32_t address,
+    uint32_t size,
+    std::vector<uint32_t>& host_buffer,
+    CoreType core_type = CoreType::WORKER);
 
 bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t address, uint32_t& regval);
-
-DeviceAddr AllocateBuffer(Buffer* buffer);
-
-void DeallocateBuffer(Buffer* buffer);
 
 void SynchronizeWorkerThreads(const std::vector<IDevice*>& workers);
 }  // namespace detail

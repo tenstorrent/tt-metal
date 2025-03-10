@@ -7,11 +7,12 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/dprint_server.hpp>
+#include "dprint_server.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
+#include "tt_cluster.hpp"
 
 using namespace tt;
-//
+
 void measure_latency(const string& kernel_name) {
     const int device_id = 0;
     tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
@@ -46,7 +47,7 @@ void measure_latency(const string& kernel_name) {
 
     tt::tt_metal::detail::SetDeviceProfilerDir(kernel_name + "_microbenchmark");
     tt::tt_metal::detail::FreshProfilerDeviceLog();
-    detail::CompileProgram(device, program);
+    tt::tt_metal::detail::CompileProgram(device, program);
     tt_metal::detail::LaunchProgram(device, program);
     tt_metal::CloseDevice(device);
 }

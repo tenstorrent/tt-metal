@@ -9,12 +9,15 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/work_split.hpp>
+
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <random>
 #include <string_view>
 #include <vector>
+#include <algorithm>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -104,21 +107,17 @@ int main(int argc, char** argv) {
             help(argv[0]);
         }
     }
+    // n_tiles is number of tiles of data for this programming example to add two vectors
+    const uint32_t n_tiles = 640;
 
-    IDevice* device = CreateDevice(device_id);
-
+    auto* device = CreateDevice(device_id);
     Program program = CreateProgram();
-    // Define 4 cores.
-    const uint32_t num_core = 4;
-    // designate 4 cores for utilization - cores (0,0), (0,1), (0,2), (0,3)
-    CoreCoord start_core = {0, 0};
-    CoreCoord end_core = {0, 3};
-    CoreRange cores(start_core, end_core);
 
     CommandQueue& cq = device->command_queue();
-    const uint32_t n_tiles = 64;
+
     const uint32_t tile_size = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
-    const uint32_t tiles_per_core = n_tiles / num_core;
+    std::vector<uint32_t> tiles_per_core;
+    const uint32_t core_to_print = 4;
 
     // Create 3 buffers on DRAM. These will hold the input and output data. A
     // and B are the input buffers, C is the output buffer.
@@ -130,10 +129,16 @@ int main(int argc, char** argv) {
     std::vector<bfloat16> a_data = create_random_vector_of_bfloat16_native(tile_size * n_tiles * 2, 10, rng());
     std::vector<bfloat16> b_data = create_random_vector_of_bfloat16_native(tile_size * n_tiles * 2, 10, rng());
 
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    uint32_t num_cores_total = num_cores_x * num_cores_y;
+    auto all_device_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
+
     const uint32_t cir_buf_num_title = 4;
-    CBHandle cb_a = MakeCircularBufferBFP16(program, cores, tt::CBIndex::c_0, cir_buf_num_title);
-    CBHandle cb_b = MakeCircularBufferBFP16(program, cores, tt::CBIndex::c_1, cir_buf_num_title);
-    CBHandle cb_c = MakeCircularBufferBFP16(program, cores, tt::CBIndex::c_2, cir_buf_num_title);
+    CBHandle cb_a = MakeCircularBufferBFP16(program, all_device_cores, tt::CBIndex::c_0, cir_buf_num_title);
+    CBHandle cb_b = MakeCircularBufferBFP16(program, all_device_cores, tt::CBIndex::c_1, cir_buf_num_title);
+    CBHandle cb_c = MakeCircularBufferBFP16(program, all_device_cores, tt::CBIndex::c_2, cir_buf_num_title);
 
     // A Tensix core is made up with 5 processors. 2 data movement processors,
     // and 3 compute processors. The 2 data movement processors act independent
@@ -154,11 +159,12 @@ int main(int argc, char** argv) {
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)tt::CBIndex::c_2};
     std::vector<uint32_t> compute_compile_time_args = {
         (std::uint32_t)tt::CBIndex::c_0, (std::uint32_t)tt::CBIndex::c_1, (std::uint32_t)tt::CBIndex::c_2};
+
     auto reader = CreateKernel(
         program,
         "tt_metal/programming_examples/vecadd_multi_core/kernels/"
         "interleaved_tile_read_multi_core.cpp",
-        cores,
+        all_device_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
@@ -167,7 +173,7 @@ int main(int argc, char** argv) {
         program,
         "tt_metal/programming_examples/vecadd_multi_core/kernels/"
         "tile_write_multi_core.cpp",
-        cores,
+        all_device_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::RISCV_1_default,
@@ -176,15 +182,36 @@ int main(int argc, char** argv) {
         program,
         "tt_metal/programming_examples/vecadd_multi_core/"
         "kernels/add_multi_core.cpp",
-        cores,
+        all_device_cores,
         ComputeConfig{.math_approx_mode = false, .compile_args = compute_compile_time_args, .defines = {}});
 
-    for (int i = 0; i < num_core; ++i) {
-        // Set runtime arguments for each core.
-        CoreCoord core = {0, i};
-        SetRuntimeArgs(program, reader, core, {a->address(), b->address(), tiles_per_core, i});
-        SetRuntimeArgs(program, writer, core, {c->address(), tiles_per_core, i});
-        SetRuntimeArgs(program, compute, core, {tiles_per_core, i});
+    constexpr bool row_major = true;
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, n_tiles, row_major);
+
+    auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
+    for (uint32_t i = 0, start_tile_id = 0; i < num_cores_total; i++) {
+        const auto& core = cores[i];
+
+        uint32_t num_tiles_per_core;
+
+        if (core_group_1.contains(core)) {
+            num_tiles_per_core = num_tiles_per_core_group_1;
+        } else if (core_group_2.contains(core)) {
+            num_tiles_per_core = num_tiles_per_core_group_2;
+        } else {
+            SetRuntimeArgs(program, reader, core, std::array<uint32_t, 10>{0});
+            SetRuntimeArgs(program, writer, core, std::array<uint32_t, 11>{0});
+            SetRuntimeArgs(program, compute, core, std::array<uint32_t, 3>{0});
+            continue;
+        }
+        if (i < core_to_print) {
+            tiles_per_core.push_back(num_tiles_per_core);
+        }
+        SetRuntimeArgs(program, reader, core, {a->address(), b->address(), num_tiles_per_core, start_tile_id});
+        SetRuntimeArgs(program, writer, core, {c->address(), num_tiles_per_core, start_tile_id});
+        SetRuntimeArgs(program, compute, core, {num_tiles_per_core, start_tile_id});
+        start_tile_id += num_tiles_per_core;
     }
 
     EnqueueWriteBuffer(cq, a, a_data, false);
@@ -202,14 +229,14 @@ int main(int argc, char** argv) {
     // some error due to BFP16 precision)
     std::cout << "Partial results: (note we are running under BFP16. It's going "
                  "to be less accurate)\n";
-    size_t data_per_core = std::min((size_t)10, (size_t)tile_size * tiles_per_core);
-
-    for (int core = 0; core < num_core; ++core) {
-        const auto core_offset = core * (tile_size + tiles_per_core);
-        for (int index = 0; index < data_per_core; index++) {
+    auto core_offset = 0;
+    for (int core_index = 0; core_index < std::min(core_to_print, num_cores_total); ++core_index) {
+        core_offset += core_index * tile_size * tiles_per_core[core_index];
+        std::cout << "Core (0, " << core_index << "):\n";
+        for (int index = 0; index < 10; index++) {
             const auto i = core_offset + index;
-            std::cout << "  " << a_data[i].to_float() << " + " << b_data[i].to_float() << " = " << c_data[i].to_float()
-                      << "\n";
+            std::cout << "index  " << i << "  " << a_data[i].to_float() << " + " << b_data[i].to_float() << " = "
+                      << c_data[i].to_float() << "\n";
         }
         std::cout << std::endl;
     }

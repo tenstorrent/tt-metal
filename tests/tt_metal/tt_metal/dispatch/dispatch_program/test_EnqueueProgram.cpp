@@ -12,16 +12,15 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/device_impl.hpp>
 #include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/kernel.hpp>
 #include "umd/device/tt_soc_descriptor.h"
 
-// TODO: ARCH_NAME specific, must remove
-#include "eth_l1_address_map.h"
+namespace tt::tt_metal {
 
 using std::vector;
-using namespace tt::tt_metal;
 
 struct CBConfig {
     uint32_t cb_id;
@@ -41,6 +40,15 @@ struct DummyProgramMultiCBConfig {
     CoreRangeSet cr_set;
     std::vector<CBConfig> cb_config_vector;
     uint32_t num_sems;
+};
+
+struct IncrementKernelsSet {
+    // Kernels that were created
+    std::vector<KernelHandle> kernel_handles;
+    // L1 address for unique args
+    uint32_t unique_args_addr;
+    // L1 address for common args
+    uint32_t common_args_addr;
 };
 
 namespace local_test_functions {
@@ -95,7 +103,7 @@ bool cb_config_successful(IDevice* device, Program& program, const DummyProgramM
     uint32_t cb_config_buffer_size =
         NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
-    uint32_t l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
+    uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
         for (const CoreCoord& core_coord : core_range) {
             tt::tt_metal::detail::ReadFromDeviceL1(
@@ -129,7 +137,8 @@ bool test_dummy_EnqueueProgram_with_runtime_args(IDevice* device, const CoreCoor
     auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_core_coord);
 
     constexpr uint32_t num_runtime_args0 = 9;
-    constexpr uint32_t rta_base0 = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    uint32_t rta_base0 =
+        hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
     std::map<string, string> dummy_defines0 = {
         {"DATA_MOVEMENT", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(num_runtime_args0)},
@@ -151,7 +160,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(IDevice* device, const CoreCoor
     vector<uint32_t> dummy_kernel0_args_readback = tt::llrt::read_hex_vec_from_core(
         device->id(),
         eth_noc_xy,
-        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
+        hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED),
         dummy_kernel0_args.size() * sizeof(uint32_t));
 
     pass &= (dummy_kernel0_args == dummy_kernel0_args_readback);
@@ -264,7 +273,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(
 
     CoreRangeSet cr_set = program_config.cr_set;
 
-    uint32_t rta_base_dm0 = device->get_base_allocator_addr(HalMemType::L1);
+    uint32_t rta_base_dm0 = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     ;
     uint32_t rta_base_dm1 = rta_base_dm0 + num_runtime_args_dm0 * sizeof(uint32_t);
     uint32_t rta_base_compute = rta_base_dm1 + num_runtime_args_dm1 * sizeof(uint32_t);
@@ -370,7 +379,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
 
     CoreRangeSet cr_set = program_config.cr_set;
 
-    uint32_t rta_base_dm0 = device->get_base_allocator_addr(HalMemType::L1);
+    uint32_t rta_base_dm0 = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     ;
     uint32_t rta_base_dm1 = rta_base_dm0 + 1024 * sizeof(uint32_t);
     uint32_t rta_base_compute = rta_base_dm1 + 2048 * sizeof(uint32_t);
@@ -616,7 +625,179 @@ bool verify_rt_args(
     return pass;
 }
 
+// Returns L1 address for {unique RTA, common RTA}
+std::pair<uint32_t, uint32_t> get_args_addr(const IDevice* device, const tt::RISCV& riscv, bool idle_eth) {
+    uint32_t unique_args_addr;
+    uint32_t common_args_addr;
+    switch (riscv) {
+        case tt::RISCV::BRISC:
+            unique_args_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+            common_args_addr = unique_args_addr + 3 * 256 * sizeof(uint32_t);
+            break;
+        case tt::RISCV::NCRISC:
+            unique_args_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1) + 256 * sizeof(uint32_t);
+            common_args_addr = unique_args_addr + 4 * 256 * sizeof(uint32_t);
+            break;
+        case tt::RISCV::COMPUTE:
+            unique_args_addr =
+                device->allocator()->get_base_allocator_addr(HalMemType::L1) + 2 * 256 * sizeof(uint32_t);
+            common_args_addr = unique_args_addr + 5 * 256 * sizeof(uint32_t);
+            break;
+        case tt::RISCV::ERISC: {
+            HalProgrammableCoreType eth_core_type =
+                idle_eth ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH;
+            unique_args_addr = hal.get_dev_addr(eth_core_type, HalL1MemAddrType::UNRESERVED);
+            common_args_addr = unique_args_addr + 1 * 256 * sizeof(uint32_t);
+            break;
+        } break;
+        default: TT_THROW("Unsupported {} processor in get_args_addr.", riscv);
+    }
+    return {unique_args_addr, common_args_addr};
+}
+
+// Call CreateKernel for the program configs
+// Returns a struct with the kernel IDs, and L1 addresses to check CRTA/RTAs.
+IncrementKernelsSet create_increment_kernels(
+    const IDevice* device,
+    Program& program,
+    const std::vector<DummyProgramConfig>& program_configs,
+    const tt::RISCV& riscv,
+    uint32_t num_unique_rt_args,
+    uint32_t num_common_rt_args,
+    bool idle_eth = false) {
+    // Tell kernel how many unique and common RT args to expect. Will increment each.
+    std::vector<KernelHandle> kernels;
+    const auto [unique_args_addr, common_args_addr] = get_args_addr(device, riscv, idle_eth);
+    std::vector<uint32_t> compile_args{num_unique_rt_args, num_common_rt_args, unique_args_addr, common_args_addr};
+
+    // CreateKernel on each core range set
+    for (const auto& program_config : program_configs) {
+        const auto& cr_set = program_config.cr_set;
+        KernelHandle kernel_id;
+        switch (riscv) {
+            case tt::RISCV::BRISC:
+                kernel_id = CreateKernel(
+                    program,
+                    "tests/tt_metal/tt_metal/test_kernels/misc/increment_runtime_arg.cpp",
+                    cr_set,
+                    DataMovementConfig{
+                        .processor = DataMovementProcessor::RISCV_0,
+                        .noc = NOC::RISCV_0_default,
+                        .compile_args = compile_args,
+                    });
+                break;
+            case tt::RISCV::NCRISC:
+                kernel_id = CreateKernel(
+                    program,
+                    "tests/tt_metal/tt_metal/test_kernels/misc/increment_runtime_arg.cpp",
+                    cr_set,
+                    DataMovementConfig{
+                        .processor = DataMovementProcessor::RISCV_1,
+                        .noc = NOC::RISCV_1_default,
+                        .compile_args = compile_args,
+                    });
+                break;
+            case tt::RISCV::COMPUTE:
+                kernel_id = CreateKernel(
+                    program,
+                    "tests/tt_metal/tt_metal/test_kernels/compute/increment_runtime_arg.cpp",
+                    cr_set,
+                    tt::tt_metal::ComputeConfig{
+                        .compile_args = compile_args,
+                    });
+                break;
+            case tt::RISCV::ERISC: {
+                kernel_id = CreateKernel(
+                    program,
+                    "tests/tt_metal/tt_metal/test_kernels/misc/increment_runtime_arg.cpp",
+                    cr_set,
+                    tt::tt_metal::EthernetConfig{
+                        .eth_mode = idle_eth ? Eth::IDLE : Eth::RECEIVER,
+                        .noc = NOC::NOC_0,
+                        .compile_args = compile_args,
+                    });
+            } break;
+            default: TT_THROW("Unsupported {} processor in test.", riscv);
+        }
+
+        kernels.push_back(kernel_id);
+    }
+
+    return IncrementKernelsSet{
+        .kernel_handles = kernels, .unique_args_addr = unique_args_addr, .common_args_addr = common_args_addr};
+}
+
 // Write unique and common RT args, increment in kernel, and verify correctness via readback.
+// Multiple program_configs may be provided to create multiple kernels on the same program.
+bool test_increment_runtime_args_sanity(
+    IDevice* device,
+    const std::vector<DummyProgramConfig>& program_configs,
+    uint32_t num_unique_rt_args,
+    uint32_t num_common_rt_args,
+    const tt::RISCV& riscv,
+    bool idle_eth = false) {
+    Program program;
+    bool pass = true;
+
+    auto configured_kernels = create_increment_kernels(
+        device, program, program_configs, riscv, num_unique_rt_args, num_common_rt_args, idle_eth);
+
+    // Args will be at this addr in L1
+    uint32_t unique_args_addr = configured_kernels.unique_args_addr;
+    uint32_t common_args_addr = configured_kernels.common_args_addr;
+
+    // Generate Runtime Args.
+    std::vector<uint32_t> unique_runtime_args;
+    for (uint32_t i = 0; i < num_unique_rt_args; i++) {
+        unique_runtime_args.push_back(i * 0x10101010);
+    }
+
+    // Generate Common Runtime Args.
+    std::vector<uint32_t> common_runtime_args;
+    for (uint32_t i = 0; i < num_common_rt_args; i++) {
+        common_runtime_args.push_back(1000 + 0x10101010);
+    }
+
+    // Call SetRuntimeArgs. Set for core ranges that are running the kernel
+    // zip the kernel_id and cr set from program_config
+    for (int i = 0; i < program_configs.size(); ++i) {
+        const auto& cr_set = program_configs[i].cr_set;
+        const auto& kernel_id = configured_kernels.kernel_handles[i];
+
+        SetRuntimeArgs(program, kernel_id, cr_set, unique_runtime_args);
+    }
+
+    // Call SetCommonRuntimeArgs for kernels. Does not take into account core range as it's common.
+    for (const auto& kernel_id : configured_kernels.kernel_handles) {
+        SetCommonRuntimeArgs(program, kernel_id, common_runtime_args);
+    }
+
+    // Compile and Launch the Program now.
+    EnqueueProgram(device->command_queue(), program, false);
+    Finish(device->command_queue());
+
+    // Read all cores for all kernels
+    constexpr uint32_t unique_arg_incr_val = 10;
+    constexpr uint32_t common_arg_incr_val = 100;
+    for (const auto& kernel_id : configured_kernels.kernel_handles) {
+        const auto& kernel = tt::tt_metal::detail::GetKernel(program, kernel_id);
+
+        for (auto& core_range : kernel->logical_coreranges()) {
+            for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+                for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
+                    CoreCoord core_coord(x, y);
+                    pass &= verify_rt_args(
+                        true, device, core_coord, riscv, unique_args_addr, unique_runtime_args, unique_arg_incr_val);
+                    pass &= verify_rt_args(
+                        false, device, core_coord, riscv, common_args_addr, common_runtime_args, common_arg_incr_val);
+                }
+            }
+        }
+    }
+
+    return pass;
+}
+
 bool test_increment_runtime_args_sanity(
     IDevice* device,
     const DummyProgramConfig& program_config,
@@ -624,116 +805,13 @@ bool test_increment_runtime_args_sanity(
     uint32_t num_common_rt_args,
     const tt::RISCV& riscv,
     bool idle_eth = false) {
-    Program program;
-    bool pass = true;
-    CoreRangeSet cr_set = program_config.cr_set;
-
-    // Tell kernel how many unique and common RT args to expect. Will increment each.
-    vector<uint32_t> compile_args = {num_unique_rt_args, num_common_rt_args, 0, 0};
-
-    KernelHandle kernel_id = 0;
-    uint32_t unique_args_addr = 0;
-    uint32_t common_args_addr = 0;
-
-    switch (riscv) {
-        case tt::RISCV::BRISC:
-            unique_args_addr = device->get_base_allocator_addr(HalMemType::L1);
-            common_args_addr = unique_args_addr + 3 * 256 * sizeof(uint32_t);
-            compile_args[2] = unique_args_addr;
-            compile_args[3] = common_args_addr;
-            kernel_id = CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/test_kernels/misc/increment_runtime_arg.cpp",
-                cr_set,
-                DataMovementConfig{
-                    .processor = DataMovementProcessor::RISCV_0,
-                    .noc = NOC::RISCV_0_default,
-                    .compile_args = compile_args,
-                });
-            break;
-        case tt::RISCV::NCRISC:
-            unique_args_addr = device->get_base_allocator_addr(HalMemType::L1) + 256 * sizeof(uint32_t);
-            common_args_addr = unique_args_addr + 4 * 256 * sizeof(uint32_t);
-            compile_args[2] = unique_args_addr;
-            compile_args[3] = common_args_addr;
-            kernel_id = CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/test_kernels/misc/increment_runtime_arg.cpp",
-                cr_set,
-                DataMovementConfig{
-                    .processor = DataMovementProcessor::RISCV_1,
-                    .noc = NOC::RISCV_1_default,
-                    .compile_args = compile_args,
-                });
-            break;
-        case tt::RISCV::COMPUTE:
-            unique_args_addr = device->get_base_allocator_addr(HalMemType::L1) + 2 * 256 * sizeof(uint32_t);
-            common_args_addr = unique_args_addr + 5 * 256 * sizeof(uint32_t);
-            compile_args[2] = unique_args_addr;
-            compile_args[3] = common_args_addr;
-            kernel_id = CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/test_kernels/compute/increment_runtime_arg.cpp",
-                cr_set,
-                tt::tt_metal::ComputeConfig{
-                    .compile_args = compile_args,
-                });
-            break;
-        case tt::RISCV::ERISC: {
-            HalProgrammableCoreType eth_core_type =
-                idle_eth ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH;
-            unique_args_addr = hal.get_dev_addr(eth_core_type, HalL1MemAddrType::UNRESERVED);
-            common_args_addr = unique_args_addr + 1 * 256 * sizeof(uint32_t);
-            compile_args[2] = unique_args_addr;
-            compile_args[3] = common_args_addr;
-            kernel_id = CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/test_kernels/misc/increment_runtime_arg.cpp",
-                cr_set,
-                tt::tt_metal::EthernetConfig{
-                    .eth_mode = idle_eth ? Eth::IDLE : Eth::RECEIVER,
-                    .noc = NOC::NOC_0,
-                    .compile_args = compile_args,
-                });
-        } break;
-        default: TT_THROW("Unsupported {} processor in test.", riscv);
-    }
-
-    const auto kernel = tt::tt_metal::detail::GetKernel(program, kernel_id);
-
-    // Unique Runtime Args.
-    std::vector<uint32_t> unique_runtime_args;
-    for (uint32_t i = 0; i < num_unique_rt_args; i++) {
-        unique_runtime_args.push_back(i);
-    }
-    SetRuntimeArgs(program, 0, cr_set, unique_runtime_args);
-
-    // Setup Common Runtime Args.
-    std::vector<uint32_t> common_runtime_args;
-    for (uint32_t i = 0; i < num_common_rt_args; i++) {
-        common_runtime_args.push_back(1000 + i);
-    }
-    SetCommonRuntimeArgs(program, 0, common_runtime_args);
-
-    // Compile and Launch the Program now.
-    EnqueueProgram(device->command_queue(), program, false);
-    Finish(device->command_queue());
-
-    constexpr uint32_t unique_arg_incr_val = 10;
-    constexpr uint32_t common_arg_incr_val = 100;
-    for (auto& core_range : kernel->logical_coreranges()) {
-        for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
-            for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                CoreCoord core_coord(x, y);
-                pass &= verify_rt_args(
-                    true, device, core_coord, riscv, unique_args_addr, unique_runtime_args, unique_arg_incr_val);
-                pass &= verify_rt_args(
-                    false, device, core_coord, riscv, common_args_addr, common_runtime_args, common_arg_incr_val);
-            }
-        }
-    }
-
-    return pass;
+    return test_increment_runtime_args_sanity(
+        device,
+        std::vector<DummyProgramConfig>{program_config},
+        num_unique_rt_args,
+        num_common_rt_args,
+        riscv,
+        idle_eth);
 }
 
 }  // namespace local_test_functions
@@ -848,7 +926,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestMultiCBSharedAddressSpace
             program.get_cb_base_addr(device, core_coord, CoreType::WORKER),
             cb_config_buffer_size,
             cb_config_vector);
-        uint32_t cb_addr = device->get_base_allocator_addr(HalMemType::L1);
+        uint32_t cb_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
         uint32_t intermediate_index = intermediate_cb * sizeof(uint32_t);
 
         bool addr_match_intermediate = cb_config_vector.at(intermediate_index) == (cb_addr);
@@ -918,6 +996,27 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixIncrementRuntimeArgsSanitySin
     for (IDevice* device : devices_) {
         EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
             device, dummy_program_config, 8, 8, tt::RISCV::COMPUTE));
+    }
+}
+
+// Test setting common runtime args across multiple kernel in the same program
+// This test will ensure a multicast (or unicast for eth) gets created for each time the
+// user calls SetCommonRuntimeArgs.
+TEST_F(CommandQueueSingleCardProgramFixture, TensixSetCommonRuntimeArgsMultipleCreateKernel) {
+    const CoreRange core_range_0(CoreCoord(1, 1), CoreCoord(2, 2));
+    const CoreRange core_range_1(CoreCoord(3, 3), CoreCoord(4, 4));
+
+    const CoreRangeSet core_range_set_0(std::vector{core_range_0});
+    const CoreRangeSet core_range_set_1(std::vector{core_range_1});
+
+    std::vector<DummyProgramConfig> configs{
+        {.cr_set = core_range_set_0},
+        {.cr_set = core_range_set_1},
+    };
+
+    for (IDevice* device : devices_) {
+        EXPECT_TRUE(
+            local_test_functions::test_increment_runtime_args_sanity(device, configs, 8, 8, tt::RISCV::COMPUTE));
     }
 }
 
@@ -2029,3 +2128,5 @@ TEST_F(RandomProgramFixture, TensixTestLargeProgramInBetweenFiveSmallPrograms) {
 }
 
 }  // namespace stress_tests
+
+}  // namespace tt::tt_metal

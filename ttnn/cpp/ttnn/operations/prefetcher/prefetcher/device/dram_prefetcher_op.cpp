@@ -21,7 +21,7 @@ void DramPrefetcher::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(global_cb.has_value(), "Global circular buffer must be provided");
     ttnn::Tensor tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
 
-    auto global_cb = get_global_circular_buffer(*this->global_cb, input_tensors[0].device()->id());
+    auto global_cb = tt::tt_metal::get_global_circular_buffer(*this->global_cb, input_tensors[0].device()->id());
     uint32_t num_receiver_cores = global_cb.receiver_cores().num_cores();
     uint32_t num_sender_cores = global_cb.sender_cores().num_cores();
 
@@ -74,12 +74,13 @@ void DramPrefetcher::validate(const std::vector<Tensor>& input_tensors) const {
 // TODO: Remove output tensor entirely (if possible)
 std::vector<ttnn::TensorSpec> DramPrefetcher::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     return {TensorSpec(
-        ttnn::SimpleShape{32, 32},
-        TensorLayout(input_tensors[0].get_dtype(), PageConfig(input_tensors[0].get_layout()), MemoryConfig{}))};
+        ttnn::Shape{32, 32},
+        tt::tt_metal::TensorLayout(
+            input_tensors[0].get_dtype(), tt::tt_metal::PageConfig(input_tensors[0].get_layout()), MemoryConfig{}))};
 }
-operation::ProgramWithCallbacks DramPrefetcher::create_program(
+tt::tt_metal::operation::ProgramWithCallbacks DramPrefetcher::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    auto global_cb = get_global_circular_buffer(*this->global_cb, input_tensors[0].device()->id());
+    auto global_cb = tt::tt_metal::get_global_circular_buffer(*this->global_cb, input_tensors[0].device()->id());
     return dram_prefetcher_multi_core(input_tensors, this->num_layers, global_cb);
 }
 

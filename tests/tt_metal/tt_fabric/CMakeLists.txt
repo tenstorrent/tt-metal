@@ -1,11 +1,14 @@
-set(UNIT_TESTS_FABRIC_SRC ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_routing_tables.cpp)
+set(UNIT_TESTS_FABRIC_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_routing_tables.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_fabric_apis.cpp
+)
 
 add_executable(fabric_unit_tests ${UNIT_TESTS_FABRIC_SRC})
 target_link_libraries(
     fabric_unit_tests
     PRIVATE
         tt_metal
-        tt_fabric
+        fabric
         test_common_libs
 )
 
@@ -13,7 +16,6 @@ target_include_directories(
     fabric_unit_tests
     PRIVATE
         ${UMD_HOME}
-        ${PROJECT_SOURCE_DIR}/tt_fabric
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${CMAKE_CURRENT_SOURCE_DIR}/common

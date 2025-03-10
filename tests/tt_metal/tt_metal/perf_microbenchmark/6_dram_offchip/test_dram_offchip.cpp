@@ -19,6 +19,8 @@
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include <tt-metalium/work_split.hpp>
 
+#include "test_common.hpp"
+
 using namespace tt;
 using std::chrono::duration_cast;
 using std::chrono::microseconds;
@@ -372,7 +374,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
 
     uint32_t cb_index = 0;
     uint32_t cb_tiles = num_reqs_at_a_time;
-    uint32_t cb_addr = device->get_base_allocator_addr(HalMemType::L1);
+    uint32_t cb_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     tt_metal::CircularBufferConfig cb_config =
         tt_metal::CircularBufferConfig(cb_tiles * single_tile_size, {{cb_index, tile_format}})
             .set_page_size(cb_index, single_tile_size);

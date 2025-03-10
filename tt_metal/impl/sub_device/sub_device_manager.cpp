@@ -18,13 +18,15 @@
 #include <trace_buffer.hpp>
 #include <span.hpp>
 #include <tt_align.hpp>
+#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
+
+#include "tt_cluster.hpp"
 
 namespace tt::tt_metal {
 
-// assert here to avoid the need to include command_queue_interface.hpp in header
 static_assert(
-    SubDeviceManager::MAX_NUM_SUB_DEVICES <= dispatch_constants::DISPATCH_MESSAGE_ENTRIES,
-    "MAX_NUM_SUB_DEVICES must be less than or equal to dispatch_constants::DISPATCH_MESSAGE_ENTRIES");
+    DispatchSettings::DISPATCH_MESSAGE_ENTRIES <= std::numeric_limits<SubDeviceId::value_type>::max(),
+    "Max number of sub-devices must be less than or equal to the max value of SubDeviceId::Id");
 
 std::atomic<uint64_t> SubDeviceManager::next_sub_device_manager_id_ = 0;
 
@@ -61,10 +63,10 @@ SubDeviceManager::~SubDeviceManager() {
     for (const auto& allocator : sub_device_allocators_) {
         if (allocator) {
             // Clear the bank managers, this makes subsequent buffer deallocations fast
-            allocator::clear(*allocator);
+            allocator->clear();
             // Deallocate all buffers
             // This is done to set buffer object status to Deallocated
-            const auto& allocated_buffers = allocator::get_allocated_buffers(*allocator);
+            const auto& allocated_buffers = allocator->get_allocated_buffers();
             for (auto buf = allocated_buffers.begin(); buf != allocated_buffers.end();) {
                 tt::tt_metal::DeallocateBuffer(*(*(buf++)));
             }
@@ -107,7 +109,7 @@ uint8_t SubDeviceManager::noc_unicast_data_start_index(SubDeviceId sub_device_id
     return noc_unicast_data_start_index_[sub_device_index];
 }
 
-const std::unique_ptr<Allocator>& SubDeviceManager::get_initialized_allocator(SubDeviceId sub_device_id) const {
+const std::unique_ptr<Allocator>& SubDeviceManager::allocator(SubDeviceId sub_device_id) const {
     auto sub_device_index = this->get_sub_device_index(sub_device_id);
     TT_FATAL(sub_device_allocators_[sub_device_index], "SubDevice allocator not initialized");
     return sub_device_allocators_[sub_device_index];
@@ -136,7 +138,7 @@ std::shared_ptr<TraceBuffer> SubDeviceManager::get_trace(uint32_t tid) {
 
 bool SubDeviceManager::has_allocations() const {
     for (const auto& allocator : sub_device_allocators_) {
-        if (allocator && allocator->allocated_buffers.size() > 0) {
+        if (allocator && allocator->get_allocated_buffers().size() > 0) {
             return true;
         }
     }
@@ -151,9 +153,9 @@ void SubDeviceManager::set_sub_device_stall_group(tt::stl::Span<const SubDeviceI
     TT_FATAL(!sub_device_ids.empty(), "sub_device_ids to stall must not be empty");
     for (const auto& sub_device_id : sub_device_ids) {
         TT_FATAL(
-            sub_device_id.to_index() < sub_devices_.size(),
+            *sub_device_id < sub_devices_.size(),
             "SubDevice index {} out of bounds {}",
-            sub_device_id.to_index(),
+            *sub_device_id,
             sub_devices_.size());
     }
     sub_device_stall_group_ = std::vector<SubDeviceId>(sub_device_ids.begin(), sub_device_ids.end());
@@ -162,7 +164,7 @@ void SubDeviceManager::set_sub_device_stall_group(tt::stl::Span<const SubDeviceI
 void SubDeviceManager::reset_sub_device_stall_group() { this->set_sub_device_stall_group(sub_device_ids_); }
 
 uint8_t SubDeviceManager::get_sub_device_index(SubDeviceId sub_device_id) const {
-    auto sub_device_index = sub_device_id.to_index();
+    auto sub_device_index = *sub_device_id;
     TT_FATAL(
         sub_device_index < sub_devices_.size(),
         "SubDevice index {} out of bounds {}",
@@ -172,13 +174,17 @@ uint8_t SubDeviceManager::get_sub_device_index(SubDeviceId sub_device_id) const 
 }
 
 void SubDeviceManager::validate_sub_devices() const {
-    TT_FATAL(sub_devices_.size() <= SubDeviceManager::MAX_NUM_SUB_DEVICES, "Too many sub devices specified");
+    TT_FATAL(
+        sub_devices_.size() <= DispatchSettings::DISPATCH_MESSAGE_ENTRIES,
+        "Number of sub-devices specified {} is larger than the max number of sub-devices {}",
+        sub_devices_.size(),
+        DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
     // Validate sub device cores fit inside the device grid
     const auto& compute_grid_size = device_->compute_with_storage_grid_size();
     CoreRange device_worker_cores = CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1});
 
-    for (auto sub_device_id = SubDeviceId{0}; sub_device_id < this->num_sub_devices(); ++sub_device_id) {
-        const auto& sub_device = this->sub_device(sub_device_id);
+    for (uint8_t sub_device_id = 0; sub_device_id < this->num_sub_devices(); ++sub_device_id) {
+        const auto& sub_device = this->sub_device(SubDeviceId(sub_device_id));
         const auto& worker_cores = sub_device.cores(HalProgrammableCoreType::TENSIX);
         TT_FATAL(
             device_worker_cores.contains(worker_cores),
@@ -217,9 +223,9 @@ void SubDeviceManager::validate_sub_devices() const {
 }
 
 void SubDeviceManager::populate_sub_device_ids() {
-    sub_device_ids_.resize(this->num_sub_devices());
+    sub_device_ids_.reserve(this->num_sub_devices());
     for (uint8_t i = 0; i < this->num_sub_devices(); ++i) {
-        sub_device_ids_[i] = SubDeviceId{i};
+        sub_device_ids_.push_back(SubDeviceId{i});
     }
     this->reset_sub_device_stall_group();
 }
@@ -237,7 +243,7 @@ void SubDeviceManager::populate_sub_allocators() {
     if (local_l1_size_ == 0) {
         return;
     }
-    const auto& global_allocator_config = device_->get_initialized_allocator()->config;
+    const auto& global_allocator_config = device_->allocator()->get_config();
     // Construct allocator config from soc_desc
     // Take max alignment to satisfy NoC rd/wr constraints
     // Tensix/Eth -> PCIe/DRAM src and dst addrs must be L1_ALIGNMENT aligned
@@ -254,13 +260,14 @@ void SubDeviceManager::populate_sub_allocators() {
         l1_bank_remap.reserve(compute_cores_vec.size());
         for (const auto& core : compute_cores_vec) {
             // These are compute cores, so they should have a single bank
-            l1_bank_remap.push_back(device_->bank_ids_from_logical_core(BufferType::L1, core)[0]);
+            l1_bank_remap.push_back(device_->allocator()->get_bank_ids_from_logical_core(BufferType::L1, core)[0]);
         }
         AllocatorConfig config(
             {.num_dram_channels = global_allocator_config.num_dram_channels,
              .dram_bank_size = 0,
              .dram_bank_offsets = global_allocator_config.dram_bank_offsets,
              .dram_unreserved_base = global_allocator_config.dram_unreserved_base,
+             .dram_alignment = global_allocator_config.dram_alignment,
              .l1_unreserved_base = global_allocator_config.l1_unreserved_base,
              .worker_grid = compute_cores,
              .worker_l1_size = global_allocator_config.l1_unreserved_base + local_l1_size_,
@@ -272,7 +279,7 @@ void SubDeviceManager::populate_sub_allocators() {
              .worker_log_to_virtual_routing_y = global_allocator_config.worker_log_to_virtual_routing_y,
              .l1_bank_remap = std::move(l1_bank_remap),
              .compute_grid = compute_cores,
-             .alignment = global_allocator_config.alignment,
+             .l1_alignment = global_allocator_config.l1_alignment,
              .disable_interleaved = true});
         TT_FATAL(
             config.l1_small_size < (config.storage_core_bank_size.has_value()
@@ -280,9 +287,9 @@ void SubDeviceManager::populate_sub_allocators() {
                                         : config.worker_l1_size - config.l1_unreserved_base),
             "Reserved size must be less than bank size");
         TT_FATAL(
-            config.l1_small_size % config.alignment == 0,
-            "Reserved size must be aligned to allocator alignment {}",
-            config.alignment);
+            config.l1_small_size % config.l1_alignment == 0,
+            "Reserved size must be aligned to allocator L1 alignment {}",
+            config.l1_alignment);
 
         // sub_devices only have compute cores for allocation
         for (const CoreCoord& core : corerange_to_cores(compute_cores)) {
@@ -304,7 +311,7 @@ void SubDeviceManager::populate_noc_data() {
     noc_mcast_data_start_index_.resize(num_sub_devices);
     noc_unicast_data_start_index_.resize(num_sub_devices);
 
-    NOC noc_index = device_->dispatch_go_signal_noc();
+    NOC noc_index = DispatchQueryManager::instance().go_signal_noc();
     uint32_t idx = 0;
     for (uint32_t i = 0; i < num_sub_devices; ++i) {
         const auto& tensix_cores = sub_devices_[i].cores(HalProgrammableCoreType::TENSIX).merge_ranges();
@@ -333,10 +340,10 @@ void SubDeviceManager::populate_noc_data() {
         num_noc_unicast_txns_[i] = idx - noc_unicast_data_start_index_[i];
 
         TT_FATAL(
-            idx <= dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES,
+            idx <= DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES,
             "NOC data entries {} exceeds maximum supported size {}",
             idx,
-            dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES);
+            DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES);
     }
 }
 

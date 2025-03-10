@@ -49,8 +49,7 @@ def run_with_trace(
         num_buffers_per_channel=n_buffer,
         topology=topology,
     )
-    for device_id in t3k_mesh_device.get_device_ids():
-        ttnn.synchronize_device(t3k_mesh_device.get_device(device_id))
+    ttnn.synchronize_device(t3k_mesh_device)
 
     # Capture trace
     logger.info("Capturing trace")
@@ -67,15 +66,13 @@ def run_with_trace(
             topology=topology,
         )
     ttnn.end_trace_capture(t3k_mesh_device, trace_id, cq_id=0)
-    for device_id in t3k_mesh_device.get_device_ids():
-        ttnn.synchronize_device(t3k_mesh_device.get_device(device_id))
+    ttnn.synchronize_device(t3k_mesh_device)
 
     # Run the op
     logger.info("Starting Trace perf test...")
     ttnn.execute_trace(t3k_mesh_device, trace_id, blocking=False)
     ttnn.release_trace(t3k_mesh_device, trace_id)
-    for device_id in t3k_mesh_device.get_device_ids():
-        ttnn.synchronize_device(t3k_mesh_device.get_device(device_id))
+    ttnn.synchronize_device(t3k_mesh_device)
 
     return output_tensor_mesh
 
@@ -119,25 +116,20 @@ def run_reduce_scatter_test(
     # Generate input tensors
     canonical_input_shape = per_chip_output_shape.copy()
     canonical_input_shape[dim] *= num_devices
-    tt_input_tensors = []
+    torch_tensor_shape = canonical_input_shape.copy()
+    torch_tensor_shape[dim] *= num_devices
 
-    numel = canonical_input_shape[0] * canonical_input_shape[1] * canonical_input_shape[2] * canonical_input_shape[3]
-    input_tensors = [
-        torch.rand(canonical_input_shape).bfloat16() if not debug else torch.ones(canonical_input_shape).bfloat16()
-        for _ in range(num_devices)
-    ]
+    torch_tensor = torch.rand(torch_tensor_shape).bfloat16()
     if debug:
-        input_tensors[-1] = torch.arange(numel).reshape(canonical_input_shape).bfloat16()
-    for i, canonical_input_tensor in enumerate(input_tensors):
-        tt_input_tensors.append(
-            ttnn.Tensor(canonical_input_tensor, input_dtype)
-            .to(layout)
-            .to(mesh_device.get_device(mesh_device.get_device_ids()[i]), mem_config)
-        )
-
-    assert len(tt_input_tensors) == num_devices
-
-    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
+        torch_tensor = torch.arange(torch_tensor.numel()).reshape(canonical_input_shape).bfloat16()
+    input_tensors = torch.chunk(torch_tensor, num_devices, dim)
+    input_tensor_mesh = ttnn.from_torch(
+        torch_tensor,
+        dtype=input_dtype,
+        layout=layout,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim),
+        device=mesh_device,
+    )
     # Run the op
     if trace_mode:
         output_tensor_mesh = run_with_trace(
@@ -161,8 +153,7 @@ def run_reduce_scatter_test(
                 topology=topology,
             )
 
-            for device_id in mesh_device.get_device_ids():
-                ttnn.synchronize_device(mesh_device.get_device(device_id))
+            ttnn.synchronize_device(mesh_device)
             logger.info(f"Done iteration {i}")
 
     # ttnn.visualize_mesh_device(t3k_mesh_device, tensor=output_tensor_mesh)
@@ -509,8 +500,7 @@ def run_reduce_scatter_sharded_test(
                 topology=topology,
             )
 
-            for device_id in t3k_mesh_device.get_device_ids():
-                ttnn.synchronize_device(t3k_mesh_device.get_device(device_id))
+            ttnn.synchronize_device(t3k_mesh_device)
             logger.info(f"Done iteration {i}")
 
     # Compute golden

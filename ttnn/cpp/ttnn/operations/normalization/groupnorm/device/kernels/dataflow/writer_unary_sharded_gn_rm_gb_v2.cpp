@@ -44,7 +44,7 @@ void kernel_main() {
     constexpr uint32_t cb_gamma = tt::CBIndex::c_5;
     constexpr uint32_t cb_beta = tt::CBIndex::c_6;
     constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
-    constexpr uint32_t cb_input_mask = tt::CBIndex::c_28;
+    constexpr uint32_t cb_input_mask = tt::CBIndex::c_7;
 
     // constexpr uint32_t block_w = 4;
     const uint32_t single_tile_size_bytes = get_tile_size(cb_gamma);
@@ -100,8 +100,14 @@ void kernel_main() {
                     for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
                         uint32_t tile_id = gamma_tile_start_id + w;
                         uint64_t gamma_noc_addr = get_noc_addr(tile_id, gamma);
+#ifdef ARCH_BLACKHOLE
+                        noc_async_read(gamma_noc_addr, l1_write_addr_gamma, 32 * 2);
+                        gamma_noc_addr = get_noc_addr(l1_write_addr_gamma + 32);
+                        noc_async_read_barrier();
+#else
                         noc_async_read(gamma_noc_addr, l1_write_addr_gamma, 32);
                         gamma_noc_addr += 32;
+#endif
                         noc_async_read(gamma_noc_addr, l1_write_addr_gamma + 512, 32);
                         l1_write_addr_gamma += gamma_tile_bytes;
                     }
@@ -124,8 +130,14 @@ void kernel_main() {
                     for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
                         uint32_t tile_id = beta_tile_start_id + w;
                         uint64_t beta_noc_addr = get_noc_addr(tile_id, beta);
+#ifdef ARCH_BLACKHOLE
+                        noc_async_read(beta_noc_addr, l1_write_addr_beta, 32 * 2);
+                        beta_noc_addr = get_noc_addr(l1_write_addr_beta + 32);
+                        noc_async_read_barrier();
+#else
                         noc_async_read(beta_noc_addr, l1_write_addr_beta, 32);
                         beta_noc_addr += 32;
+#endif
                         noc_async_read(beta_noc_addr, l1_write_addr_beta + 512, 32);
                         l1_write_addr_beta += beta_tile_bytes;
                     }

@@ -6,7 +6,6 @@
 #include "prod_nc_op.hpp"
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
 
 namespace tt {
 
@@ -57,7 +56,7 @@ operation::ProgramWithCallbacks Prod::create_program(
     return prod_nc_format(input, output, dim);
 }
 
-ttnn::SimpleShape compute_output_shape(const ttnn::SimpleShape& input_shape, const int64_t& dim) {
+ttnn::Shape compute_output_shape(const ttnn::Shape& input_shape, const int64_t& dim) {
     auto output_shape = input_shape;
     switch (dim) {
         case 0:
@@ -68,7 +67,7 @@ ttnn::SimpleShape compute_output_shape(const ttnn::SimpleShape& input_shape, con
 }
 
 inline Tensor create_output_tensor(
-    const Tensor& input_tensor, const ttnn::SimpleShape& output_shape, const MemoryConfig& mem_config) {
+    const Tensor& input_tensor, const ttnn::Shape& output_shape, const MemoryConfig& mem_config) {
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE);
     return create_device_tensor(
         output_shape, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config);

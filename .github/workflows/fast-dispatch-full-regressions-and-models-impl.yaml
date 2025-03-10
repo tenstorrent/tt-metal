@@ -12,20 +12,20 @@ jobs:
       matrix:
         test-group:
           [
-            {
-              name: "Common models GS",
-              arch: grayskull,
-              runs-on: ["cloud-virtual-machine", "E150", "in-service"],
-              cmd: tests/scripts/single_card/nightly/run_common_models.sh,
-              timeout: 40
-            },
-            {
-              name: "GS ttnn nightly",
-              arch: grayskull,
-              runs-on: ["cloud-virtual-machine", "E150", "in-service"],
-              cmd: tests/scripts/single_card/nightly/run_ttnn.sh,
-              timeout: 40
-            },
+            # {
+            #   name: "Common models GS",
+            #   arch: grayskull,
+            #   runs-on: ["cloud-virtual-machine", "E150", "in-service"],
+            #   cmd: tests/scripts/single_card/nightly/run_common_models.sh,
+            #   timeout: 40
+            # },
+            # {
+            #   name: "GS ttnn nightly",
+            #   arch: grayskull,
+            #   runs-on: ["cloud-virtual-machine", "E150", "in-service"],
+            #   cmd: tests/scripts/single_card/nightly/run_ttnn.sh,
+            #   timeout: 40
+            # },
             {
               name: "WH N150 ttnn nightly",
               arch: wormhole_b0,
@@ -40,13 +40,13 @@ jobs:
               cmd: tests/scripts/single_card/nightly/run_ttnn.sh,
               timeout: 70
             },
-            {
-              name: "GS-only models",
-              arch: grayskull,
-              runs-on: ["cloud-virtual-machine", "E150", "in-service"],
-              cmd: tests/scripts/single_card/nightly/run_gs_only.sh,
-              timeout: 40
-            },
+            # {
+            #   name: "GS-only models",
+            #   arch: grayskull,
+            #   runs-on: ["cloud-virtual-machine", "E150", "in-service"],
+            #   cmd: tests/scripts/single_card/nightly/run_gs_only.sh,
+            #   timeout: 40
+            # },
           ]
     name: FD ${{ matrix.test-group.name }} ${{ matrix.test-group.arch }}
     env:
@@ -74,7 +74,8 @@ jobs:
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           ${{ matrix.test-group.cmd }}
-      - uses: ./.github/actions/upload-artifact-with-job-uuid
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           path: |
@@ -87,7 +88,7 @@ jobs:
       fail-fast: false
       matrix:
         card: [N150, N300]
-        model: [common_models, functional_unet, llama3.2-1B, qwen, mistral7b, mistral7b_eth, resnet50, yolov4]
+        model: [common_models, functional_unet, llama3.2-1B, qwen, mistral7b, mistral7b_eth, resnet50, yolov4, whisper]
     name: Nightly ${{ matrix.card }} ${{ matrix.model }}
     env:
       ARCH_NAME: wormhole_b0
@@ -125,7 +126,8 @@ jobs:
             if [[ "${{ matrix.model }}" != *"llama3"* ]]; then
             pytest -n auto tests/nightly/single_card/${{ matrix.model }}
           fi
-      - uses: ./.github/actions/upload-artifact-with-job-uuid
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           path: |
@@ -139,7 +141,7 @@ jobs:
       matrix:
         test-config:
           - model: "stable_diffusion"
-            cmd: pytest --timeout 900 -n auto tests/nightly/single_card/stable_diffusion
+            cmd: SLOW_MATMULS=1 pytest --timeout 1000 -n auto tests/nightly/single_card/stable_diffusion
               # Skipping due to issue #15932
               # - model: "mamba 1"
               # cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 1
@@ -183,7 +185,8 @@ jobs:
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           ${{ matrix.test-config.cmd }}
-      - uses: ./.github/actions/upload-artifact-with-job-uuid
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           path: |

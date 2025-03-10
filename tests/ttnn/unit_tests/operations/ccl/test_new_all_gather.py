@@ -18,6 +18,11 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_gather_TG_post_commit import 
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows,
 )
 
+from tests.ttnn.unit_tests.operations.ccl.test_ccl_async_TG_llama import (
+    PREFETCHER_NOC1_RING,
+    get_core_range_set,
+)
+
 
 def is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout):
     if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
@@ -68,6 +73,7 @@ def run_with_trace(
     dim,
     num_links,
     output_mem_config,
+    enable_persistent_fabric,
     multi_device_global_semaphore,
     num_iter=20,
     subdevice_id=None,
@@ -82,9 +88,9 @@ def run_with_trace(
         memory_config=output_mem_config,
         topology=all_gather_topology,
         subdevice_id=subdevice_id,
+        enable_persistent_fabric_mode=enable_persistent_fabric,
     )
-    for d in mesh_device.get_devices():
-        ttnn.synchronize_device(d)
+    ttnn.synchronize_device(mesh_device)
 
     # Capture trace
     logger.info("Capturing trace")
@@ -98,17 +104,16 @@ def run_with_trace(
             memory_config=output_mem_config,
             topology=all_gather_topology,
             subdevice_id=subdevice_id,
+            enable_persistent_fabric_mode=enable_persistent_fabric,
         )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-    for d in mesh_device.get_devices():
-        ttnn.synchronize_device(d)
+    ttnn.synchronize_device(mesh_device)
 
     # Run the op
     logger.info("Starting Trace perf test...")
     ttnn.execute_trace(mesh_device, trace_id, blocking=False)
     ttnn.release_trace(mesh_device, trace_id)
-    for d in mesh_device.get_devices():
-        ttnn.synchronize_device(d)
+    ttnn.synchronize_device(mesh_device)
 
     return tt_out_tensor
 
@@ -130,12 +135,15 @@ def run_all_gather_impl(
     rand_tensor=True,
     mem_config=None,
     input_shard_shape=None,
-    shard_grid=None,
+    input_shard_grid=None,
+    output_shard_shape=None,
+    output_shard_grid=None,
     tensor_mem_layout=None,
     use_cluster_axis_api=False,
     cluster_axis=None,
     create_persistent_fabric=True,
     teardown_persistent_fabric=True,
+    wrap_fabric_around_mesh=False,
 ):
     enable_persistent_fabric = True
     if num_iters < 1:
@@ -159,45 +167,66 @@ def run_all_gather_impl(
     sub_device_stall_group = [worker_sub_device_id]
     if create_persistent_fabric:
         mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
-            mesh_device, [worker_sub_device], 0, 0, enable_persistent_fabric
+            mesh_device,
+            [worker_sub_device],
+            0,
+            0,
+            enable_persistent_fabric,
+            wrap_fabric_around_mesh=wrap_fabric_around_mesh,
         )
         mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
-    ccl_semaphore_handles = create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0)
+    ccl_semaphore_handles = [
+        create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
+    ]
 
     logger.info(f"Output shape: {output_shape}")
     logger.info(f"dim: {dim}")
     logger.info(f"input_shard_shape: {input_shard_shape}")
-    logger.info(f"shard_grid: {shard_grid}")
+    logger.info(f"input_shard_grid: {input_shard_grid}")
 
     ### For sharded all gather only
-    if bool(input_shard_shape) != bool(shard_grid) and bool(tensor_mem_layout) != bool(shard_grid):
+    if bool(input_shard_shape) != bool(input_shard_grid) and bool(tensor_mem_layout) != bool(input_shard_grid):
         pytest.fail(
             "Both input_shard_shape, shard_grid, and tensor_mem_layout must be provided together or all must be None"
         )
-    if input_shard_shape and shard_grid:
+    if input_shard_shape and input_shard_grid:
         input_shard_spec = ttnn.ShardSpec(
-            shard_grid,
+            input_shard_grid,
             input_shard_shape,
             ttnn.ShardOrientation.ROW_MAJOR,
         )
         input_mem_config = ttnn.MemoryConfig(
             tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec
         )
-        output_shard_shape = list(input_shard_shape)
-        if dim == 3:
-            output_shard_shape[1] *= num_devices
+        if output_shard_shape is None:
+            assert (
+                output_shard_grid is None
+            ), "output_shard_grid must not be provided if output_shard_shape is not provided"
+            output_shard_shape = list(input_shard_shape)
+            if dim == len(output_shape) - 1:
+                output_shard_shape[1] *= num_devices
+            else:
+                output_shard_shape[0] *= num_devices
+            output_shard_spec = ttnn.ShardSpec(
+                input_shard_grid,
+                output_shard_shape,
+                ttnn.ShardOrientation.ROW_MAJOR,
+            )
+            output_mem_config = ttnn.MemoryConfig(
+                tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=output_shard_spec
+            )
         else:
-            output_shard_shape[0] *= num_devices
-        output_shard_spec = ttnn.ShardSpec(
-            shard_grid,
-            output_shard_shape,
-            ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        output_mem_config = ttnn.MemoryConfig(
-            tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=output_shard_spec
-        )
+            assert output_shard_grid is not None, "output_shard_grid must be provided if output_shard_shape is provided"
+            output_shard_spec = ttnn.ShardSpec(
+                output_shard_grid,
+                output_shard_shape,
+                ttnn.ShardOrientation.ROW_MAJOR,
+            )
+            output_mem_config = ttnn.MemoryConfig(
+                tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=output_shard_spec
+            )
     else:
         assert mem_config is not None
         input_mem_config = mem_config
@@ -242,7 +271,8 @@ def run_all_gather_impl(
             dim,
             num_links,
             output_mem_config,
-            multi_device_global_semaphore=ccl_semaphore_handles,
+            enable_persistent_fabric,
+            multi_device_global_semaphore=ccl_semaphore_handles[0],
             num_iter=num_iters,
             subdevice_id=worker_sub_device_id,
         )
@@ -257,7 +287,7 @@ def run_all_gather_impl(
                     mesh_device=mesh_device,
                     memory_config=output_mem_config,
                     topology=all_gather_topology,
-                    multi_device_global_semaphore=ccl_semaphore_handles,
+                    multi_device_global_semaphore=ccl_semaphore_handles[i],
                     subdevice_id=worker_sub_device_id,
                     enable_persistent_fabric_mode=enable_persistent_fabric,
                     num_preferred_links=num_links,
@@ -267,7 +297,7 @@ def run_all_gather_impl(
                 tt_out_tensor = ttnn.experimental.all_gather_async(
                     input_tensor_mesh_list[i],
                     dim,
-                    multi_device_global_semaphore=ccl_semaphore_handles,
+                    multi_device_global_semaphore=ccl_semaphore_handles[i],
                     num_links=num_links,
                     memory_config=output_mem_config,
                     topology=all_gather_topology,
@@ -276,10 +306,11 @@ def run_all_gather_impl(
                 )
             tt_out_tensor_list.append(tt_out_tensor)
 
-            logger.info(f"Waiting for op {i}")
-            ttnn.synchronize_devices(mesh_device, sub_device_ids=sub_device_stall_group)
-            logger.info(f"Done iteration {i}")
+        logger.info(f"Waiting for op")
+        ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+        logger.info(f"Done op")
 
+    passed = True
     for tensor_index in range(len(tt_out_tensor_list)):
         tt_out_tensor = tt_out_tensor_list[tensor_index]
         output_tensor = output_tensor_goldens_list[tensor_index]
@@ -293,11 +324,20 @@ def run_all_gather_impl(
                 eq, output = comp_pcc(tt_output_tensor, output_tensor)
             if not eq:
                 logger.error(f"output mismatch for tensor {i}")
-            assert eq, f"{i} FAILED: {output}"
+                passed = False
+
+    for i in range(num_devices):
+        assert (
+            mesh_device.get_devices()[i].num_program_cache_entries() == 1
+            or mesh_device.get_devices()[i].num_program_cache_entries() == num_iters
+        ), f"Device {i} has {mesh_device.get_devices()[i].num_program_cache_entries()} program cache entries"
 
     if enable_persistent_fabric and teardown_persistent_fabric:
         mesh_device.reset_sub_device_stall_group()
         teardown_fabric_interface(mesh_device)
+
+    if not passed:
+        assert eq, f"{i} FAILED: {output}"
 
 
 # Enumerate the post-commit cases explicitly
@@ -305,15 +345,17 @@ def run_all_gather_impl(
 @pytest.mark.parametrize(
     "num_devices, num_links, output_shape, dim, layout",
     [
-        (4, 1, [1, 1, 64, 512], 3, ttnn.TILE_LAYOUT),
+        # (4, 1, [1, 1, 64, 512], 3, ttnn.TILE_LAYOUT),
         # (4, 1, [1, 1, 32, 32768], 3, ttnn.TILE_LAYOUT),
         # (4, 1, [1, 1, 2048, 16384], 3, ttnn.TILE_LAYOUT),
+        (4, 1, [1, 1, 32, 1280], 3, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        ttnn.bfloat16,
+        # ttnn.bfloat16,
+        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
@@ -322,7 +364,7 @@ def run_all_gather_impl(
         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
     ],
 )
-@pytest.mark.parametrize("num_iters", [8])
+@pytest.mark.parametrize("num_iters", [10])
 @pytest.mark.parametrize("enable_async", [True])
 def test_all_gather(
     t3k_mesh_device,
@@ -349,10 +391,12 @@ def test_all_gather(
         layout,
         use_program_cache,
         function_level_defaults,
-        all_gather_topology=ttnn.Topology.Ring,
+        all_gather_topology=ttnn.Topology.Linear,
         num_iters=num_iters,
         enable_async=enable_async,
         rand_tensor=True,
+        create_persistent_fabric=True,
+        teardown_persistent_fabric=True,
         mem_config=mem_config,
     )
 
@@ -360,7 +404,7 @@ def test_all_gather(
 # Enumerate the post-commit cases explicitly
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
-    "num_devices, output_shape, dim, layout, input_shard_shape, shard_grid, tensor_mem_layout",
+    "num_devices, output_shape, dim, layout, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
     [
         (
             2,
@@ -369,6 +413,8 @@ def test_all_gather(
             ttnn.TILE_LAYOUT,
             (32, 32),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+            None,
+            None,
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ),
         (
@@ -378,6 +424,8 @@ def test_all_gather(
             ttnn.TILE_LAYOUT,
             (32, 64),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
+            None,
+            None,
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ),
         (
@@ -387,6 +435,8 @@ def test_all_gather(
             ttnn.TILE_LAYOUT,
             (32, 128),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+            None,
+            None,
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ),
         (
@@ -396,6 +446,8 @@ def test_all_gather(
             ttnn.TILE_LAYOUT,
             (32, 128),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
+            None,
+            None,
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ),
         (
@@ -405,6 +457,8 @@ def test_all_gather(
             ttnn.TILE_LAYOUT,
             (32, 128),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+            None,
+            None,
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ),
         (
@@ -412,8 +466,10 @@ def test_all_gather(
             [1, 4, 32, 1280],
             3,
             ttnn.TILE_LAYOUT,
-            (32, 128),
+            (32, 320),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 4))}),
+            None,
+            None,
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ),
     ],
@@ -423,13 +479,13 @@ def test_all_gather(
     "input_dtype",
     [
         ttnn.bfloat16,
+        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize("num_iters", [8])
 @pytest.mark.parametrize("enable_async", [True])
 def test_all_gather_sharded(
     t3k_mesh_device,
-    # pcie_mesh_device,
     num_devices,
     output_shape,
     dim,
@@ -441,9 +497,14 @@ def test_all_gather_sharded(
     function_level_defaults,
     enable_async,
     input_shard_shape,
-    shard_grid,
+    input_shard_grid,
+    output_shard_shape,
+    output_shard_grid,
     tensor_mem_layout,
 ):
+    if num_links > 1:
+        assert f"num_links > 1 not supported for sharded all gather test function which is currently using the t3k_mesh_device (and hence only has 1 link available for use)"
+
     run_all_gather_impl(
         t3k_mesh_device,
         num_devices,
@@ -454,15 +515,18 @@ def test_all_gather_sharded(
         layout,
         use_program_cache,
         function_level_defaults,
-        all_gather_topology=ttnn.Topology.Ring,
+        all_gather_topology=ttnn.Topology.Linear,
         num_iters=num_iters,
         enable_async=enable_async,
         rand_tensor=True,
         input_shard_shape=input_shard_shape,
-        shard_grid=shard_grid,
+        input_shard_grid=input_shard_grid,
+        output_shard_shape=output_shard_shape,
+        output_shard_grid=output_shard_grid,
         tensor_mem_layout=tensor_mem_layout,
         create_persistent_fabric=True,
         teardown_persistent_fabric=True,
+        wrap_fabric_around_mesh=True,
     )
 
 
@@ -491,8 +555,9 @@ def test_all_gather_sharded(
 )
 @pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("replication_factor", [4])
+@pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_grid")], indirect=True)
 def test_line_all_gather_async_on_T3K_cols_persistent_fabric_post_commit(
-    t3k_mesh_device,
+    mesh_device,
     num_devices,
     per_chip_output_shape,
     dim,
@@ -506,10 +571,10 @@ def test_line_all_gather_async_on_T3K_cols_persistent_fabric_post_commit(
     replication_factor,
     num_iters=1,
 ):
-    if len(t3k_mesh_device.get_devices()) < 8:
+    if len(mesh_device.get_devices()) < 8:
         pytest.skip("Not T3K!")
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
-        t3k_mesh_device,
+        mesh_device,
         num_devices,
         per_chip_output_shape,
         ttnn.TensorMemoryLayout.INTERLEAVED,
@@ -559,8 +624,8 @@ def test_line_all_gather_async_on_T3K_cols_persistent_fabric_post_commit(
 )
 @pytest.mark.parametrize("replication_factor", [2])
 @pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_grid")], indirect=True)
 def test_line_all_gather_async_on_T3K_rows_persistent_fabric_post_commit(
-    t3k_mesh_device,
     num_devices,
     per_chip_output_shape,
     dim,
@@ -570,14 +635,15 @@ def test_line_all_gather_async_on_T3K_rows_persistent_fabric_post_commit(
     buffer_type,
     use_program_cache,
     function_level_defaults,
+    mesh_device,
     enable_async,
     replication_factor,
     num_iters=1,
 ):
-    if len(t3k_mesh_device.get_devices()) < 8:
+    if len(mesh_device.get_devices()) < 8:
         pytest.skip("Not T3K!")
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
-        t3k_mesh_device,
+        mesh_device,
         num_devices,
         per_chip_output_shape,
         ttnn.TensorMemoryLayout.INTERLEAVED,
@@ -635,8 +701,9 @@ def test_line_all_gather_async_on_T3K_rows_persistent_fabric_post_commit(
     ],
 )
 @pytest.mark.parametrize("replication_factor2", [2])
+@pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_grid")], indirect=True)
 def test_line_all_gather_async_on_T3K_back_to_back_cols_and_rows_persistent_fabric_post_commit(
-    t3k_mesh_device,
+    mesh_device,
     num_devices1,
     per_chip_output_shape1,
     dim1,
@@ -656,10 +723,10 @@ def test_line_all_gather_async_on_T3K_back_to_back_cols_and_rows_persistent_fabr
     replication_factor2,
     num_iters=1,
 ):
-    if len(t3k_mesh_device.get_devices()) < 8:
+    if len(mesh_device.get_devices()) < 8:
         pytest.skip("Not T3K!")
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
-        t3k_mesh_device,
+        mesh_device,
         num_devices1,
         per_chip_output_shape1,
         ttnn.TensorMemoryLayout.INTERLEAVED,
@@ -681,7 +748,7 @@ def test_line_all_gather_async_on_T3K_back_to_back_cols_and_rows_persistent_fabr
     )
 
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
-        t3k_mesh_device,
+        mesh_device,
         num_devices2,
         per_chip_output_shape2,
         ttnn.TensorMemoryLayout.INTERLEAVED,

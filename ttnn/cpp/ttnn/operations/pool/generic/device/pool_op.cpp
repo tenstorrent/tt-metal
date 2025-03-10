@@ -83,11 +83,8 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
         tt::round_up(out_nhw, (is_out_tiled ? tt::constants::TILE_HEIGHT : 1) * sliding_window_config.num_cores_nhw);
 
     // {1, 1, N * H * W, C}
-    const ttnn::SmallVector<uint32_t> out_dims({1, 1, out_nhw_padded, out_c_padded});
-    const auto padding = Padding(
-        {{0, 0}, {0, 0}, {0, out_nhw_padded - out_nhw}, {0, out_c_padded - out_c}},
-        Padding::PadValue::NegativeInfinity);
-    auto output_shape = Shape(tt::tt_metal::LegacyShape(out_dims, padding));
+    const ttnn::Shape padded_output_shape({1, 1, out_nhw_padded, out_c_padded});
+    const ttnn::Shape output_shape({1, 1, out_nhw, out_c});
 
     auto mem_config = out_mem_config;
     if (mem_config.shard_spec.has_value()) {
@@ -98,12 +95,13 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
         uint32_t out_nhw_per_core = output_shape[0] * output_shape[1] * output_shape[2] / ncores;
         CoreRangeSet shard_grid = sliding_window_config.core_range_set;
         std::array<uint32_t, 2> shard_shape = {out_nhw_per_core, input.get_padded_shape()[-1]};
-        mem_config.shard_spec = ShardSpec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR};
+        mem_config.shard_spec = tt::tt_metal::ShardSpec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR};
     }
 
     return TensorSpec(
-        output_shape.logical_shape(),
-        TensorLayout::fromLegacyPaddedShape(output_dtype, PageConfig(input.get_layout()), mem_config, output_shape));
+        output_shape,
+        tt::tt_metal::TensorLayout::fromPaddedShape(
+            output_dtype, tt::tt_metal::PageConfig(input.get_layout()), mem_config, output_shape, padded_output_shape));
 }
 
 Pool2D::tensor_return_value_t Pool2D::create_output_tensors(
@@ -116,11 +114,11 @@ tt::stl::hash::hash_t Pool2D::compute_program_hash(
     const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
     auto input_mem_config = tensors.input_tensor_.memory_config();
     auto dtype = tensors.input_tensor_.dtype();
-    return operation::hash_operation<Pool2D>(
+    return tt::tt_metal::operation::hash_operation<Pool2D>(
         op_attr.sliding_window_config_.get_hash(), op_attr.pool_type_, op_attr.memory_config_, input_mem_config, dtype);
 }
 
-operation::OpPerformanceModel Pool2D::create_op_performance_model(
+tt::tt_metal::operation::OpPerformanceModel Pool2D::create_op_performance_model(
     const operation_attributes_t& op_attr, const tensor_args_t& inputs, const Tensor& output) {
     const auto& input = inputs.input_tensor_;
     const auto& input_shape = input.get_logical_shape();
@@ -152,7 +150,7 @@ operation::OpPerformanceModel Pool2D::create_op_performance_model(
 
     int ideal_dev_clock_cycles = std::ceil((float)num_mul_adds / (float)(num_cores * tensix_mul_adds_per_cycle_lofi));
 
-    operation::OpPerformanceModel result({input}, {output}, ideal_dev_clock_cycles);
+    tt::tt_metal::operation::OpPerformanceModel result({input}, {output}, ideal_dev_clock_cycles);
     return result;
 }
 

@@ -22,7 +22,7 @@ namespace matmul {
 
 namespace detail {
 
-bool is_input_batched(const ttnn::SimpleShape& logical_shape);
+bool is_input_batched(const ttnn::Shape& logical_shape);
 
 }  // namespace detail
 
@@ -50,7 +50,7 @@ struct MatmulOperation {
         const std::optional<const CoreGrid> core_grid = std::nullopt,
         const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt,
-        const std::optional<const DeviceGlobalCircularBuffer>& global_cb = std::nullopt);
+        const std::optional<const tt::tt_metal::DeviceGlobalCircularBuffer>& global_cb = std::nullopt);
 };
 
 struct LinearOperation {
@@ -68,7 +68,7 @@ struct LinearOperation {
         const std::optional<const CoreGrid> core_grid = std::nullopt,
         const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt,
-        const std::optional<const DeviceGlobalCircularBuffer>& global_cb = std::nullopt);
+        const std::optional<const tt::tt_metal::DeviceGlobalCircularBuffer>& global_cb = std::nullopt);
 };
 
 }  // namespace matmul

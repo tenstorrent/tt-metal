@@ -7,13 +7,13 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/rtoptions.hpp>
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
-#include "kernels/traffic_gen_test.hpp"
+#include "test_common.hpp"
+#include "routing_test_common.hpp"
 #include "utils.hpp"
-#include <tt-metalium/llrt.hpp>
+#include "llrt.hpp"
 
 using std::vector;
 using namespace tt;
-
 
 int main(int argc, char **argv) {
 
@@ -30,7 +30,7 @@ int main(int argc, char **argv) {
 
         int device_id = 0;
         tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
-        uint32_t l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
+        uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
         uint32_t default_test_result_buf_addr = l1_unreserved_base;
         constexpr uint32_t default_test_result_buf_size = 1024;
         uint32_t default_tx_queue_start_addr = l1_unreserved_base + default_test_result_buf_size;

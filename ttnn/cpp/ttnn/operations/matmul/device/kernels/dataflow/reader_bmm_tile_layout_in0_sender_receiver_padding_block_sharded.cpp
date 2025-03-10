@@ -270,7 +270,6 @@ void kernel_main() {
                         // wait on in0 semaphore value to become VALID (set by mcast sender after it multicasts data)
                         noc_semaphore_wait(in0_mcast_receiver_semaphore_addr_ptr, VALID);
                     }
-
                     cb_push_back(cb_id_in0, in0_block_num_tiles);
 
                     // If core does not produce output block work, free cb_id_in0 immediately.
@@ -285,4 +284,6 @@ void kernel_main() {
             in0_tensor_current_h_dim_block_start_addr += in0_tensor_next_h_dim_block_stride;
         }
     }
+
+    noc_async_write_barrier();
 }

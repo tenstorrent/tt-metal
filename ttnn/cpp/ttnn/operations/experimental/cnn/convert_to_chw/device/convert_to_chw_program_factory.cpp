@@ -8,7 +8,7 @@ namespace ttnn::operations::experimental::cnn::detail {
 
 using namespace tt::constants;
 
-operation::ProgramWithCallbacks multi_core_convert_to_chw(
+tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_chw(
     const Tensor& a, Tensor& output, CoreCoord compute_with_storage_grid_size) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
@@ -38,14 +38,14 @@ operation::ProgramWithCallbacks multi_core_convert_to_chw(
                                             uint32_t total_size,
                                             uint32_t page_size,
                                             const tt::DataFormat& format,
-                                            Buffer* buffer = nullptr) -> tt::tt_metal::CBHandle {
+                                            tt::tt_metal::Buffer* buffer = nullptr) -> tt::tt_metal::CBHandle {
         tt::log_debug(
             tt::LogType::LogOp,
             "Creating CB at index {} with total size {} B and page size {} B",
             index,
             total_size,
             page_size);
-        auto config = CircularBufferConfig(total_size, {{index, format}}).set_page_size(index, page_size);
+        auto config = tt::tt_metal::CircularBufferConfig(total_size, {{index, format}}).set_page_size(index, page_size);
         if (buffer != nullptr) {
             config = config.set_globally_allocated_address(*buffer);
         }
@@ -58,19 +58,19 @@ operation::ProgramWithCallbacks multi_core_convert_to_chw(
     const tt::DataFormat intermediary_format = tt::DataFormat::Float16_b;
     const uint32_t intermediary_tile_size = tt::tt_metal::detail::TileSize(intermediary_format);
 
-    const uint32_t cb_in_id = tt::CB::c_in0;
+    const uint32_t cb_in_id = tt::CBIndex::c_0;
     const uint32_t cb_in_total_size = total_tiles_per_core * input_tile_size;
     const uint32_t cb_in_page_size = input_tile_size;
     const auto cb_in = create_circular_buffer(cb_in_id, cb_in_total_size, cb_in_page_size, input_format, a.buffer());
 
-    const uint32_t cb_out_id = tt::CB::c_out0;
+    const uint32_t cb_out_id = tt::CBIndex::c_1;
     const uint32_t element_size = tt::datum_size(input_format);
     const uint32_t cb_out_total_size = tt::div_up(C * HW * element_size, input_cores.size());
     const uint32_t cb_out_page_size = tt::div_up(HW * element_size, input_cores.size());
     const auto cb_out =
         create_circular_buffer(cb_out_id, cb_out_total_size, cb_out_page_size, input_format, output.buffer());
 
-    const uint32_t cb_in_transpose_id = tt::CB::c_intermed0;
+    const uint32_t cb_in_transpose_id = tt::CBIndex::c_2;
     const uint32_t cb_in_transpose_total_size = intermediary_tile_size;
     const uint32_t cb_in_transpose_page_size = intermediary_tile_size;
     const auto cb_in_transpose = create_circular_buffer(
@@ -104,7 +104,7 @@ operation::ProgramWithCallbacks multi_core_convert_to_chw(
 
     auto set_runtime_args =
         [cb_in, cb_out, input_cores, total_tiles_per_core, reader_kernel_id, writer_kernel_id, compute_kernel_id](
-            Program& program, const Tensor& a, const Tensor& output) {
+            tt::tt_metal::Program& program, const Tensor& a, const Tensor& output) {
             tt::tt_metal::Buffer* a_buffer = a.buffer();
             tt::tt_metal::Buffer* output_buffer = output.buffer();
             UpdateDynamicCircularBufferAddress(program, cb_in, *a_buffer);
@@ -129,7 +129,7 @@ operation::ProgramWithCallbacks multi_core_convert_to_chw(
 
     auto override_runtime_arguments_callback = [set_runtime_args](
                                                    const void* operation,
-                                                   Program& program,
+                                                   tt::tt_metal::Program& program,
                                                    const std::vector<Tensor>& input_tensors,
                                                    const std::vector<std::optional<const Tensor>>&,
                                                    const std::vector<Tensor>& output_tensors) {

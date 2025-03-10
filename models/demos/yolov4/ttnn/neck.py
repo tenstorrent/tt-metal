@@ -9,13 +9,14 @@ from tt_lib.fallback_ops import fallback_ops
 
 
 class TtNeck:
-    def __init__(self, model) -> None:
+    def __init__(self, device, model) -> None:
         if type(model) is str:
             torch_model = torch.load(model)
         else:
             torch_model = model.torch_model
         self.torch_model = torch_model
         self.conv1 = Conv(
+            device,
             torch_model,
             "neek.conv1",
             [1, 10, 10, 1024],
@@ -24,6 +25,7 @@ class TtNeck:
             reshard=True,
         )
         self.conv2 = Conv(
+            device,
             torch_model,
             "neek.conv2",
             [1, 10, 10, 512],
@@ -31,14 +33,17 @@ class TtNeck:
             width_sharding=True,
         )
         self.conv3 = Conv(
+            device,
             torch_model,
             "neek.conv3",
             [1, 10, 10, 1024],
             (1, 1, 0, 0),
             reshard=False,
+            height_sharding=False,
         )
 
         self.conv4 = Conv(
+            device,
             torch_model,
             "neek.conv4",
             [1, 10, 10, 2048],
@@ -46,6 +51,7 @@ class TtNeck:
             height_sharding=False,
         )
         self.conv5 = Conv(
+            device,
             torch_model,
             "neek.conv5",
             [1, 10, 10, 512],
@@ -53,6 +59,7 @@ class TtNeck:
             width_sharding=True,
         )
         self.conv6 = Conv(
+            device,
             torch_model,
             "neek.conv6",
             [1, 10, 10, 1024],
@@ -60,6 +67,7 @@ class TtNeck:
             height_sharding=False,
         )
         self.conv7 = Conv(
+            device,
             torch_model,
             "neek.conv7",
             [1, 10, 10, 512],
@@ -68,6 +76,7 @@ class TtNeck:
             deallocate=False,
         )
         self.conv7_2 = Conv(
+            device,
             torch_model,
             "neek.conv8",
             [1, 20, 20, 512],
@@ -77,6 +86,7 @@ class TtNeck:
             enable_act_double_buffer=True,
         )
         self.conv7_3 = Conv(
+            device,
             torch_model,
             "neek.conv9",
             [1, 20, 20, 512],
@@ -86,12 +96,15 @@ class TtNeck:
             enable_act_double_buffer=True,
         )
         self.conv8 = Conv(
+            device,
             torch_model,
             "neek.conv10",
             [1, 20, 20, 256],
             (1, 1, 1, 1),
+            height_sharding=False,
         )
         self.conv7_4 = Conv(
+            device,
             torch_model,
             "neek.conv11",
             [1, 20, 20, 512],
@@ -101,12 +114,15 @@ class TtNeck:
             enable_act_double_buffer=True,
         )
         self.conv8_2 = Conv(
+            device,
             torch_model,
             "neek.conv12",
             [1, 20, 20, 256],
             (1, 1, 1, 1),
+            height_sharding=False,
         )
         self.conv7_5 = Conv(
+            device,
             torch_model,
             "neek.conv13",
             [1, 20, 20, 512],
@@ -117,6 +133,7 @@ class TtNeck:
         )
 
         self.conv9 = Conv(
+            device,
             torch_model,
             "neek.conv14",
             [1, 20, 20, 256],
@@ -127,18 +144,21 @@ class TtNeck:
             enable_act_double_buffer=True,
         )
         self.conv9_2 = Conv(
+            device,
             torch_model,
             "neek.conv15",
             [1, 40, 40, 256],
             (1, 1, 0, 0),
         )
         self.conv9_3 = Conv(
+            device,
             torch_model,
             "neek.conv16",
             [1, 40, 40, 256],
             (1, 1, 0, 0),
         )
         self.conv10 = Conv(
+            device,
             torch_model,
             "neek.conv17",
             [1, 40, 40, 128],
@@ -146,32 +166,35 @@ class TtNeck:
         )
 
         self.conv9_4 = Conv(
+            device,
             torch_model,
             "neek.conv18",
             [1, 40, 40, 256],
             (1, 1, 0, 0),
         )
         self.conv10_2 = Conv(
+            device,
             torch_model,
             "neek.conv19",
             [1, 40, 40, 128],
             (1, 1, 1, 1),
         )
         self.conv9_5 = Conv(
+            device,
             torch_model,
             "neek.conv20",
             [1, 40, 40, 256],
             (1, 1, 0, 0),
         )
 
-    def __call__(self, device, input_tensor):
-        output_tensor = self.conv1(device, input_tensor[0])
+    def __call__(self, input_tensor):
+        output_tensor = self.conv1(input_tensor[0])
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
-        output_tensor = self.conv2(device, output_tensor)
+        output_tensor = self.conv2(output_tensor)
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
-        output_tensor = self.conv3(device, output_tensor)
+        output_tensor = self.conv3(output_tensor)
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         pool_1 = ttnn.max_pool2d(
@@ -211,26 +234,26 @@ class TtNeck:
         pool_1 = ttnn.sharded_to_interleaved(pool_1, ttnn.L1_MEMORY_CONFIG)
         pool_2 = ttnn.sharded_to_interleaved(pool_2, ttnn.L1_MEMORY_CONFIG)
         pool_3 = ttnn.sharded_to_interleaved(pool_3, ttnn.L1_MEMORY_CONFIG)
-        pool_1 = ttnn.to_layout(pool_1, layout=ttnn.TILE_LAYOUT)  # This is becauase output_tensor is in TILE_LAYOUT
-        pool_2 = ttnn.to_layout(pool_2, layout=ttnn.TILE_LAYOUT)  # This is becauase output_tensor is in TILE_LAYOUT
-        pool_3 = ttnn.to_layout(pool_3, layout=ttnn.TILE_LAYOUT)  # This is becauase output_tensor is in TILE_LAYOUT
-        output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
 
-        output_tensor = ttnn.concat([pool_3, pool_2, pool_1, output_tensor], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
+        pool_all = ttnn.concat([pool_3, pool_2, pool_1], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
+        pool_all = ttnn.to_layout(pool_all, layout=ttnn.TILE_LAYOUT)  # This is becauase output_tensor is in TILE_LAYOUT
         ttnn.deallocate(pool_3)
         ttnn.deallocate(pool_2)
         ttnn.deallocate(pool_1)
 
-        output_tensor = self.conv4(device, output_tensor)
+        output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
+        output_tensor = ttnn.concat([pool_all, output_tensor], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+        output_tensor = self.conv4(output_tensor)
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
-        output_tensor = self.conv5(device, output_tensor)
+        output_tensor = self.conv5(output_tensor)
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
-        output_tensor = self.conv6(device, output_tensor)
+        output_tensor = self.conv6(output_tensor)
         output_tensor_left_1 = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
-        output_tensor = self.conv7(device, output_tensor_left_1)
+        output_tensor = self.conv7(output_tensor_left_1)
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_shape = output_tensor.shape
@@ -268,7 +291,7 @@ class TtNeck:
         output_tensor_upsample_1 = ttnn.to_layout(output_tensor_upsample_1, layout=ttnn.TILE_LAYOUT)
 
         outDowSample5 = input_tensor[1]
-        output_tensor = self.conv7_2(device, outDowSample5)
+        output_tensor = self.conv7_2(outDowSample5)
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
@@ -278,19 +301,19 @@ class TtNeck:
         )
         ttnn.deallocate(output_tensor_upsample_1)
 
-        output_tensor = self.conv7_3(device, output_tensor)
+        output_tensor = self.conv7_3(output_tensor)
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
-        output_tensor = self.conv8(device, output_tensor)
+        output_tensor = self.conv8(output_tensor)
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
-        output_tensor = self.conv7_4(device, output_tensor)
+        output_tensor = self.conv7_4(output_tensor)
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
-        output_tensor = self.conv8_2(device, output_tensor)
+        output_tensor = self.conv8_2(output_tensor)
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
-        output_tensor = self.conv7_5(device, output_tensor)
+        output_tensor = self.conv7_5(output_tensor)
         output_tensor_left_2 = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         shard_grid = ttnn.CoreRangeSet(
@@ -304,7 +327,7 @@ class TtNeck:
         shard_spec = ttnn.ShardSpec(shard_grid, (64, 64), ttnn.ShardOrientation.COL_MAJOR)
         in_sharded_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec)
         output_tensor_left_2 = ttnn.to_memory_config(output_tensor_left_2, memory_config=in_sharded_mem_config)
-        output_tensor = self.conv9(device, output_tensor_left_2)
+        output_tensor = self.conv9(output_tensor_left_2)
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_shape = output_tensor.shape
@@ -343,7 +366,7 @@ class TtNeck:
 
         outDowSample3 = input_tensor[2]
 
-        output_tensor = self.conv9_2(device, outDowSample3)
+        output_tensor = self.conv9_2(outDowSample3)
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
@@ -352,19 +375,19 @@ class TtNeck:
         )
         ttnn.deallocate(output_tensor_upsample_2)
 
-        output_tensor = self.conv9_3(device, output_tensor)
+        output_tensor = self.conv9_3(output_tensor)
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
-        output_tensor = self.conv10(device, output_tensor)
+        output_tensor = self.conv10(output_tensor)
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
-        output_tensor = self.conv9_4(device, output_tensor)
+        output_tensor = self.conv9_4(output_tensor)
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
-        output_tensor = self.conv10_2(device, output_tensor)
+        output_tensor = self.conv10_2(output_tensor)
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
-        output_tensor = self.conv9_5(device, output_tensor)
+        output_tensor = self.conv9_5(output_tensor)
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         return output_tensor, output_tensor_left_1, output_tensor_left_2

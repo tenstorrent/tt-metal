@@ -75,13 +75,14 @@ def create_multimodal_model(mesh_device, max_batch_size, max_seq_len, dtype=ttnn
     ids=["normal"],
 )
 @pytest.mark.parametrize(
-    "warmup_iters, enable_trace, max_batch_size",
+    "warmup_iters, enable_trace, max_batch_size, include_text_only_prompts",
     [
-        (0, False, 1),  # batch1-notrace
-        (0, True, 1),  # batch1-trace
-        (0, True, 32),  # batch32-trace
+        (0, False, 1, False),  # batch1-notrace
+        (0, True, 1, False),  # batch1-trace
+        (0, True, 32, False),  # batch32-trace
+        (0, True, 4, True),  # batch4-trace-with-text-prompts
     ],
-    ids=["batch1-notrace", "batch1-trace", "batch32-trace"],
+    ids=["batch1-notrace", "batch1-trace", "batch32-trace", "batch4-trace-with-text-prompts"],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 14951424, "num_command_queues": 2}], indirect=True)
 def test_llama_multimodal_demo_text(
@@ -89,6 +90,7 @@ def test_llama_multimodal_demo_text(
     warmup_iters,
     enable_trace,
     max_batch_size,
+    include_text_only_prompts,
     test_type,
     max_seq_len,
     temperature: float = 0,
@@ -111,25 +113,34 @@ def test_llama_multimodal_demo_text(
 
     xattn_caches = generator.model.setup_cache(model_args.max_batch_size)
 
-    with open(IMG_PATH / "dog.jpg", "rb") as f:
-        img = PIL_Image.open(f).convert("RGB")
-
-    with open(IMG_PATH / "pasta.jpeg", "rb") as f:
-        img2 = PIL_Image.open(f).convert("RGB")
-
     with open(IMG_PATH / "ocr_image.jpeg", "rb") as f:
         ocr_image = PIL_Image.open(f).convert("RGB")
 
     with open(IMG_PATH / "clutter.jpeg", "rb") as f:
         clutter = PIL_Image.open(f).convert("RGB")
 
-    dialogs = [
-        # image understanding
-        [UserMessage(content=[ImageMedia(image=img), "Write a haiku for this image."])],
-        [UserMessage(content=[ImageMedia(image=img2), "What is for dinner?"])],
-        [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
-        [UserMessage(content=[ImageMedia(image=clutter), "What objects are in this image?"])],
-    ]
+    if not include_text_only_prompts:
+        with open(IMG_PATH / "dog.jpg", "rb") as f:
+            img = PIL_Image.open(f).convert("RGB")
+
+        with open(IMG_PATH / "pasta.jpeg", "rb") as f:
+            img2 = PIL_Image.open(f).convert("RGB")
+
+        dialogs = [
+            # image understanding
+            [UserMessage(content=[ImageMedia(image=img), "Write a haiku for this image."])],
+            [UserMessage(content=[ImageMedia(image=img2), "What is for dinner?"])],
+            [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
+            [UserMessage(content=[ImageMedia(image=clutter), "What objects are in this image?"])],
+        ]
+    else:
+        dialogs = [
+            # image understanding + text-only prompts
+            [UserMessage(content=["Write a haiku."])],
+            [UserMessage(content=["What is for dinner?"])],
+            [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
+            [UserMessage(content=[ImageMedia(image=clutter), "What objects are in this image?"])],
+        ]
     if len(dialogs) < max_batch_size:
         dialogs *= max_batch_size // len(dialogs)
 
@@ -150,8 +161,10 @@ def test_llama_multimodal_demo_text(
             ]
 
             # Do initial prefill
-            vision_images = [model_input.vision.images for model_input in batch_model_input]
-            vision_mask = [model_input.vision.mask for model_input in batch_model_input]
+            vision_images = [
+                model_input.vision.images if model_input.vision else None for model_input in batch_model_input
+            ]
+            vision_mask = [model_input.vision.mask if model_input.vision else None for model_input in batch_model_input]
             prompt_tokens = [model_input.tokens for model_input in batch_model_input]
             # Get max length of prompts in batch
             prefill_lens = torch.tensor([len(tokens) for tokens in prompt_tokens], dtype=torch.long)

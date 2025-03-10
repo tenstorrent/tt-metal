@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "debug_tools.hpp"
+
+#include "tt_cluster.hpp"
+
 namespace internal {
 
 using namespace tt::tt_metal;
@@ -296,12 +299,12 @@ void dump_completion_queue_entries(
         get_cq_completion_rd_ptr<true>(sysmem_manager.get_device_id(), cq_interface.id, sysmem_manager.get_cq_size())
         << 4;
     uint32_t completion_q_bytes = cq_interface.completion_fifo_size << 4;
-    TT_ASSERT(completion_q_bytes % dispatch_constants::TRANSFER_PAGE_SIZE == 0);
+    TT_ASSERT(completion_q_bytes % DispatchSettings::TRANSFER_PAGE_SIZE == 0);
     uint32_t base_addr = (cq_interface.issue_fifo_limit << 4);
 
     // Read out in pages, this is fine since all completion Q entries are page aligned.
     std::vector<uint8_t> read_data;
-    read_data.resize(dispatch_constants::TRANSFER_PAGE_SIZE);
+    read_data.resize(DispatchSettings::TRANSFER_PAGE_SIZE);
     tt::log_info("Reading Device {} CQ {}, Completion Queue...", sysmem_manager.get_device_id(), cq_interface.id);
     cq_file << fmt::format(
         "Device {}, CQ {}, Completion Queue: write_ptr={:#010x}, read_ptr={:#010x}\n",
@@ -320,21 +323,21 @@ void dump_completion_queue_entries(
         CQDispatchCmd* cmd = (CQDispatchCmd*)read_data.data();
         if (cmd->base.cmd_id < CQ_DISPATCH_CMD_MAX_COUNT && cmd->base.cmd_id > CQ_DISPATCH_CMD_ILLEGAL) {
             if (last_span_invalid) {
-                if (page_addr == last_span_start + dispatch_constants::TRANSFER_PAGE_SIZE) {
+                if (page_addr == last_span_start + DispatchSettings::TRANSFER_PAGE_SIZE) {
                     cq_file << fmt::format("{:#010x}: No valid dispatch commands detected.", last_span_start);
                 } else {
                     cq_file << fmt::format(
                         "{:#010x}-{:#010x}: No valid dispatch commands detected.",
                         last_span_start,
-                        page_addr - dispatch_constants::TRANSFER_PAGE_SIZE);
+                        page_addr - DispatchSettings::TRANSFER_PAGE_SIZE);
                 }
                 last_span_invalid = false;
                 if (last_span_start <= (completion_write_ptr) &&
-                    page_addr - dispatch_constants::TRANSFER_PAGE_SIZE >= (completion_write_ptr)) {
+                    page_addr - DispatchSettings::TRANSFER_PAGE_SIZE >= (completion_write_ptr)) {
                     cq_file << fmt::format(" << write_ptr (0x{:08x})", completion_write_ptr);
                 }
                 if (last_span_start <= (completion_read_ptr) &&
-                    page_addr - dispatch_constants::TRANSFER_PAGE_SIZE >= (completion_read_ptr)) {
+                    page_addr - DispatchSettings::TRANSFER_PAGE_SIZE >= (completion_read_ptr)) {
                     cq_file << fmt::format(" << read_ptr (0x{:08x})", completion_read_ptr);
                 }
                 cq_file << std::endl;
@@ -342,8 +345,8 @@ void dump_completion_queue_entries(
             uint32_t stride = dump_dispatch_cmd(cmd, page_addr, cq_file);
             // Completion Q is page-aligned
             uint32_t cmd_pages =
-                (stride + dispatch_constants::TRANSFER_PAGE_SIZE - 1) / dispatch_constants::TRANSFER_PAGE_SIZE;
-            page_offset += cmd_pages * dispatch_constants::TRANSFER_PAGE_SIZE;
+                (stride + DispatchSettings::TRANSFER_PAGE_SIZE - 1) / DispatchSettings::TRANSFER_PAGE_SIZE;
+            page_offset += cmd_pages * DispatchSettings::TRANSFER_PAGE_SIZE;
             if (page_addr == completion_write_ptr) {
                 cq_file << fmt::format(" << write_ptr (0x{:08x})", completion_write_ptr);
             }
@@ -356,10 +359,10 @@ void dump_completion_queue_entries(
             if (cmd_pages > 2) {
                 cq_file << fmt::format(
                     "{:#010x}-{:#010x}: Data pages\n",
-                    page_addr + dispatch_constants::TRANSFER_PAGE_SIZE,
-                    page_addr + (cmd_pages - 1) * dispatch_constants::TRANSFER_PAGE_SIZE);
+                    page_addr + DispatchSettings::TRANSFER_PAGE_SIZE,
+                    page_addr + (cmd_pages - 1) * DispatchSettings::TRANSFER_PAGE_SIZE);
             } else if (cmd_pages == 2) {
-                cq_file << fmt::format("{:#010x}: Data page\n", page_addr + dispatch_constants::TRANSFER_PAGE_SIZE);
+                cq_file << fmt::format("{:#010x}: Data page\n", page_addr + DispatchSettings::TRANSFER_PAGE_SIZE);
             }
         } else {
             // If no valid command, just move on and try the next page
@@ -368,7 +371,7 @@ void dump_completion_queue_entries(
                 last_span_start = page_addr;
             }
             last_span_invalid = true;
-            page_offset += dispatch_constants::TRANSFER_PAGE_SIZE;
+            page_offset += DispatchSettings::TRANSFER_PAGE_SIZE;
         }
 
         print_progress_bar((float)page_offset / completion_q_bytes + 0.005);
@@ -394,7 +397,7 @@ void dump_issue_queue_entries(
 
     // Read out in 4K pages, could do ISSUE_Q_ALIGNMENT chunks to match the entries but this is ~2x faster.
     std::vector<uint8_t> read_data;
-    read_data.resize(dispatch_constants::TRANSFER_PAGE_SIZE);
+    read_data.resize(DispatchSettings::TRANSFER_PAGE_SIZE);
     tt::log_info("Reading Device {} CQ {}, Issue Queue...", sysmem_manager.get_device_id(), cq_interface.id);
     iq_file << fmt::format(
         "Device {}, CQ {}, Issue Queue: write_ptr={:#010x}, read_ptr={:#010x} (read_ptr not currently implemented)\n",
@@ -405,19 +408,19 @@ void dump_issue_queue_entries(
     uint32_t last_span_start;
     bool last_span_invalid = false;
     print_progress_bar(0.0, true);
-    uint32_t first_page_addr = issue_q_base_addr - (issue_q_base_addr % dispatch_constants::TRANSFER_PAGE_SIZE);
+    uint32_t first_page_addr = issue_q_base_addr - (issue_q_base_addr % DispatchSettings::TRANSFER_PAGE_SIZE);
     uint32_t end_of_curr_page =
-        first_page_addr + dispatch_constants::TRANSFER_PAGE_SIZE - 1;  // To track offset of latest page read out
+        first_page_addr + DispatchSettings::TRANSFER_PAGE_SIZE - 1;  // To track offset of latest page read out
     tt::Cluster::instance().read_sysmem(read_data.data(), read_data.size(), first_page_addr, mmio_device_id, channel);
     for (uint32_t offset = 0; offset < issue_q_bytes;) {  // offset increments at end of loop
         uint32_t curr_addr = issue_q_base_addr + offset;
-        uint32_t page_offset = curr_addr % dispatch_constants::TRANSFER_PAGE_SIZE;
+        uint32_t page_offset = curr_addr % DispatchSettings::TRANSFER_PAGE_SIZE;
 
         // Check if we need to read a new page
         if (curr_addr > end_of_curr_page) {
-            uint32_t page_base = curr_addr - (curr_addr % dispatch_constants::TRANSFER_PAGE_SIZE);
+            uint32_t page_base = curr_addr - (curr_addr % DispatchSettings::TRANSFER_PAGE_SIZE);
             tt::Cluster::instance().read_sysmem(read_data.data(), read_data.size(), page_base, mmio_device_id, channel);
-            end_of_curr_page = page_base + dispatch_constants::TRANSFER_PAGE_SIZE - 1;
+            end_of_curr_page = page_base + DispatchSettings::TRANSFER_PAGE_SIZE - 1;
         }
 
         // Check for a valid command id
@@ -471,14 +474,14 @@ void dump_issue_queue_entries(
                     // Check if we need to read a new page
                     if (dispatch_curr_addr > end_of_curr_page) {
                         uint32_t page_base =
-                            dispatch_curr_addr - (dispatch_curr_addr % dispatch_constants::TRANSFER_PAGE_SIZE);
+                            dispatch_curr_addr - (dispatch_curr_addr % DispatchSettings::TRANSFER_PAGE_SIZE);
                         tt::Cluster::instance().read_sysmem(
                             read_data.data(), read_data.size(), page_base, mmio_device_id, channel);
-                        end_of_curr_page = page_base + dispatch_constants::TRANSFER_PAGE_SIZE - 1;
+                        end_of_curr_page = page_base + DispatchSettings::TRANSFER_PAGE_SIZE - 1;
                     }
 
                     // Read the dispatch command
-                    uint32_t dispatch_page_offset = dispatch_curr_addr % dispatch_constants::TRANSFER_PAGE_SIZE;
+                    uint32_t dispatch_page_offset = dispatch_curr_addr % DispatchSettings::TRANSFER_PAGE_SIZE;
                     CQDispatchCmd* dispatch_cmd = (CQDispatchCmd*)(read_data.data() + dispatch_page_offset);
                     if (dispatch_cmd->base.cmd_id < CQ_DISPATCH_CMD_MAX_COUNT) {
                         iq_file << "  ";
@@ -535,7 +538,7 @@ void dump_command_queue_raw_data(
                        sysmem_manager.get_device_id(), cq_interface.id, sysmem_manager.get_cq_size())
                    << 4;
         bytes_to_read = cq_interface.completion_fifo_size << 4;  // Page-aligned, Issue Q is not.
-        TT_ASSERT(bytes_to_read % dispatch_constants::TRANSFER_PAGE_SIZE == 0);
+        TT_ASSERT(bytes_to_read % DispatchSettings::TRANSFER_PAGE_SIZE == 0);
         base_addr = cq_interface.issue_fifo_limit << 4;
         queue_type_name = "Completion";
     } else if (queue_type == CQ_ISSUE_QUEUE) {
@@ -554,7 +557,7 @@ void dump_command_queue_raw_data(
 
     // Read out in pages
     std::vector<uint8_t> read_data;
-    read_data.resize(dispatch_constants::TRANSFER_PAGE_SIZE);
+    read_data.resize(DispatchSettings::TRANSFER_PAGE_SIZE);
     out_file << std::endl;
     out_file << fmt::format(
                     "Device {}, CQ {}, {} Queue Raw Data:\n",
@@ -568,7 +571,7 @@ void dump_command_queue_raw_data(
         cq_interface.id,
         queue_type_name);
     print_progress_bar(0.0, true);
-    for (uint32_t page_offset = 0; page_offset < bytes_to_read; page_offset += dispatch_constants::TRANSFER_PAGE_SIZE) {
+    for (uint32_t page_offset = 0; page_offset < bytes_to_read; page_offset += DispatchSettings::TRANSFER_PAGE_SIZE) {
         uint32_t page_addr = base_addr + page_offset;
         print_progress_bar((float)page_offset / bytes_to_read + 0.005);
 

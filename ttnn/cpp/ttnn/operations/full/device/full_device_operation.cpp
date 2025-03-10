@@ -53,9 +53,11 @@ void FullOperation::validate_on_program_cache_hit(
 FullOperation::spec_return_value_t FullOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t&) {
     return TensorSpec(
-        SimpleShape(operation_attributes.shape),
-        TensorLayout(
-            operation_attributes.dtype, PageConfig(operation_attributes.layout), operation_attributes.memory_config));
+        Shape(operation_attributes.shape),
+        tt::tt_metal::TensorLayout(
+            operation_attributes.dtype,
+            tt::tt_metal::PageConfig(operation_attributes.layout),
+            operation_attributes.memory_config));
 };
 
 FullOperation::tensor_return_value_t FullOperation::create_output_tensors(

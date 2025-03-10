@@ -44,17 +44,17 @@ void MAIN {
 #else
     constexpr uint32_t cb_xmm = tt::CBIndex::c_24;  // x minus mean
 #endif
-    constexpr auto cb_ex = tt::CBIndex::c_25;      // E[x]
-    constexpr auto cb_ex2 = tt::CBIndex::c_26;     // E[(x-E[x])^2]
-    constexpr auto cb_xmm2 = tt::CBIndex::c_27;    // xmm^2
-    constexpr auto cb_ex2pe = tt::CBIndex::c_28;   // E[(x-E[x])^2]+eps
-    constexpr auto cb_fusion = tt::CBIndex::c_29;  // stream gamma/beta
+    constexpr auto cb_ex = tt::CBIndex::c_18;      // E[x]
+    constexpr auto cb_ex2 = tt::CBIndex::c_19;     // E[(x-E[x])^2]
+    constexpr auto cb_xmm2 = tt::CBIndex::c_20;    // xmm^2
+    constexpr auto cb_ex2pe = tt::CBIndex::c_21;   // E[(x-E[x])^2]+eps
+    constexpr auto cb_fusion = tt::CBIndex::c_22;  // stream gamma/beta
     constexpr auto scaler0 = 0;
 #ifdef FUSE_PRE_ADD
 #ifdef RMSNORM
     constexpr uint32_t cb_x = cb_xmm;
 #else
-    constexpr uint32_t cb_x = tt::CBIndex::c_30;
+    constexpr uint32_t cb_x = tt::CBIndex::c_23;
 #endif
 #else
     constexpr uint32_t cb_x = cb_in;
@@ -81,7 +81,7 @@ void MAIN {
 #ifdef FUSE_PRE_ADD
         reconfig_data_format(cb_in, cb_inb);
         pack_reconfig_data_format(cb_x);
-        add_tiles_init();
+        add_tiles_init(cb_in, cb_inb);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             ACQ();
             // UNPACK(( { DPRINT  << "Waiting on cb_x" << ENDL(); } ));
@@ -122,7 +122,7 @@ void MAIN {
          */
         ACQ();
         cb_reserve_back(cb_ex, onetile);
-        reduce_init_delta<false>(cb_ex, cb_x, cb_scaler);
+        reduce_init_delta<false>(cb_x, cb_scaler, cb_ex);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_wait_front(cb_x, wt + blk);
             for (uint32_t j = 0; j < blk; j++) {
@@ -166,7 +166,7 @@ void MAIN {
         /* (x - E[x])^2
          * compute temp = xmm*xmm = (x-E[x])^2
          */
-        mul_tiles_init();
+        mul_tiles_init(cb_xmm, cb_xmm);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_wait_front(cb_xmm, wt + blk);  // cumulative wait
             cb_reserve_back(cb_xmm2, blk);    // can probably use less space for this if we block
@@ -193,7 +193,7 @@ void MAIN {
             reconfig_data_format(cb_xmm2, cb_scaler);
         }
         cb_reserve_back(cb_ex2, 1);
-        reduce_init_delta<false>(cb_ex2, cb_xmm2, cb_scaler);
+        reduce_init_delta<false>(cb_xmm2, cb_scaler, cb_ex2);
         ACQ();
         cb_wait_front(cb_xmm2, Wt);
         // cb_wait_front(cb_xmm, Wt);
@@ -219,7 +219,7 @@ void MAIN {
             reconfig_data_format(cb_ex2, cb_eps);
         }
         ACQ();
-        add_tiles_init();
+        add_tiles_init(cb_ex2, cb_eps);
         add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
 
         cb_reserve_back(cb_ex2pe, 1);  // 1

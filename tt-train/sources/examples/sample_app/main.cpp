@@ -71,9 +71,9 @@ int main() {
     // Now we create a tensor with the buffer we just created
     auto x = tt::tt_metal::Tensor(
         // Let the tensor take ownership of the buffer
-        OwnedStorage{std::move(buffer)},
+        tt::tt_metal::OwnedStorage{std::move(buffer)},
         // IMPORTANT: SHAPE MUST BE 4D ELSE EVERYTHING WILL BREAK during the PAD operation
-        ttnn::SimpleShape({1, 1, tensor_width, tensor_height}),
+        ttnn::Shape({1, 1, tensor_width, tensor_height}),
         // The data type of the tensor
         tt::tt_metal::DataType::BFLOAT16,
         // The layout of the tensor. We don't care about the layout in this demo. But the valid options are TILE and
@@ -81,7 +81,7 @@ int main() {
         // processing
         tt::tt_metal::Layout::TILE);
     // Once created, the tensor "on host" and we must move it to the device to perform operations on it
-    x = x.to(device);
+    x = x.to_device(device);
 
     // Print the tensor to see what it looks like
     std::cout << "Tensot x:\n";

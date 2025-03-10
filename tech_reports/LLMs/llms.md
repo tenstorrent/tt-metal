@@ -209,7 +209,7 @@ ttnn_gamma_rm = ttnn.as_tensor(
 
 The distributed implementation is designed for cases where activations are **sharded along the embedding dimension** across multiple devices. It ensures the correct computation of mean and variance across shards by leveraging cross-device communication. Both interleaved and width-sharded inputs are supported.
 
-##### 2.3.2.2.1 Steps to Perform Distributed Normalization on TT-Devices
+##### 2.3.1.2.1 Steps to Perform Distributed Normalization on TT-Devices
 
 1. **Compute Local Statistics** - Each device computes the required statistics (e.g., \(E[x]\), \(E[x^2]\)) locally on its shard of the input tensor.
    - For **RMSNorm**, only \(E[x^2]\) is required.
@@ -1195,7 +1195,7 @@ Below is a summary and example code of the most important concepts for mapping a
 import ttnn
 
 # 2x4 mesh_device, Topology Ring: devices are connected in a ring
-mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(2, 4), mesh_type=ttnn.MeshType.Ring)
+mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(2, 4))
 
 # Construct initial torch tensor
 torch_tensor = torch.rand((1,1,32,256), dtype=torch.bfloat16)

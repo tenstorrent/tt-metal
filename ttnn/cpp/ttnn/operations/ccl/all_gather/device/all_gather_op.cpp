@@ -5,8 +5,8 @@
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 #include "ttnn/operations/math.hpp"
 
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 #include "ttnn/tensor/tensor_utils.hpp"
 
@@ -195,20 +195,22 @@ std::vector<ttnn::TensorSpec> AllGather::compute_output_specs(const std::vector<
     const auto& input_tensor = input_tensors[0];
     TensorSpec spec(
         output_shape,
-        TensorLayout(input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config));
+        tt::tt_metal::TensorLayout(
+            input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config));
     if (this->output_mem_config.is_sharded()) {
         return {TensorSpec(
             output_shape,
-            TensorLayout(input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config))};
+            tt::tt_metal::TensorLayout(
+                input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config))};
     }
     return std::vector<TensorSpec>(input_tensors.size(), spec);
 }
 
 std::vector<Tensor> AllGather::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    return operation::default_create_output_tensors(*this, input_tensors, {});
+    return tt::tt_metal::operation::default_create_output_tensors(*this, input_tensors, {});
 }
 
-operation::ProgramWithCallbacks AllGather::create_program(
+tt::tt_metal::operation::ProgramWithCallbacks AllGather::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     return all_gather_multi_core_with_workers(
         input_tensors[0],
@@ -257,8 +259,8 @@ Tensor all_gather(
         rank - 1,
         dim);
 
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
+    tt::tt_metal::operation::launch_op(
         [gather_dim,
          num_links,
          dim,
@@ -287,13 +289,13 @@ Tensor all_gather(
                 if (input_tensor.get_dtype() != DataType::BFLOAT16 && input_tensor.get_dtype() != DataType::FLOAT32) {
                     input_tensor = ttnn::typecast(input_tensor, DataType::BFLOAT16);
                 }
-                input_tensor = ttnn::pad(0, input_tensor, padding, 0, false, std::nullopt);
+                input_tensor = ttnn::pad(input_tensor, padding, 0, false, std::nullopt);
                 if (original_dtype != input_tensor.get_dtype()) {
                     input_tensor = ttnn::typecast(input_tensor, original_dtype);
                 }
             }
 
-            auto output_tensor = operation::run(
+            auto output_tensor = tt::tt_metal::operation::run(
                 ttnn::ccl::all_gather_detail::create_all_gather_struct(
                     input_tensor,
                     gather_dim,
@@ -344,9 +346,9 @@ Tensor all_gather(
         rank - 1,
         dim);
 
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
+    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
 
-    operation::launch_op(
+    tt::tt_metal::operation::launch_op(
         [gather_dim,
          num_links,
          memory_config,
@@ -361,18 +363,22 @@ Tensor all_gather(
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_device_tensor = input_tensors.at(0);
 
+            TT_FATAL(
+                mesh_view.is_mesh_2d(),
+                "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
             const auto coordinate = mesh_view.find_device(input_device_tensor.device()->id());
-            const auto view_index = (cluster_axis == 0) ? coordinate.col : coordinate.row;
-            const auto device_index = (cluster_axis == 0) ? coordinate.row : coordinate.col;
+            const auto view_index = (cluster_axis == 0) ? coordinate[1] : coordinate[0];
+            const auto device_index = (cluster_axis == 0) ? coordinate[0] : coordinate[1];
 
             auto get_chip_id = [&](std::size_t line_index) -> std::optional<chip_id_t> {
-                auto new_coord = coordinate;
+                auto new_row = coordinate[0];
+                auto new_col = coordinate[1];
                 if (cluster_axis == 0) {
-                    new_coord.row = line_index % num_devices;
+                    new_row = line_index % num_devices;
                 } else {
-                    new_coord.col = line_index % num_devices;
+                    new_col = line_index % num_devices;
                 }
-                return mesh_view.find_device_id(new_coord);
+                return mesh_view.find_device_id(MeshCoordinate(new_row, new_col));
             };
 
             bool is_last_chip_in_clockwise_direction = device_index == (num_devices - 1);
@@ -383,7 +389,7 @@ Tensor all_gather(
                                         ? std::nullopt
                                         : get_chip_id(device_index + num_devices - 1);
 
-            return operation::run(
+            return tt::tt_metal::operation::run(
                 ttnn::AllGather{
                     gather_dim,
                     num_links,

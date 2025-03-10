@@ -6,6 +6,7 @@
 #include "kernel_config/fd_kernel.hpp"
 #include <device_pool.hpp>
 #include <tt_metal.hpp>
+#include <host_api.hpp>
 #include "kernel_config/fd_kernel.hpp"
 #include "kernel_config/prefetch.hpp"
 #include "kernel_config/dispatch.hpp"
@@ -14,11 +15,14 @@
 #include "kernel_config/demux.hpp"
 #include "kernel_config/eth_router.hpp"
 #include "kernel_config/eth_tunneler.hpp"
+#include "fabric_host_interface.h"
+
+#include "tt_cluster.hpp"
 
 namespace tt::tt_metal {
 
 // For readablity, unset = x = -1
-#define x -1
+constexpr int x = -1;
 
 void increment_node_ids(DispatchKernelNode& node, uint32_t inc) {
     node.id += inc;
@@ -41,10 +45,10 @@ static const std::vector<DispatchKernelNode> single_chip_arch_1cq = {
 };
 
 static const std::vector<DispatchKernelNode> single_chip_arch_2cq = {
-    {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {1, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {x, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {2, 0, 0, 1, PREFETCH_HD, {x, x, x, x}, {3, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {3, 0, 0, 1, DISPATCH_HD, {2, x, x, x}, {x, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {2, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {1, 0, 0, 1, PREFETCH_HD, {x, x, x, x}, {3, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {2, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {x, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {3, 0, 0, 1, DISPATCH_HD, {1, x, x, x}, {x, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
 };
 
 static const std::vector<DispatchKernelNode> single_chip_arch_2cq_dispatch_s = {
@@ -386,7 +390,8 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device
     // of active devices. TODO: read this out of YAML instead of the structs above?
     uint32_t total_devices = tt::Cluster::instance().number_of_devices();
     TT_ASSERT(
-        total_devices == 1 or total_devices == 2 or total_devices == 4 or total_devices == 8 or total_devices == 36,
+        total_devices == 1 or total_devices == 2 or total_devices == 4 or total_devices == 8 or total_devices == 32 or
+            total_devices == 36,
         "Unexpected target.");
     uint32_t num_devices = device_ids.size();
     TT_ASSERT(num_devices > 0, "Can't determine dispatch architecture with no active devices.");
@@ -692,7 +697,7 @@ void configure_dispatch_cores(IDevice* device) {
     // Set up completion_queue_writer core. This doesn't actually have a kernel so keep it out of the struct and config
     // it here. TODO: should this be in the struct?
     CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
-    auto& my_dispatch_constants = dispatch_constants::get(dispatch_core_type);
+    auto& my_dispatch_constants = DispatchMemMap::get(dispatch_core_type);
     uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
     uint32_t cq_size = device->sysmem_manager().get_cq_size();
     std::vector<uint32_t> zero = {0x0};
@@ -744,6 +749,79 @@ void configure_dispatch_cores(IDevice* device) {
         if (node_id_to_kernel[idx]->GetDeviceId() == device->id()) {
             node_id_to_kernel[idx]->ConfigureCore();
         }
+    }
+}
+
+std::unique_ptr<Program> create_and_compile_fabric_program(IDevice* device) {
+    auto fabric_program_ptr = std::make_unique<Program>();
+
+    std::uint32_t router_mask = 0;
+    auto router_chans = tt::Cluster::instance().get_fabric_ethernet_channels(device->id());
+    auto fabric_config = tt::Cluster::instance().get_fabric_config();
+    size_t num_routers = router_chans.size();
+    for (const auto& router_chan : router_chans) {
+        router_mask += 0x1 << (uint32_t)router_chan;
+    }
+    auto master_router_chan = (uint32_t)(*router_chans.begin());
+    // setup runtime args
+    std::vector<uint32_t> router_runtime_args = {
+        num_routers,         // 0: number of active fabric routers
+        router_mask,         // 1: active fabric router mask
+        master_router_chan,  // 2: master router channel
+    };
+
+    std::vector<uint32_t> router_compile_args = {
+        (tt::tt_fabric::DEFAULT_ROUTER_RX_QUEUE_SIZE_BYTES >> 4),  // 0: rx_queue_size_words
+        0,                                                         // 1: test_results_addr
+        0,                                                         // 2: test_results_size
+        0,  // 3: timeout_mcycles * 1000 * 1000 * 4, // 3: timeout_cycles
+        0,  // 4: is_master_router
+    };
+
+    std::map<string, string> router_defines = {};
+    if (fabric_config == FabricConfig::FABRIC_2D) {
+        router_defines["FVC_MODE_PULL"] = "";
+    }
+
+    // TODO: Manual clear of semaphore, move this to proper Metal sempahore apis
+    std::vector<uint32_t> fabric_sem_zero_buf(1, 0);
+
+    for (const auto& router_chan : router_chans) {
+        CoreCoord virtual_eth_core =
+            tt::Cluster::instance().get_virtual_eth_core_from_channel(device->id(), router_chan);
+        auto router_logical_core = device->logical_core_from_ethernet_core(virtual_eth_core);
+        if (master_router_chan == router_chan) {
+            router_compile_args[4] = 1;
+        } else {
+            router_compile_args[4] = 0;
+        }
+        auto kernel = tt_metal::CreateKernel(
+            *fabric_program_ptr,
+            "tt_metal/fabric/impl/kernels/tt_fabric_router.cpp",
+            router_logical_core,
+            tt_metal::EthernetConfig{
+                .noc = tt_metal::NOC::NOC_0, .compile_args = router_compile_args, .defines = router_defines});
+
+        tt_metal::SetRuntimeArgs(*fabric_program_ptr, kernel, router_logical_core, router_runtime_args);
+    }
+
+    detail::CompileProgram(device, *fabric_program_ptr, /*fd_bootloader_mode=*/device->using_fast_dispatch());
+    return fabric_program_ptr;
+}
+
+void configure_fabric_cores(IDevice* device) {
+    std::vector<uint32_t> router_zero_buf(1, 0);
+
+    auto router_chans = tt::Cluster::instance().get_fabric_ethernet_channels(device->id());
+    for (const auto& router_chan : router_chans) {
+        CoreCoord virtual_eth_core =
+            tt::Cluster::instance().get_virtual_eth_core_from_channel(device->id(), router_chan);
+        auto router_logical_core = device->logical_core_from_ethernet_core(virtual_eth_core);
+        // initialize the semaphore
+        auto fabric_router_sync_sem_addr =
+            hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        detail::WriteToDeviceL1(
+            device, router_logical_core, fabric_router_sync_sem_addr, router_zero_buf, CoreType::ETH);
     }
 }
 

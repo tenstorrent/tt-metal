@@ -6,7 +6,6 @@
 
 #include <magic_enum/magic_enum.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "tools/profiler/op_profiler.hpp"

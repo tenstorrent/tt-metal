@@ -8,13 +8,18 @@ name: PR Gate
 #   PRs only care about the latest commit and multiple pushes may happen in quick succession.
 # - End-to-end (excluding wait times for runners) must be less than 5mins.
 #   This includes the cost of checking out the code, preparing a runner, etc.
-# - Individual test cases must be less than <TBD>.
+# - Individual test cases must be less than 1s.
 
 on:
   workflow_dispatch:
-  # pull_request:
-  #   branches:
-  #     - "main"
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+    branches:
+      - "main"
 
 concurrency:
   # Use github.run_id on main branch (or any protected branch)
@@ -28,8 +33,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-artifact:
+  pr-gate-build:
+    name: Build
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     uses: ./.github/workflows/build-artifact.yaml
-    secrets: inherit
     with:
-      os: "ubuntu-22.04-amd64"
+      version: "22.04"
+
+  smoke-tests:
+    needs: pr-gate-build
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [
+          "tt-beta-ubuntu-2204-n300-large-stable",
+        ]
+    uses: ./.github/workflows/smoke.yaml
+    with:
+      docker-image: ${{ needs.pr-gate-build.outputs.ci-build-docker-image }}
+      package-artifact-name: ${{ needs.pr-gate-build.outputs.packages-artifact-name }}
+      runner: ${{ matrix.platform }}

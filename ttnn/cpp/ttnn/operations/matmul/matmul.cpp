@@ -4,7 +4,7 @@
 
 #include "matmul.hpp"
 
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
@@ -18,7 +18,7 @@ namespace matmul {
 
 namespace detail {
 
-bool is_input_batched(const ttnn::SimpleShape& shape) {
+bool is_input_batched(const ttnn::Shape& shape) {
     auto is_batched = false;
     for (auto i = 0; i < shape.rank() - 2; ++i) {
         if (shape[i] > 1) {
@@ -82,7 +82,7 @@ ttnn::Tensor bound_matmul(
         input_tensor_b_adjusted,
         post_process_bias ? std::nullopt : bias,
         parameters,
-        0,
+        DefaultQueueId,
         optional_output_tensor = optional_output_tensor);
 
     if (post_process_bias) {
@@ -118,7 +118,7 @@ Tensor MatmulOperation::invoke(
     const std::optional<const CoreGrid> core_grid,
     const std::optional<const tt::tt_metal::Tile>& output_tile,
     std::optional<Tensor> optional_output_tensor,
-    const std::optional<const DeviceGlobalCircularBuffer>& global_cb) {
+    const std::optional<const tt::tt_metal::DeviceGlobalCircularBuffer>& global_cb) {
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
@@ -160,7 +160,7 @@ Tensor LinearOperation::invoke(
     const std::optional<const CoreGrid> core_grid,
     const std::optional<const tt::tt_metal::Tile>& output_tile,
     std::optional<ttnn::Tensor> optional_output_tensor,
-    const std::optional<const DeviceGlobalCircularBuffer>& global_cb) {
+    const std::optional<const tt::tt_metal::DeviceGlobalCircularBuffer>& global_cb) {
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);

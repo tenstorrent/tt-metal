@@ -11,9 +11,13 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     with:
       tracy: true
-      os: "ubuntu-20.04-amd64"
+      build-wheel: true
     secrets: inherit
   device-perf:
     needs: build-artifact-profiler
     secrets: inherit
     uses: ./.github/workflows/perf-device-models-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact-profiler.outputs.ci-build-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}

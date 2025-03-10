@@ -25,7 +25,7 @@ ALWI void calc_numeric_stable(uint32_t cb_in, uint32_t cb_bcast_scaler, uint32_t
     reconfig_data_format(cb_in, cb_bcast_scaler);
     pack_reconfig_data_format(cb_max);
     cb_reserve_back(cb_max, 1);
-    reduce_init_delta<false, PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_max, cb_in, cb_bcast_scaler);
+    reduce_init_delta<false, PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_in, cb_bcast_scaler, cb_max);
     cb_wait_front(cb_bcast_scaler, 1);
     for (uint32_t w = 0; w < block_w; w++) {
         constexpr uint32_t bcast_scaler0 = 0;
@@ -70,19 +70,19 @@ void MAIN {
     constexpr uint32_t subblock_w = get_compile_time_arg_val(2);
     constexpr uint32_t num_subblocks_w = get_compile_time_arg_val(3);
 
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_24);
+    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_6);
 
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_bcast_scaler = tt::CBIndex::c_1;
     constexpr auto cb_fused_scale = tt::CBIndex::c_2;
     constexpr auto cb_fused_attn = tt::CBIndex::c_3;
-    constexpr auto cb_exps = tt::CBIndex::c_24;
-    constexpr auto cb_recipsumexps = tt::CBIndex::c_25;
-    constexpr auto cb_scale_mask = tt::CBIndex::c_26;
-    constexpr auto cb_out0 = tt::CBIndex::c_16;
+    constexpr auto cb_exps = tt::CBIndex::c_6;
+    constexpr auto cb_recipsumexps = tt::CBIndex::c_7;
+    constexpr auto cb_scale_mask = tt::CBIndex::c_8;
+    constexpr auto cb_out0 = tt::CBIndex::c_11;
 #ifdef NUMERIC_STABLE
-    constexpr auto cb_max = tt::CBIndex::c_27;
-    constexpr auto cb_x = tt::CBIndex::c_28;
+    constexpr auto cb_max = tt::CBIndex::c_9;
+    constexpr auto cb_x = tt::CBIndex::c_10;
 #else
     constexpr auto cb_x = cb_exps;
 #endif
@@ -124,7 +124,7 @@ void MAIN {
         index_subblock_w_offset = 0;
 
 #ifdef CAUSAL_MASK
-        add_tiles_init();
+        add_tiles_init(cb_scale_mask, cb_fused_attn);
 #else
         add_bcast_rows_init_short(cb_scale_mask, cb_fused_attn);
 #endif
@@ -203,7 +203,7 @@ void MAIN {
 
         // sum(exp(x))
         ACQ();
-        reduce_init_delta<false>(cb_recipsumexps, cb_exps, cb_bcast_scaler);
+        reduce_init_delta<false>(cb_exps, cb_bcast_scaler, cb_recipsumexps);
         cb_wait_front(cb_exps, block_w);
         cb_wait_front(cb_bcast_scaler, 1);
         cb_reserve_back(cb_recipsumexps, 1);

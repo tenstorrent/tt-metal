@@ -14,7 +14,7 @@
 namespace ttnn::operations::embedding_backward {
 
 Tensor EmbeddingBackwardOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor_arg,
     const Tensor& weight_tensor_arg,
     const Tensor& output_gradient_tensor_arg,
@@ -26,10 +26,10 @@ Tensor EmbeddingBackwardOperation::invoke(
     const auto& input_shape = input_tensor_arg.get_logical_shape();
     auto batch_size = input_shape[0];
     auto sentence_size = input_shape[-1];
-    auto input_tensor = ttnn::reshape(input_tensor_arg, ttnn::SimpleShape({batch_size, 1, 1, sentence_size}));
+    auto input_tensor = ttnn::reshape(input_tensor_arg, ttnn::Shape({batch_size, 1, 1, sentence_size}));
 
     auto input_gradient =
-        operation::run(
+        tt::tt_metal::operation::run(
             EmbeddingBackward{
                 .output_mem_config = memory_config.value_or(output_gradient_tensor_arg.memory_config()),
                 .output_dtype = dtype.value_or(output_gradient_tensor_arg.get_dtype()),

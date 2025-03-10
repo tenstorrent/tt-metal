@@ -11,10 +11,10 @@
 namespace test_utils {
 
 void test_tensor_on_device(
-    const ttnn::SimpleShape& input_shape, const TensorLayout& layout, tt::tt_metal::IDevice* device) {
+    const ttnn::Shape& input_shape, const tt::tt_metal::TensorLayout& layout, tt::tt_metal::IDevice* device) {
     using namespace tt::tt_metal;
 
-    const uint32_t io_cq = 0;
+    const ttnn::QueueId io_cq = ttnn::DefaultQueueId;
 
     const auto input_buf_size_bytes = layout.compute_packed_buffer_size_bytes(input_shape);
     const auto host_buffer_datum_size_bytes = sizeof(uint32_t);
@@ -29,13 +29,13 @@ void test_tensor_on_device(
     }
 
     auto tensor = tt::tt_metal::create_device_tensor(TensorSpec(input_shape, layout), device);
-    ttnn::queue_synchronize(device->command_queue(io_cq));
+    ttnn::queue_synchronize(device->command_queue(*io_cq));
 
     ttnn::write_buffer(io_cq, tensor, {host_data});
-    ttnn::queue_synchronize(device->command_queue(io_cq));
+    ttnn::queue_synchronize(device->command_queue(*io_cq));
 
     ttnn::read_buffer(io_cq, tensor, {readback_data});
-    ttnn::queue_synchronize(device->command_queue(io_cq));
+    ttnn::queue_synchronize(device->command_queue(*io_cq));
 
     for (int i = 0; i < input_buf_size; i++) {
         EXPECT_EQ(host_data[i], readback_data[i]);
@@ -48,7 +48,7 @@ void test_tensor_on_device(
     tensor.deallocate();
 }
 
-void test_tensor_on_device(const ttnn::SimpleShape& input_shape, const tt::tt_metal::TensorLayout& layout) {
+void test_tensor_on_device(const ttnn::Shape& input_shape, const tt::tt_metal::TensorLayout& layout) {
     tt::tt_metal::IDevice* device = tt::tt_metal::CreateDevice(0);
 
     test_tensor_on_device(input_shape, layout, device);

@@ -75,7 +75,7 @@ void GroupAttnMatmulDeviceOperation::validate(const std::vector<Tensor>& input_t
         // If user passes in output_mem_config with shard_spec, assert that it is the same as the one calculated in
         // GroupAttnMatmulDeviceOperation::create_output_tensors
         if (this->output_mem_config.shard_spec.has_value()) {
-            const ttnn::SimpleShape output_shape = this->compute_output_specs(input_tensors).at(0).padded_shape();
+            const ttnn::Shape output_shape = this->compute_output_specs(input_tensors).at(0).padded_shape();
             const uint32_t num_cores = output_shape[1];
             CoreRangeSet all_cores =
                 num_cores_to_corerangeset(num_cores, this->compute_with_storage_grid_size, this->row_major);
@@ -135,7 +135,7 @@ std::vector<ttnn::TensorSpec> GroupAttnMatmulDeviceOperation::compute_output_spe
     if (this->transpose_hw.value_or(false)) {
         N = this->num_tokens.value();
     }
-    SimpleShape output_shape({1, ashape[1], ashape[2], N});
+    Shape output_shape({1, ashape[1], ashape[2], N});
 
     if (this->output_mem_config.is_sharded()) {
         auto output_mem_config = this->output_mem_config;
@@ -205,11 +205,11 @@ const operation::Hash GroupAttnMatmulDeviceOperation::compute_program_hash(
         std::get<DeviceStorage>(input_tensor_a.storage()).memory_config().memory_layout,
         std::get<DeviceStorage>(input_tensor_a.storage()).memory_config().buffer_type,
         input_tensor_a.dtype(),
-        std::get<DeviceStorage>(input_tensor_b.storage()).buffer->device()->id(),
+        input_tensor_a.device()->id(),
         std::get<DeviceStorage>(input_tensor_b.storage()).memory_config().memory_layout,
         std::get<DeviceStorage>(input_tensor_b.storage()).memory_config().buffer_type,
         input_tensor_b.dtype(),
-        std::get<DeviceStorage>(input_tensor_b.storage()).buffer->device()->id());
+        input_tensor_b.device()->id());
 }
 
 }  // namespace ttnn::operations::experimental::matmul

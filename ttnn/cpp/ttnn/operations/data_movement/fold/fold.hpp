@@ -23,23 +23,23 @@ struct FoldOperation {
         uint32_t stride_h,
         uint32_t stride_w,
         bool use_transpose_as_fold = false,
-        const std::optional<const ttnn::SimpleShape>& output_shape = std::nullopt,
+        const std::optional<const ttnn::Shape>& output_shape = std::nullopt,
         uint32_t pad_c = 0,
         uint32_t pad_h = 0,
         uint32_t pad_w = 0,
-        const std::optional<CoreCoord> grid_size = std::nullopt,
+        const std::optional<CoreRangeSet>& core_grid = std::nullopt,
         const std::optional<MemoryConfig>& override_memory_config = std::nullopt);
     static ttnn::Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         uint32_t stride_h,
         uint32_t stride_w,
         bool use_transpose_as_fold = false,
-        const std::optional<const ttnn::SimpleShape>& output_shape = std::nullopt,
+        const std::optional<const ttnn::Shape>& output_shape = std::nullopt,
         uint32_t pad_c = 0,
         uint32_t pad_h = 0,
         uint32_t pad_w = 0,
-        const std::optional<CoreCoord> grid_size = std::nullopt,
+        const std::optional<CoreRangeSet>& core_grid = std::nullopt,
         const std::optional<MemoryConfig>& override_memory_config = std::nullopt);
 };
 

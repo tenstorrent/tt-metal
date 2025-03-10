@@ -4,91 +4,77 @@
 
 #include <host_api.hpp>
 #include <command_queue.hpp>
-#include <hardware_command_queue.hpp>
 
+#include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
+#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
+#include "tt_metal/distributed/mesh_workload_utils.hpp"
 
 namespace tt::tt_metal::distributed {
-
-namespace experimental {
-
-void write_program_commands(
-    CommandQueue& cq,
-    ProgramCommandSequence& program_cmd_seq,
-    uint32_t num_active_cores_in_program,
-    SubDeviceId sub_device_id,
-    bool stall_first,
-    bool stall_before_program,
-    bool blocking) {
-    auto sub_device_index = sub_device_id.to_index();
-    // Increment expected num workers inside single device CQs to ensure other paths dont break.
-    // This is temporary, since data movement and events rely on single device CQs. Once MeshCommandQueue
-    // supports all runtime features, this will be removed, and program dispatch commands will be written
-    // directly through dedicated interfaces.
-
-    uint32_t num_workers_in_cq =
-        cq.hw_command_queue().get_expected_num_workers_completed_for_sub_device(sub_device_index);
-    cq.hw_command_queue().set_expected_num_workers_completed_for_sub_device(
-        sub_device_index, num_workers_in_cq + num_active_cores_in_program);
-    // Write program command stream to device
-    program_dispatch::write_program_command_sequence(
-        program_cmd_seq,
-        cq.device()->sysmem_manager(),
-        cq.id(),
-        dispatch_core_manager::instance().get_dispatch_core_type(cq.device()->id()),
-        stall_first,
-        stall_before_program);
-}
 
 // Use this function to send go signals to a device not running a program.
 // In the MeshWorkload context, a go signal must be sent to each device when
 // a workload is dispatched, in order to maintain consistent global state.
 void write_go_signal(
-    CommandQueue& cq,
+    uint8_t cq_id,
+    IDevice* device,
+    SubDeviceId sub_device_id,
+    SystemMemoryManager& sysmem_manager,
     uint32_t expected_num_workers_completed,
     CoreCoord dispatch_core,
     bool send_mcast,
     bool send_unicasts,
-    int num_unicast_txns = -1) {
+    int num_unicast_txns) {
     uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
     uint32_t cmd_sequence_sizeB =
         align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), pcie_alignment) + hal.get_alignment(HalMemType::HOST);
 
-    auto& manager = cq.device()->sysmem_manager();
-    void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq.id());
+    void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
+
+    auto dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
+    CoreType dispatch_core_type = dispatch_core_config.get_core_type();
+    auto sub_device_index = *sub_device_id;
 
     HugepageDeviceCommand go_signal_cmd_sequence(cmd_region, cmd_sequence_sizeB);
     go_msg_t run_program_go_signal;
-
     run_program_go_signal.signal = RUN_MSG_GO;
     run_program_go_signal.master_x = dispatch_core.x;
     run_program_go_signal.master_y = dispatch_core.y;
-    run_program_go_signal.dispatch_message_offset = 0;
+    run_program_go_signal.dispatch_message_offset =
+        (uint8_t)DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(sub_device_index);
 
-    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(cq.device()->id());
-    uint32_t dispatch_message_addr = dispatch_constants::get(dispatch_core_type)
-                                         .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
+    uint32_t dispatch_message_addr =
+        DispatchMemMap::get(dispatch_core_type)
+            .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE) +
+        DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(sub_device_index);
 
-    go_signal_cmd_sequence.add_notify_dispatch_s_go_signal_cmd(
-        0, /* wait */
-        1 /* index_bitmask */);
-
+    // When running with dispatch_s enabled:
+    //   - dispatch_d must notify dispatch_s that a go signal can be sent
+    //   - dispatch_s then mcasts the go signal to all workers.
+    // When running without dispatch_s:
+    //   - dispatch_d handles sending the go signal to all workers
+    // There is no need for dispatch_d to barrier before sending the dispatch_s notification or go signal,
+    // since this go signal is not preceeded by NOC txns for program config data
+    DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
+    if (DispatchQueryManager::instance().dispatch_s_enabled()) {
+        uint16_t index_bitmask = 1 << sub_device_index;
+        go_signal_cmd_sequence.add_notify_dispatch_s_go_signal_cmd(
+            0,                                   /* wait */
+            index_bitmask /* index_bitmask */);  // When running on sub devices, we must account for this
+        dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SLAVE;
+    }
     go_signal_cmd_sequence.add_dispatch_go_signal_mcast(
         expected_num_workers_completed,
         *reinterpret_cast<uint32_t*>(&run_program_go_signal),
         dispatch_message_addr,
-        send_mcast ? cq.device()->num_noc_mcast_txns(SubDeviceId{0}) : 0,
-        send_unicasts ? ((num_unicast_txns > 0) ? num_unicast_txns : cq.device()->num_noc_unicast_txns(SubDeviceId{0}))
-                      : 0,
-        0, /* noc_data_start_idx */
-        DispatcherSelect::DISPATCH_SLAVE);
+        send_mcast ? device->num_noc_mcast_txns(sub_device_id) : 0,
+        send_unicasts ? ((num_unicast_txns > 0) ? num_unicast_txns : device->num_noc_unicast_txns(sub_device_id)) : 0,
+        device->noc_data_start_index(sub_device_id, send_mcast, send_unicasts), /* noc_data_start_idx */
+        dispatcher_for_go_signal);
 
-    manager.issue_queue_push_back(cmd_sequence_sizeB, cq.id());
+    sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
 
-    manager.fetch_queue_reserve_back(cq.id());
-    manager.fetch_queue_write(cmd_sequence_sizeB, cq.id());
+    sysmem_manager.fetch_queue_reserve_back(cq_id);
+    sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);
 }
-
-}  // namespace experimental
-
 }  // namespace tt::tt_metal::distributed

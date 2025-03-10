@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <tt-metalium/host_api.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
 #include "ttnn/operation.hpp"
@@ -16,7 +15,7 @@ enum class PoolType { AVG };
 
 Tensor global_avg_pool2d(
     const Tensor& input,
-    const MemoryConfig& memory_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const MemoryConfig& memory_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     const std::optional<DataType>& output_dtype = std::nullopt);
 
 }  // namespace tt_metal

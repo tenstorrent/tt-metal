@@ -9,26 +9,11 @@ import pytest
 from models.utility_functions import (
     is_wormhole_b0,
     skip_for_grayskull,
-    is_grayskull,
-    is_wormhole_b0,
-    is_x2_harvested,
-    is_blackhole,
-    skip_for_blackhole,
-    is_blackhole,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc, check_with_pcc_without_tensor_printout
+from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 import ttnn
-import readline  # optional, will allow Up/Down/History in the console
-import code
 
 torch.set_printoptions(linewidth=400, profile="full", sci_mode=False)
-
-
-def drop_to_interpreter():
-    variables = globals().copy()
-    variables.update(locals())
-    shell = code.InteractiveConsole(variables)
-    shell.interact()
 
 
 def run_conv_transpose2d(
@@ -118,7 +103,7 @@ def run_conv_transpose2d(
         enable_act_double_buffer=False,
         enable_split_reader=False,
         enable_subblock_padding=False,
-        output_layout=ttnn.ROW_MAJOR_LAYOUT,
+        output_layout=output_layout,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -178,7 +163,6 @@ def run_conv_transpose2d(
     assert passing
 
 
-@skip_for_blackhole()
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)
 @pytest.mark.parametrize(
@@ -203,12 +187,14 @@ def run_conv_transpose2d(
     "weights_dtype",
     [
         ttnn.bfloat16,
+        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
     "activations_dtype",
     [
         ttnn.bfloat16,
+        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize("mirror_kernel", [True, False])
@@ -234,8 +220,8 @@ def test_simple_conv_t2d(
     shard_layout,
     mirror_kernel,
 ):
-    if device.core_grid.y != 8:
-        pytest.skip("Needs 8x8 Grid")
+    if device.core_grid.y != 8 and is_wormhole_b0():
+        pytest.skip("Needs 8x8 Grid for Wormhole_b0")
     run_conv_transpose2d(
         device,
         math_fidelity=ttnn.MathFidelity.HiFi4,

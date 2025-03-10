@@ -13,16 +13,10 @@ namespace operations::reduction {
 
 struct ArgMaxOperation {
     static ttnn::Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const Tensor& input_tensor,
         const std::optional<int> dim = std::nullopt,
-        const bool use_muticore = false,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt);
-
-    static ttnn::Tensor invoke(
-        const Tensor& input_tensor,
-        const std::optional<int> dim = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
         const bool use_muticore = false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);

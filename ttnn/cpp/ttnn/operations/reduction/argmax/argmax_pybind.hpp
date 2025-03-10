@@ -55,19 +55,22 @@ void bind_reduction_argmax_operation(py::module& module) {
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
                const std::optional<int> dim,
+               const std::optional<CoreRangeSet>& sub_core_grids,
                const bool use_multicore,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                std::optional<ttnn::Tensor> optional_output_tensor,
-               uint8_t queue_id) {
-                return self(queue_id, input_tensor, dim, use_multicore, memory_config, optional_output_tensor);
+               QueueId queue_id) {
+                return self(
+                    queue_id, input_tensor, dim, sub_core_grids, use_multicore, memory_config, optional_output_tensor);
             },
             py::arg("input_tensor").noconvert(),
             py::kw_only(),
             py::arg("dim") = std::nullopt,
+            py::arg("sub_core_grids") = std::nullopt,
             py::arg("use_multicore") = false,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 }  // namespace ttnn::operations::reduction::detail

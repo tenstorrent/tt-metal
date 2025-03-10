@@ -28,7 +28,7 @@ std::span<const uint8_t> to_bytes(T& value) {
 }
 
 template <>
-std::span<const uint8_t> to_bytes(ttnn::SimpleShape& value) {
+std::span<const uint8_t> to_bytes(ttnn::Shape& value) {
     auto ptr = reinterpret_cast<const uint8_t*>(value.view().data());
     return std::span<const uint8_t>(ptr, sizeof(value[0]) * value.rank());
 }
@@ -48,16 +48,16 @@ void from_bytes(std::span<const uint8_t> bytes, T& value) {
 }
 
 template <>
-void from_bytes(std::span<const uint8_t> bytes, ttnn::SimpleShape& value) {
+void from_bytes(std::span<const uint8_t> bytes, ttnn::Shape& value) {
     if (bytes.size() % sizeof(uint32_t) != 0) {
         std::ostringstream oss;
         oss << "Invalid byte size for conversion to type T. Expected divisible by" << sizeof(uint32_t)
-            << " Actual: " << bytes.size() << ", type: " << typeid(ttnn::SimpleShape).name();
+            << " Actual: " << bytes.size() << ", type: " << typeid(ttnn::Shape).name();
         throw std::invalid_argument(oss.str());
     }
     ttnn::SmallVector<uint32_t> data(bytes.size() / sizeof(uint32_t));
     std::memcpy(data.data(), bytes.data(), bytes.size());
-    value = ttnn::SimpleShape(std::move(data));
+    value = ttnn::Shape(std::move(data));
 }
 
 template <typename T>
@@ -108,7 +108,7 @@ void read_ttnn_tensor(MsgPackFile& file, std::string_view name, tt::tt_metal::Te
     auto shape = core::create_shape({1, 1, 1, 1});
     std::vector<uint8_t> bytes;
     file.get(std::string(name) + "/shape", bytes);
-    from_bytes<ttnn::SimpleShape>(bytes, shape);
+    from_bytes<ttnn::Shape>(bytes, shape);
 
     get_enum(file, std::string(name) + "/data_type", data_type);
     get_enum(file, std::string(name) + "/layout", layout);
@@ -121,8 +121,8 @@ void read_ttnn_tensor(MsgPackFile& file, std::string_view name, tt::tt_metal::Te
     } else if (data_type == tt::tt_metal::DataType::UINT32) {
         std::vector<uint32_t> data;
         file.get(std::string(name) + "/data", data);
-        tensor =
-            core::from_vector<uint32_t, DataType::UINT32>(data, shape, &ttml::autograd::ctx().get_device(), layout);
+        tensor = core::from_vector<uint32_t, tt::tt_metal::DataType::UINT32>(
+            data, shape, &ttml::autograd::ctx().get_device(), layout);
     } else {
         throw std::runtime_error(fmt::format("Unsupported data type: {}", magic_enum::enum_name(data_type)));
     }

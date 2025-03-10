@@ -186,7 +186,7 @@ constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NO_STRIDE = 0x02;
 struct CQDispatchWritePackedCmd {
     uint8_t flags;   // see above
     uint16_t count;  // number of sub-cmds (max 1020 unicast, 510 mcast). Max num sub-cmds =
-                     // (dispatch_constants::TRANSFER_PAGE_SIZE - sizeof(CQDispatchCmd)) /
+                     // (DispatchSettings::TRANSFER_PAGE_SIZE - sizeof(CQDispatchCmd)) /
                      // sizeof(CQDispatchWritePacked*castSubCmd)
     uint16_t write_offset_index;
     uint16_t size;  // size of each packet, stride is padded to L1 alignment and less than dispatch_cb_page_size

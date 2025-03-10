@@ -8,9 +8,10 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/bfloat16.hpp>
 
+namespace tt::tt_metal {
+
 using std::vector;
 using namespace tt;
-using namespace tt::tt_metal;
 
 /*
  * 1. Host creates one vector of data with constant non-zero values.
@@ -256,3 +257,5 @@ TEST_F(DeviceFixture, TensixComputeDropout) {
         unit_tests::compute::sfpu::dropout::test_dropout(this->devices_.at(0), test_config);
     }
 }
+
+}  // namespace tt::tt_metal

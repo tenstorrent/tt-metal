@@ -9,13 +9,9 @@ Welcome to the Model Bring-Up and Testing Landing Page!
 </h1>
 </div>
 
-## Model Bring-Up
+## Model Bring-Up and Testing
 
-- **Adding a Model** -
-
-## Model Testing
-
-- **Testing a Model** -
+- **Model Bring-Up** - [Model Bring-Up](https://github.com/tenstorrent/tt-metal/tree/main/models/model_bring_up.md)
 
 ## Model Optimization
 

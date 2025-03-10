@@ -16,6 +16,8 @@
 #include <tt-metalium/memcpy.hpp>
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 
+#include "test_common.hpp"
+
 using namespace tt;
 using namespace tt::tt_metal;
 using std::chrono::duration_cast;
@@ -226,7 +228,7 @@ int main(int argc, char** argv) {
         uint32_t host_write_ptr = 0;
 
         CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device_id);
-        uint32_t prefetch_q_base = dispatch_constants::get(dispatch_core_type)
+        uint32_t prefetch_q_base = DispatchMemMap::get(dispatch_core_type)
                                        .get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
 
         uint32_t reg_addr = prefetch_q_base;
@@ -234,7 +236,7 @@ int main(int argc, char** argv) {
 
         std::vector<uint32_t> go_signal = {0};
         std::vector<uint32_t> done_signal = {1};
-        uint32_t l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
+        uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
         tt_metal::detail::WriteToDeviceL1(device, logical_core, l1_unreserved_base, go_signal);
 
         // Application setup

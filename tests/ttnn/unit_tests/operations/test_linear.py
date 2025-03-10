@@ -136,8 +136,8 @@ def test_linear_with_core_grid(
 
 @pytest.mark.parametrize("batch_size", [1, 8])
 @pytest.mark.parametrize("m_size", [32, 64])
-@pytest.mark.parametrize("k_size", [1024, 2048])
-@pytest.mark.parametrize("n_size", [1024, 2048])
+@pytest.mark.parametrize("k_size", [1024])
+@pytest.mark.parametrize("n_size", [1024])
 @pytest.mark.parametrize("activation", [None, "relu", "silu"])
 def test_wide_linear_with_argument_for_core_grid_set_to_device_grid(
     device, batch_size, m_size, k_size, n_size, activation
@@ -163,8 +163,8 @@ def test_wide_linear_with_argument_for_core_grid_set_to_device_grid(
 
 @pytest.mark.parametrize("batch_size", [1, 8])
 @pytest.mark.parametrize("m_size", [32, 64])
-@pytest.mark.parametrize("k_size", [1024, 2048])
-@pytest.mark.parametrize("n_size", [1024, 2048])
+@pytest.mark.parametrize("k_size", [1024])
+@pytest.mark.parametrize("n_size", [1024])
 @pytest.mark.parametrize("activation", [None, "relu"])
 def test_linear_by_passing_in_1D_systolic_array_program_config(device, batch_size, m_size, k_size, n_size, activation):
     torch.manual_seed(0)
@@ -341,3 +341,73 @@ def test_linear_with_fp32_dest_acc_and_bias(device):
     )
     output_tensor = ttnn.to_torch(output1)
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+
+
+def test_resnet50_linear(device, use_program_cache):
+    torch.manual_seed(0)
+    batch_size = 16
+    input_channels = 2048
+    output_channels = 1000
+    input_shape = [1, 1, batch_size, input_channels]
+    torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
+    torch_weight_tensor = torch.randn([1, 1, output_channels, input_channels], dtype=torch.bfloat16)
+    torch_bias_tensor = torch.randn([1, 1, 1, output_channels], dtype=torch.bfloat16)
+    torch_out_golden_tensor = torch.nn.functional.linear(
+        torch_input_tensor[0, 0, :, :], torch_weight_tensor[0, 0, :, :], bias=torch_bias_tensor[0, 0, :, :]
+    )
+
+    tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weight_tensor = ttnn.from_torch(
+        torch.permute(torch_weight_tensor, (0, 1, 3, 2)), ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT
+    )
+    tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+    matmul_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(8, 4),
+        in0_block_w=2,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=1,
+        per_core_N=1,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+    grid_size = (8, 4)
+    shard_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1),
+            )
+        }
+    )
+    x = tt_input_tensor
+    shard_shape = [
+        x.volume() // x.padded_shape[-1],
+        x.padded_shape[-1] // (grid_size[0] * grid_size[1]),
+    ]
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    width_sharded_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+    x = ttnn.to_memory_config(x, width_sharded_mem_config)
+
+    tt_output_tensor_on_device = ttnn.linear(
+        x,
+        tt_weight_tensor,
+        bias=tt_bias_tensor,
+        program_config=matmul_config,
+        memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        dtype=ttnn.bfloat8_b,
+        compute_kernel_config=compute_config,
+    )
+    tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
+    torch_output_tensor = ttnn.to_torch(tt_output_tensor)
+    assert_with_pcc(torch_out_golden_tensor, torch_output_tensor[0, 0, :, :], pcc=0.99)

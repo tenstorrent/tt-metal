@@ -8,9 +8,9 @@
 #include <tt-metalium/cq_commands.hpp>
 #include <tt-metalium/device.hpp>
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
-#include "kernels/traffic_gen_test.hpp"
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_common.hpp"
-#include <tt-metalium/llrt.hpp>
+#include "test_common.hpp"
+#include "routing_test_common.hpp"
+#include "llrt.hpp"
 
 using std::vector;
 using namespace tt;
@@ -554,10 +554,10 @@ int main(int argc, char **argv) {
                 && (demux_queue_size_bytes >= 0x20000)) {
                     double target_bandwidth = 0;
                     if (max_packet_size_words >= 1024) {
-                        target_bandwidth = 10;
+                        target_bandwidth = 13;
                         log_info(LogTest, "Perf check for pkt size >= 1024 words");
                     } else if (max_packet_size_words >= 256) {
-                        target_bandwidth = 3;
+                        target_bandwidth = 4;
                         log_info(LogTest, "Perf check for pkt size >= 256 words");
                     }
                     if (mux_bw < target_bandwidth) {

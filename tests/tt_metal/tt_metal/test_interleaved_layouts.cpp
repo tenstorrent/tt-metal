@@ -11,9 +11,11 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
 
-#include <tt-metalium/llrt.hpp>
+#include "llrt.hpp"
 
-#include <tt-metalium/dprint_server.hpp>
+#include "dprint_server.hpp"
+
+#include "test_common.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does

@@ -1,0 +1,146 @@
+// Define schema for tracing host API calls, called Commands in this context.
+include "flatbuffer/buffer_types.fbs";
+include "flatbuffer/program_types.fbs";
+include "flatbuffer/base_types.fbs";
+
+namespace tt.tt_metal.flatbuffer;
+
+table ReplayTraceCommand {
+  // TODO (kmabee) - add device.
+  cq_id: int;
+  tid: int;
+  blocking: bool;
+}
+
+table EnqueueTraceCommand {
+  // TODO (kmabee) - add device.
+  cq_id: int;
+  tid: int;
+  blocking: bool;
+}
+
+table LoadTraceCommand {
+  tid: int; // Pointer to trace data.
+  cq_id: int;
+}
+
+table ReleaseTraceCommand {
+  // TODO (kmabee) - add device.
+  tid: int; // Pointer to trace data.
+}
+
+table BufferCreateCommand {
+  global_id: uint32;
+  device_id: int; // Reference to IDevice *device;
+  address: Uint32Optional; // Optional for pre-allocated buffers.
+  size: int;
+  page_size: int;
+  buffer_type: BufferType;
+  buffer_layout: TensorMemoryLayout;
+  shard_parameters: ShardSpecBuffer;
+  bottom_up: BoolOptional;
+  sub_device_id: Uint8Optional;
+}
+
+table BufferDeallocateCommand {
+  global_id: uint32;   // Reference to Buffer to be deallocated
+}
+
+table BufferDeleteCommand {
+  global_id: uint32;   // Reference to Buffer to be deleted
+}
+
+table EnqueueWriteBufferCommand {
+  cq_global_id: uint32;       // reference to CommandQueue
+  buffer_global_id: uint32;   // Reference to Buffer used as destination
+  src: [uint32];              // Data to be written. Support only some types for now.
+  blocking: bool;
+}
+
+table EnqueueReadBufferCommand {
+  cq_global_id: uint32;       // reference to CommandQueue
+  buffer_global_id: uint32;   // Reference to Buffer used as source
+  blocking: bool;
+}
+
+table FinishCommand {
+  cq_global_id: uint32;       // reference to CommandQueue
+  sub_device_ids: [ubyte];    // array of uint8 values representing SubDeviceId::Id
+}
+
+table ProgramConstructorCommand {
+  global_id: uint32;
+}
+
+table EnqueueProgramCommand {
+  cq_global_id: uint32;       // reference to CommandQueue
+  program_global_id: uint32;  // Reference to Program
+  blocking: bool;
+}
+
+table CreateKernelCommand {
+  global_id: uint32;          // Reference to Kernel
+  program_global_id: uint32;  // Reference to Program
+  file_name: string;          // Later replace with src, then binary
+  core_spec: CoreSpec;
+  kernel_config: KernelConfig;
+}
+
+table SetRuntimeArgsUint32Command {
+  program_global_id: uint32;  // Reference to Program
+  kernel_global_id: uint32;   // Reference to Kernel
+  core_spec: CoreSpec;
+  args: [uint32];             // Arguments to be passed to kernel
+}
+
+table SetRuntimeArgsUint32VecPerCoreCommand {
+  program_global_id: uint32;  // Reference to Program
+  kernel_global_id: uint32;   // Reference to Kernel
+  core_spec: [CoreCoord];
+  args: [UInt32Vector];       // vector of vector of uint32_t
+}
+
+table SetRuntimeArgsCommand {
+  kernel_global_id: uint32;   // Reference to Kernel
+  core_spec: CoreSpec;
+  args: [RuntimeArg];         // Arguments to be passed to kernel
+}
+
+table CreateCircularBufferCommand {
+  global_id: uint32;          // Reference to CBHandle
+  program_global_id: uint32;  // Reference to Program
+  core_spec: CoreSpec;
+  config: CircularBufferConfig;
+}
+
+table LightMetalCompareCommand {
+  cq_global_id: uint32;       // reference to CommandQueue
+  buffer_global_id: uint32;   // Reference to Buffer used as destination
+  golden_data: [uint32];      // Golden data to compare against at replay
+  is_user_data: bool;         // Informational, denote if golden data is from user or capture
+}
+
+union CommandType {
+  ReplayTraceCommand,
+  EnqueueTraceCommand,
+  LoadTraceCommand,
+  ReleaseTraceCommand,
+  BufferCreateCommand,
+  BufferDeallocateCommand,
+  BufferDeleteCommand,
+  EnqueueWriteBufferCommand,
+  EnqueueReadBufferCommand,
+  FinishCommand,
+  ProgramConstructorCommand,
+  EnqueueProgramCommand,
+  CreateKernelCommand,
+  SetRuntimeArgsUint32Command,
+  SetRuntimeArgsUint32VecPerCoreCommand,
+  SetRuntimeArgsCommand,
+  CreateCircularBufferCommand,
+  LightMetalCompareCommand,
+}
+
+table Command {
+    cmd: CommandType;
+}

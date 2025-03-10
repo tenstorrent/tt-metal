@@ -7,7 +7,6 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/math.hpp"
 
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 
@@ -17,7 +16,6 @@
 
 using uint32_t = std::uint32_t;
 using namespace tt::constants;
-using namespace tt::tt_metal;
 
 namespace ttnn::operations::normalization {
 
@@ -100,10 +98,11 @@ std::vector<TensorSpec> LayerNormPostAllGather::compute_output_specs(const std::
     auto& input_tensor = input_tensors.at(0);
     return {TensorSpec(
         input_tensor.get_logical_shape(),
-        TensorLayout(this->dtype.value_or(input_tensor.get_dtype()), PageConfig(Layout::TILE), memory_config))};
+        tt::tt_metal::TensorLayout(
+            this->dtype.value_or(input_tensor.get_dtype()), tt::tt_metal::PageConfig(Layout::TILE), memory_config))};
 }
 
-operation::ProgramWithCallbacks LayerNormPostAllGather::create_program(
+tt::tt_metal::operation::ProgramWithCallbacks LayerNormPostAllGather::create_program(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {

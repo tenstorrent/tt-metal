@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/decorators.hpp"
 #include "typecast.hpp"
@@ -11,12 +11,12 @@
 namespace ttnn::operations::experimental::copy {
 
 ttnn::Tensor TypecastOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor,
     const DataType& dtype,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operation::run(
+    return tt::tt_metal::operation::run(
                ttnn::operations::data_movement::CopyDeviceOperation{
                    output_mem_config.value_or(input_tensor.memory_config()), dtype},
                {input_tensor},

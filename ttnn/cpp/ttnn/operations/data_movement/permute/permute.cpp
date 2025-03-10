@@ -4,11 +4,10 @@
 
 #include "permute.hpp"
 
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -19,11 +18,6 @@
 
 namespace ttnn::operations::data_movement {
 namespace detail {
-
-inline bool is_on_device(const Tensor& t) {
-    return ttnn::has_storage_type_of(t, ttnn::StorageType::DEVICE) or
-           ttnn::has_storage_type_of(t, ttnn::StorageType::MULTI_DEVICE);
-}
 
 ttnn::Tensor permute_impl(
     const ttnn::Tensor& a,
@@ -82,6 +76,8 @@ ttnn::Tensor permute_impl(
             output = transpose_hc(transpose_wh(formatted_input_tensor));
         } else if (N == 0 && C == 3 && H == 2 && W == 1) {
             output = transpose_wh(transpose_hc(transpose_wh(formatted_input_tensor)));
+        } else {
+            TT_FATAL(false, "Sharded permute not supported for this permutation");
         }
     } else {
         if (N == 0 && C == 1 && H == 2 && W == 3) {
@@ -106,13 +102,13 @@ ttnn::Tensor permute_launch(
     const ttnn::SmallVector<uint32_t>& dims,
     const MemoryConfig& output_mem_config,
     const std::optional<float>& pad_value) {
-    std::vector<ttnn::Tensor> output_tensors = {ttnn::Tensor(operation::get_workers_for_op_output({a}))};
-    operation::launch_with_autoformat(
+    std::vector<ttnn::Tensor> output_tensors = {ttnn::Tensor(tt::tt_metal::operation::get_workers_for_op_output({a}))};
+    tt::tt_metal::operation::launch_with_autoformat(
         [dims, output_mem_config, pad_value](
             const std::vector<ttnn::Tensor>& input_tensors,
             const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
             const std::vector<std::optional<ttnn::Tensor>>& optional_output_tensors) mutable
-        -> std::vector<ttnn::Tensor> {
+            -> std::vector<ttnn::Tensor> {
             auto& a = input_tensors.at(0);
             return {permute_impl(a, dims, output_mem_config, pad_value)};
         },
@@ -175,7 +171,7 @@ bool is_permute_nop(const ttnn::Tensor& a, const ttnn::SmallVector<uint32_t>& di
 }  // namespace detail
 
 ttnn::Tensor ExecutePermute::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::SmallVector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config,
@@ -184,7 +180,7 @@ ttnn::Tensor ExecutePermute::invoke(
     TT_FATAL(
         input_rank == dims.size(),
         "The number of dimensions in the tensor input does not match the length of the desired ordering");
-    TT_FATAL(detail::is_on_device(input_tensor), "Tensor must already be on device");
+    TT_FATAL(is_tensor_on_device_or_multidevice(input_tensor), "Tensor must already be on device");
 
     SmallVector<uint32_t> normalized_dims(dims.size());
     std::transform(dims.begin(), dims.end(), normalized_dims.begin(), [input_tensor](std::int64_t idx) {

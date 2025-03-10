@@ -13,6 +13,8 @@
 #include <tt-metalium/command_queue.hpp>
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 
+#include "test_common.hpp"
+
 using namespace tt;
 using namespace tt::tt_metal;
 using std::chrono::duration_cast;
@@ -154,7 +156,7 @@ int main(int argc, char** argv) {
         uint32_t single_tile_size = 2 * 1024;
 
         uint32_t cb_src0_index = 0;
-        uint32_t cb_src0_addr = device->get_base_allocator_addr(HalMemType::L1);
+        uint32_t cb_src0_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
         tt_metal::CircularBufferConfig cb_src0_config =
             tt_metal::CircularBufferConfig(cb_tiles * single_tile_size, {{cb_src0_index, tt::DataFormat::Float16_b}})
                 .set_page_size(cb_src0_index, single_tile_size);

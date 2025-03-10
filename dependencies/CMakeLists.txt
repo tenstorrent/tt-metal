@@ -8,14 +8,40 @@ set(CMAKE_CXX_CLANG_TIDY "")
 # Boost
 ############################################################################################################################
 
-include(${PROJECT_SOURCE_DIR}/cmake/fetch_boost.cmake)
+function(ensureboosttarget boostTarget)
+    if(NOT TARGET Boost::${boostTarget})
+        add_library(Boost::${boostTarget} INTERFACE IMPORTED GLOBAL)
+        target_link_libraries(Boost::${boostTarget} INTERFACE Boost::headers)
+        message(STATUS "Defined Boost::${boostTarget} as an INTERFACE target.")
+    endif()
+endfunction()
 
-fetch_boost_library(core)
-fetch_boost_library(smart_ptr)
-fetch_boost_library(container)
+CPMAddPackage(
+    NAME Boost
+    VERSION 1.86.0
+    URL
+        https://github.com/boostorg/boost/releases/download/boost-1.86.0/boost-1.86.0-cmake.tar.xz
+        URL_HASH
+        SHA256=2c5ec5edcdff47ff55e27ed9560b0a0b94b07bd07ed9928b476150e16b0efc57
+    OPTIONS
+        "BOOST_ENABLE_CMAKE ON"
+        "BOOST_SKIP_INSTALL_RULES ON"
+        "BUILD_SHARED_LIBS OFF"
+        "BOOST_INCLUDE_LIBRARIES core\\\;container\\\;smart_ptr\\\;interprocess\\\;asio"
+    FIND_PACKAGE_ARGUMENTS "CONFIG REQUIRED"
+)
+
+ensureboosttarget(asio)
+ensureboosttarget(core)
+ensureboosttarget(container)
+ensureboosttarget(smart_ptr)
+ensureboosttarget(interprocess)
 
 add_library(span INTERFACE)
 target_link_libraries(span INTERFACE Boost::core)
+
+add_library(small_vector INTERFACE)
+target_link_libraries(small_vector INTERFACE Boost::container)
 
 ############################################################################################################################
 # yaml-cpp
@@ -33,15 +59,6 @@ CPMAddPackage(
         "YAML_BUILD_SHARED_LIBS OFF"
 )
 
-if(yaml-cpp_ADDED)
-    set_target_properties(
-        yaml-cpp
-        PROPERTIES
-            DEBUG_POSTFIX
-                ""
-    )
-endif()
-
 ############################################################################################################################
 # googletest
 ############################################################################################################################
@@ -53,6 +70,7 @@ CPMAddPackage(
     VERSION 1.13.0
     OPTIONS
         "INSTALL_GTEST OFF"
+        "BUILD_SHARED_LIBS OFF"
 )
 
 if(googletest_ADDED)
@@ -80,7 +98,7 @@ CPMAddPackage(NAME magic_enum GITHUB_REPOSITORY Neargye/magic_enum GIT_TAG v0.9.
 # fmt : https://github.com/fmtlib/fmt
 ############################################################################################################################
 
-CPMAddPackage(NAME fmt GITHUB_REPOSITORY fmtlib/fmt GIT_TAG 11.0.1)
+CPMAddPackage(NAME fmt GITHUB_REPOSITORY fmtlib/fmt GIT_TAG 11.0.1 OPTIONS "CMAKE_MESSAGE_LOG_LEVEL NOTICE")
 
 ############################################################################################################################
 # range-v3 : https://github.com/ericniebler/range-v3
@@ -94,31 +112,53 @@ CPMAddPackage(
         range-v3.patch
     OPTIONS
         "CMAKE_BUILD_TYPE Release"
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
 )
 
 ############################################################################################################################
 # pybind11 : https://github.com/pybind/pybind11
 ############################################################################################################################
 
-CPMAddPackage(NAME pybind11 GITHUB_REPOSITORY pybind/pybind11 GIT_TAG v2.13.6)
+CPMAddPackage(NAME pybind11 GITHUB_REPOSITORY pybind/pybind11 GIT_TAG v2.13.6 OPTIONS "CMAKE_MESSAGE_LOG_LEVEL NOTICE")
 
 ############################################################################################################################
 # nlohmann/json : https://github.com/nlohmann/json
 ############################################################################################################################
 
-CPMAddPackage(NAME json GITHUB_REPOSITORY nlohmann/json GIT_TAG v3.11.3)
+CPMAddPackage(
+    NAME nlohmann_json
+    GITHUB_REPOSITORY nlohmann/json
+    GIT_TAG v3.11.3
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+)
 
 ############################################################################################################################
 # xtensor : https://github.com/xtensor-stack/xtensor
 ############################################################################################################################
 
-CPMAddPackage(NAME xtl GITHUB_REPOSITORY xtensor-stack/xtl GIT_TAG 0.7.7 OPTIONS "XTL_ENABLE_TESTS OFF")
-CPMAddPackage(NAME xtensor GITHUB_REPOSITORY xtensor-stack/xtensor GIT_TAG 0.25.0 OPTIONS "XTENSOR_ENABLE_TESTS OFF")
+CPMAddPackage(
+    NAME xtl
+    GITHUB_REPOSITORY xtensor-stack/xtl
+    GIT_TAG 0.7.7
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+        "XTL_ENABLE_TESTS OFF"
+)
+CPMAddPackage(
+    NAME xtensor
+    GITHUB_REPOSITORY xtensor-stack/xtensor
+    GIT_TAG 0.25.0
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+        "XTENSOR_ENABLE_TESTS OFF"
+)
 CPMAddPackage(
     NAME xtensor-blas
     GITHUB_REPOSITORY xtensor-stack/xtensor-blas
     GIT_TAG 0.21.0
     OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "XTENSOR_ENABLE_TESTS OFF"
 )
 
@@ -131,6 +171,7 @@ CPMAddPackage(
     GITHUB_REPOSITORY google/benchmark
     GIT_TAG v1.9.1
     OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "BENCHMARK_USE_LIBCXX ${ENABLE_LIBCXX}"
         "BENCHMARK_ENABLE_TESTING OFF"
 )
@@ -148,5 +189,34 @@ endif()
 # taskflow : https://github.com/taskflow/taskflow
 ############################################################################################################################
 
-CPMAddPackage(NAME taskflow GITHUB_REPOSITORY taskflow/taskflow GIT_TAG v3.7.0)
-add_library(Taskflow::Taskflow ALIAS Taskflow)
+CPMAddPackage(
+    NAME Taskflow
+    GITHUB_REPOSITORY taskflow/taskflow
+    GIT_TAG v3.7.0
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE" # Taskflow's CMakeLists.txt is super noisy
+)
+if(Taskflow_ADDED AND NOT TARGET Taskflow::Taskflow)
+    add_library(Taskflow::Taskflow ALIAS Taskflow)
+endif()
+
+############################################################################################################################
+# flatbuffers : https://github.com/google/flatbuffers
+############################################################################################################################
+
+CPMAddPackage(
+    NAME flatbuffers
+    GITHUB_REPOSITORY google/flatbuffers
+    GIT_TAG v24.3.25
+    OPTIONS
+        "FLATBUFFERS_BUILD_FLATC ON"
+        "FLATBUFFERS_BUILD_TESTS OFF"
+        "FLATBUFFERS_SKIP_MONSTER_EXTRA ON"
+        "FLATBUFFERS_STRICT_MODE ON"
+)
+
+if(flatbuffers_ADDED)
+    # Few files including idl_gen_dart.cpp:175:18, Possibly related: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=105329
+    target_compile_options(flatc PRIVATE -Wno-restrict)
+    target_compile_options(flatbuffers PRIVATE -Wno-restrict)
+endif()

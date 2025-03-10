@@ -8,16 +8,20 @@
 
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/mesh_device.hpp>
+
+#include <tracy/Tracy.hpp>
+
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/command_queue.hpp>
-#include <tracy/Tracy.hpp>
-#include <tt-metalium/device_impl.hpp>
+#include "ttnn/types.hpp"
 
 namespace tt {
 
@@ -79,23 +83,6 @@ constexpr inline size_t packed_buffer_size_bytes<bfloat4_b>(size_t volume_unpack
 // ======================================================================================
 //                                  Layout converters
 // ======================================================================================
-namespace detail {
-static ttnn::SmallVector<uint32_t> to_4D_shape(const tt::tt_metal::LegacyShape& shape) {
-    if (shape.rank() == 1) {
-        return {1, 1, 1, shape[-1]};
-    } else if (shape.rank() == 2) {
-        return {1, 1, shape[-2], shape[-1]};
-    } else if (shape.rank() == 3) {
-        return {1, shape[-3], shape[-2], shape[-1]};
-    } else if (shape.rank() == 4) {
-        return {shape[-4], shape[-3], shape[-2], shape[-1]};
-    } else {
-        TT_THROW("Rank {} is not supported!", shape.rank());
-    }
-}
-
-}  // namespace detail
-
 template <typename T, template <typename...> typename BufferType>
 inline std::vector<T> convert_layout_row_major_to_tile(
     const Shape2D& shape, const Tile& tile, const BufferType<T>& data_to_convert) {
@@ -173,8 +160,7 @@ std::vector<T> decode_tensor_data(std::vector<T>&& physical_data, const TensorSp
 // ======================================================================================
 //                                      Validators
 // ======================================================================================
-void validate_on_device_dtype_and_layout(
-    IDevice* device, const ttnn::SimpleShape& shape, DataType dtype, Layout layout);
+void validate_on_device_dtype_and_layout(IDevice* device, const ttnn::Shape& shape, DataType dtype, Layout layout);
 // -----------------------------------------------------------------------------------------------------------------------------------------------
 // ===============================================================================================================================================
 //                                                              High Level APIs
@@ -185,32 +171,48 @@ void validate_on_device_dtype_and_layout(
 //                           Data reader, writer, and initializers
 // ======================================================================================
 
-DeviceBuffer allocate_buffer_on_device(IDevice* device, const TensorSpec& tensor_spec);
+std::shared_ptr<Buffer> allocate_buffer_on_device(IDevice* device, const TensorSpec& tensor_spec);
+
+std::shared_ptr<distributed::MeshBuffer> allocate_mesh_buffer_on_device(
+    distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec);
 
 template <typename T>
-inline void read_data_from_device_buffer(
-    CommandQueue& cq, DeviceBuffer device_buffer, void* host_buffer_data, bool blocking) {
+void read_data_from_device_buffer(
+    CommandQueue& cq, std::shared_ptr<Buffer> device_buffer, void* host_buffer_data, bool blocking) {
     EnqueueReadBuffer(cq, device_buffer, host_buffer_data, blocking);
 }
 
 template <typename T>
-inline void read_data_from_device_buffer(DeviceBuffer device_buffer, std::vector<T>& host_buffer) {
+void read_data_from_device_buffer(std::shared_ptr<Buffer> device_buffer, std::vector<T>& host_buffer) {
     ::tt::tt_metal::detail::ReadFromBuffer(device_buffer, host_buffer);
 }
 
 // ======================================================================================
-//                                         .to()
+//                                         .to_host() and .to_device()
 // ======================================================================================
 
 template <typename T>
-Tensor to_host(const Tensor& tensor, bool blocking = true, uint8_t cq_id = ttnn::DefaultQueueId);
+Tensor to_host(const Tensor& tensor, bool blocking = true, QueueId cq_id = ttnn::DefaultQueueId);
+
+// TODO: #17215 - This will eventually subsume `to_host`, when "mesh buffer" backed tensors become the default.
+template <typename T>
+Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking = true);
 
 template <typename T>
 Tensor to_device(
     const Tensor& tensor,
     IDevice* target_device,
     const MemoryConfig& memory_config,
-    uint8_t cq_id = ttnn::DefaultQueueId);
+    QueueId cq_id = ttnn::DefaultQueueId);
+
+// TODO: #17215 - This will eventually subsume `to_device`, when "mesh buffer" backed tensors become the default.
+template <typename T>
+Tensor to_device_mesh_tensor(
+    const Tensor& tensor, distributed::MeshDevice* mesh_device, const MemoryConfig& memory_config);
+
+// ======================================================================================
+//                                  .to_layout()
+// ======================================================================================
 
 template <typename T>
 Tensor to_layout(const Tensor& tensor, Layout target_layout);
@@ -224,13 +226,12 @@ Tensor to_layout_bfloat(const Tensor& tensor, Layout target_layout);
 template <typename T>
 Tensor pad(
     const Tensor& tensor,
-    const ttnn::SimpleShape& output_padded_shape,
-    const ttnn::SimpleShape& input_tensor_start,
+    const ttnn::Shape& output_padded_shape,
+    const ttnn::Shape& input_tensor_start,
     float pad_value);
 
 template <typename T>
-Tensor unpad(
-    const Tensor& tensor, const ttnn::SimpleShape& output_tensor_start, const ttnn::SimpleShape& output_tensor_end);
+Tensor unpad(const Tensor& tensor, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end);
 
 // ======================================================================================
 //                                         Print

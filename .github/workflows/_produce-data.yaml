@@ -20,22 +20,23 @@ on:
     workflows:
       - "All post-commit tests"
       - "(Single-card) Model perf tests"
-      - "(Single-card) Device perf tests"
+      - "(Single-card) Device perf regressions"
       - "(Single-card) Demo tests"
       - "(Single-card) Tests for new models"
-      - "Nightly fast dispatch tests"
+      - "(Single-card) Fast dispatch frequent tests"
       - "(Single-card) Nightly model and ttnn tests"
-      - "(Single-card) Tests for new models"
       - "(T3K) T3000 demo tests"
+      - "(T3K) T3000 frequent tests"
       - "(T3K) T3000 model perf tests"
+      - "(T3K) T3000 nightly tests"
       - "(T3K) T3000 perplexity tests"
-      - "(T3K) T3000 model perf tests"
       - "(T3K) T3000 profiler tests"
       - "(T3K) T3000 unit tests"
       - "(TG) TG unit tests"
       - "(TG) TG demo tests"
       - "(TG) TG frequent tests"
       - "(TG) TG model perf tests"
+      - "(TG) TG nightly tests"
       - "(TGG) TGG model perf tests"
       - "(TGG) TGG unit tests"
       - "(TGG) TGG demo tests"
@@ -43,11 +44,19 @@ on:
       - "ttnn - Run sweeps"
       - "Blackhole post-commit tests"
       - "Custom test dispatch"
+      - "PR Gate"
+      - "Nightly tt-metal L2 tests"
     types:
       - completed
 
 jobs:
   produce-cicd-data:
+    if: |
+      # Check if triggered by `workflow_run` with specific conclusion states,
+      # or if it's triggered by `workflow_call` or `workflow_dispatch`
+      ${{ github.event_name == 'workflow_run' && (github.event.workflow_run.conclusion == 'success' || github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'cancelled') }} ||
+      ${{ github.event_name == 'workflow_call' }} ||
+      ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -88,6 +97,12 @@ jobs:
           echo "attempt-number=$attempt_number" >> "$GITHUB_OUTPUT"
 
           echo "::notice title=target-workflow-link::The workflow being analyzed is available at https://github.com/tenstorrent/tt-metal/actions/runs/$run_id/attempts/$attempt_number"
+      - name: Get API rate limit status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "[Info] Grabbing API rate limit status"
+          gh api rate_limit
       - name: Output auxiliary values
         env:
           GH_TOKEN: ${{ github.token }}
@@ -130,6 +145,7 @@ jobs:
       - name: Upload workflow run data, even on failure
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
+        timeout-minutes: 10
         with:
           name: workflow-run-data
           path: |
@@ -144,6 +160,12 @@ jobs:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: U014XCQ9CF8 # tt-rkim
   test-produce-complete-benchmark-with-environment:
+    if: |
+      # Check if triggered by `workflow_run` with specific conclusion states,
+      # or if it's triggered by `workflow_call` or `workflow_dispatch`
+      ${{ github.event_name == 'workflow_run' && (github.event.workflow_run.conclusion == 'success' || github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'cancelled') }} ||
+      ${{ github.event_name == 'workflow_call' }} ||
+      ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

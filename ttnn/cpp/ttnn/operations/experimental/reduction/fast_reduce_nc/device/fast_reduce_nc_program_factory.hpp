@@ -7,11 +7,10 @@
 #include "ttnn/run_operation.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
-#include <tt-metalium/host_api.hpp>
 
 namespace ttnn::operations::experimental::reduction::detail {
 
-operation::ProgramWithCallbacks reduce_nc_factory(
+tt::tt_metal::operation::ProgramWithCallbacks reduce_nc_factory(
     const ttnn::Tensor& input,
     const ttnn::Tensor& output,
     int64_t dim,

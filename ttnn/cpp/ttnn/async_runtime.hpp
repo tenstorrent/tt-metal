@@ -10,29 +10,28 @@
 #include "types.hpp"
 
 namespace ttnn {
-using queue_id = uint8_t;
 
 void write_buffer(
-    queue_id cq_id,
+    QueueId cq_id,
     Tensor& dst,
     std::vector<std::shared_ptr<void>> src,
-    const std::optional<BufferRegion>& region = std::nullopt);
+    const std::optional<tt::tt_metal::BufferRegion>& region = std::nullopt);
 
 void read_buffer(
-    queue_id cq_id,
+    QueueId cq_id,
     Tensor& src,
     std::vector<std::shared_ptr<void>> dst,
-    const std::optional<BufferRegion>& region = std::nullopt,
+    const std::optional<tt::tt_metal::BufferRegion>& region = std::nullopt,
     size_t src_offset = 0,
     bool blocking = true);
 
-void queue_synchronize(CommandQueue& cq);
+void queue_synchronize(tt::tt_metal::CommandQueue& cq);
 
-void event_synchronize(const std::shared_ptr<Event>& event);
+void event_synchronize(const std::shared_ptr<tt::tt_metal::Event>& event);
 
-bool event_query(const std::shared_ptr<Event>& event);
+bool event_query(const std::shared_ptr<tt::tt_metal::Event>& event);
 
-void wait_for_event(CommandQueue& cq, const std::shared_ptr<Event>& event);
+void wait_for_event(tt::tt_metal::CommandQueue& cq, const std::shared_ptr<tt::tt_metal::Event>& event);
 
-void record_event(CommandQueue& cq, const std::shared_ptr<Event>& event);
+void record_event(tt::tt_metal::CommandQueue& cq, const std::shared_ptr<tt::tt_metal::Event>& event);
 }  // namespace ttnn

@@ -53,7 +53,7 @@ void Tensor::add_grad(const tt::tt_metal::Tensor& grad) {
 
     // It is important to not use inline addition here
     // m_grad might share memory with other tensors
-    m_grad = ttnn::add(m_grad, grad);
+    m_grad = ttnn::experimental::add(m_grad, grad);
 }
 
 void Tensor::backward(bool retain_graph) {
@@ -148,6 +148,14 @@ bool Tensor::get_requires_grad() const {
 
 const std::optional<NodeId>& Tensor::get_node() const {
     return m_node_id;
+}
+
+const ttnn::Shape& Tensor::get_shape() const {
+    return get_value().get_logical_shape();
+}
+
+uint32_t Tensor::get_rank() const {
+    return get_shape().rank();
 }
 
 }  // namespace ttml::autograd

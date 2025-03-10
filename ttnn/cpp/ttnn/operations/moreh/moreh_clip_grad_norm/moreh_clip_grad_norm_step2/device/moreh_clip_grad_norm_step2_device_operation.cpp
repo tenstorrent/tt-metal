@@ -43,7 +43,7 @@ MorehClipGradNormStep2Operation::spec_return_value_t MorehClipGradNormStep2Opera
 
     // output total_norm 1 element
     return TensorSpec(
-        SimpleShape{1, 1},
+        Shape{1, 1},
         TensorLayout(
             tensor_args.tmp_pow_sum.get_dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
 };

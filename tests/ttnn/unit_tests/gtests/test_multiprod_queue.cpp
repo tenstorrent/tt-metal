@@ -2,91 +2,71 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <numeric>
+#include <thread>
+#include <gmock/gmock.h>
+
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn_multi_command_queue_fixture.hpp"
 #include <tt-metalium/tt_metal.hpp>
-#include "ttnn/operations/eltwise/binary/binary.hpp"
 #include <tt-metalium/bfloat16.hpp>
 #include "ttnn/async_runtime.hpp"
-#include "ttnn/operations/functions.hpp"
 #include <tt-metalium/event.hpp>
-#include <cmath>
-#include <thread>
 
-using namespace tt;
-using namespace tt_metal;
-using MultiCommandQueueSingleDeviceFixture = ttnn::MultiCommandQueueSingleDeviceFixture;
-using namespace constants;
+namespace tt::tt_metal {
+namespace {
 
-TEST_F(MultiCommandQueueSingleDeviceFixture, TestMultiProducerLockBasedQueue) {
+using ::testing::Eq;
+using ::testing::FloatEq;
+using ::testing::Pointwise;
+using ::tt::tt_metal::is_tensor_on_device;
+
+using MultiProducerCommandQueueTest = ttnn::MultiCommandQueueSingleDeviceFixture;
+
+TEST_F(MultiProducerCommandQueueTest, Stress) {
     // Spawn 2 application level threads intefacing with the same device through the async engine.
     // This leads to shared access of the work_executor and host side worker queue.
     // Test thread safety.
     IDevice* device = this->device_;
     // Enable async engine and set queue setting to lock_based
     device->enable_async(true);
-    device->set_worker_queue_mode(WorkerQueueMode::LOCKBASED);
 
-    MemoryConfig mem_cfg = MemoryConfig{
+    const ttnn::Shape tensor_shape{1, 1, 1024, 1024};
+    const MemoryConfig mem_cfg = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
         .buffer_type = BufferType::DRAM,
         .shard_spec = std::nullopt};
+    const TensorLayout tensor_layout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), mem_cfg);
+    const TensorSpec tensor_spec(tensor_shape, tensor_layout);
+
     // Thread 0 uses cq_0, thread 1 uses cq_1
-    uint32_t t0_io_cq = 0;
-    uint32_t t1_io_cq = 1;
-    uint32_t tensor_buf_size = 1024 * 1024;
-    uint32_t datum_size_bytes = 2;
+    const ttnn::QueueId t0_io_cq = ttnn::DefaultQueueId;
+    const ttnn::QueueId t1_io_cq = ttnn::QueueId(1);
 
-    ttnn::SimpleShape tensor_shape{1, 1, 1024, 1024};
-    auto t0_host_data = std::shared_ptr<bfloat16[]>(new bfloat16[tensor_buf_size]);
-    auto t0_readback_data = std::shared_ptr<bfloat16[]>(new bfloat16[tensor_buf_size]);
-    auto t1_host_data = std::shared_ptr<bfloat16[]>(new bfloat16[tensor_buf_size]);
-    auto t1_readback_data = std::shared_ptr<bfloat16[]>(new bfloat16[tensor_buf_size]);
+    std::vector<float> t0_host_data(tensor_shape.volume());
+    std::vector<float> t1_host_data(tensor_shape.volume());
+    std::iota(t0_host_data.begin(), t0_host_data.end(), 1024);
+    std::iota(t1_host_data.begin(), t1_host_data.end(), 2048);
 
-    // Application level threads issue writes and readbacks.
+    const Tensor t0_host_tensor = Tensor::from_vector(t0_host_data, tensor_spec);
+    const Tensor t1_host_tensor = Tensor::from_vector(t1_host_data, tensor_spec);
+
+    constexpr int kNumIterations = 100;
     std::thread t0([&]() {
-        for (int j = 0; j < 100; j++) {
-            // Initialize data
-            for (int i = 0; i < tensor_buf_size; i++) {
-                t0_host_data[i] = bfloat16(static_cast<float>(2 + j));
-            }
-            // Allocate and write buffer
-            tt_metal::TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg);
-            tt_metal::TensorSpec tensor_spec(tensor_shape, tensor_layout);
-            ASSERT_EQ(tensor_buf_size * datum_size_bytes, tensor_spec.compute_packed_buffer_size_bytes());
-            auto t0_input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, tensor_spec);
-            auto t0_input_storage = tt::tt_metal::DeviceStorage{t0_input_buffer};
-            Tensor t0_input_tensor = Tensor(t0_input_storage, tensor_shape, DataType::BFLOAT16, Layout::TILE);
-            ttnn::write_buffer(t0_io_cq, t0_input_tensor, {t0_host_data});
-            // Readback and verify
-            ttnn::read_buffer(t0_io_cq, t0_input_tensor, {t0_readback_data});
-            t0_input_tensor.deallocate();
-            for (int i = 0; i < tensor_buf_size; i++) {
-                EXPECT_EQ(t0_readback_data[i], t0_host_data[i]);
-            }
+        for (int j = 0; j < kNumIterations; j++) {
+            Tensor t0_tensor = t0_host_tensor.to_device(device, mem_cfg, t0_io_cq);
+            EXPECT_TRUE(is_tensor_on_device(t0_tensor));
+            EXPECT_THAT(t0_tensor.to_vector<float>(), Pointwise(FloatEq(), t0_host_data));
         }
     });
 
     std::thread t1([&]() {
-        TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg);
-        TensorSpec tensor_spec(tensor_shape, tensor_layout);
-        ASSERT_EQ(tensor_buf_size * datum_size_bytes, tensor_spec.compute_packed_buffer_size_bytes());
-        for (int j = 0; j < 100; j++) {
-            for (int i = 0; i < tensor_buf_size; i++) {
-                t1_host_data[i] = bfloat16(static_cast<float>(4 + j));
-            }
-            auto t1_input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, tensor_spec);
-            auto t1_input_storage = tt::tt_metal::DeviceStorage{t1_input_buffer};
-            Tensor t1_input_tensor = Tensor(t1_input_storage, tensor_shape, DataType::BFLOAT16, Layout::TILE);
-
-            ttnn::write_buffer(t1_io_cq, t1_input_tensor, {t1_host_data});
-            ttnn::read_buffer(t1_io_cq, t1_input_tensor, {t1_readback_data});
-
-            t1_input_tensor.deallocate();
-            for (int i = 0; i < tensor_buf_size; i++) {
-                EXPECT_EQ(t1_readback_data[i], t1_host_data[i]);
-            }
+        for (int j = 0; j < kNumIterations; j++) {
+            Tensor t1_tensor = t1_host_tensor.to_device(device, mem_cfg, t1_io_cq);
+            EXPECT_TRUE(is_tensor_on_device(t1_tensor));
+            EXPECT_THAT(t1_tensor.to_vector<float>(), Pointwise(FloatEq(), t1_host_data));
         }
     });
 
@@ -94,7 +74,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestMultiProducerLockBasedQueue) {
     t1.join();
 }
 
-TEST_F(MultiCommandQueueSingleDeviceFixture, TestMultiAppThreadSync) {
+TEST_F(MultiProducerCommandQueueTest, EventSync) {
     // Verify that the event_synchronize API stalls the calling thread until
     // the device records the event being polled.
     // Thread 0 = writer thread. Thread 1 = reader thread.
@@ -104,55 +84,62 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestMultiAppThreadSync) {
     IDevice* device = this->device_;
     // Enable async engine and set queue setting to lock_based
     device->enable_async(true);
-    device->set_worker_queue_mode(WorkerQueueMode::LOCKBASED);
 
-    MemoryConfig mem_cfg = MemoryConfig{
+    const ttnn::Shape tensor_shape{1, 1, 1024, 1024};
+    const MemoryConfig mem_cfg = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
         .buffer_type = BufferType::DRAM,
         .shard_spec = std::nullopt};
-    uint32_t write_cq = 0;
-    uint32_t read_cq = 0;
-    uint32_t tensor_buf_size = 1024 * 1024;
-    uint32_t datum_size_bytes = 2;
+    const TensorLayout tensor_layout(DataType::UINT32, PageConfig(Layout::ROW_MAJOR), mem_cfg);
+    const TensorSpec tensor_spec(tensor_shape, tensor_layout);
+
+    const ttnn::QueueId write_cq = ttnn::DefaultQueueId;
+    const ttnn::QueueId read_cq = ttnn::QueueId(1);
 
     std::shared_ptr<Event> write_event = std::make_shared<Event>();
     std::shared_ptr<Event> read_event = std::make_shared<Event>();
 
-    ttnn::SimpleShape tensor_shape{1, 1, 1024, 1024};
-    auto host_data = std::shared_ptr<bfloat16[]>(new bfloat16[tensor_buf_size]);
-    TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg);
-    auto allocated_buffer =
-        tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, TensorSpec(tensor_shape, tensor_layout));
-    auto allocated_storage = tt::tt_metal::DeviceStorage{allocated_buffer};
-    auto allocated_tensor = Tensor(allocated_storage, tensor_shape, DataType::BFLOAT16, Layout::TILE);
-    auto readback_data = std::shared_ptr<bfloat16[]>(new bfloat16[tensor_buf_size]);
+    Tensor device_tensor = create_device_tensor(tensor_spec, device);
 
+    constexpr int kNumIterations = 100;
     std::thread t0([&]() {
-        for (int j = 0; j < 1000; j++) {
+        std::vector<uint32_t> host_data(tensor_shape.volume());
+        for (int j = 0; j < kNumIterations; j++) {
             if (j != 0) {
                 ttnn::event_synchronize(read_event);
             }
             read_event = std::make_shared<Event>();
-            for (int i = 0; i < tensor_buf_size; i++) {
-                host_data[i] = bfloat16(static_cast<float>(2 + j));
-            }
-            ttnn::write_buffer(write_cq, allocated_tensor, {host_data});
-            ttnn::record_event(device->command_queue(write_cq), write_event);
+
+            // Create tensor and transfer to device
+            std::iota(host_data.begin(), host_data.end(), j);
+            const Tensor host_tensor = Tensor::from_vector(host_data, tensor_spec);
+            memcpy(device->command_queue(*write_cq), device_tensor, host_tensor);
+            EXPECT_TRUE(is_tensor_on_device(device_tensor));
+
+            ttnn::record_event(device->command_queue(*write_cq), write_event);
         }
     });
 
     std::thread t1([&]() {
-        for (int j = 0; j < 1000; j++) {
+        std::vector<uint32_t> expected_readback_data(tensor_shape.volume());
+        for (int j = 0; j < kNumIterations; j++) {
             ttnn::event_synchronize(write_event);
             write_event = std::make_shared<Event>();
-            ttnn::read_buffer(read_cq, allocated_tensor, {readback_data});
-            for (int i = 0; i < tensor_buf_size; i++) {
-                EXPECT_EQ(readback_data[i], host_data[i]);
-            }
-            ttnn::record_event(device->command_queue(read_cq), read_event);
+
+            // Read back from device and verify
+            const Tensor readback_tensor = device_tensor.cpu(/*blocking=*/true, read_cq);
+            EXPECT_FALSE(is_tensor_on_device(readback_tensor));
+            std::iota(expected_readback_data.begin(), expected_readback_data.end(), j);
+            EXPECT_THAT(readback_tensor.to_vector<uint32_t>(), Pointwise(Eq(), expected_readback_data))
+                << "At iteration " << j;
+
+            ttnn::record_event(device->command_queue(*read_cq), read_event);
         }
     });
 
     t0.join();
     t1.join();
 }
+
+}  // namespace
+}  // namespace tt::tt_metal

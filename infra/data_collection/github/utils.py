@@ -11,7 +11,7 @@ from typing import Optional, Union
 
 from loguru import logger
 
-from infra.data_collection.models import InfraErrorV1
+from infra.data_collection.models import InfraErrorV1, TestErrorV1
 from infra.data_collection.pydantic_models import CompleteBenchmarkRun
 
 
@@ -90,9 +90,23 @@ def return_first_string_starts_with(starting_string, strings):
     raise Exception(f"{strings} do not have any that match {starting_string}")
 
 
-def get_job_failure_signature_(github_job) -> Optional[Union[InfraErrorV1]]:
-    if github_job["conclusion"] == "success":
-        return None
+def get_job_failure_signature_(github_job, failure_description) -> Optional[Union[InfraErrorV1]]:
+    error_snippet_to_signature_mapping = {
+        "timed out": str(InfraErrorV1.JOB_UNIT_TIMEOUT_FAILURE),
+        "exceeded the maximum execution time": str(InfraErrorV1.JOB_CUMULATIVE_TIMEOUT_FAILURE),
+        "lost communication with the server": str(InfraErrorV1.RUNNER_COMM_FAILURE),
+        "runner has received a shutdown signal": str(InfraErrorV1.RUNNER_SHUTDOWN_FAILURE),
+        "No space left on device": str(InfraErrorV1.DISK_SPACE_FAILURE),
+        "API rate limit exceeded": str(InfraErrorV1.API_RATE_LIMIT_FAILURE),
+        "Tenstorrent cards seem to be in use": str(InfraErrorV1.RUNNER_CARD_IN_USE_FAILURE),
+    }
+
+    # Check the mapping dictionary for specific failure signature types
+    for error_snippet in error_snippet_to_signature_mapping:
+        if error_snippet in failure_description:
+            return error_snippet_to_signature_mapping[error_snippet]
+
+    # If failure occurred in runner setup, classify as set up failure
     for step in github_job["steps"]:
         is_generic_setup_failure = (
             step["name"] == "Set up runner"
@@ -103,10 +117,45 @@ def get_job_failure_signature_(github_job) -> Optional[Union[InfraErrorV1]]:
         )
         if is_generic_setup_failure:
             return str(InfraErrorV1.GENERIC_SET_UP_FAILURE)
-    return None
+
+    # generic catch-all
+    return str(InfraErrorV1.GENERIC_FAILURE)
 
 
-def get_job_row_from_github_job(github_job):
+def get_failure_signature_and_description_from_annotations(github_job, github_job_id_to_annotations):
+    failure_signature, failure_description = None, None
+
+    # Don't return any failure info if job passed
+    if github_job["conclusion"] == "success":
+        return failure_signature, failure_description
+
+    # Otherwise, check the job's annotation info for failure reason
+    job_id = github_job["id"]
+    if job_id in github_job_id_to_annotations:
+        annotation_info = github_job_id_to_annotations[job_id]
+
+        for _annot in annotation_info:
+            if _annot["annotation_level"] == "failure":
+                # Unit test failure: a failure exists where the annotation path is not .github
+                if _annot["path"] != ".github":
+                    failure_description = _annot["path"]
+                    if ".py" in failure_description:
+                        failure_signature = str(TestErrorV1.PY_TEST_FAILURE)
+                    elif ".cpp" in failure_description:
+                        failure_signature = str(TestErrorV1.CPP_TEST_FAILURE)
+                    else:
+                        failure_signature = str(TestErrorV1.UNKNOWN_TEST_FAILURE)
+                    return failure_signature, failure_description
+                else:
+                    # Infrastructure error
+                    failure_description = _annot.get("message")
+                    if failure_description:
+                        failure_signature = get_job_failure_signature_(github_job, failure_description)
+                        return failure_signature, failure_description
+    return failure_signature, failure_description
+
+
+def get_job_row_from_github_job(github_job, github_job_id_to_annotations):
     github_job_id = github_job["id"]
 
     logger.info(f"Processing github job with ID {github_job_id}")
@@ -143,7 +192,9 @@ def get_job_row_from_github_job(github_job):
 
     name = github_job["name"]
 
-    assert github_job["status"] == "completed", f"{github_job_id} is not completed"
+    if github_job["status"] != "completed":
+        logger.warning(f"{github_job_id} is not completed, skipping this job")
+        return None
 
     # Best effort card type getting
 
@@ -197,7 +248,9 @@ def get_job_row_from_github_job(github_job):
 
     job_end_ts = github_job["completed_at"]
 
-    job_success = github_job["conclusion"] == "success"
+    # skipped jobs are considered passing jobs (nothing was run)
+    job_success = github_job["conclusion"] in ["success", "skipped"]
+    job_status = github_job["conclusion"]
 
     is_build_job = "build" in name or "build" in labels
 
@@ -209,7 +262,9 @@ def get_job_row_from_github_job(github_job):
 
     github_job_link = github_job["html_url"]
 
-    failure_signature = get_job_failure_signature_(github_job)
+    failure_signature, failure_description = get_failure_signature_and_description_from_annotations(
+        github_job, github_job_id_to_annotations
+    )
 
     return {
         "github_job_id": github_job_id,
@@ -222,16 +277,21 @@ def get_job_row_from_github_job(github_job):
         "job_start_ts": job_start_ts,
         "job_end_ts": job_end_ts,
         "job_success": job_success,
+        "job_status": job_status,
         "is_build_job": is_build_job,
         "job_matrix_config": job_matrix_config,
         "docker_image": docker_image,
         "github_job_link": github_job_link,
         "failure_signature": failure_signature,
+        "failure_description": failure_description,
     }
 
 
-def get_job_rows_from_github_info(github_pipeline_json, github_jobs_json):
-    return list(map(get_job_row_from_github_job, github_jobs_json["jobs"]))
+def get_job_rows_from_github_info(github_pipeline_json, github_jobs_json, github_job_id_to_annotations):
+    job_rows = list(
+        map(lambda job: get_job_row_from_github_job(job, github_job_id_to_annotations), github_jobs_json["jobs"])
+    )
+    return [x for x in job_rows if x is not None]
 
 
 def get_github_partial_benchmark_json_filenames():

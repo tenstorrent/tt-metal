@@ -10,7 +10,6 @@
 #include "kernel_types.hpp"
 #include "circular_buffer_types.hpp"
 #include "semaphore.hpp"
-#include "program_command_sequence.hpp"
 #include "program_device_map.hpp"
 #include "worker_config_buffer.hpp"
 #include "dev_msgs.h"
@@ -30,6 +29,8 @@ class Program;
 class CircularBufferConfig;
 
 }  // namespace v0
+
+struct ProgramCommandSequence;
 
 namespace v1 {
 namespace experimental {
@@ -56,9 +57,12 @@ namespace distributed {
     class MeshWorkload;
 } // namespace distributed
 
-class EnqueueProgramCommand;
-class HWCommandQueue;
 class JitBuildOptions;
+class EnqueueProgramCommand;
+class CommandQueue;
+// Must be removed. Only here because its a friend of a Program
+class HWCommandQueue;
+
 namespace detail{
     class Program_;
 
@@ -140,8 +144,6 @@ class Program {
 
     const std::vector<std::shared_ptr<CircularBuffer>> &circular_buffers() const;
 
-    const std::size_t num_circular_buffers() const { return circular_buffers().size();};
-
     const std::vector< Semaphore > & semaphores() const;
 
     KernelGroup * kernels_on_core(const CoreCoord &core, uint32_t programmable_core_type_index);
@@ -157,7 +159,6 @@ class Program {
 
     std::vector<std::reference_wrapper<const Semaphore>> semaphores_on_core(const CoreCoord &core, CoreType core_type) const;
 
-    size_t num_semaphores ( const CoreCoord & core, CoreType core_type ) const;
     size_t num_semaphores () const;
     void init_semaphores ( const IDevice & device, const CoreCoord &logical_core, uint32_t programmable_core_type_index) const;
     // XXXXX TODO: this should return a const reference
@@ -173,9 +174,7 @@ class Program {
 
     bool is_finalized() const;
     void set_finalized();
-    bool is_cached() const;
     ProgramBinaryStatus get_program_binary_status(std::size_t device_id) const;
-    void set_cached();
     void set_program_binary_status(std::size_t device_id, ProgramBinaryStatus status);
     void allocate_kernel_bin_buf_on_device(IDevice* device);
     std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
@@ -187,8 +186,8 @@ class Program {
     uint32_t get_cb_base_addr(IDevice* device, CoreCoord logical_core, CoreType core_type);
     uint32_t get_sem_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const;
     uint32_t get_cb_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const;
-    void set_last_used_command_queue_for_testing(HWCommandQueue *queue);
-    HWCommandQueue* get_last_used_command_queue() const;
+    void set_last_used_command_queue_for_testing(CommandQueue* queue);
+    CommandQueue* get_last_used_command_queue() const;
     const std::vector<SubDeviceId> &determine_sub_device_ids(const IDevice* device);
     void set_kernels_bin_buffer(const std::shared_ptr<Buffer>& buffer);
     uint32_t get_cb_memory_size() const;

@@ -4,21 +4,12 @@
 [submodule "tt_metal/third_party/umd"]
 	path = tt_metal/third_party/umd
 	url = https://github.com/tenstorrent/tt-umd.git
-[submodule "tt_metal/third_party/tt_llk_grayskull"]
-	path = tt_metal/third_party/tt_llk_grayskull
-	url = https://github.com/tenstorrent/tt-llk-gs.git
-[submodule "tt_metal/third_party/tt_llk_wormhole_b0"]
-	path = tt_metal/third_party/tt_llk_wormhole_b0
-	url = https://github.com/tenstorrent/tt-llk-wh-b0.git
 [submodule "models/demos/t3000/llama2_70b/reference/llama"]
 	path = models/demos/t3000/llama2_70b/reference/llama
 	url = https://github.com/tenstorrent-metal/llama.git
-[submodule "tt_metal/third_party/tt_llk_blackhole"]
-	path = tt_metal/third_party/tt_llk_blackhole
-	url = https://github.com/tenstorrent/tt-llk-bh.git
-[submodule "tokenizers-cpp"]
-	path = tt-train/3rd_party/tokenizers-cpp
-	url = https://github.com/mlc-ai/tokenizers-cpp.git
 [submodule "3rd_party/wandb-cpp"]
 	path = tt-train/3rd_party/wandb-cpp
 	url = https://github.com/yhisaki/wandb-cpp
+[submodule "tt_metal/third_party/tt_llk"]
+	path = tt_metal/third_party/tt_llk
+	url = https://github.com/tenstorrent/tt-llk.git

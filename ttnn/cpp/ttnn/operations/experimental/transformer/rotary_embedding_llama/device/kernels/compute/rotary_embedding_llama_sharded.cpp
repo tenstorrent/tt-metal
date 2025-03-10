@@ -27,7 +27,7 @@ void MAIN {
     constexpr uint32_t Wt = get_compile_time_arg_val(8);
     constexpr uint32_t Ht = get_compile_time_arg_val(9);  // How many rows (tiles) in n_heads dimension
 
-    mm_init();
+    mm_init(in_cb, trans_mat_cb, out_cb);
     binary_op_init_common(rotated_in_interm_cb, sin_cb, sin_interm_cb);  // General Init for all binary ops
 
     // Get the trans_mat
@@ -90,7 +90,7 @@ void MAIN {
 
         cb_wait_front(sin_interm_cb, Wt);
         cb_wait_front(cos_interm_cb, Wt);
-        add_tiles_init();
+        add_tiles_init(cos_interm_cb, sin_interm_cb);
         ACQ();
         for (uint32_t j = 0; j < Wt; ++j) {
             // out = cos_interim + sin_interim

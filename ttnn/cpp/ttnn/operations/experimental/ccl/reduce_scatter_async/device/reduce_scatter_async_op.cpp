@@ -4,13 +4,14 @@
 
 #include "cpp/ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
 #include <tt-metalium/sub_device_types.hpp>
-#include <tt-metalium/host_api.hpp>
 #include "cpp/ttnn/global_semaphore.hpp"
 
 #include <ranges>
 #include <algorithm>
 #include <cstdint>
 #include <optional>
+
+using namespace tt::tt_metal;
 
 namespace ttnn {
 namespace ccl {
@@ -26,8 +27,8 @@ ReduceScatterAsync create_reduce_scatter_struct(
     std::optional<std::vector<Tensor>> forward_output_tensors,
     std::optional<std::vector<Tensor>> backward_output_tensors,
     std::optional<size_t> num_links_preferred,
-    const std::vector<std::shared_ptr<const GlobalSemaphore>>& from_remote_sems,
-    const std::vector<std::shared_ptr<const GlobalSemaphore>>& to_remote_sems,
+    const std::vector<GlobalSemaphore>& from_remote_sems,
+    const std::vector<GlobalSemaphore>& to_remote_sems,
     std::optional<SubDeviceId> sub_device_id,
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle) {
     uint32_t num_devices = devices.size();
@@ -55,8 +56,8 @@ ReduceScatterAsync create_reduce_scatter_struct(
         return *device;
     };
 
-    std::shared_ptr<const GlobalSemaphore> from_remote_sem = from_remote_sems.at(device_index);
-    std::shared_ptr<const GlobalSemaphore> to_remote_sem = to_remote_sems.at(device_index);
+    GlobalSemaphore from_remote_sem = from_remote_sems.at(device_index);
+    GlobalSemaphore to_remote_sem = to_remote_sems.at(device_index);
 
     return ttnn::ReduceScatterAsync{
         binary_op_type,
@@ -160,8 +161,20 @@ operation::ProgramWithCallbacks ReduceScatterAsync::create_program(
 }
 
 operation::Hash ReduceScatterAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
+    auto input_shape = input_tensors[0].get_padded_shape();
+    auto input_memory_layout = input_tensors[0].get_layout();
+    auto input_dtype = input_tensors[0].get_dtype();
+    auto input_memory_config = input_tensors[0].memory_config();
     return operation::hash_operation<ReduceScatterAsync>(
-        this->binary_op_type, this->scatter_dim, this->ring_size, this->ring_index, this->topology);
+        this->binary_op_type,
+        this->scatter_dim,
+        this->ring_size,
+        this->ring_index,
+        this->topology,
+        input_shape,
+        input_memory_layout,
+        input_dtype,
+        input_memory_config);
 }
 
 namespace {
@@ -215,16 +228,11 @@ Tensor reduce_scatter(
         rank - 1,
         dim);
 
-    // get shared_ptr from multi_device_global_semaphore
-    std::vector<std::shared_ptr<const tt::tt_metal::GlobalSemaphore>> from_remote_inputs_semaphores;
-    for (auto& sem : from_remote_multi_device_global_semaphore.global_semaphores) {
-        from_remote_inputs_semaphores.push_back(std::make_shared<tt::tt_metal::GlobalSemaphore>(sem));
-    }
+    std::vector<GlobalSemaphore> from_remote_inputs_semaphores =
+        from_remote_multi_device_global_semaphore.global_semaphores;
 
-    std::vector<std::shared_ptr<const tt::tt_metal::GlobalSemaphore>> to_remote_inputs_semaphores;
-    for (auto& sem : to_remote_multi_device_global_semaphore.global_semaphores) {
-        to_remote_inputs_semaphores.push_back(std::make_shared<tt::tt_metal::GlobalSemaphore>(sem));
-    }
+    std::vector<GlobalSemaphore> to_remote_inputs_semaphores =
+        to_remote_multi_device_global_semaphore.global_semaphores;
 
     std::vector<Tensor> output_tensors = {
         Tensor(operation::get_workers_for_op_output({input_tensor})),
@@ -295,16 +303,11 @@ Tensor reduce_scatter(
     const auto mesh_view = mesh_device.get_view();
     auto devices = input_tensor.get_workers();
 
-    // get shared_ptr from multi_device_global_semaphore
-    std::vector<std::shared_ptr<const tt::tt_metal::GlobalSemaphore>> from_remote_inputs_semaphores;
-    for (auto& sem : from_remote_multi_device_global_semaphore.global_semaphores) {
-        from_remote_inputs_semaphores.push_back(std::make_shared<tt::tt_metal::GlobalSemaphore>(sem));
-    }
+    std::vector<GlobalSemaphore> from_remote_inputs_semaphores =
+        from_remote_multi_device_global_semaphore.global_semaphores;
 
-    std::vector<std::shared_ptr<const tt::tt_metal::GlobalSemaphore>> to_remote_inputs_semaphores;
-    for (auto& sem : to_remote_multi_device_global_semaphore.global_semaphores) {
-        to_remote_inputs_semaphores.push_back(std::make_shared<tt::tt_metal::GlobalSemaphore>(sem));
-    }
+    std::vector<GlobalSemaphore> to_remote_inputs_semaphores =
+        to_remote_multi_device_global_semaphore.global_semaphores;
 
     std::vector<Tensor> output_tensors = {
         Tensor(operation::get_workers_for_op_output({input_tensor})),
@@ -334,9 +337,12 @@ Tensor reduce_scatter(
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_device_tensor = input_tensors.at(0);
 
+            TT_FATAL(
+                mesh_view.is_mesh_2d(),
+                "reduce-scatter invoked with cluster_axis API on >2D mesh, which is currently unsupported");
             const auto coordinate = mesh_view.find_device(input_device_tensor.device()->id());
-            std::vector<IDevice*> devices = (cluster_axis == 0) ? mesh_view.get_devices_on_column(coordinate.col)
-                                                               : mesh_view.get_devices_on_row(coordinate.row);
+            std::vector<IDevice*> devices = (cluster_axis == 0) ? mesh_view.get_devices_on_column(coordinate[1])
+                                                                : mesh_view.get_devices_on_row(coordinate[0]);
 
             const auto& input_tensor = input_tensors.at(0);
 

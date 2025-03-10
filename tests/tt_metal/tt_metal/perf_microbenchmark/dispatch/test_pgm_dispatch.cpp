@@ -6,6 +6,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/hal_exp.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "test_common.hpp"
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/rtoptions.hpp>
@@ -302,9 +303,6 @@ static int pgm_dispatch(T& state, TestInfo info) {
         auto core_count = get_core_count();
         info.workers = CoreRange({0, 0}, {std::get<0>(core_count), std::get<1>(core_count)});
     }
-    if constexpr (std::is_same_v<T, benchmark::State>) {
-        info.kernel_size = state.range(0);
-    }
 
     if (info.use_trace) {
         log_info(LogTest, "Running with trace enabled");
@@ -428,7 +426,15 @@ static int pgm_dispatch(T& state, TestInfo info) {
     }
 }
 
-static void BM_pgm_dispatch(benchmark::State& state, TestInfo info) { pgm_dispatch(state, info); }
+static void BM_pgm_dispatch(benchmark::State& state, TestInfo info) {
+    info.kernel_size = state.range(0);
+    pgm_dispatch(state, info);
+}
+
+static void BM_pgm_dispatch_vary_slow_cycles(benchmark::State& state, TestInfo info) {
+    info.slow_kernel_cycles = state.range(0);
+    pgm_dispatch(state, info);
+}
 
 static void Max12288Args(benchmark::internal::Benchmark* b) {
     b->Arg(256)->Arg(512)->Arg(1024)->Arg(2048)->Arg(4096)->Arg(8192)->Arg(12288);
@@ -436,6 +442,11 @@ static void Max12288Args(benchmark::internal::Benchmark* b) {
 
 static void Max8192Args(benchmark::internal::Benchmark* b) {
     b->Arg(256)->Arg(512)->Arg(1024)->Arg(2048)->Arg(4096)->Arg(8192);
+}
+
+static void KernelCycleArgs(benchmark::internal::Benchmark* b) {
+    // Dispatch time for most normal kernels is around 3000-4000 cycles.
+    b->Arg(0)->Arg(1000)->Arg(2000)->Arg(3000)->Arg(4000)->Arg(5000)->Arg(10000);
 }
 
 BENCHMARK_CAPTURE(
@@ -560,6 +571,26 @@ BENCHMARK_CAPTURE(
     kernel_groups_trace,
     TestInfo{.warmup_iterations = 5000, .n_kgs = 8, .use_trace = true, .use_all_cores = true})
     ->Apply(Max8192Args)
+    ->UseManualTime();
+
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    10000_kernel_all_cores_all_processors_32_cbs_trace,
+    TestInfo{.warmup_iterations = 5000, .slow_kernel_cycles = 10000, .n_cbs = 32, .use_trace = true, .use_all_cores = true})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    5000_kernel_all_cores_all_processors_32_cbs_trace,
+    TestInfo{.warmup_iterations = 5000, .slow_kernel_cycles = 5000, .n_cbs = 32, .use_trace = true, .use_all_cores = true})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
+// Intended to be GO-latency-bound
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch_vary_slow_cycles,
+    256_bytes_brisc_only_all_processors_trace,
+    TestInfo{.warmup_iterations = 5000, .kernel_size = 256, .ncrisc_enabled = false, .trisc_enabled = false, .use_trace = true, .use_all_cores = true})
+    ->Apply(KernelCycleArgs)
     ->UseManualTime();
 int main(int argc, char** argv) {
     std::vector<std::string> input_args(argv, argv + argc);

@@ -15,11 +15,11 @@ namespace unit_tests::test_l1_banking_allocator {
 
 uint64_t get_alloc_limit(const tt::tt_metal::IDevice* device) {
     const metal_SocDescriptor& soc_desc = tt::Cluster::instance().get_soc_desc(device->id());
-    uint32_t l1_unreserved_base = device->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    auto dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(device->id());
+    uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    auto dispatch_core_config = tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_config(device->id());
     auto storage_core_bank_size =
         tt::get_storage_core_bank_size(device->id(), device->num_hw_cqs(), dispatch_core_config);
-    const uint32_t allocator_alignment = device->get_allocator_alignment();
+    const uint32_t allocator_alignment = device->allocator()->get_alignment(tt::tt_metal::BufferType::L1);
     const uint32_t interleaved_l1_bank_size = storage_core_bank_size.has_value()
                                                   ? storage_core_bank_size.value()
                                                   : (soc_desc.worker_l1_size - l1_unreserved_base);
@@ -30,6 +30,8 @@ uint64_t get_alloc_limit(const tt::tt_metal::IDevice* device) {
 }
 
 }  // namespace unit_tests::test_l1_banking_allocator
+
+namespace tt::tt_metal {
 
 TEST_F(DeviceSingleCardBufferFixture, TestL1BuffersAllocatedTopDown) {
     std::vector<uint32_t> alloc_sizes = {32 * 1024, 64 * 1024, 128 * 1024};
@@ -66,3 +68,5 @@ TEST_F(DeviceSingleCardBufferFixture, TestL1BuffersDoNotGrowBeyondBankSize) {
 
     EXPECT_ANY_THROW(auto buffer = tt::tt_metal::CreateBuffer(l1_config););
 }
+
+}  // namespace tt::tt_metal

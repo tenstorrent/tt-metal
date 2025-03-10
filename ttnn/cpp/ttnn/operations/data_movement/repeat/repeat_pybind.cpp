@@ -22,14 +22,14 @@ void bind_repeat(py::module& module, const data_movement_operation_t& operation,
         ttnn::pybind_overload_t{
             [](const data_movement_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               const Shape& repeat_dims,
+               const ttnn::SmallVector<uint32_t>& repetition_vector,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               uint8_t queue_id) { return self(queue_id, input_tensor, repeat_dims, memory_config); },
+               QueueId queue_id) { return self(input_tensor, repetition_vector, memory_config, queue_id); },
             py::arg("input_tensor"),
             py::arg("repeat_dims"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = 0,
+            py::arg("queue_id") = DefaultQueueId,
         });
 }
 
@@ -42,7 +42,7 @@ void py_bind_repeat(py::module& module) {
 
     Args:
         input_tensor (ttnn.Tensor): the input tensor.
-        repeat_dims (number): The number of repetitions for each element.
+        repetition_vector (SmallVector): The number of repetitions for each dimension.
 
     Keyword Args:
         memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
@@ -52,7 +52,7 @@ void py_bind_repeat(py::module& module) {
 
     Example:
 
-        >>> tensor = ttnn.repeat(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]]), 2,)), device)
+        >>> tensor = ttnn.repeat(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]]), [1,2],)), device)
         >>> print(tensor)
         tensor([[1, 2],
         [1, 2],

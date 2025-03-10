@@ -12,7 +12,7 @@ namespace ttnn {
 namespace operations {
 namespace data_movement {
 
-ttnn::SimpleShape squeeze_shape_to_4D(ttnn::SimpleShape shape) {
+ttnn::Shape squeeze_shape_to_4D(ttnn::Shape shape) {
     if (shape.rank() <= 4) {
         return shape;
     }
@@ -25,7 +25,7 @@ ttnn::SimpleShape squeeze_shape_to_4D(ttnn::SimpleShape shape) {
     shape_4d[1] = shape[1 + extra_rank];
     shape_4d[2] = shape[2 + extra_rank];
     shape_4d[3] = shape[3 + extra_rank];
-    return ttnn::SimpleShape(shape_4d);
+    return ttnn::Shape(shape_4d);
 }
 
 ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor) {
@@ -52,8 +52,37 @@ ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor) {
     return ttnn::reshape(tensor, squeeze_shape_to_4D(shape));
 }
 
+uint32_t get_estimated_size_of_cbs(
+    const Tensor& input_tensor_a,
+    const uint32_t input_single_tile_size,
+    const uint32_t output_single_tile_size,
+    const uint32_t num_tiles_per_row) {
+    uint32_t cb_src0_size = input_single_tile_size * num_tiles_per_row;
+    uint32_t cb_output_size = output_single_tile_size * num_tiles_per_row;
+    return cb_src0_size + cb_output_size;
+}
+
+uint32_t get_max_l1_space(const Tensor& input_tensor_a) {
+    auto device = input_tensor_a.device();
+    auto lowest_address = device->lowest_occupied_compute_l1_address();
+    uint32_t max_l1_space = lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
+    max_l1_space = max_l1_space - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    return max_l1_space;
+}
+
+bool is_enough_space(
+    const Tensor& input_tensor_a,
+    const uint32_t input_single_tile_size,
+    const uint32_t output_single_tile_size,
+    const uint32_t num_tiles_per_row) {
+    uint32_t max_l1_space = get_max_l1_space(input_tensor_a);
+    uint32_t estimated_size_of_cbs =
+        get_estimated_size_of_cbs(input_tensor_a, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
+    return max_l1_space > estimated_size_of_cbs;
+}
+
 ttnn::Tensor pad_to_tile_vol(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& tensor,
     const float value,
     const bool use_multicore,
@@ -123,7 +152,7 @@ std::array<uint32_t, 2> compute_height_sharded_shard_shape(const std::array<uint
 }
 
 ttnn::MemoryConfig create_sharded_memory_config(
-    const ttnn::SimpleShape& logical_shape,
+    const ttnn::Shape& logical_shape,
     const tt::tt_metal::CoreRangeSet& core_grid,
     const ShardStrategy& strategy,
     const tt::tt_metal::ShardOrientation& orientation,

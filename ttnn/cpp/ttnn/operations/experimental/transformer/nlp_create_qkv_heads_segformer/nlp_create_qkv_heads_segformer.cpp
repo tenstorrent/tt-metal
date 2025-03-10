@@ -9,7 +9,7 @@
 namespace ttnn::operations::experimental::transformer {
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NLPCreateHeadsSegformerOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor_q,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<std::vector<std::optional<Tensor>>> optional_output_tensors) {
@@ -20,7 +20,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NLPCreateHeadsSegformerOper
     } else {
         optional_outputs = {};
     }
-    auto outputs = operation::run(
+    auto outputs = tt::tt_metal::operation::run(
         NlpCreateHeadsSegformerDeviceOperation{output_mem_config}, {input_tensor_q}, {}, optional_outputs);
     return {outputs[0], outputs[1], outputs[2]};
     // return {outputs[0]}

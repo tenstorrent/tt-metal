@@ -7,10 +7,28 @@
 
 #include <numa.h>
 
+#include <algorithm>
+#include <cstdlib>
+#include <set>
+#include <utility>
+
+#include <tt-metalium/env_lib.hpp>
+
+#include "dispatch_core_manager.hpp"
+#include "dispatch_settings.hpp"
+#include "dprint_server.hpp"
+#include "host_api.hpp"
+#include "control_plane.hpp"
 #include <tt_metal.hpp>
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
+#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
+#include "tt_metal/jit_build/build_env_manager.hpp"
+
+#include "tt_cluster.hpp"
+
+#include <unistd.h>  // Warning Linux Only, needed for _SC_NPROCESSORS_ONLN
 
 using namespace tt::tt_metal;
 
@@ -149,8 +167,6 @@ void bind_current_thread_to_free_cores(const std::unordered_set<uint32_t>& free_
 }  // namespace device_cpu_allocator
 
 DevicePool* DevicePool::_inst = nullptr;
-// Should probably add a dispatch_core_manager.cpp and move this there
-tt_metal::dispatch_core_manager* tt_metal::dispatch_core_manager::_inst = nullptr;
 
 void DevicePool::init_profiler_devices() const {
 #if defined(TRACY_ENABLE)
@@ -191,7 +207,12 @@ void DevicePool::initialize(
     tt::stl::Span<const std::uint32_t> l1_bank_remap) noexcept {
     ZoneScoped;
     log_debug(tt::LogMetal, "DevicePool initialize");
+    // Initialize the dispatch core manager, responsible for assigning dispatch cores
     tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_config, num_hw_cqs);
+    // Initialize the dispatch query layer, used by runtime command generation
+    tt_metal::DispatchQueryManager::initialize(num_hw_cqs);
+    // Initialize DispatchSettings with defaults
+    tt_metal::DispatchSettings::initialize(tt::Cluster::instance());
 
     if (_inst == nullptr) {
         static DevicePool device_pool{};
@@ -232,7 +253,9 @@ void DevicePool::initialize(
 
     _inst->add_devices_to_pool(device_ids);
     _inst->init_firmware_on_active_devices();
+
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true, target_mmio_ids);
+    _inst->wait_for_fabric_master_router_sync();
     _inst->init_profiler_devices();
 }
 
@@ -246,7 +269,6 @@ void DevicePool::initialize_device(IDevice* dev) const {
         dev->init_command_queue_host();
     } else {
         detail::DispatchStateCheck(false);
-        dev->initialize_synchronous_sw_cmd_queue();
         TT_ASSERT(dev->num_hw_cqs() == 1, "num_hw_cqs must be 1 in slow dispatch");
     }
 
@@ -261,6 +283,13 @@ void DevicePool::initialize_device(IDevice* dev) const {
     dev->initialize_and_launch_firmware();
 
     watcher_attach(dev);
+
+    // TODO: add handling of EDM
+    FabricConfig fabric_config = tt::Cluster::instance().get_fabric_config();
+    if (fabric_config == FabricConfig::FABRIC_2D || fabric_config == FabricConfig::FABRIC_2D_PUSH) {
+        // Initialize fabric on mmio device
+        dev->init_fabric();
+    }
 
     // Set up HW command queues on device for FD
     if (this->using_fast_dispatch) {
@@ -292,24 +321,22 @@ void DevicePool::activate_device(chip_id_t id) {
             false,
             worker_core_thread_core,
             completion_queue_reader_core);
-        device->update_dispatch_cores_for_multi_cq_eth_dispatch();
-        if (!this->firmware_built_keys.contains(device->build_key())) {
-            device->build_firmware();
-            this->firmware_built_keys.insert(device->build_key());
+        if (!this->firmware_built_keys.contains(
+                BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key)) {
+            BuildEnvManager::get_instance().build_firmware(device->build_id());
+            this->firmware_built_keys.insert(
+                BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
         }
         this->devices.emplace_back(std::unique_ptr<IDevice>(device));
     } else {
         log_debug(tt::LogMetal, "DevicePool re-initialize device {}", id);
         if (not device->is_initialized()) {
-            if (device->num_hw_cqs() != num_hw_cqs) {
-                // The dispatch core manager was reset, since the number of CQs was toggled.
-                // Account for chip specific idle eth dispatch cores.
-                device->update_dispatch_cores_for_multi_cq_eth_dispatch();
-            }
             device->initialize(num_hw_cqs, this->l1_small_size, this->trace_region_size, this->l1_bank_remap);
-            if (!this->firmware_built_keys.contains(device->build_key())) {
-                device->build_firmware();
-                this->firmware_built_keys.insert(device->build_key());
+            if (!this->firmware_built_keys.contains(
+                    BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key)) {
+                BuildEnvManager::get_instance().build_firmware(device->build_id());
+                this->firmware_built_keys.insert(
+                    BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
             }
         } else {
             TT_THROW("Cannot re-initialize device {}, must first call close()", id);
@@ -360,9 +387,62 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
             this->activate_device(device_id);
         }
     }
+
+    FabricConfig fabric_config = tt::Cluster::instance().get_fabric_config();
+    // Only can launch Fabric if all devices are active
+    if (fabric_config == FabricConfig::FABRIC_2D || fabric_config == FabricConfig::FABRIC_2D_PUSH) {
+        for (int i = 0; i < tt::Cluster::instance().number_of_devices(); i++) {
+            if (not _inst->is_device_active(i)) {
+                // Fabric currently requires all devices to be active
+                log_fatal(tt::LogMetal, "Fabric is being used but {} is not active", i);
+            }
+        }
+    }
+
+    // TODO: add handling of EDM
+    if (fabric_config == FabricConfig::FABRIC_2D || fabric_config == FabricConfig::FABRIC_2D_PUSH) {
+        // Initialize control plane, does not configure kernels/routing tables
+        // We always need a control plane for mapping of logical devices to physical devices
+        // TODO: add single device support
+        _inst->initialize_control_plane();
+        // write routing tables to all ethernet cores
+        this->control_plane->configure_routing_tables();
+    }
     this->using_fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
     if (this->using_fast_dispatch) {
         populate_fd_kernels(devices_to_activate, this->num_hw_cqs);
+    }
+}
+
+void DevicePool::wait_for_fabric_master_router_sync() const {
+    FabricConfig fabric_config = tt::Cluster::instance().get_fabric_config();
+    if (fabric_config == FabricConfig::FABRIC_2D || fabric_config == FabricConfig::FABRIC_2D_PUSH) {
+        auto fabric_router_sync_sem_addr =
+            hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+
+        std::vector<std::uint32_t> master_router_status{0};
+        for (const auto& dev : this->get_all_active_devices()) {
+            if (tt::Cluster::instance().get_fabric_ethernet_channels(dev->id()).empty()) {
+                continue;
+            }
+            tt_fabric::chan_id_t fabric_master_router_chan =
+                *(tt::Cluster::instance().get_fabric_ethernet_channels(dev->id()).begin());
+            CoreCoord virtual_eth_core =
+                tt::Cluster::instance().get_virtual_eth_core_from_channel(dev->id(), fabric_master_router_chan);
+            auto fabric_master_router_core = dev->logical_core_from_ethernet_core(virtual_eth_core);
+
+            auto [mesh_id, chip_id] = this->control_plane->get_mesh_chip_id_from_physical_chip_id(dev->id());
+            auto num_routers = this->control_plane->get_num_active_fabric_routers(mesh_id, chip_id);
+            while (master_router_status[0] != num_routers) {
+                tt_metal::detail::ReadFromDeviceL1(
+                    dev,
+                    fabric_master_router_core,
+                    fabric_router_sync_sem_addr,
+                    4,
+                    master_router_status,
+                    CoreType::ETH);
+            }
+        }
     }
 }
 
@@ -437,6 +517,27 @@ void DevicePool::init_firmware_on_active_devices() const {
         }
     }
 }
+
+void DevicePool::initialize_control_plane() {
+    // Default mode, auto select mesh graph descriptor. In future, we can add a way for user to specify custom
+    // descriptors
+    std::string mesh_graph_descriptor;
+    switch (tt::Cluster::instance().get_cluster_type()) {
+        case tt::ClusterType::N150: mesh_graph_descriptor = "n150_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::N300: mesh_graph_descriptor = "n300_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::T3K: mesh_graph_descriptor = "t3k_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::GALAXY: mesh_graph_descriptor = "quanta_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::TG: mesh_graph_descriptor = "tg_mesh_graph_descriptor.yaml"; break;
+        default: TT_THROW("Unknown cluster type");
+    }
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
+
+    this->control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
+}
+
+tt::tt_fabric::ControlPlane* DevicePool::get_control_plane() const { return this->control_plane.get(); }
 
 DevicePool::DevicePool() {
     ZoneScoped;
@@ -530,12 +631,33 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
     // before closing any device + modifying routing info.
     // If this is not done, non-blocking CCLs followed by a close will hang, since
     // the main thread will modify device state while the CCL is running on device.
+    // On TG - this should not be done on MMIO mapped devices, since we don't run
+    // any workloads on them
     for (const auto& dev_id : devices_to_close) {
         auto dev = tt::DevicePool::instance().get_active_device(dev_id);
+        if (tt::Cluster::instance().is_galaxy_cluster() and dev->is_mmio_capable()) {
+            continue;
+        }
         dev->synchronize();  // Synchronize worker queue
         Synchronize(dev);    // Synchronize device
     }
 
+    // Terminate fabric routers
+    FabricConfig fabric_config = tt::Cluster::instance().get_fabric_config();
+    if (fabric_config == FabricConfig::FABRIC_2D || fabric_config == FabricConfig::FABRIC_2D_PUSH) {
+        std::vector<uint32_t> master_router_terminate(1, 0);
+        auto fabric_router_sync_sem_addr =
+            hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        for (const auto& dev : this->get_all_active_devices()) {
+            tt_fabric::chan_id_t fabric_master_router_chan =
+                *(tt::Cluster::instance().get_fabric_ethernet_channels(dev->id()).begin());
+            CoreCoord virtual_eth_core =
+                tt::Cluster::instance().get_virtual_eth_core_from_channel(dev->id(), fabric_master_router_chan);
+            auto fabric_master_router_core = dev->logical_core_from_ethernet_core(virtual_eth_core);
+            tt_metal::detail::WriteToDeviceL1(
+                dev, fabric_master_router_core, fabric_router_sync_sem_addr, master_router_terminate, CoreType::ETH);
+        }
+    }
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
     for (const auto& dev_id : devices_to_close) {
         auto dev = tt::DevicePool::instance().get_active_device(dev_id);
@@ -550,9 +672,9 @@ DevicePool::~DevicePool() {
     log_debug(tt::LogMetal, "DevicePool destructor");
     for (const auto& dev : this->devices) {
         if (dev != nullptr and dev->is_initialized()) {
-            // TODO: #13876, Was encountering issues with the dispatch_constants being destroyed before the DevicePool
+            // TODO: #13876, Was encountering issues with the DispatchMemMap being destroyed before the DevicePool
             // destructor, which leads to device->close() hitting asserts. We need to move the ownership of
-            // dispatch_constants to the device, so it doesn't go out of scope before the device is closed.
+            // DispatchMemMap to the device, so it doesn't go out of scope before the device is closed.
             dev->close();
         }
     }

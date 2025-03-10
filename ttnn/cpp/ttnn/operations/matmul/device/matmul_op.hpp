@@ -5,15 +5,14 @@
 #pragma once
 #include <optional>
 
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/global_cb_utils.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/types.hpp"
-
-#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
-#include "ttnn/operations/global_cb_utils.hpp"
 
 namespace ttnn {
 
@@ -106,8 +105,8 @@ tt::tt_metal::operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(
     bool untilize_out);
 
 // TODO: Uplift this to support fused activation and bias
-// TODO: Uplift this to support bcast batch for in1; currently, only allows B=1 for in1 iff B=1 for in0 (ie. single
-// core)
+// TODO: Uplift this to support bcast batch for in1; currently, only allows B=1
+// for in1 iff B=1 for in0 (ie. single core)
 struct MatmulMultiCoreReuseProgramConfig {
     CoreCoord compute_with_storage_grid_size;
     std::size_t in0_block_w;
@@ -180,7 +179,7 @@ struct Matmul {
     const bool transpose_a = false;
     const bool transpose_b = false;
     const std::optional<const tt::tt_metal::Tile> output_tile;
-    const std::optional<const DeviceGlobalCircularBuffer> global_cb;
+    const std::optional<const tt::tt_metal::DeviceGlobalCircularBuffer> global_cb;
 
     void validate(
         const std::vector<Tensor>& input_tensors,
@@ -188,7 +187,8 @@ struct Matmul {
         const std::vector<std::optional<Tensor>>& optional_output_tensors = {std::nullopt}) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(
         const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<Tensor>>& optional_output_tensors = {std::nullopt}) const;
+        const std::vector<std::optional<Tensor>>& optional_output_tensors = {std::nullopt},
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors = {std::nullopt}) const;
     std::vector<Tensor> create_output_tensors(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<Tensor>>& optional_output_tensors = {std::nullopt}) const;
@@ -237,7 +237,7 @@ Tensor matmul(
     const Tensor& input_tensor_b,
     const std::optional<const Tensor>& bias = std::nullopt,
     const struct Matmul& parameters = Matmul{},
-    const uint8_t queue_id = 0,
+    const QueueId queue_id = DefaultQueueId,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 }  // namespace matmul

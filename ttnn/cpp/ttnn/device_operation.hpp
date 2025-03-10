@@ -282,7 +282,7 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
     const auto enqueue_or_launch_program = [=](tt::tt_metal::Program& program) {
         if (USE_FAST_DISPATCH) {
             ZoneScopedN("EnqueueProgram");
-            auto& queue = device->command_queue(cq_id);
+            auto& queue = device->command_queue(*cq_id);
             tt::tt_metal::EnqueueProgram(queue, program, false);
         } else {
             ZoneScopedN("LaunchProgram");
@@ -345,7 +345,7 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
 
 template <DeviceOperationConcept device_operation_t>
 typename device_operation_t::tensor_return_value_t launch_on_single_device(
-    uint8_t cq_id,
+    QueueId cq_id,
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
     ZoneScopedN("Launch Device Operation");
@@ -362,7 +362,7 @@ template <DeviceOperationConcept device_operation_t>
 typename device_operation_t::tensor_args_t get_shard_tensor_args(std::size_t index, auto device, const typename device_operation_t::tensor_args_t& tensor_args) {
     auto get_shard = [device](const auto& tensor) {
         auto& storage = std::get<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage());
-        return Tensor{DeviceStorage{storage.get_buffer_for_device(device)}, storage.get_tensor_spec_for_device(device)};
+        return Tensor{tt::tt_metal::DeviceStorage{storage.get_buffer_for_device(device)}, storage.get_tensor_spec_for_device(device)};
     };
     return tt::stl::reflection::transform_object_of_type<Tensor>(get_shard, tensor_args);
 }
@@ -415,7 +415,7 @@ static T make_tensor_return_value_from_shards(auto& old_storage, std::vector<T>&
 
 template <DeviceOperationConcept device_operation_t>
 typename device_operation_t::tensor_return_value_t launch_on_multi_device(
-    uint8_t cq_id,
+    QueueId cq_id,
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
     ZoneScopedN("Launch Multi Device Operation");
@@ -432,8 +432,8 @@ typename device_operation_t::tensor_return_value_t launch_on_multi_device(
     std::vector<tensor_return_value_t> outputs;
     outputs.reserve(num_shards);
 
-    for (auto shard_index = 0; shard_index < num_shards; shard_index++) {
-        auto device = storage.get_buffer_for_device_id(shard_index)->device();
+    for (const auto &[shard_index, buffer] : storage.buffers ) {
+        auto device = buffer->device();
         auto shard_tensor_args = get_shard_tensor_args<device_operation_t>(shard_index, device, tensor_args);
         outputs.push_back(launch_on_single_device<device_operation_t>(cq_id, operation_attributes, shard_tensor_args));
     }
@@ -443,7 +443,7 @@ typename device_operation_t::tensor_return_value_t launch_on_multi_device(
 
 template <DeviceOperationConcept device_operation_t>
 typename device_operation_t::tensor_return_value_t invoke(
-    uint8_t cq_id,
+    QueueId cq_id,
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
     ZoneScopedN("Run Device Operation");

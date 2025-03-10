@@ -3,6 +3,10 @@ name: "[post-commit] Docs build and deploy to GitHub pages on main"
 on:
   workflow_dispatch:
 
+permissions:
+  id-token: write
+  pages: write
+
 jobs:
   build-docker-artifact:
     uses: ./.github/workflows/build-docker-artifact.yaml
@@ -15,3 +19,5 @@ jobs:
     needs: build-artifact
     uses: ./.github/workflows/docs-latest-public.yaml
     secrets: inherit
+    with:
+      version: latest

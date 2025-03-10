@@ -61,7 +61,7 @@ void py_bind_conv2d(py::module& module) {
                const std::optional<const Conv2dConfig>& conv_config,
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
                const std::optional<const MemoryConfig>& memory_config,
-               const uint8_t& queue_id) -> Result {
+               QueueId queue_id) -> Result {
                 return self(
                     queue_id,
                     input_tensor,
@@ -100,7 +100,7 @@ void py_bind_conv2d(py::module& module) {
             py::arg("conv_config") = std::nullopt,
             py::arg("compute_config") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = 0},
+            py::arg("queue_id") = DefaultQueueId},
 
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::conv2d)& self,
@@ -121,7 +121,7 @@ void py_bind_conv2d(py::module& module) {
                const std::optional<const Conv2dConfig>& conv_config,
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
                const std::optional<const MemoryConfig>& memory_config,
-               const uint8_t& queue_id) -> Result {
+               QueueId queue_id) -> Result {
                 return self(
                     queue_id,
                     input_tensor,
@@ -160,7 +160,7 @@ void py_bind_conv2d(py::module& module) {
             py::arg("conv_config") = std::nullopt,
             py::arg("compute_config") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 
     module.def(
         "prepare_conv_weights",
@@ -179,6 +179,7 @@ void py_bind_conv2d(py::module& module) {
         py::arg("stride"),
         py::arg("padding"),
         py::arg("dilation"),
+        py::arg("has_bias"),
         py::arg("groups"),
         py::arg("device"),
         py::arg("conv_config") = std::nullopt,
@@ -201,6 +202,7 @@ void py_bind_conv2d(py::module& module) {
         py::arg("stride"),
         py::arg("padding"),
         py::arg("dilation"),
+        py::arg("has_bias"),
         py::arg("groups"),
         py::arg("device"),
         py::arg("conv_config") = std::nullopt,
@@ -280,7 +282,7 @@ void py_bind_conv2d(py::module& module) {
            uint32_t output_width,
            uint32_t output_channels,
            const CoreCoord& compute_grid_size,
-           ShardOrientation block_shard_orientation,
+           tt::tt_metal::ShardOrientation block_shard_orientation,
            bool enable_channels_padding,
            bool is_out_tiled) -> ttnn::operations::sliding_window::ParallelConfig {
             return determine_parallel_config(
@@ -293,8 +295,7 @@ void py_bind_conv2d(py::module& module) {
                 compute_grid_size,
                 block_shard_orientation,
                 enable_channels_padding,
-                is_out_tiled,
-                false);
+                is_out_tiled);
         },
         py::arg("shard_layout"),
         py::arg("batch_size"),
@@ -382,16 +383,16 @@ void py_bind_conv2d(py::module& module) {
             py::arg("grid_size"),
             py::arg("num_cores_nhw") = 1,
             py::arg("num_cores_c") = 1,
-            py::arg("per_core_out_matrix_height").noconvert(),
-            py::arg("per_core_out_matrix_width").noconvert())
+            py::arg("per_core_out_matrix_height_ntiles").noconvert(),
+            py::arg("per_core_out_matrix_width_ntiles").noconvert())
         .def_property_readonly("grid_size", [](const OptimizedConvParallelizationConfig& c) { return c.grid_size; })
         .def_property_readonly(
             "num_cores_nhw", [](const OptimizedConvParallelizationConfig& c) { return c.num_cores_nhw; })
         .def_property_readonly(
-            "per_core_out_matrix_height",
-            [](const OptimizedConvParallelizationConfig& c) { return c.per_core_out_matrix_height; })
-        .def_property_readonly("per_core_out_matrix_width", [](const OptimizedConvParallelizationConfig& c) {
-            return c.per_core_out_matrix_width;
+            "per_core_out_matrix_height_ntiles",
+            [](const OptimizedConvParallelizationConfig& c) { return c.per_core_out_matrix_height_ntile; })
+        .def_property_readonly("per_core_out_matrix_width_ntiles", [](const OptimizedConvParallelizationConfig& c) {
+            return c.per_core_out_matrix_width_ntile;
         });
 
     py::class_<OptimizedConvBlockConfig>(module, "OptimizedConvBlockConfig")

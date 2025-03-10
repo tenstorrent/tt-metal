@@ -13,7 +13,8 @@
 #include <allocator.hpp>
 #include <buffer_constants.hpp>
 #include <command_queue.hpp>
-#include <hardware_command_queue.hpp>
+#include <command_queue.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <data_types.hpp>
 #include <sub_device.hpp>
 #include <sub_device_manager.hpp>
@@ -61,10 +62,19 @@ std::tuple<SubDeviceManagerId, SubDeviceId> SubDeviceManagerTracker::create_sub_
 
 void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDeviceManager>& sub_device_manager) {
     auto num_sub_devices = sub_device_manager->num_sub_devices();
-    for (uint8_t cq_id = 0; cq_id < device_->num_hw_cqs(); ++cq_id) {
-        auto& hw_cq = device_->hw_command_queue(cq_id);
-        // Only need to reset launch messages once, so reset on cq 0
-        hw_cq.reset_worker_state(cq_id == 0, num_sub_devices, sub_device_manager->noc_mcast_unicast_data());
+    // Dynamic resolution of device types is unclean and poor design. This will be cleaned up
+    // when MeshCommandQueue + CommandQueue are unified under the same API
+    if (dynamic_cast<distributed::MeshDevice*>(device_)) {
+        // Multi CQ support for MeshDevice is not currently available
+        distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device_);
+        mesh_device->mesh_command_queue().reset_worker_state(
+            true, num_sub_devices, sub_device_manager->noc_mcast_unicast_data());
+    } else {
+        for (uint8_t cq_id = 0; cq_id < device_->num_hw_cqs(); ++cq_id) {
+            auto& hw_cq = device_->command_queue(cq_id);
+            // Only need to reset launch messages once, so reset on cq 0
+            hw_cq.reset_worker_state(cq_id == 0, num_sub_devices, sub_device_manager->noc_mcast_unicast_data());
+        }
     }
     sub_device_manager->reset_sub_device_stall_group();
 }
@@ -82,11 +92,11 @@ void SubDeviceManagerTracker::load_sub_device_manager(SubDeviceManagerId sub_dev
     auto sub_device_manager = sub_device_managers_.find(sub_device_manager_id);
     TT_FATAL(sub_device_manager != sub_device_managers_.end(), "Sub device manager does not exist");
     this->reset_sub_device_state(sub_device_manager->second);
-    const auto& default_allocator = default_sub_device_manager_->get_initialized_allocator(SubDeviceId{0});
-    allocator::reset_allocator_size(*default_allocator, BufferType::L1);
+    const auto& default_allocator = default_sub_device_manager_->allocator(SubDeviceId{0});
+    default_allocator->reset_allocator_size(BufferType::L1);
     // Shrink the global allocator size to make room for sub-device allocators
     auto local_l1_size = sub_device_manager->second->local_l1_size();
-    allocator::shrink_allocator_size(*default_allocator, BufferType::L1, local_l1_size, /*bottom_up=*/true);
+    default_allocator->shrink_allocator_size(BufferType::L1, local_l1_size, /*bottom_up=*/true);
     active_sub_device_manager_ = sub_device_manager->second.get();
 }
 
@@ -130,14 +140,14 @@ std::optional<DeviceAddr> SubDeviceManagerTracker::lowest_occupied_compute_l1_ad
     if (sub_device_ids.empty()) {
         // Global bank id needs to look up a bank from the compute grid (not the storage grid)
         // Since banks are lockstep in an allocator it doesn't matter if the actual core matches or not
-        const auto& default_allocator = default_sub_device_manager_->get_initialized_allocator(SubDeviceId{0});
-        return allocator::lowest_occupied_l1_address(*default_allocator, global_bank_id);
+        const auto& default_allocator = default_sub_device_manager_->allocator(SubDeviceId{0});
+        return default_allocator->get_lowest_occupied_l1_address(global_bank_id);
     } else {
         DeviceAddr lowest_addr = std::numeric_limits<DeviceAddr>::max();
         for (const auto& sub_device_id : sub_device_ids) {
             const auto& allocator = this->get_active_sub_device_manager()->sub_device_allocator(sub_device_id);
             if (allocator) {
-                auto found_addr = allocator::lowest_occupied_l1_address(*allocator, global_bank_id);
+                auto found_addr = allocator->get_lowest_occupied_l1_address(global_bank_id);
                 if (found_addr.has_value()) {
                     lowest_addr = std::min(lowest_addr, *found_addr);
                 }

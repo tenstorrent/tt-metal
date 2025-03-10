@@ -12,7 +12,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
-#include <tt-metalium/llrt.hpp>
+#include "llrt.hpp"
 
 // TODO: ARCH_NAME specific, must remove
 #include "eth_l1_address_map.h"
@@ -41,7 +41,7 @@ namespace unit_tests::erisc::kernels {
  */
 
 bool reader_kernel_no_send(
-    DispatchFixture* fixture,
+    tt_metal::DispatchFixture* fixture,
     tt_metal::IDevice* device,
     const size_t& byte_size,
     const size_t& eth_l1_byte_address,
@@ -107,7 +107,7 @@ bool reader_kernel_no_send(
 }
 
 bool writer_kernel_no_receive(
-    DispatchFixture* fixture,
+    tt_metal::DispatchFixture* fixture,
     tt_metal::IDevice* device,
     const size_t& byte_size,
     const size_t& eth_l1_byte_address,
@@ -278,6 +278,8 @@ bool noc_reader_and_writer_kernels(
 
 }  // namespace unit_tests::erisc::kernels
 
+namespace tt::tt_metal {
+
 TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthKernelsNocReadNoSend) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
@@ -295,6 +297,9 @@ TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthKernelsNocReadNoSend) {
 }
 
 TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthKernelsNocWriteNoReceive) {
+    if (arch_ == ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "See GH Issue #18384";
+    }
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 
@@ -486,3 +491,5 @@ TEST_F(BlackholeSingleCardFixture, IdleEthKernelOnBothIdleEriscs) {
             erisc1_ethernet_config));
     }
 }
+
+}  // namespace tt::tt_metal

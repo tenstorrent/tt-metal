@@ -39,22 +39,59 @@ std::tuple<uint32_t, uint32_t> calculate_compute_kernel_args(
     }
 }
 
-std::tuple<std::optional<ShardSpec>, TensorMemoryLayout> get_shard_spec(
-    const Tensor& a, const std::optional<Tensor>& b, const Tensor& c) {
-    if (a.memory_config().is_sharded()) {
-        return {a.shard_spec().value(), a.memory_config().memory_layout};
-    } else if (b.has_value() && b->memory_config().is_sharded()) {
-        return {b->shard_spec().value(), b->memory_config().memory_layout};
-    } else if (c.memory_config().is_sharded()) {
-        return {c.shard_spec().value(), c.memory_config().memory_layout};
-    }
+struct AllShardSpecs {
+    ShardSpec a_shard_spec;
+    ShardSpec b_shard_spec;
+    ShardSpec c_shard_spec;
+};
 
-    return {std::nullopt, TensorMemoryLayout::INTERLEAVED};
+ShardSpec adjust_to_shape(const ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape) {
+    auto ret = shard_spec;
+
+    ret.shape[0] = (ret.shape[0] * to_shape[-2]) / from_shape[-2];
+    ret.shape[1] = (ret.shape[1] * to_shape[-1]) / from_shape[-1];
+
+    return ret;
 }
 
-uint32_t get_shards_per_width(
-    const CoreRangeSet& all_cores, TensorMemoryLayout memory_layout, ShardOrientation orientation) {
-    auto num_cores = all_cores.num_cores();
+TensorMemoryLayout get_memory_layout(const Tensor& a, const std::optional<Tensor>& b, const Tensor& c) {
+    if (a.memory_config().is_sharded()) {
+        return a.memory_config().memory_layout;
+    }
+    if (b.has_value() && b->memory_config().is_sharded()) {
+        return b->memory_config().memory_layout;
+    }
+    if (c.memory_config().is_sharded()) {
+        return c.memory_config().memory_layout;
+    }
+    return TensorMemoryLayout::INTERLEAVED;
+}
+
+std::optional<AllShardSpecs> get_shard_specs(const Tensor& a, const std::optional<Tensor>& b, const Tensor& c) {
+    bool a_sharded = a.memory_config().is_sharded();
+    bool b_sharded = b.has_value() && b->memory_config().is_sharded();
+    bool c_sharded = c.memory_config().is_sharded();
+
+    if (!a_sharded && !b_sharded && !c_sharded) {
+        return std::nullopt;
+    }
+
+    auto a_shape = a.padded_shape();
+    auto b_shape = b.has_value() ? b->padded_shape() : ttnn::Shape{1, 1};
+    auto c_shape = c.padded_shape();
+
+    ShardSpec c_shard_spec = c_sharded   ? *c.shard_spec()
+                             : a_sharded ? adjust_to_shape(*a.shard_spec(), a_shape, c_shape)
+                                         : adjust_to_shape(*b->shard_spec(), b_shape, c_shape);
+
+    return AllShardSpecs{
+        a_sharded ? *a.shard_spec() : adjust_to_shape(c_shard_spec, c_shape, a_shape),
+        b_sharded ? *b->shard_spec() : adjust_to_shape(c_shard_spec, c_shape, b_shape),
+        c_shard_spec};
+}
+
+uint32_t get_shards_per_width(const ShardSpec& shard_spec, TensorMemoryLayout memory_layout) {
+    auto num_cores = shard_spec.grid.num_cores();
     if (memory_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED) {
         return 1;
     }
@@ -63,11 +100,64 @@ uint32_t get_shards_per_width(
         return num_cores;
     }
 
-    const auto& bbox = all_cores.bounding_box();
+    const auto& bbox = shard_spec.grid.bounding_box();
     const auto& start = bbox.start_coord;
     const auto& end = bbox.end_coord;
-    return (orientation == ShardOrientation::ROW_MAJOR ? end.x - start.x : end.y - start.y) + 1;
+    return (shard_spec.orientation == ShardOrientation::ROW_MAJOR ? end.x - start.x : end.y - start.y) + 1;
 }
+
+class ShardShapeGenerator {
+    CoreCoord end_core;
+    bool row_major;
+    TensorMemoryLayout memory_layout;
+    std::array<uint32_t, 2> shard_shape;
+    std::array<uint32_t, 2> last_shard_shape;
+
+public:
+    ShardShapeGenerator() = default;
+
+    ShardShapeGenerator(const ShardSpec& shard_spec, const Tensor& tensor) :
+        // core ranges are sorted, so the last one is indeed the last core
+        end_core(shard_spec.grid.ranges().rbegin()->end_coord),
+        row_major(shard_spec.orientation == ShardOrientation::ROW_MAJOR),
+        memory_layout(tensor.memory_config().memory_layout) {
+        auto tile_height = tensor.tensor_spec().tile().get_height();
+        auto tile_width = tensor.tensor_spec().tile().get_width();
+
+        shard_shape = {
+            tt::round_up(shard_spec.shape[0], tile_height) / tile_height,
+            tt::round_up(shard_spec.shape[1], tile_width) / tile_width};
+
+        const auto [N, C, Ht, Wt] = get_shape_dims(tensor);
+        const auto unrolled_Ht = N * C * Ht;
+        last_shard_shape = {
+            shard_shape[0] - (tt::round_up(unrolled_Ht, shard_shape[0]) - unrolled_Ht),
+            shard_shape[1] - (tt::round_up(Wt, shard_shape[1]) - Wt),
+        };
+    }
+    std::array<uint32_t, 2> operator()(CoreCoord core) const {
+        const unsigned majorDim = row_major ? 1 : 0;
+        const unsigned minorDim = row_major ? 0 : 1;
+
+        auto current_shape = shard_shape;
+        // for uneven shard, HEIGHT, WIDTH, and BLOCK handling order should be all different in kernel
+        // only HEIGHT sharding works naturally
+        // for eltwise, it should be insignificant to process the padded tile although it is a waste
+        if (core == end_core) {
+            if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+                current_shape[majorDim] = last_shard_shape[majorDim];
+                current_shape[minorDim] = last_shard_shape[minorDim];
+            } else {
+                TT_FATAL(
+                    current_shape[majorDim] == last_shard_shape[majorDim] and
+                        current_shape[minorDim] == last_shard_shape[minorDim],
+                    "no un-even shard size support memory layout {}",
+                    memory_layout);
+            }
+        }
+        return current_shape;
+    }
+};
 
 template <typename F>
 void set_or_update_runtime_arguments(
@@ -82,18 +172,16 @@ void set_or_update_runtime_arguments(
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
 
-    const auto ashape = a.padded_shape();
-    const auto bshape = b.has_value() ? b->padded_shape() : SimpleShape{1, 1};
-    const auto cshape = c.padded_shape();
-
     const auto [aN, aC, aHt, aWt] = get_shape_dims(a);
     const auto [bN, bC, bHt, bWt] = b.has_value() ? get_shape_dims(*b) : std::tuple{1u, 1u, 1u, 1u};
     const auto [cN, cC, cHt, cWt] = get_shape_dims(c);
     const uint32_t cHt_unrolled = cN * cC * cHt;
 
-    bool row_major = true;
-    const auto [shard_spec, memory_layout] = get_shard_spec(a, b, c);
-    const bool has_sharding = shard_spec.has_value();
+    const auto shard_specs = get_shard_specs(a, b, c);
+    const bool has_sharding = shard_specs.has_value();
+    auto grid = has_sharding ? shard_specs->a_shard_spec.grid : CoreRangeSet{};
+
+    const auto row_major = has_sharding ? shard_specs->a_shard_spec.orientation == ShardOrientation::ROW_MAJOR : true;
 
     // zero_start_grid is a flag to indicate that we are using a single rectangular grid that starts at (0, 0)
     // as well as having the sharded tensors (if any) start at (0, 0)
@@ -102,11 +190,11 @@ void set_or_update_runtime_arguments(
     bool zero_start_grid = false;
     CoreCoord compute_with_storage_grid;
     const auto& all_device_cores = operation_attributes.worker_grid;
-    if (all_device_cores.size() == 1) {
+    if (grid.size() == 1) {
         const auto& cr = *all_device_cores.ranges().begin();
         if (cr.start_coord.x == 0 && cr.start_coord.y == 0) {
             if (has_sharding) {
-                const auto& shard_start_coord = shard_spec->grid.ranges()[0].start_coord;
+                const auto& shard_start_coord = grid.ranges()[0].start_coord;
                 if (shard_start_coord.x == 0 && shard_start_coord.y == 0) {
                     zero_start_grid = true;
                     compute_with_storage_grid = CoreCoord(cr.end_coord.x + 1, cr.end_coord.y + 1);
@@ -123,26 +211,28 @@ void set_or_update_runtime_arguments(
     uint32_t num_tiles_per_core_group_1{}, num_tiles_per_core_group_2{};
     CoreRangeSet all_cores, core_group_1, core_group_2;
     uint32_t num_cores;
-    CoreCoord end_core;
     std::vector<CoreCoord> cores;
 
     const uint32_t tile_height = c.tensor_spec().tile().get_height();
     const uint32_t tile_width = c.tensor_spec().tile().get_width();
     const uint32_t tile_hw = tile_height * tile_width;
-    const uint32_t num_output_tiles = c.volume() / tile_hw;
+    const uint32_t c_num_tiles = c.volume() / tile_hw;
+    uint32_t c_shard_height, c_shard_width, num_shards_per_width;
 
-    uint32_t shard_height = cHt_unrolled, shard_width = cWt;
-    uint32_t last_shard_height = shard_height, last_shard_width = shard_width;
+    ShardShapeGenerator a_shard_shape_generator;
+    ShardShapeGenerator b_shard_shape_generator;
+    ShardShapeGenerator c_shard_shape_generator;
 
     if (has_sharding) {
-        core_group_1 = shard_spec->grid;
-        num_tiles_per_core_group_1 = shard_spec->numel() / tile_hw;
-        row_major = shard_spec->orientation == ShardOrientation::ROW_MAJOR;
-        shard_height = shard_spec->shape[0] / tile_height;
-        shard_width = shard_spec->shape[1] / tile_width;
-        end_core = (*shard_spec->grid.ranges().begin()).end_coord;
-        last_shard_height = shard_height - (tt::round_up(cHt_unrolled, shard_height) - cHt_unrolled);
-        last_shard_width = shard_width - (tt::round_up(cWt, shard_width) - cWt);
+        core_group_1 = grid;
+        a_shard_shape_generator = ShardShapeGenerator(shard_specs->a_shard_spec, a);
+        if (b.has_value()) {
+            b_shard_shape_generator = ShardShapeGenerator(shard_specs->b_shard_spec, *b);
+        }
+        c_shard_shape_generator = ShardShapeGenerator(shard_specs->c_shard_spec, c);
+        c_shard_height = shard_specs->c_shard_spec.shape[0] / tile_height;
+        c_shard_width = shard_specs->c_shard_spec.shape[1] / tile_width;
+        num_shards_per_width = get_shards_per_width(shard_specs->c_shard_spec, get_memory_layout(a, b, c));
 
         if (zero_start_grid) {
             auto bbox = core_group_1.bounding_box();
@@ -158,65 +248,52 @@ void set_or_update_runtime_arguments(
     } else if (zero_start_grid) {
         std::tie(
             num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2) =
-            tt::tt_metal::split_work_to_cores(compute_with_storage_grid, num_output_tiles, row_major);
+            tt::tt_metal::split_work_to_cores(compute_with_storage_grid, c_num_tiles, row_major);
         cores = grid_to_cores(num_cores_total, compute_with_storage_grid.x, compute_with_storage_grid.y, row_major);
     } else {
         std::tie(
             num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2) =
-            tt::tt_metal::split_work_to_cores(all_device_cores, num_output_tiles, row_major);
+            tt::tt_metal::split_work_to_cores(all_device_cores, c_num_tiles, row_major);
         cores = corerange_to_cores(all_device_cores, {}, row_major);
     }
-
-    auto num_shards_per_width =
-        has_sharding ? get_shards_per_width(shard_spec->grid, memory_layout, shard_spec->orientation) : 0u;
 
     for (uint32_t i = 0, start_tile_id = 0; i < num_cores_total; i++) {
         const auto& core = cores[i];
 
-        uint32_t num_tiles_per_core = 0;
+        uint32_t a_num_tiles = 0;
+        uint32_t b_num_tiles = 0;
+        uint32_t c_num_tiles = 0;
         if (core_group_1.contains(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_1;
+            c_num_tiles = num_tiles_per_core_group_1;
         } else if (core_group_2.contains(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_2;
+            c_num_tiles = num_tiles_per_core_group_2;
         } else {
-            handle_args(program, reader_kernel_id, core, std::array<uint32_t, 10>{0});
-            handle_args(program, writer_kernel_id, core, std::array<uint32_t, 11>{0});
+            handle_args(program, reader_kernel_id, core, std::array<uint32_t, 11>{0});
+            handle_args(program, writer_kernel_id, core, std::array<uint32_t, 12>{0});
             handle_args(program, compute_kernel_id, core, std::array<uint32_t, 3>{0});
             continue;
         }
 
-        uint32_t start_id = 0;
-        uint32_t current_shard_height = 0;
-        uint32_t current_shard_width = 0;
+        uint32_t c_start_id = 0;
+        uint32_t c_current_shard_width = 0;
         if (has_sharding) {
-            current_shard_height = shard_height;
-            current_shard_width = shard_width;
-            if (row_major) {
-                if (core.x == end_core.x) {
-                    current_shard_width = last_shard_width;
-                }
-                if (core.y == end_core.y) {
-                    current_shard_height = last_shard_height;
-                }
-            } else {
-                if (core.y == end_core.y) {
-                    current_shard_width = last_shard_width;
-                }
-                if (core.x == end_core.x) {
-                    current_shard_height = last_shard_height;
-                }
-            }
-            start_id = (i / num_shards_per_width) * (shard_height * cWt) + (i % num_shards_per_width) * shard_width;
-            num_tiles_per_core = current_shard_height * current_shard_width;
+            auto c_shard_shape = c_shard_shape_generator(core);
+            c_num_tiles = c_shard_shape[0] * c_shard_shape[1];
+            c_current_shard_width = c_shard_shape[1];
+            auto a_shard_shape = a_shard_shape_generator(core);
+            a_num_tiles = a_shard_shape[0] * a_shard_shape[1];
+            c_start_id =
+                (i / num_shards_per_width) * (c_shard_height * cWt) + (i % num_shards_per_width) * c_shard_width;
         } else {
-            start_id = start_tile_id;
+            c_start_id = start_tile_id;
         }
 
         std::array reader_runtime_args = {
             a.buffer()->address(),
-            start_id,
-            num_tiles_per_core,
-            current_shard_width,
+            c_start_id,
+            a_num_tiles,
+            c_num_tiles,
+            c_current_shard_width,
             aHt * aWt * aC * (aN > 1),
             aHt * aWt * (aC > 1),
             cN,
@@ -225,13 +302,29 @@ void set_or_update_runtime_arguments(
             cWt};
         handle_args(program, reader_kernel_id, core, reader_runtime_args);
 
+        const bool is_quant_op = (operation_attributes.binary_op_type == BinaryOpType::QUANT) ||
+                                 (operation_attributes.binary_op_type == BinaryOpType::REQUANT) ||
+                                 (operation_attributes.binary_op_type == BinaryOpType::DEQUANT);
+        TT_FATAL(
+            is_quant_op == ((operation_attributes.post_activations.size() == 1) &&
+                            (operation_attributes.post_activations[0].op_type ==
+                             ttnn::operations::unary::UnaryOpType::ZERO_POINT)),
+            "Quantization op needs to exactly one zero-point value as a post activation");
+        const uint32_t quantization_zero_point =
+            is_quant_op ? std::bit_cast<uint32_t>(operation_attributes.post_activations[0].params[0]) : 0u;
+
         if (b.has_value()) {
+            if (has_sharding) {
+                auto b_shard_shape = b_shard_shape_generator(core);
+                b_num_tiles = b_shard_shape[0] * b_shard_shape[1];
+            }
             std::array writer_runtime_args = {
                 b->buffer()->address(),
                 c.buffer()->address(),
-                start_id,
-                num_tiles_per_core,
-                current_shard_width,
+                c_start_id,
+                b_num_tiles,
+                c_num_tiles,
+                c_current_shard_width,
                 bHt * bWt * bC * (bN > 1),
                 bHt * bWt * (bC > 1),
                 cN,
@@ -241,34 +334,32 @@ void set_or_update_runtime_arguments(
             handle_args(program, writer_kernel_id, core, writer_runtime_args);
 
             auto [freq, counter] =
-                calculate_compute_kernel_args(operation_attributes.subtile_broadcast_type, start_id, cHt, cWt);
-            std::array compute_runtime_args = {num_tiles_per_core, freq, counter};
+                calculate_compute_kernel_args(operation_attributes.subtile_broadcast_type, c_start_id, cHt, cWt);
+            std::array compute_runtime_args = {c_num_tiles, freq, counter, quantization_zero_point};
             handle_args(program, compute_kernel_id, core, compute_runtime_args);
         } else {
             const auto scalar = *operation_attributes.scalar;
-            const auto packed_scalar = a.get_dtype() == DataType::FLOAT32 ? std::bit_cast<uint32_t>(scalar)
-                                       : a.get_dtype() == DataType::INT32
-                                           ? std::bit_cast<uint32_t>(static_cast<int32_t>(scalar))
-                                           : pack_two_bfloat16_into_uint32({scalar, scalar});
+            const auto packed_scalar = pack_scalar_runtime_arg(scalar, a.get_dtype(), is_quant_op);
             std::array writer_runtime_args = {
                 packed_scalar,
                 c.buffer()->address(),
-                start_id,
-                num_tiles_per_core,
-                current_shard_width,
+                c_start_id,
+                c_num_tiles,
+                c_current_shard_width,
                 cN,
                 cC,
                 cHt,
                 cWt,
                 0u,
+                0u,
                 0u};
             handle_args(program, writer_kernel_id, core, writer_runtime_args);
 
-            std::array compute_runtime_args = {num_tiles_per_core, 0u, 0u};
+            std::array compute_runtime_args = {c_num_tiles, 0u, 0u, quantization_zero_point};
             handle_args(program, compute_kernel_id, core, compute_runtime_args);
         }
 
-        start_tile_id += num_tiles_per_core;
+        start_tile_id += c_num_tiles;
     }
 }
 
@@ -285,18 +376,24 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
 
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
+    const auto a_dtype = a.get_dtype();
+    const auto b_dtype = b.has_value() ? b->get_dtype() : a_dtype;
     auto is_sfpu_op = operation_attributes.is_sfpu;
 
     auto program = CreateProgram();
     auto* device = a.device();
 
-    auto [shard_spec, memory_layout] = CMAKE_UNIQUE_NAMESPACE::get_shard_spec(a, b, c);
-    const bool has_sharding = shard_spec.has_value();
-    uint32_t num_tiles_per_shard = has_sharding ? shard_spec->numel() / a.tensor_spec().tile().get_tile_hw() : 0;
+    const auto shard_specs = CMAKE_UNIQUE_NAMESPACE::get_shard_specs(a, b, c);
+    const bool has_sharding = shard_specs.has_value();
 
-    auto a_data_format = datatype_to_dataformat_converter(a.get_dtype());
+    auto tile_hw = c.tensor_spec().tile().get_tile_hw();
+    uint32_t a_num_tiles_per_shard = has_sharding ? shard_specs->a_shard_spec.numel() / tile_hw : 0;
+    uint32_t b_num_tiles_per_shard = has_sharding ? shard_specs->b_shard_spec.numel() / tile_hw : 0;
+    uint32_t c_num_tiles_per_shard = has_sharding ? shard_specs->c_shard_spec.numel() / tile_hw : 0;
+
+    auto a_data_format = datatype_to_dataformat_converter(a_dtype);
     auto b_data_format = b.has_value() ? datatype_to_dataformat_converter(b->get_dtype())
-                         : is_sfpu_op  ? datatype_to_dataformat_converter(a.get_dtype())
+                         : is_sfpu_op  ? datatype_to_dataformat_converter(a_dtype)
                                        : DataFormat::Float16_b;
     auto c_data_format = datatype_to_dataformat_converter(c.get_dtype());
 
@@ -304,10 +401,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     uint32_t b_single_tile_size = tt_metal::detail::TileSize(b_data_format);
     uint32_t c_single_tile_size = tt_metal::detail::TileSize(c_data_format);
 
-    uint32_t num_output_tiles = c.volume() / c.tensor_spec().tile().get_tile_hw();
-
     // we parallelize the computation across the output tiles
-    constexpr bool row_major = true;
     const auto& all_device_cores = operation_attributes.worker_grid;
 
     Buffer* a_buffer = a.buffer();
@@ -319,7 +413,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     const auto op_config = is_sfpu_op ? OpConfig(op_type, std::in_place_type<OpConfig::SfpuBinaryOp>)
                                       : OpConfig(op_type, std::in_place_type<OpConfig::FpuBinaryOp>);
 
-    auto compute_kernel_defines = op_config.as_defines(a.get_dtype());
+    auto compute_kernel_defines = op_config.as_defines(a_dtype);
 
     {
         ttnn::SmallVector<unary::UnaryWithParam> lhs_activations = operation_attributes.lhs_activations;
@@ -341,11 +435,18 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         add_activation_defines(compute_kernel_defines, lhs_activations, "LHS");
         add_activation_defines(compute_kernel_defines, rhs_activations, "RHS");
 
-        if (lhs_activations.empty() and rhs_activations.empty() and post_activations.size() == 1 and
-            post_activations[0].op_type == unary::UnaryOpType::RELU) {
-            compute_kernel_defines["PACK_RELU"] = "1";
+        if (lhs_activations.empty() and rhs_activations.empty() and post_activations.size() == 1) {
             compute_kernel_defines["PROCESS_POST_ACTIVATIONS(i)"] = "";
-            unary::utils::update_macro_defines(unary::UnaryOpType::RELU, compute_kernel_defines);
+            if (post_activations[0].op_type == unary::UnaryOpType::RELU) {
+                compute_kernel_defines["PACK_RELU"] = "1";
+                unary::utils::update_macro_defines(unary::UnaryOpType::RELU, compute_kernel_defines);
+            } else if (post_activations[0].op_type == unary::UnaryOpType::ZERO_POINT) {
+                // Zero-point is passed as the 4th run-time kernel argument
+                compute_kernel_defines["QUANT_ZERO_POINT_RT_ARGS_IDX"] = "3";
+                unary::utils::update_macro_defines(unary::UnaryOpType::ZERO_POINT, compute_kernel_defines);
+            } else {
+                add_activation_defines(compute_kernel_defines, post_activations, "POST");
+            }
         } else {
             add_activation_defines(compute_kernel_defines, post_activations, "POST");
         }
@@ -364,7 +465,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         program,
         all_device_cores,
         a_single_tile_size,
-        a_sharded ? num_tiles_per_shard : 2,
+        a_sharded ? a_num_tiles_per_shard : 2,
         a_data_format,
         a_sharded ? a_buffer : nullptr);
 
@@ -383,7 +484,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         program,
         all_device_cores,
         b_single_tile_size,
-        b_buffer == nullptr ? 1 : (b_sharded ? num_tiles_per_shard : 2),
+        b_buffer == nullptr ? 1 : (b_sharded ? b_num_tiles_per_shard : 2),
         b_data_format,
         b_sharded ? b_buffer : nullptr);
 
@@ -401,7 +502,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         program,
         all_device_cores,
         c_single_tile_size,
-        c_sharded ? num_tiles_per_shard : 2,
+        c_sharded ? c_num_tiles_per_shard : 2,
         c_data_format,
         c_sharded ? c_buffer : nullptr);
 
@@ -412,12 +513,12 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     auto kernel_config = CMAKE_UNIQUE_NAMESPACE::BinaryNgKernelConfig(operation_attributes.subtile_broadcast_type);
 
     std::map<std::string, std::string> dataflow_defines;
-    if (is_sfpu_op && a.get_dtype() == DataType::FLOAT32) {
+    if (is_sfpu_op && a_dtype == DataType::FLOAT32) {
         dataflow_defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
         dataflow_defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
         dataflow_defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<float>";
         dataflow_defines["FILL_WITH_VALUE_FLOAT"] = "fill_with_val<1024, float>";
-    } else if (is_sfpu_op && a.get_dtype() == DataType::INT32) {
+    } else if (is_sfpu_op && a_dtype == DataType::INT32) {
         dataflow_defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
         dataflow_defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
         dataflow_defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<int32_t>";
@@ -466,11 +567,23 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     uint32_t src1interim_cb_index = tt::CBIndex::c_4;
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+
     if (is_sfpu_op) {
-        unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode[src1_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode[src0interim_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode[src1interim_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        if (op_type != BinaryOpType::POWER) {
+            unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+            unpack_to_dest_mode[src1_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+            unpack_to_dest_mode[src0interim_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+            unpack_to_dest_mode[src1interim_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        } else {
+            unpack_to_dest_mode[src0_cb_index] =
+                (a_dtype == DataType::FLOAT32) ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
+            unpack_to_dest_mode[src1_cb_index] =
+                (b_dtype == DataType::FLOAT32) ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
+            unpack_to_dest_mode[src0interim_cb_index] =
+                (a_dtype == DataType::FLOAT32) ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
+            unpack_to_dest_mode[src1interim_cb_index] =
+                (b_dtype == DataType::FLOAT32) ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
+        }
     }
 
     compute_kernel_defines["BCAST_INPUT"] = kernel_config.bcast_input_str();

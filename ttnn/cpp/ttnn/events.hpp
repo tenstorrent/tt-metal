@@ -1,30 +1,43 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024-2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <memory>
-#include <tt-metalium/host_api.hpp>
+#include "tt-metalium/mesh_event.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/distributed/types.hpp"
 
-namespace ttnn::events {
+#include "tt-metalium/device.hpp"
+#include "tt-metalium/event.hpp"
+#include "tt-metalium/sub_device_types.hpp"
 
-struct MultiDeviceEvent {
-    MultiDeviceEvent(MeshDevice* mesh_device);
-    std::vector<std::shared_ptr<Event>> events;
-};
+namespace ttnn {
+
+using MeshEvent = tt::tt_metal::distributed::MeshEvent;
+
+namespace events {
+
 // Single Device APIs
-std::shared_ptr<Event> create_event(IDevice* device);
-void record_event(
-    uint8_t cq_id,
-    const std::shared_ptr<Event>& event,
-    const std::vector<tt::tt_metal::SubDeviceId>& sub_device_ids = {});
-void wait_for_event(uint8_t cq_id, const std::shared_ptr<Event>& event);
-// Multi Device APIs
-MultiDeviceEvent create_event(MeshDevice* mesh_device);
-void record_event(
-    uint8_t cq_id, const MultiDeviceEvent& event, const std::vector<tt::tt_metal::SubDeviceId>& sub_device_ids = {});
-void wait_for_event(uint8_t cq_id, const MultiDeviceEvent& event);
+std::shared_ptr<tt::tt_metal::Event> record_event(
+    tt::tt_metal::IDevice* device, QueueId cq_id, const std::vector<tt::tt_metal::SubDeviceId>& sub_device_ids = {});
+void wait_for_event(QueueId cq_id, const std::shared_ptr<tt::tt_metal::Event>& event);
 
-}  // namespace ttnn::events
+// Multi Device APIs
+struct MultiDeviceEvent {
+    std::vector<std::shared_ptr<tt::tt_metal::Event>> events;
+};
+MultiDeviceEvent record_event(
+    MeshDevice* mesh_device, QueueId cq_id, const std::vector<tt::tt_metal::SubDeviceId>& sub_device_ids = {});
+void wait_for_event(QueueId cq_id, const MultiDeviceEvent& event);
+
+MeshEvent record_mesh_event(
+    MeshDevice* mesh_device,
+    QueueId cq_id,
+    const std::vector<tt::tt_metal::SubDeviceId>& sub_device_ids = {},
+    const std::optional<ttnn::MeshCoordinateRange>& device_range = std::nullopt);
+void wait_for_mesh_event(QueueId cq_id, const MeshEvent& event);
+
+}  // namespace events
+}  // namespace ttnn

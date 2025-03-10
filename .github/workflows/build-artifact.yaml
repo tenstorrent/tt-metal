@@ -12,10 +12,23 @@ on:
         type: boolean
         default: false
         description: "Build with tracy enabled"
-      os:
+      build-wheel:
+        required: false
+        type: boolean
+        default: false
+        description: "Build Python Wheel"
+      distro:
         required: false
         type: string
-        default: "ubuntu-20.04-amd64"
+        default: "ubuntu"
+      version:
+        required: false
+        type: string
+        default: "20.04"
+      architecture:
+        required: false
+        type: string
+        default: "amd64"
       toolchain:
         required: false
         type: string
@@ -34,7 +47,22 @@ on:
         required: false
         type: boolean
         default: false
-
+    outputs:
+      ci-build-docker-image:
+        description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
+        value: ${{ jobs.build-docker-image.outputs.ci-build-tag }}
+      #ci-test-docker-image:
+      #  description: "Docker tag for the CI Test Docker image for testing TT-Metalium et al"
+      #  value: ${{ jobs.build-docker-image.outputs.ci-test-tag }}
+      packages-artifact-name:
+        description: "Name to give download-artifact to get the packages"
+        value: ${{ jobs.build-artifact.outputs.packages-artifact-name }}
+      build-artifact-name:
+        description: "Name of the published build artifact"
+        value: ${{ jobs.build-artifact.outputs.build_artifact_name }}
+      wheel-artifact-name:
+        description: "Name of the published wheel artifact"
+        value: ${{ jobs.build-artifact.outputs.wheel_artifact_name }}
 
   workflow_dispatch:
     inputs:
@@ -47,10 +75,28 @@ on:
         type: boolean
         default: false
         description: "Build with tracy enabled"
-      os:
+      build-wheel:
+        required: false
+        type: boolean
+        default: false
+        description: "Build Python Wheel"
+      distro:
         required: false
         type: string
-        default: "ubuntu-20.04-amd64"
+        default: "ubuntu"
+      version:
+        required: false
+        type: string
+        default: "20.04"
+      architecture:
+        required: false
+        type: string
+        default: "amd64"
+      toolchain:
+        required: false
+        type: string
+        default: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+        description: "Toolchain file to use for build"
 
 
 jobs:
@@ -58,18 +104,41 @@ jobs:
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
     with:
-      os: ${{ inputs.os }}
+      distro: ${{ inputs.distro }}
+      version: ${{ inputs.version }}
+      architecture: ${{ inputs.architecture }}
 
   build-artifact:
-    name: "🛠️ Build ${{ inputs.build-type }} ${{ inputs.os }}"
+    name: "🛠️ Build ${{ inputs.build-type }} ${{ inputs.distro }} ${{ inputs.version }}"
     needs: build-docker-image
     timeout-minutes: 30
-    env:
-      SILENT: 0
-      VERBOSE: 1
     runs-on:
       - build
       - in-service
+    outputs:
+      packages-artifact-name: ${{ steps.set-artifact-name.outputs.name }}
+      build_artifact_name: ${{ steps.set_build_artifact_name.outputs.build_artifact_name }}
+      wheel_artifact_name: ${{ steps.set_wheel_artifact_name.outputs.wheel_artifact_name }}
+    container:
+      image: ${{ needs.build-docker-image.outputs.ci-build-tag }}
+      env:
+        CCACHE_TEMPDIR: /tmp/ccache
+        CARGO_HOME: /tmp/.cargo
+        TT_FROM_PRECOMPILED_DIR: /work
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /home/ubuntu/.ccache-ci:/github/home/.ccache # HOME is hardcoded for no clear reason: https://github.com/actions/runner/issues/863
+        - /mnt/MLPerf/ccache:/mnt/MLPerf/ccache
+      # Group 1457 is for the shared ccache drive
+      # tmpfs is for efficiency
+      options: >
+        --group-add 1457
+        --tmpfs /tmp
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+
     steps:
       - name: Verify ccache availability
         shell: bash
@@ -78,81 +147,137 @@ jobs:
             echo "::error title=ccache-mlperf-not-mounted::NFS drive is not mounted; build machine not properly provisioned."
             exit 1
           fi
-          if [ ! -d "$HOME/.ccache-ci" ]; then
+          if [ ! -d "$HOME/.ccache" ]; then
             echo "::error title=ccache-not-provisioned::Ccache is not properly provisioned."
             exit 1
           fi
-      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
-      - name: Set up dynamic env vars for build
+
+      - name: Set artifact name
+        id: set-artifact-name
         run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-          echo "RUNNER_UID=$(id -u)" >> $GITHUB_ENV
-          echo "RUNNER_GID=$(id -g)" >> $GITHUB_ENV
-      - name: Update submodules
+          TOOLCHAIN="${{ inputs.toolchain }}"
+          TOOLCHAIN_CLEANED=$(echo "$TOOLCHAIN" | sed -E 's/^cmake\///; s/-toolchain\.cmake$//')
+          ARTIFACT_NAME="packages-${{ inputs.distro }}-${{ inputs.version }}-${{ inputs.architecture }}-${{ inputs.build-type }}-${TOOLCHAIN_CLEANED}${{ (inputs.tracy && '_profiler') || '' }}"
+
+          echo "name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+          echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> "$GITHUB_ENV"
+
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 500 # Need enough history for `git describe`
+          fetch-tags: true # Need tags for `git describe`
+          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
+
+      - name: Sanity check
         run: |
-          git submodule update --init --recursive
-      - name: Generate docker tag
-        id: generate-docker-tag
-        uses: ./.github/actions/generate-docker-tag
-        with:
-          image: tt-metalium/${{ inputs.os }}
-      - name: Docker login
-        uses: docker/login-action@v3
-        with:
-          registry: https://ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Pull docker image
-        run: docker pull ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
-      - name: Build tt-metal and libs
-        uses: tenstorrent/docker-run-action@v5
-        with:
-          image: ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
-          options: |
-            --rm
-            --tmpfs /tmp
-            -u ${{ env.RUNNER_UID }}:${{ env.RUNNER_GID }}
-            --group-add 1457
-            -v ${{ github.workspace }}:${{ github.workspace }}
-            -v /etc/passwd:/etc/passwd:ro
-            -v /etc/shadow:/etc/shadow:ro
-            -v /etc/bashrc:/etc/bashrc:ro
-            -v /home/ubuntu/.ccache-ci:/home/ubuntu/.ccache
-            -v /mnt/MLPerf/ccache:/mnt/MLPerf/ccache
-            -e CARGO_HOME=${{ github.workspace }}/.cargo
-            -w ${{ github.workspace }}
-          run: |
-            set -eu # basic shell hygiene
+          set -eu # basic shell hygiene
+          if find . -maxdepth 1 -type d -name 'build*' -print -quit | grep -q .; then
+            echo "!!! ALERT !!! This should never happen, but does explain an issue we've been hunting. Please send a link to this job to Metal Infra.  kthxbye."
+            exit 42
+          fi
 
-            # /tmp is a tmpfs; more efficient than persisted storage
-            mkdir -p /tmp/ccache
-            export CCACHE_TEMPDIR=/tmp/ccache
+      - name: Create ccache tmpdir
+        run: |
+          mkdir -p /tmp/ccache
 
-            # Zero out the stats so we can see how we did this build
-            # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
-            ccache -z
+      - name: Prepare ccache summary
+        run: |
+          # Zero out the stats so we can see how we did this build
+          # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
+          ccache -z
 
-            args_fixme=$([ "${{ inputs.skip-tt-train }}" = "true" ] && echo "--build-metal-tests --build-ttnn-tests --build-programming-examples" || echo "--build-all")
-            echo "Args: ${args_fixme}"
-            build_command="./build_metal.sh --build-type ${{ inputs.build-type }} --toolchain-path ${{ inputs.toolchain }} ${args_fixme} --enable-ccache"
-            echo "Build tracy: ${{ inputs.tracy }}"
-            if [ "${{ inputs.tracy }}" = "true" ]; then
-              build_command="$build_command --enable-profiler"
-            fi
-            nice -n 19 $build_command
-            ccache -s > build/ccache.stats
-      - name: Publish Ccache summary
+      - name: 🔧 CMake configure
+        run: |
+          set -eu # basic shell hygiene
+
+          args_fixme=$([ "${{ inputs.skip-tt-train }}" = "true" ] && echo "--build-metal-tests --build-ttnn-tests --build-programming-examples" || echo "--build-all")
+          echo "Args: ${args_fixme}"
+          build_command="./build_metal.sh --build-dir build --build-type ${{ inputs.build-type }} --toolchain-path ${{ inputs.toolchain }} ${args_fixme} --enable-ccache --configure-only --cpm-use-local-packages"
+          echo "Build tracy: ${{ inputs.tracy }}"
+          if [ "${{ inputs.tracy }}" = "true" ]; then
+            build_command="$build_command --enable-profiler"
+          fi
+
+          nice -n 19 $build_command
+
+      - name: 🛠️ Compile
+        run: |
+          # --target install is for the tarball that should get replaced by proper packaging later
+          nice -19 cmake --build build --target install
+
+      - name: 📦 Package
+        run: |
+          nice -n 19 cmake --build build --target package
+          ls -1sh build/*.deb build/*.ddeb
+
+      - name: 🐍 Build wheel
+        if: ${{ inputs.build-wheel }}
+        run: |
+          nice -n 19 python3 -m build
+
+      - name: Publish ccache summary
         run: |
           echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          cat build/ccache.stats >> $GITHUB_STEP_SUMMARY
+          ccache -s >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: ☁️ Upload packages
+        uses: actions/upload-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: |
+            /work/build/*.deb
+            /work/build/*.ddeb
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Set wheel artifact name
+        id: set_wheel_artifact_name
+        run: |
+          WHEEL_ARTIFACT_NAME="eager-dist-${{ inputs.distro }}-${{ inputs.version }}-any${{ (inputs.tracy && '-profiler') || '' }}"
+          echo "wheel_artifact_name=$WHEEL_ARTIFACT_NAME" >> "$GITHUB_ENV"
+          echo "wheel_artifact_name=$WHEEL_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: ☁️ Upload wheel
+        if: ${{ inputs.build-wheel }}
+        uses: actions/upload-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ env.wheel_artifact_name }}
+          path: /work/dist/
+          if-no-files-found: error
+
       - name: 'Tar files'
         if: ${{ inputs.publish-artifact }}
-        run: tar -cvhf ttm_any.tar ttnn/ttnn/*.so build/lib ttnn/ttnn/*.so build/programming_examples build/test build/tools build/tt-train data runtime
-      - name: 'Upload Artifact'
+        run: tar -cvhf /work/ttm_any.tar ttnn/ttnn/*.so build/lib ttnn/ttnn/*.so build/programming_examples build/test build/tools build/tt-train data runtime
+
+      - name: Set build artifact name
+        id: set_build_artifact_name
+        run: |
+          BUILD_ARTIFACT_NAME="TTMetal_build_any${{ (inputs.tracy && '_profiler') || '' }}"
+          echo "build_artifact_name=$BUILD_ARTIFACT_NAME" >> "$GITHUB_ENV"
+          echo "build_artifact_name=$BUILD_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: ☁️ Upload tarball
         if: ${{ inputs.publish-artifact }}
         uses: actions/upload-artifact@v4
+        timeout-minutes: 10
         with:
-          name: TTMetal_build_any${{ (inputs.tracy && '_profiler') || '' }}
-          path: ttm_any.tar
+          name: ${{ env.build_artifact_name }}
+          path: /work/ttm_any.tar
+          if-no-files-found: error
+
+      - name: Cleanup
+        if: always()
+        run: |
+          # We are forced to checkout the repo into a subdir of the host's workdir; this pollutes the host
+          # with root-owned files.  Be sure to clean up after ourselves in case we're on a non-ephemeral runner.
+          echo "pre rm"
+          ls -al /__w/tt-metal/tt-metal
+          rm -rf /__w/tt-metal/tt-metal/docker-job
+          echo "post rm"
+          ls -al /__w/tt-metal/tt-metal

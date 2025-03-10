@@ -5,8 +5,7 @@
 #pragma once
 
 #include "ttnn/decorators.hpp"
-#include "ttnn/common/constants.hpp"
-#include "ttnn/operations/core/core.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
 #include "cpp/ttnn/operations/experimental/copy/typecast/typecast.hpp"
@@ -18,7 +17,7 @@ namespace copy {
 namespace detail {
 
 inline Tensor copy_impl(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor,
     const std::vector<ttnn::operations::unary::UnaryWithParam>& op_chain,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -52,7 +51,7 @@ inline Tensor copy_impl(
 
 struct Typecast {
     static Tensor invoke(
-        const uint8_t queue_id,
+        const QueueId queue_id,
         const Tensor& input,
         const DataType& output_dtype,
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
@@ -77,28 +76,20 @@ struct Typecast {
             optional_output_tensor);
     }
 
-    static Tensor invoke(
-        const Tensor& input,
-        const DataType& output_dtype,
-        const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        return invoke(DefaultQueueId, input, output_dtype, memory_config_arg, optional_output_tensor);
-    }
-
     // eltwise_typecast implementation in tt_eager :
     // ---------------------------------------------
     // inline Tensor eltwise_typecast(
     //     const Tensor& input_tensor,
     //     uint32_t tt_input_dtype,
     //     uint32_t tt_output_dtype,
-    //     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG)
+    //     const MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG)
 
     static ttnn::Tensor invoke(
-        const uint8_t queue_id,
+        const QueueId queue_id,
         const Tensor& input_tensor,
         const DataType& tt_input_dtype,
         const DataType& tt_output_dtype,
-        const std::optional<MemoryConfig>& memory_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        const std::optional<MemoryConfig>& memory_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
         TT_ASSERT(
             input_tensor.device()->arch() != tt::ARCH::GRAYSKULL,

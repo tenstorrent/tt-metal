@@ -15,15 +15,14 @@ void ConcatenateHeadsDeviceOperation::validate_with_output_tensors(
     // TODO: See issue #1744
     TT_FATAL(batch_size >= 7 && batch_size <= 9, "Input batch size must be between 7 to 9 for bert large TM ops!");
 
-    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
+    TT_FATAL(input_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
     TT_FATAL(
         input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16 ||
             input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B,
         "Unsupported data format");
 
-    TT_FATAL(
-        (input_tensor.get_padded_shape() == ttnn::SimpleShape({batch_size, 16, 384, 64})), "Unsupported input shape");
+    TT_FATAL((input_tensor.get_padded_shape() == ttnn::Shape({batch_size, 16, 384, 64})), "Unsupported input shape");
 
     TT_FATAL(output_tensors.size() == 1, "Must have 1 output tensors");
     const auto& optional_output_tensor = output_tensors.at(0);
@@ -33,7 +32,7 @@ void ConcatenateHeadsDeviceOperation::validate_with_output_tensors(
             "Output dtype must be same as input dtype!");
 
         TT_FATAL(
-            optional_output_tensor.value().get_padded_shape() == ttnn::SimpleShape({batch_size, 1, 384, 1024}),
+            optional_output_tensor.value().get_padded_shape() == ttnn::Shape({batch_size, 1, 384, 1024}),
             "Output shape must be (batch_size, 1, 384, 1024)!");
     }
 }
@@ -45,9 +44,11 @@ std::vector<ttnn::TensorSpec> ConcatenateHeadsDeviceOperation::compute_output_sp
     }
     const auto& input_tensor = input_tensors.at(0);
     const auto batch_size = input_tensor.get_padded_shape()[0];
-    ttnn::SimpleShape output_shape({batch_size, 1, 384, 1024});
-    return {
-        TensorSpec(output_shape, TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), output_mem_config))};
+    ttnn::Shape output_shape({batch_size, 1, 384, 1024});
+    return {TensorSpec(
+        output_shape,
+        tt::tt_metal::TensorLayout(
+            input_tensor.get_dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), output_mem_config))};
 }
 
 std::vector<Tensor> ConcatenateHeadsDeviceOperation::create_output_tensors(
@@ -59,7 +60,7 @@ std::vector<Tensor> ConcatenateHeadsDeviceOperation::create_output_tensors(
     return {create_device_tensor(compute_output_specs(input_tensors, output_tensors)[0], input_tensors.at(0).device())};
 }
 
-operation::ProgramWithCallbacks ConcatenateHeadsDeviceOperation::create_program(
+tt::tt_metal::operation::ProgramWithCallbacks ConcatenateHeadsDeviceOperation::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);

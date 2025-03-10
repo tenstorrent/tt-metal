@@ -9,12 +9,13 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tt_memory.h>
-#include <tt-metalium/llrt.hpp>
+#include "llrt.hpp"
 #include "tt_metal/detail/kernel_cache.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/kernel.hpp>
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/hal.hpp>
+#include "tt_metal/jit_build/build_env_manager.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -22,7 +23,8 @@
 using std::vector;
 using namespace tt;
 
-std::string get_latest_kernel_binary_path(const string& kernel_root_path, const std::shared_ptr<Kernel>& kernel) {
+std::string get_latest_kernel_binary_path(
+    const string& kernel_root_path, const std::shared_ptr<tt_metal::Kernel>& kernel) {
     TT_FATAL(kernel != nullptr, "Error");
     TT_FATAL(std::filesystem::exists(kernel_root_path + kernel->name()), "Error");
 
@@ -40,7 +42,7 @@ std::string get_latest_kernel_binary_path(const string& kernel_root_path, const 
     return kernel->name() + "/" + latest_hash;
 }
 
-void construct_program(Program& program, IDevice* device, CoreCoord& core) {
+void construct_program(tt_metal::Program& program, tt_metal::IDevice* device, CoreCoord& core) {
     uint32_t single_tile_size = 2 * 1024;
     uint32_t num_tiles = 2048;
     uint32_t dram_buffer_size =
@@ -80,13 +82,15 @@ void construct_program(Program& program, IDevice* device, CoreCoord& core) {
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto unary_writer_kernel = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     vector<uint32_t> compute_kernel_args = {
         uint(num_tiles)  // per_core_tile_cnt
@@ -112,9 +116,10 @@ int main(int argc, char** argv) {
         for (unsigned int id = 0; id < num_devices; id++) {
             ids.push_back(id);
         }
-        tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, DispatchCoreConfig{});
+        tt::DevicePool::initialize(
+            ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, tt_metal::DispatchCoreConfig{});
         auto devices = tt::DevicePool::instance().get_all_active_devices();
-        std::vector<Program> programs;
+        std::vector<tt_metal::Program> programs;
         // kernel->binaries() returns 32B aligned binaries
         std::map<uint32_t, std::vector<ll_api::memory const*>> compute_binaries;
         std::map<uint32_t, std::vector<ll_api::memory const*>> brisc_binaries;
@@ -126,8 +131,8 @@ int main(int argc, char** argv) {
             ////////////////////////////////////////////////////////////////////////////
             //                      Application Setup
             ////////////////////////////////////////////////////////////////////////////
-            programs.push_back(Program());
-            Program& program = programs.back();
+            programs.push_back(tt_metal::Program());
+            tt_metal::Program& program = programs.back();
 
             construct_program(program, device, core);
 
@@ -135,8 +140,9 @@ int main(int argc, char** argv) {
             //                      Compile Application
             ////////////////////////////////////////////////////////////////////////////
             // Check that binary memory objects in the kernel match the ones obtained from the persistent cache
-            uint32_t programmable_core_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-            const KernelGroup* kernel_group = program.kernels_on_core(core, programmable_core_index);
+            uint32_t programmable_core_index =
+                tt_metal::hal.get_programmable_core_type_index(tt_metal::HalProgrammableCoreType::TENSIX);
+            const tt_metal::KernelGroup* kernel_group = program.kernels_on_core(core, programmable_core_index);
             TT_FATAL(
                 kernel_group != nullptr && kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].has_value() and
                     kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].has_value() and
@@ -150,7 +156,8 @@ int main(int argc, char** argv) {
                 tt_metal::detail::GetKernel(program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value());
 
             // Run iteration to get golden
-            uint32_t mask = device->build_key();
+            uint32_t mask =
+                tt_metal::BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key;
             tt_metal::detail::CompileProgram(device, program);
             compute_binaries.insert({mask, compute_kernel->binaries(mask)});
             TT_FATAL(compute_binaries.at(mask).size() == 3, "Expected 3 Compute binaries!");
@@ -165,32 +172,39 @@ int main(int argc, char** argv) {
             std::vector<string> kernel_names = {"reader_unary_push_4", "writer_unary", "eltwise_copy_3m"};
             for (int i = 0; i < num_devices; i++) {
                 for (const auto& kernel_name : kernel_names) {
-                    std::filesystem::remove_all(devices[i]->build_env().get_out_kernel_root_path() + kernel_name);
+                    std::filesystem::remove_all(
+                        tt_metal::BuildEnvManager::get_instance()
+                            .get_device_build_env(devices[i]->id())
+                            .build_env.get_out_kernel_root_path() +
+                        kernel_name);
                 }
             }
             tt_metal::detail::ClearKernelCache();
-            std::vector<Program> new_programs;
+            std::vector<tt_metal::Program> new_programs;
             for (int i = 0; i < num_devices; i++) {
                 auto& device = devices[i];
-                new_programs.push_back(Program());
-                Program& program = new_programs.back();
+                new_programs.push_back(tt_metal::Program());
+                tt_metal::Program& program = new_programs.back();
                 construct_program(program, device, core);
             }
 
             std::vector<std::thread> ths;
             ths.reserve(num_devices);
-            uint32_t dm_class_idx = magic_enum::enum_integer(HalProcessorClassType::DM);
-            uint32_t compute_class_idx = magic_enum::enum_integer(HalProcessorClassType::COMPUTE);
+            uint32_t dm_class_idx = magic_enum::enum_integer(tt_metal::HalProcessorClassType::DM);
+            uint32_t compute_class_idx = magic_enum::enum_integer(tt_metal::HalProcessorClassType::COMPUTE);
             for (int i = 0; i < num_devices; i++) {
                 auto& device = devices[i];
                 auto& program = new_programs[i];
                 ths.emplace_back([&] {
                     for (int j = 0; j < num_compiles; j++) {
-                        uint32_t mask = device->build_key();
+                        uint32_t mask = tt_metal::BuildEnvManager::get_instance()
+                                            .get_device_build_env(device->build_id())
+                                            .build_key;
                         tt_metal::detail::CompileProgram(device, program);
                         uint32_t programmable_core_index =
-                            hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-                        const KernelGroup* kernel_group = program.kernels_on_core(core, programmable_core_index);
+                            tt_metal::hal.get_programmable_core_type_index(tt_metal::HalProgrammableCoreType::TENSIX);
+                        const tt_metal::KernelGroup* kernel_group =
+                            program.kernels_on_core(core, programmable_core_index);
                         auto compute_kernel = tt_metal::detail::GetKernel(
                             program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].value());
                         auto riscv0_kernel = tt_metal::detail::GetKernel(
@@ -201,21 +215,29 @@ int main(int argc, char** argv) {
                         TT_FATAL(riscv0_kernel->binaries(mask) == brisc_binaries.at(mask), "Error");
                         TT_FATAL(riscv1_kernel->binaries(mask) == ncrisc_binaries.at(mask), "Error");
 
-                        std::string brisc_hex_path = device->build_kernel_target_path(
-                            programmable_core_index,
-                            dm_class_idx,
-                            0,
-                            get_latest_kernel_binary_path(device->build_env().get_out_kernel_root_path(), riscv0_kernel));
+                        std::string kernel_name = get_latest_kernel_binary_path(
+                            tt_metal::BuildEnvManager::get_instance()
+                                .get_device_build_env(device->build_id())
+                                .build_env.get_out_kernel_root_path(),
+                            riscv0_kernel);
+                        std::string brisc_hex_path =
+                            tt_metal::BuildEnvManager::get_instance()
+                                .get_kernel_build_state(device->build_id(), programmable_core_index, dm_class_idx, 0)
+                                .get_target_out_path(kernel_name);
                         ll_api::memory const& brisc_binary =
                             llrt::get_risc_binary(brisc_hex_path, ll_api::memory::Loading::CONTIGUOUS_XIP);
                         TT_FATAL(
                             brisc_binary == *brisc_binaries.at(mask).at(0),
                             "Expected saved BRISC binary to be the same as binary in persistent cache");
-                        std::string ncrisc_hex_path = device->build_kernel_target_path(
-                            programmable_core_index,
-                            dm_class_idx,
-                            1,
-                            get_latest_kernel_binary_path(device->build_env().get_out_kernel_root_path(), riscv1_kernel));
+                        kernel_name = get_latest_kernel_binary_path(
+                            tt_metal::BuildEnvManager::get_instance()
+                                .get_device_build_env(device->build_id())
+                                .build_env.get_out_kernel_root_path(),
+                            riscv1_kernel);
+                        std::string ncrisc_hex_path =
+                            tt_metal::BuildEnvManager::get_instance()
+                                .get_kernel_build_state(device->build_id(), programmable_core_index, dm_class_idx, 1)
+                                .get_target_out_path(kernel_name);
                         auto load_type =
                             (device->arch() == tt::ARCH::GRAYSKULL || device->arch() == tt::ARCH::WORMHOLE_B0)
                                 ? ll_api::memory::Loading::CONTIGUOUS
@@ -225,12 +247,17 @@ int main(int argc, char** argv) {
                             ncrisc_binary == *ncrisc_binaries.at(mask).at(0),
                             "Expected saved NCRISC binary to be the same as binary in persistent cache");
                         for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
+                            kernel_name = get_latest_kernel_binary_path(
+                                tt_metal::BuildEnvManager::get_instance()
+                                    .get_device_build_env(device->build_id())
+                                    .build_env.get_out_kernel_root_path(),
+                                compute_kernel);
                             std::string trisc_id_str = std::to_string(trisc_id);
-                            std::string trisc_hex_path = device->build_kernel_target_path(
-                                programmable_core_index,
-                                compute_class_idx,
-                                trisc_id,
-                                get_latest_kernel_binary_path(device->build_env().get_out_kernel_root_path(), compute_kernel));
+                            std::string trisc_hex_path =
+                                tt_metal::BuildEnvManager::get_instance()
+                                    .get_kernel_build_state(
+                                        device->build_id(), programmable_core_index, compute_class_idx, trisc_id)
+                                    .get_target_out_path(kernel_name);
                             ll_api::memory const& trisc_binary =
                                 llrt::get_risc_binary(trisc_hex_path, ll_api::memory::Loading::CONTIGUOUS_XIP);
                             TT_FATAL(

@@ -18,10 +18,8 @@ void MorehCumsumDeviceOperation::validate_inputs(
         return;
     }
 
-    const auto input_shape = input.get_shape();
-    const auto output_shape = output.value().get_shape();
-    const auto input_shape_wo_padding = input_shape.value.without_padding();
-    const auto output_shape_wo_padding = output_shape.value.without_padding();
+    const auto input_shape = input.get_logical_shape();
+    const auto output_shape = output.value().get_logical_shape();
 
     for (int i = 0; i < input_shape.rank(); ++i) {
         TT_FATAL(
@@ -29,12 +27,6 @@ void MorehCumsumDeviceOperation::validate_inputs(
             "Input shape must match output shape. Received input_shape = {} and output_shape = {}.",
             input_shape[i],
             output_shape[i]);
-        TT_FATAL(
-            input_shape_wo_padding[i] == output_shape_wo_padding[i],
-            "Input and output shapes (excluding padding) must be equal. Received input_shape_wo_padding = {} and "
-            "output_shape_wo_padding = {}.",
-            input_shape_wo_padding[i],
-            output_shape_wo_padding[i]);
     }
 }
 
@@ -61,7 +53,8 @@ MorehCumsumDeviceOperation::spec_return_value_t MorehCumsumDeviceOperation::comp
 
     const auto& input = tensor_args.input;
     return TensorSpec(
-        input.get_logical_shape(), TensorLayout(input.dtype(), PageConfig(input.layout()), MemoryConfig{}));
+        input.get_logical_shape(),
+        tt::tt_metal::TensorLayout(input.dtype(), tt::tt_metal::PageConfig(input.layout()), MemoryConfig{}));
 }
 
 MorehCumsumDeviceOperation::tensor_return_value_t MorehCumsumDeviceOperation::create_output_tensors(

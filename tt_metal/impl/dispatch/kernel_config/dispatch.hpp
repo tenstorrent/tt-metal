@@ -18,8 +18,7 @@ typedef struct dispatch_static_config {
     std::optional<uint32_t> my_downstream_cb_sem_id;
 
     std::optional<uint32_t> split_dispatch_page_preamble_size;  // 14
-    std::optional<uint32_t> split_prefetch;
-    std::optional<uint32_t> prefetch_h_max_credits;
+    std::optional<uint32_t> prefetch_h_max_credits;             // Used if split_prefetch is true
 
     std::optional<uint32_t> packed_write_max_unicast_sub_cmds;  // 19
     std::optional<uint32_t> dispatch_s_sync_sem_base_addr;
@@ -50,8 +49,9 @@ typedef struct dispatch_dependent_config {
     std::optional<uint32_t> downstream_cb_size;    // Dependent
     std::optional<uint32_t> downstream_cb_sem_id;  // Dependant
 
-    std::optional<uint32_t> prefetch_h_noc_xy;                     // Dependent
-    std::optional<uint32_t> prefetch_h_local_downstream_sem_addr;  // Dependent
+    std::optional<uint32_t> split_prefetch;                        // If upstream is NOT a prefetch_HD
+    std::optional<uint32_t> prefetch_h_noc_xy;                     // Dependent. Used if split_prefetch is true
+    std::optional<uint32_t> prefetch_h_local_downstream_sem_addr;  // Dependent. Used if split_prefetch is true
 } dispatch_dependent_config_t;
 
 class DispatchKernel : public FDKernel {
@@ -65,8 +65,9 @@ public:
         bool h_variant,
         bool d_variant) :
         FDKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection) {
+        auto& core_manager = tt::tt_metal::dispatch_core_manager::instance();  // Not thread safe
         TT_FATAL(
-            noc_selection.downstream_noc == dispatch_downstream_noc,
+            noc_selection.downstream_noc == tt::tt_metal::dispatch_downstream_noc,
             "Invalid downstream NOC specified for Dispatcher kernel");
         TT_FATAL(
             noc_selection.upstream_noc != noc_selection.downstream_noc,
@@ -75,13 +76,12 @@ public:
         static_config_.is_d_variant = d_variant;
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
         if (h_variant && d_variant) {
-            this->logical_core_ = dispatch_core_manager::instance().dispatcher_core(device_id, channel, cq_id);
+            this->logical_core_ = core_manager.dispatcher_core(device_id, channel, cq_id);
         } else if (h_variant) {
             channel = tt::Cluster::instance().get_assigned_channel_for_device(servicing_device_id);
-            this->logical_core_ =
-                dispatch_core_manager::instance().dispatcher_core(servicing_device_id, channel, cq_id);
+            this->logical_core_ = core_manager.dispatcher_core(servicing_device_id, channel, cq_id);
         } else if (d_variant) {
-            this->logical_core_ = dispatch_core_manager::instance().dispatcher_d_core(device_id, channel, cq_id);
+            this->logical_core_ = core_manager.dispatcher_d_core(device_id, channel, cq_id);
         }
     }
     void CreateKernel() override;

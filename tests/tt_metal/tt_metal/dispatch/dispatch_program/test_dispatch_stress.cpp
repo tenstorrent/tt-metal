@@ -8,16 +8,17 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 
+namespace tt::tt_metal {
+
 using std::vector;
 using namespace tt;
-using namespace tt::tt_metal;
 
 void RunTest(IDevice* device) {
     // Set up program
     Program program = Program();
     CoreRange core_range({0, 0}, {5, 5});
 
-    auto l1_unreserved_base = device->get_base_allocator_addr(tt_metal::HalMemType::L1);
+    auto l1_unreserved_base = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
 
     // Kernels on brisc + ncrisc that just add two numbers
     KernelHandle brisc_kid = CreateKernel(
@@ -125,3 +126,5 @@ TEST(DispatchStress, TensixRunManyTimes) {
         tt::tt_metal::detail::CloseDevices(reserved_devices_);
     }
 }
+
+}  // namespace tt::tt_metal

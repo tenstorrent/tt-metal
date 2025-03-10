@@ -87,6 +87,8 @@
  *
  */
 
+using namespace tt::tt_metal;
+
 namespace ttnn::ccl::reduce_scatter_detail {
 
 using ttnn::ccl::Shape4D;
@@ -1345,7 +1347,10 @@ static void validate_end_of_line_worker_tensors(
             all_tensors.input_tensor_from_remote[LineDirection::BACKWARD] != nullptr,
             "Input tensor from remote must be populated");
         TT_FATAL(
-            all_tensors.input_tensor->shape() == all_tensors.input_tensor_from_remote[LineDirection::BACKWARD]->shape(),
+            all_tensors.input_tensor->logical_shape() == all_tensors.input_tensor_from_remote[LineDirection::BACKWARD]->logical_shape(),
+            "Input tensor and input from remote tensor must have the same shape");
+        TT_FATAL(
+            all_tensors.input_tensor->padded_shape() == all_tensors.input_tensor_from_remote[LineDirection::BACKWARD]->padded_shape(),
             "Input tensor and input from remote tensor must have the same shape");
     }
     if (line_topology.is_first_device_in_line(LineDirection::BACKWARD)) {
@@ -1356,7 +1361,10 @@ static void validate_end_of_line_worker_tensors(
             all_tensors.input_tensor_from_remote[LineDirection::FORWARD] != nullptr,
             "Input tensor from remote must be populated");
         TT_FATAL(
-            all_tensors.input_tensor->shape() == all_tensors.input_tensor_from_remote[LineDirection::FORWARD]->shape(),
+            all_tensors.input_tensor->logical_shape() == all_tensors.input_tensor_from_remote[LineDirection::FORWARD]->logical_shape(),
+            "Input tensor and input from remote tensor must have the same shape");
+        TT_FATAL(
+            all_tensors.input_tensor->padded_shape() == all_tensors.input_tensor_from_remote[LineDirection::FORWARD]->padded_shape(),
             "Input tensor and input from remote tensor must have the same shape");
     }
 }
@@ -1650,12 +1658,21 @@ static void validate_non_end_of_line_tensors(ReduceScatterBuilderConfig& builder
             "Internal error. Expected input tensor from remote direction {} to be populated",
             direction);
         TT_ASSERT(
-            all_program_tensors.input_tensor->shape() == all_program_tensors.remote_output[direction]->shape(),
+            all_program_tensors.input_tensor->logical_shape() == all_program_tensors.remote_output[direction]->logical_shape(),
             "Input tensor and remote output tensor - direction {} must have the same shape",
             direction);
         TT_ASSERT(
-            all_program_tensors.input_tensor->shape() ==
-                all_program_tensors.input_tensor_from_remote[direction]->shape(),
+            all_program_tensors.input_tensor->padded_shape() == all_program_tensors.remote_output[direction]->padded_shape(),
+            "Input tensor and remote output tensor - direction {} must have the same shape",
+            direction);
+        TT_ASSERT(
+            all_program_tensors.input_tensor->logical_shape() ==
+                all_program_tensors.input_tensor_from_remote[direction]->logical_shape(),
+            "Input tensor and input from remote tensor from direction {} must have the same shape",
+            direction);
+        TT_ASSERT(
+            all_program_tensors.input_tensor->padded_shape() ==
+                all_program_tensors.input_tensor_from_remote[direction]->padded_shape(),
             "Input tensor and input from remote tensor from direction {} must have the same shape",
             direction);
     }
@@ -1764,17 +1781,26 @@ static void validate_tensors(ProgramTensorsBundle const& all_tensors, LineTopolo
             }
             if (all_tensors.local_output_partial[direction] != nullptr) {
                 TT_FATAL(
-                    all_tensors.local_output_partial[direction]->shape() == all_tensors.local_final_output_tensor->shape(),
+                    all_tensors.local_output_partial[direction]->logical_shape() == all_tensors.local_final_output_tensor->logical_shape(),
+                    "Partial output tensor and local output tensor must have the same shape");
+                TT_FATAL(
+                    all_tensors.local_output_partial[direction]->padded_shape() == all_tensors.local_final_output_tensor->padded_shape(),
                     "Partial output tensor and local output tensor must have the same shape");
             }
             if (all_tensors.input_tensor_from_remote[direction] != nullptr) {
                 TT_FATAL(
-                    all_tensors.input_tensor_from_remote[direction]->shape() == all_tensors.input_tensor->shape(),
+                    all_tensors.input_tensor_from_remote[direction]->logical_shape() == all_tensors.input_tensor->logical_shape(),
+                    "Input tensor from remote and input tensor must have the same shape");
+                TT_FATAL(
+                    all_tensors.input_tensor_from_remote[direction]->padded_shape() == all_tensors.input_tensor->padded_shape(),
                     "Input tensor from remote and input tensor must have the same shape");
             }
             if (all_tensors.remote_output[direction] != nullptr) {
                 TT_FATAL(
-                    all_tensors.remote_output[direction]->shape() == all_tensors.input_tensor->shape(),
+                    all_tensors.remote_output[direction]->logical_shape() == all_tensors.input_tensor->logical_shape(),
+                    "Remote output tensor and input tensor must have the same shape");
+                TT_FATAL(
+                    all_tensors.remote_output[direction]->padded_shape() == all_tensors.input_tensor->padded_shape(),
                     "Remote output tensor and input tensor must have the same shape");
             }
         }
@@ -1789,8 +1815,8 @@ static void initialize_op_internal_tensor_syncs(
     std::array<IDevice*, 2> const& neighbour_devices,
     ProgramTensorsBundle& all_tensors,
     WorkerCoreBundle const& worker_cores,
-    std::shared_ptr<const GlobalSemaphore> const& from_remote_sem,
-    std::shared_ptr<const GlobalSemaphore> const& to_remote_sem) {
+    GlobalSemaphore const& from_remote_sem,
+    GlobalSemaphore const& to_remote_sem) {
     auto core_coord_lt = [](CoreCoord const& a, CoreCoord const& b) { return a.y < b.y || (a.y == b.y && a.x < b.x); };
 
     TT_FATAL(
@@ -1812,12 +1838,12 @@ static void initialize_op_internal_tensor_syncs(
                 device->worker_core_from_logical_core(worker_core).x,
                 device->worker_core_from_logical_core(worker_core).y,
             });
-            all_tensors.input_tensor_from_remote_sync[direction].semaphore_ids.push_back(from_remote_sem.get());
+            all_tensors.input_tensor_from_remote_sync[direction].semaphore_ids.push_back(&from_remote_sem);
             all_tensors.input_tensor_from_remote_sync[direction].completion_target_value_per_semaphore.push_back(1);
 
             // remote output sync
             if (neighbour_devices[direction] != nullptr) {
-                all_tensors.remote_output_sync[direction].semaphore_ids.push_back(to_remote_sem.get());
+                all_tensors.remote_output_sync[direction].semaphore_ids.push_back(&to_remote_sem);
                 all_tensors.remote_output_sync[direction].completion_target_value_per_semaphore.push_back(1);
                 all_tensors.remote_output_sync[direction] = all_tensors.input_tensor_from_remote_sync[direction];
                 all_tensors.remote_output_sync[direction].targets.back() = TensorSyncSpec::target_rect{
@@ -2133,10 +2159,9 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
     const uint32_t dim,
     const size_t num_links,
     ttnn::ccl::Topology topology,
-
     fabric_lifetime_mode fabric_mode,
-    std::shared_ptr<const GlobalSemaphore> const& from_remote_sems,
-    std::shared_ptr<const GlobalSemaphore> const& to_remote_sem,
+    const GlobalSemaphore& from_remote_sems,
+    const GlobalSemaphore& to_remote_sem,
     const std::optional<SubDeviceId>& sub_device_id) {
     using namespace ttnn::ccl::worker_detail;
     bool do_dynamic_fabric_bringup_and_teardown = fabric_mode == fabric_lifetime_mode::TRANSIENT;
@@ -2460,8 +2485,8 @@ operation::ProgramWithCallbacks build_reduce_scatter_async_program(
     const uint32_t line_index,
     ttnn::ccl::Topology topology,
     std::optional<size_t> num_links_preferred,
-    std::shared_ptr<const tt::tt_metal::GlobalSemaphore> const& from_remote_sem,
-    std::shared_ptr<const tt::tt_metal::GlobalSemaphore> const& to_remote_sem,
+    const tt::tt_metal::GlobalSemaphore& from_remote_sem,
+    const tt::tt_metal::GlobalSemaphore& to_remote_sem,
     const std::optional<SubDeviceId>& sub_device_id,
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle_) {
     auto program = tt::tt_metal::Program();

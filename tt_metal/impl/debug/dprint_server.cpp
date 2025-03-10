@@ -16,7 +16,7 @@
 #include <set>
 #include <filesystem>
 #include <tuple>
-#include <llrt.hpp>
+#include "llrt.hpp"
 #include <logger.hpp>
 
 #include "dprint_server.hpp"
@@ -57,16 +57,16 @@ static inline float bfloat16_to_float(uint16_t bfloat_val) {
     return f;
 }
 
-static string GetRiscName(CoreType core_type, int hart_id, bool abbreviated = false) {
+static string GetRiscName(CoreType core_type, int risc_id, bool abbreviated = false) {
     if (core_type == CoreType::ETH) {
-        switch (hart_id) {
+        switch (risc_id) {
             case DPRINT_RISCV_INDEX_ER: return abbreviated ? "ER" : "ERISC";
             case DPRINT_RISCV_INDEX_ER1:
                 return abbreviated ? "ER1" : "ERISC1";
                 // Default case falls through and handled at end.
         }
     } else {
-        switch (hart_id) {
+        switch (risc_id) {
             case DPRINT_RISCV_INDEX_NC: return abbreviated ? "NC" : "NCRISC";
             case DPRINT_RISCV_INDEX_TR0: return abbreviated ? "TR0" : "TRISC0";
             case DPRINT_RISCV_INDEX_TR1: return abbreviated ? "TR1" : "TRISC1";
@@ -76,7 +76,7 @@ static string GetRiscName(CoreType core_type, int hart_id, bool abbreviated = fa
                 // Default case falls through and handled at end.
         }
     }
-    return fmt::format("UNKNOWN_RISC_ID({})", hart_id);
+    return fmt::format("UNKNOWN_RISC_ID({})", risc_id);
 }
 
 static void AssertSize(uint8_t sz, uint8_t expected_sz) {
@@ -85,6 +85,17 @@ static void AssertSize(uint8_t sz, uint8_t expected_sz) {
         "DPrint token size ({}) did not match expected ({}), potential data corruption in the DPrint buffer.",
         sz,
         expected_sz);
+}
+
+inline bool RiscEnabled(const CoreDescriptor& core, int risc_index) {
+    uint32_t risc_mask =
+        tt::llrt::RunTimeOptions::get_instance().get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDprint);
+    if (core.type == CoreType::ETH) {
+        // For ethernet cores, need to adjust the index up since the mask flags are successive. TODO(#17275): move this
+        // logic into HAL?
+        risc_index += DPRINT_NRISCVS;
+    }
+    return risc_mask & (1 << risc_index);
 }
 
 // A null stream for when the print server is muted.
@@ -101,8 +112,8 @@ struct HartKeyComparator {
     bool operator()(const HartKey& x, const HartKey& y) const {
         const chip_id_t x_device_id = get<0>(x);
         const chip_id_t y_device_id = get<0>(y);
-        const uint32_t x_hart_id = get<2>(x);
-        const uint32_t y_hart_id = get<2>(y);
+        const uint32_t x_risc_id = get<2>(x);
+        const uint32_t y_risc_id = get<2>(y);
         const CoreDescriptor& x_core_desc = get<1>(x);
         const CoreDescriptor& y_core_desc = get<1>(y);
 
@@ -118,7 +129,7 @@ struct HartKeyComparator {
             return false;
         }
 
-        return x_hart_id < y_hart_id;
+        return x_risc_id < y_risc_id;
     }
 };
 
@@ -185,12 +196,12 @@ private:
     // For buffering up partial dprints from each risc.
     std::map<HartKey, ostringstream*, HartKeyComparator> risc_to_intermediate_stream_;
 
-    // For printing each risc's dprint to a separate file, a map from {device id, core, hart index} to files.
+    // For printing each risc's dprint to a separate file, a map from {device id, core, risc index} to files.
     std::map<HartKey, ofstream*, HartKeyComparator> risc_to_file_stream_;
 
-    // A map from {device id, core, hart index} to the signal code it's waiting for.
-    std::map<HartKey, uint32_t, HartKeyComparator> hart_waiting_on_signal_;
-    // Keep a separate set of raised signal codes so that multiple harts can wait for the same
+    // A map from {device id, core, risc index} to the signal code it's waiting for.
+    std::map<HartKey, uint32_t, HartKeyComparator> risc_waiting_on_signal_;
+    // Keep a separate set of raised signal codes so that multiple riscs can wait for the same
     // signal.
     std::set<uint32_t> raised_signals_;
     std::mutex raise_wait_lock_;  // A lock for these two objects since both server and main access.
@@ -207,17 +218,17 @@ private:
     std::map<IDevice*, bool> device_intermediate_streams_force_flush_;
     std::mutex device_intermediate_streams_force_flush_lock_;
 
-    // Polls specified cores/harts on all attached devices and prints any new print data. This
+    // Polls specified cores/riscs on all attached devices and prints any new print data. This
     // function is the main loop for the print server thread.
-    void PollPrintData(uint32_t hart_mask);
+    void PollPrintData();
 
-    // Peeks a specified hart for any debug prints present in the buffer, printing the contents
+    // Peeks a specified risc for any debug prints present in the buffer, printing the contents
     // out to host-side stream. Returns true if some data was read out, and false if no new
     // print data was present on the device. Note that if an unanswered WAIT is present, the print
     // buffer on the device is only flushed  up to the WAIT, even if more print data is available
     // after it.
     bool PeekOneHartNonBlocking(
-        IDevice* device, const CoreDescriptor& logical_core, int hart_index, bool new_data_this_iter);
+        IDevice* device, const CoreDescriptor& logical_core, int risc_index, bool new_data_this_iter);
 
     // Transfers data from each intermediate stream associated with the given device to the output stream and flushes
     // the output stream so that the data is visible to the user.
@@ -225,14 +236,14 @@ private:
 
     // Transfers data from the given intermediate stream to the output stream and flushes the output stream so that the
     // data is visible to the user.
-    void TransferToAndFlushOutputStream(const HartKey& hart_key, ostringstream* intermediate_stream);
+    void TransferToAndFlushOutputStream(const HartKey& risc_key, ostringstream* intermediate_stream);
 
     // Returns the dprint data that should be outputted by the output stream.
-    string GetDataToOutput(const HartKey& hart_key, const ostringstream* stream);
+    string GetDataToOutput(const HartKey& risc_key, const ostringstream* stream);
 
     // Returns the stream that the dprint data should be output to. Can be auto-generated files, the user-selected file,
     // stdout, or nothing.
-    ostream* GetOutputStream(const HartKey& hart_key);
+    ostream* GetOutputStream(const HartKey& risc_key);
 
     // Stores the last value of setw, so that array elements can reuse the width.
     char most_recent_setw = 0;
@@ -442,11 +453,11 @@ static void PrintTypedUint32Array(
     }
 }
 
-// Writes a magic value at wpos ptr address for dprint buffer for a specific hart/core/chip
+// Writes a magic value at wpos ptr address for dprint buffer for a specific risc/core/chip
 // Used for debug print server startup sequence.
-void WriteInitMagic(IDevice* device, const CoreCoord& virtual_core, int hart_id, bool enabled) {
-    // compute the buffer address for the requested hart
-    uint64_t base_addr = GetDprintBufAddr(device, virtual_core, hart_id);
+void WriteInitMagic(IDevice* device, const CoreCoord& virtual_core, int risc_id, bool enabled) {
+    // compute the buffer address for the requested risc
+    uint64_t base_addr = GetDprintBufAddr(device, virtual_core, risc_id);
 
     // TODO(AP): this could use a cleanup - need a different mechanism to know if a kernel is running on device.
     // Force wait for first kernel launch by first writing a non-zero and waiting for a zero.
@@ -476,9 +487,9 @@ void WriteInitMagic(IDevice* device, const CoreCoord& virtual_core, int hart_id,
 // The assumption is that if our magic number was cleared,
 // it means there is a write in the queue and wpos/rpos are now valid
 // Note that this is not a bulletproof way to bootstrap the print server (TODO(AP))
-bool CheckInitMagicCleared(IDevice* device, const CoreCoord& virtual_core, int hart_id) {
-    // compute the buffer address for the requested hart
-    uint32_t base_addr = GetDprintBufAddr(device, virtual_core, hart_id);
+bool CheckInitMagicCleared(IDevice* device, const CoreCoord& virtual_core, int risc_id) {
+    // compute the buffer address for the requested risc
+    uint32_t base_addr = GetDprintBufAddr(device, virtual_core, risc_id);
 
     auto result = tt::llrt::read_hex_vec_from_core(device->id(), virtual_core, base_addr, 4);
     return (result[0] != DEBUG_PRINT_SERVER_STARTING_MAGIC && result[0] != DEBUG_PRINT_SERVER_DISABLED_MAGIC);
@@ -488,9 +499,7 @@ DebugPrintServerContext::DebugPrintServerContext() {
     TT_ASSERT(inst == nullptr);
     inst = this;
 
-    // Read hart mask + log file from rtoptions
-    uint32_t hart_mask =
-        tt::llrt::RunTimeOptions::get_instance().get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDprint);
+    // Read risc mask + log file from rtoptions
     string file_name =
         tt::llrt::RunTimeOptions::get_instance().get_feature_file_name(tt::llrt::RunTimeDebugFeatureDprint);
     bool one_file_per_risc =
@@ -527,7 +536,7 @@ DebugPrintServerContext::DebugPrintServerContext() {
     server_killed_due_to_hang_ = false;
 
     // Spin off the thread that runs the print server.
-    print_server_thread_ = new std::thread([this, hart_mask] { PollPrintData(hart_mask); });
+    print_server_thread_ = new std::thread([this] { PollPrintData(); });
 }  // DebugPrintServerContext
 
 DebugPrintServerContext::~DebugPrintServerContext() {
@@ -561,7 +570,7 @@ void DebugPrintServerContext::WaitForPrintsFinished() {
     // or whether any cores are waiting for a signal to be raised.
     // TODO(dma): once we have access to the device is there a way we can poll the device to
     // check whether more print data is coming?
-    size_t num_harts_waiting = 0;
+    size_t num_riscs_waiting = 0;
 
     // Make sure to run at least one full iteration inside PollPrintData before returning.
     wait_loop_iterations_ = 0;
@@ -573,9 +582,9 @@ void DebugPrintServerContext::WaitForPrintsFinished() {
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
         raise_wait_lock_.lock();
-        num_harts_waiting = hart_waiting_on_signal_.size();
+        num_riscs_waiting = risc_waiting_on_signal_.size();
         raise_wait_lock_.unlock();
-    } while (num_harts_waiting > 0 || new_data_last_iter_ || wait_loop_iterations_ < 2);
+    } while (num_riscs_waiting > 0 || new_data_last_iter_ || wait_loop_iterations_ < 2);
 }  // WaitForPrintsFinished
 
 void DebugPrintServerContext::AttachDevice(IDevice* device) {
@@ -593,8 +602,8 @@ void DebugPrintServerContext::AttachDevice(IDevice* device) {
     // flushed from the host.
     for (auto& logical_core : all_cores) {
         CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
-        for (int hart_index = 0; hart_index < GetNumRiscs(logical_core); hart_index++) {
-            WriteInitMagic(device, virtual_core, hart_index, false);
+        for (int risc_index = 0; risc_index < GetNumRiscs(device, logical_core); risc_index++) {
+            WriteInitMagic(device, virtual_core, risc_index, false);
         }
     }
 
@@ -693,13 +702,11 @@ void DebugPrintServerContext::AttachDevice(IDevice* device) {
     }
 
     // Write print enable magic for the cores the user specified.
-    uint32_t hart_mask =
-        tt::llrt::RunTimeOptions::get_instance().get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDprint);
     for (auto& logical_core : print_cores_sanitized) {
         CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
-        for (int hart_index = 0; hart_index < GetNumRiscs(logical_core); hart_index++) {
-            if (hart_mask & (1 << hart_index)) {
-                WriteInitMagic(device, virtual_core, hart_index, true);
+        for (int risc_index = 0; risc_index < GetNumRiscs(device, logical_core); risc_index++) {
+            if (RiscEnabled(logical_core, risc_index)) {
+                WriteInitMagic(device, virtual_core, risc_index, true);
             }
         }
         if (dispatch_cores.count(logical_core)) {
@@ -735,8 +742,6 @@ void DebugPrintServerContext::DetachDevice(IDevice* device) {
 
     // When we detach a device, we should poll to make sure there's no outstanding prints.
     chip_id_t chip_id = device->id();
-    uint32_t risc_mask =
-        tt::llrt::RunTimeOptions::get_instance().get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDprint);
     bool outstanding_prints = true;
     while (outstanding_prints && !server_killed_due_to_hang_) {
         // Polling interval of 1ms
@@ -746,8 +751,8 @@ void DebugPrintServerContext::DetachDevice(IDevice* device) {
         outstanding_prints = false;
         for (auto& logical_core : device_to_core_range_.at(device)) {
             CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
-            for (int risc_id = 0; risc_id < GetNumRiscs(logical_core); risc_id++) {
-                if (risc_mask & (1 << risc_id)) {
+            for (int risc_id = 0; risc_id < GetNumRiscs(device, logical_core); risc_id++) {
+                if (RiscEnabled(logical_core, risc_id)) {
                     // No need to check if risc is not dprint-enabled.
                     if (!CheckInitMagicCleared(device, virtual_core, risc_id)) {
                         continue;
@@ -808,8 +813,8 @@ void DebugPrintServerContext::DetachDevice(IDevice* device) {
     CoreDescriptorSet all_cores = GetAllCores(device);
     for (auto& logical_core : all_cores) {
         CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
-        for (int hart_index = 0; hart_index < GetNumRiscs(logical_core); hart_index++) {
-            WriteInitMagic(device, virtual_core, hart_index, false);
+        for (int risc_index = 0; risc_index < GetNumRiscs(device, logical_core); risc_index++) {
+            WriteInitMagic(device, virtual_core, risc_index, false);
         }
     }
     device_to_core_range_lock_.unlock();
@@ -835,37 +840,37 @@ void DebugPrintServerContext::ClearSignals() {
 }  // ClearSignals
 
 bool DebugPrintServerContext::PeekOneHartNonBlocking(
-    IDevice* device, const CoreDescriptor& logical_core, int hart_id, bool new_data_this_iter) {
+    IDevice* device, const CoreDescriptor& logical_core, int risc_id, bool new_data_this_iter) {
     // If init magic isn't cleared for this risc, then dprint isn't enabled on it, don't read it.
     CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
-    if (!CheckInitMagicCleared(device, virtual_core, hart_id)) {
+    if (!CheckInitMagicCleared(device, virtual_core, risc_id)) {
         return false;
     }
 
-    // compute the buffer address for the requested hart
-    uint32_t base_addr = GetDprintBufAddr(device, virtual_core, hart_id);
+    // compute the buffer address for the requested risc
+    uint32_t base_addr = GetDprintBufAddr(device, virtual_core, risc_id);
     chip_id_t chip_id = device->id();
-    HartKey hart_key{chip_id, logical_core, hart_id};
+    HartKey risc_key{chip_id, logical_core, risc_id};
 
-    if (!risc_to_prev_type_[hart_key]) {
-        risc_to_prev_type_[hart_key] = DPrintTypeID_Count;
+    if (!risc_to_prev_type_[risc_key]) {
+        risc_to_prev_type_[risc_key] = DPrintTypeID_Count;
     }
 
-    if (!risc_to_intermediate_stream_[hart_key]) {
-        risc_to_intermediate_stream_[hart_key] = new ostringstream;
+    if (!risc_to_intermediate_stream_[risc_key]) {
+        risc_to_intermediate_stream_[risc_key] = new ostringstream;
     }
-    ostringstream* intermediate_stream = risc_to_intermediate_stream_[hart_key];
+    ostringstream* intermediate_stream = risc_to_intermediate_stream_[risc_key];
 
-    // Check whether this hart is currently waiting on a WAIT to be fulfilled.
+    // Check whether this risc is currently waiting on a WAIT to be fulfilled.
     raise_wait_lock_.lock();
-    if (hart_waiting_on_signal_.count(hart_key) > 0) {
-        // Check if the signal the hart is waiting for has been raised.
-        uint32_t wait_signal = hart_waiting_on_signal_[hart_key];
+    if (risc_waiting_on_signal_.count(risc_key) > 0) {
+        // Check if the signal the risc is waiting for has been raised.
+        uint32_t wait_signal = risc_waiting_on_signal_[risc_key];
         if (raised_signals_.count(wait_signal) > 0) {
             // The signal has been raised, we can continue.
-            hart_waiting_on_signal_.erase(hart_key);
+            risc_waiting_on_signal_.erase(risc_key);
         } else {
-            // This hart is still waiting. This is fine as long as the print server (and therefore
+            // This risc is still waiting. This is fine as long as the print server (and therefore
             // the device) is still making progress. Unfortunetaly there's no way to check if the
             // print server is full because the next print that would overflow the buffer spins the
             // device until the buffer has more space, but checking for any new prints seems to work
@@ -879,11 +884,11 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                     chip_id,
                     tt::llrt::get_core_type_name(logical_core.type),
                     logical_core.coord,
-                    hart_id);
+                    risc_id);
                 string error_str = fmt::format(
                     "DPRINT server timed out on {}, waiting on a RAISE signal: {}\n", core_str, wait_signal);
                 *intermediate_stream << error_str;
-                TransferToAndFlushOutputStream(hart_key, intermediate_stream);
+                TransferToAndFlushOutputStream(risc_key, intermediate_stream);
                 log_warning(tt::LogMetal, "Debug Print Server encountered an error: {}", error_str);
                 raise_wait_lock_.unlock();
                 TT_THROW("{}", error_str);
@@ -934,7 +939,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                     const size_t cptr_len = strnlen(cptr, sizeof(DebugPrintMemLayout::data) - 2);
                     if (cptr_len == sizeof(DebugPrintMemLayout::data) - 2) {
                         *intermediate_stream << "STRING BUFFER OVERFLOW DETECTED\n";
-                        TransferToAndFlushOutputStream(hart_key, intermediate_stream);
+                        TransferToAndFlushOutputStream(risc_key, intermediate_stream);
                     } else {
                         // if we come across a newline char, we should transfer the data up to the newline to the output
                         // stream and flush it
@@ -947,7 +952,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                             strncpy(substr_upto_newline, cptr, substr_len);
                             substr_upto_newline[substr_len] = '\0';
                             *intermediate_stream << substr_upto_newline;
-                            TransferToAndFlushOutputStream(hart_key, intermediate_stream);
+                            TransferToAndFlushOutputStream(risc_key, intermediate_stream);
                             cptr = pos_after_newline;
                             newline_pos = strchr(cptr, '\n');
                             contains_newline = newline_pos != nullptr;
@@ -960,11 +965,11 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                 case DPrintTILESLICE: PrintTileSlice(intermediate_stream, ptr); break;
 
                 case DPrintENDL:
-                    if (risc_to_prev_type_[hart_key] != DPrintTILESLICE ||
+                    if (risc_to_prev_type_[risc_key] != DPrintTILESLICE ||
                         !StreamEndsWithNewlineChar(intermediate_stream)) {
                         *intermediate_stream << '\n';
                     }
-                    TransferToAndFlushOutputStream(hart_key, intermediate_stream);
+                    TransferToAndFlushOutputStream(risc_key, intermediate_stream);
                     AssertSize(sz, 1);
                     break;
                 case DPrintSETW: {
@@ -1087,9 +1092,9 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                     // Given that we break immediately on a wait, this core should never be waiting
                     // on multiple signals at the same time.
                     raise_wait_lock_.lock();
-                    TT_ASSERT(hart_waiting_on_signal_.count(hart_key) == 0);
-                    // Set that this hart is waiting on this signal, and then stop reading for now.
-                    hart_waiting_on_signal_[hart_key] = sigval;
+                    TT_ASSERT(risc_waiting_on_signal_.count(risc_key) == 0);
+                    // Set that this risc is waiting on this signal, and then stop reading for now.
+                    risc_waiting_on_signal_[risc_key] = sigval;
                     raise_wait_lock_.unlock();
                     break_due_to_wait = true;
                     AssertSize(sz, 4);
@@ -1105,7 +1110,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                         virtual_core.y);
             }
 
-            risc_to_prev_type_[hart_key] = code;
+            risc_to_prev_type_[risc_key] = code;
 
             rpos += sz;  // parse the payload size
             TT_ASSERT(rpos <= wpos);
@@ -1134,20 +1139,20 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
     return false;
 }  // PeekOneHartNonBlocking
 
-void DebugPrintServerContext::PollPrintData(uint32_t hart_mask) {
+void DebugPrintServerContext::PollPrintData() {
     // Give the print server thread a reasonable name.
     pthread_setname_np(pthread_self(), "TT_DPRINT_SERVER");
 
-    // Main print loop, go through all chips/cores/harts on the device and poll for any print data
+    // Main print loop, go through all chips/cores/riscs on the device and poll for any print data
     // written.
     while (true) {
         if (stop_print_server_) {
             // If the stop signal was received, exit the print server thread, but wait for any
             // existing prints to be wrapped up first.
             raise_wait_lock_.lock();
-            size_t num_harts_waiting = hart_waiting_on_signal_.size();
+            size_t num_riscs_waiting = risc_waiting_on_signal_.size();
             raise_wait_lock_.unlock();
-            if (num_harts_waiting == 0 && !new_data_last_iter_) {
+            if (num_riscs_waiting == 0 && !new_data_last_iter_) {
                 break;
             }
         }
@@ -1168,12 +1173,12 @@ void DebugPrintServerContext::PollPrintData(uint32_t hart_mask) {
             }
             device_intermediate_streams_force_flush_lock_.unlock();
             for (auto& logical_core : device_and_cores.second) {
-                int hart_count = GetNumRiscs(logical_core);
-                for (int hart_index = 0; hart_index < hart_count; hart_index++) {
-                    if (hart_mask & (1 << hart_index)) {
+                int risc_count = GetNumRiscs(device, logical_core);
+                for (int risc_index = 0; risc_index < risc_count; risc_index++) {
+                    if (RiscEnabled(logical_core, risc_index)) {
                         try {
                             new_data_this_iter |=
-                                PeekOneHartNonBlocking(device, logical_core, hart_index, new_data_this_iter);
+                                PeekOneHartNonBlocking(device, logical_core, risc_index, new_data_this_iter);
                         } catch (std::runtime_error& e) {
                             // Depending on if test mode is enabled, catch and stop server, or
                             // re-throw the exception.
@@ -1210,30 +1215,30 @@ void DebugPrintServerContext::PollPrintData(uint32_t hart_mask) {
 
 void DebugPrintServerContext::TransferIntermediateStreamsToOutputStreamAndFlush(IDevice* device) {
     const chip_id_t device_id = device->id();
-    for (auto& [hart_key, intermediate_stream] : risc_to_intermediate_stream_) {
-        const chip_id_t hart_key_device_id = get<0>(hart_key);
-        if (device_id == hart_key_device_id) {
-            TransferToAndFlushOutputStream(hart_key, intermediate_stream);
+    for (auto& [risc_key, intermediate_stream] : risc_to_intermediate_stream_) {
+        const chip_id_t risc_key_device_id = get<0>(risc_key);
+        if (device_id == risc_key_device_id) {
+            TransferToAndFlushOutputStream(risc_key, intermediate_stream);
         }
     }
 }  // TransferIntermediateStreamsToOutputStreamAndFlush
 
 void DebugPrintServerContext::TransferToAndFlushOutputStream(
-    const HartKey& hart_key, ostringstream* intermediate_stream) {
-    const string& output_data = GetDataToOutput(hart_key, intermediate_stream);
-    ostream* output_stream = GetOutputStream(hart_key);
+    const HartKey& risc_key, ostringstream* intermediate_stream) {
+    const string& output_data = GetDataToOutput(risc_key, intermediate_stream);
+    ostream* output_stream = GetOutputStream(risc_key);
     *output_stream << output_data << flush;
     ResetStream(intermediate_stream);
 }  // TransferToAndFlushOutputStream
 
-string DebugPrintServerContext::GetDataToOutput(const HartKey& hart_key, const ostringstream* stream) {
+string DebugPrintServerContext::GetDataToOutput(const HartKey& risc_key, const ostringstream* stream) {
     string output;
     const bool prepend_device_core_risc =
         tt::llrt::RunTimeOptions::get_instance().get_feature_prepend_device_core_risc(tt::llrt::RunTimeDebugFeatureDprint);
     if (prepend_device_core_risc) {
-        const chip_id_t device_id = get<0>(hart_key);
-        const CoreDescriptor& core_desc = get<1>(hart_key);
-        const uint32_t risc_id = get<2>(hart_key);
+        const chip_id_t device_id = get<0>(risc_key);
+        const CoreDescriptor& core_desc = get<1>(risc_key);
+        const uint32_t risc_id = get<2>(risc_key);
 
         const string& device_id_str = to_string(device_id);
         const string& core_coord_str = core_desc.coord.str();
@@ -1250,13 +1255,13 @@ string DebugPrintServerContext::GetDataToOutput(const HartKey& hart_key, const o
     return output;
 }
 
-ostream* DebugPrintServerContext::GetOutputStream(const HartKey& hart_key) {
+ostream* DebugPrintServerContext::GetOutputStream(const HartKey& risc_key) {
     ostream* output_stream = stream_;
     if (tt::llrt::RunTimeOptions::get_instance().get_feature_one_file_per_risc(tt::llrt::RunTimeDebugFeatureDprint)) {
-        if (!risc_to_file_stream_[hart_key]) {
-            const chip_id_t chip_id = get<0>(hart_key);
-            const CoreDescriptor& logical_core = get<1>(hart_key);
-            const int hart_id = get<2>(hart_key);
+        if (!risc_to_file_stream_[risc_key]) {
+            const chip_id_t chip_id = get<0>(risc_key);
+            const CoreDescriptor& logical_core = get<1>(risc_key);
+            const int risc_id = get<2>(risc_key);
             string filename = tt::llrt::RunTimeOptions::get_instance().get_root_dir() + logfile_path;
             filename += fmt::format(
                 "device-{}_{}-core-{}-{}_{}.txt",
@@ -1264,10 +1269,10 @@ ostream* DebugPrintServerContext::GetOutputStream(const HartKey& hart_key) {
                 tt::llrt::get_core_type_name(logical_core.type),
                 logical_core.coord.x,
                 logical_core.coord.y,
-                GetRiscName(logical_core.type, hart_id));
-            risc_to_file_stream_[hart_key] = new ofstream(filename);
+                GetRiscName(logical_core.type, risc_id));
+            risc_to_file_stream_[risc_key] = new ofstream(filename);
         }
-        output_stream = risc_to_file_stream_[hart_key];
+        output_stream = risc_to_file_stream_[risc_key];
     }
 
     if (mute_print_server_) {

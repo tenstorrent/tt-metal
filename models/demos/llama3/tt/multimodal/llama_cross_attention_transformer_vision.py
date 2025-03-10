@@ -13,10 +13,6 @@ from models.utility_functions import (
 from models.common.lightweightmodule import LightweightModule
 from models.demos.llama3.tt.multimodal.llama_vision_encoder import TtLlamaVisionEncoder
 
-from models.demos.falcon7b_common.tests.test_utils import (
-    synchronize_devices,
-)
-
 
 class TtLlamaCrossAttentionTransformerVision(LightweightModule):
     def __init__(
@@ -72,14 +68,16 @@ class TtLlamaCrossAttentionTransformerVision(LightweightModule):
             return w.transpose(-1, -2).view(orig_shape)
 
         as_interleaved_tensor = lambda name, suffix, type, dim: ttnn.as_tensor(
-            shuffle_weight(torch_weight(name, suffix))
-            if suffix == "weight"
-            else torch_bias(name, suffix),  # Grab only the wX part of the name
+            (
+                shuffle_weight(torch_weight(name, suffix)) if suffix == "weight" else torch_bias(name, suffix)
+            ),  # Grab only the wX part of the name
             dtype=type,
             device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=dim)
-            if dim is not None
-            else ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=(
+                ttnn.ShardTensorToMesh(self.mesh_device, dim=dim)
+                if dim is not None
+                else ttnn.ReplicateTensorToMesh(self.mesh_device)
+            ),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name(name, suffix),
@@ -88,6 +86,7 @@ class TtLlamaCrossAttentionTransformerVision(LightweightModule):
         # Sharded weights
         self.vision_projection_weight = as_interleaved_tensor("vision_projection", "weight", dtype, dim=-1)
         self.vision_projection_bias = as_interleaved_tensor("vision_projection", "bias", ttnn.bfloat16, dim=-1)
+        self.vision_projection_bias = ttnn.reshape(self.vision_projection_bias, [1, -1])
 
     def forward(self, images, ar):
         vision_tokens = self.vision_encoder(images, ar)

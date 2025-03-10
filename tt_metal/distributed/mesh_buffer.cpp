@@ -3,10 +3,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <mesh_buffer.hpp>
+#include <mesh_coord.hpp>
+#include <mesh_device_view.hpp>
 #include <overloaded.hpp>
 #include <tt_metal.hpp>
-
-#include "tt_metal/distributed/mesh_buffer.hpp"
 
 namespace tt::tt_metal::distributed {
 namespace {
@@ -55,6 +56,20 @@ void validate_mesh_buffer_config(const MeshBufferConfig& config, const MeshDevic
 
 }  // namespace
 
+uint32_t ShardedBufferConfig::compute_datum_size_bytes() const {
+    return global_size / (global_buffer_shape.height() * global_buffer_shape.width());
+}
+
+std::pair<bool, bool> ShardedBufferConfig::replicated_dims() const {
+    return {shard_shape.height() == 0, shard_shape.width() == 0};
+}
+
+Shape2D ShardedBufferConfig::physical_shard_shape() const {
+    const auto [shard_height, shard_width] = shard_shape;
+    const auto [global_height, global_width] = global_buffer_shape;
+    return Shape2D(shard_height == 0 ? global_height : shard_height, shard_width == 0 ? global_width : shard_width);
+}
+
 std::shared_ptr<MeshBuffer> MeshBuffer::create(
     const MeshBufferConfig& mesh_buffer_config,
     const DeviceLocalBufferConfig& device_local_config,
@@ -84,32 +99,22 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
             device_local_config.shard_parameters,
             device_local_config.bottom_up);
 
-        mesh_buffer = std::shared_ptr<MeshBuffer>(
-            new MeshBuffer(mesh_buffer_config, device_local_config, device_local_size, mesh_device, backing_buffer));
+        mesh_buffer = std::shared_ptr<MeshBuffer>(new MeshBuffer(
+            mesh_buffer_config, device_local_config, device_local_size, mesh_device, std::move(backing_buffer)));
     } else {
         mesh_buffer = std::shared_ptr<MeshBuffer>(
             new MeshBuffer(mesh_buffer_config, device_local_config, address.value(), device_local_size, mesh_device));
     }
 
-    mesh_buffer->allocate();
+    mesh_buffer->initialize_device_buffers();
 
     return mesh_buffer;
 }
 
-void MeshBuffer::allocate() {
-    if (backing_buffer_) {
-        TT_FATAL(
-            !address_, "The address for a MeshBuffer should not explicitly be initialized when it is being allocated");
-        address_ = backing_buffer_->address();
-    } else {
-        TT_FATAL(address_, "A MeshBuffer should be provided a valid address if its not being allocated");
-    }
-    buffers_ = std::vector<std::vector<std::shared_ptr<Buffer>>>(
-        mesh_device_->num_rows(), std::vector<std::shared_ptr<Buffer>>(mesh_device_->num_cols()));
-
-    auto allocate_device_buffer_at_address = [this](const Coordinate& coord) {
+void MeshBuffer::initialize_device_buffers() {
+    auto init_device_buffer_at_address = [this](const MeshCoordinate& coord) {
         std::shared_ptr<Buffer> buffer = Buffer::create(
-            mesh_device_->get_device(coord.row, coord.col),
+            device()->get_device(coord),
             address_,
             device_local_size_,
             device_local_config_.page_size,
@@ -120,22 +125,38 @@ void MeshBuffer::allocate() {
         return buffer;
     };
 
-    for (int row = 0; row < mesh_device_->num_rows(); row++) {
-        for (int col = 0; col < mesh_device_->num_cols(); col++) {
-            buffers_[row][col] = allocate_device_buffer_at_address(Coordinate{row, col});
-        }
+    for (auto& [coord, device_buffer] : buffers_) {
+        device_buffer = init_device_buffer_at_address(coord);
     }
 }
 
-std::shared_ptr<Buffer> MeshBuffer::get_device_buffer(const Coordinate& device_coord) {
-    TT_FATAL(
-        device_coord.row < mesh_device_->num_rows() and device_coord.col < mesh_device_->num_cols(),
-        "Logical coordinates must be within the bounds of the mesh: {}, {}, mesh shape: {}, {}",
-        device_coord.row,
-        device_coord.col,
-        mesh_device_->num_rows(),
-        mesh_device_->num_cols());
-    return buffers_[device_coord.row][device_coord.col];
+bool MeshBuffer::is_allocated() const { return not std::holds_alternative<DeallocatedState>(state_); }
+
+MeshBuffer::~MeshBuffer() { deallocate(); }
+
+void MeshBuffer::deallocate() {
+    auto mesh_device = mesh_device_.lock();
+    if (mesh_device) {
+        state_ = DeallocatedState{};
+        return;
+    }
+
+    // Special handling is required if MeshDevice is already deallocated
+    if (std::holds_alternative<OwnedBufferState>(state_)) {
+        auto& owned_state = std::get<OwnedBufferState>(state_);
+        owned_state.backing_buffer->mark_as_deallocated();
+    }
+    state_ = DeallocatedState{};
+}
+
+MeshDevice* MeshBuffer::device() const {
+    auto device = mesh_device_.lock();
+    TT_FATAL(device, "Can't get device from mesh buffer, already deallocated");
+    return device.get();
+}
+
+std::shared_ptr<Buffer> MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const {
+    return buffers_.at(device_coord);
 }
 
 DeviceAddr MeshBuffer::size() const {

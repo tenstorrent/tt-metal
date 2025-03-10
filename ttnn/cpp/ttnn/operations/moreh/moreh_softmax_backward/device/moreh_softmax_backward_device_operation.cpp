@@ -9,7 +9,7 @@ namespace ttnn::operations::moreh::moreh_softmax_backward {
 #define L1_512KB (512 * 1024)
 
 bool is_moreh_softmax_backward_w_small_available(const Tensor& tensor) {
-    auto w = tensor.get_shape()[-1];
+    auto w = tensor.get_logical_shape()[-1];
     int32_t Wt = (w + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH;
 
     tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.get_dtype());
@@ -26,11 +26,11 @@ bool is_moreh_softmax_backward_w_small_available(const Tensor& tensor) {
     cb_usage += 1 * tile_size;   // reduce
     cb_usage += 1 * tile_size;   // dy - sum
 
-    return (tensor.device()->get_base_allocator_addr(HalMemType::L1) + cb_usage <= L1_512KB);
+    return (tensor.device()->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1) + cb_usage <= L1_512KB);
 }
 
 bool is_moreh_softmax_backward_h_small_available(const Tensor& tensor) {
-    auto h = tensor.get_shape()[-2];
+    auto h = tensor.get_logical_shape()[-2];
     int32_t Ht = (h + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
 
     tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.get_dtype());
@@ -47,7 +47,7 @@ bool is_moreh_softmax_backward_h_small_available(const Tensor& tensor) {
     cb_usage += 1 * tile_size;   // reduce
     cb_usage += 1 * tile_size;   // dy - sum
 
-    return (tensor.device()->get_base_allocator_addr(HalMemType::L1) + cb_usage <= L1_512KB);
+    return (tensor.device()->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1) + cb_usage <= L1_512KB);
 }
 
 MorehSoftmaxBackwardOperation::program_factory_t MorehSoftmaxBackwardOperation::select_program_factory(
@@ -80,7 +80,7 @@ void MorehSoftmaxBackwardOperation::validate_inputs(
         output_grad_tensor.get_dtype() == DataType::BFLOAT16 || output_grad_tensor.get_dtype() == DataType::BFLOAT8_B,
         "Output_tensor_grad dtype should be bfloat16 or bfloat8_b");
 
-    const auto rank = output_tensor.get_shape().rank();
+    const auto rank = output_tensor.get_logical_shape().rank();
     const auto dim = operation_attributes.dim;
     TT_FATAL(dim >= 0 && dim < rank, "dim {} should be less than output tensor rank {}", dim, rank);
 }
@@ -102,9 +102,9 @@ MorehSoftmaxBackwardOperation::spec_return_value_t MorehSoftmaxBackwardOperation
     }
     return TensorSpec(
         tensor_args.output_tensor.get_logical_shape(),
-        TensorLayout(
+        tt::tt_metal::TensorLayout(
             tensor_args.output_tensor.get_dtype(),
-            PageConfig(tensor_args.output_tensor.get_layout()),
+            tt::tt_metal::PageConfig(tensor_args.output_tensor.get_layout()),
             operation_attributes.memory_config));
 }
 
@@ -147,7 +147,7 @@ MorehSoftmaxBackwardOpParallelizationStrategy MorehSoftmaxBackwardOperation::get
     const auto dim = operation_attributes.dim;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    auto rank = output.get_shape().rank();
+    auto rank = output.get_logical_shape().rank();
     if (strategy == MorehSoftmaxBackwardOpParallelizationStrategy::NONE) {
         if (rank - 1 == dim) {
             if (is_moreh_softmax_backward_w_small_available(output)) {

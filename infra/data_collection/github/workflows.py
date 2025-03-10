@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pathlib
-from datetime import datetime
+import json
+from datetime import datetime, timedelta
 from functools import partial
 from typing import List
 
@@ -23,9 +24,14 @@ def get_workflow_run_uuids_to_test_reports_paths_(workflow_outputs_dir, workflow
         assert test_report_dir.is_dir(), f"{test_report_dir} is not dir"
 
         test_report_uuid = test_report_dir.name.replace("test_reports_", "")
-        workflow_run_test_reports_path[test_report_uuid] = (test_report_dir / "most_recent_tests.xml").resolve(
-            strict=True
-        )
+
+        try:
+            # read all *.xml in test_report_dir (gtest can have one xml files per test executable)
+            xml_file_paths = [file.resolve(strict=True) for file in list(test_report_dir.glob("*.xml"))]
+        except FileNotFoundError as e:
+            logger.warning(f"No pytest or gtest xml file found in {test_report_dir}, skipping directory.")
+        else:
+            workflow_run_test_reports_path[test_report_uuid] = xml_file_paths
 
     return workflow_run_test_reports_path
 
@@ -108,43 +114,79 @@ def get_github_job_id_to_test_reports(workflow_outputs_dir, workflow_run_id: int
     return github_job_id_to_test_reports
 
 
-def get_pydantic_test_from_pytest_testcase_(testcase, default_timestamp=datetime.now()):
-    skipped = junit_xml_utils.get_pytest_testcase_is_skipped(testcase)
-    failed = junit_xml_utils.get_pytest_testcase_is_failed(testcase)
-    error = junit_xml_utils.get_pytest_testcase_is_error(testcase)
+def get_github_job_id_to_annotations(workflow_outputs_dir, workflow_run_id: int):
+    # Read <job_id>_annotations.json inside the logs dir
+    logs_dir = workflow_outputs_dir / str(workflow_run_id) / "logs"
+    annot_json_files = logs_dir.glob("*_annotations.json")
+
+    github_job_ids_to_annotation_jsons = {}
+    for annot_json_file in annot_json_files:
+        annot_json_info = None
+        with open(annot_json_file, "r") as f:
+            annot_json_info = json.load(f)
+        if annot_json_info:
+            # Map job id to annotation info (list of dict)
+            github_job_id = annot_json_file.name.replace("_annotations.json", "")
+            assert github_job_id.isnumeric(), f"{github_job_id}"
+            github_job_id = int(github_job_id)
+            github_job_ids_to_annotation_jsons[github_job_id] = annot_json_info
+    return github_job_ids_to_annotation_jsons
+
+
+def get_pydantic_test_from_testcase_(testcase, default_timestamp=datetime.now(), is_pytest=True, testsuite_name=None):
+    skipped = junit_xml_utils.get_testcase_is_skipped(testcase)
+    failed = junit_xml_utils.get_testcase_is_failed(testcase)
+    error = junit_xml_utils.get_testcase_is_error(testcase)
     success = not (failed or error)
 
     error_message = None
 
     # Error is a scarier thing than failure because it means there's an infra error, expose that first
     if failed:
-        error_message = junit_xml_utils.get_pytest_failure_message(testcase)
+        error_message = junit_xml_utils.get_test_failure_message(testcase)
 
     if error:
-        error_message = junit_xml_utils.get_pytest_error_message(testcase)
+        error_message = junit_xml_utils.get_test_error_message(testcase)
 
     # Error at the beginning of a test can prevent pytest from recording timestamps at all
     if not (skipped or error):
-        properties = junit_xml_utils.get_pytest_testcase_properties(testcase)
-        test_start_ts = datetime.strptime(properties["start_timestamp"], "%Y-%m-%dT%H:%M:%S")
-        test_end_ts = datetime.strptime(properties["end_timestamp"], "%Y-%m-%dT%H:%M:%S")
+        if is_pytest:
+            properties = junit_xml_utils.get_pytest_testcase_properties(testcase)
+            # Check if properties is none to see if pytest recorded the timestamps
+            if properties is not None:
+                test_start_ts = datetime.strptime(properties["start_timestamp"], "%Y-%m-%dT%H:%M:%S")
+                test_end_ts = datetime.strptime(properties["end_timestamp"], "%Y-%m-%dT%H:%M:%S")
+            else:
+                test_start_ts = default_timestamp
+                test_end_ts = default_timestamp
+        else:
+            test_start_ts = default_timestamp
+            # gtest stores elapsed time for the test in the time attribute
+            gtest_elapsed_time = float(testcase.attrib["time"])
+            test_end_ts = default_timestamp + timedelta(seconds=gtest_elapsed_time)
     else:
         test_start_ts = default_timestamp
         test_end_ts = default_timestamp
 
     test_case_name = testcase.attrib["name"].split("[")[0]
 
-    filepath_no_ext = testcase.attrib["classname"].replace(".", "/")
-    filepath = f"{filepath_no_ext}.py"
+    if is_pytest:
+        filepath_no_ext = testcase.attrib["classname"].replace(".", "/")
+        filepath = f"{filepath_no_ext}.py"
+    else:
+        filepath = testcase.attrib["file"]
+        if filepath.startswith("/work/"):
+            filepath = filepath.lstrip("/work/")
 
-    def get_category_from_pytest_testcase_(testcase_):
+    def get_category_from_testcase_(testcase_, is_pytest=True):
         categories = ["models", "ttnn", "tt_eager", "tt_metal"]
         for category in categories:
-            if category in testcase_.attrib["classname"]:
+            identifier_attrib = "classname" if is_pytest else "file"
+            if category in testcase_.attrib[identifier_attrib]:
                 return category
         return "other"
 
-    category = get_category_from_pytest_testcase_(testcase)
+    category = get_category_from_testcase_(testcase, is_pytest=is_pytest)
 
     # leaving empty for now
     group = None
@@ -152,7 +194,10 @@ def get_pydantic_test_from_pytest_testcase_(testcase, default_timestamp=datetime
     # leaving empty for now
     owner = None
 
-    full_test_name = f"{filepath}::{testcase.attrib['name']}"
+    if testsuite_name:
+        full_test_name = f"{filepath}::{testsuite_name}::{testcase.attrib['name']}"
+    else:
+        full_test_name = f"{filepath}::{testcase.attrib['name']}"
 
     # to be populated with [] if available
     config = None
@@ -198,18 +243,26 @@ def get_tests_from_test_report_path(test_report_path):
     report_root = report_root_tree.getroot()
 
     is_pytest = junit_xml_utils.is_pytest_junit_xml(report_root)
+    is_gtest = junit_xml_utils.is_gtest_xml(report_root)
 
-    if is_pytest:
-        testsuite = report_root[0]
-        default_timestamp = datetime.strptime(testsuite.attrib["timestamp"], "%Y-%m-%dT%H:%M:%S.%f")
-
-        get_pydantic_test = partial(get_pydantic_test_from_pytest_testcase_, default_timestamp=default_timestamp)
-
+    if is_pytest or is_gtest:
+        logger.info(f"Found {len(report_root)} testsuites")
         tests = []
-        for testcase in testsuite:
-            if is_valid_testcase_(testcase):
-                tests.append(get_pydantic_test(testcase))
+        for i in range(len(report_root)):
+            testsuite = report_root[i]
+            testsuite_name = testsuite.attrib.get("name") if is_gtest else None
+            default_timestamp = datetime.strptime(testsuite.attrib["timestamp"], "%Y-%m-%dT%H:%M:%S.%f")
+            get_pydantic_test = partial(
+                get_pydantic_test_from_testcase_,
+                default_timestamp=default_timestamp,
+                is_pytest=is_pytest,
+                testsuite_name=testsuite_name,
+            )
+            for testcase in testsuite:
+                if is_valid_testcase_(testcase):
+                    tests.append(get_pydantic_test(testcase))
 
         return tests
     else:
-        raise Exception("We only support pytest junit xml outputs for now")
+        logger.warning("XML is not pytest junit or gtest format, or no tests were found in the XML, skipping for now")
+        return []

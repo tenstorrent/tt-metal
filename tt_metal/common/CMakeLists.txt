@@ -1,31 +1,20 @@
-set(COMMON_SRCS
-    ${CMAKE_CURRENT_SOURCE_DIR}/core_assignment.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/core_coord.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/core_descriptor.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal_soc_descriptor.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/shape2d.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/tt_backend_api_types.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/utils.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/work_split.cpp
-)
+add_library(common OBJECT)
+add_library(TT::Metalium::Common ALIAS common)
 
-add_library(common OBJECT ${COMMON_SRCS})
-add_library(Metalium::Metal::Common ALIAS common)
-
-target_link_libraries(common PRIVATE yaml-cpp::yaml-cpp)
-target_link_libraries(
+target_sources(
     common
-    PUBLIC
-        nlohmann_json::nlohmann_json
-        magic_enum
-        fmt::fmt-header-only
-        span
-        Metalium::Metal::STL
-        umd::Firmware
-        umd::device
     PRIVATE
-        Tracy::TracyClient
-        TT::Metalium::HostDevCommon
+        core_assignment.cpp
+        core_coord.cpp
+        mesh_coord.cpp
+        metal_soc_descriptor.cpp
+        shape.cpp
+        shape2d.cpp
+        shape_base.cpp
+        tt_backend_api_types.cpp
+        utils.cpp
+        work_split.cpp
+        thread_pool.cpp
 )
 
 target_include_directories(
@@ -33,4 +22,23 @@ target_include_directories(
     PUBLIC
         ${PROJECT_SOURCE_DIR}
         ${PROJECT_SOURCE_DIR}/tt_metal
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(
+    common
+    PUBLIC
+        nlohmann_json::nlohmann_json
+        magic_enum::magic_enum
+        fmt::fmt-header-only
+        span
+        small_vector
+        Metalium::Metal::STL
+        umd::Firmware
+        umd::device
+    PRIVATE
+        Tracy::TracyClient
+        TT::Metalium::HostDevCommon
+        yaml-cpp::yaml-cpp
+        Boost::asio
 )

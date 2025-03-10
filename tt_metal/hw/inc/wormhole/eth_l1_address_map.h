@@ -8,6 +8,14 @@
 
 #include "noc/noc_parameters.h"
 
+namespace eth_iram_mem {
+struct address_map {
+    static constexpr std::int32_t ERISC_IRAM_BASE = 0xFFC00000;
+    static constexpr std::int32_t ERISC_IRAM_SIZE = 16 * 1024;
+    static constexpr std::int32_t ERISC_KERNEL_BASE = ERISC_IRAM_BASE;
+};
+};  // namespace eth_iram_mem
+
 namespace eth_l1_mem {
 
 struct address_map {
@@ -33,17 +41,17 @@ struct address_map {
 
     // Kernel config buffer is WIP
     // Size is presently based on the old sizes of the RTAs + CB config + Sems
-    static constexpr std::int32_t ERISC_L1_KERNEL_CONFIG_SIZE = 96 * 4 + 8 * 16;
+    static constexpr std::int32_t ERISC_L1_KERNEL_CONFIG_SIZE = 96 * 4 + 16 * 16;
 
     // Base addresses
     static constexpr std::int32_t FIRMWARE_BASE = 0x9040;
     static constexpr std::int32_t L1_EPOCH_Q_BASE = 0x9000;  // Epoch Q start in L1.
+    static constexpr std::int32_t KERNEL_BASE = 0xA840;
     static constexpr std::int32_t COMMAND_Q_BASE = L1_EPOCH_Q_BASE + FIRMWARE_SIZE;
     static constexpr std::int32_t DATA_BUFFER_BASE = COMMAND_Q_BASE + COMMAND_Q_SIZE;
     static constexpr std::int32_t TILE_HEADER_BUFFER_BASE = DATA_BUFFER_BASE + DATA_BUFFER_SIZE;
 
     // TT Metal Specific
-    static constexpr std::int32_t ERISC_FIRMWARE_SIZE = 2 * 1024;
     // Total 160 * 1024 L1 starting from TILE_HEADER_BUFFER_BASE
     //    -   1 * 1024 misc args
     //    -  53 * 1024 eth app reserved buffer space
@@ -58,7 +66,7 @@ struct address_map {
 
     static constexpr std::int32_t ERISC_MEM_MAILBOX_BASE = ERISC_APP_SYNC_INFO_BASE + ERISC_APP_SYNC_INFO_SIZE;
 
-    static constexpr std::uint32_t ERISC_MEM_MAILBOX_SIZE = 3232;
+    static constexpr std::uint32_t ERISC_MEM_MAILBOX_SIZE = 3616;
     static constexpr std::uint32_t ERISC_MEM_MAILBOX_END = ERISC_MEM_MAILBOX_BASE + ERISC_MEM_MAILBOX_SIZE;
     static constexpr std::int32_t ERISC_L1_KERNEL_CONFIG_BASE = ERISC_MEM_MAILBOX_END;
     static constexpr std::int32_t FABRIC_ROUTER_CONFIG_BASE =

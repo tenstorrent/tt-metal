@@ -12,8 +12,9 @@
 #include <tt-metalium/event.hpp>
 #include <tt-metalium/device.hpp>
 
+namespace tt::tt_metal {
+
 using std::vector;
-using namespace tt::tt_metal;
 
 namespace local_test_functions {
 
@@ -193,7 +194,7 @@ TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsEnqueueWaitForEventC
     for (uint cq_id = 0; cq_id < cqs.size(); cq_id++) {
         for (size_t i = 0; i < num_cmds_per_cq * num_events_per_cq; i++) {
             uint32_t host_addr =
-                completion_queue_base[cq_id] + i * dispatch_constants::TRANSFER_PAGE_SIZE + sizeof(CQDispatchCmd);
+                completion_queue_base[cq_id] + i * DispatchSettings::TRANSFER_PAGE_SIZE + sizeof(CQDispatchCmd);
             tt::Cluster::instance().read_sysmem(&event, 4, host_addr, mmio_device_id, channel);
             log_debug(
                 tt::LogTest,
@@ -465,3 +466,5 @@ TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsReadWriteWithWaitFor
 }
 
 }  // end namespace basic_tests
+
+}  // namespace tt::tt_metal

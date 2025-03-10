@@ -86,33 +86,33 @@ std::ostream& operator<<(std::ostream& os, const ShardSpec& spec);
 struct ShardSpecBuffer {
     ShardSpec tensor_shard_spec;
     std::array<uint32_t, 2> page_shape;
-    std::array<uint32_t, 2> tensor2d_shape;
+    std::array<uint32_t, 2> tensor2d_shape_in_pages;
     ShardSpecBuffer(
-        const CoreRangeSet &core_sets_,
-        const std::array<uint32_t, 2> &shard_shape_,
-        const ShardOrientation &shard_orientation_,
-        const std::array<uint32_t, 2> &page_shape,
-        const std::array<uint32_t, 2> &tensor2d_shape) :
+        const CoreRangeSet& core_sets_,
+        const std::array<uint32_t, 2>& shard_shape_,
+        const ShardOrientation& shard_orientation_,
+        const std::array<uint32_t, 2>& page_shape,
+        const std::array<uint32_t, 2>& tensor2d_shape_in_pages) :
         tensor_shard_spec(core_sets_, shard_shape_, shard_orientation_) {
         this->page_shape = page_shape;
-        this->tensor2d_shape = tensor2d_shape;
+        this->tensor2d_shape_in_pages = tensor2d_shape_in_pages;
     }
     ShardSpecBuffer(
-        const ShardSpec &shard_spec,
-        const std::array<uint32_t, 2> &page_shape,
-        const std::array<uint32_t, 2> &tensor2d_shape) :
+        const ShardSpec& shard_spec,
+        const std::array<uint32_t, 2>& page_shape,
+        const std::array<uint32_t, 2>& tensor2d_shape_in_pages) :
         tensor_shard_spec(shard_spec) {
         this->page_shape = page_shape;
-        this->tensor2d_shape = tensor2d_shape;
+        this->tensor2d_shape_in_pages = tensor2d_shape_in_pages;
     }
     CoreRangeSet grid() const { return tensor_shard_spec.grid; }
     std::array<uint32_t, 2> shape() const { return tensor_shard_spec.shape; }
     ShardOrientation orientation() const { return tensor_shard_spec.orientation; }
     void set_shard_spec(const ShardSpec& shard_spec) { tensor_shard_spec = shard_spec; };
 
-    /* Shape in pages of the full tensor, not per core */
+    /* Shape in pages of the full shard */
     std::array<uint32_t, 2> shape_in_pages() const;
-    DeviceAddr size() const;
+    DeviceAddr num_pages() const;
 };
 
 inline namespace v0 {
@@ -194,9 +194,10 @@ class Buffer final {
     Buffer &operator=(const Buffer &other) = delete;
     Buffer(Buffer &&other) = delete;
     Buffer &operator=(Buffer &&other) = delete;
+    ~Buffer();
 
     IDevice* device() const { return device_; }
-    Allocator *allocator() const { return allocator_; }
+    Allocator* allocator() const { return allocator_; }
     DeviceAddr size() const { return size_; }
     bool is_allocated() const;
 
@@ -223,10 +224,6 @@ class Buffer final {
 
     bool bottom_up() const { return bottom_up_; }
 
-    uint32_t dram_channel_from_bank_id(uint32_t bank_id) const;
-
-    CoreCoord logical_core_from_bank_id(uint32_t bank_id) const;
-
     DeviceAddr page_address(uint32_t bank_id, uint32_t page_index) const;
 
     DeviceAddr bank_local_page_address(uint32_t bank_id, uint32_t page_index) const;
@@ -248,9 +245,11 @@ class Buffer final {
     const std::shared_ptr<const BufferPageMapping>& get_buffer_page_mapping();
 
     std::optional<SubDeviceId> sub_device_id() const { return sub_device_id_; }
-    std::optional<SubDeviceManagerId> sub_device_manager_id() const { return sub_device_manager_id_; }
 
     size_t unique_id() const { return unique_id_; }
+
+    // Mark the buffer as deallocated, without releasing underlying device memory
+    void mark_as_deallocated();
 
     Buffer(
         IDevice* device,
@@ -271,6 +270,8 @@ class Buffer final {
         ALLOCATED,
         DEALLOCATED,
     };
+
+    void allocate_impl();
 
     // Deallocate is allowed to be called multiple times on the same buffer
     void deallocate();

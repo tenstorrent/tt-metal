@@ -7,11 +7,10 @@ on:
         required: true
         type: choice
         options:
-          - grayskull
           - wormhole_b0
           - blackhole
       runner-label:
-        description: 'Optional: N150, N300, E150, BH, config-t3000, config-tg, config-tgg'
+        description: 'Optional: N150, N300, BH, config-t3000, config-tg, config-tgg'
         required: true
         type: string
         default: '["in-service"]'
@@ -60,7 +59,6 @@ jobs:
     needs: build-artifact
     timeout-minutes: 1440
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ inputs.arch }}
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on: ${{ fromJSON(inputs.runner-label) }}
@@ -73,6 +71,7 @@ jobs:
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - uses: actions/download-artifact@v4
+        timeout-minutes: 10
         with:
           name:  TTMetal_build_any${{ (inputs.tracy && '_profiler') || '' }}
       - name: Extract files

@@ -4,7 +4,7 @@
 
 #include "pad.hpp"
 
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -14,24 +14,21 @@ namespace ttnn::operations::data_movement {
 
 namespace {
 
-template <typename ArrayType>
-bool eq_spans(const ArrayType& a, const ArrayType& b) {
-    return std::equal(a.begin(), a.end(), b.begin(), b.end());
-}
+bool eq_spans(const auto a, const auto b) { return std::equal(a.begin(), a.end(), b.begin(), b.end()); }
 
-ttnn::Shape update_original_shape(ttnn::Shape padded_shape, ttnn::Shape input_shape) {
-    std::vector<uint32_t> updated_shape;
+ttnn::Shape update_original_shape(const ttnn::Shape& padded_shape, const ttnn::Shape& input_shape) {
+    ttnn::SmallVector<uint32_t> updated_shape;
     size_t input_rank = input_shape.rank();
     for (size_t i = 0; i < input_rank - 2; i++) {
         updated_shape.push_back(input_shape[i]);
     }
     updated_shape.push_back(padded_shape[-2]);
     updated_shape.push_back(padded_shape[-1]);
-    return ttnn::Shape(updated_shape);
+    return ttnn::Shape(std::move(updated_shape));
 }
 
 static ttnn::Tensor pad_impl(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     std::span<const uint32_t> output_padded_shape,
     std::span<const uint32_t> input_tensor_start,
@@ -44,8 +41,7 @@ static ttnn::Tensor pad_impl(
         if (eq_spans(input_logical_shape, output_padded_shape)) {
             return input_tensor;
         } else {
-            return input_tensor.pad(
-                ttnn::SimpleShape(output_padded_shape), ttnn::SimpleShape{input_tensor_start}, value);
+            return input_tensor.pad(ttnn::Shape(output_padded_shape), ttnn::Shape{input_tensor_start}, value);
         }
     }
 
@@ -80,7 +76,7 @@ static ttnn::Tensor pad_impl(
                 std::array<uint32_t, 4> output_shape_width_padded{
                     input_logical_shape[0], input_logical_shape[1], input_logical_shape[2], output_w};
                 auto width_pad_memory_config = create_sharded_memory_config(
-                    ttnn::SimpleShape{output_shape_width_padded},
+                    ttnn::Shape{output_shape_width_padded},
                     input_tensor.shard_spec()->grid,  // reuse input cores for now: FIXME: can we do better?
                                                       // it's complicated because we need the input shards to be local
                                                       // to the core holding the output shard currently.
@@ -114,7 +110,7 @@ static ttnn::Tensor pad_impl(
                         "infinite recursion");
 
                     auto height_pad_memory_config = create_sharded_memory_config(
-                        ttnn::SimpleShape{output_padded_shape},
+                        ttnn::Shape{output_padded_shape},
                         input_tensor.shard_spec()->grid,
                         ShardStrategy::HEIGHT,
                         ShardOrientation::ROW_MAJOR);
@@ -139,11 +135,11 @@ static ttnn::Tensor pad_impl(
             !input_tensor.is_sharded() || output_w == output_memory_config.shard_spec->shape[1],
             "output_w != output_memory_config.shard_spec().shape[1]");
 
-        ttnn::SimpleShape output_shape{output_padded_shape};
-        auto output_tensor = operation::run(
+        ttnn::Shape output_shape{output_padded_shape};
+        auto output_tensor = tt::tt_metal::operation::run(
                                  Pad{output_shape,
                                      output_shape,
-                                     ttnn::SimpleShape{input_tensor_start},
+                                     ttnn::Shape{input_tensor_start},
                                      value,
                                      output_memory_config,
                                      use_multicore},
@@ -158,7 +154,7 @@ static ttnn::Tensor pad_impl(
 }
 
 static ttnn::Tensor pad_impl(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding,
     const float value,
@@ -229,7 +225,7 @@ static ttnn::Tensor pad_impl(
 // Any rank tensor supported
 
 ttnn::Tensor ExecutePad::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     tt::stl::Span<const std::pair<uint32_t, uint32_t>> padding,
     const float value,
@@ -249,17 +245,12 @@ ttnn::Tensor ExecutePad::invoke(
             auto remove_prefix = [](auto& source, size_t n) { source.erase(source.begin(), source.begin() + n); };
             remove_prefix(output_shape, rank_diff);
             remove_prefix(padded_shape, rank_diff);
-            auto squeezedShape = ttnn::Shape(tt::tt_metal::LegacyShape(output_shape, padded_shape));
-            output_tensor = ttnn::reshape(output_tensor, squeezedShape);
+            output_tensor = ttnn::reshape(output_tensor, ttnn::Shape(output_shape), ttnn::Shape(padded_shape));
             output_tensor = ttnn::reshape(output_tensor, ttnn::Shape(padded_shape));
         }
     } else {
-        auto to_vec = [](const auto& span) { return ttnn::SmallVector<uint32_t>{span.begin(), span.end()}; };
-        auto output_shape = to_vec(output_tensor.get_padded_shape().view());
-        auto padded_shape = to_vec(output_tensor.get_padded_shape().view());
-        auto squeezedShape = ttnn::Shape(tt::tt_metal::LegacyShape(output_shape, padded_shape));
-        output_tensor =
-            ttnn::reshape(output_tensor, update_original_shape(squeezedShape, input_tensor.get_logical_shape()));
+        output_tensor = ttnn::reshape(
+            output_tensor, update_original_shape(output_tensor.get_padded_shape(), input_tensor.get_logical_shape()));
     }
 
     // Padding always turns the intended shape to the shape with tile padding. For simplicity of the operation
@@ -269,7 +260,7 @@ ttnn::Tensor ExecutePad::invoke(
 
 #define PAD_OVERLOAD_DIM_IMPL(ShapeType)                                                                               \
     ttnn::Tensor ExecutePad::invoke(                                                                                   \
-        uint8_t queue_id,                                                                                              \
+        QueueId queue_id,                                                                                              \
         const ttnn::Tensor& input_tensor,                                                                              \
         const ShapeType& output_padded_shape,                                                                          \
         const ShapeType& input_tensor_start,                                                                           \

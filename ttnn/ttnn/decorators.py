@@ -262,7 +262,7 @@ def preprocess_global_golden_function_inputs(function_args, function_kwargs):
             input_index += 1
             return golden_tensor
         elif isinstance(object_value, ttnn.Shape):
-            return tuple(object_value.with_tile_padding())
+            return tuple(object_value)
         elif isinstance(object_value, (list, tuple)):
             new_object_value = [recursive_preprocess_golden_function_inputs(element) for element in object_value]
             return type(object_value)(new_object_value)
@@ -803,8 +803,9 @@ def register_python_operation(
 
         if is_cpp_operation:
             raise RuntimeError(f"{function} is a C++ operation, but it is being registered as a Python operation")
-        elif not is_experimental and not is_method:
-            logger.debug(f"Should {python_fully_qualified_name} be migrated to C++?")
+        # Disabling for now (See GH issue #18386)
+        # elif not is_experimental and not is_method:
+        #     logger.debug(f"Should {python_fully_qualified_name} be migrated to C++?")
 
         operation_class = FastOperation if ttnn.CONFIG.enable_fast_runtime_mode else Operation
 

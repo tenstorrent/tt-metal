@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/edm_fabric_worker_adapters.hpp"
+
 class FabricConnectionManager final {
 public:
     // return if there is/should be a connection - doesn't return whether or not the connection

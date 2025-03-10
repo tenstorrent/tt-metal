@@ -6,7 +6,6 @@
 #include "rotary_embedding_llama_fused_qk_program_factory.hpp"
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
 
 namespace tt {
 

@@ -2,6 +2,11 @@ name: "[internal] Docs build and deploy to GitHub pages on main impl"
 
 on:
   workflow_call:
+    inputs:
+      version:
+        required: false
+        type: string
+        default: latest
 
 concurrency:
   # Note that people may spam the post-commit pipeline on their branch, and
@@ -20,8 +25,6 @@ jobs:
       matrix:
         arch: [grayskull]
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      DOCS_VERSION: latest
       ARCH_NAME: ${{ matrix.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
@@ -41,6 +44,7 @@ jobs:
         with:
           os: ubuntu-20.04
       - uses: actions/download-artifact@v4
+        timeout-minutes: 10
         with:
           name: TTMetal_build_any
       - name: Extract files
@@ -58,18 +62,36 @@ jobs:
       - name: Prepare artifact - move output
         run: |
           mkdir gh_pages
-          mv docs/build/html gh_pages/$DOCS_VERSION
+          mv docs/build/html gh_pages/${{ inputs.version }}
       - name: Prepare artifact - create .nojekyll
         run: |
           touch gh_pages/.nojekyll
       - name: Prepare artifact - create root index
         run: |
           touch gh_pages/index.html
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3.0.1
-        with:
-          path: "gh_pages"
       - name: Deploy to GitHub Pages
         if: ${{ github.ref == 'refs/heads/main' }}
+        uses: JamesIves/github-pages-deploy-action@v4
         id: deployment
-        uses: actions/deploy-pages@v4.0.4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: gh-pages
+          target-folder: ${{ inputs.version }}
+          folder: ./gh_pages/${{ inputs.version }}
+          force: false
+      - name: Delete artifact if deployment failed
+        # When the deployment API call fails, the artifacts are not cleaned up correctly
+        # and the next attempt (!) run will cause an error.
+        # See more:
+        # https://github.com/tenstorrent/tt-metal/issues/17623
+        if: ${{ failure() }}
+        uses: geekyeggo/delete-artifact@v5
+        continue-on-error: true
+        with:
+            name: github-pages
+      - name: Check the docs deployment is up
+        if: ${{ github.ref == 'refs/heads/main' }}
+        # TODO: Enhance this by looping over all the published versions in docs/published_versions.json
+        run: |
+          set -eu # basic shell hygiene
+          curl --fail -LI https://docs.tenstorrent.com/tt-metal/latest/ttnn/index.html -o /dev/null -s

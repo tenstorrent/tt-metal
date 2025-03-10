@@ -69,6 +69,9 @@ int main() {
     // put this into scratch space similar to idle erisc
     noc_bank_table_init(eth_l1_mem::address_map::ERISC_MEM_BANK_TO_NOC_SCRATCH);
 
+    mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
+    noc_index = 0;
+
     risc_init();
 
     mailboxes->slave_sync.all = RUN_SYNC_MSG_ALL_SLAVES_DONE;
@@ -79,7 +82,6 @@ int main() {
     }
 
     mailboxes->go_message.signal = RUN_MSG_DONE;
-    mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
 
     while (1) {
         // Wait...
@@ -118,6 +120,8 @@ int main() {
             noc_index = launch_msg_address->kernel_config.brisc_noc_id;
 
             flush_erisc_icache();
+
+            firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, DISPATCH_CLASS_ETH_DM0);
 
             enum dispatch_core_processor_masks enables =
                 (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;

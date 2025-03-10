@@ -78,17 +78,17 @@ MorehFoldOperation::spec_return_value_t MorehFoldOperation::compute_output_specs
         if (input_tensor_rank == 3) {
             uint32_t N = input_tensor_shape[0];
             uint32_t C = input_tensor_shape[1] / kernel_size_product;
-            return ttnn::SimpleShape{N, C, operation_attributes.output_size[0], operation_attributes.output_size[1]};
+            return ttnn::Shape{N, C, operation_attributes.output_size[0], operation_attributes.output_size[1]};
         }
         // If input_tensor_rank == 2
         uint32_t C = input_tensor_shape[0] / kernel_size_product;
-        return ttnn::SimpleShape{C, operation_attributes.output_size[0], operation_attributes.output_size[1]};
+        return ttnn::Shape{C, operation_attributes.output_size[0], operation_attributes.output_size[1]};
     }();
     return TensorSpec(
         output_shape,
-        TensorLayout(
+        tt::tt_metal::TensorLayout(
             tensor_args.input.get_dtype(),
-            PageConfig(tensor_args.input.get_layout()),
+            tt::tt_metal::PageConfig(tensor_args.input.get_layout()),
             operation_attributes.memory_config));
 };
 

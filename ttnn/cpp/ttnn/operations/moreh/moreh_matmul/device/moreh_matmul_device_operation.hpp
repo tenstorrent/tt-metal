@@ -34,14 +34,14 @@ struct MorehMatmulOperation {
     using tensor_return_value_t = Tensor;
 
     struct MultiCoreProgramFactory {
-        struct shared_variable_t {
-            KernelHandle reader_kernel_id;
-            KernelHandle writer_kernel_id;
+        struct shared_variables_t {
+            tt::tt_metal::KernelHandle reader_kernel_id;
+            tt::tt_metal::KernelHandle writer_kernel_id;
             std::size_t num_cores;
             std::size_t num_cores_y;
         };
 
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variable_t>;
+        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
         static cached_program_t create(
             const operation_attributes_t& operation_attributes,
@@ -74,8 +74,8 @@ struct MorehMatmulOperation {
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
 
-void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::SimpleShape& shape);
-ttnn::SmallVector<int64_t> find_reduce_dim(const ttnn::SimpleShape& a_shape, const ttnn::SimpleShape& b_shape);
+void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& shape);
+ttnn::SmallVector<int64_t> find_reduce_dim(const ttnn::Shape& a_shape, const ttnn::Shape& b_shape);
 bool is_same_batch_dim(const Tensor& tensor_a, const Tensor& tensor_b);
 
 }  // namespace ttnn::operations::moreh::moreh_matmul

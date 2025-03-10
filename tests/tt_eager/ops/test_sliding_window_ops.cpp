@@ -20,7 +20,7 @@ using namespace ttnn::operations::sliding_window;
 
 // From owned_buffer of type bfloat16 of create float vector for convolution operation.
 vector<float> create_filter_vec(
-    const owned_buffer::Buffer<bfloat16>& filter_tensor_buf, uint32_t filter_h, uint32_t filter_w) {
+    const tt::tt_metal::owned_buffer::Buffer<bfloat16>& filter_tensor_buf, uint32_t filter_h, uint32_t filter_w) {
     vector<float> filter_vector;
     for (auto h = 0; h < filter_h; h++) {
         for (auto w = 0; w < filter_w; w++) {
@@ -32,8 +32,8 @@ vector<float> create_filter_vec(
 
 // Compare calculated convolution buffer with Golden convolution
 uint32_t compare_conv_out_with_golden(
-    const owned_buffer::Buffer<bfloat16>& out_golden_tensor_buf,
-    const owned_buffer::Buffer<bfloat16>& conv_tensor_buf) {
+    const tt::tt_metal::owned_buffer::Buffer<bfloat16>& out_golden_tensor_buf,
+    const tt::tt_metal::owned_buffer::Buffer<bfloat16>& conv_tensor_buf) {
     uint32_t diff = 0;
     if (out_golden_tensor_buf != conv_tensor_buf) {
         assert(out_golden_tensor_buf.size() == conv_tensor_buf.size());
@@ -56,7 +56,7 @@ uint32_t compare_conv_out_with_golden(
 // It is ok to use pad_metadata since its correctness is validated in other test cases.
 uint32_t validate_generate_halo_kernel_config(
     tt::tt_metal::IDevice* device,
-    const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries,
+    const std::vector<ShardBoundary>& shard_boundaries,
     const std::tuple<vector<vector<uint16_t>>, std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>>&
         halo_kernel_config,
     const vector<bool>& pad_metadata,
@@ -125,13 +125,13 @@ uint32_t validate_generate_halo_kernel_config(
 uint32_t validate_generate_functions(
     tt::tt_metal::IDevice* device,
     const SlidingWindowConfig& config,
-    const owned_buffer::Buffer<bfloat16>& input_padded_tensor_buf,
+    const tt::tt_metal::owned_buffer::Buffer<bfloat16>& input_padded_tensor_buf,
     const vector<float>& filter_vector,
-    const owned_buffer::Buffer<bfloat16>& out_golden_tensor_buf,
+    const tt::tt_metal::owned_buffer::Buffer<bfloat16>& out_golden_tensor_buf,
     uint32_t reshard_num_cores_nhw = 0,
     bool remote_read = false) {
     log_debug(tt::LogTest, "Validating generate functions for config = {}", config);
-    owned_buffer::Buffer<bfloat16> conv_tensor_buf;
+    tt::tt_metal::owned_buffer::Buffer<bfloat16> conv_tensor_buf;
     uint32_t diff;
     uint32_t failed_tests = 0;
     auto pad_metadata = generate_pad_metadata(config);
@@ -373,22 +373,23 @@ int main() {
             .pad_hw = {tc.pad_h, tc.pad_w},
             .dilation_hw = {1, 1},
             .num_cores_nhw = tc.num_cores_nhw};
-        ttnn::SimpleShape input_tensor_shape(
+        ttnn::Shape input_tensor_shape(
             {config.batch_size,
              config.input_hw.first + 2 * config.pad_hw.first,
              config.input_hw.second + 2 * config.pad_hw.second});
         auto output_tensor_shape = config.get_output_shape();
-        ttnn::SimpleShape filter_tensor_shape({config.window_hw.first, config.window_hw.second});
+        ttnn::Shape filter_tensor_shape({config.window_hw.first, config.window_hw.second});
 
         Tensor input_padded_tensor =
-            ttnn::random::random(input_tensor_shape, DataType::BFLOAT16).to(Layout::ROW_MAJOR).cpu();
-        Tensor filter_tensor =
-            ttnn::random::random(filter_tensor_shape, DataType::BFLOAT16).to(Layout::ROW_MAJOR).cpu();
-        auto input_padded_tensor_buf = owned_buffer::get_as<bfloat16>(input_padded_tensor);
-        auto filter_tensor_buf = owned_buffer::get_as<bfloat16>(filter_tensor);
+            ttnn::random::random(input_tensor_shape, ttnn::DataType::BFLOAT16).to_layout(ttnn::Layout::ROW_MAJOR).cpu();
+        Tensor filter_tensor = ttnn::random::random(filter_tensor_shape, ttnn::DataType::BFLOAT16)
+                                   .to_layout(ttnn::Layout::ROW_MAJOR)
+                                   .cpu();
+        auto input_padded_tensor_buf = tt::tt_metal::owned_buffer::get_as<bfloat16>(input_padded_tensor);
+        auto filter_tensor_buf = tt::tt_metal::owned_buffer::get_as<bfloat16>(filter_tensor);
 
         vector<float> filter_vector = create_filter_vec(filter_tensor_buf, tc.filter_h, tc.filter_w);
-        owned_buffer::Buffer<bfloat16> out_golden_tensor_buf = ref_conv_op(
+        tt::tt_metal::owned_buffer::Buffer<bfloat16> out_golden_tensor_buf = ref_conv_op(
             input_padded_tensor,
             input_tensor_shape,
             tc.stride_h,
