@@ -131,8 +131,8 @@ MeshDevice::MeshDevice(
     view_(std::move(mesh_device_view)),
     mesh_id_(generate_unique_mesh_id()),
     parent_mesh_(std::move(parent_mesh)),
-    dispatch_thread_pool_(create_boost_thread_pool(view_->shape().mesh_size())),
-    reader_thread_pool_(create_boost_thread_pool(view_->shape().mesh_size())) {}
+    dispatch_thread_pool_(create_device_bound_thread_pool(view_->shape().mesh_size())),
+    reader_thread_pool_(create_device_bound_thread_pool(view_->shape().mesh_size(), view_->shape().mesh_size())) {}
 
 std::shared_ptr<MeshDevice> MeshDevice::create(
     const MeshDeviceConfig& config,
