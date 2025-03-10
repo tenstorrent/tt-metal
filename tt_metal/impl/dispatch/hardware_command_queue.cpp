@@ -38,12 +38,18 @@ Buffer& get_buffer_object(const std::variant<std::reference_wrapper<Buffer>, std
 
 }  // namespace
 
-HWCommandQueue::HWCommandQueue(IDevice* device, uint32_t id, NOC noc_index, uint32_t completion_queue_reader_core) :
+HWCommandQueue::HWCommandQueue(
+    IDevice* device,
+    std::shared_ptr<DispatchArray<LaunchMessageRingBufferState>>& worker_launch_message_buffer_state,
+    uint32_t id,
+    NOC noc_index,
+    uint32_t completion_queue_reader_core) :
     manager(device->sysmem_manager()),
     completion_queue_thread{},
     completion_queue_reader_core(completion_queue_reader_core) {
     ZoneScopedN("CommandQueue_constructor");
     this->device_ = device;
+    this->worker_launch_message_buffer_state = worker_launch_message_buffer_state;
     this->id_ = id;
     this->noc_index_ = noc_index;
     this->num_entries_in_completion_q = 0;
@@ -114,7 +120,10 @@ void HWCommandQueue::reset_worker_state(
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
         this->config_buffer_mgr, this->expected_num_workers_completed, device_->num_sub_devices());
     if (reset_launch_msg_state) {
-        this->manager.reset_worker_launch_message_buffer_state(num_sub_devices);
+        std::for_each(
+            this->worker_launch_message_buffer_state->begin(),
+            this->worker_launch_message_buffer_state->begin() + num_sub_devices,
+            std::mem_fn(&LaunchMessageRingBufferState::reset));
     }
 }
 
@@ -325,7 +334,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         }
     }
 
-    auto& worker_launch_message_buffer_state = this->manager.get_worker_launch_message_buffer_state()[*sub_device_id];
+    auto& worker_launch_message_buffer_state = (*this->worker_launch_message_buffer_state)[*sub_device_id];
     auto command = EnqueueProgramCommand(
         this->id_,
         this->device_,
@@ -430,7 +439,10 @@ void HWCommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
         virtual_enqueue_program_dispatch_core_);
 
     trace_dispatch::update_worker_state_post_trace_execution(
-        trace_inst->desc->descriptors, this->manager, this->config_buffer_mgr, this->expected_num_workers_completed);
+        trace_inst->desc->descriptors,
+        *this->worker_launch_message_buffer_state,
+        this->config_buffer_mgr,
+        this->expected_num_workers_completed);
 
     if (blocking) {
         this->finish(trace_inst->desc->sub_device_ids);
@@ -527,7 +539,7 @@ void HWCommandQueue::record_begin(const uint32_t tid, const std::shared_ptr<Trac
     // worker_config_buffer, etc.
     trace_dispatch::reset_host_dispatch_state_for_trace(
         device_->num_sub_devices(),
-        this->manager,
+        *this->worker_launch_message_buffer_state,
         this->expected_num_workers_completed,
         this->config_buffer_mgr,
         this->worker_launch_message_buffer_state_reset,
@@ -564,7 +576,7 @@ void HWCommandQueue::record_end() {
     // host, even though device doesn't run any programs.
     trace_dispatch::load_host_dispatch_state(
         device_->num_sub_devices(),
-        this->manager,
+        *this->worker_launch_message_buffer_state,
         this->expected_num_workers_completed,
         this->config_buffer_mgr,
         this->worker_launch_message_buffer_state_reset,
