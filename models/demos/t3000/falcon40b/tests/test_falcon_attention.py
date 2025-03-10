@@ -90,7 +90,7 @@ def run_test_FalconAttention_inference(
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=model_config["ATTN_INPUT_MEMCFG"],
-            ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
 
         attention_mask_memconfig = model_config["ATTN_MASK_MEMCFG"]
@@ -105,7 +105,7 @@ def run_test_FalconAttention_inference(
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
             memory_config=attention_mask_memconfig,
-            ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
             preprocess=lambda x: (x * (-1e5)).expand(1, 1, -1, -1),
         )
 

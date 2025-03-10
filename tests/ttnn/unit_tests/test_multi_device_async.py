@@ -99,7 +99,7 @@ def test_multi_device_replicate(pcie_mesh_device, shape, layout, memory_config):
 
         ttnn_tensor = ttnn.from_torch(
             full_tensor,
-            ttnn.replicate_tensor_to_mesh_mapper(pcie_mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(pcie_mesh_device),
             layout=layout,
             memory_config=memory_config,
             device=pcie_mesh_device,
@@ -128,7 +128,7 @@ def test_ttnn_to_multi_device_tilized_parallel(pcie_mesh_device, layout, memory_
         torch_tensor = torch.rand((8, 1, 1024, 1024), dtype=torch.bfloat16)
         ttnn_tensor = ttnn.from_torch(
             torch_tensor,
-            ttnn.shard_tensor_to_mesh_mapper(pcie_mesh_device, dim=shard_dim),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(pcie_mesh_device, dim=shard_dim),
             layout=layout,
             memory_config=memory_config,
             device=pcie_mesh_device,

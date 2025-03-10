@@ -128,7 +128,7 @@ def test_positional_embedding_inference(
         layout=layout,
         device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
 
     tt_input_tensor = ttnn.to_layout(tt_input_tensor, ttnn.ROW_MAJOR_LAYOUT)

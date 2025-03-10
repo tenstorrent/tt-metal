@@ -327,7 +327,7 @@ def run_inference_prefill(tt_model, model_args, prefill_seqlen, mesh_device, pt_
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
     profiler.end("prefill_prepare_rot_matrices")
 

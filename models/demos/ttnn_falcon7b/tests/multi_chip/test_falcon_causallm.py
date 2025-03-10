@@ -153,7 +153,7 @@ def test_falcon_causal_lm(
             model_config,
             tt_cache_path=get_tt_cache_path(f"{model_version}"),
             device=mesh_device,
-            weights_ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+            weights_mesh_mapper=replicate_tensor_to_mesh_mapper(mesh_device),
         ),
         convert_to_ttnn=convert_to_ttnn,
     )
@@ -369,7 +369,7 @@ def test_t3k_falcon_causal_lm_with_trace(
             model_config,
             tt_cache_path=get_tt_cache_path(f"{model_version}"),
             device=t3k_mesh_device,
-            weights_ttnn.replicate_tensor_to_mesh_mapper(t3k_mesh_device),
+            weights_mesh_mapper=replicate_tensor_to_mesh_mapper(t3k_mesh_device),
         ),
         convert_to_ttnn=convert_to_ttnn,
     )

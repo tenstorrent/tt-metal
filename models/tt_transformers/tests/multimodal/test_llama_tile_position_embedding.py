@@ -98,7 +98,7 @@ def test_conv2d_inference(
         layout=layout,
         device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
     logger.info(f"TT Input tensor shape: {tt_input_tensor.shape}")
 

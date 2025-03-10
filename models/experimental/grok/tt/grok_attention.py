@@ -91,7 +91,7 @@ class TtGrokAttention(LightweightModule):
             .unsqueeze(0)
             .unsqueeze(0),
             device=self.mesh_device,
-            ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
             dtype=self.dtype,
             memory_config=self.model_config["ATTN_WEIGHTS_MEMCFG"],
             layout=self.model_config["ATTN_W_LAYOUT_TILE"],

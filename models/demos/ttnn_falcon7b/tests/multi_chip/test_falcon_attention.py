@@ -144,7 +144,7 @@ def test_falcon_attention(
             tt_cache_path=get_tt_cache_path(f"{model_name}"),
             device=mesh_device,
             base_file_name=get_model_prefix(),
-            weights_ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+            weights_mesh_mapper=replicate_tensor_to_mesh_mapper(mesh_device),
         ),
     )
     tt_FalconAttention_model = TtFalconAttention(

@@ -62,7 +62,7 @@ def test_mixtral_mlp_inference(t3k_mesh_device, use_program_cache, reset_seeds):
         dtype=ttnn.bfloat16,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
-        ttnn.replicate_tensor_to_mesh_mapper(t3k_mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(t3k_mesh_device),
     )
 
     tt_output = tt_model(tt_input)

@@ -157,7 +157,7 @@ def test_falcon_model(
             tt_cache_path=get_tt_cache_path(f"{model_version}"),
             device=mesh_device,
             base_file_name=get_model_prefix(),
-            weights_ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+            weights_mesh_mapper=replicate_tensor_to_mesh_mapper(mesh_device),
         ),
         convert_to_ttnn=convert_to_ttnn,
     )

@@ -130,7 +130,7 @@ def tt_llama_attention_prepare_inputs(
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            ttnn.replicate_tensor_to_mesh_mapper(llama_attention_model.mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(llama_attention_model.mesh_device),
             device=llama_attention_model.mesh_device,
         )
         xs = ttnn.to_device(xs, llama_attention_model.mesh_device)
@@ -149,7 +149,7 @@ def tt_llama_attention_prepare_inputs(
             cache_file_name=cache_name(f"cos_gathered_prefill_{start_pos}_to_{start_pos + seq_len}"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             device=llama_attention_model.mesh_device,
-            ttnn.replicate_tensor_to_mesh_mapper(llama_attention_model.mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(llama_attention_model.mesh_device),
         )
         sin_gathereds = ttnn.as_tensor(
             sin_gathered,
@@ -158,7 +158,7 @@ def tt_llama_attention_prepare_inputs(
             cache_file_name=cache_name(f"sin_gathered_prefill_{start_pos}_to_{start_pos + seq_len}"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             device=llama_attention_model.mesh_device,
-            ttnn.replicate_tensor_to_mesh_mapper(llama_attention_model.mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(llama_attention_model.mesh_device),
         )
 
         cos_gathereds = ttnn.to_device(cos_gathereds, llama_attention_model.mesh_device)
@@ -181,7 +181,7 @@ def tt_llama_attention_prepare_inputs(
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            ttnn.replicate_tensor_to_mesh_mapper(llama_attention_model.mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(llama_attention_model.mesh_device),
             device=llama_attention_model.mesh_device,
         )
         xs = ttnn.to_device(xs, llama_attention_model.mesh_device)
@@ -194,7 +194,7 @@ def tt_llama_attention_prepare_inputs(
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=llama_attention_model.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            ttnn.replicate_tensor_to_mesh_mapper(llama_attention_model.mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(llama_attention_model.mesh_device),
         )
 
         rot_mats = rope_setup.get_rot_mats(cache_idxs)
@@ -263,7 +263,7 @@ def run_test_LlamaAttention_inference(
             layout=ttnn.TILE_LAYOUT,
             device=t3k_mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            ttnn.replicate_tensor_to_mesh_mapper(t3k_mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(t3k_mesh_device),
         )
         transformation_mats = ttnn.to_device(transformation_mats, t3k_mesh_device)
         transformation_mats = {"prefill": transformation_mats}
@@ -284,7 +284,7 @@ def run_test_LlamaAttention_inference(
             page_table,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            ttnn.replicate_tensor_to_mesh_mapper(t3k_mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(t3k_mesh_device),
         )
         page_table_tt = ttnn.to_device(page_table_tt, t3k_mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
@@ -352,7 +352,7 @@ def run_test_LlamaAttention_inference(
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     device=t3k_mesh_device,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    ttnn.replicate_tensor_to_mesh_mapper(t3k_mesh_device),
+                    mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(t3k_mesh_device),
                 )
                 # SDPA requires that the page table batch dim matches the input batch dim, which must be 1 in prefill
                 prefill_page_table = page_table[0:1, :]
@@ -362,7 +362,7 @@ def run_test_LlamaAttention_inference(
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     device=t3k_mesh_device,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    ttnn.replicate_tensor_to_mesh_mapper(t3k_mesh_device),
+                    mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(t3k_mesh_device),
                 )
 
                 chunk_tt_input = tt_input[:, chunk_start:chunk_end]

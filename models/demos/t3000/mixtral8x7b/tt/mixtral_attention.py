@@ -135,7 +135,7 @@ class TtMixtralAttention(LightweightModule):
         self.reduce_mask = ttnn.from_torch(
             reduce_mask_torch,
             device=self.mesh_device,
-            ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
         )

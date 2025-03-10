@@ -80,10 +80,10 @@ def test_multi_device_single_trace(mesh_device, shape, enable_async, enable_mult
         )
         # Convert torch tensors to TTNN Multi-Device Host Tensors
         ttnn_input_tensor_0 = ttnn.from_torch(
-            torch_input_tensor_0, layout=ttnn.TILE_LAYOUT, ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0)
+            torch_input_tensor_0, layout=ttnn.TILE_LAYOUT, mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0)
         )
         ttnn_input_tensor_1 = ttnn.from_torch(
-            torch_input_tensor_1, layout=ttnn.TILE_LAYOUT, ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0)
+            torch_input_tensor_1, layout=ttnn.TILE_LAYOUT, mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0)
         )
 
         # Copy TTNN host tensors into preallocated Mult-Device tensors
@@ -217,13 +217,13 @@ def test_multi_device_multi_trace(mesh_device, shape, enable_async, enable_multi
 
         # Convert torch tensors to TTNN Multi-Device Host Tensors
         ttnn_input_tensor_0 = ttnn.from_torch(
-            torch_input_tensor_0, layout=ttnn.TILE_LAYOUT, ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0)
+            torch_input_tensor_0, layout=ttnn.TILE_LAYOUT, mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0)
         )
         ttnn_input_tensor_1 = ttnn.from_torch(
-            torch_input_tensor_1, layout=ttnn.TILE_LAYOUT, ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0)
+            torch_input_tensor_1, layout=ttnn.TILE_LAYOUT, mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0)
         )
         ttnn_weight = ttnn.from_torch(
-            torch_weight, layout=ttnn.TILE_LAYOUT, ttnn.replicate_tensor_to_mesh_mapper(mesh_device)
+            torch_weight, layout=ttnn.TILE_LAYOUT, mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device)
         )
 
         # Copy TTNN host tensors into preallocated Mult-Device tensors

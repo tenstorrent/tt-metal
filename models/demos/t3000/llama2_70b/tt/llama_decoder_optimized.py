@@ -106,7 +106,7 @@ class TtLlamaDecoder_optimized:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
             cache_file_name=self.cache_path / attn_norm_str,
         )
         self.attn_norm = ttnn.to_device(attn_norm_ttnn, self.mesh_device)

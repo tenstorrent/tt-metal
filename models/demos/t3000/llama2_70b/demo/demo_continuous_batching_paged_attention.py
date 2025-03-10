@@ -243,7 +243,7 @@ def run_decode(
         static_page_table,
         dtype=ttnn.int32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.replicate_tensor_to_mesh_mapper(model.mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(model.mesh_device),
     )
     page_table_tt = ttnn.to_device(page_table_tt, model.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 

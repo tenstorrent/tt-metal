@@ -66,7 +66,7 @@ class TtLlamaModel_optimized:
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
         transformation_mats_prefill = ttnn.to_device(transformation_mats_prefill, mesh_device)
 
@@ -210,7 +210,7 @@ class TtLlamaModel_optimized:
             inp_ids,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
         )
 
         if mode == "prefill":
@@ -235,7 +235,7 @@ class TtLlamaModel_optimized:
                 cache_file_name=cache_name(f"cos_gathered_prefill_{start_pos}_{start_pos+seq_len}"),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 device=self.mesh_device,
-                ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
+                mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
             )
             sin_gathereds = ttnn.as_tensor(
                 sin_gathered,
@@ -244,7 +244,7 @@ class TtLlamaModel_optimized:
                 cache_file_name=cache_name(f"sin_gathered_prefill_{start_pos}_{start_pos+seq_len}"),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 device=self.mesh_device,
-                ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
+                mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
             )
             cos_gathereds = ttnn.to_device(cos_gathereds, self.mesh_device)
             sin_gathereds = ttnn.to_device(sin_gathereds, self.mesh_device)
@@ -261,7 +261,7 @@ class TtLlamaModel_optimized:
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     dtype=ttnn.int32,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
-                    ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
+                    mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
                 )
             if chunk_page_table is not None:
                 chunk_page_table = ttnn.as_tensor(
@@ -270,7 +270,7 @@ class TtLlamaModel_optimized:
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     dtype=ttnn.int32,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
-                    ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
+                    mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
                 )
 
             return (xs, start_pos, rot_mats, rot_idxs_tt, cache_idxs_tt, page_table, chunk_page_table)
@@ -288,7 +288,7 @@ class TtLlamaModel_optimized:
                 cache_idxs,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
+                mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
             )
 
             rot_mats = None  # Created in prepare_device_inputs
@@ -303,7 +303,7 @@ class TtLlamaModel_optimized:
                     page_table,
                     dtype=ttnn.int32,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
-                    ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
+                    mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
                 )
             return (xs, start_pos, rot_mats, rot_idxs_tt, cache_idxs_tt, page_table)
 

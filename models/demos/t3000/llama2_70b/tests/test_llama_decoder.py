@@ -141,7 +141,7 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos, mode, rop
             cache_file_name=cache_name(f"cos_gathered_prefill_{seq_len}"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             device=llama_decoder_model.mesh_device,
-            ttnn.replicate_tensor_to_mesh_mapper(llama_decoder_model.mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(llama_decoder_model.mesh_device),
         )
         sin_gathereds = ttnn.as_tensor(
             sin_gathered,
@@ -150,7 +150,7 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos, mode, rop
             cache_file_name=cache_name(f"sin_gathered_prefill_{seq_len}"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             device=llama_decoder_model.mesh_device,
-            ttnn.replicate_tensor_to_mesh_mapper(llama_decoder_model.mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(llama_decoder_model.mesh_device),
         )
         cos_gathereds = ttnn.to_device(cos_gathereds, llama_decoder_model.mesh_device)
         sin_gathereds = ttnn.to_device(sin_gathereds, llama_decoder_model.mesh_device)
@@ -184,7 +184,7 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos, mode, rop
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=llama_decoder_model.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            ttnn.replicate_tensor_to_mesh_mapper(llama_decoder_model.mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(llama_decoder_model.mesh_device),
         )
 
         rot_mats = rope_setup.get_rot_mats(cache_idxs)
@@ -248,7 +248,7 @@ def run_test_LlamaDecoder_inference(
             layout=ttnn.TILE_LAYOUT,
             device=t3k_mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            ttnn.replicate_tensor_to_mesh_mapper(t3k_mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(t3k_mesh_device),
         )
         transformation_mats = ttnn.to_device(transformation_mats, t3k_mesh_device)
         transformation_mats = {"prefill": transformation_mats}

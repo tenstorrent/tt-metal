@@ -178,7 +178,7 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, test_pr
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
     profiler.end("prepare_rot_mat_for_prefill")
 

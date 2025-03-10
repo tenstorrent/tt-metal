@@ -57,7 +57,7 @@ def test_mixtral_decoder_inference(t3k_mesh_device, use_program_cache, reset_see
         layout=ttnn.TILE_LAYOUT,
         device=t3k_mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        ttnn.replicate_tensor_to_mesh_mapper(t3k_mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(t3k_mesh_device),
     )
 
     # Initialize TT model

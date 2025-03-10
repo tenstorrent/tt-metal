@@ -55,7 +55,7 @@ def test_grok_rms_norm_inference(t3k_mesh_device, use_program_cache, reset_seeds
         device=t3k_mesh_device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        ttnn.replicate_tensor_to_mesh_mapper(t3k_mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(t3k_mesh_device),
     )
 
     tt_output = tt_model(tt_input)
@@ -104,7 +104,7 @@ def test_grok_rms_norm_sharded_inference(t3k_mesh_device, use_program_cache, res
         device=t3k_mesh_device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        ttnn.replicate_tensor_to_mesh_mapper(t3k_mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(t3k_mesh_device),
     )
 
     tt_output = tt_model(tt_input)

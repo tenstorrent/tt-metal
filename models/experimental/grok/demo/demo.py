@@ -85,7 +85,7 @@ def preprocess_inputs(input_prompts, tokenizer, model_args, dtype, instruct, mes
             device=mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
         for i in range(max_prompt_len)
     ]
@@ -95,7 +95,7 @@ def preprocess_inputs(input_prompts, tokenizer, model_args, dtype, instruct, mes
             device=mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
         for i in range(max_prompt_len)
     ]

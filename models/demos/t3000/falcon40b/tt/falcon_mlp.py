@@ -84,7 +84,7 @@ class TtFalconMLP:
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=self.model_config["DEFAULT_MEMCFG"],
-                ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
+                mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
             )
 
     def __call__(self, x: List[ttnn.Tensor], llm_mode: str) -> List[ttnn.Tensor]:

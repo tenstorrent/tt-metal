@@ -43,7 +43,7 @@ class TtRMSNorm(LightweightModule):
             layout=self.model_config["NORM_W_LAYOUT_TILE"],
             memory_config=self.model_config["NORM_WEIGHTS_MEMCFG"],
             cache_file_name=cache_name,
-            ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
@@ -88,7 +88,7 @@ class TtRMSNormSharded(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             memory_config=self.model_config["NORM_WEIGHTS_MEMCFG"],
             cache_file_name=cache_name,
-            ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
 
     def forward(self, x: ttnn.Tensor, out_sharded=False) -> ttnn.Tensor:

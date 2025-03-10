@@ -55,7 +55,7 @@ def preprocess_inputs(input_prompts, tokenizer, model_args, dtype, instruct, mes
             device=mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
         for i in range(max_prompt_len)
     ]
@@ -65,7 +65,7 @@ def preprocess_inputs(input_prompts, tokenizer, model_args, dtype, instruct, mes
             device=mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
         for i in range(max_prompt_len)
     ]
@@ -183,7 +183,7 @@ def prepare_inputs_ttnn(x_bsh, hidden_size, mesh_device):
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.L1_MEMORY_CONFIG,
-        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
 
     return xs_1SBH
@@ -224,7 +224,7 @@ def cache_attention(mesh_device, state_dict, model_args, current_rot_mat, rot_ma
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
-        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
 
     tt_attn = TtMixtralAttention(
@@ -295,13 +295,13 @@ def get_single_rot_mat(dhead, mesh_device, start_pos=0, theta: float = 1000000.0
         device=mesh_device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     ), ttnn.from_torch(
         rot_matrix.unsqueeze(0).unsqueeze(0),  # 1,1,head_dim,head_dim
         device=mesh_device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
 
 
@@ -330,13 +330,13 @@ def get_single_rot_mat_multi_pos(dhead, mesh_device, start_pos_ids, theta: float
         device=mesh_device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     ), ttnn.from_torch(
         rot_matrix.unsqueeze(0).unsqueeze(0).repeat(1, len(start_pos_ids), 1, 1),  # 1,1,head_dim,head_dim
         device=mesh_device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
 
 
@@ -376,14 +376,14 @@ def get_prefill_rot_mat(head_dim, max_seq_len, mesh_device, seq_len):
         cos_gathered,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         device=mesh_device,
     )
     sin_gathereds = ttnn.from_torch(
         sin_gathered,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         device=mesh_device,
     )
 
@@ -421,7 +421,7 @@ def prepare_inputs_ttnn_prefill(x_bsh, mesh_device, num_tokens=None):
         dtype=attn_mask_dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
 
     # input goes to L1
@@ -431,7 +431,7 @@ def prepare_inputs_ttnn_prefill(x_bsh, mesh_device, num_tokens=None):
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
     return xs_1BSH, attn_mask, attn_mask_torch
 

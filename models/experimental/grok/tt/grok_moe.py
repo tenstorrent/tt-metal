@@ -34,7 +34,7 @@ class TtMoeLayer(LightweightModule):
             memory_config=self.model_config["GATE_WEIGHTS_MEMCFG"],
             cache_file_name=cache_name,
             device=self.mesh_device,
-            ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
 
         self.num_devices = 8
@@ -48,14 +48,14 @@ class TtMoeLayer(LightweightModule):
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
-            ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
         self.expert_mask_11BB = ttnn.from_torch(
             torch.cat([torch.full((1, 1, 32, 32), fill_value=i + 1) for i in range(8)], dim=3),
             dtype=ttnn.uint16,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
-            ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=3),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=3),
         )
         top8_mask = torch.full((1, 1, 32, 64), fill_value=torch.finfo(torch.float).min)
         top8_mask[:, :, :, 1:9] = 0.0
@@ -64,7 +64,7 @@ class TtMoeLayer(LightweightModule):
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
-            ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
 
         top2_mask = torch.full((1, 1, 32, 32), fill_value=0.0)
@@ -74,7 +74,7 @@ class TtMoeLayer(LightweightModule):
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
-            ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
         self.softmax_compute_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
