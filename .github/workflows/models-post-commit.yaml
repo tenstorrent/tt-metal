@@ -223,12 +223,6 @@ jobs:
         with:
           name: ${{ inputs.wheel-artifact-name }}
           path: docker-job
-      - uses: ./.github/actions/retry-command
-        with:
-          timeout-seconds: 100
-          max-retries: 10
-          backoff-seconds: 60
-          command: ./.github/scripts/cloud_utils/mount_weka.sh
       - name: Install Wheel
         run: |
           WHEEL_FILENAME=$(ls -1 *.whl)
