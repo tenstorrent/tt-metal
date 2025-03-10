@@ -1025,7 +1025,10 @@ re_run_command:
         case CQ_DISPATCH_CMD_WRITE_PACKED: {
             DPRINT << "cmd_write_packed" << ENDL();
             uint32_t flags = cmd->write_packed.flags;
-            DeviceTimestampedData(DISPATCH_COMMAND_SUBTYPE_DATA, bool{flags & CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST});
+            DeviceTimestampedData(
+                DISPATCH_COMMAND_SUBTYPE_DATA,
+                ((flags & CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_MASK) >> 3) |
+                    bool{flags & CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST});
             if (flags & CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST) {
                 process_write_packed<true, CQDispatchWritePackedMulticastSubCmd>(
                     flags, l1_cache, block_noc_writes_to_clear, block_next_start_addr);
@@ -1042,6 +1045,7 @@ re_run_command:
 
         case CQ_DISPATCH_CMD_WRITE_PACKED_LARGE:
             DPRINT << "cmd_write_packed_large" << ENDL();
+            DeviceTimestampedData(DISPATCH_COMMAND_SUBTYPE_DATA, cmd->write_packed_large.type);
             process_write_packed_large(l1_cache, block_noc_writes_to_clear, block_next_start_addr);
             break;
 

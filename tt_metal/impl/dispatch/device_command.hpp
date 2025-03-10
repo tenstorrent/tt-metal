@@ -126,6 +126,7 @@ public:
 
     template <typename PackedSubCmd>
     void add_dispatch_write_packed(
+        uint8_t type,
         uint16_t num_sub_cmds,
         uint32_t common_addr,
         uint16_t packed_data_sizeB,
@@ -141,6 +142,7 @@ public:
     //  0:address, 1:size, 2:stride
     template <typename PackedSubCmd>
     void add_dispatch_write_packed(
+        uint8_t type,
         uint16_t num_sub_cmds,
         uint32_t common_addr,
         uint16_t packed_data_sizeB,
@@ -154,6 +156,7 @@ public:
 
     // Add write packed large, with no data.
     void add_dispatch_write_packed_large(
+        uint8_t type,
         uint16_t alignment,
         uint16_t num_sub_cmds,
         const std::vector<CQDispatchWritePackedLargeSubCmd>& sub_cmds,
@@ -162,6 +165,7 @@ public:
 
     // Add write packed large, with data inlined.
     void add_dispatch_write_packed_large(
+        uint8_t type,
         uint16_t alignment,
         uint16_t num_sub_cmds,
         const std::vector<CQDispatchWritePackedLargeSubCmd>& sub_cmds,
@@ -193,6 +197,7 @@ private:
 
     // Write packed large cmd and subcmds, but not data.
     void add_dispatch_write_packed_large_internal(
+        uint8_t type,
         bool flush_prefetch,
         uint16_t alignment,
         uint32_t payload_sizeB,

@@ -183,6 +183,12 @@ constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NONE = 0x00;
 constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST = 0x01;
 constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NO_STRIDE = 0x02;
 
+constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_MASK = 0xf << 4;
+constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_RTA = 0x1 << 4;
+constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_LAUNCH = 0x2 << 4;
+constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_SEMS = 0x3 << 4;
+constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_EVENT = 0x4 << 4;
+
 struct CQDispatchWritePackedCmd {
     uint8_t flags;   // see above
     uint16_t count;  // number of sub-cmds (max 1020 unicast, 510 mcast). Max num sub-cmds =
@@ -223,11 +229,15 @@ get_packed_write_max_multicast_sub_cmds(uint32_t packed_write_max_unicast_sub_cm
 // Current implementation limit is based on size of the l1_cache which stores the sub_cmds
 constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS = 35;
 
+constexpr uint8_t CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_UNKNOWN = 0;
+constexpr uint8_t CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_CBS_SEMS = 1;
+constexpr uint8_t CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_PROGRAM_BINARIES = 2;
+
 // More flexible/slower than WritePacked
 // Removes size constraints
 // Implicitly mcast
 struct CQDispatchWritePackedLargeCmd {
-    uint8_t pad1;
+    uint8_t type;
     uint16_t count;  // number of sub-cmds
     uint16_t alignment;
     uint16_t write_offset_index;
