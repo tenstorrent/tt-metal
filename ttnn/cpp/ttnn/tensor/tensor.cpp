@@ -837,7 +837,7 @@ Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshD
     std::vector<std::pair<distributed::MeshCoordinate, TensorSpec>> specs;
     specs.reserve(mesh_device->shape().mesh_size());
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
-        specs.emplace_back(coord, tensor_spec);
+        specs.push_back(std::make_pair(coord, tensor_spec));
     }
     DeviceStorage device_storage(std::move(mesh_buffer), ReplicateTensor(), std::move(specs));
     return Tensor(std::move(device_storage), tensor_spec);
