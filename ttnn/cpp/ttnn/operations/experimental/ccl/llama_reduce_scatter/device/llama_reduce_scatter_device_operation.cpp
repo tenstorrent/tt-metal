@@ -46,7 +46,7 @@ LlamaReduceScatterDeviceOperation::spec_return_value_t LlamaReduceScatterDeviceO
     auto core_range = num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size, row_wise);
 
     ShardSpec shard_spec{core_range, {input_shape[-2], final_width}};
-    tt::tt_metal::MemoryConfig out_memory_config = input_spec.memory_config();
+    tt::tt_metal::MemoryConfig out_memory_config = input_tensor.memory_config();
     out_memory_config.shard_spec = shard_spec;
 
     return {TensorSpec(
@@ -65,13 +65,26 @@ std::tuple<LlamaReduceScatterDeviceOperation::operation_attributes_t, LlamaReduc
 LlamaReduceScatterDeviceOperation::invoke(
     const ttnn::Tensor& input_tensor,
     const int32_t dim,
-    const global_semaphore::MultiDeviceGlobalSemaphore& cross_device_semaphore,
+    const GlobalSemaphore semaphore,
+    const SubDeviceId subdevice_id,
+    const uint32_t ring_index,
+    const uint32_t cluster_axis,
+    std::optional<IDevice*>& forward_device,
+    std::optional<IDevice*>& backward_device,
+    const uint32_t ring_devices,
     const std::optional<ttnn::MemoryConfig>& memory_config) {
+    std::cout << "Primitive operation called" << std::endl;
     return {
         operation_attributes_t{
             .dim = (dim < 0 ? uint32_t(input_tensor.get_logical_shape().rank() + dim) : (uint32_t)dim),
-            .cross_device_semaphore = cross_device_semaphore,
-            .output_mem_config = memory_config.value_or(input_tensor.memory_config())},
+            .cross_device_semaphore = semaphore,
+            .subdevice_id = subdevice_id,
+            .ring_index = ring_index,
+            .cluster_axis = cluster_axis,
+            .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
+            .ring_devices = ring_devices,
+            .forward_device = forward_device,
+            .backward_device = backward_device},
         tensor_args_t{.input_tensor = input_tensor}};
 }
 
