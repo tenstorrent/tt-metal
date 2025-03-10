@@ -6,6 +6,7 @@ on:
 permissions:
   id-token: write
   pages: write
+  contents: write
 
 jobs:
   build-docker-artifact:
