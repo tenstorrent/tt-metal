@@ -33,12 +33,14 @@ concurrency:
 
 jobs:
   build:
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    if: github.event_name == 'merge_group'
+    # if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     uses: ./.github/workflows/build-artifact.yaml
     with:
       version: "22.04"
 
   smoke-tests:
+    if: github.event_name == 'merge_group'
     needs: build
     strategy:
       fail-fast: false
