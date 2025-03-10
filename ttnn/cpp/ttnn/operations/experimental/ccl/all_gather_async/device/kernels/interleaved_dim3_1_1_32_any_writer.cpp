@@ -26,10 +26,8 @@ constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(5);
 constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(6);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(7);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(8);
-constexpr uint32_t dim = get_compile_time_arg_val(9);
-constexpr uint32_t ring_size = get_compile_time_arg_val(10);
-constexpr uint32_t tile_rows = get_compile_time_arg_val(11);
-constexpr uint32_t tile_cols_for_chip = get_compile_time_arg_val(12);
+constexpr bool last_dim = get_compile_time_arg_val(9);
+constexpr uint32_t tile_cols_for_chip = get_compile_time_arg_val(10);
 
 /*
  * CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time)
@@ -51,6 +49,7 @@ void kernel_main() {
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t ring_size = get_arg_val<uint32_t>(arg_idx++);
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_idx);
 
@@ -64,9 +63,7 @@ void kernel_main() {
     DPRINT << "tensor0_page_size: " << (uint32_t)tensor0_page_size << "\n";
     DPRINT << "num_targets_forward_direction: " << (uint32_t)num_targets_forward_direction << "\n";
     DPRINT << "num_targets_backward_direction: " << (uint32_t)num_targets_backward_direction << "\n";
-    DPRINT << "dim: " << (uint32_t)dim << "\n";
-    DPRINT << "ring_size: " << (uint32_t)ring_size << "\n";
-    DPRINT << "tile_rows: " << (uint32_t)tile_rows << "\n";
+    DPRINT << "last_dim: " << (uint32_t)last_dim << "\n";
     DPRINT << "tile_cols_for_chip: " << (uint32_t)tile_cols_for_chip << "\n";
 
     DPRINT << "rt args: \n";
@@ -79,6 +76,7 @@ void kernel_main() {
     DPRINT << "out_ready_sem_noc0_x: " << (uint32_t)out_ready_sem_noc0_x << "\n";
     DPRINT << "out_ready_sem_noc0_y: " << (uint32_t)out_ready_sem_noc0_y << "\n";
     DPRINT << "out_ready_sem_wait_value: " << (uint32_t)out_ready_sem_wait_value << "\n";
+    DPRINT << "ring_size: " << (uint32_t)ring_size << "\n";
 
     DPRINT << "arg_for_fab: " << (uint32_t)arg_for_fab << "\n";
     DPRINT << "fabric_connection arg 0" << get_arg_val<uint32_t>(arg_for_fab++) << "\n";
@@ -129,19 +127,19 @@ void kernel_main() {
     DPRINT << "packet size in pages: " << (uint32_t)packet_size_in_pages << "\n";
     uint32_t tile_id = tile_id_start;
 
-    if (dim == 3) {
+    if constexpr (last_dim) {
         // tile_id for each chips/tiles
-        //            |        chip0          |       chip1           |
-        //            |  tile_cols_for_chip   |                       |
-        //            | id 0|    1|    2|    3|    4|    5|    6|    7|
-        // tile_rows  |    8|    9|   10|   11|   12|   13|   14|   15|
-        //            |   16|   17|   18|   19|   20|   21|   22|   23|
-        //            |   24|   25|   26|   27|   28|   29|   30|   31|
+        //      |        chip0          |       chip1           |
+        //      |  tile_cols_for_chip   |                       |
+        //      | id 0|    1|    2|    3|    4|    5|    6|    7|
+        // row  |    8|    9|   10|   11|   12|   13|   14|   15|
+        //      |   16|   17|   18|   19|   20|   21|   22|   23|
+        //      |   24|   25|   26|   27|   28|   29|   30|   31|
         //
 
         uint32_t row = 0;
         uint32_t total = 0;
-        while (total < tile_rows * tile_cols_for_chip) {
+        while (total < tile_id_end) {
             cb_wait_front(cb0_id, packet_size_in_pages);
             size_t l1_read_addr = get_read_ptr(cb0_id);
             for (uint32_t j = 0; j < packet_size_in_pages; j++) {
@@ -155,10 +153,14 @@ void kernel_main() {
                     l1_read_addr,
                     tensor0_page_size);
 
-                tile_id++;
-                if (tile_id % tile_cols_for_chip == 0) {
-                    row++;
-                    tile_id = row * (tile_cols_for_chip * ring_size) + tile_id_start;
+                if constexpr (tile_cols_for_chip == 1) {
+                    tile_id += ring_size;
+                } else {
+                    tile_id++;
+                    if (tile_id % tile_cols_for_chip == 0) {
+                        row++;
+                        tile_id = row * (tile_cols_for_chip * ring_size) + tile_id_start;
+                    }
                 }
                 total++;
             }
