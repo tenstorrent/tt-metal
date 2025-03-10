@@ -293,8 +293,23 @@ def gen_pytest_parametrize_args(parameters: dict) -> dict:
                     The values of the inner dictionaries are lists of parameter values to be used for sweep.
     Returns:
         A dictionary of pytest parametrize arguments.
+    Example:
+        parameters = {
+            "cfg1": {
+                "arg1": [1, 2],
+                "arg2": [3, 4],
+            },
+            "cfg2": {
+                "arg1": [5, 6],
+                "arg2": [7],
+            },
+        }
+        The function returns:
+        {'argnames': ['arg1', 'arg2'], 'argvalues': { ... }, 'ids': { ... }} where
+        argvalues = [(1, 3), (1, 4), (2, 3), (2, 4), (5, 7), (6, 7)]
+        ids = ['cfg1-arg1_1-arg2_3', 'cfg1-arg1_1-arg2_4', ... , 'cfg2-arg1_6-arg2_7']
     """
-    test_argnames, test_argvalues, test_ids = [], [], []
+    test_argnames, test_id2values = [], {}
     for param_name, values_dict in parameters.items():
         test_argnames = list(values_dict)
         all_arg_combs = itertools.product(*[values_dict[arg_name] for arg_name in test_argnames])
@@ -305,6 +320,5 @@ def gen_pytest_parametrize_args(parameters: dict) -> dict:
                 + "-"
                 + "-".join(str(name) + "_" + str(val) for name, val in zip(test_argnames, arg_vals))
             )
-            test_ids.append(id_str)
-            test_argvalues.append(arg_vals)
-    return {"argnames": test_argnames, "argvalues": test_argvalues, "ids": test_ids}
+            test_id2values[id_str] = arg_vals
+    return {"argnames": test_argnames, "argvalues": test_id2values.values(), "ids": test_id2values.keys()}
