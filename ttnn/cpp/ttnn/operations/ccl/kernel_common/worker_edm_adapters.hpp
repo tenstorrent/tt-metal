@@ -56,6 +56,7 @@ struct WorkerToEdmReader {
     FORCE_INLINE void close() {
         if constexpr (termination_mode == ttnn::ccl::EriscDataMoverTerminationMode::WORKER_INITIATED) {
             noc_semaphore_inc(edm_semaphore_addr, ttnn::ccl::EriscDataMoverWorkerSignal::TERMINATE_IMMEDIATELY);
+            noc_async_atomic_barrier();
         }
     }
 
@@ -127,6 +128,7 @@ struct WorkerToEdmSender {
         if constexpr (termination_mode == ttnn::ccl::EriscDataMoverTerminationMode::WORKER_INITIATED) {
             this->wait_for_empty_write_slot();
             noc_semaphore_inc(edm_semaphore_addr, ttnn::ccl::EriscDataMoverWorkerSignal::TERMINATE_IMMEDIATELY);
+            noc_async_atomic_barrier();
         }
     }
 
