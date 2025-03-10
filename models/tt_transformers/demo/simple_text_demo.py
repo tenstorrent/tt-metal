@@ -148,7 +148,7 @@ def create_tt_model(
     return tt_model_args, model, tt_kv_cache, state_dict
 
 
-def create_tt_page_table(max_batch_size, data_parallel, page_params, use_paged_kv_cache):
+def create_tt_page_table(global_batch_size, data_parallel, page_params, use_paged_kv_cache):
     page_table = None
     paged_attention_config = None
 
@@ -162,7 +162,7 @@ def create_tt_page_table(max_batch_size, data_parallel, page_params, use_paged_k
         # Page table which maps virtual blocks to physical
         reverse_permutation = torch.argsort(permutation).repeat(data_parallel)
         page_table = reverse_permutation.reshape(
-            max_batch_size, paged_attention_config.max_num_blocks // (max_batch_size // data_parallel)
+            global_batch_size, paged_attention_config.max_num_blocks // (global_batch_size // data_parallel)
         )
         paged_attention_config = PagedAttentionConfig(
             block_size=page_params["page_block_size"],
@@ -176,7 +176,7 @@ def prepare_generator_args(
     data_parallel,
     mesh_device,
     instruct,
-    batch_size,
+    global_batch_size,
     optimizations,
     max_seq_len,
     page_params,
@@ -199,7 +199,7 @@ def prepare_generator_args(
         model_args_i, model_i, tt_kv_cache_i, state_dict = create_tt_model(
             submesh,
             instruct=instruct,
-            max_batch_size=batch_size // data_parallel,
+            max_batch_size=global_batch_size // data_parallel,
             optimizations=optimizations,
             max_seq_len=max_seq_len,
             page_params=page_params,
@@ -212,7 +212,7 @@ def prepare_generator_args(
         tt_kv_cache.append(tt_kv_cache_i)
 
     page_table = create_tt_page_table(
-        max_batch_size=batch_size,
+        global_batch_size=global_batch_size,
         data_parallel=data_parallel,
         page_params=page_params,
         use_paged_kv_cache=paged_attention,
@@ -536,7 +536,7 @@ def test_demo_text(
         data_parallel=data_parallel,
         mesh_device=mesh_device,
         instruct=instruct,
-        batch_size=global_batch_size,
+        global_batch_size=global_batch_size,
         optimizations=optimizations,
         max_seq_len=max_seq_len,
         page_params=page_params,
