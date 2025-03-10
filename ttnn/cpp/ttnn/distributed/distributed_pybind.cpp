@@ -167,7 +167,7 @@ void py_module(py::module& module) {
             "create_submesh",
             &MeshDevice::create_submesh,
             py::arg("submesh_shape"),
-            py::arg("offset"),
+            py::arg("offset") = std::nullopt,
             py::keep_alive<1, 0>())  // Keep MeshDevice alive as long as SubmeshDevice is alive
         .def(
             "create_submeshes",
