@@ -48,10 +48,7 @@ public:
     bfloat16 operator*(const bfloat16 rhs) const { return bfloat16(this->to_float() * rhs.to_float()); }
 };
 
-std::ostream& operator<<(std::ostream& os, const bfloat16& bfp16) {
-    os << bfp16.to_uint16();
-    return os;
-}
+std::ostream& operator<<(std::ostream& os, const bfloat16& bfp16);
 
 bool operator==(const std::vector<bfloat16>& lhs, const std::vector<bfloat16>& rhs);
 
