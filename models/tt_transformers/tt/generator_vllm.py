@@ -20,20 +20,19 @@ from vllm.model_executor.models.interfaces import SupportsMultiModal
 from vllm.model_executor.models.mllama import MLLAMA_IMAGE_TOKEN_ID, MLLAMA_IMAGE_TOKEN
 
 
-def generate_submeshes(mesh_device):
-    data_parallel = int(os.getenv("TT_DATA_PARALLEL", 1))
-
+def generate_submeshes(mesh_device, data_parallel):
     if not isinstance(mesh_device, ttnn.MeshDevice) or data_parallel == 1:
         return 1, [mesh_device]
 
     num_devices = mesh_device.get_num_devices()
     assert num_devices % data_parallel == 0, f"Unsupported device split: {num_devices} devices, {data_parallel} groups"
 
-    return data_parallel, mesh_device.create_submeshes(ttnn.MeshShape(1, num_devices // data_parallel))
+    return mesh_device.create_submeshes(ttnn.MeshShape(1, num_devices // data_parallel))
 
 
-def allocate_kv_cache(kv_cache_shape, dtype, num_layers, mesh_device):
-    _, submesh_devices = generate_submeshes(mesh_device)
+def allocate_kv_cache(tt_data_parallel, kv_cache_shape, dtype, num_layers, mesh_device):
+    submesh_devices = generate_submeshes(mesh_device, tt_data_parallel)
+
     kv_cache = []
     for submesh in submesh_devices:
         cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
@@ -60,6 +59,7 @@ def allocate_kv_cache(kv_cache_shape, dtype, num_layers, mesh_device):
 
 def initialize_vllm_text_transformer(
     hf_config,
+    tt_data_parallel,
     mesh_device,
     max_batch_size,
     max_seq_len,
@@ -67,7 +67,7 @@ def initialize_vllm_text_transformer(
     dtype=ttnn.bfloat8_b,
     optimizations=ModelOptimizations.performance,
 ):
-    data_parallel, submesh_devices = generate_submeshes(mesh_device)
+    submesh_devices = generate_submeshes(mesh_device, tt_data_parallel)
     # Load model args, weights
     model_args = []
     for submesh in submesh_devices:
@@ -76,7 +76,7 @@ def initialize_vllm_text_transformer(
             instruct=(
                 "Instruct" in hf_config._name_or_path or "DeepSeek-R1-Distill-Llama-70B" in hf_config._name_or_path
             ),
-            max_batch_size=max_batch_size // data_parallel,
+            max_batch_size=max_batch_size // tt_data_parallel,
             optimizations=optimizations,
             max_seq_len=max_seq_len,
         )
@@ -172,18 +172,19 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
         self.max_gen_len = self.model_args[0].max_seq_len - 1  # TODO: double check what this should be
 
     @classmethod
-    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size):
+    def initialize_vllm_model(cls, hf_config, tt_data_parallel, mesh_device, max_batch_size):
         max_seq_len = 131072
 
-        data_parallel, submesh_devices = generate_submeshes(mesh_device)
+        submesh_devices = generate_submeshes(mesh_device, tt_data_parallel)
 
         model_args = []
         model = []
+        state_dict = None
 
         for submesh in submesh_devices:
             model_args_i, model_i, state_dict = create_multimodal_model(
                 mesh_device=submesh,
-                max_batch_size=max_batch_size // data_parallel,
+                max_batch_size=max_batch_size // tt_data_parallel,
                 max_seq_len=max_seq_len,
                 use_paged_kv_cache=True,
                 checkpoint=state_dict,
@@ -195,11 +196,11 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
 
     @property
     def cache_path(self):
-        return self.model_args.model_cache_path
+        return self.model_args[0].model_cache_path
 
     @property
     def max_cross_attn_tokens(self):
-        return self.model_args.vision_max_num_chunks * nearest_32(self.model_args.vision_chunk_ntok)
+        return self.model_args[0].vision_max_num_chunks * nearest_32(self.model_args[0].vision_chunk_ntok)
 
     def prefill_forward(
         self,
@@ -247,9 +248,10 @@ class LlamaForCausalLM(Generator):
         super().__init__(*args, **kwargs)
 
     @classmethod
-    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, n_layers=None):
+    def initialize_vllm_model(cls, hf_config, tt_data_parallel, mesh_device, max_batch_size, n_layers=None):
         tt_model, model_args = initialize_vllm_text_transformer(
             hf_config,
+            tt_data_parallel,
             mesh_device,
             max_batch_size,
             max_seq_len=131072,
@@ -278,9 +280,10 @@ class Qwen2ForCausalLM(Generator):
         super().__init__(*args, **kwargs)
 
     @classmethod
-    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, n_layers=None):
+    def initialize_vllm_model(cls, hf_config, tt_data_parallel, mesh_device, max_batch_size, n_layers=None):
         tt_model, model_args = initialize_vllm_text_transformer(
             hf_config,
+            tt_data_parallel,
             mesh_device,
             max_batch_size,
             max_seq_len=131072,
@@ -292,7 +295,7 @@ class Qwen2ForCausalLM(Generator):
 
     @property
     def cache_path(self):
-        return self.model_args.model_cache_path
+        return self.model_args[0].model_cache_path
 
     def prefill_forward(self, *args, **kwargs):
         return super().prefill_forward_text(*args, **kwargs)
