@@ -55,7 +55,7 @@ jobs:
             arch: wormhole_b0,
             runs-on: ["arch-wormhole_b0", "pipeline-perf", "config-t3000", "in-service"],
             name: "T3K ubench",
-            cmd: "pytest -svv tests/tt_metal/microbenchmarks/ethernet/test_fabric_edm_bandwidth.py",
+            cmd: "pytest -svv tests/tt_metal/microbenchmarks/ethernet/test_fabric_edm_bandwidth.py; pytest -svv tests/tt_metal/microbenchmarks/ethernet/test_1d_fabric_latency.py",
           }, # Allan Liu
         ]
     container:
