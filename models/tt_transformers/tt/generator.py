@@ -195,6 +195,7 @@ class Generator:
         read_from_device=True,
         argmax_on_device=False,
     ):
+        B = tokens.shape[0]
         tokens = torch.chunk(tokens, self.data_parallel, 0)
         start_pos = torch.chunk(start_pos, self.data_parallel, 0)
         page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
@@ -212,10 +213,7 @@ class Generator:
             tt_logits = self._decode_forward_no_trace_text(**decode_kwargs)
 
         if read_from_device:
-            to_host = []
-            for i, t in enumerate(tokens):
-                to_host.append(self.read_decode_output(tt_logits[i], t.shape[0], i, argmax_on_device))
-            to_host = torch.cat(to_host, 0)
+            to_host = self.read_decode_output(tt_logits, B, argmax_on_device)
             return to_host
         else:
             return tt_logits
@@ -539,6 +537,7 @@ class Generator:
         enable_trace=True,
         read_from_device=True,
     ):
+        B = tokens.shape[0]
         tokens = torch.chunk(tokens, self.data_parallel, 0)
         start_pos = torch.chunk(start_pos, self.data_parallel, 0)
         page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
@@ -562,18 +561,20 @@ class Generator:
             tt_logits = self._decode_forward_no_trace(**decode_kwargs)
 
         if read_from_device:
-            to_host = []
-            for i, t in enumerate(tokens):
-                to_host.append(self.read_decode_output(tt_logits[i], t.shape[0], i))
-            to_host = torch.cat(to_host, 0)
+            to_host = self.read_decode_output(tt_logits, B)
             return to_host
         else:
             return tt_logits
 
-    def read_decode_output(self, tt_logits, unpadded_batch, i, argmax_on_device=False):
-        logits = self.model[i].process_output_decode(
-            tt_logits, B=unpadded_batch, S=1, argmax_on_device=argmax_on_device
-        )
+    def read_decode_output(self, tt_logits, unpadded_batch, argmax_on_device=False):
+        batch_per_dp = unpadded_batch // self.data_parallel
+        logits = []
+        for i in range(self.data_parallel):
+            logits_i = self.model[i].process_output_decode(
+                tt_logits[i], B=batch_per_dp, S=1, argmax_on_device=argmax_on_device
+            )
+            logits.append(logits_i)
+        logits = torch.cat(logits, 0)
         return logits
 
     def _decode_forward_no_trace(

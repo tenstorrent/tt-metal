@@ -30,7 +30,7 @@ def generate_submeshes(mesh_device, data_parallel):
     return mesh_device.create_submeshes(ttnn.MeshShape(1, num_devices // data_parallel))
 
 
-def allocate_kv_cache(tt_data_parallel, kv_cache_shape, dtype, num_layers, mesh_device):
+def allocate_kv_cache(kv_cache_shape, dtype, num_layers, mesh_device, tt_data_parallel=1):
     submesh_devices = generate_submeshes(mesh_device, tt_data_parallel)
 
     kv_cache = []
@@ -172,7 +172,7 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
         self.max_gen_len = self.model_args[0].max_seq_len - 1  # TODO: double check what this should be
 
     @classmethod
-    def initialize_vllm_model(cls, hf_config, tt_data_parallel, mesh_device, max_batch_size):
+    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, tt_data_parallel=1):
         max_seq_len = 131072
 
         submesh_devices = generate_submeshes(mesh_device, tt_data_parallel)
@@ -248,7 +248,7 @@ class LlamaForCausalLM(Generator):
         super().__init__(*args, **kwargs)
 
     @classmethod
-    def initialize_vllm_model(cls, hf_config, tt_data_parallel, mesh_device, max_batch_size, n_layers=None):
+    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, n_layers=None, tt_data_parallel=1):
         tt_model, model_args = initialize_vllm_text_transformer(
             hf_config,
             tt_data_parallel,
@@ -280,7 +280,7 @@ class Qwen2ForCausalLM(Generator):
         super().__init__(*args, **kwargs)
 
     @classmethod
-    def initialize_vllm_model(cls, hf_config, tt_data_parallel, mesh_device, max_batch_size, n_layers=None):
+    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, n_layers=None, tt_data_parallel=1):
         tt_model, model_args = initialize_vllm_text_transformer(
             hf_config,
             tt_data_parallel,
