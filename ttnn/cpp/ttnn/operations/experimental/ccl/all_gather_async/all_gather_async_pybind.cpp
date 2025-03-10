@@ -89,7 +89,25 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
             py::arg("num_links") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("subdevice_id") = std::nullopt,
-            py::arg("enable_persistent_fabric_mode") = false});
+            py::arg("enable_persistent_fabric_mode") = false},
+
+        ttnn::pybind_overload_t{
+            [](const ccl_operation_t& self,
+               const ttnn::Tensor& input_tensor,
+               const int32_t dim,
+               const CoreRangeSet& cores,
+               const uint32_t num_links,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const ttnn::ccl::Topology topology) -> ttnn::Tensor {
+                return self(input_tensor, dim, cores, num_links, memory_config, topology);
+            },
+            py::arg("input_tensor"),
+            py::arg("dim"),
+            py::arg("cores"),
+            py::kw_only(),
+            py::arg("num_links") = 1,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("topology") = ttnn::ccl::Topology::Ring});
 }
 
 }  // namespace detail
