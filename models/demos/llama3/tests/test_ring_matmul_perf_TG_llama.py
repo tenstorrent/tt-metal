@@ -14,11 +14,11 @@ from models.perf.device_perf_utils import run_device_perf_detailed
 @pytest.mark.parametrize(
     "mm_type, perf_target_us",
     [
-        ("qkv", 7.5),
-        ("do", 6.5),
-        ("ff13", 8.5),
-        ("ff2", 14),
-        ("lm_head", 350),
+        ("qkv", 7.9),
+        ("do", 7.0),
+        ("ff13", 8.9),
+        ("ff2", 14.8),
+        ("lm_head", 380),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

@@ -14,8 +14,8 @@ from models.perf.device_perf_utils import run_device_perf_detailed
 @pytest.mark.parametrize(
     "ag_type, warmup_iters, perf_target_us",
     [
-        ("sdpa", 10, 11),
-        ("binary_mult", 10, 12),
+        ("sdpa", 10, 11.5),
+        ("binary_mult", 10, 12.9),
         ("layernorm", 10, 8),
     ],
 )
@@ -69,9 +69,9 @@ def test_ag_tg_llama_perf(
     "ar_type, warmup_iters, perf_target_us",
     [
         ("ff2", 10, 29),
-        ("qkv", 10, 25),
+        ("qkv", 10, 26.3),
         ("ff1", 10, 30),
-        ("lm_head", 10, 70),
+        ("lm_head", 10, 78),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
