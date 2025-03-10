@@ -41,97 +41,245 @@ namespace ttnn::ccl {
 //                         ------------------
 //
 
-FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
-    std::size_t channel_buffer_size_bytes, std::size_t sender_ratio_size, std::size_t receiver_ratio_size) {
-    TT_FATAL(
-        (receiver_completed_packet_header_cb_address % eth_word_l1_alignment == 0),
-        "receiver_completed_packet_header_cb_address must be aligned to 16 bytes");
-    TT_FATAL(
-        (sender_0_completed_packet_header_cb_address % eth_word_l1_alignment == 0),
-        "receiver_completed_packet_header_cb_address must be aligned to 16 bytes");
-    TT_FATAL(
-        (sender_1_completed_packet_header_cb_address % eth_word_l1_alignment == 0),
-        "receiver_completed_packet_header_cb_address must be aligned to 16 bytes");
-    TT_FATAL(
-        (sender_channel_0_buffer_index_address % eth_word_l1_alignment == 0),
-        "receiver_completed_packet_header_cb_address must be aligned to 16 bytes");
-    TT_FATAL(
-        (sender_channel_0_worker_conn_info_base_address % eth_word_l1_alignment == 0),
-        "receiver_completed_packet_header_cb_address must be aligned to 16 bytes");
-    TT_FATAL(
-        (sender_channel_0_local_flow_control_semaphore_address % eth_word_l1_alignment == 0),
-        "receiver_completed_packet_header_cb_address must be aligned to 16 bytes");
-    TT_FATAL(
-        (sender_channel_0_producer_terminate_connection_address % eth_word_l1_alignment == 0),
-        "receiver_completed_packet_header_cb_address must be aligned to 16 bytes");
-    TT_FATAL(
-        (sender_channel_1_local_flow_control_semaphore_address % eth_word_l1_alignment == 0),
-        "receiver_completed_packet_header_cb_address must be aligned to 16 bytes");
-    TT_FATAL(
-        (sender_channel_1_producer_terminate_connection_address % eth_word_l1_alignment == 0),
-        "receiver_completed_packet_header_cb_address must be aligned to 16 bytes");
+FabricEriscDatamoverConfig::FabricEriscDatamoverConfig() {
+    // Global
+    this->handshake_addr = tt::tt_metal::experimental::hal::get_erisc_l1_unreserved_base() /* + 1024*/;
+    this->edm_channel_ack_addr = handshake_addr + eth_channel_sync_size;
+    this->termination_signal_address =
+        edm_channel_ack_addr +
+        (4 * eth_channel_sync_size);  // pad extra bytes to match old EDM so handshake logic will still work
 
-    TT_FATAL(sender_channel_1_buffer_index_address != sender_channel_0_buffer_index_address, "FabricEriscDatamoverConfig was constructed with illegal buffer index address");
+    uint32_t buffer_address = termination_signal_address + field_size;
+    for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_receiver_channels; i++) {
+        this->receiver_channels_counters_address[i] = buffer_address;
+        buffer_address += receiver_channel_counters_size_bytes;
+    }
+    for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_sender_channels; i++) {
+        this->sender_channels_counters_address[i] = buffer_address;
+        buffer_address += sender_channel_counters_size_bytes;
+    }
+
+    // Packet header history buffer(s)
+    for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_receiver_channels; i++) {
+        this->receivers_completed_packet_header_cb_address[i] = buffer_address;
+        buffer_address += receiver_completed_packet_header_cb_size_bytes;
+    }
+    for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_sender_channels; i++) {
+        this->senders_completed_packet_header_cb_address[i] = buffer_address;
+        buffer_address += sender_completed_packet_header_cb_size_bytes;
+    }
+
+    // ----------- Sender Channels
+    for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_sender_channels; i++) {
+        this->sender_channels_buffer_index_address[i] = buffer_address;
+        buffer_address += field_size;
+        // Connection info layout:
+        // 0: buffer_index_rdptr -> Tells EDM the address in worker L1 to update EDM's copy of channel rdptr
+        // 1: worker_teardown_semaphore_address -> Tells EDM where to signal connection teardown completion in worker's
+        // L1 2: WorkerXY (as uint32_t) 3: Hold's EDM's rdptr for the buffer index in the channel
+        this->sender_channels_worker_conn_info_base_address[i] = buffer_address;
+        buffer_address += sizeof(tt::fabric::EDMChannelWorkerLocationInfo);
+        this->sender_channels_local_flow_control_semaphore_address[i] = buffer_address;
+        buffer_address += field_size;
+        this->sender_channels_producer_terminate_connection_address[i] = buffer_address;
+        buffer_address += field_size;
+        // persistent mode field
+        this->sender_channels_connection_semaphore_address[i] = buffer_address;
+        buffer_address += field_size;
+        // persistent mode field
+        this->sender_channels_buffer_index_semaphore_address[i] = buffer_address;
+        buffer_address += field_size;
+    }
+    // ----------- Receiver Channels
+    for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_receiver_channels; i++) {
+        this->receiver_channels_local_buffer_index_address[i] = buffer_address;
+        buffer_address += field_size;
+        // persistent mode field
+        this->receiver_channels_downstream_flow_control_semaphore_address[i] = buffer_address;
+        buffer_address += field_size;
+    }
+
+    // Channel Allocations
+    this->max_l1_loading_size = tt::tt_metal::experimental::hal::get_erisc_l1_unreserved_size() +
+                                tt::tt_metal::experimental::hal::get_erisc_l1_unreserved_base();
+    this->buffer_region_start = (buffer_address + buffer_alignment) & ~(buffer_alignment - 1);  // Align
+    this->available_channel_buffering_space = max_l1_loading_size - buffer_region_start;
+}
+
+FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
+    std::size_t channel_buffer_size_bytes,
+    std::size_t sender_ratio_size,
+    std::size_t receiver_ratio_size,
+    bool ring_topology) :
+    FabricEriscDatamoverConfig() {
+    this->num_used_sender_channels = FabricEriscDatamoverConfig::num_sender_channels;
+    this->num_used_receiver_channels = FabricEriscDatamoverConfig::num_receiver_channels;
+    this->enable_ring_topology = ring_topology;
+    if (!ring_topology) {
+        this->num_used_sender_channels -= 1;
+        this->num_used_receiver_channels -= 1;
+    }
+    for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
+        TT_FATAL(
+            (receivers_completed_packet_header_cb_address[i] % eth_word_l1_alignment == 0),
+            "receivers_completed_packet_header_cb_address[{}] {} must be aligned to {} bytes",
+            i,
+            receivers_completed_packet_header_cb_address[i],
+            eth_word_l1_alignment);
+    }
+    for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
+        TT_FATAL(
+            (senders_completed_packet_header_cb_address[i] % eth_word_l1_alignment == 0),
+            "senders_completed_packet_header_cb_address[{}] {} must be aligned to {} bytes",
+            i,
+            senders_completed_packet_header_cb_address[i],
+            eth_word_l1_alignment);
+        TT_FATAL(
+            (sender_channels_buffer_index_address[i] % eth_word_l1_alignment == 0),
+            "sender_channels_buffer_index_address[{}] {} must be aligned to {} bytes",
+            i,
+            sender_channels_buffer_index_address[i],
+            eth_word_l1_alignment);
+        TT_FATAL(
+            (sender_channels_worker_conn_info_base_address[i] % eth_word_l1_alignment == 0),
+            "sender_channels_worker_conn_info_base_address[{}] {} must be aligned to {} bytes",
+            i,
+            sender_channels_worker_conn_info_base_address[i],
+            eth_word_l1_alignment);
+        TT_FATAL(
+            (sender_channels_local_flow_control_semaphore_address[i] % eth_word_l1_alignment == 0),
+            "sender_channels_local_flow_control_semaphore_address[{}] {} must be aligned to {} bytes",
+            i,
+            sender_channels_local_flow_control_semaphore_address[i],
+            eth_word_l1_alignment);
+        TT_FATAL(
+            (sender_channels_producer_terminate_connection_address[i] % eth_word_l1_alignment == 0),
+            "sender_channels_producer_terminate_connection_address[{}] {} must be aligned to {} bytes",
+            i,
+            sender_channels_producer_terminate_connection_address[i],
+            eth_word_l1_alignment);
+    }
+    TT_FATAL(
+        std::unordered_set<size_t>(
+            sender_channels_buffer_index_address.begin(),
+            sender_channels_buffer_index_address.begin() + this->num_used_sender_channels)
+                .size() == this->num_used_sender_channels,
+        "FabricEriscDatamoverConfig was constructed with illegal buffer index address");
+
     const size_t min_buffer_size = sizeof(tt::fabric::PacketHeader) + 2 * FabricEriscDatamoverConfig::eth_channel_sync_size;
     TT_FATAL(channel_buffer_size_bytes >= min_buffer_size, "FabricEriscDatamoverConfig was constructed with `channel_buffer_size_bytes` argument set smaller than minimum size of {}", min_buffer_size);
 
-    constexpr size_t default_pow2_num_sender_buffer_slots = 8;
-    constexpr size_t default_pow2_num_receiver_buffer_slots = 16;
+    // TODO: Review
+    size_t default_pow2_num_sender_buffer_slots = 8;
+    size_t default_pow2_num_receiver_buffer_slots = 16;
+    if (ring_topology) {
+        default_pow2_num_sender_buffer_slots /= 2;
+        default_pow2_num_receiver_buffer_slots /= 2;
+    }
 
     const std::size_t channel_buffer_size_with_channel_sync =
         channel_buffer_size_bytes + sizeof(tt::fabric::PacketHeader); // + 16 // sizeof(tt::fabric::PacketHeader);
 
-    const size_t next_lowest_power_of_2_buffer_slot_count =
-
-        this->channel_buffer_size_bytes = channel_buffer_size_bytes;
+    const size_t next_lowest_power_of_2_buffer_slot_count = this->channel_buffer_size_bytes = channel_buffer_size_bytes;
     this->channel_buffer_size_bytes_with_channel_sync = channel_buffer_size_with_channel_sync;
-    const std::size_t total_ratio_count = 2 * sender_ratio_size + receiver_ratio_size;
+    const std::size_t total_ratio_count =
+        this->num_used_sender_channels * sender_ratio_size + this->num_used_receiver_channels * receiver_ratio_size;
 
-    this->sender_0_channel_size_bytes = tt::round_down(
-        (available_channel_buffering_space / total_ratio_count) * sender_ratio_size,
-        channel_buffer_size_with_channel_sync);
-    if constexpr (FabricEriscDatamoverConfig::constrain_to_power_of_2_buffer_slot_counts) {
-        this->sender_0_num_buffers = default_pow2_num_sender_buffer_slots;
-    } else {
-        this->sender_0_num_buffers = this->sender_0_channel_size_bytes / channel_buffer_size_with_channel_sync;
+    auto buffer_initializer = [available_channel_buffering_space = this->available_channel_buffering_space,
+                               total_ratio_count,
+                               default_pow2_num_sender_buffer_slots,
+                               channel_buffer_size_with_channel_sync](
+                                  auto& channel_size_bytes,
+                                  auto& num_buffers,
+                                  const auto ratio_size,
+                                  const auto default_pow2_num_buffer_slots) {
+        channel_size_bytes = tt::round_down(
+            (available_channel_buffering_space / total_ratio_count) * ratio_size,
+            channel_buffer_size_with_channel_sync);
+        if constexpr (FabricEriscDatamoverConfig::constrain_to_power_of_2_buffer_slot_counts) {
+            num_buffers = default_pow2_num_buffer_slots;
+        } else {
+            num_buffers = channel_size_bytes / channel_buffer_size_with_channel_sync;
+        }
+    };
+
+    for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
+        buffer_initializer(
+            this->sender_channels_size_bytes[i],
+            this->sender_channels_num_buffers[i],
+            sender_ratio_size,
+            default_pow2_num_sender_buffer_slots);
+        TT_FATAL(
+            channel_buffer_size_with_channel_sync * this->sender_channels_num_buffers[i] <=
+                this->sender_channels_size_bytes[i],
+            "Sender channel with {} buffer slots of size {} B does not fit in {} B",
+            this->sender_channels_num_buffers[i],
+            channel_buffer_size_with_channel_sync,
+            this->sender_channels_size_bytes[i]);
     }
-    this->sender_1_channel_size_bytes = tt::round_down(
-        (available_channel_buffering_space / total_ratio_count) * sender_ratio_size,
-        channel_buffer_size_with_channel_sync);
-    if constexpr (FabricEriscDatamoverConfig::constrain_to_power_of_2_buffer_slot_counts) {
-        this->sender_1_num_buffers = default_pow2_num_sender_buffer_slots;
-    } else {
-        this->sender_1_num_buffers = this->sender_1_channel_size_bytes / channel_buffer_size_with_channel_sync;
-    }
-    this->receiver_channel_size_bytes = tt::round_down(
-        (available_channel_buffering_space / total_ratio_count) * receiver_ratio_size,
-        channel_buffer_size_with_channel_sync);
-    if constexpr (FabricEriscDatamoverConfig::constrain_to_power_of_2_buffer_slot_counts) {
-        this->receiver_num_buffers = default_pow2_num_receiver_buffer_slots;
-    } else {
-        this->receiver_num_buffers = this->receiver_channel_size_bytes / channel_buffer_size_with_channel_sync;
+    for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
+        buffer_initializer(
+            this->receiver_channels_size_bytes[i],
+            this->receiver_channels_num_buffers[i],
+            receiver_ratio_size,
+            default_pow2_num_receiver_buffer_slots);
+        TT_FATAL(
+            channel_buffer_size_with_channel_sync * this->receiver_channels_num_buffers[i] <=
+                this->receiver_channels_size_bytes[i],
+            "Receiver channel with {} buffer slots of size {} B does not fit in {} B",
+            this->receiver_channels_num_buffers[i],
+            channel_buffer_size_with_channel_sync,
+            this->receiver_channels_size_bytes[i]);
     }
 
-    this->sender_0_channel_base_address = buffer_region_start;
-    this->sender_1_channel_base_address = this->sender_0_channel_base_address + this->sender_0_channel_size_bytes;
-    this->receiver_channel_base_address = this->sender_1_channel_base_address + this->sender_1_channel_size_bytes;
+    uint32_t buffer_addr = buffer_region_start;
+    for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
+        this->sender_channels_base_address[i] = buffer_addr;
+        buffer_addr += this->sender_channels_size_bytes[i];
+        log_trace(tt::LogOp, "Sender {} channel_start: {}", i, this->sender_channels_base_address[i]);
+    }
+    for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
+        this->receiver_channels_base_address[i] = buffer_addr;
+        buffer_addr += this->receiver_channels_size_bytes[i];
+        log_trace(tt::LogOp, "Receiver {} channel_start: {}", i, this->receiver_channels_base_address[i]);
+    }
 
-    log_trace(tt::LogOp, "Sender 0 channel_start: {}", this->sender_0_channel_base_address);
-    log_trace(tt::LogOp, "Sender 1 channel_start: {}", this->sender_1_channel_base_address);
-    log_trace(tt::LogOp, "Receiver channel_start: {}", this->receiver_channel_base_address);
+    log_trace(tt::LogOp, "Available channel buffering space: {}", this->available_channel_buffering_space);
 
-    static constexpr size_t total_num_channels = 3; // sender0, sender1, receiver
-    const size_t max_channel_buffer_size = (available_channel_buffering_space / total_num_channels) - FabricEriscDatamoverConfig::eth_channel_sync_size - sizeof(tt::fabric::PacketHeader);
-    TT_FATAL(channel_buffer_size_bytes <= max_channel_buffer_size, "Specified size of `channel_buffer_size_bytes` was too large. Maximum allowable size is {} B", max_channel_buffer_size);
-    TT_FATAL(this->sender_0_channel_size_bytes > 0, "Internal error when computing `sender_0_channel_size_bytes` which was computed to be size 0");
-    TT_FATAL(this->sender_1_channel_size_bytes > 0, "Internal error when computing `sender_1_channel_size_bytes` which was computed to be size 0");
-    TT_FATAL(this->receiver_channel_size_bytes > 0, "Internal error when computing `receiver_channel_size_bytes` which was computed to be size 0");
+    const size_t total_num_channels = this->num_used_sender_channels + this->num_used_receiver_channels;
+    const size_t max_channel_buffer_size = (available_channel_buffering_space / total_num_channels) -
+                                           FabricEriscDatamoverConfig::eth_channel_sync_size -
+                                           sizeof(tt::fabric::PacketHeader);
     TT_FATAL(
-        this->sender_0_channel_size_bytes + this->sender_1_channel_size_bytes + this->receiver_channel_size_bytes <=
-        this->available_channel_buffering_space, "Internal error when computing channel sizes. Total channel size exceeds available space");
+        channel_buffer_size_bytes <= max_channel_buffer_size,
+        "Specified size of `channel_buffer_size_bytes` was too large. Maximum allowable size is {} B",
+        max_channel_buffer_size);
+    for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
+        TT_FATAL(
+            this->sender_channels_size_bytes[i] > 0,
+            "Internal error when computing `sender_channels_size_bytes[{}]` which was computed to be size 0",
+            i);
+    }
+    for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
+        TT_FATAL(
+            this->receiver_channels_size_bytes[i] > 0,
+            "Internal error when computing `receiver_channels_size_bytes[{}]` which was computed to be size 0",
+            i);
+    }
     TT_FATAL(
-        this->receiver_channel_base_address + this->receiver_channel_size_bytes <
-        this->max_l1_loading_size, "Internal error - channel buffers spilled past the end of usable L1 region.");
+        std::accumulate(
+            this->sender_channels_size_bytes.begin(),
+            this->sender_channels_size_bytes.begin() + this->num_used_sender_channels,
+            0) +
+                std::accumulate(
+                    this->receiver_channels_size_bytes.begin(),
+                    this->receiver_channels_size_bytes.begin() + this->num_used_receiver_channels,
+                    0) <=
+            this->available_channel_buffering_space,
+        "Internal error when computing channel sizes. Total channel size exceeds available space");
+    TT_FATAL(
+        buffer_addr < this->max_l1_loading_size,
+        "Internal error - channel buffers spilled past the end of usable L1 region.");
 }
 
 void get_runtime_args_for_edm_termination_infos(std::vector<edm_termination_info_t> const& edm_termination_infos, std::vector<uint32_t>& args_out) {
@@ -198,14 +346,15 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     size_t my_chip_id,
     size_t peer_chip_id,
 
-    std::optional<size_t> receiver_channel_downstream_flow_control_semaphore_id,
-    std::optional<size_t> receiver_channel_downstream_teardown_semaphore_id,
-    size_t sender_channel_0_flow_control_semaphore_id,
-    size_t sender_channel_1_flow_control_semaphore_id,
-    size_t sender_channel_0_connection_semaphore_id,
-    size_t sender_channel_1_connection_semaphore_id,
-    size_t sender_channel_0_buffer_index_semaphore_id,
-    size_t sender_channel_1_buffer_index_semaphore_id,
+    const std::array<std::optional<size_t>, FabricEriscDatamoverConfig::num_receiver_channels>&
+        receiver_channels_downstream_flow_control_semaphore_id,
+    const std::array<std::optional<size_t>, FabricEriscDatamoverConfig::num_receiver_channels>&
+        receiver_channels_downstream_teardown_semaphore_id,
+    const std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels>&
+        sender_channels_flow_control_semaphore_id,
+    const std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels>& sender_channels_connection_semaphore_id,
+    const std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels>&
+        sender_channels_buffer_index_semaphore_id,
 
     const FabricEriscDatamoverConfig& config,
     bool enable_persistent_mode,
@@ -219,27 +368,20 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     handshake_address(
         tt::round_up(hal::get_erisc_l1_unreserved_base(), FabricEriscDatamoverConfig::eth_channel_sync_size)),
     channel_buffer_size(config.channel_buffer_size_bytes),
-    sender_0_num_buffers(config.sender_0_num_buffers),
-    sender_1_num_buffers(config.sender_1_num_buffers),
-    receiver_num_buffers(config.receiver_num_buffers),
+    sender_channels_num_buffers(config.sender_channels_num_buffers),
+    receiver_channels_num_buffers(config.receiver_channels_num_buffers),
 
     // this is the receiver channel's local sem for flow controlling with downstream fabric sender
-    receiver_channel_downstream_flow_control_semaphore_id(receiver_channel_downstream_flow_control_semaphore_id),
-    receiver_channel_downstream_teardown_semaphore_id(receiver_channel_downstream_teardown_semaphore_id),
-    sender_channel_0_flow_control_semaphore_id(sender_channel_0_flow_control_semaphore_id),
-    sender_channel_1_flow_control_semaphore_id(sender_channel_1_flow_control_semaphore_id),
-    sender_channel_0_connection_semaphore_id(sender_channel_0_connection_semaphore_id),
-    sender_channel_1_connection_semaphore_id(sender_channel_1_connection_semaphore_id),
-    sender_channel_0_buffer_index_semaphore_id(sender_channel_0_buffer_index_semaphore_id),
-    sender_channel_1_buffer_index_semaphore_id(sender_channel_1_buffer_index_semaphore_id),
+    receiver_channels_downstream_flow_control_semaphore_id(receiver_channels_downstream_flow_control_semaphore_id),
+    receiver_channels_downstream_teardown_semaphore_id(receiver_channels_downstream_teardown_semaphore_id),
+    sender_channels_flow_control_semaphore_id(sender_channels_flow_control_semaphore_id),
+    sender_channels_connection_semaphore_id(sender_channels_connection_semaphore_id),
+    sender_channels_buffer_index_semaphore_id(sender_channels_buffer_index_semaphore_id),
 
-    receiver_channel_local_buffer_index_address(config.receiver_channel_local_buffer_index_address),
-
-    local_sender_channel_0_buffer_address(config.sender_0_channel_base_address),
-    local_sender_channel_0_connection_info_addr(config.sender_channel_0_worker_conn_info_base_address),
-    local_sender_channel_1_buffer_address(config.sender_1_channel_base_address),
-    local_sender_channel_1_connection_info_addr(config.sender_channel_1_worker_conn_info_base_address),
-    local_receiver_channel_buffer_address(config.receiver_channel_base_address),
+    receiver_channels_local_buffer_index_address(config.receiver_channels_local_buffer_index_address),
+    local_sender_channels_buffer_address(config.sender_channels_base_address),
+    local_sender_channels_connection_info_addr(config.sender_channels_worker_conn_info_base_address),
+    local_receiver_channels_buffer_address(config.receiver_channels_base_address),
 
     termination_signal_ptr(config.termination_signal_address),
     enable_persistent_mode(enable_persistent_mode),
@@ -249,73 +391,110 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const
     const bool is_handshake_master = this->my_chip_id < this->peer_chip_id;
     TT_ASSERT(this->my_chip_id != this->peer_chip_id);
     TT_ASSERT(
-        this->sender_0_num_buffers == this->sender_1_num_buffers);  //, "Implementation expects sender_0_num_buffers and
-                                                                    // sender_1_num_buffers to be the same for now");
-    log_trace(tt::LogTest, "Sender 0 num buffers: {}", this->sender_0_num_buffers);
-    log_trace(tt::LogTest, "Sender 0 channel address: {}", this->local_sender_channel_0_buffer_address);
-    log_trace(tt::LogTest, "Sender 1 num buffers: {}", this->sender_1_num_buffers);
-    log_trace(tt::LogTest, "Sender 1 channel address: {}", this->local_sender_channel_1_buffer_address);
-    log_trace(tt::LogTest, "Receiver num buffers: {}", this->receiver_num_buffers);
-    log_trace(tt::LogTest, "Receiver channel address: {}", this->local_receiver_channel_buffer_address);
+        std::unordered_set<size_t>(
+            sender_channels_num_buffers.begin(), sender_channels_num_buffers.begin() + config.num_used_sender_channels)
+                .size() == 1,
+        "Implementation expects sender_channels_num_buffers to all be the same for now");
+
+    for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_sender_channels; i++) {
+        log_trace(tt::LogTest, "Sender {} num buffers: {}", i, this->sender_channels_num_buffers[i]);
+        log_trace(tt::LogTest, "Sender {} channel address: {}", i, this->local_sender_channels_buffer_address[i]);
+    }
+    for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_receiver_channels; i++) {
+        log_trace(tt::LogTest, "Receiver {} num buffers: {}", i, this->receiver_channels_num_buffers[i]);
+        log_trace(tt::LogTest, "Receiver {} channel address: {}", i, this->local_receiver_channels_buffer_address[i]);
+    }
 
     return std::vector<uint32_t>{
         this->firmware_context_switch_interval,
+        this->enable_first_level_ack,
+        this->fuse_receiver_flush_and_completion_ptr,
+        config.enable_ring_topology,
         is_handshake_master,
         this->handshake_address,
         this->channel_buffer_size,
 
-        this->sender_0_num_buffers,
-        this->receiver_num_buffers,
+        this->sender_channels_num_buffers[0],
+        this->receiver_channels_num_buffers[0],
 
-        config.sender_0_channel_base_address,
-        config.sender_channel_0_worker_conn_info_base_address,
-        config.sender_1_channel_base_address,
-        config.sender_channel_1_worker_conn_info_base_address,
-        config.receiver_channel_base_address,
-        config.receiver_channel_base_address,
+        config.sender_channels_base_address[0],
+        config.sender_channels_worker_conn_info_base_address[0],
+        config.sender_channels_base_address[1],
+        config.sender_channels_worker_conn_info_base_address[1],
+        config.sender_channels_base_address[2],
+        config.sender_channels_worker_conn_info_base_address[2],
+        config.receiver_channels_base_address[0],
+        config.receiver_channels_base_address[0],
+        config.receiver_channels_base_address[1],
+        config.receiver_channels_base_address[1],
 
-        config.sender_0_channel_base_address,
-        config.sender_1_channel_base_address,
+        config.sender_channels_base_address[0],
+        config.sender_channels_base_address[1],
+        config.sender_channels_base_address[2],
 
         this->termination_signal_ptr,
         this->enable_persistent_mode,
 
         // fabric counters
         FabricEriscDatamoverConfig::enable_fabric_counters,
-        config.receiver_channel_counters_address,
-        config.sender_channel_0_counters_address,
-        config.sender_channel_1_counters_address,
+        config.receiver_channels_counters_address[0],
+        config.receiver_channels_counters_address[1],
+        config.sender_channels_counters_address[0],
+        config.sender_channels_counters_address[1],
+        config.sender_channels_counters_address[2],
 
         // fabric pkt header recording
         FabricEriscDatamoverConfig::enable_fabric_pkt_header_recording,
 
-        config.receiver_completed_packet_header_cb_address,
+        config.receivers_completed_packet_header_cb_address[0],
         FabricEriscDatamoverConfig::receiver_completed_packet_header_cb_size_headers,
-        config.sender_0_completed_packet_header_cb_address,
+        config.receivers_completed_packet_header_cb_address[1],
+        FabricEriscDatamoverConfig::receiver_completed_packet_header_cb_size_headers,
+        config.senders_completed_packet_header_cb_address[0],
         FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers,
-        config.sender_1_completed_packet_header_cb_address,
+        config.senders_completed_packet_header_cb_address[1],
+        FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers,
+        config.senders_completed_packet_header_cb_address[2],
         FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers};
 }
 
 std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
     return std::vector<uint32_t>{
-        this->sender_channel_0_connection_semaphore_id,
-        this->sender_channel_1_connection_semaphore_id,
-        this->sender_channel_0_buffer_index_semaphore_id,
-        this->downstream_sender_channel_buffer_index_semaphore_id.value_or(-1),
-        this->downstream_edm_buffer_base_address != std::nullopt,
-        this->downstream_edm_buffer_base_address.value_or(0),
-        this->downstream_edm_noc_x.value_or(0),
-        this->downstream_edm_noc_y.value_or(0),
-        this->downstream_edm_semaphore_address.value_or(-1),
-        this->downstream_edm_worker_registration_address.value_or(0),
-        this->downstream_edm_worker_location_info_address.value_or(0),
-        this->receiver_channel_local_buffer_index_address,
+        this->sender_channels_connection_semaphore_id[0],
+        this->sender_channels_connection_semaphore_id[1],
+        this->sender_channels_connection_semaphore_id[2],
+        this->sender_channels_buffer_index_semaphore_id[0],
+
+        this->downstream_vcs_sender_channel_buffer_index_semaphore_id[0].value_or(-1),
+        this->downstream_vcs_sender_channel_buffer_index_semaphore_id[1].value_or(-1),
+
+        this->downstream_edm_vcs_buffer_base_address[0] != std::nullopt,
+        this->downstream_edm_vcs_buffer_base_address[0].value_or(0),
+        this->downstream_edm_vcs_noc_x[0].value_or(0),
+        this->downstream_edm_vcs_noc_y[0].value_or(0),
+        this->downstream_edm_vcs_semaphore_address[0].value_or(-1),
+        this->downstream_edm_vcs_worker_registration_address[0].value_or(0),
+        this->downstream_edm_vcs_worker_location_info_address[0].value_or(0),
+        this->receiver_channels_local_buffer_index_address[0],
         // this is the receiver channel's local sem for flow controlling with downstream fabric sender
-        this->receiver_channel_downstream_flow_control_semaphore_id.value_or(-1),
-        this->receiver_channel_downstream_teardown_semaphore_id.value_or(-1),
-        this->sender_channel_0_flow_control_semaphore_id,
-        this->sender_channel_1_flow_control_semaphore_id};
+        this->receiver_channels_downstream_flow_control_semaphore_id[0].value_or(-1),
+        this->receiver_channels_downstream_teardown_semaphore_id[0].value_or(-1),
+
+        this->downstream_edm_vcs_buffer_base_address[1] != std::nullopt,
+        this->downstream_edm_vcs_buffer_base_address[1].value_or(0),
+        this->downstream_edm_vcs_noc_x[1].value_or(0),
+        this->downstream_edm_vcs_noc_y[1].value_or(0),
+        this->downstream_edm_vcs_semaphore_address[1].value_or(-1),
+        this->downstream_edm_vcs_worker_registration_address[1].value_or(0),
+        this->downstream_edm_vcs_worker_location_info_address[1].value_or(0),
+        this->receiver_channels_local_buffer_index_address[1],
+        // this is the receiver channel's local sem for flow controlling with downstream fabric sender
+        this->receiver_channels_downstream_flow_control_semaphore_id[1].value_or(-1),
+        this->receiver_channels_downstream_teardown_semaphore_id[1].value_or(-1),
+
+        this->sender_channels_flow_control_semaphore_id[0],
+        this->sender_channels_flow_control_semaphore_id[1],
+        this->sender_channels_flow_control_semaphore_id[2]};
 }
 
 FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
@@ -327,26 +506,45 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     FabricEriscDatamoverConfig const& config,
     bool enable_persistent_mode,
     bool build_in_worker_connection_mode) {
+    std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> sender_channels_buffer_index_semaphore_id;
+    std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> sender_channels_flow_control_semaphore_id;
+    std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> sender_channels_connection_semaphore_id;
+    std::array<std::optional<size_t>, FabricEriscDatamoverConfig::num_receiver_channels>
+        receiver_channels_downstream_flow_control_semaphore_id;
+    std::array<std::optional<size_t>, FabricEriscDatamoverConfig::num_receiver_channels>
+        receiver_channels_downstream_teardown_semaphore_id;
     if (enable_persistent_mode) {
-        auto sender_channel_0_buffer_index_semaphore_address =
-            config.sender_channel_0_buffer_index_semaphore_address;
-        auto sender_channel_0_flow_control_semaphore_address =
-            config.sender_channel_0_local_flow_control_semaphore_address;
-        auto sender_channel_0_connection_semaphore_address =
-            config.sender_channel_0_connection_semaphore_address;
+        // Sender channel 0 uses addresses instead of ids in persistent mode
+        sender_channels_buffer_index_semaphore_id[0] = config.sender_channels_buffer_index_semaphore_address[0];
+        sender_channels_flow_control_semaphore_id[0] = config.sender_channels_local_flow_control_semaphore_address[0];
+        sender_channels_connection_semaphore_id[0] = config.sender_channels_connection_semaphore_address[0];
 
-        std::optional<size_t> receiver_channel_downstream_flow_control_semaphore_address =
-            build_in_worker_connection_mode ? 0: tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
-        std::optional<size_t> receiver_channel_downstream_terminate_semaphore_address =
-            build_in_worker_connection_mode ? 0
-                                            : tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
-        auto sender_channel_1_flow_control_semaphore_id =
-            build_in_worker_connection_mode ? 0: tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
-        auto sender_channel_1_connection_semaphore_id =
-            build_in_worker_connection_mode ? 0: tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
-        auto sender_channel_1_buffer_index_semaphore_id =
-            build_in_worker_connection_mode ? 0: tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
-
+        if (build_in_worker_connection_mode) {
+            for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_receiver_channels; i++) {
+                receiver_channels_downstream_flow_control_semaphore_id[i] = 0;
+                receiver_channels_downstream_teardown_semaphore_id[i] = 0;
+            }
+            for (uint32_t i = 1; i < FabricEriscDatamoverConfig::num_sender_channels; i++) {
+                sender_channels_flow_control_semaphore_id[i] = 0;
+                sender_channels_connection_semaphore_id[i] = 0;
+                sender_channels_buffer_index_semaphore_id[i] = 0;
+            }
+        } else {
+            for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_receiver_channels; i++) {
+                receiver_channels_downstream_flow_control_semaphore_id[i] =
+                    tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
+                receiver_channels_downstream_teardown_semaphore_id[i] =
+                    tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
+            }
+            for (uint32_t i = 1; i < FabricEriscDatamoverConfig::num_sender_channels; i++) {
+                sender_channels_flow_control_semaphore_id[i] =
+                    tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
+                sender_channels_connection_semaphore_id[i] =
+                    tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
+                sender_channels_buffer_index_semaphore_id[i] =
+                    tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
+            }
+        }
         return FabricEriscDatamoverBuilder(
             ethernet_core,
             device->ethernet_core_from_logical_core(ethernet_core).x,
@@ -354,35 +552,32 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
             local_chip_id,
             peer_chip_id,
 
-            receiver_channel_downstream_flow_control_semaphore_address,
-            receiver_channel_downstream_terminate_semaphore_address,
-            sender_channel_0_flow_control_semaphore_address,
-            sender_channel_1_flow_control_semaphore_id,
-            sender_channel_0_connection_semaphore_address,
-            sender_channel_1_connection_semaphore_id,
-            sender_channel_0_buffer_index_semaphore_address,
-            sender_channel_1_buffer_index_semaphore_id,
+            receiver_channels_downstream_flow_control_semaphore_id,
+            receiver_channels_downstream_teardown_semaphore_id,
+            sender_channels_flow_control_semaphore_id,
+            sender_channels_connection_semaphore_id,
+            sender_channels_buffer_index_semaphore_id,
 
             config,
             enable_persistent_mode,
             build_in_worker_connection_mode);
 
     } else {
-        std::optional<size_t> receiver_channel_downstream_flow_control_semaphore_id = tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
-        std::optional<size_t> receiver_channel_downstream_teardown_semaphore_id =
-            tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
-        auto sender_channel_0_flow_control_semaphore_id =
-            tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
-        auto sender_channel_1_flow_control_semaphore_id =
-            tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
-        auto sender_channel_0_connection_semaphore_id =
-            tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
-        auto sender_channel_1_connection_semaphore_id =
-            tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
-        auto sender_channel_0_buffer_index_semaphore_id =
-            tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
-        auto sender_channel_1_buffer_index_semaphore_id =
-            tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
+        for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_receiver_channels; i++) {
+            receiver_channels_downstream_flow_control_semaphore_id[i] =
+                tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
+            receiver_channels_downstream_teardown_semaphore_id[i] =
+                tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
+        }
+
+        for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_sender_channels; i++) {
+            sender_channels_flow_control_semaphore_id[i] =
+                tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
+            sender_channels_connection_semaphore_id[i] =
+                tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
+            sender_channels_buffer_index_semaphore_id[i] =
+                tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
+        }
 
         return FabricEriscDatamoverBuilder(
             ethernet_core,
@@ -391,14 +586,11 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
             local_chip_id,
             peer_chip_id,
 
-            receiver_channel_downstream_flow_control_semaphore_id,
-            receiver_channel_downstream_teardown_semaphore_id,
-            sender_channel_0_flow_control_semaphore_id,
-            sender_channel_1_flow_control_semaphore_id,
-            sender_channel_0_connection_semaphore_id,
-            sender_channel_1_connection_semaphore_id,
-            sender_channel_0_buffer_index_semaphore_id,
-            sender_channel_1_buffer_index_semaphore_id,
+            receiver_channels_downstream_flow_control_semaphore_id,
+            receiver_channels_downstream_teardown_semaphore_id,
+            sender_channels_flow_control_semaphore_id,
+            sender_channels_connection_semaphore_id,
+            sender_channels_buffer_index_semaphore_id,
 
             config,
             enable_persistent_mode);
@@ -411,103 +603,133 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_worker_
     } else {
         log_trace(tt::LogOp, "Building connection to non-persistent fabric");
     }
-    TT_FATAL(sender_channel_0_buffer_index_semaphore_id != sender_channel_0_flow_control_semaphore_id, "Internal error - sender_channel_0_buffer_index_semaphore_id and sender_channel_0_flow_control_semaphore_id aliased eachother");
+    static constexpr uint32_t worker_chan = 0;
+    TT_FATAL(
+        sender_channels_buffer_index_semaphore_id[worker_chan] !=
+            sender_channels_flow_control_semaphore_id[worker_chan],
+        "Internal error - sender_channel_buffer_index_semaphore_id and sender_channel_flow_control_semaphore_id "
+        "aliased eachother");
     return SenderWorkerAdapterSpec{
         this->my_noc_x,
         this->my_noc_y,
-        this->local_sender_channel_0_buffer_address,
-        this->sender_0_num_buffers,
-        this->sender_channel_0_flow_control_semaphore_id,
-        this->sender_channel_0_connection_semaphore_id,
-        this->config.sender_channel_0_worker_conn_info_base_address,
+        this->local_sender_channels_buffer_address[worker_chan],
+        this->sender_channels_num_buffers[worker_chan],
+        this->sender_channels_flow_control_semaphore_id[worker_chan],
+        this->sender_channels_connection_semaphore_id[worker_chan],
+        this->config.sender_channels_worker_conn_info_base_address[worker_chan],
         this->config.channel_buffer_size_bytes,
-        this->sender_channel_0_buffer_index_semaphore_id,
+        this->sender_channels_buffer_index_semaphore_id[worker_chan],
         this->enable_persistent_mode};
 }
 
-
-SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_channel() const {
+SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_channel(uint32_t vc) const {
+    uint32_t chan = 0;
+    if (vc == 0) {
+        chan = 1;
+    } else if (vc == 1) {
+        chan = 2;
+    } else {
+        TT_THROW("Invalid VC");
+    }
     return SenderWorkerAdapterSpec{
         this->my_noc_x,
         this->my_noc_y,
-        this->local_sender_channel_1_buffer_address,
-        this->sender_1_num_buffers,
-        this->sender_channel_1_flow_control_semaphore_id,
-        this->sender_channel_1_connection_semaphore_id,
-        this->config.sender_channel_1_worker_conn_info_base_address,
+        this->local_sender_channels_buffer_address[chan],
+        this->sender_channels_num_buffers[chan],
+        this->sender_channels_flow_control_semaphore_id[chan],
+        this->sender_channels_connection_semaphore_id[chan],
+        this->config.sender_channels_worker_conn_info_base_address[chan],
         this->config.channel_buffer_size_bytes,
-        this->sender_channel_1_buffer_index_semaphore_id,
+        this->sender_channels_buffer_index_semaphore_id[chan],
         false};
 }
 
 void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricEriscDatamoverBuilder const& downstream_edm) {
     TT_FATAL(!this->build_in_worker_connection_mode, "Tried to connect two EDMs to each other in worker connection mode");
-    auto const adapter_spec = downstream_edm.build_connection_to_fabric_channel();
+    for (uint32_t i = 0; i < FabricEriscDatamoverBuilder::num_virtual_channels; i++) {
+        const auto adapter_spec = downstream_edm.build_connection_to_fabric_channel(i);
 
-    log_trace(tt::LogTest, "Connecting to downstream EDM at x={}, y={}", adapter_spec.edm_noc_x, adapter_spec.edm_noc_y);
+        log_trace(
+            tt::LogTest,
+            "Connecting to downstream EDM at x={}, y={} VC={}",
+            adapter_spec.edm_noc_x,
+            adapter_spec.edm_noc_y,
+            i);
 
-    this->downstream_edm_noc_x = adapter_spec.edm_noc_x;
-    this->downstream_edm_noc_y = adapter_spec.edm_noc_y;
-    this->downstream_edm_buffer_base_address = adapter_spec.edm_buffer_base_addr;
-    this->downstream_edm_semaphore_address = adapter_spec.edm_l1_sem_addr;
-    this->downstream_edm_worker_registration_address = adapter_spec.edm_connection_handshake_addr;
-    this->downstream_edm_worker_location_info_address = adapter_spec.edm_worker_location_info_addr;
-    this->downstream_sender_channel_buffer_index_semaphore_id = adapter_spec.buffer_index_semaphore_id;
+        this->downstream_edm_vcs_noc_x[i] = adapter_spec.edm_noc_x;
+        this->downstream_edm_vcs_noc_y[i] = adapter_spec.edm_noc_y;
+        this->downstream_edm_vcs_buffer_base_address[i] = adapter_spec.edm_buffer_base_addr;
+        this->downstream_edm_vcs_semaphore_address[i] = adapter_spec.edm_l1_sem_addr;
+        this->downstream_edm_vcs_worker_registration_address[i] = adapter_spec.edm_connection_handshake_addr;
+        this->downstream_edm_vcs_worker_location_info_address[i] = adapter_spec.edm_worker_location_info_addr;
+        this->downstream_vcs_sender_channel_buffer_index_semaphore_id[i] = adapter_spec.buffer_index_semaphore_id;
+    }
 }
 
 EdmLineFabricOpInterface::EdmLineFabricOpInterface(
-    std::vector<IDevice*> const& device_sequence,
-    std::vector<Program*> const& program_sequence,
+    const std::vector<IDevice*>& device_sequence,
+    const std::vector<Program*>& program_sequence,
     bool enable_persistent_mode,
     std::optional<size_t> desired_num_links,
-    bool build_in_worker_connection_mode) :
+    bool build_in_worker_connection_mode,
+    bool ring_topology) :
     device_sequence(device_sequence), programs(program_sequence) {
     static constexpr std::size_t edm_buffer_size =
         FabricEriscDatamoverBuilder::default_packet_payload_size_bytes + sizeof(tt::fabric::PacketHeader);
-    auto const config = FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
+    const auto config = FabricEriscDatamoverConfig(edm_buffer_size, 1, 2, ring_topology);
     TT_ASSERT(device_sequence.size() == program_sequence.size());
 
     for (size_t i = 0; i < device_sequence.size(); i++) {
         log_trace(tt::LogOp, "device[{}] id={}",  i, device_sequence[i]->id());
     }
-    size_t min_link_count = desired_num_links.value_or(std::numeric_limits<size_t>::max());
-    for (size_t hop = 0; hop < device_sequence.size() - 1; hop++) {
-        auto src_device = device_sequence[hop];
-        auto dest_device = device_sequence[hop + 1];
-        auto const& src_device_sockets = src_device->get_ethernet_sockets(dest_device->id());;
-        auto const& dest_device_sockets = dest_device->get_ethernet_sockets(src_device->id());;
+    auto get_min_link_count = [&](IDevice* src_device, IDevice* dest_device, size_t min_link_count) {
+        const auto& src_device_sockets = src_device->get_ethernet_sockets(dest_device->id());
+        const auto& dest_device_sockets = dest_device->get_ethernet_sockets(src_device->id());
         if (src_device_sockets.size() > 0) {
             min_link_count = std::min(min_link_count, src_device_sockets.size());
         }
         if (src_device_sockets.size() > 0) {
             min_link_count = std::min(min_link_count, dest_device_sockets.size());
         }
-    }
+        return min_link_count;
+    };
 
-    FabricEriscDatamoverBuilder *a_builder = nullptr;
-    // Construct the builders
+    size_t min_link_count = desired_num_links.value_or(std::numeric_limits<size_t>::max());
     for (size_t hop = 0; hop < device_sequence.size() - 1; hop++) {
         auto src_device = device_sequence[hop];
         auto dest_device = device_sequence[hop + 1];
+        min_link_count = get_min_link_count(src_device, dest_device, min_link_count);
+    }
+    if (ring_topology) {
+        auto src_device = device_sequence.back();
+        auto dest_device = device_sequence.front();
+        min_link_count = get_min_link_count(src_device, dest_device, min_link_count);
+    }
 
-        auto const& src_device_sockets = src_device->get_ethernet_sockets(dest_device->id());;
-        auto const& dest_device_sockets = dest_device->get_ethernet_sockets(src_device->id());;
-        std::vector<CoreCoord> local_link_cores; local_link_cores.reserve(src_device_sockets.size());
-        std::vector<CoreCoord> remote_link_cores; remote_link_cores.reserve(dest_device_sockets.size());
+    this->num_links = min_link_count;
+
+    auto build_edm_directions = [&](IDevice* src_device,
+                                    IDevice* dest_device,
+                                    Program* src_program,
+                                    Program* dest_program) {
+        const auto& src_device_sockets = src_device->get_ethernet_sockets(dest_device->id());
+        const auto& dest_device_sockets = dest_device->get_ethernet_sockets(src_device->id());
+        std::vector<CoreCoord> local_link_cores;
+        local_link_cores.reserve(src_device_sockets.size());
+        std::vector<CoreCoord> remote_link_cores;
+        remote_link_cores.reserve(dest_device_sockets.size());
         std::copy_if(src_device_sockets.begin(), src_device_sockets.end(), std::back_inserter(local_link_cores), [src_device](CoreCoord const& core) { return src_device->is_active_ethernet_core(core, true); });
         std::copy_if(dest_device_sockets.begin(), dest_device_sockets.end(), std::back_inserter(remote_link_cores), [dest_device](CoreCoord const& core) { return dest_device->is_active_ethernet_core(core, true); });
-
-        this->num_links = min_link_count;
 
         TT_ASSERT(local_link_cores.size() == remote_link_cores.size());
 
         edm_builders_forward_direction[src_device->id()].reserve(local_link_cores.size());
-        edm_builders_forward_direction[dest_device->id()].reserve(local_link_cores.size());
+        edm_builders_backward_direction[dest_device->id()].reserve(local_link_cores.size());
         for (size_t l = 0; l < this->num_links; l++) {
             log_trace(tt::LogOp, "Building forward direction EDM on chip {} on link {}", src_device->id(), edm_builders_forward_direction[src_device->id()].size());
             edm_builders_forward_direction[src_device->id()].push_back(FabricEriscDatamoverBuilder::build(
-                device_sequence[hop],
-                *programs[hop],
+                src_device,
+                *src_program,
                 local_link_cores[l],
                 src_device->id(),
                 dest_device->id(),
@@ -517,24 +739,49 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
 
             log_trace(tt::LogOp, "Building backward direction EDM on chip {} on link {}", dest_device->id(), edm_builders_backward_direction[dest_device->id()].size());
             edm_builders_backward_direction[dest_device->id()].push_back(FabricEriscDatamoverBuilder::build(
-                device_sequence[hop + 1],
-                *programs[hop + 1],
+                dest_device,
+                *dest_program,
                 remote_link_cores[l],
                 dest_device->id(),
                 src_device->id(),
                 config,
                 enable_persistent_mode,
                 build_in_worker_connection_mode));
-
-            a_builder = &edm_builders_backward_direction[dest_device->id()].front();
         }
+    };
 
+    FabricEriscDatamoverBuilder* a_builder = nullptr;
+    // Construct the builders
+    for (size_t hop = 0; hop < device_sequence.size() - 1; hop++) {
+        auto src_device = device_sequence[hop];
+        auto dest_device = device_sequence[hop + 1];
+        auto src_program = programs[hop];
+        auto dest_program = programs[hop + 1];
+        build_edm_directions(src_device, dest_device, src_program, dest_program);
+        // Move out of loop?
+        a_builder = &edm_builders_backward_direction[dest_device->id()].front();
+        this->buffer_size_bytes = a_builder->channel_buffer_size;
+    }
+    if (ring_topology) {
+        auto src_device = device_sequence.back();
+        auto dest_device = device_sequence.front();
+        auto src_program = programs.back();
+        auto dest_program = programs.front();
+        build_edm_directions(src_device, dest_device, src_program, dest_program);
+
+        a_builder = &edm_builders_backward_direction[dest_device->id()].front();
         this->buffer_size_bytes = a_builder->channel_buffer_size;
     }
 
     if (!build_in_worker_connection_mode) {
-        // Establish local connections between EDMs on the same chips to establish the lin fabric
-        for (size_t i = 1; i < device_sequence.size() - 1; i++) {
+        // Establish local connections between EDMs on the same chips to establish the line fabric
+        uint32_t start_bidirectional_device_index = 1;
+        uint32_t end_bidirectional_device_index = device_sequence.size() - 1;
+        if (ring_topology) {
+            start_bidirectional_device_index = 0;
+            end_bidirectional_device_index = device_sequence.size();
+        }
+        for (size_t i = start_bidirectional_device_index; i < end_bidirectional_device_index; i++) {
             const size_t num_links = edm_builders_forward_direction.at(device_sequence[i]->id()).size();
             auto& forward_direction_edm = edm_builders_forward_direction.at(device_sequence[i]->id());
             auto& backward_direction_edm = edm_builders_backward_direction.at(device_sequence[i]->id());
@@ -556,11 +803,12 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     Program* program,
     bool enable_persistent_mode,
     std::optional<size_t> desired_num_links,
-    bool build_in_worker_connection_mode) :
+    bool build_in_worker_connection_mode,
+    bool ring_topology) :
     device_sequence({local_device}), programs({program}) {
     static constexpr std::size_t edm_buffer_size =
         FabricEriscDatamoverBuilder::default_packet_payload_size_bytes + sizeof(tt::fabric::PacketHeader);
-    auto const config = FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
+    const auto config = FabricEriscDatamoverConfig(edm_buffer_size, 1, 2, ring_topology);
 
     log_trace(tt::LogOp, "device id={}", local_device->id());
     log_trace(tt::LogOp, "EDM Fabric Factory ctor on device: {}", local_device->id());
@@ -673,11 +921,13 @@ SenderWorkerAdapterSpec EdmLineFabricOpInterface::uniquely_connect_worker(IDevic
 }
 
 EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
-    std::vector<IDevice*> const& device_sequence,
-    std::vector<Program*> const& program_sequence,
+    const std::vector<IDevice*>& device_sequence,
+    const std::vector<Program*>& program_sequence,
     bool enable_persistent_mode,
-    std::optional<size_t> desired_num_links) {
-    return EdmLineFabricOpInterface(device_sequence, program_sequence, enable_persistent_mode, desired_num_links, true);
+    std::optional<size_t> desired_num_links,
+    bool ring_topology) {
+    return EdmLineFabricOpInterface(
+        device_sequence, program_sequence, enable_persistent_mode, desired_num_links, true, ring_topology);
 }
 
 EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
@@ -686,7 +936,8 @@ EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_
     IDevice* backward_device,
     Program* program,
     bool enable_persistent_mode,
-    std::optional<size_t> desired_num_links) {
+    std::optional<size_t> desired_num_links,
+    bool ring_topology) {
     return EdmLineFabricOpInterface(
         local_device,
         forward_device == nullptr ? std::nullopt : std::optional<IDevice*>(forward_device),
@@ -694,7 +945,8 @@ EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_
         program,
         enable_persistent_mode,
         desired_num_links,
-        true);
+        true,
+        ring_topology);
 }
 
 void EdmLineFabricOpInterface::build_kernels() const {
