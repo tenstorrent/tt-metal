@@ -65,9 +65,11 @@ def test_demo_image_classification(device, reset_seeds):
             # print("image: ", image_path)
             # print("json: ", json_path)
 
-    samples = 50
+    print(len(images), len(gt))
+    samples = 100
     correct = 0
     torch_correct = 0
+    torch_org_correct = 0
     ttnn_correct = 0
     for image_file, gt_file in zip(images[:samples], gt[:samples]):
         print(f"Image: {image_file}")
@@ -107,7 +109,7 @@ def test_demo_image_classification(device, reset_seeds):
         parameters = move_to_device(parameters, device)
 
         torch_output = reference_model(torch_input_tensor)
-
+        org_torch = torch_model(torch_input_tensor)
         ttnn_model = TtSegformerForImageClassification(config, parameters)
         ttnn_output = ttnn_model(
             ttnn_input_tensor,
@@ -117,6 +119,12 @@ def test_demo_image_classification(device, reset_seeds):
             parameters=parameters,
             model=reference_model,
         )
+
+        torch_final_output_org = org_torch.logits
+        torch_predicted_id_org = torch_final_output_org.argmax(-1).item()
+
+        torch_predicted_label_org = torch_model.config.id2label[torch_predicted_id_org]
+        print("torch_predicted_label_org: ", torch_predicted_label_org, torch_predicted_id_org)
 
         torch_final_output = torch_output.logits
         torch_predicted_id = torch_final_output.argmax(-1).item()
@@ -129,6 +137,9 @@ def test_demo_image_classification(device, reset_seeds):
 
         ttnn_predicted_label = reference_model.config.id2label[ttnn_predicted_id]
         print("ttnn_predicted_label: ", ttnn_predicted_label, ttnn_predicted_id)
+
+        if torch_predicted_label_org in ground_truth_labels:
+            torch_org_correct += 1
 
         if ttnn_predicted_label in ground_truth_labels:
             ttnn_correct += 1
@@ -148,6 +159,7 @@ def test_demo_image_classification(device, reset_seeds):
         # logger.info("Output")
         # logger.info(reference_model.config.id2label[ttnn_predicted_label])
     ttnn_accuracy = ttnn_correct / samples
+    print("org, torch and ttnn corrects", torch_org_correct, torch_correct, ttnn_correct)
     print(f"ttnn_accuracy: {ttnn_accuracy:.2f}%")
 
     torch_accuracy = torch_correct / samples
@@ -155,3 +167,5 @@ def test_demo_image_classification(device, reset_seeds):
 
     accuracy = correct / samples
     print(f"accuracy: {accuracy:.2f}%")
+    org_accuracy = torch_org_correct / samples
+    print(f"org_accuracy: {org_accuracy:.2f}%")

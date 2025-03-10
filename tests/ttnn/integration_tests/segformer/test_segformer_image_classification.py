@@ -38,7 +38,7 @@ def create_custom_preprocessor(device):
                 device=device,
             )
             parameters["classifier"]["bias"] = ttnn.from_torch(
-                model.classifier.bias,
+                model.classifier.bias.reshape(1, 1, 1, model.classifier.bias.shape[-1]),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
@@ -92,4 +92,4 @@ def test_segformer_image_classificaton(device, reset_seeds):
         model=reference_model,
     )
     ttnn_final_output = ttnn.to_torch(ttnn_output.logits)
-    assert_with_pcc(torch_output.logits, ttnn_final_output, pcc=0.94)
+    assert_with_pcc(torch_output.logits, ttnn_final_output, pcc=0.975)
