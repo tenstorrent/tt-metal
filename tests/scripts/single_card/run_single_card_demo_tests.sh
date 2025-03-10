@@ -24,7 +24,7 @@ run_common_func_tests() {
 
   # Run Llama3 accuracy tests for 1B, 3B, 8B weights
   for llama_dir in "$llama1b" "$llama3b" "$llama8b"; do
-    LLAMA_DIR=$llama_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/tests/test_llama_accuracy.py -k perf --timeout 420; fail+=$?
+    LLAMA_DIR=$llama_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py -k perf --timeout 420; fail+=$?
     echo "LOG_METAL: Llama3 accuracy tests for $llama_dir completed"
   done
 
@@ -117,12 +117,12 @@ run_n300_perf_tests(){
   # Run all Llama3 tests for 1B, 3B, 8B weights for N150
   # To ensure a proper perf measurement and dashboard upload of the Llama3 models on a N150, we have to run them on the N300 perf pipeline for now
   for llama_dir in "$llama1b" "$llama3b" "$llama8b"; do
-    FAKE_DEVICE=N150 LLAMA_DIR=$llama_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/demo/simple_text_demo.py --timeout 600; fail+=$?
+    MESH_DEVICE=N150 LLAMA_DIR=$llama_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600; fail+=$?
     echo "LOG_METAL: Llama3 tests for $llama_dir completed on N150"
   done
   # Run all Llama3 tests for 1B, 3B, 8B and 11B weights
   for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
-    LLAMA_DIR=$llama_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/demo/simple_text_demo.py --timeout 600; fail+=$?
+    LLAMA_DIR=$llama_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600; fail+=$?
     echo "LOG_METAL: Llama3 tests for $llama_dir completed"
   done
 
