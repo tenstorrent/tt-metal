@@ -45,7 +45,7 @@ def test_unet_perf_device(batch: int, groups: int, expected_device_perf_fps: flo
 @skip_for_grayskull("UNet not currently supported on GS")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 68864, "trace_region_size": 424960, "num_command_queues": 2}], indirect=True
+    "device_params", [{"l1_small_size": 68864, "trace_region_size": 434176, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize(
     "batch, groups, iterations, expected_compile_time, expected_throughput",
@@ -87,7 +87,7 @@ def test_unet_trace_perf(
 @skip_for_grayskull("UNet not currently supported on GS")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 68864, "trace_region_size": 424960, "num_command_queues": 2}], indirect=True
+    "device_params", [{"l1_small_size": 68864, "trace_region_size": 434176, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize(
     "batch, groups, iterations, expected_compile_time, expected_throughput, use_async_mode",
