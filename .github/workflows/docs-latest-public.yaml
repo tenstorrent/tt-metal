@@ -7,7 +7,15 @@ on:
         required: false
         type: string
         default: latest
-
+      docker-image:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
 concurrency:
   # Note that people may spam the post-commit pipeline on their branch, and
   # we have this docs pipeline in the post-commit pipeline, then people
@@ -17,58 +25,80 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build-deploy-docs:
+  build-docs:
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
       fail-fast: false
-      matrix:
-        arch: [grayskull]
-    env:
-      ARCH_NAME: ${{ matrix.arch }}
-      LOGURU_LEVEL: INFO
-      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ inputs.docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - uses: actions/checkout@v4
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
         with:
           submodules: recursive
-          lfs: false
-      - name: Set up dynamic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - uses: ./.github/actions/install-metal-deps
-        with:
-          os: ubuntu-20.04
-      - uses: ./.github/actions/install-metal-dev-deps
-        with:
-          os: ubuntu-20.04
+          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
       - uses: actions/download-artifact@v4
         timeout-minutes: 10
         with:
-          name: TTMetal_build_any
+          name: ${{ inputs.build-artifact-name }}
+          path: /work
       - name: Extract files
         run: tar -xvf ttm_any.tar
-      - uses: ./.github/actions/install-python-deps
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.wheel-artifact-name }}
+          path: /work
+      - name: Install Wheel
+        run: |
+          WHEEL_FILENAME=$(ls -1 *.whl)
+          pip3 install $WHEEL_FILENAME
       - name: Build Docs
         timeout-minutes: 15
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          source ${{ github.workspace }}/python_env/bin/activate
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
           ./tests/scripts/run_build_docs.sh
       - name: Prepare artifact - move output
         run: |
           mkdir gh_pages
           mv docs/build/html gh_pages/${{ inputs.version }}
-      - name: Prepare artifact - create .nojekyll
-        run: |
-          touch gh_pages/.nojekyll
-      - name: Prepare artifact - create root index
-        run: |
-          touch gh_pages/index.html
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gh_pages_${{ inputs.version }}
+          path: /work/gh_pages/${{ inputs.version }}/
+          if-no-files-found: error
+
+  deploy-docs:
+    needs: build-docs
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: ⬇️ Checkout
+        # This is needed by the pages-deploy action so
+        # that the folder is initialized for .git
+        uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: gh_pages_${{ inputs.version }}
+          path: gh_pages/${{ inputs.version }}
       - name: Deploy to GitHub Pages
         if: ${{ github.ref == 'refs/heads/main' }}
         uses: JamesIves/github-pages-deploy-action@v4

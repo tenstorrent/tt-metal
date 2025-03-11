@@ -20,7 +20,7 @@
 #include <math.hpp>
 #include <dev_msgs.h>
 #include <hal.hpp>
-#include "program_command_sequence.hpp"
+#include "tt_metal/impl/program/program_command_sequence.hpp"
 #include "tt_metal/command_queue.hpp"
 #include <assert.hpp>
 #include <logger.hpp>
@@ -30,7 +30,7 @@
 #include <circular_buffer.hpp>
 #include "dprint_server.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
-#include <cq_commands.hpp>
+#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include <dispatch_core_manager.hpp>
 #include <event.hpp>
@@ -352,9 +352,9 @@ void Finish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     detail::DispatchStateCheck(true);
     cq.finish(sub_device_ids);
     TT_ASSERT(
-        !(cq.is_dprint_server_hung()), "Command Queue could not finish: device hang due to unanswered DPRINT WAIT.");
+        !(DPrintServerHangDetected()), "Command Queue could not finish: device hang due to unanswered DPRINT WAIT.");
     TT_ASSERT(
-        !(cq.is_noc_hung()),
+        !(tt::watcher_server_killed_due_to_error()),
         "Command Queue could not finish: device hang due to illegal NoC transaction. See {} for details.",
         tt::watcher_get_log_file_name());
 }

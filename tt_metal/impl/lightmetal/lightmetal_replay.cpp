@@ -9,6 +9,7 @@
 #include <tt-metalium/logger.hpp>
 
 #include <host_api.hpp>
+#include "env_lib.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device_impl.hpp>
@@ -301,8 +302,12 @@ void LightMetalReplay::execute(const tt::tt_metal::flatbuffer::Command* command)
             execute(command->cmd_as_BufferCreateCommand());
             break;
         }
-        case ::tt::tt_metal::flatbuffer::CommandType::DeallocateBufferCommand: {
-            execute(command->cmd_as_DeallocateBufferCommand());
+        case ::tt::tt_metal::flatbuffer::CommandType::BufferDeallocateCommand: {
+            execute(command->cmd_as_BufferDeallocateCommand());
+            break;
+        }
+        case ::tt::tt_metal::flatbuffer::CommandType::BufferDeleteCommand: {
+            execute(command->cmd_as_BufferDeleteCommand());
             break;
         }
         case ::tt::tt_metal::flatbuffer::CommandType::EnqueueWriteBufferCommand: {
@@ -433,15 +438,21 @@ void LightMetalReplay::execute(const tt::tt_metal::flatbuffer::BufferCreateComma
     }
 }
 
-void LightMetalReplay::execute(const tt::tt_metal::flatbuffer::DeallocateBufferCommand* cmd) {
+void LightMetalReplay::execute(const tt::tt_metal::flatbuffer::BufferDeallocateCommand* cmd) {
     auto buffer = get_buffer_from_map(cmd->global_id());
     TT_FATAL(
         buffer,
         "Attempted to DeallocateBuffer() buffer w/ global_id: {} that was not previously created.",
         cmd->global_id());
 
-    log_debug(tt::LogMetalTrace, "LightMetalReplay(DeallocateBuffer) global_id: {}", cmd->global_id());
+    log_debug(tt::LogMetalTrace, "LightMetalReplay(BufferDeallocate) global_id: {}", cmd->global_id());
     DeallocateBuffer(*buffer);  // Buffer& expected.
+}
+
+void LightMetalReplay::execute(const tt::tt_metal::flatbuffer::BufferDeleteCommand* cmd) {
+    auto buffer = get_buffer_from_map(cmd->global_id());
+    TT_FATAL(buffer, "Attempted to Delete buffer w/ global_id: {} that was not previously created.", cmd->global_id());
+    log_debug(tt::LogMetalTrace, "LightMetalReplay(BufferDelete) global_id: {}", cmd->global_id());
     remove_bufer_from_map(cmd->global_id());
 }
 

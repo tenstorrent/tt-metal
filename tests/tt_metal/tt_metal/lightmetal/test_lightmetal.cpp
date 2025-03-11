@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "lightmetal_fixture.hpp"
+#include "env_lib.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include "env_lib.hpp"
 #include "gtest/gtest.h"
@@ -254,6 +255,28 @@ TEST_F(LightMetalBasicTest, CreateBufferWidthShardEnqueueWriteRead) {
     EXPECT_TRUE(l1_buffer_read_write_test(device_, test_config));
 }
 
+// Test with large number of buffers, ensure Buffers are deallocated when going out of scope during replay
+TEST_F(LightMetalBasicTest, BufferDeallocationsScope) {
+    CreateDeviceAndBeginCapture(4096);
+
+    const uint32_t num_buffers = 100;
+    for (uint32_t i = 0; i < num_buffers; i++) {
+        const size_t size_bytes = 1024 * 256;  // 256 KB
+        auto buf = Buffer::create(device_, size_bytes, size_bytes, BufferType::L1);
+    }
+}
+
+// Test that we can create buffers and deallocate them, and new buffers don't collide in capture time object map.
+TEST_F(LightMetalBasicTest, CreateBufferAndDeallocate) {
+    CreateDeviceAndBeginCapture(4096);
+
+    const uint32_t num_buffers = 5;
+    for (uint32_t i = 0; i < num_buffers; i++) {
+        auto buf = Buffer::create(device_, 64, 64, BufferType::DRAM);
+        DeallocateBuffer(*buf);
+    }
+}
+
 void SingleRISCDataMovement_test(tt::tt_metal::IDevice* device, bool rt_arg_per_core_vec) {
     uint32_t size_bytes = 64;  // 16 elements.
 
@@ -315,20 +338,26 @@ TEST_F(LightMetalBasicTest, SingleRISCDataMovementReplayManageDevice) {
     SingleRISCDataMovement_test(device_, false);
 }
 
-// Test simple case of 3 riscs used for datamovement and compute works for trace + replay.
-TEST_F(LightMetalBasicTest, ThreeRISCDataMovementCompute) {
-    CreateDeviceAndBeginCapture(4096);
+void three_risc_data_movement_compute_test(IDevice* device, bool dynamic_cb, bool dealloc_cb_buf_early) {
+    uint32_t buf_size_bytes = 64;  // 16 elements.
+    uint32_t cb_size_bytes = 2048;
 
-    uint32_t size_bytes = 64;  // 16 elements.
-    auto input = CreateBuffer(InterleavedBufferConfig{device_, size_bytes, size_bytes, BufferType::DRAM});
-    auto output = CreateBuffer(InterleavedBufferConfig{device_, size_bytes, size_bytes, BufferType::DRAM});
+    CommandQueue& command_queue = device->command_queue();
 
-    CommandQueue& command_queue = device_->command_queue();
+    auto input = CreateBuffer(InterleavedBufferConfig{device, buf_size_bytes, buf_size_bytes, BufferType::DRAM});
+    auto output = CreateBuffer(InterleavedBufferConfig{device, buf_size_bytes, buf_size_bytes, BufferType::DRAM});
+    std::shared_ptr<Buffer> cb_in_buf;
+    Program program;
 
-    // TODO (kmabee) - There is issue with using make_shared, revisit this.
-    // auto simple_program = std::make_shared<Program>(create_simple_unary_program(*input,
-    // *output));
-    auto simple_program = create_simple_unary_program(*input, *output);
+    if (dynamic_cb) {
+        cb_in_buf = CreateBuffer(InterleavedBufferConfig{device, cb_size_bytes, cb_size_bytes, BufferType::L1});
+        if (dealloc_cb_buf_early) {
+            DeallocateBuffer(*cb_in_buf);
+        }
+        program = create_simple_unary_program(*input, *output, cb_in_buf.get());
+    } else {
+        program = create_simple_unary_program(*input, *output);
+    }
 
     vector<uint32_t> input_data(input->size() / sizeof(uint32_t), 0);
     for (uint32_t i = 0; i < input_data.size(); i++) {
@@ -337,44 +366,29 @@ TEST_F(LightMetalBasicTest, ThreeRISCDataMovementCompute) {
 
     // Write data to buffer, enqueue program, then read outputs.
     EnqueueWriteBuffer(command_queue, *input, input_data.data(), /*blocking=*/true);
-    EnqueueProgram(command_queue, simple_program, /*blocking=*/true);
+    EnqueueProgram(command_queue, program, /*blocking=*/true);
     // This will verify that outputs matches between capture + replay
     LightMetalCompareToCapture(command_queue, *output);  // No read return
 
     Finish(command_queue);
 }
 
+// Test simple case of 3 riscs used for datamovement and compute works for trace + replay.
+TEST_F(LightMetalBasicTest, ThreeRISCDataMovementCompute) {
+    CreateDeviceAndBeginCapture(4096);
+    three_risc_data_movement_compute_test(device_, false, false);
+}
+
 // Test simple case of 3 riscs used for datamovement and compute works for trace + replay. Also include dynamic CB.
 TEST_F(LightMetalBasicTest, ThreeRISCDataMovementComputeDynamicCB) {
     CreateDeviceAndBeginCapture(4096);
+    three_risc_data_movement_compute_test(device_, true, false);
+}
 
-    uint32_t buf_size_bytes = 64;  // 16 elements.
-    uint32_t cb_size_bytes = 2048;
-    auto input = CreateBuffer(InterleavedBufferConfig{device_, buf_size_bytes, buf_size_bytes, BufferType::DRAM});
-    auto output = CreateBuffer(InterleavedBufferConfig{device_, buf_size_bytes, buf_size_bytes, BufferType::DRAM});
-    auto cb_in_buf = CreateBuffer(InterleavedBufferConfig{device_, cb_size_bytes, cb_size_bytes, BufferType::L1});
-    log_info(
-        tt::LogTest,
-        "Created 3 Buffers. 0x{:x} 0x{:x} 0x{:x}",
-        input->address(),
-        output->address(),
-        cb_in_buf->address());
-
-    CommandQueue& command_queue = device_->command_queue();
-    auto simple_program = create_simple_unary_program(*input, *output, cb_in_buf.get());
-
-    vector<uint32_t> input_data(input->size() / sizeof(uint32_t), 0);
-    for (uint32_t i = 0; i < input_data.size(); i++) {
-        input_data[i] = i;
-    }
-
-    // Write data to buffer, enqueue program, then read outputs.
-    EnqueueWriteBuffer(command_queue, *input, input_data.data(), /*blocking=*/true);
-    EnqueueProgram(command_queue, simple_program, /*blocking=*/true);
-    // This will verify that outputs matches between capture + replay
-    LightMetalCompareToCapture(command_queue, *output);  // No read return
-
-    Finish(command_queue);
+// Same as previous test but deallocate the Buffer before CB uses it (like Move op, which exposed bug)
+TEST_F(LightMetalBasicTest, ThreeRISCDataMovementComputeDynamicCBDeallocEarly) {
+    CreateDeviceAndBeginCapture(4096);
+    three_risc_data_movement_compute_test(device_, true, true);
 }
 
 // Test simple compute test with metal trace, but no explicit trace replay (added automatically by light metal trace).

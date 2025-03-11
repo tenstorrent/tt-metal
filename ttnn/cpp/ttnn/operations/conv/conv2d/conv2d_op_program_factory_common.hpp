@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <cstdint>
+#include "hostdevcommon/kernel_structs.h"
+
 namespace ttnn::operations::conv {
 namespace conv2d {
 
@@ -32,7 +35,7 @@ struct CBIndices {
     uint32_t get_next_cb_index();
 
 private:
-    uint32_t next_cb_index = CBIndex::c_0;
+    uint32_t next_cb_index = tt::CBIndex::c_0;
 };
 }  // namespace conv2d
 }  // namespace ttnn::operations::conv

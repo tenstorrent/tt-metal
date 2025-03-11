@@ -1,8 +1,13 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+
 #pragma once
+
 #include "fd_kernel.hpp"
+#include "tt_metal/impl/dispatch/topology.hpp"
+#include "core_coord.hpp"
+#include "mesh_graph.hpp"
 
 typedef struct dispatch_static_config {
     std::optional<uint32_t> dispatch_cb_base;  // 0
@@ -34,6 +39,9 @@ typedef struct dispatch_static_config {
 
     std::optional<bool> is_d_variant;
     std::optional<bool> is_h_variant;
+
+    // Populated if fabric is being used to talk to downstream
+    std::optional<uint32_t> client_interface_addr;
 } dispatch_static_config_t;
 
 typedef struct dispatch_dependent_config {
@@ -52,6 +60,13 @@ typedef struct dispatch_dependent_config {
     std::optional<uint32_t> split_prefetch;                        // If upstream is NOT a prefetch_HD
     std::optional<uint32_t> prefetch_h_noc_xy;                     // Dependent. Used if split_prefetch is true
     std::optional<uint32_t> prefetch_h_local_downstream_sem_addr;  // Dependent. Used if split_prefetch is true
+
+    // Populated if fabric is being used to talk to downstream
+    std::optional<uint32_t> fabric_router_noc_xy;
+    std::optional<uint32_t> upstream_mesh_id;
+    std::optional<uint32_t> upstream_chip_id;
+    std::optional<uint32_t> downstream_mesh_id;
+    std::optional<uint32_t> downstream_chip_id;
 } dispatch_dependent_config_t;
 
 class DispatchKernel : public FDKernel {
@@ -67,7 +82,7 @@ public:
         FDKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection) {
         auto& core_manager = tt::tt_metal::dispatch_core_manager::instance();  // Not thread safe
         TT_FATAL(
-            noc_selection.downstream_noc == tt::tt_metal::dispatch_downstream_noc,
+            noc_selection.downstream_noc == tt::tt_metal::k_dispatch_downstream_noc,
             "Invalid downstream NOC specified for Dispatcher kernel");
         TT_FATAL(
             noc_selection.upstream_noc != noc_selection.downstream_noc,
@@ -84,10 +99,25 @@ public:
             this->logical_core_ = core_manager.dispatcher_d_core(device_id, channel, cq_id);
         }
     }
+
     void CreateKernel() override;
+
     void GenerateStaticConfigs() override;
+
     void GenerateDependentConfigs() override;
+
     void ConfigureCore() override;
+
+    void UpdateArgsForFabric(
+        const CoreCoord& fabric_router,
+        tt::tt_fabric::mesh_id_t src_mesh_id,
+        chip_id_t src_chip_id,
+        tt::tt_fabric::mesh_id_t dst_mesh_id,
+        chip_id_t dst_chip_id) override;
+
+    uint32_t GetDispatchBufferSize() const {
+        return (1 << static_config_.dispatch_cb_log_page_size.value()) * static_config_.dispatch_cb_pages.value();
+    }
     const dispatch_static_config_t& GetStaticConfig() { return static_config_; }
 
 private:
