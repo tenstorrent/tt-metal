@@ -59,20 +59,11 @@ public:
 
     static Cluster& instance();
 
-    // For TG Galaxy systems, mmio chips are gateway chips that are only used for dispatc, so user_devices are meant for
-    // user facing host apis
-    size_t number_of_user_devices() const {
-        if (this->cluster_type_ == ClusterType::TG) {
-            const auto& chips = this->cluster_desc_->get_all_chips();
-            return std::count_if(chips.begin(), chips.end(), [&](const auto& id) {
-                return this->cluster_desc_->get_board_type(id) == BoardType::GALAXY;
-            });
-        } else {
-            return this->cluster_desc_->get_number_of_chips();
-        }
-    }
-
+    // For TG Galaxy systems, mmio chips are gateway chips that are only used for dispatch, so user_devices are meant
+    // for user facing host apis
     std::unordered_map<chip_id_t, eth_coord_t> get_user_chip_ethernet_coordinates() const;
+    size_t number_of_user_devices() const;
+    std::unordered_set<chip_id_t> user_exposed_chip_ids() const;
 
     size_t number_of_devices() const { return this->cluster_desc_->get_number_of_chips(); }
 
