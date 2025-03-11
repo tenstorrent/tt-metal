@@ -518,6 +518,8 @@ static constexpr bool enable_ring_support = get_compile_time_arg_val(3);
 static constexpr size_t ETH_BYTES_TO_WORDS_SHIFT = 4;
 static constexpr size_t NUM_SENDER_CHANNELS = 3;
 static constexpr size_t NUM_RECEIVER_CHANNELS = 2;
+// TODO: Pipe from host
+static constexpr size_t NUM_VCS = enable_ring_support ? NUM_RECEIVER_CHANNELS : NUM_RECEIVER_CHANNELS - 1;
 static constexpr size_t num_workers_ctor = 1;
 static constexpr size_t num_messages_to_move_ctor_value = 1;
 // Doesn't REALLY matter but for consistency I picked the next available ID
@@ -803,7 +805,7 @@ template <bool enable_packet_header_recording, bool enable_fabric_counters, uint
 FORCE_INLINE void run_receiver_channel_step(
     tt::fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS> &local_receiver_channel,
     std::array<tt::fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS> &remote_sender_channels,
-    std::array<tt::fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS> &downstream_edm_interfaces,
+    std::array<tt::fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_VCS> &downstream_edm_interfaces,
     volatile tt::fabric::EdmFabricReceiverChannelCounters *receiver_channel_counters_ptr,
     std::array<tt::fabric::ChannelBufferPointer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS> &remote_eth_sender_wrptrs,
     ReceiverChannelPointers<RECEIVER_NUM_BUFFERS> &receiver_channel_pointers,
@@ -954,7 +956,7 @@ void run_fabric_edm_main_loop(
     std::array<tt::fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS> &local_receiver_channels,
     std::array<tt::fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS> &local_sender_channels,
     std::array<tt::fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS> &local_sender_channel_worker_interfaces,
-    std::array<tt::fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS> &downstream_edm_noc_interfaces,
+    std::array<tt::fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_VCS> &downstream_edm_noc_interfaces,
     std::array<tt::fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS> &remote_sender_channels,
     std::array<tt::fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS> &remote_receiver_channels,
     volatile tt::fabric::TerminationSignal *termination_signal_ptr,
@@ -1306,44 +1308,46 @@ void kernel_main() {
         connection_worker_info_ptr->edm_rdptr = 0;
     }
 
-    std::array<tt::fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS> downstream_edm_noc_interfaces = {
-        has_downstream_edm_vc0_buffer_connection
-            ? tt::fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>(
-                 //persistent_mode -> hardcode to false because for EDM -> EDM
-                 // connections we must always use semaphore lookup
-                  false,
-                  downstream_edm_vc0_noc_x,
-                  downstream_edm_vc0_noc_y,
-                  downstream_edm_vc0_buffer_base_address,
-                  SENDER_NUM_BUFFERS,
-                  downstream_edm_vc0_semaphore_id,
-                  downstream_edm_vc0_worker_registration_id,
-                  downstream_edm_vc0_worker_location_info_address,
-                  channel_buffer_size,
-                  local_sender_channel_1_connection_buffer_index_id,
-                  reinterpret_cast<volatile uint32_t *const>(edm_vc0_forwarding_semaphore_address),
-                  reinterpret_cast<volatile uint32_t *const>(edm_vc0_teardown_semaphore_address),
-                  downstream_vc0_noc_interface_buffer_index_local_addr) : tt::fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>(),
-
-        has_downstream_edm_vc1_buffer_connection
-            ? tt::fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>(
-                    //persistent_mode -> hardcode to false because for EDM -> EDM
-                    // connections we must always use semaphore lookup
-                     false,
-                     downstream_edm_vc1_noc_x,
-                     downstream_edm_vc1_noc_y,
-                     downstream_edm_vc1_buffer_base_address,
-                     SENDER_NUM_BUFFERS,
-                     downstream_edm_vc1_semaphore_id,
-                     downstream_edm_vc1_worker_registration_id,
-                     downstream_edm_vc1_worker_location_info_address,
-                     channel_buffer_size,
-                     local_sender_channel_1_connection_buffer_index_id,
-                     reinterpret_cast<volatile uint32_t *const>(edm_vc1_forwarding_semaphore_address),
-                     reinterpret_cast<volatile uint32_t *const>(edm_vc1_teardown_semaphore_address),
-                     downstream_vc1_noc_interface_buffer_index_local_addr) : tt::fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>()};
-
-                     for (uint8_t i = 0; i < NUM_RECEIVER_CHANNELS; i++) {
+    std::array<tt::fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_VCS> downstream_edm_noc_interfaces;
+    if (has_downstream_edm_vc0_buffer_connection) {
+        new (&downstream_edm_noc_interfaces[0]) tt::fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>(
+            //persistent_mode -> hardcode to false because for EDM -> EDM
+            // connections we must always use semaphore lookup
+             false,
+             downstream_edm_vc0_noc_x,
+             downstream_edm_vc0_noc_y,
+             downstream_edm_vc0_buffer_base_address,
+             SENDER_NUM_BUFFERS,
+             downstream_edm_vc0_semaphore_id,
+             downstream_edm_vc0_worker_registration_id,
+             downstream_edm_vc0_worker_location_info_address,
+             channel_buffer_size,
+             local_sender_channel_1_connection_buffer_index_id,
+             reinterpret_cast<volatile uint32_t *const>(edm_vc0_forwarding_semaphore_address),
+             reinterpret_cast<volatile uint32_t *const>(edm_vc0_teardown_semaphore_address),
+             downstream_vc0_noc_interface_buffer_index_local_addr);
+    }
+    if constexpr (enable_ring_support) {
+        if (has_downstream_edm_vc1_buffer_connection) {
+            new (&downstream_edm_noc_interfaces[1]) tt::fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>(
+                //persistent_mode -> hardcode to false because for EDM -> EDM
+                // connections we must always use semaphore lookup
+                 false,
+                 downstream_edm_vc1_noc_x,
+                 downstream_edm_vc1_noc_y,
+                 downstream_edm_vc1_buffer_base_address,
+                 SENDER_NUM_BUFFERS,
+                 downstream_edm_vc1_semaphore_id,
+                 downstream_edm_vc1_worker_registration_id,
+                 downstream_edm_vc1_worker_location_info_address,
+                 channel_buffer_size,
+                 local_sender_channel_2_connection_buffer_index_id,
+                 reinterpret_cast<volatile uint32_t *const>(edm_vc1_forwarding_semaphore_address),
+                 reinterpret_cast<volatile uint32_t *const>(edm_vc1_teardown_semaphore_address),
+                 downstream_vc1_noc_interface_buffer_index_local_addr);
+        }
+    }
+    for (uint8_t i = 0; i < NUM_RECEIVER_CHANNELS; i++) {
         new (&local_receiver_channels[i]) tt::fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>(
             local_receiver_buffer_addresses[i],
             channel_buffer_size,
