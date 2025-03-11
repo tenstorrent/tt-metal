@@ -4,13 +4,11 @@
 
 #include <buffer.hpp>
 
-#include "tt_metal/buffer.hpp"
 #include <assert.hpp>
 #include <math.hpp>
 #include <tt_metal.hpp>
 #include <allocator.hpp>
 #include <device.hpp>
-#include <types.hpp>
 #include <graph_tracking.hpp>
 #include <algorithm>
 #include <atomic>

@@ -273,8 +273,10 @@ void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, co
  * | buffer     | Dynamically allocated L1 buffer that shares address space of circular buffer `cb_handle` | const Buffer &               | L1 buffer   | Yes      |
  * | total_size | New size of the circular buffer in bytes                                                 | uint32_t                     |             | Yes      |
  */
+// clang-format on
 void UpdateDynamicCircularBufferAddressAndTotalSize(Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t total_size);
 
+// clang-format off
 /**
  * Initializes semaphore on all cores within core range (inclusive). Each core can have up to eight 4B semaphores aligned to L1_ALIGNMENT.
  *

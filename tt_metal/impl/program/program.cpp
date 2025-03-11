@@ -27,7 +27,6 @@
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "llrt.hpp"
 #include "program_command_sequence.hpp"
-#include "tt_metal/program.hpp"
 #include "tracy/Tracy.hpp"
 #include <tt_align.hpp>
 #include <tuple>
@@ -1627,70 +1626,6 @@ std::vector<uint32_t> &Program::get_program_config_sizes() const noexcept { retu
 
 std::unordered_map<uint64_t, ProgramCommandSequence> &Program::get_cached_program_command_sequences() noexcept {
     return pimpl_->cached_program_command_sequences_;
-}
-
-ProgramHandle CreateProgram() { return {}; }
-
-KernelHandle CreateKernel(
-    ProgramHandle& program,
-    std::string_view file_name,
-    const CoreRangeSet& core_spec,
-    const DataMovementConfig& config) {
-    return KernelHandle{::CreateKernel(program, std::string{file_name}, core_spec, config)};
-}
-
-KernelHandle CreateKernel(
-    ProgramHandle& program, std::string_view file_name, const CoreRangeSet& core_spec, const ComputeConfig& config) {
-    return KernelHandle{::CreateKernel(program, std::string{file_name}, core_spec, config)};
-}
-
-KernelHandle CreateKernel(
-    ProgramHandle& program, std::string_view file_name, const CoreRangeSet& core_spec, const EthernetConfig& config) {
-    return KernelHandle{::CreateKernel(program, std::string{file_name}, core_spec, config)};
-}
-
-uint32_t CreateSemaphore(
-    ProgramHandle& program, const CoreRangeSet& core_spec, uint32_t initial_value, CoreType core_type) {
-    return ::CreateSemaphore(program, core_spec, initial_value, core_type);
-}
-
-CircularBufferHandle CreateCircularBuffer(
-    ProgramHandle& program, const CoreRangeSet& core_spec, const CircularBufferConfig& config) {
-    return CircularBufferHandle{::CreateCircularBuffer(program, core_spec, config)};
-}
-
-const CircularBufferConfig& GetCircularBufferConfig(ProgramHandle& program, CircularBufferHandle cb_handle) {
-    return ::GetCircularBufferConfig(program, static_cast<::CBHandle>(cb_handle));
-}
-
-constexpr auto to_handle() {
-    return [](const detail::Internal_::map_type::value_type& pair) { return CircularBufferHandle{pair.first}; };
-}
-
-SizedCircularBufferRange GetCircularBuffers(ProgramHandle& program) {
-    return detail::Internal_::get_circular_buffers_by_id(program) |
-           ranges::views::transform(to_handle());
-}
-
-inline auto is_on_logical_corerange(CoreRange cr) {
-    return [=](const detail::Internal_::map_type::value_type &pair) {
-        return pair.second->is_on_logical_corerange(cr);
-    };
-}
-
-CircularBufferRange GetCircularBuffersOnCoreRange(ProgramHandle& program, CoreRange cr) {
-    return detail::Internal_::get_circular_buffers_by_id(program) |
-           ranges::views::filter(is_on_logical_corerange(cr)) |
-           ranges::views::transform(to_handle());
-}
-
-void UpdateCircularBufferTotalSize(ProgramHandle& program, CircularBufferHandle cb_handle, std::uint32_t total_size) {
-    ::UpdateCircularBufferTotalSize(program, static_cast<::CBHandle>(cb_handle), total_size);
-}
-
-void UpdateDynamicCircularBufferAddress(
-    ProgramHandle& program, CircularBufferHandle cb_handle, const BufferHandle& buffer) {
-    ::UpdateDynamicCircularBufferAddress(program, static_cast<::CBHandle>(cb_handle), *buffer);
 }
 
 }  // namespace tt::tt_metal

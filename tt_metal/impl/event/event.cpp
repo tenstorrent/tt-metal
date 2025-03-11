@@ -8,7 +8,6 @@
 
 #include <assert.hpp>
 #include <logger.hpp>
-#include "tt_metal/event.hpp"
 
 namespace tt::tt_metal {
 
