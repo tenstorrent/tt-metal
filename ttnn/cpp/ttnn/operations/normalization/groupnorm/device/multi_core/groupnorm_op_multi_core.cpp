@@ -1253,6 +1253,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     uint32_t xmm_CB_size = interm_block_tiles * single_tile_size;
     uint32_t ex_partial_CB_size = single_tile_size;   // partial Ex
     uint32_t ex_global_CB_size = ex_partial_CB_size;  // the final result Ex
+    uint32_t ex2_global_CB_size = ex_partial_CB_size;  // the final result Ex
     uint32_t xmm2_CB_size = interm_block_tiles * single_tile_size;
     uint32_t ex2pe_CB_size = ex_partial_CB_size;
     // output buffer size
@@ -1377,7 +1378,10 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)per_core_Nt * TILE_WIDTH * datum_size_bytes,
         (std::uint32_t)datum_size_bytes,
         (std::uint32_t)per_core_Mt,
-        (std::uint32_t)TILE_HEIGHT};
+        (std::uint32_t)TILE_HEIGHT,
+        (std::uint32_t)block_ht,
+        (std::uint32_t)block_wt,
+        (std::uint32_t)block_ht * block_wt};
     std::vector<uint32_t> reader_mcast_receiver_compile_time_args = {
         (std::uint32_t)1,
         (std::uint32_t)reduce_receiver_semaphore_id,
@@ -1387,7 +1391,10 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)per_core_N_bytes_padded,
         (std::uint32_t)per_core_Nt * TILE_WIDTH * datum_size_bytes,
         (std::uint32_t)per_core_Mt,
-        (std::uint32_t)TILE_HEIGHT};
+        (std::uint32_t)TILE_HEIGHT,
+        (std::uint32_t)block_ht,
+        (std::uint32_t)block_wt,
+        (std::uint32_t)block_ht * block_wt};
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
     // reader kernel
@@ -1433,7 +1440,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)per_core_Nt * TILE_WIDTH * datum_size_bytes,
         (std::uint32_t)num_groups_per_core,
         (std::uint32_t)num_batches_per_core,
-        (std::uint32_t)block_wt};
+        (std::uint32_t)block_ht,
+        (std::uint32_t)block_wt,
+        (std::uint32_t)block_ht * block_wt};
 
     if (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) {
         auto gamma_stick_size = gamma.value().get_padded_shape()[3] * gamma.value().element_size();
@@ -1701,6 +1710,15 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
                                    .set_page_size(ex_global_cb_index, single_tile_size)
                                    .set_page_size(ex_cb_index, single_tile_size);
     auto cb_ex_global = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_global_cb_config);
+    // ex2_global
+    uint32_t ex2_cb_index = tt::CBIndex::c_13;
+    uint32_t ex2_global_cb_index = tt::CBIndex::c_14;
+    std::map<uint8_t, tt::DataFormat> ex2_global_cb_data_format_spec{
+        {ex2_global_cb_index, cb_data_format}, {ex2_cb_index, cb_data_format}};
+    auto ex2_global_cb_config = tt::tt_metal::CircularBufferConfig(ex2_global_CB_size, ex2_global_cb_data_format_spec)
+                                    .set_page_size(ex2_global_cb_index, single_tile_size)
+                                    .set_page_size(ex2_cb_index, single_tile_size);
+    auto cb2_ex_global = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2_global_cb_config);
     // ex2pe
     uint32_t cb_ex2pe_index;
     cb_ex2pe_index = tt::CBIndex::c_27;
