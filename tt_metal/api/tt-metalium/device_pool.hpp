@@ -62,6 +62,8 @@ public:
     const std::unordered_set<std::thread::id>& get_worker_thread_ids() const;
     void init_profiler() const;
 
+    // Allowing to get corresponding MeshDevice for a given device to properly schedule programs / create buffers for
+    // it. This is currently used exclusively by profiler.
     void set_mesh_device(tt_metal::IDevice* device, std::weak_ptr<tt_metal::distributed::MeshDevice> mesh);
     std::shared_ptr<tt_metal::distributed::MeshDevice> get_mesh_device(tt_metal::IDevice* device) const;
 

@@ -132,6 +132,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
             .noc = tt_metal::NOC::RISCV_0_default,
             .defines = kernel_defines});
 
+    // Using MeshDevice APIs if the current device is managed by MeshDevice
     if (auto mesh_device = DevicePool::instance().get_mesh_device(device)) {
         auto device_coord = mesh_device->get_view().find_device(device_id);
         distributed::MeshWorkload workload;
@@ -625,6 +626,8 @@ void InitDeviceProfiler(IDevice* device) {
         auto mesh_device = DevicePool::instance().get_mesh_device(device);
         auto& profiler = tt_metal_device_profiler_map.at(device_id);
         if (profiler.output_dram_buffer.get_buffer() == nullptr && mesh_device) {
+            // If buffer is not allocated, trying to re-use a buffer already allocated for another device within a
+            // single MeshDevice
             for (auto neighbor_device : mesh_device->get_devices()) {
                 auto neighbor_profiler_it = tt_metal_device_profiler_map.find(neighbor_device->id());
                 if (neighbor_profiler_it != tt_metal_device_profiler_map.end()) {
