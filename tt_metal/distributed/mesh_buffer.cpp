@@ -160,10 +160,7 @@ std::shared_ptr<Buffer> MeshBuffer::get_device_buffer(const MeshCoordinate& devi
     return buffers_.at(device_coord);
 }
 
-std::shared_ptr<Buffer> MeshBuffer::get_device_buffer() const {
-    auto coord_range = MeshCoordinateRange(device()->shape());
-    return get_device_buffer(*coord_range.begin());
-}
+std::shared_ptr<Buffer> MeshBuffer::get_reference_buffer() const { return buffers_.values().front(); }
 
 DeviceAddr MeshBuffer::size() const {
     return std::visit(
@@ -209,7 +206,7 @@ std::pair<bool, bool> MeshBuffer::replicated_dims() const {
 
 AnyBuffer::AnyBuffer(std::shared_ptr<Buffer> buffer) : buffer_(buffer.get()), holder_(std::move(buffer)) {}
 AnyBuffer::AnyBuffer(std::shared_ptr<MeshBuffer> buffer) :
-    buffer_(buffer->get_device_buffer().get()), holder_(std::move(buffer)) {}
+    buffer_(buffer->get_reference_buffer().get()), holder_(std::move(buffer)) {}
 
 AnyBuffer AnyBuffer::create(const tt::tt_metal::ShardedBufferConfig& config) {
     auto mesh_device = dynamic_cast<MeshDevice*>(config.device);

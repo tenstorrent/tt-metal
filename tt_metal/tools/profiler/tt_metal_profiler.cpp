@@ -624,16 +624,14 @@ void InitDeviceProfiler(IDevice* device) {
 
         auto mesh_device = DevicePool::instance().get_mesh_device(device);
         auto& profiler = tt_metal_device_profiler_map.at(device_id);
-        if (profiler.output_dram_buffer.get_buffer() == nullptr) {
-            if (mesh_device) {
-                for (auto neighbor_device : mesh_device->get_devices()) {
-                    auto neighbor_profiler_it = tt_metal_device_profiler_map.find(neighbor_device->id());
-                    if (neighbor_profiler_it != tt_metal_device_profiler_map.end()) {
-                        auto& neighbor_profiler = neighbor_profiler_it->second;
-                        if (neighbor_profiler.output_dram_buffer.get_buffer() != nullptr) {
-                            profiler.output_dram_buffer = neighbor_profiler.output_dram_buffer;
-                            break;
-                        }
+        if (profiler.output_dram_buffer.get_buffer() == nullptr && mesh_device) {
+            for (auto neighbor_device : mesh_device->get_devices()) {
+                auto neighbor_profiler_it = tt_metal_device_profiler_map.find(neighbor_device->id());
+                if (neighbor_profiler_it != tt_metal_device_profiler_map.end()) {
+                    auto& neighbor_profiler = neighbor_profiler_it->second;
+                    if (neighbor_profiler.output_dram_buffer.get_buffer() != nullptr) {
+                        profiler.output_dram_buffer = neighbor_profiler.output_dram_buffer;
+                        break;
                     }
                 }
             }

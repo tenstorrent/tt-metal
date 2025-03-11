@@ -99,7 +99,10 @@ public:
     const DeviceLocalBufferConfig& device_local_config() const { return device_local_config_; }
 
     std::shared_ptr<Buffer> get_device_buffer(const MeshCoordinate& device_coord) const;
-    std::shared_ptr<Buffer> get_device_buffer() const;
+
+    // TODO: Remove this method, once there is no need to interop MeshBuffer with Buffer.
+    std::shared_ptr<Buffer> get_reference_buffer() const;
+
     uint32_t datum_size_bytes() const;
     Shape2D physical_shard_shape() const;
     std::pair<bool, bool> replicated_dims() const;
