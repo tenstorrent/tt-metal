@@ -547,7 +547,7 @@ MeshEvent MeshCommandQueue::enqueue_record_event_helper(
         device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
-    for (const auto& coord : event.device_range()) {
+    auto dispatch_lambda = [this, &event, &sub_device_ids, notify_host](const MeshCoordinate& coord) {
         event_dispatch::issue_record_event_commands(
             mesh_device_,
             event.id(),
@@ -557,8 +557,13 @@ MeshEvent MeshCommandQueue::enqueue_record_event_helper(
             sub_device_ids,
             expected_num_workers_completed_,
             notify_host);
-    }
+    };
 
+    for (const auto& coord : event.device_range()) {
+        dispatch_thread_pool_->enqueue(
+            [&dispatch_lambda, coord]() { dispatch_lambda(coord); }, mesh_device_->get_device(coord)->id());
+    }
+    dispatch_thread_pool_->wait();
     return event;
 }
 
