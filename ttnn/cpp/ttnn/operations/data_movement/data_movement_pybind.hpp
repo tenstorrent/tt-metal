@@ -20,6 +20,8 @@
 #include "ttnn/operations/data_movement/fill_rm/fill_rm_pybind.hpp"
 #include "ttnn/operations/data_movement/fold/fold_pybind.hpp"
 #include "ttnn/operations/data_movement/indexed_fill/indexed_fill_pybind.hpp"
+#include "ttnn/operations/data_movement/conv_knit/conv_knit_pybind.hpp"
+#include "ttnn/operations/data_movement/conv_crop/conv_crop_pybind.hpp"
 #include "ttnn/operations/data_movement/move/move_pybind.hpp"
 #include "ttnn/operations/data_movement/non_zero_indices/non_zero_indices_pybind.hpp"
 #include "ttnn/operations/data_movement/pad/pad_pybind.hpp"
@@ -71,6 +73,8 @@ void py_module(py::module& module) {
     detail::py_bind_copy(module);
     detail::py_bind_move(module);
     py_bind_expand(module);
+    py_bind_conv_knit(module);
+    py_bind_conv_crop(module);
     py_bind_interleaved_to_sharded(module);
     py_bind_interleaved_to_sharded_partial(module);
     py_bind_repeat(module);
