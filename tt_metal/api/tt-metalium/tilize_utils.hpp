@@ -35,7 +35,7 @@ using PhysicalSize = std::array<uint32_t, 2>;
 struct TensAddr {
     std::vector<std::uint32_t> sh;
 
-    TensAddr(std::vector<std::uint32_t> shape);
+    TensAddr(const std::vector<std::uint32_t>& shape);
     std::uint32_t numel() const;
     int offs(int n, int c, int h, int w);
 };

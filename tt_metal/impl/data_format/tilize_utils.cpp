@@ -6,7 +6,7 @@
 
 #include <tt-metalium/bfloat16.hpp>
 
-TensAddr::TensAddr(std::vector<std::uint32_t> shape) : sh(shape) {}
+TensAddr::TensAddr(const std::vector<std::uint32_t>& shape) : sh(shape) {}
 
 std::uint32_t TensAddr::numel() const {
     std::uint32_t prod = 1;
