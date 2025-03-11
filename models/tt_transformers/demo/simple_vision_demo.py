@@ -336,9 +336,9 @@ def test_multimodal_demo_text(
             profiler,
             run_type=f"{model_args.device_name}-demo",
             ml_model_name=model_args.base_model_name,
-            ml_model_type="llm",
+            ml_model_type="vlm",
             num_layers=model_args.n_layers,
             batch_size=max_batch_size,
             input_sequence_length=max(prefill_lens).item(),
-            output_sequence_length=1,
+            output_sequence_length=max_gen_len,
         )
