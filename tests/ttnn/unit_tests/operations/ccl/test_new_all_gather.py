@@ -173,6 +173,7 @@ def run_all_gather_impl(
             0,
             enable_persistent_fabric,
             wrap_fabric_around_mesh=wrap_fabric_around_mesh,
+            topology=all_gather_topology,
         )
         mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
@@ -334,7 +335,9 @@ def run_all_gather_impl(
 
     if enable_persistent_fabric and teardown_persistent_fabric:
         mesh_device.reset_sub_device_stall_group()
-        teardown_fabric_interface(mesh_device)
+        teardown_fabric_interface(
+            mesh_device, wrap_fabric_around_mesh=wrap_fabric_around_mesh, topology=all_gather_topology
+        )
 
     if not passed:
         assert eq, f"{i} FAILED: {output}"
@@ -516,6 +519,80 @@ def test_all_gather_sharded(
         use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Linear,
+        num_iters=num_iters,
+        enable_async=enable_async,
+        rand_tensor=True,
+        input_shard_shape=input_shard_shape,
+        input_shard_grid=input_shard_grid,
+        output_shard_shape=output_shard_shape,
+        output_shard_grid=output_shard_grid,
+        tensor_mem_layout=tensor_mem_layout,
+        create_persistent_fabric=True,
+        teardown_persistent_fabric=True,
+        wrap_fabric_around_mesh=True,
+    )
+
+
+# Enumerate the post-commit cases explicitly
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "num_devices, output_shape, dim, layout, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
+    [
+        (
+            4,
+            [1, 4, 32, 1280],
+            3,
+            ttnn.TILE_LAYOUT,
+            (32, 320),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 4))}),
+            None,
+            None,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ),
+    ],
+)
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
+    ],
+)
+@pytest.mark.parametrize("num_iters", [8])
+@pytest.mark.parametrize("enable_async", [False])
+def test_all_gather_sharded_ring(
+    pcie_mesh_device,
+    num_devices,
+    output_shape,
+    dim,
+    num_links,
+    input_dtype,
+    layout,
+    num_iters,
+    use_program_cache,
+    function_level_defaults,
+    enable_async,
+    input_shard_shape,
+    input_shard_grid,
+    output_shard_shape,
+    output_shard_grid,
+    tensor_mem_layout,
+):
+    if num_links > 1:
+        assert f"num_links > 1 not supported for sharded all gather test function which is currently using the pcie_mesh_device (and hence only has 1 link available for use)"
+
+    run_all_gather_impl(
+        pcie_mesh_device,
+        num_devices,
+        output_shape,
+        dim,
+        num_links,
+        input_dtype,
+        layout,
+        use_program_cache,
+        function_level_defaults,
+        all_gather_topology=ttnn.Topology.Ring,
         num_iters=num_iters,
         enable_async=enable_async,
         rand_tensor=True,

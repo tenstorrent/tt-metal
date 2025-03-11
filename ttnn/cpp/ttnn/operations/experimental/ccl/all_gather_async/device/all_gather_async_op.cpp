@@ -35,9 +35,13 @@ AllGatherAsync create_all_gather_async_struct(
             semaphore = semaphores.at(i);  // Get raw pointer
             if (i != 0) {
                 backward_device = devices.at(i - 1);
+            } else if (topology == ttnn::ccl::Topology::Ring) {
+                backward_device = devices.at(num_devices - 1);
             }
             if (i != num_devices - 1) {
                 forward_device = devices.at(i + 1);
+            } else if (topology == ttnn::ccl::Topology::Ring) {
+                forward_device = devices.at(0);
             }
         }
     }

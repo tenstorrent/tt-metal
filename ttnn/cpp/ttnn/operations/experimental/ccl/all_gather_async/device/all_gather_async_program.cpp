@@ -162,16 +162,16 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_w
                   backward_device.value_or(nullptr),
                   &program,
                   enable_persistent_fabric_mode,
-                  num_links)
+                  num_links,
+                  topology)
             : ccl::EdmLineFabricOpInterface(
                   device,
                   forward_device.value_or(nullptr),
                   backward_device.value_or(nullptr),
                   &program,
                   enable_persistent_fabric_mode,
-                  num_links);
-
-    LineTopology line_topology(ring_size, ring_index);
+                  num_links,
+                  topology);
 
     std::unique_ptr<ccl::CclOpTensorConfig> input_tensor_config =
         ttnn::ccl::CclOpTensorConfig::build_all_gather_tensor_config(input_tensor);
@@ -244,14 +244,24 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_w
             tt::tt_metal::WriterDataMovementConfig{},
             1,  // num_command_streams
             device->id());
+    size_t num_targets_forward = 0;
+    size_t num_targets_backward = 0;
+    if (topology == ccl::Topology::Linear) {
+        LineTopology line_topology(ring_size, ring_index);
+        num_targets_forward =
+            line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD);
+        num_targets_backward =
+            line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD);
+    } else if (topology == ccl::Topology::Ring) {
+        // TODO: Commonize
+        num_targets_forward = tt::div_up(ring_size - 1, 2);
+        num_targets_backward = ring_size - 1 - num_targets_forward;
+        if (ring_index % 2 == 0) {
+            std::swap(num_targets_forward, num_targets_backward);
+        }
+    }
 
-    const size_t forward_direction_distance_to_end_of_line =
-        line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD);
-    const size_t backward_direction_distance_to_end_of_line =
-        line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD);
-
-    ttnn::ccl::cmd::MulticastCommandDestArgs mcast_dest_args = {
-        forward_direction_distance_to_end_of_line, backward_direction_distance_to_end_of_line};
+    ttnn::ccl::cmd::MulticastCommandDestArgs mcast_dest_args = {num_targets_forward, num_targets_backward};
     log_trace(
         tt::LogOp,
         "[mcast_dest_args] num target forward: {}, num target backward: {}",
@@ -288,27 +298,27 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_w
         print_tensor_slice(output_worker_slice_v2);
 
         std::optional<ttnn::ccl::SenderWorkerAdapterSpec> forward_fabric_connection =
-            line_topology.is_first_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD)
+            !forward_device.has_value()
                 ? std::nullopt
                 : std::optional<ttnn::ccl::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
                       device, ttnn::ccl::EdmLineFabricOpInterface::FORWARD));
         std::optional<ttnn::ccl::SenderWorkerAdapterSpec> backward_fabric_connection =
-            line_topology.is_last_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD)
+            !backward_device.has_value()
                 ? std::nullopt
                 : std::optional<ttnn::ccl::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
                       device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
 
         log_trace(
             tt::LogOp,
-            "DEBUG: line_index: {}, line_size: {}, forward_fabric_connection: {}",
-            line_topology.line_index(),
-            line_topology.line_size(),
+            "DEBUG: ring_index: {}, ring_size: {}, forward_fabric_connection: {}",
+            ring_index,
+            ring_size,
             forward_fabric_connection.has_value());
         log_trace(
             tt::LogOp,
-            "DEBUG: line_index: {}, line_size: {}, backward_fabric_connection: {}",
-            line_topology.line_index(),
-            line_topology.line_size(),
+            "DEBUG: ring_index: {}, ring_size: {}, backward_fabric_connection: {}",
+            ring_index,
+            ring_size,
             backward_fabric_connection.has_value());
 
         // READER COMMAND STREAM and RT ARGS
