@@ -157,7 +157,7 @@ jobs:
         run: |
           TOOLCHAIN="${{ inputs.toolchain }}"
           TOOLCHAIN_CLEANED=$(echo "$TOOLCHAIN" | sed -E 's/^cmake\///; s/-toolchain\.cmake$//')
-          ARTIFACT_NAME="packages-${{ inputs.distro }}-${{ inputs.version }}-${{ inputs.architecture }}-${{ inputs.build-type }}-${TOOLCHAIN_CLEANED}${{ (inputs.tracy && '_profiler') || '' }}"
+          ARTIFACT_NAME="packages-2204-${{ inputs.distro }}-${{ inputs.version }}-${{ inputs.architecture }}-${{ inputs.build-type }}-${TOOLCHAIN_CLEANED}${{ (inputs.tracy && '_profiler') || '' }}"
 
           echo "name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
           echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> "$GITHUB_ENV"
