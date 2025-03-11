@@ -120,16 +120,15 @@ Tensor aggregate_as_tensor(
         auto mesh_buffer = std::get<DeviceStorage>(reference_shard.get_storage()).mesh_buffer;
         TT_FATAL(
             mesh_buffer != nullptr,
-            "Does not support aggregating tensor shards that are not backed by a mesh buffer. Consider moving tensors "
-            "to host, aggregating, and re-uploading on device storage.");
+            "Error aggregating multichip tensors: tensors shards must be allocated on a mesh buffer.");
         std::vector<std::pair<MeshCoordinate, TensorSpec>> specs;
 
         for (const auto& shard : tensor_shards) {
             const auto& shard_storage = std::get<DeviceStorage>(shard.get_storage());
             TT_FATAL(
                 shard_storage.mesh_buffer == mesh_buffer,
-                "Does not support aggregating tensor shards, allocated on different mesh buffers. Consider moving "
-                "tensors to host, aggregating, and re-uploading on device storage.");
+                "Error aggregating multichip tensors: tensor shards must be allocated on the same mesh buffer. "
+                "Consider moving tensors to host, aggregating, and re-uploading on device storage.");
             for (const auto& [coord, shard_spec] : shard_storage.specs) {
                 specs.push_back(std::make_pair(coord, shard_spec));
             }
