@@ -69,7 +69,14 @@ inline void _calculate_reciprocal_(const int iterations)
         }
         v_endif;
 
-        dst_reg[0] = out;
+        if constexpr (APPROXIMATION_MODE)
+        {
+            dst_reg[0] = out;
+        }
+        else
+        {
+            dst_reg[0] = reinterpret<vFloat>(float_to_fp16b(out, 0));
+        }
 
         dst_reg++;
     }
