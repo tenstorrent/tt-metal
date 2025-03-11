@@ -19,16 +19,17 @@ from models.experimental.functional_yolov8x.tt.ttnn_yolov8x_utils import (
     custom_preprocessor,
 )
 from models.experimental.functional_yolov8x.reference import yolov8x
+from models.experimental.functional_yolov9c.demo.demo_utils import attempt_load
 
-try:
-    sys.modules["ultralytics"] = yolov8x_utils
-    sys.modules["ultralytics.nn.tasks"] = yolov8x_utils
-    sys.modules["ultralytics.nn.modules.conv"] = yolov8x_utils
-    sys.modules["ultralytics.nn.modules.block"] = yolov8x_utils
-    sys.modules["ultralytics.nn.modules.head"] = yolov8x_utils
+# try:
+#     sys.modules["ultralytics"] = yolov8x_utils
+#     sys.modules["ultralytics.nn.tasks"] = yolov8x_utils
+#     sys.modules["ultralytics.nn.modules.conv"] = yolov8x_utils
+#     sys.modules["ultralytics.nn.modules.block"] = yolov8x_utils
+#     sys.modules["ultralytics.nn.modules.head"] = yolov8x_utils
 
-except KeyError:
-    logger.info("models.experimental.functional_yolov8x.reference.yolov8x_utils not found.")
+# except KeyError:
+#     logger.info("models.experimental.functional_yolov8x.reference.yolov8x_utils not found.")
 
 
 # For testing reference
@@ -59,66 +60,6 @@ def make_anchors(feats, strides, grid_cell_offset=0.5):
     return torch.cat(anchor_points), torch.cat(stride_tensor)
 
 
-class Ensemble(nn.ModuleList):
-    def __init__(self):
-        super(Ensemble, self).__init__()
-
-    def forward(self, x, augment=False):
-        y = []
-        for module in self:
-            y.append(module(x, augment)[0])
-        y = torch.cat(y, 1)
-        return y, None
-
-
-def attempt_download(file, repo="ultralytics/assets"):
-    tests = Path(__file__).parent.parent / "yolov8x"
-    file_path = tests / Path(str(file).strip().replace("'", "").lower())
-
-    if not file_path.exists():
-        name = "yolov8x.pt"
-        msg = f"{file_path} missing, try downloading from https://github.com/{repo}/releases/"
-        try:
-            url = f"https://github.com/{repo}/releases/download/v8.3.0/{name}"
-            logger.info(f"Downloading {url} to {file_path}...")
-            torch.hub.download_url_to_file(url, file_path)
-
-            assert file_path.exists() and file_path.stat().st_size > 1e6, f"Download failed for {name}"
-        except Exception as e:
-            logger.info(f"Error downloading from GitHub: {e}. Trying secondary source...")
-
-            url = f"https://storage.googleapis.com/{repo}/ckpt/{name}"
-            logger.info(f"Downloading {url} to {file_path}...")
-            os.system(f"curl -L {url} -o {file_path}")
-
-            if not file_path.exists() or file_path.stat().st_size < 1e6:
-                file_path.unlink(missing_ok=True)
-                logger.info(f"ERROR: Download failure for {msg}")
-            else:
-                logger.info(f"Download succeeded from secondary source!")
-    return file_path
-
-
-def attempt_load(weights, map_location=None):
-    model = Ensemble()
-    for w in weights if isinstance(weights, list) else [weights]:
-        weight_path = attempt_download(w)
-        logger.info("Loading weights from:", weight_path)
-        ckpt = torch.load(weight_path, map_location=map_location)
-        model.append(ckpt["ema" if ckpt.get("ema") else "model"].float().eval())
-    for m in model.modules():
-        if isinstance(m, (nn.Hardswish, nn.LeakyReLU, nn.ReLU, nn.ReLU6, nn.SiLU)):
-            m.inplace = True
-        elif isinstance(m, nn.Upsample):
-            m.recompute_scale_factor = None
-    if len(model) == 1:
-        return model[-1]
-    else:
-        for k in ["names", "stride"]:
-            setattr(model, k, getattr(model[-1], k))
-        return model
-
-
 def run_submodule(x, submodule):
     y = []
     for m in submodule:
@@ -146,7 +87,7 @@ def run_submodule(x, submodule):
         "pretrained_weight_true",
     ],
 )
-def test_yolov8x_640(device, input_tensor, use_pretrained_weight):
+def test_yolov8x_640(device, input_tensor, use_pretrained_weight, use_program_cache):
     disable_persistent_kernel_cache()
 
     inp_h, inp_w = input_tensor.shape[2], input_tensor.shape[3]
