@@ -14,6 +14,8 @@ namespace NAMESPACE {
 void MAIN {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
 
+    constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
+
     constexpr auto cb_pre_lhs = tt::CBIndex::c_0;
     constexpr auto cb_pre_rhs = tt::CBIndex::c_1;
     constexpr auto cb_out = tt::CBIndex::c_2;
@@ -30,16 +32,14 @@ void MAIN {
     binary_op_specific_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
 #endif
 
-    constexpr uint32_t onetile = 1;
-
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
-        PREPROCESS(LHS, cb_pre_lhs, cb_post_lhs, cb_out, onetile);
-        cb_wait_front(cb_post_lhs, onetile);
+        PREPROCESS(LHS, cb_pre_lhs, cb_post_lhs, cb_out, num_tiles_per_cycle);
+        cb_wait_front(cb_post_lhs, num_tiles_per_cycle);
 
-        PREPROCESS(RHS, cb_pre_rhs, cb_post_rhs, cb_out, onetile);
-        cb_wait_front(cb_post_rhs, onetile);
+        PREPROCESS(RHS, cb_pre_rhs, cb_post_rhs, cb_out, num_tiles_per_cycle);
+        cb_wait_front(cb_post_rhs, num_tiles_per_cycle);
 
-        cb_reserve_back(cb_out, onetile);
+        cb_reserve_back(cb_out, num_tiles_per_cycle);
 
 #if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)
         binary_op_specific_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
@@ -53,9 +53,9 @@ void MAIN {
         pack_tile(0, cb_out);
         tile_regs_release();
 
-        cb_push_back(cb_out, onetile);
-        cb_pop_front(cb_post_lhs, onetile);
-        cb_pop_front(cb_post_rhs, onetile);
+        cb_push_back(cb_out, num_tiles_per_cycle);
+        cb_pop_front(cb_post_lhs, num_tiles_per_cycle);
+        cb_pop_front(cb_post_rhs, num_tiles_per_cycle);
     }
 }
 }  // namespace NAMESPACE
