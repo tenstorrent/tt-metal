@@ -16,7 +16,7 @@ struct AllocatorConfig;
 
 class L1BankingAllocator : public Allocator {
 public:
-    L1BankingAllocator(const AllocatorConfig& alloc_config);
+    explicit L1BankingAllocator(const AllocatorConfig& alloc_config);
 };
 
 }  // namespace tt_metal
