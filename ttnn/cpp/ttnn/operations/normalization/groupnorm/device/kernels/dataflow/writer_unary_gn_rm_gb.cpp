@@ -27,7 +27,9 @@ void kernel_main() {
 
     constexpr uint32_t num_groups_per_core = get_compile_time_arg_val(12);
     constexpr uint32_t num_batches_per_core = get_compile_time_arg_val(13);
-    constexpr uint32_t block_w = get_compile_time_arg_val(14);
+    volatile uint32_t block_h = get_compile_time_arg_val(14);
+    constexpr uint32_t block_w = get_compile_time_arg_val(15);
+    constexpr uint32_t block_hw = get_compile_time_arg_val(16);
 
 #define stick_size_is_pow2 get_compile_time_arg_val(15) == 1
 #if (stick_size_is_pow2)
@@ -149,22 +151,27 @@ void kernel_main() {
                     cb_push_back(cb_beta, num_cols_tile_gamma_beta);
                 }
             }
+
+            const InterleavedAddrGenFast<out_is_dram> dst_a = {
+                .bank_base_address = out_addr, .page_size = single_tile_size_bytes, .data_format = out_data_format};
+
+            uint32_t out_block_start_id_offset = 0;
+            for (uint32_t out_block_index = 0; out_block_index < num_out_blocks; out_block_index++) {
+                cb_wait_front(cb_out, out_block_hw);
+                uint32_t l1_read_addr = get_read_ptr(cb_out);
+                for (uint32_t mt = 0; mt < out_block_h; mt++) {
+                    for (uint32_t nt = 0; nt < block_w; nt++) {
+                        noc_async_write_tile(
+                            out_start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt,
+                            dst_a,
+                            l1_read_addr);
+                        l1_read_addr += single_tile_size_bytes;
+                    }
+                }
+                out_block_start_id_offset += block_h * num_channels_tiles;
+                noc_async_write_barrier();
+                cb_pop_front(cb_out, out_block_hw);
+            }
         }
     }
-
-    const InterleavedAddrGenFast<out_is_dram> dst_a = {
-        .bank_base_address = out_addr, .page_size = single_tile_size_bytes, .data_format = out_data_format};
-
-    // we want to read into cb_in0
-    uint32_t per_core_MN = per_core_M * per_core_N;
-    cb_wait_front(cb_out, per_core_MN);
-    uint32_t l1_read_addr = get_read_ptr(cb_out);
-    for (uint32_t mt = 0; mt < per_core_M; mt++) {
-        for (uint32_t nt = 0; nt < per_core_N; nt++) {
-            noc_async_write_tile(out_start_id + (mt * num_channels_tiles) + nt, dst_a, l1_read_addr);
-            l1_read_addr += single_tile_size_bytes;
-        }
-    }
-    noc_async_write_barrier();
-    cb_pop_front(cb_out, per_core_MN);
 }

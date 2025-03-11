@@ -394,6 +394,7 @@ void MAIN {
             pack_tile(dst0, cb_ex2pe);
             tile_regs_release();
             cb_push_back(cb_ex2pe, 1);
+            cb_pop_front(cb_ex2_global, 1);
 
             uint32_t out_block_h_offset = 0;
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks; out_block_index++) {
