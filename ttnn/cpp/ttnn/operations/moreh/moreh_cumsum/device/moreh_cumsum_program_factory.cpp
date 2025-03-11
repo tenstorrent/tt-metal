@@ -70,6 +70,9 @@ MorehCumsumDeviceOperation::ProgramFactory::cached_program_t MorehCumsumDeviceOp
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(arch, operation_attributes.compute_kernel_config);
 
+    fp32_dest_acc_en = true;
+    std::cout << "fp32_dest_acc_en: " << fp32_dest_acc_en << " *******************************" << std::endl;
+
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2] =
             tt::tt_metal::split_work_to_cores(grid, num_tiles_per_chip);
@@ -104,7 +107,8 @@ MorehCumsumDeviceOperation::ProgramFactory::cached_program_t MorehCumsumDeviceOp
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1};
-    std::map<string, string> compute_defines;
+    std::map<string, string> compute_defines;  // = {{"TRISC_MATH", "1"}};
+
     const auto compute_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_cumsum/device/kernels/moreh_cumsum_nc.cpp";
     const auto compute_kernel_1_id = CreateComputeKernel(
         program,
@@ -142,6 +146,14 @@ MorehCumsumDeviceOperation::ProgramFactory::cached_program_t MorehCumsumDeviceOp
         } else {
             TT_THROW("Core not in specified core ranges.");
         }
+
+        std::cout << "num_cumsum_tiles: " << num_cumsum_tiles << "----------------------------------------- "
+                  << std::endl;
+        std::cout << "num_tiles_per_core: " << num_tiles_per_core << "----------------------------------------- "
+                  << std::endl;
+        std::cout << "input_tile_offset: " << input_tile_offset << "----------------------------------------- "
+                  << std::endl;
+        std::cout << "tile_offset: " << tile_offset << "----------------------------------------- " << std::endl;
 
         SetRuntimeArgs(
             program,
