@@ -28,9 +28,86 @@ std::uint32_t round_up_to_mul32(std::uint32_t val) { return ((val & 31) == 0) ? 
 
 std::uint32_t round_up_to_tile(int val, int tile_val) { return (val + tile_val - 1) & ~(tile_val - 1); }
 
+// Converts a 32-swizzled tilized row-major tensor to a linear 32-zero-padded row-major tensor
+template <typename T>
+std::vector<T> untilize_nchw(
+    tt::stl::Span<const T> in, const PhysicalSize& shape, std::optional<PhysicalSize> tile_shape) {
+    ZoneScoped;
+    std::vector<T> result;
+    if (in.size() == 0) {
+        return result;
+    }
+
+    auto tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
+    auto tile_W = tile_shape.has_value() ? tile_shape.value()[1] : tt::constants::TILE_WIDTH;
+
+    TT_ASSERT(shape[0] % tile_H == 0 && shape[1] % tile_W == 0);
+
+    // Untilize into row major
+    uint32_t H = shape[0];
+    uint32_t W = shape[1];
+
+    result.resize(H * W);
+    uint64_t linear = 0;
+    for (auto hs = 0; hs < H; hs += tile_H) {           // iterate over h with stride 32
+        for (auto ws = 0; ws < W; ws += tile_W) {       // iterate over w with stride 32
+            for (auto ht = 0; ht < tile_H; ht++) {      // hs + ht = h
+                for (auto wt = 0; wt < tile_W; wt++) {  // ws + wt = w
+                    T val = in[linear];
+                    auto w = wt + ws;
+                    auto h = ht + hs;
+                    auto offs = w + h * W;  // + batch_index * H * W;
+                    result[offs] = val;
+                    linear++;
+                }
+            }
+        }
+    }
+
+    return result;
+}
+
+// Converts a linear non-zero-padded row-major tensor to 32-swizzled tilized row-major tensor
+template <typename T>
+std::vector<T> tilize_nchw(
+    tt::stl::Span<const T> in_rowmajor, const PhysicalSize& shape, std::optional<PhysicalSize> tile_shape) {
+    ZoneScoped;
+    std::vector<T> tilized_result;
+    if (in_rowmajor.size() == 0) {
+        return tilized_result;
+    }
+
+    auto tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
+    auto tile_W = tile_shape.has_value() ? tile_shape.value()[1] : tt::constants::TILE_WIDTH;
+
+    TT_ASSERT(shape[0] % tile_H == 0 && shape[1] % tile_W == 0);
+
+    uint32_t H = shape[0];
+    uint32_t W = shape[1];
+
+    tilized_result.resize(H * W);
+    uint64_t out_index = 0;
+    for (auto hs = 0; hs < H; hs += tile_H) {
+        for (auto ws = 0; ws < W; ws += tile_W) {
+            for (auto ht = 0; ht < tile_H; ht++) {
+                for (auto wt = 0; wt < tile_W; wt++) {
+                    auto w = wt + ws;
+                    auto h = ht + hs;
+                    auto in_offs = w + h * W;
+                    auto val = in_rowmajor[in_offs];
+                    tilized_result[out_index] = val;
+                    out_index++;
+                }
+            }
+        }
+    }
+
+    return tilized_result;
+}
+
 template <class T>
 std::vector<T> convert_to_tile_layout(
-    const BufferProxy<T>& data,
+    tt::stl::Span<const T> data,
     std::optional<PhysicalSize> tile_shape,
     std::optional<PhysicalSize> face_shape,
     const bool transpose_face,
@@ -116,7 +193,7 @@ std::vector<T> convert_to_tile_layout(
 
 template <class T>
 std::vector<T> convert_to_flat_layout(
-    const BufferProxy<T>& data,
+    tt::stl::Span<const T> data,
     std::optional<PhysicalSize> tile_shape,
     std::optional<PhysicalSize> face_shape,
     const bool transpose_face,
@@ -191,86 +268,9 @@ std::vector<T> convert_to_flat_layout(
     return result;
 }
 
-// Converts a 32-swizzled tilized row-major tensor to a linear 32-zero-padded row-major tensor
-template <typename T>
-std::vector<T> untilize_nchw(
-    const BufferProxy<T>& in, const PhysicalSize& shape, std::optional<PhysicalSize> tile_shape) {
-    ZoneScoped;
-    std::vector<T> result;
-    if (in.size() == 0) {
-        return result;
-    }
-
-    auto tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
-    auto tile_W = tile_shape.has_value() ? tile_shape.value()[1] : tt::constants::TILE_WIDTH;
-
-    TT_ASSERT(shape[0] % tile_H == 0 && shape[1] % tile_W == 0);
-
-    // Untilize into row major
-    uint32_t H = shape[0];
-    uint32_t W = shape[1];
-
-    result.resize(H * W);
-    uint64_t linear = 0;
-    for (auto hs = 0; hs < H; hs += tile_H) {           // iterate over h with stride 32
-        for (auto ws = 0; ws < W; ws += tile_W) {       // iterate over w with stride 32
-            for (auto ht = 0; ht < tile_H; ht++) {      // hs + ht = h
-                for (auto wt = 0; wt < tile_W; wt++) {  // ws + wt = w
-                    T val = in[linear];
-                    auto w = wt + ws;
-                    auto h = ht + hs;
-                    auto offs = w + h * W;  // + batch_index * H * W;
-                    result[offs] = val;
-                    linear++;
-                }
-            }
-        }
-    }
-
-    return result;
-}
-
-// Converts a linear non-zero-padded row-major tensor to 32-swizzled tilized row-major tensor
-template <typename T>
-std::vector<T> tilize_nchw(
-    const BufferProxy<T>& in_rowmajor, const PhysicalSize& shape, std::optional<PhysicalSize> tile_shape) {
-    ZoneScoped;
-    std::vector<T> tilized_result;
-    if (in_rowmajor.size() == 0) {
-        return tilized_result;
-    }
-
-    auto tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
-    auto tile_W = tile_shape.has_value() ? tile_shape.value()[1] : tt::constants::TILE_WIDTH;
-
-    TT_ASSERT(shape[0] % tile_H == 0 && shape[1] % tile_W == 0);
-
-    uint32_t H = shape[0];
-    uint32_t W = shape[1];
-
-    tilized_result.resize(H * W);
-    uint64_t out_index = 0;
-    for (auto hs = 0; hs < H; hs += tile_H) {
-        for (auto ws = 0; ws < W; ws += tile_W) {
-            for (auto ht = 0; ht < tile_H; ht++) {
-                for (auto wt = 0; wt < tile_W; wt++) {
-                    auto w = wt + ws;
-                    auto h = ht + hs;
-                    auto in_offs = w + h * W;
-                    auto val = in_rowmajor[in_offs];
-                    tilized_result[out_index] = val;
-                    out_index++;
-                }
-            }
-        }
-    }
-
-    return tilized_result;
-}
-
 template <typename T>
 std::vector<T> convert_layout(
-    const BufferProxy<T>& inp,
+    tt::stl::Span<const T> inp,
     const PhysicalSize& shape,
     tests::utils::TensorLayoutType inL,
     tests::utils::TensorLayoutType outL,
@@ -324,7 +324,7 @@ std::vector<T> convert_layout(
 
 template <typename T>
 std::vector<T> convert_layout(
-    const BufferProxy<T>& inp,
+    tt::stl::Span<const T> inp,
     tt::stl::Span<const uint32_t> shape,
     tests::utils::TensorLayoutType inL,
     tests::utils::TensorLayoutType outL,
@@ -474,35 +474,30 @@ void untilize(std::vector<T>& input, uint32_t m, uint32_t n) {
 
 // Explicit instantiations
 // clang-format off
-template std::vector<float> convert_to_tile_layout<float>(const BufferProxy<float>&, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<uint16_t> convert_to_tile_layout<uint16_t>(const BufferProxy<uint16_t>&, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<uint32_t> convert_to_tile_layout<uint32_t>(const BufferProxy<uint32_t>&, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<bfloat16> convert_to_tile_layout<bfloat16>(const BufferProxy<bfloat16>&, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<float> convert_to_tile_layout<float>(tt::stl::Span<const float>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<uint16_t> convert_to_tile_layout<uint16_t>(tt::stl::Span<const uint16_t>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<uint32_t> convert_to_tile_layout<uint32_t>(tt::stl::Span<const uint32_t>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<bfloat16> convert_to_tile_layout<bfloat16>(tt::stl::Span<const bfloat16>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 
-template std::vector<float> convert_to_flat_layout<float>(const BufferProxy<float>&, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<uint16_t> convert_to_flat_layout<uint16_t>(const BufferProxy<uint16_t>&, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<uint32_t> convert_to_flat_layout<uint32_t>(const BufferProxy<uint32_t>&, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<bfloat16> convert_to_flat_layout<bfloat16>(const BufferProxy<bfloat16>&, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<float> convert_to_flat_layout<float>(tt::stl::Span<const float>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<uint16_t> convert_to_flat_layout<uint16_t>(tt::stl::Span<const uint16_t>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<uint32_t> convert_to_flat_layout<uint32_t>(tt::stl::Span<const uint32_t>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<bfloat16> convert_to_flat_layout<bfloat16>(tt::stl::Span<const bfloat16>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 
-template std::vector<float> untilize_nchw<float>(const BufferProxy<float>&, const PhysicalSize&, std::optional<PhysicalSize>);
-template std::vector<uint16_t> untilize_nchw<uint16_t>(const BufferProxy<uint16_t>&, const PhysicalSize&, std::optional<PhysicalSize>);
-template std::vector<uint32_t> untilize_nchw<uint32_t>(const BufferProxy<uint32_t>&, const PhysicalSize&, std::optional<PhysicalSize>);
-template std::vector<bfloat16> untilize_nchw<bfloat16>(const BufferProxy<bfloat16>&, const PhysicalSize&, std::optional<PhysicalSize>);
+template std::vector<float> convert_layout<float>(tt::stl::Span<const float>, const PhysicalSize&, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<int> convert_layout<int>(tt::stl::Span<const int>, const PhysicalSize&, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<uint16_t> convert_layout<uint16_t>(tt::stl::Span<const uint16_t>, const PhysicalSize&, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<uint32_t> convert_layout<uint32_t>(tt::stl::Span<const uint32_t>, const PhysicalSize&, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<bfloat16> convert_layout<bfloat16>(tt::stl::Span<const bfloat16>, const PhysicalSize&, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<unsigned char> convert_layout<unsigned char>(tt::stl::Span<const unsigned char>, const PhysicalSize&, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 
-template std::vector<float> tilize_nchw<float>(const BufferProxy<float>&, const PhysicalSize&, std::optional<PhysicalSize>);
-template std::vector<uint16_t> tilize_nchw<uint16_t>(const BufferProxy<uint16_t>&, const PhysicalSize&, std::optional<PhysicalSize>);
-template std::vector<uint32_t> tilize_nchw<uint32_t>(const BufferProxy<uint32_t>&, const PhysicalSize&, std::optional<PhysicalSize>);
-template std::vector<bfloat16> tilize_nchw<bfloat16>(const BufferProxy<bfloat16>&, const PhysicalSize&, std::optional<PhysicalSize>);
+template std::vector<float> convert_layout<float>(tt::stl::Span<const float>, tt::stl::Span<const uint32_t>, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<int> convert_layout<int>(tt::stl::Span<const int>, tt::stl::Span<const uint32_t>, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<uint16_t> convert_layout<uint16_t>(tt::stl::Span<const uint16_t>, tt::stl::Span<const uint32_t>, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<uint32_t> convert_layout<uint32_t>(tt::stl::Span<const uint32_t>, tt::stl::Span<const uint32_t>, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<bfloat16> convert_layout<bfloat16>(tt::stl::Span<const bfloat16>, tt::stl::Span<const uint32_t>, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<unsigned char> convert_layout<unsigned char>(tt::stl::Span<const unsigned char>, tt::stl::Span<const uint32_t>, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 
-template std::vector<float> convert_layout<float>(const BufferProxy<float>&, const PhysicalSize&, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<uint16_t> convert_layout<uint16_t>(const BufferProxy<uint16_t>&, const PhysicalSize&, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<uint32_t> convert_layout<uint32_t>(const BufferProxy<uint32_t>&, const PhysicalSize&, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<bfloat16> convert_layout<bfloat16>(const BufferProxy<bfloat16>&, const PhysicalSize&, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-
-template std::vector<float> convert_layout<float>(const BufferProxy<float>&, tt::stl::Span<const uint32_t>, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<uint16_t> convert_layout<uint16_t>(const BufferProxy<uint16_t>&, tt::stl::Span<const uint32_t>, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<uint32_t> convert_layout<uint32_t>(const BufferProxy<uint32_t>&, tt::stl::Span<const uint32_t>, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<bfloat16> convert_layout<bfloat16>(const BufferProxy<bfloat16>&, tt::stl::Span<const uint32_t>, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 
 template void tilize<uint16_t>(std::vector<uint16_t>& input, uint32_t m, uint32_t n);
 template void tilize<uint32_t>(std::vector<uint32_t>& input, uint32_t m, uint32_t n);

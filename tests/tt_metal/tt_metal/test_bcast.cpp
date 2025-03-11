@@ -169,7 +169,7 @@ int main(int argc, char** argv) {
                     }
                     // convert the reference broadcast tensor to tiled format
                     tiled_bcast_values = convert_layout<uint16_t>(
-                        ref_bcast_values_with_tile_padding,
+                        tt::stl::MakeConstSpan(ref_bcast_values_with_tile_padding),
                         ref_bcast_shape_with_tile_padding,
                         tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
                         tests::utils::TensorLayoutType::TILED_NFACES);
@@ -195,7 +195,7 @@ int main(int argc, char** argv) {
                         ref_bcast_values_with_tile_padding[j % W + (j / W) * TILE_HEIGHT * W] = val;
                     }
                     tiled_bcast_values = convert_layout<uint16_t>(
-                        ref_bcast_values_with_tile_padding,
+                        tt::stl::MakeConstSpan(ref_bcast_values_with_tile_padding),
                         ref_bcast_shape_with_tile_padding,
                         tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
                         tests::utils::TensorLayoutType::TILED_NFACES);
@@ -214,7 +214,7 @@ int main(int argc, char** argv) {
                         ref_bcast_values_with_tile_padding[j * TILE_WIDTH] = val;
                     }
                     tiled_bcast_values = convert_layout<uint16_t>(
-                        ref_bcast_values_with_tile_padding,
+                        tt::stl::MakeConstSpan(ref_bcast_values_with_tile_padding),
                         ref_bcast_shape_with_tile_padding,
                         tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
                         tests::utils::TensorLayoutType::TILED_NFACES);
@@ -322,7 +322,7 @@ int main(int argc, char** argv) {
                 // recover a linear view of input vector for consumption by gold_ function
                 auto u16_src0_vec = u16_from_u32_vector(src0_vec);
                 vector<uint16_t> src_linear = convert_layout<uint16_t>(
-                    u16_src0_vec,
+                    tt::stl::MakeConstSpan(u16_src0_vec),
                     shape,
                     tests::utils::TensorLayoutType::TILED_NFACES,
                     tests::utils::TensorLayoutType::LIN_ROW_MAJOR);
@@ -332,7 +332,7 @@ int main(int argc, char** argv) {
                 // Tilize from row major and convert to pairs (uint32_t)
                 vector<uint32_t> shapeR{shape[0], shape[1], shape[2], shape[3]};
                 auto gold_4f_u32 = u32_from_u16_vector(convert_layout<uint16_t>(
-                    gold_added,
+                    tt::stl::MakeConstSpan(gold_added),
                     shapeR,
                     tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
                     tests::utils::TensorLayoutType::TILED_NFACES));

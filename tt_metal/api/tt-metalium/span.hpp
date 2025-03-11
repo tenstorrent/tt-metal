@@ -92,4 +92,9 @@ Span(const std::array<T, N>&) -> Span<const T, N>;
 template <class R>
 Span(R&&) -> Span<std::remove_reference_t<decltype(*std::begin(std::declval<R&>()))>>;
 
+template <class Container, class T = std::remove_reference_t<decltype(*std::begin(std::declval<Container&>()))>>
+Span<const T> MakeConstSpan(const Container& vec) {
+    return Span<const T>(vec.data(), vec.size());
+}
+
 }  // namespace tt::stl
