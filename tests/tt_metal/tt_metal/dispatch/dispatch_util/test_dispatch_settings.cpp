@@ -4,11 +4,11 @@
 
 #include <array>
 #include <stdexcept>
-#include "command_queue_fixture.hpp"
 #include <tt-metalium/logger.hpp>
 #include "gtest/gtest.h"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
+#include "tt_cluster.hpp"
 #include "umd/device/tt_core_coordinates.h"
 
 namespace tt::tt_metal {
@@ -31,18 +31,20 @@ void ForEachCoreTypeXHWCQs(const std::function<void(const CoreType& core_type, c
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestDispatchSettingsDefaultUnsupportedCoreType) {
+TEST(DispatchSettingsTest, TestDispatchSettingsDefaultUnsupportedCoreType) {
+    DispatchSettings::initialize(tt::Cluster::instance());
     const auto unsupported_core = CoreType::ARC;
     EXPECT_THROW(DispatchSettings::get(unsupported_core, 1), std::runtime_error);
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestDispatchSettingsMissingArgs) {
+TEST(DispatchSettingsTest, TestDispatchSettingsMissingArgs) {
     DispatchSettings settings;
     EXPECT_THROW(settings.build(), std::runtime_error);
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestDispatchSettingsEq) {
+TEST(DispatchSettingsTest, TestDispatchSettingsEq) {
     const uint32_t hw_cqs = 2;
+    DispatchSettings::initialize(tt::Cluster::instance());
     auto settings = DispatchSettings::get(CoreType::WORKER, hw_cqs);
     auto settings_2 = settings; // Copy
     EXPECT_EQ(settings, settings_2);
@@ -50,60 +52,65 @@ TEST_F(CommandQueueSingleCardFixture, TestDispatchSettingsEq) {
     EXPECT_NE(settings, settings_2);
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestDispatchSettingsSetPrefetchDBuffer) {
+TEST(DispatchSettingsTest, TestDispatchSettingsSetPrefetchDBuffer) {
     const uint32_t hw_cqs = 2;
     const uint32_t expected_buffer_bytes = 0xcafe;
     const uint32_t expected_page_count =
         expected_buffer_bytes / (1 << DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE);
+    DispatchSettings::initialize(tt::Cluster::instance());
     auto settings = DispatchSettings::get(CoreType::WORKER, hw_cqs);
     settings.prefetch_d_buffer_size(expected_buffer_bytes);
     EXPECT_EQ(settings.prefetch_d_buffer_size_, expected_buffer_bytes);
     EXPECT_EQ(settings.prefetch_d_pages_, expected_page_count);
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestDispatchSettingsSetPrefetchQBuffer) {
+TEST(DispatchSettingsTest, TestDispatchSettingsSetPrefetchQBuffer) {
     const uint32_t hw_cqs = 2;
     const uint32_t expected_buffer_entries = 0x1000;
     const uint32_t expected_buffer_bytes = expected_buffer_entries * sizeof(DispatchSettings::prefetch_q_entry_type);
+    DispatchSettings::initialize(tt::Cluster::instance());
     auto settings = DispatchSettings::get(CoreType::WORKER, hw_cqs);
     settings.prefetch_q_entries(expected_buffer_entries);
     EXPECT_EQ(settings.prefetch_q_entries_, expected_buffer_entries);
     EXPECT_EQ(settings.prefetch_q_size_, expected_buffer_bytes);
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestDispatchSettingsSetDispatchBuffer) {
+TEST(DispatchSettingsTest, TestDispatchSettingsSetDispatchBuffer) {
     const uint32_t hw_cqs = 2;
     const uint32_t expected_buffer_bytes = 0x2000;
     const uint32_t expected_page_count = expected_buffer_bytes / (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE);
+    DispatchSettings::initialize(tt::Cluster::instance());
     auto settings = DispatchSettings::get(CoreType::WORKER, hw_cqs);
     settings.dispatch_size(expected_buffer_bytes);
     EXPECT_EQ(settings.dispatch_size_, expected_buffer_bytes);
     EXPECT_EQ(settings.dispatch_pages_, expected_page_count);
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestDispatchSettingsSetDispatchSBuffer) {
+TEST(DispatchSettingsTest, TestDispatchSettingsSetDispatchSBuffer) {
     const uint32_t hw_cqs = 2;
     const uint32_t expected_buffer_bytes = 0x2000;
     const uint32_t expected_page_count =
         expected_buffer_bytes / (1 << DispatchSettings::DISPATCH_S_BUFFER_LOG_PAGE_SIZE);
+    DispatchSettings::initialize(tt::Cluster::instance());
     auto settings = DispatchSettings::get(CoreType::WORKER, hw_cqs);
     settings.dispatch_s_buffer_size(expected_buffer_bytes);
     EXPECT_EQ(settings.dispatch_s_buffer_size_, expected_buffer_bytes);
     EXPECT_EQ(settings.dispatch_s_buffer_pages_, expected_page_count);
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestDispatchSettingsSetTunnelerBuffer) {
+TEST(DispatchSettingsTest, TestDispatchSettingsSetTunnelerBuffer) {
     const uint32_t hw_cqs = 2;
     const uint32_t expected_buffer_bytes = 0x2000;
     const uint32_t expected_page_count =
         expected_buffer_bytes / (1 << DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE);
+    DispatchSettings::initialize(tt::Cluster::instance());
     auto settings = DispatchSettings::get(CoreType::WORKER, hw_cqs);
     settings.tunneling_buffer_size(expected_buffer_bytes);
     EXPECT_EQ(settings.tunneling_buffer_size_, expected_buffer_bytes);
     EXPECT_EQ(settings.tunneling_buffer_pages_, expected_page_count);
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestDispatchSettingsMutations) {
+TEST(DispatchSettingsTest, TestDispatchSettingsMutations) {
     if (hal.get_programmable_core_type_index(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH) == -1) {
         // This device does not have the eth core
         tt::log_info(tt::LogTest, "Test not supported on this device");
@@ -120,6 +127,7 @@ TEST_F(CommandQueueSingleCardFixture, TestDispatchSettingsMutations) {
     const uint32_t prefetch_q_entries = 512;
     const uint32_t scratch_db_size = 5120;
 
+    DispatchSettings::initialize(tt::Cluster::instance());
     auto& settings = DispatchSettings::get(core_type, hw_cqs);
     DispatchSettings original_settings = settings;  // Copy the original to be restored later
 

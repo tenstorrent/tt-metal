@@ -16,16 +16,22 @@ typedef struct eth_tunneler_static_config {
 } eth_tunneler_static_config_t;
 
 typedef struct eth_tunneler_dependent_config {
-    std::array<std::optional<uint32_t>, MAX_TUNNEL_LANES> remote_receiver_x;             // [4:13], dependent
-    std::array<std::optional<uint32_t>, MAX_TUNNEL_LANES> remote_receiver_y;             // [4:13], dependent
-    std::array<std::optional<uint32_t>, MAX_TUNNEL_LANES> remote_receiver_queue_id;      // [4:13], dependent
-    std::array<std::optional<uint32_t>, MAX_TUNNEL_LANES> remote_receiver_network_type;  // [4:13], dependent
-    std::array<std::optional<uint32_t>, MAX_TUNNEL_LANES> remote_receiver_queue_start;   // [14:2:32], dependent
-    std::array<std::optional<uint32_t>, MAX_TUNNEL_LANES> remote_receiver_queue_size;    // [15:2:33], dependent
-    std::array<std::optional<uint32_t>, MAX_TUNNEL_LANES> remote_sender_x;               // [34:43], dependent
-    std::array<std::optional<uint32_t>, MAX_TUNNEL_LANES> remote_sender_y;               // [34:43], dependent
-    std::array<std::optional<uint32_t>, MAX_TUNNEL_LANES> remote_sender_queue_id;        // [34:43], dependent
-    std::array<std::optional<uint32_t>, MAX_TUNNEL_LANES> remote_sender_network_type;    // [34:43], dependent
+    std::array<std::optional<uint32_t>, tt::packet_queue::MAX_TUNNEL_LANES> remote_receiver_x;  // [4:13], dependent
+    std::array<std::optional<uint32_t>, tt::packet_queue::MAX_TUNNEL_LANES> remote_receiver_y;  // [4:13], dependent
+    std::array<std::optional<uint32_t>, tt::packet_queue::MAX_TUNNEL_LANES>
+        remote_receiver_queue_id;  // [4:13], dependent
+    std::array<std::optional<uint32_t>, tt::packet_queue::MAX_TUNNEL_LANES>
+        remote_receiver_network_type;  // [4:13], dependent
+    std::array<std::optional<uint32_t>, tt::packet_queue::MAX_TUNNEL_LANES>
+        remote_receiver_queue_start;  // [14:2:32], dependent
+    std::array<std::optional<uint32_t>, tt::packet_queue::MAX_TUNNEL_LANES>
+        remote_receiver_queue_size;                                                           // [15:2:33], dependent
+    std::array<std::optional<uint32_t>, tt::packet_queue::MAX_TUNNEL_LANES> remote_sender_x;  // [34:43], dependent
+    std::array<std::optional<uint32_t>, tt::packet_queue::MAX_TUNNEL_LANES> remote_sender_y;  // [34:43], dependent
+    std::array<std::optional<uint32_t>, tt::packet_queue::MAX_TUNNEL_LANES>
+        remote_sender_queue_id;  // [34:43], dependent
+    std::array<std::optional<uint32_t>, tt::packet_queue::MAX_TUNNEL_LANES>
+        remote_sender_network_type;  // [34:43], dependent
 
     std::optional<uint32_t> inner_stop_mux_d_bypass;  // Dependent
 } eth_tunneler_dependent_config_t;
