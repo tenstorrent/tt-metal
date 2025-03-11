@@ -18,7 +18,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_vovnet_model_inference(device, pcc, imagenet_sample_input, model_name, reset_seeds):
-    model = timm.create_model(model_name, pretrained=False)
+    model = timm.create_model(model_name, pretrained=False).eval()
 
     torch_model = model
     parameters = custom_preprocessor(device, torch_model.state_dict())
