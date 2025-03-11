@@ -270,7 +270,7 @@ def test_full_multi_device(mesh_device, input_shape, fill_value, layout):
 )
 @pytest.mark.parametrize(
     "end",
-    [100, 200, 300],
+    [100, 103, 200, 259, 300],
 )
 @pytest.mark.parametrize(
     "step",
@@ -290,8 +290,7 @@ def test_arange(device, start, end, step):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
     output_tensor = output_tensor[-1, -1, -1, :]
-    if divup((end - start), step) % 2 != 0:
-        output_tensor = output_tensor[:-1]
+
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
 
 
@@ -301,7 +300,7 @@ def test_arange(device, start, end, step):
 )
 @pytest.mark.parametrize(
     "end",
-    [100, 200, 300],
+    [100, 103, 200, 259, 300],
 )
 @pytest.mark.parametrize(
     "step",
@@ -323,8 +322,7 @@ def test_arange_multi_device(mesh_device, start, end, step):
     output_tensors = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(output_tensor.cpu())]
     for output_tensor in output_tensors:
         output_tensor = output_tensor[-1, -1, -1, :]
-        if divup((end - start), step) % 2 != 0:
-            output_tensor = output_tensor[:-1]
+
         assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
 
 

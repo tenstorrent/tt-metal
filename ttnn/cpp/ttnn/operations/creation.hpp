@@ -83,9 +83,6 @@ static Tensor arange_impl(
     TT_ASSERT(step > 0, "Step must be greater than 0");
     TT_ASSERT(start < stop, "Start must be less than step");
     auto size = tt::div_up((stop - start), step);
-    if (size % 2 != 0) {
-        size++;
-    }
     auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(size);
 
     auto index = 0;
