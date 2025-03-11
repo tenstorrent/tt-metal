@@ -565,6 +565,12 @@ int main(int argc, char** argv) {
             host_completion_queue_wr_ptr,
             dev_completion_queue_wr_ptr,
             dev_completion_queue_rd_ptr,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
             true,  // is_dram_variant
             true,  // is_host_variant
         };

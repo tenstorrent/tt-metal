@@ -97,7 +97,10 @@ private:
     std::unordered_map<uint32_t, uint32_t> completion_queue_reader_to_cpu_core_map;
     void init_firmware_on_active_devices() const;
     void activate_device(chip_id_t id);
-    void initialize_device(tt_metal::IDevice* dev) const;
+    // Initialize state on the host for this device
+    void initialize_host(tt_metal::IDevice* dev) const;
+    // Initialize state for activated devices
+    void initialize_active_devices() const;
     void add_devices_to_pool(const std::vector<chip_id_t>& device_ids);
     void wait_for_fabric_master_router_sync() const;
     tt_metal::IDevice* get_device(chip_id_t id) const;

@@ -364,7 +364,7 @@ void syncDeviceDevice(chip_id_t device_id_sender, chip_id_t device_id_receiver) 
         constexpr std::uint16_t sample_size = 16;
         constexpr std::uint16_t channel_count = 1;
 
-        auto const& active_eth_cores = device_sender->get_active_ethernet_cores(true);
+        const auto& active_eth_cores = device_sender->get_active_ethernet_cores(true);
         auto eth_sender_core_iter = active_eth_cores.begin();
         tt_xy_pair eth_receiver_core;
         tt_xy_pair eth_sender_core;
@@ -486,7 +486,7 @@ void ProfilerSync(ProfilerSyncState state) {
         for (int sender_device_id = 0; sender_device_id < TOTAL_DEVICE_COUNT; sender_device_id++) {
             if (tt::DevicePool::instance().is_device_active(sender_device_id)) {
                 auto sender_device = tt::DevicePool::instance().get_active_device(sender_device_id);
-                auto const& active_eth_cores = sender_device->get_active_ethernet_cores(true);
+                const auto& active_eth_cores = sender_device->get_active_ethernet_cores(true);
 
                 chip_id_t receiver_device_id;
                 tt_xy_pair receiver_eth_core;
