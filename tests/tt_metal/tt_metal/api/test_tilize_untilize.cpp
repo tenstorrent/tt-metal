@@ -4,7 +4,7 @@
 
 #include <gtest/gtest.h>
 #include <vector>
-#include <tt-metalium/tilize_untilize.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 
 template <bool tilize_first, typename T>
 void tilize_untilize_helper(

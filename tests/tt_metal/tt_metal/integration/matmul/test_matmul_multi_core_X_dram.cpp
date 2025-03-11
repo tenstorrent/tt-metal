@@ -9,7 +9,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include <tt-metalium/test_tiles.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/command_queue.hpp>
 #include "tests/tt_metal/test_utils/tilization.hpp"
 #include "matmul_test_utils.hpp"
