@@ -46,7 +46,6 @@ void MAIN {
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t dst1 = 1;
     constexpr uint32_t scaler0 = 0;
-
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_in1 = tt::CBIndex::c_1;
 #ifdef FUSE_PRE_ADD
@@ -74,11 +73,6 @@ void MAIN {
     int index_subblock_w_offset = 0;
     int index_h_offset = 0;
     int index = 0;
-
-    uint32_t num_tiles_per_partial_result = 2;
-#ifdef RMSNORM
-    num_tiles_per_partial_result = 1;
-#endif
 
 // pre-add x + y
 #ifdef FUSE_PRE_ADD
@@ -201,11 +195,11 @@ void MAIN {
         reconfig_data_format_srca(cb_x2, cb_ex_external2);
         reconfig_data_format_srcb(cb_scaler, cb_scaler_global);
         reduce_init_delta<false>(cb_ex_external2, cb_scaler_global, cb_reduction_out);
-        cb_reserve_back(cb_reduction_out, num_tiles_per_partial_result * num_tiles_per_allgather_worker);
+        cb_reserve_back(cb_reduction_out, num_tiles_per_allgather_worker);
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {  // loops over height
             tile_regs_acquire();
-            for (uint32_t w = 0; w < num_tiles_per_partial_result * num_blocks_reduce;
+            for (uint32_t w = 0; w < num_blocks_reduce;
                  w++) {  // Need to read this interleaved now, we have SUM(X) and SUM(X^2) interleaved
                 cb_wait_front(cb_ex_external2, 1);
                 reduce_tile(
@@ -213,8 +207,8 @@ void MAIN {
                     cb_scaler_global,
                     0,
                     scaler0,
-                    w % num_tiles_per_partial_result);  // E(x) and E(x^2) interleaved so we reduce each one into
-                                                        // different dest reg
+                    1);  // E(x) and E(x^2) interleaved so we reduce each one into
+                         // different dest reg
                 cb_pop_front(cb_ex_external2, 1);
             }
             tile_regs_commit();
@@ -226,7 +220,7 @@ void MAIN {
             tile_regs_release();
         }
         reduce_revert_delta(cb_reduction_out);
-        cb_push_back(cb_reduction_out, num_tiles_per_partial_result * num_tiles_per_allgather_worker);
+        cb_push_back(cb_reduction_out, num_tiles_per_allgather_worker);
     }
 }
 
