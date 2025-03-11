@@ -9,9 +9,11 @@ namespace ttnn::operations::experimental {
 
 Tensor DropoutOperation::invoke(
     const Tensor& input_tensor, float prob, float scale, uint32_t seed, bool use_per_device_seed) {
-    auto chip_id = static_cast<uint32_t>(input_tensor.device()->id());
-    return ttnn::prim::dropout(
-        input_tensor, prob, scale, use_per_device_seed ? seed + chip_id : seed, DataType::BFLOAT16);
+    if (use_per_device_seed) {
+        return ttnn::prim::mdropout(input_tensor, prob, scale, seed, DataType::BFLOAT16);
+    } else {
+        return ttnn::prim::dropout(input_tensor, prob, scale, seed, DataType::BFLOAT16);
+    }
 }
 
 }  // namespace ttnn::operations::experimental
