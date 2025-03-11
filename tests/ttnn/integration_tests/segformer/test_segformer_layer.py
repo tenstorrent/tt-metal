@@ -148,11 +148,11 @@ def test_segformer_layer(
     ttnn_model = TtSegformerLayer(hidden_size, num_attention_heads, sequence_reduction_ratio, parameters, mlp_ratio)
 
     ttnn_output = ttnn_model(
+        device,
         ttnn_input_tensor,
         height,
         width,
         parameters=parameters,
-        device=device,
     )
     ttnn_final_output = ttnn.to_torch(ttnn_output[0])
     if len(ttnn_final_output.shape) == 4:

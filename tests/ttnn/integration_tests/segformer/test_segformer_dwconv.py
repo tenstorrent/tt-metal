@@ -73,10 +73,10 @@ def test_segformer_dw_conv(device, batch_size, seq_len, dim, height, width, bloc
     ttnn_model = TtSegformerDWConv(parameters, dim)
 
     ttnn_output = ttnn_model(
+        device,
         ttnn_input_tensor,
         height,
         width,
-        device,
     )
     ttnn_output = ttnn.from_device(ttnn_output[0])
     ttnn_output = ttnn.to_torch(ttnn_output)[0]
