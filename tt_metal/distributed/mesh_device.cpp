@@ -27,6 +27,8 @@
 #include <mesh_coord.hpp>
 #include <small_vector.hpp>
 
+#include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
+
 namespace tt::tt_metal::distributed {
 
 namespace {
