@@ -8,7 +8,7 @@
 #include <functional>
 #include <random>
 
-#include <tt-metalium/test_tiles.hpp>  // FIXME: Remove dependency on this or move to test_utils like tilize/untilize
+#include <tt-metalium/tilize_utils.hpp>  // FIXME: Remove dependency on this or move to test_utils like tilize/untilize
 #include "device_fixture.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>

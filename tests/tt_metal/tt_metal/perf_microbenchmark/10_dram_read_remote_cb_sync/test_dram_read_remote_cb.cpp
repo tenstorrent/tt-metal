@@ -402,7 +402,7 @@ bool validation_fp16(
     std::vector<uint32_t> result;
     tt::tt_metal::detail::ReadFromBuffer(out_buffer, result);
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result);
-    auto result_flat_layout = convert_to_flat_layout(result_bfp16);
+    auto result_flat_layout = convert_to_flat_layout(tt::stl::MakeConstSpan(result_bfp16));
     auto result_untilized = tt::test_utils::untilize(result_flat_layout, kt * 32 / num_blocks * cb_num_blocks, nt * 32);
 
     const auto& values = input_tensor.get_values();
@@ -445,7 +445,7 @@ bool validation_mixed_df(
     tt::tt_metal::detail::ReadFromBuffer(out_buffer, result);
 
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result);
-    auto result_untilized_fp16 = convert_to_flat_layout(result_bfp16);
+    auto result_untilized_fp16 = convert_to_flat_layout(tt::stl::MakeConstSpan(result_bfp16));
 
     std::vector<float> golden_vec(kt * 32 / num_blocks * cb_num_blocks * nt * 32);
     std::vector<float> result_vec_fp16(kt * 32 / num_blocks * cb_num_blocks * nt * 32);
@@ -768,7 +768,7 @@ int main(int argc, char** argv) {
                         num_banks);
                 } else {  // odd layers
                     auto input_vec_tilized = tt::test_utils::tilize(tensor_fp16.get_values(), k, n);
-                    auto input_vec_tile_layout = convert_to_tile_layout(input_vec_tilized);
+                    auto input_vec_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(input_vec_tilized));
                     vector<uint32_t> packed_input_vec_tile_layout =
                         pack_bfloat16_vec_into_uint32_vec(input_vec_tile_layout);
                     input_buffers[i] = create_and_transfer_data_sharded_cb(
@@ -786,7 +786,7 @@ int main(int argc, char** argv) {
             for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
                 if (i % 2 == 0) {  // even layers
                     auto input_vec_tilized = tt::test_utils::tilize(tensor_fp16.get_values(), k, n);
-                    auto input_vec_tile_layout = convert_to_tile_layout(input_vec_tilized);
+                    auto input_vec_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(input_vec_tilized));
                     vector<uint32_t> packed_input_vec_tile_layout =
                         pack_bfloat16_vec_into_uint32_vec(input_vec_tile_layout);
                     input_buffers[i] = create_and_transfer_data_sharded_cb(

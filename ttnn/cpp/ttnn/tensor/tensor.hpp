@@ -13,7 +13,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
-#include <tt-metalium/test_tiles.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "ttnn/any_device.hpp"
 #include "ttnn/common/queue_id.hpp"

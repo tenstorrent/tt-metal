@@ -8,7 +8,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include <tt-metalium/test_tiles.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 #include "tests/tt_metal/test_utils/tilization.hpp"
 #include "tests/tt_metal/test_utils/print_helpers.hpp"
 #include "matmul_test_utils.hpp"
@@ -51,14 +51,14 @@ void create_test_stimuli(MatmulTileStimuli& stimuli, uint32_t M, uint32_t K, uin
     stimuli.t = tensor.get_values();
 
     auto activations_tilized = test_utils::tilize(tensor.get_values(), M * 32, K * 32);
-    auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
+    auto activations_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(activations_tilized));
     auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
     auto activations_tile_transposed = tt::tt_metal::transpose_tiles(activations, M, K, 1);
     stimuli.a = activations_tile_transposed;
 
     auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32);
     auto identity_tilized = test_utils::tilize(identity, K * 32, N * 32);
-    auto weights_tile_layout = convert_to_tile_layout(identity_tilized);
+    auto weights_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(identity_tilized));
     auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
     stimuli.w = weights;
 }
@@ -292,7 +292,7 @@ void matmul_tile(
 
     std::vector<bfloat16> golden = std::move(tensor_vals);
     std::vector<bfloat16> golden_tilized = test_utils::tilize(golden, M * 32, N * 32);
-    std::vector<bfloat16> golden_tilized_single = convert_to_tile_layout(golden_tilized);
+    std::vector<bfloat16> golden_tilized_single = convert_to_tile_layout(tt::stl::MakeConstSpan(golden_tilized));
 
     std::vector<uint32_t> golden_packed(golden_tilized_single.size());
     uint16_t math_fid_mask = 0xFFFF;
