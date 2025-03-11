@@ -104,12 +104,12 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     std::size_t channel_buffer_size_bytes,
     std::size_t sender_ratio_size,
     std::size_t receiver_ratio_size,
-    bool ring_topology) :
+    Topology topology) :
     FabricEriscDatamoverConfig() {
     this->num_used_sender_channels = FabricEriscDatamoverConfig::num_sender_channels;
     this->num_used_receiver_channels = FabricEriscDatamoverConfig::num_receiver_channels;
-    this->enable_ring_topology = ring_topology;
-    if (!ring_topology) {
+    this->topology = topology;
+    if (topology != Topology::Ring) {
         this->num_used_sender_channels -= 1;
         this->num_used_receiver_channels -= 1;
     }
@@ -171,7 +171,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     // TODO: Review
     size_t default_pow2_num_sender_buffer_slots = 8;
     size_t default_pow2_num_receiver_buffer_slots = 16;
-    if (ring_topology) {
+    if (topology == Topology::Ring) {
         default_pow2_num_sender_buffer_slots /= 2;
         default_pow2_num_receiver_buffer_slots /= 2;
     }
@@ -413,7 +413,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const
         this->firmware_context_switch_interval,
         this->enable_first_level_ack,
         this->fuse_receiver_flush_and_completion_ptr,
-        config.enable_ring_topology,
+        config.topology == Topology::Ring,
         is_handshake_master,
         this->handshake_address,
         this->channel_buffer_size,

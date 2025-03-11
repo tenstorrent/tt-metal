@@ -24,7 +24,7 @@ int main(int argc, char** argv) {
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_sync = line_sync;
     params.line_size = line_size;
-    params.ring_topology = ring_topology;
+    params.topology = ring_topology ? ttnn::ccl::Topology::Ring : ttnn::ccl::Topology::Linear;
     RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params, packet_payload_size_bytes);
 }

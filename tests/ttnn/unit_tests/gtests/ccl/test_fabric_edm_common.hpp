@@ -1079,7 +1079,7 @@ void setup_test_with_persistent_fabric(
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& line_fabric,
     bool enable_persistent_fabric,
     std::optional<size_t> num_links = std::nullopt,
-    bool ring_topology = false) {
+    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear) {
     if (enable_persistent_fabric) {
         log_info(tt::LogTest, "Enabling persistent fabric");
         fabric_programs = std::vector<Program>(devices.size());
@@ -1094,7 +1094,7 @@ void setup_test_with_persistent_fabric(
     }
 
     line_fabric = ttnn::ccl::EdmLineFabricOpInterface(
-        devices, fabric_program_ptrs, enable_persistent_fabric, num_links.value_or(1), false, ring_topology);
+        devices, fabric_program_ptrs, enable_persistent_fabric, num_links.value_or(1), false, topology);
     line_fabric->set_firmware_context_switch_interval(0);
 
     if (enable_persistent_fabric) {
@@ -2073,7 +2073,7 @@ struct WriteThroughputStabilityTestWithPersistentFabricParams {
     size_t line_size = 4;
     size_t num_devices_with_workers = 0;
     bool line_sync = true;
-    bool ring_topology = false;
+    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear;
 };
 
 void RunWriteThroughputStabilityTestWithPersistentFabric(
@@ -2095,7 +2095,7 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
         return;
     }
 
-    bool ring_topology = params.ring_topology;
+    auto topology = params.topology;
 
     size_t line_size = params.line_size;
     size_t num_devices_with_workers = params.num_devices_with_workers;
@@ -2156,7 +2156,7 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
         fabric_handle,
         enable_persistent_fabric_mode,
         num_links,
-        ring_topology);
+        topology);
 
     // Other boiler plate setup
     CoreRangeSet worker_cores = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(num_links - 1, 0)));
@@ -2230,7 +2230,7 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
         size_t mcast_fwd_hops;
         size_t mcast_bwd_hops;
         size_t unicast_hops;
-        if (ring_topology) {
+        if (topology == ttnn::ccl::Topology::Ring) {
             backward_device = i == 0 ? devices.back() : devices[i - 1];
             forward_device = i == line_size - 1 ? devices.front() : devices[i + 1];
 
@@ -2261,13 +2261,7 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
 
         auto local_device_fabric_handle =
             ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
-                device,
-                forward_device,
-                backward_device,
-                &program,
-                enable_persistent_fabric_mode,
-                num_links,
-                ring_topology);
+                device, forward_device, backward_device, &program, enable_persistent_fabric_mode, num_links, topology);
 
         // reserve CB
         tt_metal::CircularBufferConfig cb_src0_config =

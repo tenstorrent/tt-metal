@@ -91,7 +91,7 @@ struct FabricEriscDatamoverConfig {
         std::size_t channel_buffer_size_bytes,
         std::size_t sender_ratio_size,
         std::size_t receiver_ratio_size,
-        bool ring_topology = false);
+        Topology topology = Topology::Linear);
 
     std::size_t channel_buffer_size_bytes = 0;
     std::size_t channel_buffer_size_bytes_with_channel_sync = 0;
@@ -107,7 +107,7 @@ struct FabricEriscDatamoverConfig {
     std::size_t num_used_sender_channels = 0;
     std::size_t num_used_receiver_channels = 0;
 
-    bool enable_ring_topology = false;
+    Topology topology = Topology::Linear;
 
 private:
     FabricEriscDatamoverConfig();
