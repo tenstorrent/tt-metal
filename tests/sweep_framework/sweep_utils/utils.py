@@ -283,3 +283,42 @@ def get_device_grid_size():
     ttnn.close_device(device)
     del device
     return y, x
+
+
+def gen_pytest_parametrize_args(parameters: dict) -> dict:
+    """Generate pytest parametrize arguments from a dictionary of parameters."
+    Args:
+        parameters: A dictionary of parameters. The keys are the config names and the values are dictionaries of parameter values.
+                    The keys of the inner dictionaries are the function argument names.
+                    The values of the inner dictionaries are lists of parameter values to be used for sweep.
+    Returns:
+        A dictionary of pytest parametrize arguments.
+    Example:
+        parameters = {
+            "cfg1": {
+                "arg1": [1, 2],
+                "arg2": [3, 4],
+            },
+            "cfg2": {
+                "arg1": [5, 6],
+                "arg2": [7],
+            },
+        }
+        The function returns:
+        {'argnames': ['arg1', 'arg2'], 'argvalues': { ... }, 'ids': { ... }} where
+        argvalues = [(1, 3), (1, 4), (2, 3), (2, 4), (5, 7), (6, 7)]
+        ids = ['cfg1-arg1_1-arg2_3', 'cfg1-arg1_1-arg2_4', ... , 'cfg2-arg1_6-arg2_7']
+    """
+    test_argnames, test_id2values = [], {}
+    for param_name, values_dict in parameters.items():
+        test_argnames = list(values_dict)
+        all_arg_combs = itertools.product(*[values_dict[arg_name] for arg_name in test_argnames])
+
+        for arg_vals in all_arg_combs:
+            id_str = (
+                str(param_name)
+                + "-"
+                + "-".join(str(name) + "_" + str(val) for name, val in zip(test_argnames, arg_vals))
+            )
+            test_id2values[id_str] = arg_vals
+    return {"argnames": test_argnames, "argvalues": test_id2values.values(), "ids": test_id2values.keys()}
