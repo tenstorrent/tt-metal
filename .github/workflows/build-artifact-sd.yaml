@@ -258,7 +258,7 @@ jobs:
       - name: Set build artifact name
         id: set_build_artifact_name
         run: |
-          BUILD_ARTIFACT_NAME="TTMetal_build_any${{ (inputs.tracy && '_profiler') || '' }}"
+          BUILD_ARTIFACT_NAME="TTMetal_build_2204_any${{ (inputs.tracy && '_profiler') || '' }}"
           echo "build_artifact_name=$BUILD_ARTIFACT_NAME" >> "$GITHUB_ENV"
           echo "build_artifact_name=$BUILD_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
 
