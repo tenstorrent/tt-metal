@@ -24,6 +24,7 @@ namespace tt::tt_metal {
 
 class SubDeviceManagerTracker;
 class ThreadPool;
+class ProgramCache;
 
 namespace distributed {
 
@@ -81,6 +82,7 @@ private:
     std::shared_ptr<ThreadPool> reader_thread_pool_;
 
     std::recursive_mutex push_work_mutex_;
+    std::unique_ptr<program_cache::detail::ProgramCache> program_cache_;
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
 

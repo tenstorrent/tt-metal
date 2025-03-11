@@ -132,16 +132,16 @@ struct MeshDeviceOperationAdapter {
         tt::tt_metal::distributed::MeshDevice* mesh_device,
         const operation_attributes_t& attrs,
         const tensor_args_t& tensor_args) {
-        auto customizer_func = create_attribute_customizer_function();
-        auto factory = select_program_factory(attrs, tensor_args);
-
-        return std::visit(
-            [&](auto&& concrete_factory) {
-                using ConcreteFactory = std::decay_t<decltype(concrete_factory)>;
-                return device_operation::MeshDeviceOperationHelper::compute_mesh_workload_hash<ConcreteFactory>(
-                    mesh_device, attrs, tensor_args, customizer_func);
-            },
-            factory);
+        if (auto customizer_func = create_attribute_customizer_function(); customizer_func != nullptr) {
+            auto hash = tt::stl::hash::hash_t{0};
+            for (auto coordinate : tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape())) {
+                auto device_attrs = customizer_func(attrs, coordinate, mesh_device);
+                tt::utils::hash_combine(hash, compute_program_hash(device_attrs, tensor_args));
+            }
+            return hash;
+        } else {
+            return compute_program_hash(attrs, tensor_args);
+        }
     }
 
 private:

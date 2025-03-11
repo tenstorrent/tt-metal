@@ -83,32 +83,6 @@ public:
             std::move(mesh_workload), std::move(coordinate_range_to_shared_variables)};
     }
 
-    template <typename ProgramFactoryT, typename AttributesT, typename TensorArgsT>
-    static tt::stl::hash::hash_t compute_mesh_workload_hash(
-        tt::tt_metal::distributed::MeshDevice* mesh_device,
-        const AttributesT& attrs,
-        const TensorArgsT& tensor_args,
-        std::function<AttributesT(
-            const AttributesT&,
-            const tt::tt_metal::distributed::MeshCoordinate&,
-            tt::tt_metal::distributed::MeshDevice*)> attribute_customizer = nullptr) {
-        ProgramFactoryT program_factory;
-
-        auto hash = tt::stl::hash::hash_objects_with_default_seed(
-            tt::stl::hash::type_hash<ProgramFactoryT>, attrs, tensor_args);
-
-        if (attribute_customizer) {
-            for (auto coordinate : tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape())) {
-                auto device_attrs = attribute_customizer(attrs, coordinate, mesh_device);
-                tt::utils::hash_combine(
-                    hash,
-                    tt::stl::hash::hash_objects_with_default_seed(tt::stl::hash::type_hash<AttributesT>, device_attrs));
-            }
-        }
-
-        return hash;
-    }
-
     template <typename ProgramFactoryT, typename AttributesT, typename TensorArgsT, typename ReturnValueT>
     static void override_mesh_runtime_arguments(
         ttnn::device_operation::CachedMeshWorkload<typename ProgramFactoryT::shared_variables_t>& cached_workload,
