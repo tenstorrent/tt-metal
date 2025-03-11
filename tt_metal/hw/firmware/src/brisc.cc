@@ -404,6 +404,7 @@ int main() {
     uint8_t prev_noc_mode = DM_DEDICATED_NOC;
     trigger_sync_register_init();
 
+
 #if defined(ARCH_BLACKHOLE)
     // When dispatch_s is on an ethernet core on blockhole, we've been seeing
     // issues where posted atomic incremenets seem to fail to complete.
