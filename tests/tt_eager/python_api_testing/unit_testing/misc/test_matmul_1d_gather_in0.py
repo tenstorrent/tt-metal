@@ -8,6 +8,7 @@ import ttnn
 from models.utility_functions import is_wormhole_b0, is_grayskull, skip_for_wormhole_b0
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
 import torch
+import itertools
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
     comp_pcc,
@@ -119,40 +120,12 @@ PREFETCHER_NOC1_GRID = [
     (2, 9),
 ]
 
-LM_HEAD_32_GRID = [
-    (1, 0),
-    (1, 1),
-    (1, 2),
-    (1, 3),
-    (1, 4),
-    (1, 5),
-    (1, 6),
-    (1, 7),
-    (1, 8),
-    (1, 9),
-    (2, 0),
-    (2, 1),
-    (2, 2),
-    (2, 3),
-    (2, 4),
-    (2, 5),
-    (2, 6),
-    (2, 7),
-    (2, 8),
-    (2, 9),
-    (3, 0),
-    (3, 1),
-    (3, 2),
-    (3, 3),
-    (3, 4),
-    (3, 5),
-    (3, 6),
-    (3, 7),
-    (3, 8),
-    (3, 9),
-    (5, 0),
-    (5, 1),
-]
+LM_HEAD_32_GRID = list(
+    itertools.chain(
+        itertools.product([1, 2, 3], range(10)),  # Generates (1,0)-(1,9), (2,0)-(2,9), (3,0)-(3,9)
+        itertools.product([5], range(2)),  # Generates (5,0), (5,1)
+    )
+)
 
 
 def run_multi_core_matmul_1d(

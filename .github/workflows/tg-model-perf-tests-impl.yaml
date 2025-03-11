@@ -33,9 +33,8 @@ jobs:
           }, # Sean Nijjar
           {
             name: "Llama TG Perf Unit Tests",
-            model-type: "LLM",
             arch: wormhole_b0,
-            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type llama_tg_perf_unit_tests --dispatch-mode ""',
+            cmd: 'pytest models/tt_transformers/tests/tg_perf_unit_tests',
             timeout: 900,
             tracy: true,
             runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "bare-metal", "pipeline-perf"],
