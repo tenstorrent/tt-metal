@@ -42,6 +42,7 @@ void kernel_main() {
     constexpr uint32_t cb_repack = tt::CBIndex::c_26;
     constexpr uint32_t cb_repack_out = tt::CBIndex::c_31;
     constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
+    constexpr uint32_t cb_x = tt::CBIndex::c_24;
 
     const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial);  // tile size
     const DataFormat data_format = get_dataformat(cb_ex_partial);          // data format
@@ -121,6 +122,7 @@ void kernel_main() {
 
             if (n == 0 || n == 1) {
                 noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
+                uint32_t cb_mcast_receive;
                 if (n == 0) {
                     cb_mcast_receive = cb_ex_global;
                 } else if (n == 1) {

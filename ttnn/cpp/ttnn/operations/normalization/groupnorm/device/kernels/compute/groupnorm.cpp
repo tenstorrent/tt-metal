@@ -206,7 +206,7 @@ void MAIN {
 #ifdef TILIZE_IN
                 cb_pop_front(cb_in, out_block_hw);
 #else
-                cb_pop_front(cb_in0, out_block_hw) :
+                cb_pop_front(cb_in0, out_block_hw);
 #endif
                 cb_push_back(cb_x, out_block_hw);
                 reconfig_data_format_srcb(cb_input_mask, cb_scaler);
@@ -483,7 +483,8 @@ void MAIN {
                 uint32_t block_w_curr = index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
 
                 for (uint32_t w = 0; w < block_w_curr; ++w) {
-                    index_h_offset = 0 uint32_t index_h1_offset = 0;
+                    index_h_offset = 0;
+                    uint32_t index_h1_offset = 0;
 
                     if (copy_or_add == true) {
                         copy_tile_init(cb_xmm);

@@ -75,6 +75,10 @@ void kernel_main() {
         .page_size = input_mask_single_tile_size_bytes,
         .data_format = input_mask_data_format};
 
+    uint32_t out_block_h = block_h / 1;  // TODO READ THIS IN FROM USER
+    uint32_t out_block_hw = out_block_h * block_w;
+    uint32_t num_out_blocks = block_h / out_block_h;
+
     for (uint32_t b = 0; b < num_batches_per_core; ++b) {
         uint32_t input_mask_tile_id = input_mask_tile_start_id;
         for (uint32_t i = 0; i < num_groups_per_core; ++i) {
