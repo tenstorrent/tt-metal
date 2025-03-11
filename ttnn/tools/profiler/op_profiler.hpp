@@ -14,7 +14,6 @@
 #include "ttnn/tensor/tensor.hpp"
 #include <nlohmann/json.hpp>
 #include <magic_enum/magic_enum.hpp>
-#include <tt-metalium/profiler.hpp>
 #include <tt-metalium/kernel.hpp>
 #include "ttnn/operation.hpp"
 #include <tt-metalium/tt_metal.hpp>

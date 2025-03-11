@@ -28,7 +28,9 @@ inline std::string get_profiler_artifacts_dir() {
     return artifacts_dir;
 }
 
-inline std::string get_profiler_logs_dir() { return get_profiler_artifacts_dir() + std::string(PROFILER_LOGS_DIR_NAME); }
+inline std::string get_profiler_logs_dir() {
+    return get_profiler_artifacts_dir() + std::string(PROFILER_LOGS_DIR_NAME);
+}
 
 inline std::string PROFILER_ZONE_SRC_LOCATIONS_LOG = get_profiler_logs_dir() + "zone_src_locations.log";
 }  // namespace tt_metal

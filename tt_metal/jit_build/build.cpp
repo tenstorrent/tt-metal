@@ -12,8 +12,8 @@
 #include "common/executor.hpp"
 #include "jit_build/genfiles.hpp"
 #include "jit_build/kernel_args.hpp"
-#include <common.hpp>
-#include <profiler_state.hpp>
+#include "profiler_paths.hpp"
+#include "profiler_state.hpp"
 #include <command_queue_interface.hpp>
 #include <kernel.hpp>
 #include "tt_metal/llrt/tt_elffile.hpp"

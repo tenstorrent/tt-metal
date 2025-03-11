@@ -10,8 +10,6 @@
 #include <cstring>
 #include <string>
 
-#include <profiler_state.hpp>
-
 using std::vector;
 
 namespace tt {
