@@ -66,7 +66,6 @@ def test_llama_attention_inference(
     mesh_device,
     use_program_cache,
     reset_seeds,
-    ensure_gc,
 ):
     dtype = ttnn.bfloat8_b
     pcc = 0.99

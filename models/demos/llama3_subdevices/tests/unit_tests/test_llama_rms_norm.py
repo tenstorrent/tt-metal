@@ -52,7 +52,6 @@ def test_llama_rms_norm_inference(
     mesh_device,
     use_program_cache,
     reset_seeds,
-    ensure_gc,
 ):
     dtype = ttnn.bfloat16
 
