@@ -58,6 +58,16 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers, is_functional_tes
         ttnn.CoreCoord(4, 4),
         ttnn.CoreCoord(4, 5),
     ]
+    dummy_sender_cores = [
+        ttnn.CoreCoord(0, 1),
+        ttnn.CoreCoord(0, 2),
+        ttnn.CoreCoord(0, 3),
+        ttnn.CoreCoord(0, 6),
+        ttnn.CoreCoord(0, 7),
+        ttnn.CoreCoord(0, 8),
+        ttnn.CoreCoord(4, 3),
+        ttnn.CoreCoord(4, 8),
+    ]
 
     all_receiver_cores_list = [
         (1, 9),
@@ -98,13 +108,99 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers, is_functional_tes
         for idx in range(0, len(all_receiver_cores_list), 2)
     ]
 
+    dummy_receiver_cores = [
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(3, 0),
+                    ttnn.CoreCoord(3, 0),
+                ),
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(1, 1),
+                    ttnn.CoreCoord(3, 1),
+                ),
+            ]
+        ),
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(1, 2),
+                    ttnn.CoreCoord(3, 2),
+                ),
+            ]
+        ),
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(1, 3),
+                    ttnn.CoreCoord(3, 3),
+                ),
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(3, 4),
+                    ttnn.CoreCoord(3, 4),
+                ),
+            ]
+        ),
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(3, 5),
+                    ttnn.CoreCoord(3, 5),
+                ),
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(1, 6),
+                    ttnn.CoreCoord(3, 6),
+                ),
+            ]
+        ),
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(1, 7),
+                    ttnn.CoreCoord(3, 7),
+                ),
+            ]
+        ),
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(1, 8),
+                    ttnn.CoreCoord(3, 8),
+                ),
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(3, 9),
+                    ttnn.CoreCoord(3, 9),
+                ),
+            ]
+        ),
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(5, 3),
+                    ttnn.CoreCoord(6, 3),
+                ),
+            ]
+        ),
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(5, 8),
+                    ttnn.CoreCoord(6, 8),
+                ),
+            ]
+        ),
+    ]
+
     dram_cores = all_dram_cores[:num_reader_cores]
     hop_grid = []
     mm_optimised_ring_cores = []
     if not is_functional_test:
-        sender_cores = all_sender_cores[:num_reader_cores]
-        receiver_cores_list = all_receiver_cores_list[: num_reader_cores * num_global_cb_receivers]
-        receiver_cores = all_receiver_cores[:num_reader_cores]
+        sender_cores = all_sender_cores
+        active_sender_cores = all_sender_cores[:num_reader_cores]
+        sender_cores.extend(dummy_sender_cores)
+        active_receiver_cores_list = all_receiver_cores_list[: num_reader_cores * num_global_cb_receivers]
+        receiver_cores = all_receiver_cores
+        receiver_cores.extend(dummy_receiver_cores)
 
         worker_cores_range_set = ttnn.CoreRangeSet(
             [
@@ -120,14 +216,16 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers, is_functional_tes
     else:
         sender_cores = [ttnn.CoreCoord(0, y) for y in range(num_reader_cores)]
 
-        receiver_cores_list = [(x, y) for y in range(num_reader_cores) for x in range(1, num_global_cb_receivers + 1)]
+        active_receiver_cores_list = [
+            (x, y) for y in range(num_reader_cores) for x in range(1, num_global_cb_receivers + 1)
+        ]
 
         receiver_cores = [
             ttnn.CoreRangeSet(
                 [
                     ttnn.CoreRange(
-                        ttnn.CoreCoord(*receiver_cores_list[idx * num_global_cb_receivers]),
-                        ttnn.CoreCoord(*receiver_cores_list[(idx + 1) * num_global_cb_receivers - 1]),
+                        ttnn.CoreCoord(*active_receiver_cores_list[idx * num_global_cb_receivers]),
+                        ttnn.CoreCoord(*active_receiver_cores_list[(idx + 1) * num_global_cb_receivers - 1]),
                     )
                 ]
             )
@@ -141,9 +239,10 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers, is_functional_tes
         )
 
     return (
+        active_sender_cores,
         dram_cores,
         sender_cores,
-        receiver_cores_list,
+        active_receiver_cores_list,
         receiver_cores,
         worker_cores_range_set,
         mm_optimised_ring_cores,
@@ -169,17 +268,23 @@ def run_prefetcher_mm(
     K, N = input_shapes[0]
 
     (
+        active_sender_cores,
         dram_cores,
-        sender_cores,
-        receiver_cores_list,
-        receiver_cores,
+        all_sender_cores,
+        active_receiver_cores_list,
+        all_receiver_cores,
         worker_cores_range_set,
         mm_optimised_ring_cores,
         hop_grid,
     ) = get_core_ranges(num_reader_cores, num_global_cb_receivers, is_functional_test)
 
+    logger.info(f"active_sender_cores: {active_sender_cores}")
+    logger.info(f"all_sender_cores: {all_sender_cores}")
+    logger.info(f"active_receiver_cores_list: {active_receiver_cores_list}")
+    logger.info(f"all_receiver_cores: {all_receiver_cores}")
+
     if num_reader_cores != 12:
-        mm_optimised_ring_cores = receiver_cores_list
+        mm_optimised_ring_cores = active_receiver_cores_list
 
     max_tile_size = 0
     for dtype in dtypes:
@@ -204,17 +309,19 @@ def run_prefetcher_mm(
 
     # global_cb_size = 1000 * max_tile_size # works without profiler, fails with profiler, 900 doesn't provide tracy info
     global_cb_size = 750 * max_tile_size
-    sender_receiver_mapping = list(zip(sender_cores, receiver_cores))
+    sender_receiver_mapping = list(zip(all_sender_cores, all_receiver_cores))
     global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, global_cb_size)
     logger.info(f"global cb size {global_cb_size}")
 
     ##### Set up the input tensors #####
     dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core_coord, core_coord) for core_coord in dram_cores])
-    sender_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core_coord, core_coord) for core_coord in sender_cores])
+    sender_core_range_set = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(core_coord, core_coord) for core_coord in active_sender_cores]
+    )
 
     padded_shapes, shard_shapes = [], []
     for K, N in input_shapes:
-        num_cores = len(receiver_cores_list)
+        num_cores = len(active_receiver_cores_list)
         K_per_shard = round_up(math.ceil(K / num_cores), ttnn.TILE_SIZE)
         K_padded = K_per_shard * num_cores
         N_per_shard = round_up(math.ceil(N / num_cores), ttnn.TILE_SIZE)
@@ -290,7 +397,7 @@ def run_prefetcher_mm(
     worker_sub_device_id = ttnn.SubDeviceId(1)  # Can we parameterize this?
 
     max_dst_tiles = 8
-    grid = receiver_cores_list
+    grid = active_receiver_cores_list
     num_cores = grid[0] * grid[1] if isinstance(grid, tuple) else len(grid)
     storage_grid = num_cores_to_rectangle_grid(num_cores, device)
     M = 32
