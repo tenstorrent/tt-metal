@@ -17,6 +17,7 @@
 #include <command_queue_interface.hpp>
 #include <kernel.hpp>
 #include "tt_metal/llrt/tt_elffile.hpp"
+#include "env_lib.hpp"
 
 namespace fs = std::filesystem;
 
@@ -62,13 +63,25 @@ static void check_built_dir(const std::filesystem::path& dir_path, const std::fi
     }
 }
 
+std::string get_default_root_path() {
+    const std::string emptyString("");
+    const std::string home_path = parse_env<std::string>("HOME", emptyString);
+    if (!home_path.empty() && std::filesystem::exists(home_path)) {
+        return home_path + "/.cache/tt-metal-cache/";
+    } else {
+        return "/tmp/tt-metal-cache/";
+    }
+}
 JitBuildEnv::JitBuildEnv() {}
 
 void JitBuildEnv::init(
     uint32_t build_key, tt::ARCH arch, const std::map<std::string, std::string>& device_kernel_defines) {
     // Paths
     this->root_ = llrt::RunTimeOptions::get_instance().get_root_dir();
-    this->out_root_ = this->root_ + "built/";
+    this->out_root_ = llrt::RunTimeOptions::get_instance().is_cache_dir_specified()
+                          ? llrt::RunTimeOptions::get_instance().get_cache_dir()
+                          : get_default_root_path();
+
     this->arch_ = arch;
     this->arch_name_ = get_string_lowercase(arch);
     this->aliased_arch_name_ = get_string_aliased_arch_lowercase(arch);

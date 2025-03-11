@@ -45,6 +45,10 @@ show_help() {
 clean() {
     echo "INFO: Removing build artifacts!"
     rm -rf build_Release* build_Debug* build_RelWithDebInfo* build built
+    rm -rf ~/.cache/tt-metal-cache /tmp/tt-metal-cache
+    if [[ ! -z $TT_METAL_CACHE ]]; then
+        echo "User has TT_METAL_CACHE set, please make sure you delete it in order to delete all artifacts!"
+    fi
 }
 
 # Parse CLI options
