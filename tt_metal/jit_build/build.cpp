@@ -108,7 +108,7 @@ void JitBuildEnv::init(
     this->out_firmware_root_ = this->out_root_ + to_string(build_key) + "/firmware/";
     this->out_kernel_root_ = this->out_root_ + to_string(build_key) + "/kernels/";
 
-    const static bool use_ccache = std::getenv("CCACHE_KERNEL_SUPPORT") != nullptr;
+    const static bool use_ccache = std::getenv("TT_METAL_CCACHE_KERNEL_SUPPORT") != nullptr;
     if (use_ccache) {
         this->gpp_ = "ccache ";
     } else {
