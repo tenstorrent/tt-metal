@@ -1,0 +1,43 @@
+name: "Workflow Status"
+description: "Ensures all required jobs succeeded and handles optional jobs correctly."
+
+inputs:
+  required-jobs:
+    description: "Comma-separated list of required jobs (must succeed)."
+    required: true
+  optional-jobs:
+    description: "Comma-separated list of optional jobs (skipped is OK, but failure is not)."
+    required: false
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - name: Check Jobs with github-script
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const requiredJobs = "${{ inputs.required-jobs }}".split(",").map(job => job.trim());
+          const optionalJobs = "${{ inputs.optional-jobs }}".split(",").map(job => job.trim());
+
+          const needs = JSON.parse(process.env.NEEDS_CONTEXT);
+
+          // Check required jobs
+          for (const job of requiredJobs) {
+            const result = needs[job]?.result;
+            console.log(`Job: ${job}, Result: ${result}`);
+            if (result !== "success") {
+              core.setFailed(`Required job '${job}' did not succeed.`);
+            }
+          }
+
+          // Check optional jobs (treat skipped as success)
+          for (const job of optionalJobs) {
+            const result = needs[job]?.result || "success"; // Default to success if missing
+            console.log(`Job: ${job}, Result: ${result}`);
+            if (result === "failure") {
+              core.setFailed(`Optional job '${job}' failed.`);
+            }
+          }
+
+          console.log("Workflow was successful.");

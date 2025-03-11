@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #define PROFILER_OPT_DO_DISPATCH_CORES 2
 
 namespace kernel_profiler {

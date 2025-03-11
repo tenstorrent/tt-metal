@@ -1,0 +1,53 @@
+name: Merge Gate
+# This pipeline is the minimum bar a PR must pass before it can pass the merge queue.
+# It is intended to be relatively fast and lightweight that the delay between completing
+# a PR and having the changes available on main is not onerous.
+
+# Requirements for all jobs in this workflow:
+# - End-to-end (excluding wait times for runners) must be less than 15mins.
+#   This includes the cost of checking out the code, preparing a runner, etc.
+# - Individual test cases must be less than 5s.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+  merge_group:
+
+jobs:
+  code-analysis:
+    # Workaround for https://github.com/orgs/community/discussions/46757?sort=old#discussioncomment-4909336
+    # We must have this workflow trigger on PRs in order to allow us to require them in the merge queue.
+    # But we don't actually WANT to run it on PRs -- that's the whole point.  GitHub strikes again.
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/code-analysis.yaml
+    with:
+      version: 22.04
+
+  # GitHub has so many design limitations it's not even funny.
+  # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
+  workflow-status:
+    name: Merge Gate Status
+    # Force this job to run so GH can 'see' it, provided some other job has actually run.
+    # Otherwise if the entire workflow has been skipped (eg: the PR was in Draft), then this will
+    # report FAILED instead of SKIPPED.
+    if: >-
+      ${{
+        always() &&
+        contains(join(needs.*.result, ','), 'success') ||
+        contains(join(needs.*.result, ','), 'failure')
+      }}
+    needs: [code-analysis]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check if all jobs passed
+        uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
+        with:
+          required-jobs: "code-analysis"
+          optional-jobs: ""
+        env:
+          NEEDS_CONTEXT: '${{ toJSON(needs) }}'

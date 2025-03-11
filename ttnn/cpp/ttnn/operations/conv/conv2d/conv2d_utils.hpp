@@ -35,6 +35,8 @@ bool use_matmul_for_1x1_conv(
     uint32_t groups,
     const Conv2dConfig& conv_config);
 
+bool is_1d_conv(uint32_t kernel_width, uint32_t image_width);
+
 bool is_1d_deptwise_conv(
     uint32_t groups, uint32_t input_channels, uint32_t output_channels, uint32_t kernel_width, uint32_t image_width);
 sliding_window::ParallelConfig determine_parallel_config(

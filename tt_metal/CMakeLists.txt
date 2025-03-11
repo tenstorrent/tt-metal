@@ -25,12 +25,13 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES
             api/tt-metalium/circular_buffer_constants.h
-            api/tt-metalium/cq_commands.hpp
             api/tt-metalium/dev_msgs.h
             api/tt-metalium/tt_log.h
+            api/tt-metalium/fabric_host_interface.h
             core_descriptors/blackhole_140_arch.yaml
             core_descriptors/grayskull_120_arch.yaml
             core_descriptors/wormhole_b0_80_arch.yaml
+            impl/dispatch/kernels/cq_commands.hpp
             impl/dispatch/kernels/cq_common.hpp
             impl/dispatch/kernels/cq_helpers.hpp
             impl/dispatch/kernels/packet_queue.hpp

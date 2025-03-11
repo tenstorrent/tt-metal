@@ -61,7 +61,7 @@ void LightMetalCaptureContext::reset() {
     next_global_id_ = 0;
     cmds_vec_.clear();
     trace_descs_vec_.clear();
-    buffer_to_global_id_map_.clear();
+    buffer_id_to_global_id_map_.clear();
     program_id_to_global_id_map_.clear();
     kernel_to_global_id_map_.clear();
     cb_handle_to_global_id_map_.clear();
@@ -72,15 +72,15 @@ void LightMetalCaptureContext::reset() {
 ////////////////////////////////////////////
 
 bool LightMetalCaptureContext::is_in_map(const Buffer* obj) {
-    return buffer_to_global_id_map_.find(obj) != buffer_to_global_id_map_.end();
+    return buffer_id_to_global_id_map_.find(obj->unique_id()) != buffer_id_to_global_id_map_.end();
 }
 
 uint32_t LightMetalCaptureContext::add_to_map(const Buffer* obj) {
     if (is_in_map(obj)) {
-        log_warning(tt::LogMetalTrace, "Buffer already exists in global_id map.");
+        TT_THROW("Buffer id: {} already exists in global_id map.", obj->unique_id());
     }
     uint32_t global_id = next_global_id_++;
-    buffer_to_global_id_map_[obj] = global_id;
+    buffer_id_to_global_id_map_[obj->unique_id()] = global_id;
     return global_id;
 }
 
@@ -88,15 +88,15 @@ void LightMetalCaptureContext::remove_from_map(const Buffer* obj) {
     if (!is_in_map(obj)) {
         log_warning(tt::LogMetalTrace, "Buffer not found in global_id map.");
     }
-    buffer_to_global_id_map_.erase(obj);
+    buffer_id_to_global_id_map_.erase(obj->unique_id());
 }
 
 uint32_t LightMetalCaptureContext::get_global_id(const Buffer* obj) {
-    auto it = buffer_to_global_id_map_.find(obj);
-    if (it != buffer_to_global_id_map_.end()) {
+    auto it = buffer_id_to_global_id_map_.find(obj->unique_id());
+    if (it != buffer_id_to_global_id_map_.end()) {
         return it->second;
     } else {
-        TT_THROW("Buffer not found in global_id global_id map");
+        TT_THROW("Buffer id: {} not found in global_id map", obj->unique_id());
     }
 }
 

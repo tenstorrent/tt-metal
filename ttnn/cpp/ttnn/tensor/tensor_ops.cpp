@@ -99,6 +99,10 @@ Tensor tensor_to_device(
 }
 
 Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, QueueId cq_id) {
+    if (input_tensor.storage_type() == StorageType::OWNED || input_tensor.storage_type() == StorageType::BORROWED) {
+        return input_tensor;
+    }
+
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::cpu", input_tensor, blocking);
     auto workers = input_tensor.get_workers(blocking);
@@ -287,7 +291,7 @@ Tensor tensor_pad_to_tile(const Tensor& input_tensor, float pad_value) {
     ttnn::SmallVector<uint32_t> padded_shape;
     ttnn::SmallVector<uint32_t> input_tensor_start;
 
-    for (auto index = 0; index < input_tensor.get_padded_shape().rank() - 2; index++) {
+    for (auto index = 0; index < static_cast<int>(input_tensor.get_padded_shape().rank()) - 2; index++) {
         padded_shape.push_back(input_tensor.get_padded_shape()[index]);
         input_tensor_start.push_back(0);
     }

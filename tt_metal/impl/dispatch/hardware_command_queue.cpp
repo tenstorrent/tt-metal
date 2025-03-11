@@ -502,13 +502,11 @@ void HWCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
     if (tt::llrt::RunTimeOptions::get_instance().get_test_mode_enabled()) {
         while (this->num_entries_in_completion_q > this->num_completed_completion_q_reads) {
             if (DPrintServerHangDetected()) {
-                // DPrint Server hang. Mark state and early exit. Assert in main thread.
-                this->dprint_server_hang = true;
+                // DPrint Server hang, early exit. We're in test mode, so main thread will assert.
                 this->set_exit_condition();
                 return;
             } else if (tt::watcher_server_killed_due_to_error()) {
-                // Illegal NOC txn killed watcher. Mark state and early exit. Assert in main thread.
-                this->illegal_noc_txn_hang = true;
+                // Illegal NOC txn killed watcher, early exit. We're in test mode, so main thread will assert.
                 this->set_exit_condition();
                 return;
             }
@@ -519,10 +517,6 @@ void HWCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
             lock, [this] { return this->num_entries_in_completion_q == this->num_completed_completion_q_reads; });
     }
 }
-
-volatile bool HWCommandQueue::is_dprint_server_hung() { return dprint_server_hang; }
-
-volatile bool HWCommandQueue::is_noc_hung() { return illegal_noc_txn_hang; }
 
 const CoreCoord& HWCommandQueue::virtual_enqueue_program_dispatch_core() const {
     return this->virtual_enqueue_program_dispatch_core_;

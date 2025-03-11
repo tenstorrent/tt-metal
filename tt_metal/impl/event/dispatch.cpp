@@ -4,7 +4,10 @@
 
 #include "tt_metal/impl/event/dispatch.hpp"
 #include <tt-metalium/dispatch_settings.hpp>
+#include "tt_metal/impl/dispatch/device_command.hpp"
+#include <tt-metalium/program_impl.hpp>
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
+#include "tt_metal/impl/dispatch/topology.hpp"
 #include <tt_align.hpp>
 
 #include "tt_cluster.hpp"
@@ -86,7 +89,7 @@ void issue_record_event_commands(
         tt_cxy_pair dispatch_location = DispatchQueryManager::instance().get_dispatch_core(cq_id);
         CoreCoord dispatch_virtual_core = device->virtual_core_from_logical_core(dispatch_location, dispatch_core_type);
         unicast_sub_cmds[cq_id] = CQDispatchWritePackedUnicastSubCmd{
-            .noc_xy_addr = device->get_noc_unicast_encoding(dispatch_downstream_noc, dispatch_virtual_core)};
+            .noc_xy_addr = device->get_noc_unicast_encoding(k_dispatch_downstream_noc, dispatch_virtual_core)};
         event_payloads[cq_id] = {event_payload.data(), event_payload.size() * sizeof(uint32_t)};
     }
 

@@ -638,7 +638,7 @@ def as_tensor(
                 tensor = from_torch_and_dump(tensor, dtype, layout, cache_file_name, mesh_mapper)
             logger.debug(f"Loaded cache for {cache_file_name} of shape {tensor.shape}")
         except RuntimeError as e:
-            log.warning(f"Failed to load cache for {cache_file_name}: {e}")
+            logger.warning(f"Failed to load cache for {cache_file_name}: {e}")
             tensor = from_torch_and_dump(tensor, dtype, layout, cache_file_name, mesh_mapper)
         return tensor
 

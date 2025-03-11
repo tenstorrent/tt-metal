@@ -91,7 +91,8 @@ void CaptureBufferCreate(
     const std::optional<bool> bottom_up,
     const std::optional<SubDeviceId> sub_device_id);
 
-void CaptureDeallocateBuffer(Buffer& buffer);
+void CaptureBufferDeallocate(const Buffer& buffer);
+void CaptureBufferDelete(const Buffer& buffer);
 
 void CaptureEnqueueWriteBuffer(
     CommandQueue& cq,

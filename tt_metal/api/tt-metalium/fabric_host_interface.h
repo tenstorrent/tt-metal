@@ -4,15 +4,7 @@
 
 #pragma once
 
-#include <stdint.h>
-
-#if defined(KERNEL_BUILD) || defined(FW_BUILD)
-#include "risc_attribs.h"
-#else
-#define tt_l1_ptr
-#define tt_reg_ptr
-#define FORCE_INLINE inline
-#endif
+#include <cstdint>
 
 // TODO: move routing table here
 namespace tt::tt_fabric {
@@ -37,6 +29,7 @@ static_assert(
 
 static constexpr std::uint32_t CLIENT_INTERFACE_SIZE = 3280;
 static constexpr std::uint32_t PULL_CLIENT_INTERFACE_SIZE = 112;
+static constexpr std::uint32_t PUSH_CLIENT_INTERFACE_SIZE = 48;
 static constexpr std::uint32_t PACKET_WORD_SIZE_BYTES = 16;
 static constexpr std::uint32_t PACKET_HEADER_SIZE_BYTES = 48;
 static constexpr std::uint32_t PACKET_HEADER_SIZE_WORDS = PACKET_HEADER_SIZE_BYTES / PACKET_WORD_SIZE_BYTES;
@@ -46,15 +39,20 @@ enum eth_chan_magic_values {
     INVALID_ROUTING_TABLE_ENTRY = 0xFF,
 };
 
+enum eth_chan_directions {
+    EAST = 0,
+    WEST = 1,
+    NORTH = 2,
+    SOUTH = 3,
+    COUNT = 4,
+};
+
 struct routing_table_t {
     chan_id_t dest_entry[MAX_MESH_SIZE];
 };
 
 struct port_direction_t {
-    chan_id_t north;
-    chan_id_t south;
-    chan_id_t east;
-    chan_id_t west;
+    chan_id_t directions[eth_chan_directions::COUNT];
 };
 
 struct fabric_router_l1_config_t {

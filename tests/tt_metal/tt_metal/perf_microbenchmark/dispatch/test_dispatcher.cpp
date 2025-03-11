@@ -11,7 +11,7 @@
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/rtoptions.hpp>
-#include <tt-metalium/cq_commands.hpp>
+#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "common.h"
 
 #include "test_common.hpp"
@@ -565,6 +565,12 @@ int main(int argc, char** argv) {
             host_completion_queue_wr_ptr,
             dev_completion_queue_wr_ptr,
             dev_completion_queue_rd_ptr,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
             true,  // is_dram_variant
             true,  // is_host_variant
         };

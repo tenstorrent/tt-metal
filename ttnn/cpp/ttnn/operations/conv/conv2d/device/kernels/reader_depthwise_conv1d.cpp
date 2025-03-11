@@ -31,6 +31,10 @@ void kernel_main() {
     constexpr uint32_t weight_size_h = get_compile_time_arg_val(15);
     constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(16);
 
+    constexpr uint32_t cb_id_act = get_compile_time_arg_val(27);
+    constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(28);
+    constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(29);
+
     uint32_t i = 0;
     uint32_t noop = get_arg_val<uint32_t>(i);
     i += 1;
@@ -38,9 +42,6 @@ void kernel_main() {
     if (noop) {
         return;
     }
-
-    constexpr uint32_t cb_id_act = 0;
-    constexpr uint32_t cb_id_sharded_act = 3;
 
     // LOOP TO FILL READER OFFSETS
     /* We can add another loop to read chunks of a stick as well.
@@ -70,7 +71,6 @@ void kernel_main() {
 #endif
 
     // LOOP TO FILL READER INDICES
-    constexpr uint32_t cb_reader_indices = tt::CBIndex::c_4;
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
 

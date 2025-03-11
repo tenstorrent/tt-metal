@@ -29,9 +29,6 @@ public:
 
     const CoreCoord& virtual_enqueue_program_dispatch_core() const override;
 
-    volatile bool is_dprint_server_hung() override;
-    volatile bool is_noc_hung() override;
-
     void record_begin(const uint32_t tid, const std::shared_ptr<TraceDescriptor>& ctx) override;
     void record_end() override;
 
@@ -92,8 +89,6 @@ private:
     std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES> expected_num_workers_completed;
 
     volatile bool exit_condition;
-    volatile bool dprint_server_hang = false;
-    volatile bool illegal_noc_txn_hang = false;
     volatile uint32_t num_entries_in_completion_q;  // issue queue writer thread increments this when an issued command
                                                     // is expected back in the completion queue
     volatile uint32_t num_completed_completion_q_reads;  // completion queue reader thread increments this after reading

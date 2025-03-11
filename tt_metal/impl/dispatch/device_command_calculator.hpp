@@ -4,7 +4,7 @@
 
 #include "hal.hpp"
 #include "tt_align.hpp"
-#include <tt-metalium/cq_commands.hpp>
+#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 
 namespace tt::tt_metal {
 class DeviceCommandCalculator {

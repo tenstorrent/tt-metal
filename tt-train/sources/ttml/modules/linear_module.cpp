@@ -52,8 +52,9 @@ LinearLayer::LinearLayer(uint32_t in_features, uint32_t out_features, bool has_b
 
 LinearLayer::LinearLayer(const autograd::TensorPtr& weight, bool has_bias) : m_weight(weight) {
     if (has_bias) {
-        int in_features = m_weight->get_value().get_logical_shape()[3];
-        int out_features = m_weight->get_value().get_logical_shape()[2];
+        auto weight_shape = m_weight->get_value().get_logical_shape();
+        uint32_t in_features = weight_shape[3];
+        uint32_t out_features = weight_shape[2];
         m_bias = create_bias(in_features, out_features);
     }
     register_tensors();

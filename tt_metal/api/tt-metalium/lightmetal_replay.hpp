@@ -10,6 +10,7 @@
 #include <optional>
 #include <tt-metalium/lightmetal_binary.hpp>
 
+#include <tt-metalium/program_impl.hpp>
 #include <tt-metalium/device.hpp>
 
 // Forward decl for trace_buffer.hpp
@@ -25,7 +26,8 @@ struct EnqueueTraceCommand;
 struct LoadTraceCommand;
 struct ReleaseTraceCommand;
 struct BufferCreateCommand;
-struct DeallocateBufferCommand;
+struct BufferDeallocateCommand;
+struct BufferDeleteCommand;
 struct EnqueueWriteBufferCommand;
 struct EnqueueReadBufferCommand;
 struct FinishCommand;
@@ -69,7 +71,8 @@ private:
     void execute(const tt::tt_metal::flatbuffer::LoadTraceCommand* command);
     void execute(const tt::tt_metal::flatbuffer::ReleaseTraceCommand* command);
     void execute(const tt::tt_metal::flatbuffer::BufferCreateCommand* cmd);
-    void execute(const tt::tt_metal::flatbuffer::DeallocateBufferCommand* command);
+    void execute(const tt::tt_metal::flatbuffer::BufferDeallocateCommand* command);
+    void execute(const tt::tt_metal::flatbuffer::BufferDeleteCommand* command);
     void execute(const tt::tt_metal::flatbuffer::EnqueueWriteBufferCommand* command);
     void execute(const tt::tt_metal::flatbuffer::EnqueueReadBufferCommand* command);
     void execute(const tt::tt_metal::flatbuffer::FinishCommand* command);

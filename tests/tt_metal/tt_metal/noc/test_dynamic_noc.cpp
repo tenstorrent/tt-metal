@@ -12,6 +12,7 @@
 #include "command_queue_fixture.hpp"
 #include "device_fixture.hpp"
 #include "multi_device_fixture.hpp"
+#include "env_lib.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel.hpp>

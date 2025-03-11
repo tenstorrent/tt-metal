@@ -35,6 +35,7 @@ void kernel_main() {
     tt_l1_ptr uint32_t* mcast_sem = reinterpret_cast<tt_l1_ptr uint32_t*>(0x100000);
     *mcast_sem = 1;
 
+#ifdef FVC_MODE_PULL
     if (sync_with_remote) {
         uint32_t dest_device = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
         uint32_t remote_controller_noc_encoding = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
@@ -53,7 +54,8 @@ void kernel_main() {
         volatile tt_l1_ptr fabric_pull_client_interface_t* client_interface =
             reinterpret_cast<volatile tt_l1_ptr fabric_pull_client_interface_t*>(client_interface_addr);
 
-        fabric_endpoint_init<RoutingType::ROUTING_TABLE>(client_interface, outbound_eth_chan);
+        fabric_endpoint_init<decltype(client_interface), RoutingType::ROUTING_TABLE>(
+            client_interface, outbound_eth_chan);
 
         uint64_t dst_noc_addr = get_noc_addr_helper(remote_controller_noc_encoding, remote_notification_addr);
 
@@ -83,6 +85,7 @@ void kernel_main() {
 
         while (*poll_addr != CONTROLLER_HANDSHAKE_END);
     }
+#endif
 
     // do a noc multicast to tx kernels
     uint64_t mcast_dest_addr = get_noc_addr_helper(mcast_encoding, tx_signal_addr);
