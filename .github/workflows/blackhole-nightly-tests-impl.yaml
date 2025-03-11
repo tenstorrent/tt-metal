@@ -32,7 +32,7 @@ jobs:
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
-          pytest -n auto tests/nightly/single_card/${{ matrix.test-group.model }}
+          pytest tests/nightly/single_card/${{ matrix.test-group.model }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}

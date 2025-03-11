@@ -13,7 +13,7 @@ jobs:
             name: "whisper_performance",
             arch: blackhole,
             runs-on: ["BH", "pipeline-perf", "in-service"],
-            cmd: pytest -n auto models/demos/whisper/demo/demo.py --input-path="models/demos/whisper/demo/dataset/conditional_generation" -k "conditional_generation",
+            cmd: pytest models/demos/whisper/demo/demo.py --input-path="models/demos/whisper/demo/dataset/conditional_generation" -k "conditional_generation",
             owner_id: U05RWH3QUPM #Salar Hosseini
           }
         ]
