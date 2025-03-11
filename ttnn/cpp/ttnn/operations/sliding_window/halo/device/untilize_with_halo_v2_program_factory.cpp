@@ -19,42 +19,17 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::detail {
 
-// In order to make circular buffer indicies sequential, we use variable to keep track of the next available index.
-// Circular buffer indices should be assigned right before their creation.
-struct CBIndices {
-    // Invalid value for cb id is 32, number greater than the maximum number of index circular buffer can have.
-    // Not assigning get_next_cb_index() value before creating cb will throw exception in circular_buffer_types.cpp
-    // which can be used as a reminder.
-    uint32_t src_cb_id = 32;
-    uint32_t pad_cb_id = 32;
-    uint32_t out_cb_id = 32;
-
-    // Additional CBs for sharded data kernel configs
-    uint32_t padding_config_cb_id1 = 32;
-    uint32_t padding_config_cb_id2 = 32;
-    uint32_t local_config_cb_id1 = 32;
-    uint32_t local_config_cb_id2 = 32;
-    uint32_t remote_config_cb_id1 = 32;
-    uint32_t remote_config_cb_id2 = 32;
-    uint32_t untilize_out_cb_id = 32;
-    uint32_t get_next_cb_id() { return next_cb_id++; }
-
-private:
-    uint32_t next_cb_id = tt::CBIndex::c_0;
-};
-
 operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     Program& program,
     const Tensor& input_tensor,
     const uint32_t pad_val,
     const uint32_t ncores_nhw,
     const uint32_t max_out_nsticks_per_core,
-    const Tensor& padding_config1,
-    const Tensor& padding_config2,
-    const Tensor& local_config1,
-    const Tensor& local_config2,
-    const Tensor& remote_config1,
-    const Tensor& remote_config2,
+    const Tensor& padding_config,
+    const Tensor& local_config,
+    const Tensor& remote_config,
+    const Tensor& blocking_local_config,
+    const Tensor& blocking_remote_config,
     const bool remote_read,
     const bool transpose_mcast,
     Tensor& output_tensor,
@@ -93,53 +68,58 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         in_page_size = input_shard_shape[1] * in_nbytes;
         input_npages = remapped_input_shard_shape_for_output_grid;
     }
+
     // Construct CBs
     // //
-    CBIndices cb_indices = CBIndices();
-    cb_indices.src_cb_id = cb_indices.get_next_cb_id();
+
+    uint32_t src_cb_id = tt::CBIndex::c_0;
+    uint32_t pad_cb_id = tt::CBIndex::c_1;
+    uint32_t untilize_out_cb_id = tt::CBIndex::c_16;
+    uint32_t out_cb_id = tt::CBIndex::c_17;
+
     // input CB (sharded)
-    auto src_cb_config = CircularBufferConfig(input_npages * in_page_size, {{cb_indices.src_cb_id, in_df}})
-                             .set_page_size(cb_indices.src_cb_id, in_page_size)
+    auto src_cb_config = CircularBufferConfig(input_npages * in_page_size, {{src_cb_id, in_df}})
+                             .set_page_size(src_cb_id, in_page_size)
                              .set_globally_allocated_address(*src_buffer);
     auto src_cb = CreateCircularBuffer(program, all_cores, src_cb_config);
-    log_debug(tt::LogOp, "CB {} :: npages = {}, pagesize = {}", cb_indices.src_cb_id, input_npages, in_page_size);
+    log_debug(tt::LogOp, "CB {} :: npages = {}, pagesize = {}", src_cb_id, input_npages, in_page_size);
 
-    uint32_t input_to_writer_cb_id = cb_indices.src_cb_id;
+    uint32_t input_to_writer_cb_id = src_cb_id;
     if (!skip_untilize) {
-        cb_indices.untilize_out_cb_id = cb_indices.get_next_cb_id();
-        input_to_writer_cb_id = cb_indices.untilize_out_cb_id;
+        input_to_writer_cb_id = untilize_out_cb_id;
+
         // output of untilize from compute kernel goes into this CB
         uint32_t output_ntiles = ntiles_per_block * input_nblocks_per_core;
         auto untilize_out_cb_config =
-            CircularBufferConfig(output_ntiles * out_tile_size, {{cb_indices.untilize_out_cb_id, out_df}})
-                .set_page_size(cb_indices.untilize_out_cb_id, out_tile_size);
+            CircularBufferConfig(output_ntiles * out_tile_size, {{untilize_out_cb_id, out_df}})
+                .set_page_size(untilize_out_cb_id, out_tile_size);
         auto untilize_out_cb = CreateCircularBuffer(program, all_cores, untilize_out_cb_config);
-        log_debug(
-            tt::LogOp,
-            "CB {} :: npages = {}, pagesize = {}",
-            cb_indices.untilize_out_cb_id,
-            output_ntiles,
-            out_tile_size);
+        log_debug(tt::LogOp, "CB {} :: npages = {}, pagesize = {}", untilize_out_cb_id, output_ntiles, out_tile_size);
     }
 
-    cb_indices.out_cb_id = cb_indices.get_next_cb_id();
     // output shard, after inserting halo and padding, goes into this CB as input to next op.
     uint32_t out_cb_pagesize = out_stick_nbytes;
     uint32_t out_cb_npages = max_out_nsticks_per_core;
-    auto out_cb_config = CircularBufferConfig(out_cb_npages * out_cb_pagesize, {{cb_indices.out_cb_id, out_df}})
-                             .set_page_size(cb_indices.out_cb_id, out_cb_pagesize)
+    auto out_cb_config = CircularBufferConfig(out_cb_npages * out_cb_pagesize, {{out_cb_id, out_df}})
+                             .set_page_size(out_cb_id, out_cb_pagesize)
                              .set_globally_allocated_address(*dst_buffer);
     auto out_cb = CreateCircularBuffer(program, all_cores, out_cb_config);
-    log_debug(tt::LogOp, "CB {} :: npages = {}, pagesize = {}", cb_indices.out_cb_id, out_cb_npages, out_cb_pagesize);
+    log_debug(tt::LogOp, "CB {} :: npages = {}, pagesize = {}", out_cb_id, out_cb_npages, out_cb_pagesize);
 
     // CB for pad val buffer (stick sized)
     uint32_t pad_cb_pagesize = out_stick_nbytes;
     uint32_t pad_cb_npages = 1;
-    cb_indices.pad_cb_id = cb_indices.get_next_cb_id();
-    auto pad_cb_config = CircularBufferConfig(pad_cb_pagesize * pad_cb_npages, {{cb_indices.pad_cb_id, out_df}})
-                             .set_page_size(cb_indices.pad_cb_id, pad_cb_pagesize);
+    auto pad_cb_config = CircularBufferConfig(pad_cb_pagesize * pad_cb_npages, {{pad_cb_id, out_df}})
+                             .set_page_size(pad_cb_id, pad_cb_pagesize);
     auto pad_cb = CreateCircularBuffer(program, all_cores, pad_cb_config);
-    log_debug(tt::LogOp, "CB {} :: npages = {}, pagesize = {}", cb_indices.pad_cb_id, pad_cb_npages, pad_cb_pagesize);
+    log_debug(tt::LogOp, "CB {} :: npages = {}, pagesize = {}", pad_cb_id, pad_cb_npages, pad_cb_pagesize);
+
+    // Additional CBs for sharded data kernel configs
+    uint32_t padding_config_cb_id = tt::CBIndex::c_2;
+    uint32_t local_config_cb_id = tt::CBIndex::c_3;
+    uint32_t remote_config_cb_id = tt::CBIndex::c_4;
+    uint32_t blocking_local_config_cb_id = tt::CBIndex::c_5;
+    uint32_t blocking_remote_config_cb_id = tt::CBIndex::c_6;
 
     tt::DataFormat kernel_config_df = tt::DataFormat::RawUInt16;  // NOTE: UInt16 is not supported for CB types
     uint32_t config_nbytes =
@@ -149,8 +129,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     // Gather data
     if (!skip_untilize) {
         // compute kernel
-        std::vector<uint32_t> compute_ct_args = {
-            input_nblocks_per_core, ntiles_per_block, cb_indices.src_cb_id, input_to_writer_cb_id};
+        std::vector<uint32_t> compute_ct_args = {input_nblocks_per_core, ntiles_per_block};
         std::string compute_kernel(
             "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
         if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH) {
@@ -165,67 +144,47 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
             CreateKernel(program, compute_kernel, all_cores, ComputeConfig{.compile_args = compute_ct_args});
     }
 
-    TT_ASSERT(padding_config1.get_dtype() == DataType::UINT16);
-    TT_ASSERT(padding_config2.get_dtype() == DataType::UINT16);
-    TT_ASSERT(local_config1.get_dtype() == DataType::UINT16);
-    TT_ASSERT(local_config2.get_dtype() == DataType::UINT16);
-    TT_ASSERT(remote_config1.get_dtype() == DataType::UINT16);
-    TT_ASSERT(remote_config2.get_dtype() == DataType::UINT16);
+    TT_ASSERT(padding_config.get_dtype() == DataType::UINT16);
+    TT_ASSERT(local_config.get_dtype() == DataType::UINT16);
+    TT_ASSERT(remote_config.get_dtype() == DataType::UINT16);
 
-    auto padding_config_buffer1 = padding_config1.device_buffer();
+    auto padding_config_buffer = padding_config.device_buffer();
     const uint32_t num_cores = all_cores.num_cores();
-    cb_indices.padding_config_cb_id1 = cb_indices.get_next_cb_id();
-    auto padding_config_cb_config1 =
-        CircularBufferConfig(
-            padding_config_buffer1->size() / num_cores, {{cb_indices.padding_config_cb_id1, kernel_config_df}})
-            .set_page_size(cb_indices.padding_config_cb_id1, padding_config_buffer1->page_size())
-            .set_globally_allocated_address(*padding_config_buffer1);
-    CBHandle padding_config_cb1 = CreateCircularBuffer(program, all_cores, padding_config_cb_config1);
+    auto padding_config_cb_config =
+        CircularBufferConfig(padding_config_buffer->size() / num_cores, {{padding_config_cb_id, kernel_config_df}})
+            .set_page_size(padding_config_cb_id, padding_config_buffer->page_size())
+            .set_globally_allocated_address(*padding_config_buffer);
+    CBHandle padding_config_cb = CreateCircularBuffer(program, all_cores, padding_config_cb_config);
 
-    cb_indices.padding_config_cb_id2 = cb_indices.get_next_cb_id();
-    auto padding_config_buffer2 = padding_config2.device_buffer();
-    auto padding_config_cb_config2 =
-        CircularBufferConfig(
-            padding_config_buffer2->size() / num_cores, {{cb_indices.padding_config_cb_id2, kernel_config_df}})
-            .set_page_size(cb_indices.padding_config_cb_id2, padding_config_buffer2->page_size())
-            .set_globally_allocated_address(*padding_config_buffer2);
-    CBHandle padding_config_cb2 = CreateCircularBuffer(program, all_cores, padding_config_cb_config2);
+    auto local_config_buffer = local_config.device_buffer();
+    auto local_config_cb_config =
+        CircularBufferConfig(local_config_buffer->size() / num_cores, {{local_config_cb_id, kernel_config_df}})
+            .set_page_size(local_config_cb_id, local_config_buffer->page_size())
+            .set_globally_allocated_address(*local_config_buffer);
+    CBHandle local_config_cb = CreateCircularBuffer(program, all_cores, local_config_cb_config);
 
-    cb_indices.local_config_cb_id1 = cb_indices.get_next_cb_id();
-    auto local_config_buffer1 = local_config1.device_buffer();
-    auto local_config_cb_config1 =
-        CircularBufferConfig(
-            local_config_buffer1->size() / num_cores, {{cb_indices.local_config_cb_id1, kernel_config_df}})
-            .set_page_size(cb_indices.local_config_cb_id1, local_config_buffer1->page_size())
-            .set_globally_allocated_address(*local_config_buffer1);
-    CBHandle local_config_cb1 = CreateCircularBuffer(program, all_cores, local_config_cb_config1);
+    auto remote_config_buffer = remote_config.device_buffer();
+    auto remote_config_cb_config =
+        CircularBufferConfig(remote_config_buffer->size() / num_cores, {{remote_config_cb_id, kernel_config_df}})
+            .set_page_size(remote_config_cb_id, remote_config_buffer->page_size())
+            .set_globally_allocated_address(*remote_config_buffer);
+    CBHandle remote_config_cb = CreateCircularBuffer(program, all_cores, remote_config_cb_config);
 
-    cb_indices.local_config_cb_id2 = cb_indices.get_next_cb_id();
-    auto local_config_buffer2 = local_config2.device_buffer();
-    auto local_config_cb_config2 =
+    auto blocking_local_config_buffer = blocking_local_config.device_buffer();
+    auto blocking_local_config_cb_config =
         CircularBufferConfig(
-            local_config_buffer2->size() / num_cores, {{cb_indices.local_config_cb_id2, kernel_config_df}})
-            .set_page_size(cb_indices.local_config_cb_id2, local_config_buffer2->page_size())
-            .set_globally_allocated_address(*local_config_buffer2);
-    CBHandle local_config_cb2 = CreateCircularBuffer(program, all_cores, local_config_cb_config2);
+            blocking_local_config_buffer->size() / num_cores, {{blocking_local_config_cb_id, kernel_config_df}})
+            .set_page_size(blocking_local_config_cb_id, blocking_local_config_buffer->page_size())
+            .set_globally_allocated_address(*blocking_local_config_buffer);
+    CBHandle blocking_local_config_cb = CreateCircularBuffer(program, all_cores, blocking_local_config_cb_config);
 
-    cb_indices.remote_config_cb_id1 = cb_indices.get_next_cb_id();
-    auto remote_config_buffer1 = remote_config1.device_buffer();
-    auto remote_config_cb_config1 =
+    auto blocking_remote_config_buffer = blocking_remote_config.device_buffer();
+    auto blocking_remote_config_cb_config =
         CircularBufferConfig(
-            remote_config_buffer1->size() / num_cores, {{cb_indices.remote_config_cb_id1, kernel_config_df}})
-            .set_page_size(cb_indices.remote_config_cb_id1, remote_config_buffer1->page_size())
-            .set_globally_allocated_address(*remote_config_buffer1);
-    CBHandle remote_config_cb1 = CreateCircularBuffer(program, all_cores, remote_config_cb_config1);
-
-    cb_indices.remote_config_cb_id2 = cb_indices.get_next_cb_id();
-    auto remote_config_buffer2 = remote_config2.device_buffer();
-    auto remote_config_cb_config2 =
-        CircularBufferConfig(
-            remote_config_buffer2->size() / num_cores, {{cb_indices.remote_config_cb_id2, kernel_config_df}})
-            .set_page_size(cb_indices.remote_config_cb_id2, remote_config_buffer2->page_size())
-            .set_globally_allocated_address(*remote_config_buffer2);
-    CBHandle remote_config_cb2 = CreateCircularBuffer(program, all_cores, remote_config_cb_config2);
+            blocking_remote_config_buffer->size() / num_cores, {{blocking_remote_config_cb_id, kernel_config_df}})
+            .set_page_size(blocking_remote_config_cb_id, blocking_remote_config_buffer->page_size())
+            .set_globally_allocated_address(*blocking_remote_config_buffer);
+    CBHandle blocking_remote_config_cb = CreateCircularBuffer(program, all_cores, blocking_remote_config_cb_config);
 
     const bool is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
     const bool is_width_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED;
@@ -242,10 +201,12 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         0,  // padding_config_cb_id
         0,  // local_config_cb_id
         0,  // remote_config_cb_id
-        cb_indices.src_cb_id,
+        0,  // blocking_local_config_cb_id
+        0,  // blocking_remote_config_cb_id
+        src_cb_id,
         input_to_writer_cb_id,
-        cb_indices.out_cb_id,
-        cb_indices.pad_cb_id,
+        out_cb_id,
+        pad_cb_id,
         pad_val,
         input_npages,
         out_stick_nbytes,
@@ -253,12 +214,14 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         remote_read,
         (uint32_t)(transpose_mcast ? 1 : 0),
         is_width_sharded,
-        aligned_input_nstick_nbytes,
-        true};
+        aligned_input_nstick_nbytes};
 
-    reader_ct_args[0] = cb_indices.padding_config_cb_id1;
-    reader_ct_args[1] = cb_indices.local_config_cb_id2;
-    reader_ct_args[2] = cb_indices.remote_config_cb_id1;
+    reader_ct_args[0] = 0;
+    reader_ct_args[1] = local_config_cb_id;
+    reader_ct_args[2] = 0;
+    reader_ct_args[3] = blocking_local_config_cb_id;
+    reader_ct_args[4] = 0;
+
     KernelHandle reader_kernel_id0 = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather.cpp",
@@ -266,12 +229,11 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_ct_args});
 
-    reader_ct_args[0] = cb_indices.padding_config_cb_id2;
-    // Change order of cbs so that in case if total(local_config1 and local_config2)local writes and
-    // total(remote_config1 and remote_config2) remote writes both are odd, load is better balanced.
-    reader_ct_args[1] = cb_indices.local_config_cb_id1;
-    reader_ct_args[2] = cb_indices.remote_config_cb_id2;
-    reader_ct_args[15] = false;
+    reader_ct_args[0] = padding_config_cb_id;
+    reader_ct_args[1] = 0;
+    reader_ct_args[2] = remote_config_cb_id;
+    reader_ct_args[3] = 0;
+    reader_ct_args[4] = blocking_remote_config_cb_id;
 
     KernelHandle reader_kernel_id1 = CreateKernel(
         program,
@@ -281,28 +243,19 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
             .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_ct_args});
 
     if (!capture_buffers) {
-        padding_config_buffer1 = nullptr;
-        padding_config_buffer2 = nullptr;
-        local_config_buffer1 = nullptr;
-        local_config_buffer2 = nullptr;
-        remote_config_buffer1 = nullptr;
-        remote_config_buffer2 = nullptr;
+        padding_config_buffer = nullptr;
+        local_config_buffer = nullptr;
+        remote_config_buffer = nullptr;
     }
     // Capture padding_config_buffer, local_config_buffer, remote_config_buffer to cache this with the program
     auto override_runtime_arguments_callback = [src_cb,
                                                 out_cb,
-                                                padding_config_cb1,
-                                                padding_config_cb2,
-                                                local_config_cb1,
-                                                local_config_cb2,
-                                                remote_config_cb1,
-                                                remote_config_cb2,
-                                                padding_config_buffer1,
-                                                padding_config_buffer2,
-                                                local_config_buffer1,
-                                                local_config_buffer2,
-                                                remote_config_buffer1,
-                                                remote_config_buffer2](
+                                                padding_config_cb,
+                                                local_config_cb,
+                                                remote_config_cb,
+                                                padding_config_buffer,
+                                                local_config_buffer,
+                                                remote_config_buffer](
                                                    const void* operation,
                                                    Program& program,
                                                    const std::vector<Tensor>& input_tensors,
