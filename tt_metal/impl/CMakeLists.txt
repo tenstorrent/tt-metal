@@ -12,10 +12,12 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/global_circular_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/global_semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/semaphore.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/blockfloat/blockfloat_common.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/blockfloat/bfloat4.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/blockfloat/bfloat8.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/blockfloat/bfloat16.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/blockfloat_common.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat4.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat8.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat16.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/tile.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/tilize_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel_types.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/algorithms/free_list.cpp

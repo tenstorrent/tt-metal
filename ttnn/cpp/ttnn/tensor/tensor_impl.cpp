@@ -609,7 +609,7 @@ Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking) {
 
         shard_data_transfers.push_back(distributed::MeshCommandQueue::ShardDataTransfer{
             .shard_coord = *shard_coord,
-            .host_data = std::visit([](auto& b) { return b.data(); }, buffers.back()),
+            .host_data = std::visit([](auto& b) { return reinterpret_cast<T*>(b.data()); }, buffers.back()),
             .region = BufferRegion(0, tensor_size_bytes)});
         ++shard_coord;
     }
