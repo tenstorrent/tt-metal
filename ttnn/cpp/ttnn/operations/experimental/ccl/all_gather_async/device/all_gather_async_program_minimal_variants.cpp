@@ -174,8 +174,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
 
     // Writer
     bool last_dim = dim == input_tensor_shape.rank() - 1;
-    uint32_t tile_rows = input_tensor_shape[dim - 1] / 32;
-    uint32_t tile_cols_for_chip = input_tensor_shape[dim] / 32;
+    uint32_t tile_rows = input_tensor_shape[dim - 1] / input_tensor.get_tensor_spec().tile().get_height();
+    uint32_t tile_cols_for_chip = input_tensor_shape[dim] / input_tensor.get_tensor_spec().tile().get_width();
     auto writer_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
     writer_kernel_config.compile_args = {
         ring_index,                                        // my_chip_id
