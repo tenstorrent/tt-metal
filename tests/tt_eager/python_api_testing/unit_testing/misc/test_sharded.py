@@ -2430,6 +2430,7 @@ def test_llama_mlp_width_sharded_to_interleaved_pcc_err(device, seq_len, use_pro
     if is_wormhole_b0():
         w1_w3_shard_spec = ttnn.ShardSpec(dram_core_range_set, (4096, 320), ttnn.ShardOrientation.ROW_MAJOR)
     else:
+        assert is_blackhole()
         w1_w3_shard_spec = ttnn.ShardSpec(dram_core_range_set, (4096, 448), ttnn.ShardOrientation.ROW_MAJOR)
     w1_w3_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -2440,6 +2441,7 @@ def test_llama_mlp_width_sharded_to_interleaved_pcc_err(device, seq_len, use_pro
     if is_wormhole_b0():
         w2_shard_spec = ttnn.ShardSpec(dram_core_range_set, (3584, 352), ttnn.ShardOrientation.ROW_MAJOR)
     else:
+        assert is_blackhole()
         w2_shard_spec = ttnn.ShardSpec(dram_core_range_set, (3584, 512), ttnn.ShardOrientation.ROW_MAJOR)
     w2_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
