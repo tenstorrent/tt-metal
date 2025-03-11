@@ -486,18 +486,17 @@ template std::vector<bfloat16> convert_to_flat_layout<bfloat16>(tt::stl::Span<co
 
 template std::vector<float> convert_layout<float>(tt::stl::Span<const float>, const PhysicalSize&, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 template std::vector<int> convert_layout<int>(tt::stl::Span<const int>, const PhysicalSize&, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<uint8_t> convert_layout<uint8_t>(tt::stl::Span<const uint8_t>, const PhysicalSize&, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 template std::vector<uint16_t> convert_layout<uint16_t>(tt::stl::Span<const uint16_t>, const PhysicalSize&, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 template std::vector<uint32_t> convert_layout<uint32_t>(tt::stl::Span<const uint32_t>, const PhysicalSize&, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 template std::vector<bfloat16> convert_layout<bfloat16>(tt::stl::Span<const bfloat16>, const PhysicalSize&, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<unsigned char> convert_layout<unsigned char>(tt::stl::Span<const unsigned char>, const PhysicalSize&, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 
 template std::vector<float> convert_layout<float>(tt::stl::Span<const float>, tt::stl::Span<const uint32_t>, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 template std::vector<int> convert_layout<int>(tt::stl::Span<const int>, tt::stl::Span<const uint32_t>, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<uint8_t> convert_layout<uint8_t>(tt::stl::Span<const uint8_t>, tt::stl::Span<const uint32_t>, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 template std::vector<uint16_t> convert_layout<uint16_t>(tt::stl::Span<const uint16_t>, tt::stl::Span<const uint32_t>, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 template std::vector<uint32_t> convert_layout<uint32_t>(tt::stl::Span<const uint32_t>, tt::stl::Span<const uint32_t>, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 template std::vector<bfloat16> convert_layout<bfloat16>(tt::stl::Span<const bfloat16>, tt::stl::Span<const uint32_t>, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<unsigned char> convert_layout<unsigned char>(tt::stl::Span<const unsigned char>, tt::stl::Span<const uint32_t>, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-
 
 template void tilize<uint16_t>(std::vector<uint16_t>& input, uint32_t m, uint32_t n);
 template void tilize<uint32_t>(std::vector<uint32_t>& input, uint32_t m, uint32_t n);
