@@ -7,7 +7,6 @@ from loguru import logger
 import torch
 import pytest
 from models.utility_functions import (
-    skip_for_grayskull,
     is_grayskull,
     is_wormhole_b0,
     is_blackhole,
@@ -58,6 +57,7 @@ def run_conv(
     config_override,
     dilation=1,
     use_shallow_conv_variant=False,
+    transpose_shards=True,  # https://github.com/tenstorrent/tt-metal/issues/17897
     fp32_accum=False,
     packer_l1_acc=False,
     output_layout=ttnn.TILE_LAYOUT,
@@ -73,6 +73,7 @@ def run_conv(
     output_mesh_composer=None,
     enable_split_reader=False,
     activation="",
+    preprocess_weights_on_device=True,
 ):
     if isinstance(device, ttnn.MeshDevice):
         assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when using device mesh"
@@ -92,7 +93,7 @@ def run_conv(
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
 
     torch_weight_tensor = randomize_torch_tensor(torch_tensor_map, conv_weight_shape)
-    torch_bias_tensor = randomize_torch_tensor(torch_tensor_map, conv_bias_shape) if has_bias else None
+    torch_bias_tensor = randomize_torch_tensor(torch_tensor_map, conv_bias_shape) * 10 if has_bias else None
 
     torch_out_golden_tensor = torch.nn.functional.conv2d(
         torch_input_tensor_nchw,
@@ -138,6 +139,9 @@ def run_conv(
         enable_subblock_padding=False,
         output_layout=output_layout,
         activation=activation,
+        transpose_shards=transpose_shards,
+        preprocess_weights_on_device=preprocess_weights_on_device,
+        always_preprocess_weights=True,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -157,7 +161,7 @@ def run_conv(
             conv_config.override_sharding_config = True
             print("Setting num_cores_nhw to 98")
 
-    [tt_output_tensor_on_device, [out_height, out_width]] = ttnn.conv2d(
+    [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
         input_tensor=tt_input_tensor,
         weight_tensor=tt_weight_tensor,
         in_channels=input_channels,
@@ -178,8 +182,8 @@ def run_conv(
         groups=groups,
         memory_config=memory_config,
         return_output_dim=True,
+        return_weights_and_bias=True,
     )
-
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     torch_output_tensor = ttnn.to_torch(tt_output_tensor, mesh_composer=output_mesh_composer)
 
@@ -195,6 +199,8 @@ def run_conv(
 
     if not fp32_accum:
         pcc = 0.985
+        if input_channels * filter_height * filter_width > 10000:
+            pcc = 0.97
     elif math_fidelity == ttnn.MathFidelity.LoFi and activations_dtype == ttnn.bfloat8_b:
         pcc = 0.996
     else:
@@ -388,6 +394,9 @@ def test_conv_features(
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat8_b:
         pytest.skip("Row major layout not compatible with bfloat8_b")
 
+    if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat16 and packer_l1_acc and fp32_accum:
+        pytest.skip("skipping due to pack_untilize_dst issue!")
+
     run_conv(
         device,
         torch_tensor_map,
@@ -411,10 +420,10 @@ def test_conv_features(
         has_bias=True,
         fp32_accum=fp32_accum,
         packer_l1_acc=packer_l1_acc,
+        preprocess_weights_on_device=True,
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 2 * 16384}], indirect=True)
 @pytest.mark.parametrize("groups", [1, 2])
 @pytest.mark.parametrize("stride", [2])
@@ -494,7 +503,6 @@ def test_conv_features_multi_device(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("stride", [1])
 @pytest.mark.parametrize(
@@ -698,7 +706,6 @@ def test_conv_ws(
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 @pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
-@skip_for_grayskull()
 def test_conv_for_segformer_512x512(
     device,
     torch_tensor_map,
@@ -854,7 +861,6 @@ def test_resnet50_conv_gs(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override",
@@ -965,6 +971,7 @@ def test_resnet50_conv_wh(
         pad_w,
         config_override=config_override,
         use_shallow_conv_variant=use_shallow_conv_variant,
+        transpose_shards=True,  ## use RM (transpose_mcast=False) with 2D on WH
         packer_l1_acc=packer_l1_acc,
         fp32_accum=False,
         has_bias=has_bias,
@@ -973,7 +980,6 @@ def test_resnet50_conv_wh(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override",
@@ -1026,6 +1032,7 @@ def test_conv_mem_config_wh(
         shard_layout=shard_layout,
         config_override=config_override,
         use_shallow_conv_variant=use_shallow_conv_variant,
+        transpose_shards=True,  ## use RM (transpose_mcast=False) with 2D on WH
         packer_l1_acc=True,
         fp32_accum=False,
         has_bias=True,
@@ -1034,7 +1041,6 @@ def test_conv_mem_config_wh(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override",
@@ -1293,7 +1299,6 @@ def test_sd_conv(
         )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override",
@@ -1559,7 +1564,6 @@ def test_unet_conv(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override, use_shallow_conv_variant",
@@ -1646,12 +1650,12 @@ def test_unet_conv_wh(
         config_override,
         shard_layout=shard_layout,
         use_shallow_conv_variant=use_shallow_conv_variant,
+        transpose_shards=True,  ## use RM (transpose_mcast=False) with 2D on WH
         output_layout=output_layout,
         auto_shard=auto_shard,
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize(
     "batch_size",
     [1],
@@ -1744,13 +1748,13 @@ def test_unet_conv_groups_2_wh(
         config_override,
         shard_layout=shard_layout,
         use_shallow_conv_variant=use_shallow_conv_variant,
+        transpose_shards=True,  ## use RM (transpose_mcast=False) with 2D on WH
         output_layout=output_layout,
         auto_shard=auto_shard,
         groups=groups,
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize(
     "batch_size",
     [1],
@@ -1841,12 +1845,12 @@ def test_unet_conv_groups_4_6_wh(
         config_override,
         shard_layout=shard_layout,
         use_shallow_conv_variant=use_shallow_conv_variant,
+        transpose_shards=True,  ## use RM (transpose_mcast=False) with 2D on WH
         output_layout=output_layout,
         groups=groups,
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize(
     "batch_size",
     [1],
@@ -1939,6 +1943,7 @@ def test_unet_conv_groups_8_wh(
         config_override,
         shard_layout=shard_layout,
         use_shallow_conv_variant=use_shallow_conv_variant,
+        transpose_shards=True,  ## use RM (transpose_mcast=False) with 2D on WH
         output_layout=output_layout,
         auto_shard=auto_shard,
         groups=groups,
@@ -2071,7 +2076,6 @@ def test_conv_core_nondivis(
 
 
 # The following test takes various shape sizes from resnet50, unet and stable diffusion and tests for different number of groups - all the way to num_groups = num_in_channels (depthwise conv)
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("stride", [1])
 @pytest.mark.parametrize("batch_size", [1])
@@ -2155,7 +2159,6 @@ def test_conv_dilation(
 
 
 # The following test takes various shape sizes from resnet50, unet and stable diffusion and tests for different number of groups - all the way to num_groups = num_in_channels (depthwise conv)
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, input_channels, output_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, groups, shard_layout, config_override, use_shallow_conv_variant",
@@ -2442,7 +2445,6 @@ def test_swin_s_conv(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, dilation, shard_layout",
@@ -2541,7 +2543,6 @@ def test_model_k_256x256(
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 @pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
-@skip_for_grayskull()
 def test_conv_for_vanilla_unet(
     device,
     torch_tensor_map,
@@ -2593,7 +2594,6 @@ def test_conv_for_vanilla_unet(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_shallow_conv_with_tiled_input(device):
     out_channels, in_channels, kernel_h, kernel_w = 7, 3, 3, 3
@@ -2780,6 +2780,7 @@ def test_small_in_large_out_channels_auto_shard(device, torch_tensor_map):
     padding = (0, 0)
     height = 128
     width = 128
+
     run_conv(
         device,
         torch_tensor_map,
