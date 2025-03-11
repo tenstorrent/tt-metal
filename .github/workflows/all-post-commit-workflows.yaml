@@ -43,7 +43,7 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
     with:
-      tracy: true
+      build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
@@ -54,12 +54,10 @@ jobs:
     secrets: inherit
   build-artifact-sd:
     uses: ./.github/workflows/build-artifact-sd.yaml
+    secrets: inherit
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
-      tracy: true
-    secrets: inherit
-
   smoke-tests:
     needs: build-artifact
     strategy:
