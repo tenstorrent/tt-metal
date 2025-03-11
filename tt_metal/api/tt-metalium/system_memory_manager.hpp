@@ -87,12 +87,6 @@ public:
 
     void fetch_queue_write(uint32_t command_size_B, uint8_t cq_id, bool stall_prefetcher = false);
 
-    using WorkerLaunchMessageBufferState =
-        std::array<LaunchMessageRingBufferState, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>;
-    WorkerLaunchMessageBufferState& get_worker_launch_message_buffer_state();
-
-    void reset_worker_launch_message_buffer_state(uint32_t num_entries);
-
 private:
     chip_id_t device_id = 0;
     uint8_t num_hw_cqs = 0;
@@ -113,8 +107,6 @@ private:
     bool bypass_enable = false;
     std::vector<uint32_t> bypass_buffer;
     uint32_t bypass_buffer_write_offset = 0;
-    std::array<LaunchMessageRingBufferState, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>
-        worker_launch_message_buffer_state;
 };
 
 }  // namespace tt::tt_metal

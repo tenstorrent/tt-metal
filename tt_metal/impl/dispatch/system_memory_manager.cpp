@@ -416,15 +416,4 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
     this->prefetch_q_dev_ptrs[cq_id] += sizeof(DispatchSettings::prefetch_q_entry_type);
 }
 
-SystemMemoryManager::WorkerLaunchMessageBufferState& SystemMemoryManager::get_worker_launch_message_buffer_state() {
-    return this->worker_launch_message_buffer_state;
-}
-
-void SystemMemoryManager::reset_worker_launch_message_buffer_state(const uint32_t num_entries) {
-    std::for_each(
-        this->worker_launch_message_buffer_state.begin(),
-        this->worker_launch_message_buffer_state.begin() + num_entries,
-        std::mem_fn(&LaunchMessageRingBufferState::reset));
-}
-
 }  // namespace tt::tt_metal

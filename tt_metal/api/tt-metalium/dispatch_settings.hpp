@@ -158,8 +158,8 @@ public:
     uint32_t prefetch_d_pages_;  // prefetch_d_buffer_size_ / PREFETCH_D_BUFFER_LOG_PAGE_SIZE
 
     // cq_dispatch
-    uint32_t dispatch_size_;             // total buffer size
-    uint32_t dispatch_pages_;            // total buffer size / page size
+    uint32_t dispatch_size_;   // total buffer size
+    uint32_t dispatch_pages_;  // total buffer size / page size
     uint32_t dispatch_s_buffer_size_;
     uint32_t dispatch_s_buffer_pages_;  // dispatch_s_buffer_size_ / DISPATCH_S_BUFFER_LOG_PAGE_SIZE
 
@@ -169,5 +169,9 @@ public:
 
     CoreType core_type_;  // Which core this settings is for
 };
+
+// Convenience type alias for arrays of `DISPATCH_MESSAGE_ENTRIES` size.
+template <typename T>
+using DispatchArray = std::array<T, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>;
 
 }  // namespace tt::tt_metal
