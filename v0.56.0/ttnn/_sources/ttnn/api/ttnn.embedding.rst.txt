@@ -1,0 +1,8 @@
+﻿ttnn.embedding
+==============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.embedding:
+
+.. autofastoperation:: ttnn.embedding

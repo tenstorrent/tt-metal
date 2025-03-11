@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Build a graph of a pytorch based model &mdash; TT-NN  documentation</title>
+      <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/tt_theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/nbsphinx-code-cells.css" type="text/css" />
+    <link rel="shortcut icon" href="../../../_static/favicon.png"/>
+    <link rel="canonical" href="/ttnn/latest/ttnn/tutorials/ttnn_tutorials/007.html" />
+  <!--[if lt IE 9]>
+    <script src="../../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+        <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script src="../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+    <link rel="next" title="Onboarding New Functionality" href="../../onboarding.html" />
+    <link rel="prev" title="Graphing Torch DiT_XL_2 With TTNN" href="../graphing_torch_dit.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../../index.html">
+    TT-NN
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">TTNN</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../../about.html">What is ttnn?</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../installing.html">Install</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../usage.html">Using ttnn</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../tensor.html">Tensor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html">APIs</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../../tutorials.html">Tutorials</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../tensor_and_add_operation.html">Tensor and Add Operation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../matmul.html">Matmul Operation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../multihead-attention.html">Multi-Head Attention</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../ttnn-tracer.html">ttnn Tracer</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../profiling.html">ttnn Profiling</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../resnet-basic-block.html">Resnet Basic Block</a></li>
+<li class="toctree-l2 current"><a class="reference internal" href="../graphing_torch_dit.html">Graphing Torch DiT_XL_2 With TTNN</a><ul class="current">
+<li class="toctree-l3 current"><a class="current reference internal" href="#">Build a graph of a pytorch based model</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#Clone-the-library-from-https://github.com/facebookresearch/DiT.git">Clone the library from https://github.com/facebookresearch/DiT.git</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#Download-DiT-XL/2-Models">Download DiT-XL/2 Models</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#Sample-from-Pre-trained-DiT-Models-and-build-the-graph">Sample from Pre-trained DiT Models and build the graph</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#Display-the-graph">Display the graph</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../onboarding.html">Onboarding New Functionality</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../converting_torch_model_to_ttnn.html">Converting torch Model to ttnn</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../adding_new_ttnn_operation.html">Adding New ttnn Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../profiling_ttnn_operations.html">Profiling ttnn Operations</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../dependencies/index.html">Dependencies</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../demos.html">Building and Uplifting Demos</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Models</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../tt_metal_models/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../tt_metal_models/get_performance.html">Performance</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../index.html">TT-NN</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../tutorials.html">Tutorials</a></li>
+          <li class="breadcrumb-item"><a href="../graphing_torch_dit.html">Graphing Torch DiT_XL_2 With TTNN</a></li>
+      <li class="breadcrumb-item active">Build a graph of a pytorch based model</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../../_sources/ttnn/tutorials/ttnn_tutorials/007.ipynb.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="Build-a-graph-of-a-pytorch-based-model">
+<h1>Build a graph of a pytorch based model<a class="headerlink" href="#Build-a-graph-of-a-pytorch-based-model" title="Permalink to this heading"></a>
+</h1>
+<p>In this tutorial, we walk you through the steps of building a graph of a pytorch model. The example chosen will be the Dit-XL/2 Model. Note that many of these steps mirror what you see here: <a class="reference external" href="https://colab.research.google.com/github/facebookresearch/DiT/blob/main/run_DiT.ipynb">https://colab.research.google.com/github/facebookresearch/DiT/blob/main/run_DiT.ipynb</a>. More details on this model can be found at <a class="reference external" href="https://github.com/facebookresearch/DiT?tab=readme-ov-file">https://github.com/facebookresearch/DiT?tab=readme-ov-file</a></p>
+<p>The assumption is that this notebook has access to a machine with a Tenstorrent device and that tt-metal has been successfully built.</p>
+<p>We will follow these steps: - Clone the library from <a class="reference external" href="https://github.com/facebookresearch/DiT.git">https://github.com/facebookresearch/DiT.git</a> - Download DiT-XL - Sample from the Pre-trained DiT Models and build the graph - Display the graph</p>
+<section id="Clone-the-library-from-https://github.com/facebookresearch/DiT.git">
+<h2>Clone the library from <a class="reference external" href="https://github.com/facebookresearch/DiT.git">https://github.com/facebookresearch/DiT.git</a><a class="headerlink" href="#Clone-the-library-from-https://github.com/facebookresearch/DiT.git" title="Permalink to this heading"></a>
+</h2>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[1]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
+
+<span class="o">!</span>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/facebookresearch/DiT.git
+<span class="kn">import</span><span class="w"> </span><span class="nn">DiT</span><span class="o">,</span><span class="w"> </span><span class="nn">os</span>
+<span class="n">os</span><span class="o">.</span><span class="n">chdir</span><span class="p">(</span><span class="s1">'DiT'</span><span class="p">)</span>
+<span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s1">'PYTHONPATH'</span><span class="p">]</span> <span class="o">=</span> <span class="s1">'/env/python:/content/DiT'</span>
+<span class="o">!</span>pip<span class="w"> </span>install<span class="w"> </span>diffusers<span class="w"> </span>timm<span class="w"> </span>--upgrade
+<span class="c1"># DiT imports:</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">torchvision.utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">save_image</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">diffusion</span><span class="w"> </span><span class="kn">import</span> <span class="n">create_diffusion</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">diffusers.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">AutoencoderKL</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">download</span><span class="w"> </span><span class="kn">import</span> <span class="n">find_model</span>
+<span class="c1"># We have a name collision in python's namespace with ttnn using models and models also existing in DiT</span>
+<span class="c1"># So here we just append DiT to the front.</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">DiT.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">DiT_XL_2</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">PIL</span><span class="w"> </span><span class="kn">import</span> <span class="n">Image</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">IPython.display</span><span class="w"> </span><span class="kn">import</span> <span class="n">display</span>
+<span class="n">torch</span><span class="o">.</span><span class="n">set_grad_enabled</span><span class="p">(</span><span class="kc">False</span><span class="p">)</span>
+<span class="n">device</span> <span class="o">=</span> <span class="s2">"cuda"</span> <span class="k">if</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">is_available</span><span class="p">()</span> <span class="k">else</span> <span class="s2">"cpu"</span>
+<span class="k">if</span> <span class="n">device</span> <span class="o">==</span> <span class="s2">"cpu"</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"GPU not found. Using CPU instead."</span><span class="p">)</span>
+<br></pre></div>
+</div>
+</div>
+<div class="nboutput docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area stderr docutils container">
+<div class="highlight"><pre>
+2024-04-05 05:49:00.322 | INFO     | ttnn:&lt;module&gt;:28 - ttnn: model cache was enabled
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+fatal: destination path 'DiT' already exists and is not an empty directory.
+Looking in indexes: https://pypi.org/simple, https://download.pytorch.org/whl/cpu
+Requirement already up-to-date: diffusers in /home/ubuntu/git/tt-metal/build/python_env/lib/python3.8/site-packages (0.27.2)
+Requirement already up-to-date: timm in /home/ubuntu/git/tt-metal/build/python_env/lib/python3.8/site-packages (0.9.16)
+Requirement already satisfied, skipping upgrade: filelock in /home/ubuntu/git/tt-metal/build/python_env/lib/python3.8/site-packages (from diffusers) (3.13.1)
+Requirement already satisfied, skipping upgrade: Pillow in /home/ubuntu/git/tt-metal/build/python_env/lib/python3.8/site-packages (from diffusers) (9.5.0)
+Requirement already satisfied, skipping upgrade: regex!=2019.12.17 in /home/ubuntu/git/tt-metal/build/python_env/lib/python3.8/site-packages (from diffusers) (2023.12.25)
+Requirement already satisfied, skipping upgrade: importlib-metadata in /home/ubuntu/git/tt-metal/build/python_env/lib/python3.8/site-packages (from diffusers) (7.1.0)
+Requirement already satisfied, skipping upgrade: numpy in /home/ubuntu/git/tt-metal/build/python_env/lib/python3.8/site-packages (from diffusers) (1.24.4)
+Requirement already satisfied, skipping upgrade: huggingface-hub&gt;=0.20.2 in /home/ubuntu/git/tt-metal/build/python_env/lib/python3.8/site-packages (from diffusers) (0.21.4)
+Requirement already satisfied, skipping upgrade: safetensors&gt;=0.3.1 in /home/ubuntu/git/tt-metal/build/python_env/lib/python3.8/site-packages (from diffusers) (0.4.2)
+Requirement already satisfied, skipping upgrade: requests in /home/ubuntu/git/tt-metal/build/python_env/lib/python3.8/site-packages (from diffusers) (2.31.0)
+Requirement already satisfied, skipping upgrade: pyyaml in /home/ubuntu/git/tt-metal/build/python_env/lib/python3.8/site-packages (from timm) (5.3.1)
+Requirement already satisfied, skipping upgrade: torchvision in /home/ubuntu/git/tt-metal/build/python_env/lib/python3.8/site-packages (from timm) (0.17.1+cpu)
+Requirement already satisfied, skipping upgrade: torch in /home/ubuntu/git/tt-metal/build/python_env/lib/python3.8/site-packages (from timm) (2.2.1+cpu)
+Requirement already satisfied, skipping upgrade: zipp&gt;=0.5 in /home/ubuntu/git/tt-metal/build/python_env/lib/python3.8/site-packages (from importlib-metadata-&gt;diffusers) (3.18.1)
+Requirement already satisfied, skipping upgrade: fsspec&gt;=2023.5.0 in /home/ubuntu/git/tt-metal/build/python_env/lib/python3.8/site-packages (from huggingface-hub&gt;=0.20.2-&gt;diffusers) (2023.9.2)
+Requirement already satisfied, skipping upgrade: typing-extensions&gt;=3.7.4.3 in /home/ubuntu/git/tt-metal/build/python_env/lib/python3.8/site-packages (from huggingface-hub&gt;=0.20.2-&gt;diffusers) (4.10.0)
+Requirement already satisfied, skipping upgrade: packaging&gt;=20.9 in /home/ubuntu/git/tt-metal/build/python_env/lib/python3.8/site-packages (from huggingface-hub&gt;=0.20.2-&gt;diffusers) (24.0)
+Requirement already satisfied, skipping upgrade: tqdm&gt;=4.42.1 in /home/ubuntu/git/tt-metal/build/python_env/lib/python3.8/site-packages (from huggingface-hub&gt;=0.20.2-&gt;diffusers) (4.65.0)
+Requirement already satisfied, skipping upgrade: certifi&gt;=2017.4.17 in /home/ubuntu/git/tt-metal/build/python_env/lib/python3.8/site-packages (from requests-&gt;diffusers) (2024.2.2)
+Requirement already satisfied, skipping upgrade: idna&lt;4,&gt;=2.5 in /home/ubuntu/git/tt-metal/build/python_env/lib/python3.8/site-packages (from requests-&gt;diffusers) (3.6)
+Requirement already satisfied, skipping upgrade: charset-normalizer&lt;4,&gt;=2 in /home/ubuntu/git/tt-metal/build/python_env/lib/python3.8/site-packages (from requests-&gt;diffusers) (3.3.2)
+Requirement already satisfied, skipping upgrade: urllib3&lt;3,&gt;=1.21.1 in /home/ubuntu/git/tt-metal/build/python_env/lib/python3.8/site-packages (from requests-&gt;diffusers) (2.2.1)
+Requirement already satisfied, skipping upgrade: sympy in /home/ubuntu/git/tt-metal/build/python_env/lib/python3.8/site-packages (from torch-&gt;timm) (1.12)
+Requirement already satisfied, skipping upgrade: jinja2 in /home/ubuntu/git/tt-metal/build/python_env/lib/python3.8/site-packages (from torch-&gt;timm) (3.1.3)
+Requirement already satisfied, skipping upgrade: networkx in /home/ubuntu/git/tt-metal/build/python_env/lib/python3.8/site-packages (from torch-&gt;timm) (3.1)
+Requirement already satisfied, skipping upgrade: mpmath&gt;=0.19 in /home/ubuntu/git/tt-metal/build/python_env/lib/python3.8/site-packages (from sympy-&gt;torch-&gt;timm) (1.3.0)
+Requirement already satisfied, skipping upgrade: MarkupSafe&gt;=2.0 in /home/ubuntu/git/tt-metal/build/python_env/lib/python3.8/site-packages (from jinja2-&gt;torch-&gt;timm) (2.1.5)
+GPU not found. Using CPU instead.
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Download-DiT-XL/2-Models">
+<h2>Download DiT-XL/2 Models<a class="headerlink" href="#Download-DiT-XL/2-Models" title="Permalink to this heading"></a>
+</h2>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[2]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">image_size</span> <span class="o">=</span> <span class="mi">256</span> <span class="c1">#@param [256, 512]</span>
+<span class="n">vae_model</span> <span class="o">=</span> <span class="s2">"stabilityai/sd-vae-ft-ema"</span> <span class="c1">#@param ["stabilityai/sd-vae-ft-mse", "stabilityai/sd-vae-ft-ema"]</span>
+<span class="n">latent_size</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">image_size</span><span class="p">)</span> <span class="o">//</span> <span class="mi">8</span>
+<span class="c1"># Load model:</span>
+<span class="n">model</span> <span class="o">=</span> <span class="n">DiT_XL_2</span><span class="p">(</span><span class="n">input_size</span><span class="o">=</span><span class="n">latent_size</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+<span class="n">state_dict</span> <span class="o">=</span> <span class="n">find_model</span><span class="p">(</span><span class="sa">f</span><span class="s2">"DiT-XL-2-</span><span class="si">{</span><span class="n">image_size</span><span class="si">}</span><span class="s2">x</span><span class="si">{</span><span class="n">image_size</span><span class="si">}</span><span class="s2">.pt"</span><span class="p">)</span>
+<span class="n">model</span><span class="o">.</span><span class="n">load_state_dict</span><span class="p">(</span><span class="n">state_dict</span><span class="p">)</span>
+<span class="n">model</span><span class="o">.</span><span class="n">eval</span><span class="p">()</span> <span class="c1"># important!</span>
+<span class="n">vae</span> <span class="o">=</span> <span class="n">AutoencoderKL</span><span class="o">.</span><span class="n">from_pretrained</span><span class="p">(</span><span class="n">vae_model</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Sample-from-Pre-trained-DiT-Models-and-build-the-graph">
+<h2>Sample from Pre-trained DiT Models and build the graph<a class="headerlink" href="#Sample-from-Pre-trained-DiT-Models-and-build-the-graph" title="Permalink to this heading"></a>
+</h2>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[3]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Set user inputs:</span>
+<span class="n">seed</span> <span class="o">=</span> <span class="mi">0</span> <span class="c1">#@param {type:"number"}</span>
+<span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="n">seed</span><span class="p">)</span>
+<span class="n">num_sampling_steps</span> <span class="o">=</span> <span class="mi">250</span> <span class="c1">#@param {type:"slider", min:0, max:1000, step:1}</span>
+<span class="n">cfg_scale</span> <span class="o">=</span> <span class="mi">4</span> <span class="c1">#@param {type:"slider", min:1, max:10, step:0.1}</span>
+<span class="n">class_labels</span> <span class="o">=</span> <span class="mi">207</span><span class="p">,</span> <span class="mi">360</span><span class="p">,</span> <span class="mi">387</span><span class="p">,</span> <span class="mi">974</span><span class="p">,</span> <span class="mi">88</span><span class="p">,</span> <span class="mi">979</span><span class="p">,</span> <span class="mi">417</span><span class="p">,</span> <span class="mi">279</span> <span class="c1">#@param {type:"raw"}</span>
+<span class="n">samples_per_row</span> <span class="o">=</span> <span class="mi">4</span> <span class="c1">#@param {type:"number"}</span>
+
+<span class="c1"># Create diffusion object:</span>
+<span class="n">diffusion</span> <span class="o">=</span> <span class="n">create_diffusion</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">num_sampling_steps</span><span class="p">))</span>
+
+<span class="c1"># Create sampling noise:</span>
+<span class="n">n</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">class_labels</span><span class="p">)</span>
+<span class="n">z</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">n</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="n">latent_size</span><span class="p">,</span> <span class="n">latent_size</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">y</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">class_labels</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+
+<span class="c1"># Setup classifier-free guidance:</span>
+<span class="n">z</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">([</span><span class="n">z</span><span class="p">,</span> <span class="n">z</span><span class="p">],</span> <span class="mi">0</span><span class="p">)</span>
+<span class="n">y_null</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([</span><span class="mi">1000</span><span class="p">]</span> <span class="o">*</span> <span class="n">n</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">y</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">([</span><span class="n">y</span><span class="p">,</span> <span class="n">y_null</span><span class="p">],</span> <span class="mi">0</span><span class="p">)</span>
+<span class="n">model_kwargs</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">y</span><span class="o">=</span><span class="n">y</span><span class="p">,</span> <span class="n">cfg_scale</span><span class="o">=</span><span class="n">cfg_scale</span><span class="p">)</span>
+
+<span class="c1"># Sample images:</span>
+<span class="n">samples</span> <span class="o">=</span> <span class="n">diffusion</span><span class="o">.</span><span class="n">p_sample_loop</span><span class="p">(</span>
+    <span class="n">model</span><span class="o">.</span><span class="n">forward_with_cfg</span><span class="p">,</span> <span class="n">z</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">z</span><span class="p">,</span> <span class="n">clip_denoised</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+    <span class="n">model_kwargs</span><span class="o">=</span><span class="n">model_kwargs</span><span class="p">,</span> <span class="n">progress</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span>
+<span class="p">)</span>
+<span class="n">samples</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">samples</span><span class="o">.</span><span class="n">chunk</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>  <span class="c1"># Remove null class samples</span>
+
+<span class="c1"># Here is where we capture the graph into an svg!</span>
+<span class="k">with</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">tracer</span><span class="o">.</span><span class="n">trace</span><span class="p">():</span>
+    <span class="n">samples</span> <span class="o">=</span> <span class="n">vae</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span><span class="n">samples</span> <span class="o">/</span> <span class="mf">0.18215</span><span class="p">)</span><span class="o">.</span><span class="n">sample</span>
+
+<span class="n">ttnn</span><span class="o">.</span><span class="n">tracer</span><span class="o">.</span><span class="n">visualize</span><span class="p">(</span><span class="n">samples</span><span class="p">,</span> <span class="n">file_name</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TMP_DIR</span> <span class="o">/</span> <span class="s2">"dit_model_graph.svg"</span><span class="p">)</span>
+
+<span class="c1"># Optionally Save and display images from DiT:</span>
+<span class="c1"># save_image(samples, "sample.png", nrow=int(samples_per_row),</span>
+<span class="c1">#            normalize=True, value_range=(-1, 1))</span>
+<span class="c1"># samples = Image.open("sample.png")</span>
+<span class="c1"># display(samples)</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<script type="application/vnd.jupyter.widget-view+json">{"model_id": "3117d12d79234600bd29780debc8da25", "version_major": 2, "version_minor": 0}</script>
+</div>
+</div>
+<div class="nboutput docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area stderr docutils container">
+<div class="highlight"><pre>
+2024-04-05 06:21:17.987 | INFO     | ttnn.tracer:visualize:210 - Dumping graph of the model to /tmp/ttnn/dit_model_graph.svg
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[3]:
+</pre></div>
+</div>
+<div class="output_area docutils container">
+<img alt="../../../_images/ttnn_tutorials_ttnn_tutorials_007_6_2.svg" src="../../../_images/ttnn_tutorials_ttnn_tutorials_007_6_2.svg">
+</div>
+</div>
+</section>
+<section id="Display-the-graph">
+<h2>Display the graph<a class="headerlink" href="#Display-the-graph" title="Permalink to this heading"></a>
+</h2>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">IPython.display</span><span class="w"> </span><span class="kn">import</span> <span class="n">SVG</span><span class="p">,</span> <span class="n">display</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">show_svg</span><span class="p">():</span>
+    <span class="k">return</span> <span class="n">SVG</span><span class="p">(</span><span class="n">filename</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TMP_DIR</span> <span class="o">/</span> <span class="s2">"dit_model_graph.svg"</span><span class="p">)</span>
+
+<span class="n">show_svg</span><span class="p">()</span>
+</pre></div>
+</div>
+</div>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span>
+</pre></div>
+</div>
+</div>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="../graphing_torch_dit.html" class="btn btn-neutral float-left" title="Graphing Torch DiT_XL_2 With TTNN" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="../../onboarding.html" class="btn btn-neutral float-right" title="Onboarding New Functionality" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

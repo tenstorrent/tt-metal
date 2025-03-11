@@ -1,0 +1,8 @@
+﻿ttnn.lez
+========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.lez:
+
+.. autofastoperation:: ttnn.lez

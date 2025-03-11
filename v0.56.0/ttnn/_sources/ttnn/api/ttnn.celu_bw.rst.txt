@@ -1,0 +1,8 @@
+﻿ttnn.celu\_bw
+=============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.celu_bw:
+
+.. autofastoperation:: ttnn.celu_bw

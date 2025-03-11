@@ -1,0 +1,1250 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tensor &mdash; TT-NN  documentation</title>
+      <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../../_static/favicon.png"/>
+    <link rel="canonical" href="/ttnn/latest/ttnn/dependencies/tensor.html" />
+  <!--[if lt IE 9]>
+    <script src="../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Examples of Tensor and TT-LIB Use" href="examples.html" />
+    <link rel="prev" title="TT-LIB" href="tt_lib.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../index.html">
+    TT-NN
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">TTNN</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../about.html">What is ttnn?</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../installing.html">Install</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../usage.html">Using ttnn</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tensor.html">Tensor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../api.html">APIs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tutorials.html">Tutorials</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../onboarding.html">Onboarding New Functionality</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../converting_torch_model_to_ttnn.html">Converting torch Model to ttnn</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../adding_new_ttnn_operation.html">Adding New ttnn Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../profiling_ttnn_operations.html">Profiling ttnn Operations</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="index.html">Dependencies</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="tt_lib.html">TT-LIB</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Tensor</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#overview">Overview</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#tensor-storage">Tensor Storage</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#tensor-api">Tensor API</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#ttnn.Tensor"><code class="docutils literal notranslate"><span class="pre">Tensor</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#memoryconfig">MemoryConfig</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#ttnn.MemoryConfig"><code class="docutils literal notranslate"><span class="pre">MemoryConfig</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#examples-of-converting-between-pytorch-tensor-and-tt-tensor">Examples of converting between PyTorch Tensor and TT Tensor</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#converting-a-pytorch-tensor-to-a-tt-tensor">Converting a PyTorch Tensor to a TT Tensor</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#converting-a-tt-tensor-to-a-pytorch-tensor">Converting a TT Tensor to a PyTorch Tensor</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="examples.html">Examples of Tensor and TT-LIB Use</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../demos.html">Building and Uplifting Demos</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Models</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../tt_metal_models/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../tt_metal_models/get_performance.html">Performance</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">TT-NN</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">Dependencies</a></li>
+      <li class="breadcrumb-item active">Tensor</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../_sources/ttnn/dependencies/tensor.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="tensor">
+<span id="id1"></span><h1>Tensor<a class="headerlink" href="#tensor" title="Permalink to this heading"></a>
+</h1>
+<section id="overview">
+<h2>Overview<a class="headerlink" href="#overview" title="Permalink to this heading"></a>
+</h2>
+<p>The TT Tensor library provides support for creation and manipulation of TT Tensors.</p>
+<p>This library is used by TT-Dispatch to represent tensors that can be sent to and received from TT-Metal platform.
+Operations in ttDNN library also utilize this library: operation take TT Tensors as inputs and return TT Tensors as outputs.</p>
+<p>This library only supports tensors of rank 4.</p>
+<p>TT Tensor library provides support for different memory layouts of data stored within tensor.</p>
+<p>ROW_MAJOR layout will store values in memory row by row, starting from last dimension of tensor.
+For a tensor of shape <code class="docutils literal notranslate"><span class="pre">[W,</span> <span class="pre">Z,</span> <span class="pre">Y,</span> <span class="pre">X]</span></code> to be stored in ROW_MAJOR order on TT Accelerator device, <code class="docutils literal notranslate"><span class="pre">X</span></code> must be divisible by 2.
+A tensor in ROW_MAJOR order with <code class="docutils literal notranslate"><span class="pre">X</span></code> not divisible by 2 can exist on host machine, but can’t be sent TT Accelerator device.
+So you can’t provide a TT Accelerator device to TT Tensor construct for this type of tensor nor can you use <code class="docutils literal notranslate"><span class="pre">ttnn.Tensor.to()</span></code>
+to send this type of tensor to TT Accelerator device.</p>
+<p>TILE layout will store values in memory tile by tile, starting from the last two dimensions of the tensor.
+A tile is a (32, 32) shaped subsection of tensor.
+Tiles are stored in memory in row major order, and then values inside tiles are stored in row major order.
+A TT Tensor of shape <code class="docutils literal notranslate"><span class="pre">[W,</span> <span class="pre">Z,</span> <span class="pre">Y,</span> <span class="pre">X]</span></code> can have TILE layout only if both <code class="docutils literal notranslate"><span class="pre">X</span></code> and <code class="docutils literal notranslate"><span class="pre">Y</span></code> are divisible by 2.</p>
+<div class="highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="c1">#Tensor of shape (2, 64, 64)</span>
+
+<span class="c1">#batch=0</span>
+<span class="p">[</span>    <span class="mi">0</span><span class="p">,</span>    <span class="mi">1</span><span class="p">,</span>    <span class="mi">2</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span>   <span class="mi">63</span><span class="p">,</span>
+    <span class="mi">64</span><span class="p">,</span>   <span class="mi">65</span><span class="p">,</span>   <span class="mi">66</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span>  <span class="mi">127</span><span class="p">,</span>
+    <span class="o">...</span>
+  <span class="mi">3968</span><span class="p">,</span> <span class="mi">3969</span><span class="p">,</span> <span class="mi">3970</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="mi">4031</span><span class="p">,</span>
+  <span class="mi">4032</span><span class="p">,</span> <span class="mi">4033</span><span class="p">,</span> <span class="mi">4034</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="mi">4095</span> <span class="p">]</span>
+
+<span class="c1">#batch=1</span>
+<span class="p">[</span> <span class="mi">4096</span><span class="p">,</span> <span class="mi">4097</span><span class="p">,</span> <span class="mi">4098</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="mi">4159</span><span class="p">,</span>
+  <span class="mi">4160</span><span class="p">,</span> <span class="mi">4161</span><span class="p">,</span> <span class="mi">6462</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="mi">4223</span><span class="p">,</span>
+    <span class="o">...</span>
+  <span class="mi">8064</span><span class="p">,</span> <span class="mi">8065</span><span class="p">,</span> <span class="mi">8066</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="mi">8127</span><span class="p">,</span>
+  <span class="mi">8128</span><span class="p">,</span> <span class="mi">8129</span><span class="p">,</span> <span class="mi">8130</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="mi">8191</span> <span class="p">]</span>
+
+
+<span class="c1">#Stored in ROW_MAJOR layout</span>
+<span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="mi">63</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="mi">4095</span><span class="p">,</span> <span class="mi">4096</span><span class="p">,</span> <span class="mi">4097</span><span class="p">,</span> <span class="mi">4098</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="mi">4159</span><span class="p">,</span> <span class="mi">4160</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="mi">8191</span><span class="p">]</span>
+
+<span class="c1">#Stored in TILE layout</span>
+<span class="p">[</span>  <span class="mi">0</span><span class="p">,</span>    <span class="mi">1</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span>   <span class="mi">31</span><span class="p">,</span>   <span class="mi">64</span><span class="p">,</span>   <span class="mi">65</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span>   <span class="mi">95</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="mi">1984</span><span class="p">,</span> <span class="mi">1985</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="mi">2015</span><span class="p">,</span> <span class="c1"># first tile of batch=0</span>
+  <span class="mi">32</span><span class="p">,</span>   <span class="mi">33</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span>   <span class="mi">63</span><span class="p">,</span>   <span class="mi">96</span><span class="p">,</span>   <span class="mi">97</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span>  <span class="mi">127</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="mi">2016</span><span class="p">,</span> <span class="mi">2017</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="mi">2047</span><span class="p">,</span> <span class="c1"># second tile of batch=0</span>
+<span class="o">...</span>
+<span class="mi">2080</span><span class="p">,</span> <span class="mi">2081</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="mi">2111</span><span class="p">,</span> <span class="mi">2144</span><span class="p">,</span> <span class="mi">2145</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="mi">2175</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="mi">4064</span><span class="p">,</span> <span class="mi">4065</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="mi">4095</span><span class="p">,</span> <span class="c1"># fourth (last) tile of batch=0</span>
+
+<span class="mi">4096</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="mi">6111</span><span class="p">,</span>                                                           <span class="c1"># first tile of batch=1</span>
+<span class="o">...</span>
+<span class="mi">6176</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="mi">8191</span> <span class="p">]</span>                                                          <span class="c1"># fourth (last) tile of batch=0</span>
+</pre></div>
+</div>
+</section>
+<section id="tensor-storage">
+<h2>Tensor Storage<a class="headerlink" href="#tensor-storage" title="Permalink to this heading"></a>
+</h2>
+<p>Tensor class has 3 types of storages: <cite>OwnedStorage</cite>, <cite>BorrowedStorage</cite> and <cite>DeviceStorage</cite>. And it has a constructor for each type.</p>
+<p><cite>OwnedStorage</cite> is used to store the data in host DRAM. Every data type is stored in the vector corresponding to that data type.
+And the vector itself is stored in the shared pointer. That is done so that if the Tensor object is copied, the underlying storage is simply reference counted and not copied as well.</p>
+<p><cite>BorrowedStorage</cite> is used to borrow buffers from <cite>torch</cite>, <cite>numpy</cite>, etc</p>
+<p><cite>DeviceStorage</cite> is used to store the data in device DRAM or device L1. It also uses a shared pointer to store the underlying buffer. And the reason is also to allow for copying Tensor objects without having to copy the underlying storage.</p>
+</section>
+<section id="tensor-api">
+<h2>Tensor API<a class="headerlink" href="#tensor-api" title="Permalink to this heading"></a>
+</h2>
+<dl class="py class">
+<dt class="sig sig-object py" id="ttnn.Tensor">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">Tensor</span></span><a class="headerlink" href="#ttnn.Tensor" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Class constructor supports tensors of rank 4.
+The constructor takes following arguments:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>data</p></td>
+<td><p>Data to store in TT tensor</p></td>
+<td><p>List[float/int]</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>shape</p></td>
+<td><p>Shape of TT tensor</p></td>
+<td><p>List[int[4]]</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-even">
+<td><p>data_type</p></td>
+<td><p>Data type of numbers in TT tensor</p></td>
+<td><p>ttnn.DataType</p></td>
+<td>
+<p>ttnn.DataType.BFLOAT16</p>
+<p>ttnn.DataType.FLOAT32</p>
+<p>ttnn.DataType.UINT32</p>
+<p>ttnn.DataType.BFLOAT8_B</p>
+<p>ttnn.DataType.BFLOAT4_B</p>
+</td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>layout</p></td>
+<td><p>Layout of tensor data in memory</p></td>
+<td><p>ttnn.Layout</p></td>
+<td>
+<p>ttnn.Layout.ROW_MAJOR</p>
+<p>ttnn.Layout.TILE</p>
+</td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-even">
+<td><p>device</p></td>
+<td><p>Device on which tensor will be created</p></td>
+<td><p>ttnn.Device</p></td>
+<td><p>Host or TT accelerator device</p></td>
+<td><p>No</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>mem_config</p></td>
+<td><p>Layout of tensor in TT Accelerator device memory banks</p></td>
+<td><p>ttnn.MemoryConfig</p></td>
+<td></td>
+<td><p>No</p></td>
+</tr>
+</tbody>
+</table>
+<dl class="py method">
+<dt class="sig sig-object py" id="ttnn.Tensor.__init__">
+<span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#ttnn.Tensor.__init__" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Overloaded function.</p>
+<ol class="arabic">
+<li><p>__init__(self: ttnn._ttnn.tensor.Tensor, arg0: ttnn._ttnn.tensor.Tensor) -&gt; None</p></li>
+<li>
+<p>__init__(self: ttnn._ttnn.tensor.Tensor, data: list[float], shape: Annotated[list[int], FixedSize(4)], data_type: ttnn._ttnn.tensor.DataType, layout: ttnn._ttnn.tensor.Layout, tile: Optional[ttnn._ttnn.tensor.Tile] = None) -&gt; None</p>
+<blockquote>
+<div>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Name</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>arg0</p></td>
+<td><p>data</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>arg1</p></td>
+<td><p>shape</p></td>
+</tr>
+<tr class="row-even">
+<td><p>arg2</p></td>
+<td><p>data_type</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>arg3</p></td>
+<td><p>layout</p></td>
+</tr>
+</tbody>
+</table>
+<p>Example of creating a TT Tensor on host:</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">py_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">))</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">Tensor</span><span class="p">(</span>
+    <span class="n">py_tensor</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">tolist</span><span class="p">(),</span>
+    <span class="n">py_tensor</span><span class="o">.</span><span class="n">size</span><span class="p">(),</span>
+    <span class="n">ttnn</span><span class="o">.</span><span class="n">DataType</span><span class="o">.</span><span class="n">BFLOAT16</span><span class="p">,</span>
+    <span class="n">ttnn</span><span class="o">.</span><span class="n">Layout</span><span class="o">.</span><span class="n">ROW_MAJOR</span><span class="p">,</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</blockquote>
+</li>
+<li>
+<p>__init__(self: ttnn._ttnn.tensor.Tensor, data: list[float], shape: Annotated[list[int], FixedSize(4)], data_type: ttnn._ttnn.tensor.DataType, layout: ttnn._ttnn.tensor.Layout, device: ttnn._ttnn.device.IDevice = None, tile: Optional[ttnn._ttnn.tensor.Tile] = None) -&gt; None</p>
+<blockquote>
+<div>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Name</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>arg0</p></td>
+<td><p>data</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>arg1</p></td>
+<td><p>shape</p></td>
+</tr>
+<tr class="row-even">
+<td><p>arg2</p></td>
+<td><p>data_type</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>arg3</p></td>
+<td><p>layout</p></td>
+</tr>
+<tr class="row-even">
+<td><p>arg3</p></td>
+<td><p>device</p></td>
+</tr>
+</tbody>
+</table>
+<p>Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B, BFLOAT4_B (in TILE layout) are supported on device.</p>
+<p>Note that TT Tensor in ROW_MAJOR layout on TT Accelerator device must have size of last dimension divisble by 2.</p>
+<p>Example of creating a TT Tensor on TT accelerator device:</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">py_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">))</span>
+<span class="n">tt_device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">CreateDevice</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+<span class="o">//</span> <span class="o">...</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">Tensor</span><span class="p">(</span>
+    <span class="n">py_tensor</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">tolist</span><span class="p">(),</span>
+    <span class="n">py_tensor</span><span class="o">.</span><span class="n">size</span><span class="p">(),</span>
+    <span class="n">ttnn</span><span class="o">.</span><span class="n">DataType</span><span class="o">.</span><span class="n">BFLOAT16</span><span class="p">,</span>
+    <span class="n">ttnn</span><span class="o">.</span><span class="n">Layout</span><span class="o">.</span><span class="n">ROW_MAJOR</span><span class="p">,</span>
+    <span class="n">tt_device</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</blockquote>
+</li>
+<li>
+<p>__init__(self: ttnn._ttnn.tensor.Tensor, data: list[float], shape: Annotated[list[int], FixedSize(4)], data_type: ttnn._ttnn.tensor.DataType, layout: ttnn._ttnn.tensor.Layout, device: ttnn._ttnn.device.IDevice = None, memory_config: ttnn._ttnn.tensor.MemoryConfig, tile: Optional[ttnn._ttnn.tensor.Tile] = None) -&gt; None</p>
+<blockquote>
+<div>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Name</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>arg0</p></td>
+<td><p>data</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>arg1</p></td>
+<td><p>shape</p></td>
+</tr>
+<tr class="row-even">
+<td><p>arg2</p></td>
+<td><p>data_type</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>arg3</p></td>
+<td><p>layout</p></td>
+</tr>
+<tr class="row-even">
+<td><p>arg4</p></td>
+<td><p>device</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>arg5</p></td>
+<td><p>mem_config</p></td>
+</tr>
+</tbody>
+</table>
+<p>Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B, BFLOAT4_B (in TILE layout) are supported on device.</p>
+<p>Note that TT Tensor in ROW_MAJOR layout on TT Accelerator device must have size of last dimension divisble by 2.</p>
+<p>Example of creating a TT Tensor on TT accelerator device with specified mem_config:</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">py_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">))</span>
+<span class="n">tt_device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">CreateDevice</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">mem_config</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">MemoryConfig</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TensorMemoryLayout</span><span class="o">.</span><span class="n">SINGLE_BANK</span><span class="p">)</span>
+<span class="o">//</span> <span class="o">...</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">Tensor</span><span class="p">(</span>
+    <span class="n">py_tensor</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">tolist</span><span class="p">(),</span>
+    <span class="n">py_tensor</span><span class="o">.</span><span class="n">size</span><span class="p">(),</span>
+    <span class="n">ttnn</span><span class="o">.</span><span class="n">DataType</span><span class="o">.</span><span class="n">BFLOAT16</span><span class="p">,</span>
+    <span class="n">ttnn</span><span class="o">.</span><span class="n">Layout</span><span class="o">.</span><span class="n">ROW_MAJOR</span><span class="p">,</span>
+    <span class="n">tt_device</span><span class="p">,</span>
+    <span class="n">mem_config</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</blockquote>
+</li>
+<li>
+<p>__init__(self: ttnn._ttnn.tensor.Tensor, tensor: object, data_type: Optional[ttnn._ttnn.tensor.DataType] = None, strategy: dict[str, str] = {}, tile: Optional[ttnn._ttnn.tensor.Tile] = None) -&gt; None</p>
+<blockquote>
+<div>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>tensor</p></td>
+<td><p>Pytorch or Numpy Tensor</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>data_type</p></td>
+<td><p>TT Tensor data type</p></td>
+</tr>
+<tr class="row-even">
+<td><p>tile</p></td>
+<td><p>TT Tile Spec</p></td>
+</tr>
+</tbody>
+</table>
+<p>Example of creating a TT Tensor that uses torch.Tensor’s storage as its own storage:</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">py_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">))</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">Tensor</span><span class="p">(</span><span class="n">py_tensor</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</blockquote>
+</li>
+<li>
+<p>__init__(self: ttnn._ttnn.tensor.Tensor, tensor: object, data_type: Optional[ttnn._ttnn.tensor.DataType] = None, device: ttnn._ttnn.device.IDevice = None, layout: ttnn._ttnn.tensor.Layout = &lt;Layout.ROW_MAJOR: 0&gt;, mem_config: ttnn._ttnn.tensor.MemoryConfig = MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt), tile: Optional[ttnn._ttnn.tensor.Tile] = None) -&gt; None</p>
+<blockquote>
+<div>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>tensor</p></td>
+<td><p>Pytorch or Numpy Tensor</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>data_type</p></td>
+<td><p>TT Tensor data type</p></td>
+</tr>
+<tr class="row-even">
+<td><p>device</p></td>
+<td><p>TT device ptr</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>layout</p></td>
+<td><p>TT layout</p></td>
+</tr>
+<tr class="row-even">
+<td><p>mem_config</p></td>
+<td><p>TT memory_config</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>tile</p></td>
+<td><p>TT Tile Spec</p></td>
+</tr>
+</tbody>
+</table>
+<p>Example of creating a TT Tensor from numpy tensor:</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_device</span><span class="p">(</span><span class="n">device_id</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">py_tensor</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">))</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">Tensor</span><span class="p">(</span><span class="n">py_tensor</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">device</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</blockquote>
+</li>
+</ol>
+</dd>
+</dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="ttnn.Tensor.buffer">
+<span class="sig-name descname"><span class="pre">buffer</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">ttnn._ttnn.tensor.Tensor</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn._ttnn.tensor.owned_buffer_for_uint8_t</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">ttnn._ttnn.tensor.owned_buffer_for_uint16_t</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">ttnn._ttnn.tensor.owned_buffer_for_int32_t</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">ttnn._ttnn.tensor.owned_buffer_for_uint32_t</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">ttnn._ttnn.tensor.owned_buffer_for_float32_t</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">ttnn._ttnn.tensor.owned_buffer_for_bfloat16_t</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">ttnn._ttnn.tensor.borrowed_buffer_for_uint8_t</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">ttnn._ttnn.tensor.borrowed_buffer_for_uint16_t</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">ttnn._ttnn.tensor.borrowed_buffer_for_int32_t</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">ttnn._ttnn.tensor.borrowed_buffer_for_uint32_t</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">ttnn._ttnn.tensor.borrowed_buffer_for_float32_t</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">ttnn._ttnn.tensor.borrowed_buffer_for_bfloat16_t</span></span></span><a class="headerlink" href="#ttnn.Tensor.buffer" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Get the underlying buffer.</p>
+<p>The tensor must be on the cpu when calling this function.</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">buffer</span> <span class="o">=</span> <span class="n">tt_tensor</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span><span class="o">.</span><span class="n">buffer</span><span class="p">()</span> <span class="c1"># move TT Tensor to host and get the buffer</span>
+</pre></div>
+</div>
+</dd>
+</dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="ttnn.Tensor.device">
+<span class="sig-name descname"><span class="pre">device</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">ttnn._ttnn.tensor.Tensor</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn._ttnn.device.IDevice</span></span></span><a class="headerlink" href="#ttnn.Tensor.device" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Get the device of the tensor.</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">device</span> <span class="o">=</span> <span class="n">tt_tensor</span><span class="o">.</span><span class="n">device</span><span class="p">()</span>
+</pre></div>
+</div>
+</dd>
+</dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="ttnn.Tensor.get_dtype">
+<span class="sig-name descname"><span class="pre">get_dtype</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">ttnn._ttnn.tensor.Tensor</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn._ttnn.tensor.DataType</span></span></span><a class="headerlink" href="#ttnn.Tensor.get_dtype" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Get dtype of TT Tensor.</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">dtype</span> <span class="o">=</span> <span class="n">tt_tensor</span><span class="o">.</span><span class="n">get_dtype</span><span class="p">()</span>
+</pre></div>
+</div>
+</dd>
+</dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="ttnn.Tensor.get_layout">
+<span class="sig-name descname"><span class="pre">get_layout</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">ttnn._ttnn.tensor.Tensor</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn._ttnn.tensor.Layout</span></span></span><a class="headerlink" href="#ttnn.Tensor.get_layout" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Get memory layout of TT Tensor.</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">layout</span> <span class="o">=</span> <span class="n">tt_tensor</span><span class="o">.</span><span class="n">get_layout</span><span class="p">()</span>
+</pre></div>
+</div>
+</dd>
+</dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="ttnn.Tensor.pad">
+<span class="sig-name descname"><span class="pre">pad</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">ttnn._ttnn.tensor.Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">arg0</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Annotated[list[int],</span> <span class="pre">FixedSize(4)]</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">arg1</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Annotated[list[int],</span> <span class="pre">FixedSize(4)]</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">arg2</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><a class="reference internal" href="#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">ttnn._ttnn.tensor.Tensor</span></a></span></span><a class="headerlink" href="#ttnn.Tensor.pad" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Pad TT Tensor with given pad value <code class="docutils literal notranslate"><span class="pre">arg2</span></code>.</p>
+<p>The input tensor must be on host and in ROW_MAJOR layout.</p>
+<p>Returns an output tensor that contains the input tensor at the given input tensor start indices <code class="docutils literal notranslate"><span class="pre">arg1</span></code> and the padded value everywhere else.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>arg0</p></td>
+<td><p>Shape of output tensor</p></td>
+<td><p>List[int[4]]</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>arg1</p></td>
+<td><p>Start indices to place input tensor in output tensor</p></td>
+<td><p>List[int[4]]</p></td>
+<td>
+<p>Values along each dim must be</p>
+<p>&lt;= (output_tensor_shape[i] - input_tensor_shape[i])</p>
+</td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-even">
+<td><p>arg2</p></td>
+<td><p>Value to pad input tensor</p></td>
+<td><p>float</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+</tbody>
+</table>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">input_tensor_shape</span> <span class="o">=</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>
+<span class="n">output_tensor_shape</span> <span class="o">=</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">5</span><span class="p">]</span>
+<span class="n">input_tensor_start</span> <span class="o">=</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">]</span>
+<span class="n">pad_value</span> <span class="o">=</span> <span class="mi">0</span>
+
+<span class="n">inp</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">(</span>
+    <span class="p">[</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span>
+    <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span>
+    <span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">9</span> <span class="p">]</span>
+<span class="p">)</span>
+<span class="n">tt_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">Tensor</span><span class="p">(</span>
+    <span class="n">inp</span><span class="o">.</span><span class="n">tolist</span><span class="p">(),</span>
+    <span class="n">input_tensor_shape</span><span class="p">,</span>
+    <span class="n">ttnn</span><span class="o">.</span><span class="n">DataType</span><span class="o">.</span><span class="n">BFLOAT16</span><span class="p">,</span>
+    <span class="n">ttnn</span><span class="o">.</span><span class="n">Layout</span><span class="o">.</span><span class="n">ROW_MAJOR</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">tt_tensor_padded</span> <span class="o">=</span> <span class="n">tt_tensor</span><span class="o">.</span><span class="n">pad</span><span class="p">(</span><span class="n">output_tensor_shape</span><span class="p">,</span> <span class="n">input_tensor_start</span><span class="p">,</span> <span class="n">pad_value</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="s2">"Input tensor:"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">tt_tensor</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">Padded tensor:"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">tt_tensor_padded</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Example output:</p>
+<div class="highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="n">Input</span> <span class="n">tensor</span><span class="p">:</span>
+<span class="p">[</span> <span class="p">[[[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span>
+    <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">],</span>
+    <span class="p">[</span><span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">9</span><span class="p">]]]</span> <span class="n">dtype</span><span class="o">=</span><span class="n">bfloat16</span> <span class="p">]</span>
+
+<span class="n">Padded</span> <span class="n">tensor</span><span class="p">:</span>
+<span class="p">[</span> <span class="p">[[[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+    <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+    <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+    <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+    <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">]],</span>
+
+    <span class="p">[[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+    <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+    <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+    <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">9</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+    <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">]]]</span> <span class="n">dtype</span><span class="o">=</span><span class="n">bfloat16</span> <span class="p">]</span>
+</pre></div>
+</div>
+</dd>
+</dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="ttnn.Tensor.pad_to_tile">
+<span class="sig-name descname"><span class="pre">pad_to_tile</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">ttnn._ttnn.tensor.Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">arg0</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><a class="reference internal" href="#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">ttnn._ttnn.tensor.Tensor</span></a></span></span><a class="headerlink" href="#ttnn.Tensor.pad_to_tile" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Pads TT Tensor with given pad value <code class="docutils literal notranslate"><span class="pre">arg0</span></code>.</p>
+<p>The input tensor must be on host and in ROW_MAJOR layout.</p>
+<p>Returns an output tensor that contains the input tensor padded with the padded value in the last two dims to multiples of 32.</p>
+<p>Padding will be added to the right and bottom of the tensor.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>arg0</p></td>
+<td><p>Value to pad input tensor</p></td>
+<td><p>float</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+</tbody>
+</table>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">input_tensor_shape</span> <span class="o">=</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>
+<span class="n">pad_value</span> <span class="o">=</span> <span class="mi">0</span>
+
+<span class="n">inp</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">(</span>
+    <span class="p">[</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span>
+    <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span>
+    <span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">9</span> <span class="p">]</span>
+<span class="p">)</span>
+<span class="n">tt_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">Tensor</span><span class="p">(</span>
+    <span class="n">inp</span><span class="o">.</span><span class="n">tolist</span><span class="p">(),</span>
+    <span class="n">input_tensor_shape</span><span class="p">,</span>
+    <span class="n">ttnn</span><span class="o">.</span><span class="n">DataType</span><span class="o">.</span><span class="n">BFLOAT16</span><span class="p">,</span>
+    <span class="n">ttnn</span><span class="o">.</span><span class="n">Layout</span><span class="o">.</span><span class="n">ROW_MAJOR</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">tt_tensor_padded</span> <span class="o">=</span> <span class="n">tt_tensor</span><span class="o">.</span><span class="n">pad_to_tile</span><span class="p">(</span><span class="n">pad_value</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="s2">"Input tensor:"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">tt_tensor</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">Padded tensor:"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">tt_tensor_padded</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Example output:</p>
+<div class="highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="n">Input</span> <span class="n">tensor</span><span class="p">:</span>
+<span class="p">[</span> <span class="p">[[[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span>
+    <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">],</span>
+    <span class="p">[</span><span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">9</span><span class="p">]]]</span> <span class="n">dtype</span><span class="o">=</span><span class="n">bfloat16</span> <span class="p">]</span>
+
+<span class="n">Padded</span> <span class="n">tensor</span><span class="p">:</span>
+<span class="p">[</span> <span class="p">[[[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+    <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+    <span class="p">[</span><span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">9</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+    <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+    <span class="o">...</span><span class="p">,</span>
+    <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="mi">0</span><span class="p">]]]</span> <span class="n">dtype</span><span class="o">=</span><span class="n">bfloat16</span> <span class="p">]</span>
+</pre></div>
+</div>
+</dd>
+</dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="ttnn.Tensor.storage_type">
+<span class="sig-name descname"><span class="pre">storage_type</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">ttnn._ttnn.tensor.Tensor</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn._ttnn.tensor.StorageType</span></span></span><a class="headerlink" href="#ttnn.Tensor.storage_type" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Check if the tensor is on host</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">storage_type</span> <span class="o">=</span> <span class="n">tt_tensor</span><span class="o">.</span><span class="n">storage_type</span><span class="p">()</span>
+</pre></div>
+</div>
+</dd>
+</dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="ttnn.Tensor.to">
+<span class="sig-name descname"><span class="pre">to</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#ttnn.Tensor.to" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Overloaded function.</p>
+<ol class="arabic">
+<li>
+<p>to(self: ttnn._ttnn.tensor.Tensor, device: ttnn._ttnn.device.IDevice, mem_config: ttnn._ttnn.tensor.MemoryConfig = MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt), cq_id: ttnn._ttnn.types.QueueId = QueueId(0)) -&gt; ttnn._ttnn.tensor.Tensor</p>
+<blockquote>
+<div>
+<p>Move TT Tensor from host device to TT accelerator device.</p>
+<p>Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B, BFLOAT4_B (in TILE layout) are supported on device.</p>
+<p>If <code class="docutils literal notranslate"><span class="pre">arg1</span></code> is not supplied, default <code class="docutils literal notranslate"><span class="pre">MemoryConfig</span></code> with <code class="docutils literal notranslate"><span class="pre">interleaved</span></code> set to <code class="docutils literal notranslate"><span class="pre">True</span></code>.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>arg0</p></td>
+<td><p>Device to which tensor will be moved</p></td>
+<td><p>ttnn.Device</p></td>
+<td><p>TT accelerator device</p></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>arg1</p></td>
+<td><p>MemoryConfig of tensor of TT accelerator device</p></td>
+<td><p>ttnn.MemoryConfig</p></td>
+<td></td>
+<td><p>No</p></td>
+</tr>
+<tr class="row-even">
+<td><p>arg2</p></td>
+<td><p>CQ ID of TT accelerator device to use</p></td>
+<td><p>uint8_t</p></td>
+<td></td>
+<td><p>No</p></td>
+</tr>
+</tbody>
+</table>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">tt_tensor</span> <span class="o">=</span> <span class="n">tt_tensor</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">tt_device</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</blockquote>
+</li>
+<li>
+<p>to(self: ttnn._ttnn.tensor.Tensor, mesh_device: ttnn._ttnn.multi_device.MeshDevice, mem_config: ttnn._ttnn.tensor.MemoryConfig = MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt), cq_id: ttnn._ttnn.types.QueueId = QueueId(0)) -&gt; ttnn._ttnn.tensor.Tensor</p>
+<blockquote>
+<div>
+<p>Move TT Tensor from host device to TT accelerator device.</p>
+<p>Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B, BFLOAT4_B (in TILE layout) are supported on device.</p>
+<p>If <code class="docutils literal notranslate"><span class="pre">arg1</span></code> is not supplied, default <code class="docutils literal notranslate"><span class="pre">MemoryConfig</span></code> with <code class="docutils literal notranslate"><span class="pre">interleaved</span></code> set to <code class="docutils literal notranslate"><span class="pre">True</span></code>.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>arg0</p></td>
+<td><p>MeshDevice to which tensor will be moved</p></td>
+<td><p>ttnn.MeshDevice</p></td>
+<td><p>TT accelerator device</p></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>arg1</p></td>
+<td><p>MemoryConfig of tensor of TT accelerator device</p></td>
+<td><p>ttnn.MemoryConfig</p></td>
+<td></td>
+<td><p>No</p></td>
+</tr>
+<tr class="row-even">
+<td><p>arg2</p></td>
+<td><p>CQ ID of TT accelerator device to use</p></td>
+<td><p>uint8_t</p></td>
+<td></td>
+<td><p>No</p></td>
+</tr>
+</tbody>
+</table>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">tt_tensor</span> <span class="o">=</span> <span class="n">tt_tensor</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">tt_device</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</blockquote>
+</li>
+<li>
+<p>to(self: ttnn._ttnn.tensor.Tensor, target_layout: ttnn._ttnn.tensor.Layout, worker: ttnn._ttnn.device.IDevice = None) -&gt; ttnn._ttnn.tensor.Tensor</p>
+<blockquote>
+<div>
+<p>Convert TT Tensor to provided memory layout. Available layouts conversions are:</p>
+<ul class="simple">
+<li><p>ROW_MAJOR to TILE</p></li>
+<li><p>TILE to ROW_MAJOR</p></li>
+</ul>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>arg0</p></td>
+<td><p>Target memory layout</p></td>
+<td><p>ttnn.Layout</p></td>
+<td><p>ROW_MAJOR, TILE</p></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>arg1</p></td>
+<td><p>Worker thread performing layout conversion
+(optional)</p></td>
+<td><p>ttnn.Device</p></td>
+<td><p>Thread tied to TT accelerator
+device</p></td>
+<td><p>No</p></td>
+</tr>
+</tbody>
+</table>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">tt_tensor</span> <span class="o">=</span> <span class="n">tt_tensor</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">Layout</span><span class="o">.</span><span class="n">TILE</span><span class="p">,</span> <span class="n">worker</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</blockquote>
+</li>
+<li>
+<p>to(self: ttnn._ttnn.tensor.Tensor, target_layout: ttnn._ttnn.tensor.Layout, mesh_device: ttnn._ttnn.multi_device.MeshDevice = None) -&gt; ttnn._ttnn.tensor.Tensor</p>
+<blockquote>
+<div>
+<p>Convert TT Tensor to provided memory layout. Available layouts conversions are:</p>
+<ul class="simple">
+<li><p>ROW_MAJOR to TILE</p></li>
+<li><p>TILE to ROW_MAJOR</p></li>
+</ul>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>arg0</p></td>
+<td><p>Target memory layout</p></td>
+<td><p>ttnn.Layout</p></td>
+<td><p>ROW_MAJOR, TILE</p></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>arg1</p></td>
+<td><p>Worker thread performing layout conversion
+(optional)</p></td>
+<td><p>ttnn.Device</p></td>
+<td><p>Thread tied to TT accelerator
+device</p></td>
+<td><p>No</p></td>
+</tr>
+</tbody>
+</table>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">tt_tensor</span> <span class="o">=</span> <span class="n">tt_tensor</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">Layout</span><span class="o">.</span><span class="n">TILE</span><span class="p">,</span> <span class="n">mesh_device</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</blockquote>
+</li>
+</ol>
+</dd>
+</dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="ttnn.Tensor.unpad">
+<span class="sig-name descname"><span class="pre">unpad</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">ttnn._ttnn.tensor.Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">arg0</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Annotated[list[int],</span> <span class="pre">FixedSize(4)]</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">arg1</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Annotated[list[int],</span> <span class="pre">FixedSize(4)]</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><a class="reference internal" href="#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">ttnn._ttnn.tensor.Tensor</span></a></span></span><a class="headerlink" href="#ttnn.Tensor.unpad" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Unpad this TT Tensor.</p>
+<p>This tensor must be on host and in ROW_MAJOR layout.</p>
+<p>Returns an output tensor from output tensor start indices <code class="docutils literal notranslate"><span class="pre">arg0</span></code> to output tensor end indices <code class="docutils literal notranslate"><span class="pre">arg1</span></code> (inclusive) of the input tensor.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>arg0</p></td>
+<td><p>Start indices of input tensor</p></td>
+<td><p>List[int[4]]</p></td>
+<td>
+<p>Values along each dim must be</p>
+<p>&lt; input_tensor_shape[i] and &lt;= output_tensor_end[i]</p>
+</td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>arg1</p></td>
+<td><p>End indices of input tensor in output tensor</p></td>
+<td><p>List[int[4]]</p></td>
+<td>
+<p>Values along each dim must be</p>
+<p>&lt; input_tensor_shape[i]</p>
+</td>
+<td><p>Yes</p></td>
+</tr>
+</tbody>
+</table>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">input_tensor_shape</span> <span class="o">=</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">5</span><span class="p">]</span>
+<span class="n">output_tensor_start</span> <span class="o">=</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">]</span>
+<span class="n">output_tensor_end</span> <span class="o">=</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>
+
+<span class="n">inp</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">(</span>
+    <span class="p">[</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span>
+    <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span>
+    <span class="mi">0</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span>
+    <span class="mi">0</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">9</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span>
+    <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span> <span class="p">]</span>
+<span class="p">)</span>
+<span class="n">tt_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">Tensor</span><span class="p">(</span>
+    <span class="n">inp</span><span class="o">.</span><span class="n">tolist</span><span class="p">(),</span>
+    <span class="n">input_tensor_shape</span><span class="p">,</span>
+    <span class="n">ttnn</span><span class="o">.</span><span class="n">DataType</span><span class="o">.</span><span class="n">BFLOAT16</span><span class="p">,</span>
+    <span class="n">ttnn</span><span class="o">.</span><span class="n">Layout</span><span class="o">.</span><span class="n">ROW_MAJOR</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">tt_tensor_unpadded</span> <span class="o">=</span> <span class="n">tt_tensor</span><span class="o">.</span><span class="n">unpad</span><span class="p">(</span><span class="n">output_tensor_start</span><span class="p">,</span> <span class="n">output_tensor_end</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="s2">"Input tensor:"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">tt_tensor</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">Unpadded tensor:"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">tt_tensor_unpadded</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Example output:</p>
+<div class="highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="n">Input</span> <span class="n">tensor</span><span class="p">:</span>
+<span class="p">[</span> <span class="p">[[[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+    <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+    <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+    <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">9</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+    <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">]]]</span> <span class="n">dtype</span><span class="o">=</span><span class="n">bfloat16</span> <span class="p">]</span>
+
+<span class="n">Unpadded</span> <span class="n">tensor</span><span class="p">:</span>
+<span class="p">[</span> <span class="p">[[[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span>
+    <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">],</span>
+    <span class="p">[</span><span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">9</span><span class="p">]]]</span> <span class="n">dtype</span><span class="o">=</span><span class="n">bfloat16</span> <span class="p">]</span>
+</pre></div>
+</div>
+</dd>
+</dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="ttnn.Tensor.unpad_from_tile">
+<span class="sig-name descname"><span class="pre">unpad_from_tile</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">ttnn._ttnn.tensor.Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">arg0</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><a class="reference internal" href="#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">ttnn._ttnn.tensor.Tensor</span></a></span></span><a class="headerlink" href="#ttnn.Tensor.unpad_from_tile" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Unpads TT Tensor from given input tensor <code class="docutils literal notranslate"><span class="pre">arg0</span></code>.</p>
+<p>The input tensor must be on host and in ROW_MAJOR layout.</p>
+<p>This function expects the real data to aligned on the top left of the tensor.</p>
+<p>Returns an output tensor with padding removed from the right and bottom of the input tensor.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>arg0</p></td>
+<td><p>Shape of output tensor</p></td>
+<td><p>List[int[4]]</p></td>
+<td>
+<p>All dims must match the input tensor dims apart from the last two dims.</p>
+<p>Last two dims have the following restrictions:</p>
+<p>input_tensor_shape[i] must be a multiple of 32</p>
+<p>input_tensor_shape[i] - 32 &lt; output_tensor_shape[i] &lt;= input_tensor_shape[i]</p>
+</td>
+<td><p>Yes</p></td>
+</tr>
+</tbody>
+</table>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">input_tensor_shape</span> <span class="o">=</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">]</span>
+<span class="n">output_tensor_shape</span> <span class="o">=</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>
+
+<span class="n">inp</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">start</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="mf">10.0</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span>
+<span class="n">inp</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">functional</span><span class="o">.</span><span class="n">pad</span><span class="p">(</span><span class="n">inp</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="n">input_tensor_shape</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span> <span class="o">-</span> <span class="n">inp</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">3</span><span class="p">],</span> <span class="mi">0</span><span class="p">,</span> <span class="n">input_tensor_shape</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span> <span class="o">-</span> <span class="n">inp</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">2</span><span class="p">]])</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+<span class="n">tt_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">Tensor</span><span class="p">(</span>
+    <span class="n">inp</span><span class="o">.</span><span class="n">tolist</span><span class="p">(),</span>
+    <span class="n">input_tensor_shape</span><span class="p">,</span>
+    <span class="n">ttnn</span><span class="o">.</span><span class="n">DataType</span><span class="o">.</span><span class="n">BFLOAT16</span><span class="p">,</span>
+    <span class="n">ttnn</span><span class="o">.</span><span class="n">Layout</span><span class="o">.</span><span class="n">ROW_MAJOR</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">tt_tensor_unpadded</span> <span class="o">=</span> <span class="n">tt_tensor</span><span class="o">.</span><span class="n">unpad_from_tile</span><span class="p">(</span><span class="n">output_tensor_shape</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="s2">"Input tensor:"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">tt_tensor</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">Unpadded tensor:"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">tt_tensor_unpadded</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Example output:</p>
+<div class="highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="n">Input</span> <span class="n">tensor</span><span class="p">:</span>
+<span class="p">[</span> <span class="p">[[[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+    <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+    <span class="p">[</span><span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">9</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+    <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+    <span class="o">...</span><span class="p">,</span>
+    <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="mi">0</span><span class="p">]]]</span> <span class="n">dtype</span><span class="o">=</span><span class="n">bfloat16</span> <span class="p">]</span>
+
+<span class="n">Unpadded</span> <span class="n">tensor</span><span class="p">:</span>
+<span class="p">[</span> <span class="p">[[[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span>
+    <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">],</span>
+    <span class="p">[</span><span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">9</span><span class="p">]]]</span> <span class="n">dtype</span><span class="o">=</span><span class="n">bfloat16</span> <span class="p">]</span>
+</pre></div>
+</div>
+</dd>
+</dl>
+
+</dd>
+</dl>
+
+</section>
+<section id="memoryconfig">
+<h2>MemoryConfig<a class="headerlink" href="#memoryconfig" title="Permalink to this heading"></a>
+</h2>
+<dl class="py class">
+<dt class="sig sig-object py" id="ttnn.MemoryConfig">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">MemoryConfig</span></span><a class="headerlink" href="#ttnn.MemoryConfig" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Class defining memory configuration for storing tensor data on TT Accelerator device.
+There are eight DRAM memory banks on TT Accelerator device, indexed as 0, 1, 2, …, 7.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="ttnn.MemoryConfig.__init__">
+<span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self:</span> <span class="pre">ttnn._ttnn.tensor.MemoryConfig</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_layout:</span> <span class="pre">ttnn._ttnn.tensor.TensorMemoryLayout</span> <span class="pre">=</span> <span class="pre">&lt;TensorMemoryLayout.INTERLEAVED:</span> <span class="pre">0&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">buffer_type:</span> <span class="pre">ttnn._ttnn.tensor.BufferType</span> <span class="pre">=</span> <span class="pre">&lt;BufferType.DRAM:</span> <span class="pre">0&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">shard_spec:</span> <span class="pre">Optional[ttnn._ttnn.tensor.ShardSpec]</span> <span class="pre">=</span> <span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.MemoryConfig.__init__" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Create MemoryConfig class.
+If interleaved is set to True, tensor data will be interleaved across multiple DRAM banks on TT Accelerator device.
+Otherwise, tensor data will be stored in a DRAM bank selected by dram_channel (valid values are 0, 1, …, 7).</p>
+<p>Example of creating MemoryConfig specifying that tensor data should be stored in DRAM bank 3.</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">mem_config</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">MemoryConfig</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TensorMemoryLayout</span><span class="o">.</span><span class="n">SINGLE_BANK</span><span class="p">)</span>
+</pre></div>
+</div>
+</dd>
+</dl>
+
+</dd>
+</dl>
+
+</section>
+<section id="examples-of-converting-between-pytorch-tensor-and-tt-tensor">
+<h2>Examples of converting between PyTorch Tensor and TT Tensor<a class="headerlink" href="#examples-of-converting-between-pytorch-tensor-and-tt-tensor" title="Permalink to this heading"></a>
+</h2>
+<p>Remember that TT Tensors must have rank 4.</p>
+<section id="converting-a-pytorch-tensor-to-a-tt-tensor">
+<h3>Converting a PyTorch Tensor to a TT Tensor<a class="headerlink" href="#converting-a-pytorch-tensor-to-a-tt-tensor" title="Permalink to this heading"></a>
+</h3>
+<p>This example shows how to create a TT Tensor <code class="docutils literal notranslate"><span class="pre">tt_tensor</span></code> from a PyTorch tensor.
+The created tensor will be in ROW_MAJOR layout and stored on TT accelerator device.</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">py_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">))</span>
+<span class="n">tt_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">Tensor</span><span class="p">(</span><span class="n">py_tensor</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">tt_device</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="converting-a-tt-tensor-to-a-pytorch-tensor">
+<h3>Converting a TT Tensor to a PyTorch Tensor<a class="headerlink" href="#converting-a-tt-tensor-to-a-pytorch-tensor" title="Permalink to this heading"></a>
+</h3>
+<p>This example shows how to move a TT Tensor <code class="docutils literal notranslate"><span class="pre">output</span></code> from device to host and how to convert a TT Tensor to PyTorch tensor.</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># move TT Tensor output from TT accelerator device to host</span>
+<span class="n">tt_output</span> <span class="o">=</span> <span class="n">tt_output</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span>
+
+<span class="c1"># create PyTorch tensor from TT Tensor using to_torch() member function</span>
+<span class="n">py_output</span> <span class="o">=</span> <span class="n">tt_output</span><span class="o">.</span><span class="n">to_torch</span><span class="p">()</span>
+</pre></div>
+</div>
+</section>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="tt_lib.html" class="btn btn-neutral float-left" title="TT-LIB" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="examples.html" class="btn btn-neutral float-right" title="Examples of Tensor and TT-LIB Use" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

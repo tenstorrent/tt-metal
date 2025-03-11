@@ -1,0 +1,8 @@
+﻿ttnn.ceil\_bw
+=============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.ceil_bw:
+
+.. autofastoperation:: ttnn.ceil_bw

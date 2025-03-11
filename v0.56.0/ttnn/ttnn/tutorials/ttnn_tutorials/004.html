@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tracing ttnn operations and torch modules/functions &mdash; TT-NN  documentation</title>
+      <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/tt_theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/nbsphinx-code-cells.css" type="text/css" />
+    <link rel="shortcut icon" href="../../../_static/favicon.png"/>
+    <link rel="canonical" href="/ttnn/latest/ttnn/tutorials/ttnn_tutorials/004.html" />
+  <!--[if lt IE 9]>
+    <script src="../../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+        <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script src="../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+    <link rel="next" title="ttnn Profiling" href="../profiling.html" />
+    <link rel="prev" title="ttnn Tracer" href="../ttnn-tracer.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../../index.html">
+    TT-NN
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">TTNN</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../../about.html">What is ttnn?</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../installing.html">Install</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../usage.html">Using ttnn</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../tensor.html">Tensor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html">APIs</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../../tutorials.html">Tutorials</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../tensor_and_add_operation.html">Tensor and Add Operation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../matmul.html">Matmul Operation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../multihead-attention.html">Multi-Head Attention</a></li>
+<li class="toctree-l2 current"><a class="reference internal" href="../ttnn-tracer.html">ttnn Tracer</a><ul class="current">
+<li class="toctree-l3 current"><a class="current reference internal" href="#">Tracing ttnn operations and torch modules/functions</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#Trace-torch-functions">Trace torch functions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#Trace-torch-functions-and-ttnn-operations">Trace torch functions and ttnn operations</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#Trace-torch-functions,-torch-modules-and-ttnn-operations">Trace torch functions, torch modules and ttnn operations</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#Trace-models-written-using-ttnn">Trace models written using ttnn</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../profiling.html">ttnn Profiling</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../resnet-basic-block.html">Resnet Basic Block</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../graphing_torch_dit.html">Graphing Torch DiT_XL_2 With TTNN</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../onboarding.html">Onboarding New Functionality</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../converting_torch_model_to_ttnn.html">Converting torch Model to ttnn</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../adding_new_ttnn_operation.html">Adding New ttnn Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../profiling_ttnn_operations.html">Profiling ttnn Operations</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../dependencies/index.html">Dependencies</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../demos.html">Building and Uplifting Demos</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Models</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../tt_metal_models/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../tt_metal_models/get_performance.html">Performance</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../index.html">TT-NN</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../tutorials.html">Tutorials</a></li>
+          <li class="breadcrumb-item"><a href="../ttnn-tracer.html">ttnn Tracer</a></li>
+      <li class="breadcrumb-item active">Tracing ttnn operations and torch modules/functions</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../../_sources/ttnn/tutorials/ttnn_tutorials/004.ipynb.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="Tracing-ttnn-operations-and-torch-modules/functions">
+<h1>Tracing ttnn operations and torch modules/functions<a class="headerlink" href="#Tracing-ttnn-operations-and-torch-modules/functions" title="Permalink to this heading"></a>
+</h1>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[1]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+<span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s2">"TTNN_CONFIG_OVERRIDES"</span><span class="p">]</span> <span class="o">=</span> <span class="s2">"{</span><span class="se">\"</span><span class="s2">enable_fast_runtime_mode</span><span class="se">\"</span><span class="s2">: false}"</span>
+</pre></div>
+</div>
+</div>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[2]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">transformers</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">ttnn.tracer</span><span class="w"> </span><span class="kn">import</span> <span class="n">trace</span><span class="p">,</span> <span class="n">visualize</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area stderr docutils container">
+<div class="highlight"><pre>
+2024-07-11 18:17:47.183 | DEBUG    | ttnn:&lt;module&gt;:133 - Loading ttnn configuration overrides from environment variable TTNN_CONFIG_OVERRIDES
+2024-07-11 18:17:47.184 | DEBUG    | ttnn:&lt;module&gt;:136 - Initial ttnn.CONFIG:
+{'cache_path': PosixPath('/home/ubuntu/.cache/ttnn'),
+ 'comparison_mode_pcc': 0.9999,
+ 'enable_comparison_mode': False,
+ 'enable_detailed_buffer_report': False,
+ 'enable_detailed_tensor_report': False,
+ 'enable_fast_runtime_mode': False,
+ 'enable_graph_report': False,
+ 'enable_logging': False,
+ 'enable_model_cache': False,
+ 'model_cache_path': PosixPath('/home/ubuntu/.cache/ttnn/models'),
+ 'report_name': None,
+ 'root_report_path': PosixPath('generated/ttnn/reports'),
+ 'throw_exception_on_fallback': False,
+ 'tmp_dir': PosixPath('/tmp/ttnn')}
+2024-07-11 18:17:47.354 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.logical_xor be migrated to C++?
+2024-07-11 18:17:47.355 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.xlogy be migrated to C++?
+2024-07-11 18:17:47.356 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.maximum be migrated to C++?
+2024-07-11 18:17:47.356 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.minimum be migrated to C++?
+2024-07-11 18:17:47.357 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.atan2 be migrated to C++?
+2024-07-11 18:17:47.358 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.hypot be migrated to C++?
+2024-07-11 18:17:47.358 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.nextafter be migrated to C++?
+2024-07-11 18:17:47.359 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.polyval be migrated to C++?
+2024-07-11 18:17:47.359 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.isclose be migrated to C++?
+2024-07-11 18:17:47.360 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.all_gather be migrated to C++?
+2024-07-11 18:17:47.362 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.pearson_correlation_coefficient be migrated to C++?
+2024-07-11 18:17:47.366 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.conv2d be migrated to C++?
+2024-07-11 18:17:47.367 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.reshape be migrated to C++?
+2024-07-11 18:17:47.368 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.unsqueeze_to_4D be migrated to C++?
+2024-07-11 18:17:47.369 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.squeeze be migrated to C++?
+2024-07-11 18:17:47.369 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.from_torch be migrated to C++?
+2024-07-11 18:17:47.370 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.to_torch be migrated to C++?
+2024-07-11 18:17:47.370 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.to_device be migrated to C++?
+2024-07-11 18:17:47.371 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.from_device be migrated to C++?
+2024-07-11 18:17:47.371 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.allocate_tensor_on_device be migrated to C++?
+2024-07-11 18:17:47.372 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.copy_host_to_device_tensor be migrated to C++?
+2024-07-11 18:17:47.373 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.deallocate be migrated to C++?
+2024-07-11 18:17:47.373 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.clone be migrated to C++?
+2024-07-11 18:17:47.374 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.reallocate be migrated to C++?
+2024-07-11 18:17:47.374 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.load_tensor be migrated to C++?
+2024-07-11 18:17:47.375 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.dump_tensor be migrated to C++?
+2024-07-11 18:17:47.375 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.as_tensor be migrated to C++?
+2024-07-11 18:17:47.378 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.arange be migrated to C++?
+2024-07-11 18:17:47.379 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.mse_loss be migrated to C++?
+2024-07-11 18:17:47.380 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.l1_loss be migrated to C++?
+2024-07-11 18:17:47.381 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.matmul be migrated to C++?
+2024-07-11 18:17:47.381 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.linear be migrated to C++?
+2024-07-11 18:17:47.383 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.mac be migrated to C++?
+2024-07-11 18:17:47.384 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.addcmul be migrated to C++?
+2024-07-11 18:17:47.384 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.addcdiv be migrated to C++?
+2024-07-11 18:17:47.385 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.lerp be migrated to C++?
+2024-07-11 18:17:47.390 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.logit be migrated to C++?
+2024-07-11 18:17:47.390 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.polygamma be migrated to C++?
+2024-07-11 18:17:47.391 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.hardshrink be migrated to C++?
+2024-07-11 18:17:47.392 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.celu be migrated to C++?
+2024-07-11 18:17:47.392 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.softshrink be migrated to C++?
+2024-07-11 18:17:47.393 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.clip be migrated to C++?
+2024-07-11 18:17:47.393 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.threshold be migrated to C++?
+2024-07-11 18:17:47.394 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.glu be migrated to C++?
+2024-07-11 18:17:47.394 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.reglu be migrated to C++?
+2024-07-11 18:17:47.395 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.swiglu be migrated to C++?
+2024-07-11 18:17:47.396 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.geglu be migrated to C++?
+2024-07-11 18:17:47.397 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.matmul be migrated to C++?
+2024-07-11 18:17:47.398 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.linear be migrated to C++?
+2024-07-11 18:17:47.399 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.conv2d be migrated to C++?
+</pre></div>
+</div>
+</div>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[3]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">transformers</span><span class="o">.</span><span class="n">logging</span><span class="o">.</span><span class="n">set_verbosity_error</span><span class="p">()</span>
+</pre></div>
+</div>
+</div>
+<section id="Trace-torch-functions">
+<h2>Trace torch functions<a class="headerlink" href="#Trace-torch-functions" title="Permalink to this heading"></a>
+</h2>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[4]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="k">with</span> <span class="n">trace</span><span class="p">():</span>
+    <span class="n">tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">100</span><span class="p">,</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">64</span><span class="p">))</span>
+    <span class="n">tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">tensor</span><span class="p">)</span>
+<span class="n">visualize</span><span class="p">(</span><span class="n">tensor</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area stderr docutils container">
+<div class="highlight"><pre>
+2024-07-11 18:17:47.412 | DEBUG    | ttnn.tracer:visualize:442 - Dumping graph of the model to None
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[4]:
+</pre></div>
+</div>
+<div class="output_area docutils container">
+<img alt="../../../_images/ttnn_tutorials_ttnn_tutorials_004_5_1.svg" src="../../../_images/ttnn_tutorials_ttnn_tutorials_004_5_1.svg">
+</div>
+</div>
+</section>
+<section id="Trace-torch-functions-and-ttnn-operations">
+<h2>Trace torch functions and ttnn operations<a class="headerlink" href="#Trace-torch-functions-and-ttnn-operations" title="Permalink to this heading"></a>
+</h2>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[5]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="k">with</span> <span class="n">trace</span><span class="p">():</span>
+    <span class="n">tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">100</span><span class="p">,</span> <span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mi">64</span><span class="p">))</span>
+    <span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">tensor</span><span class="p">)</span>
+    <span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">32</span><span class="p">))</span>
+    <span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_torch</span><span class="p">(</span><span class="n">tensor</span><span class="p">)</span>
+<span class="n">visualize</span><span class="p">(</span><span class="n">tensor</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area stderr docutils container">
+<div class="highlight"><pre>
+2024-07-11 18:17:47.447 | DEBUG    | ttnn.tracer:visualize:442 - Dumping graph of the model to None
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[5]:
+</pre></div>
+</div>
+<div class="output_area docutils container">
+<img alt="../../../_images/ttnn_tutorials_ttnn_tutorials_004_7_1.svg" src="../../../_images/ttnn_tutorials_ttnn_tutorials_004_7_1.svg">
+</div>
+</div>
+</section>
+<section id="Trace-torch-functions,-torch-modules-and-ttnn-operations">
+<h2>Trace torch functions, torch modules and ttnn operations<a class="headerlink" href="#Trace-torch-functions,-torch-modules-and-ttnn-operations" title="Permalink to this heading"></a>
+</h2>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[6]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">model_name</span> <span class="o">=</span> <span class="s2">"google/bert_uncased_L-4_H-256_A-4"</span>
+<span class="n">config</span> <span class="o">=</span> <span class="n">transformers</span><span class="o">.</span><span class="n">BertConfig</span><span class="o">.</span><span class="n">from_pretrained</span><span class="p">(</span><span class="n">model_name</span><span class="p">)</span>
+<span class="n">model</span> <span class="o">=</span> <span class="n">transformers</span><span class="o">.</span><span class="n">models</span><span class="o">.</span><span class="n">bert</span><span class="o">.</span><span class="n">modeling_bert</span><span class="o">.</span><span class="n">BertSelfOutput</span><span class="p">(</span><span class="n">config</span><span class="p">)</span><span class="o">.</span><span class="n">eval</span><span class="p">()</span>
+
+<span class="k">with</span> <span class="n">trace</span><span class="p">():</span>
+    <span class="n">hidden_states</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">hidden_size</span><span class="p">))</span>
+    <span class="n">input_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">hidden_size</span><span class="p">))</span>
+    <span class="n">hidden_states</span> <span class="o">=</span> <span class="n">model</span><span class="p">(</span><span class="n">hidden_states</span><span class="p">,</span> <span class="n">input_tensor</span><span class="p">)</span>
+    <span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">hidden_states</span><span class="p">)</span>
+<span class="n">visualize</span><span class="p">(</span><span class="n">output</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area stderr docutils container">
+<div class="highlight"><pre>
+/home/ubuntu/tt-metal/python_env/lib/python3.8/site-packages/huggingface_hub/file_download.py:1132: FutureWarning: `resume_download` is deprecated and will be removed in version 1.0.0. Downloads always resume when possible. If you want to force a new download, use `force_download=True`.
+  warnings.warn(
+2024-07-11 18:17:48.874 | DEBUG    | ttnn.tracer:visualize:442 - Dumping graph of the model to None
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[6]:
+</pre></div>
+</div>
+<div class="output_area docutils container">
+<img alt="../../../_images/ttnn_tutorials_ttnn_tutorials_004_9_1.svg" src="../../../_images/ttnn_tutorials_ttnn_tutorials_004_9_1.svg">
+</div>
+</div>
+</section>
+<section id="Trace-models-written-using-ttnn">
+<h2>Trace models written using ttnn<a class="headerlink" href="#Trace-models-written-using-ttnn" title="Permalink to this heading"></a>
+</h2>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[7]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">dispatch_core_type</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">DispatchCoreType</span><span class="o">.</span><span class="n">ETH</span>
+<span class="k">if</span> <span class="s2">"grayskull"</span> <span class="ow">in</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"ARCH_NAME"</span><span class="p">):</span>
+    <span class="n">dispatch_core_type</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">DispatchCoreType</span><span class="o">.</span><span class="n">WORKER</span>
+<span class="n">device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_device</span><span class="p">(</span><span class="n">device_id</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">l1_small_size</span><span class="o">=</span><span class="mi">8192</span><span class="p">,</span> <span class="n">dispatch_core_config</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">DispatchCoreConfig</span><span class="p">(</span><span class="n">dispatch_core_type</span><span class="p">))</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+<span style="color: rgb(0,128,0)">                 Device</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Opening user mode device driver
+
+<span class="ansi-green-fg">2024-07-11 18:17:48.936</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | <span class="ansi-cyan-fg">SiliconDriver  </span> - Detected 1 PCI device : {0}
+<span class="ansi-green-fg">2024-07-11 18:17:48.949</span> | <span class="ansi-bold" style="color: rgb(255,165,0)">WARNING </span> | <span class="ansi-cyan-fg">SiliconDriver  </span> - init_detect_tt_device_numanodes(): Could not determine NumaNodeSet for TT device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
+<span class="ansi-green-fg">2024-07-11 18:17:48.949</span> | <span class="ansi-bold" style="color: rgb(255,165,0)">WARNING </span> | <span class="ansi-cyan-fg">SiliconDriver  </span> - Could not find NumaNodeSet for TT Device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
+<span class="ansi-green-fg">2024-07-11 18:17:48.951</span> | <span class="ansi-bold" style="color: rgb(255,165,0)">WARNING </span> | <span class="ansi-cyan-fg">SiliconDriver  </span> - bind_area_memory_nodeset(): Unable to determine TT Device to NumaNode mapping for physical_device_id: 0. Skipping membind.
+<span class="ansi-yellow-fg">---- ttSiliconDevice::init_hugepage: bind_area_to_memory_nodeset() failed (physical_device_id: 0 ch: 0). Hugepage allocation is not on NumaNode matching TT Device. Side-Effect is decreased Device-&gt;Host perf (Issue #893).
+</span><span class="ansi-green-fg">2024-07-11 18:17:48.960</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | <span class="ansi-cyan-fg">SiliconDriver  </span> - Software version 6.0.0, Ethernet FW version 6.9.0 (Device 0)
+<span style="color: rgb(0,128,0)">                  Metal</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Initializing device 0. Program cache is NOT enabled
+<span style="color: rgb(0,128,0)">                  Metal</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | AI CLK for device 0 is:   800 MHz
+</pre></div>
+</div>
+</div>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[8]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">models.demos.bert.tt</span><span class="w"> </span><span class="kn">import</span> <span class="n">ttnn_bert</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">models.demos.bert.tt</span><span class="w"> </span><span class="kn">import</span> <span class="n">ttnn_optimized_bert</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">ttnn.model_preprocessing</span><span class="w"> </span><span class="kn">import</span> <span class="n">preprocess_model_parameters</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">ttnn_bert</span><span class="p">(</span><span class="n">bert</span><span class="p">):</span>
+    <span class="n">model_name</span> <span class="o">=</span> <span class="s2">"phiyodr/bert-large-finetuned-squad2"</span>
+
+    <span class="n">config</span> <span class="o">=</span> <span class="n">transformers</span><span class="o">.</span><span class="n">BertConfig</span><span class="o">.</span><span class="n">from_pretrained</span><span class="p">(</span><span class="n">model_name</span><span class="p">)</span>
+    <span class="n">config</span><span class="o">.</span><span class="n">num_hidden_layers</span> <span class="o">=</span> <span class="mi">1</span>
+
+    <span class="n">batch_size</span> <span class="o">=</span> <span class="mi">8</span>
+    <span class="n">sequence_size</span> <span class="o">=</span> <span class="mi">384</span>
+
+    <span class="n">parameters</span> <span class="o">=</span> <span class="n">preprocess_model_parameters</span><span class="p">(</span>
+        <span class="n">initialize_model</span><span class="o">=</span><span class="k">lambda</span><span class="p">:</span> <span class="n">transformers</span><span class="o">.</span><span class="n">BertForQuestionAnswering</span><span class="o">.</span><span class="n">from_pretrained</span><span class="p">(</span>
+            <span class="n">model_name</span><span class="p">,</span> <span class="n">config</span><span class="o">=</span><span class="n">config</span>
+        <span class="p">)</span><span class="o">.</span><span class="n">eval</span><span class="p">(),</span>
+        <span class="n">custom_preprocessor</span><span class="o">=</span><span class="n">bert</span><span class="o">.</span><span class="n">custom_preprocessor</span><span class="p">,</span>
+        <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="k">with</span> <span class="n">trace</span><span class="p">():</span>
+        <span class="n">input_ids</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">vocab_size</span><span class="p">,</span> <span class="p">(</span><span class="n">batch_size</span><span class="p">,</span> <span class="n">sequence_size</span><span class="p">))</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">)</span>
+        <span class="n">torch_token_type_ids</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">batch_size</span><span class="p">,</span> <span class="n">sequence_size</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">)</span>
+        <span class="n">torch_position_ids</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">batch_size</span><span class="p">,</span> <span class="n">sequence_size</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">)</span>
+        <span class="n">torch_attention_mask</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">sequence_size</span><span class="p">)</span> <span class="k">if</span> <span class="n">bert</span> <span class="o">==</span> <span class="n">ttnn_optimized_bert</span> <span class="k">else</span> <span class="kc">None</span>
+
+
+        <span class="n">ttnn_bert_inputs</span> <span class="o">=</span> <span class="n">bert</span><span class="o">.</span><span class="n">preprocess_inputs</span><span class="p">(</span>
+            <span class="n">input_ids</span><span class="p">,</span>
+            <span class="n">torch_token_type_ids</span><span class="p">,</span>
+            <span class="n">torch_position_ids</span><span class="p">,</span>
+            <span class="n">torch_attention_mask</span><span class="p">,</span>
+            <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
+        <span class="p">)</span>
+
+        <span class="n">output</span> <span class="o">=</span> <span class="n">bert</span><span class="o">.</span><span class="n">bert_for_question_answering</span><span class="p">(</span>
+            <span class="n">config</span><span class="p">,</span>
+            <span class="o">*</span><span class="n">ttnn_bert_inputs</span><span class="p">,</span>
+            <span class="n">parameters</span><span class="o">=</span><span class="n">parameters</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_device</span><span class="p">(</span><span class="n">output</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">visualize</span><span class="p">(</span><span class="n">output</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[9]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">ttnn_bert</span><span class="p">(</span><span class="n">ttnn_optimized_bert</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area stderr docutils container">
+<div class="highlight"><pre>
+/home/ubuntu/tt-metal/python_env/lib/python3.8/site-packages/huggingface_hub/file_download.py:1132: FutureWarning: `resume_download` is deprecated and will be removed in version 1.0.0. Downloads always resume when possible. If you want to force a new download, use `force_download=True`.
+  warnings.warn(
+2024-07-11 18:17:50.339 | DEBUG    | ttnn:manage_config:144 - Set ttnn.CONFIG.enable_logging to False
+2024-07-11 18:17:50.340 | DEBUG    | ttnn:manage_config:144 - Set ttnn.CONFIG.enable_comparison_mode to False
+2024-07-11 18:17:50.341 | WARNING  | ttnn.model_preprocessing:from_torch:555 - ttnn: model cache can be enabled by passing model_name argument to preprocess_model[_parameters] and setting env variable TTNN_CONFIG_OVERRIDES='{"enable_model_cache": true}'
+2024-07-11 18:17:51.343 | DEBUG    | ttnn.model_preprocessing:from_torch:634 - Moving model weights to device
+2024-07-11 18:17:51.366 | DEBUG    | ttnn.model_preprocessing:from_torch:636 - Moved model weights to device
+2024-07-11 18:17:51.367 | DEBUG    | ttnn:manage_config:147 - Restored ttnn.CONFIG.enable_comparison_mode to False
+2024-07-11 18:17:51.368 | DEBUG    | ttnn:manage_config:147 - Restored ttnn.CONFIG.enable_logging to False
+2024-07-11 18:18:02.947 | DEBUG    | ttnn.tracer:visualize:442 - Dumping graph of the model to None
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[9]:
+</pre></div>
+</div>
+<div class="output_area docutils container">
+<img alt="../../../_images/ttnn_tutorials_ttnn_tutorials_004_13_1.svg" src="../../../_images/ttnn_tutorials_ttnn_tutorials_004_13_1.svg">
+</div>
+</div>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[10]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">ttnn</span><span class="o">.</span><span class="n">close_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+<span style="color: rgb(0,128,0)">                  Metal</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Closing device 0
+<span style="color: rgb(0,128,0)">                  Metal</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Disabling and clearing program cache on device 0
+</pre></div>
+</div>
+</div>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span>
+</pre></div>
+</div>
+</div>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="../ttnn-tracer.html" class="btn btn-neutral float-left" title="ttnn Tracer" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="../profiling.html" class="btn btn-neutral float-right" title="ttnn Profiling" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

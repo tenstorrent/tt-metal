@@ -1,0 +1,8 @@
+﻿ttnn.batch\_norm
+================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.batch_norm:
+
+.. autofastoperation:: ttnn.batch_norm

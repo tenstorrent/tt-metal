@@ -1,0 +1,8 @@
+﻿ttnn.repeat\_interleave
+=======================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.repeat_interleave:
+
+.. autofastoperation:: ttnn.repeat_interleave

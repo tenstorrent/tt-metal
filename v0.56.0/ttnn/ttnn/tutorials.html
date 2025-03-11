@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tutorials &mdash; TT-NN  documentation</title>
+      <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../_static/favicon.png"/>
+    <link rel="canonical" href="/ttnn/latest/ttnn/tutorials.html" />
+  <!--[if lt IE 9]>
+    <script src="../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../_static/doctools.js?v=888ff710"></script>
+        <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Tensor and Add Operation" href="tutorials/tensor_and_add_operation.html" />
+    <link rel="prev" title="ttnn.register_post_operation_hook" href="api/ttnn.register_post_operation_hook.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../index.html">
+    TT-NN
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">TTNN</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="about.html">What is ttnn?</a></li>
+<li class="toctree-l1"><a class="reference internal" href="get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="installing.html">Install</a></li>
+<li class="toctree-l1"><a class="reference internal" href="usage.html">Using ttnn</a></li>
+<li class="toctree-l1"><a class="reference internal" href="tensor.html">Tensor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api.html">APIs</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Tutorials</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="tutorials/tensor_and_add_operation.html">Tensor and Add Operation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tutorials/matmul.html">Matmul Operation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tutorials/multihead-attention.html">Multi-Head Attention</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tutorials/ttnn-tracer.html">ttnn Tracer</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tutorials/profiling.html">ttnn Profiling</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tutorials/resnet-basic-block.html">Resnet Basic Block</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tutorials/graphing_torch_dit.html">Graphing Torch DiT_XL_2 With TTNN</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="onboarding.html">Onboarding New Functionality</a></li>
+<li class="toctree-l1"><a class="reference internal" href="converting_torch_model_to_ttnn.html">Converting torch Model to ttnn</a></li>
+<li class="toctree-l1"><a class="reference internal" href="adding_new_ttnn_operation.html">Adding New ttnn Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="profiling_ttnn_operations.html">Profiling ttnn Operations</a></li>
+<li class="toctree-l1"><a class="reference internal" href="dependencies/index.html">Dependencies</a></li>
+<li class="toctree-l1"><a class="reference internal" href="demos.html">Building and Uplifting Demos</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Models</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../tt_metal_models/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tt_metal_models/get_performance.html">Performance</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">TT-NN</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Tutorials</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/ttnn/tutorials.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <div class="admonition note" id="tutorials">
+<p class="admonition-title">Note</p>
+<p>Certain TT-NN tutorials currently work on Grayskull only. Please check the specific pages
+of tutorials below for more information.</p>
+</div>
+
+<section id="id1">
+<h1>Tutorials<a class="headerlink" href="#id1" title="Permalink to this heading"></a>
+</h1>
+<p>This is a collection of tutorials written with Jupyter Notebooks to help you ramp up your skillset for using <cite>tt-metal</cite>. These
+notebooks can be found under <a class="reference external" href="https://github.com/tenstorrent/tt-metal/tree/main/ttnn/tutorials">https://github.com/tenstorrent/tt-metal/tree/main/ttnn/tutorials</a>.</p>
+<p>These tutorials assume you already have a machine set up with either a grayskull or wormhole device available and that you have successfully
+followed the instructions for <a class="reference external" href="https://github.com/tenstorrent/tt-metal/blob/main/README.md">installing and building the software from source</a>.</p>
+<p>From within the <cite>ttnn/tutorials</cite> directory, launch the notebooks with: <code class="code docutils literal notranslate"><span class="pre">jupyter</span> <span class="pre">lab</span> <span class="pre">--no-browser</span> <span class="pre">--port=8888</span></code>
+Hint: Be sure to always run the cells from top to bottom as the order of the cells are dependent.</p>
+<div class="toctree-wrapper compound">
+<ul>
+<li class="toctree-l1">
+<a class="reference internal" href="tutorials/tensor_and_add_operation.html">Tensor and Add Operation</a><ul>
+<li class="toctree-l2">
+<a class="reference internal" href="tutorials/ttnn_tutorials/001.html">Tensor and Add Operation</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/001.html#Creating-a-tensor">Creating a tensor</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/001.html#Host-Storage:-Borrowed-vs-Owned">Host Storage: Borrowed vs Owned</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/001.html#Data-Type">Data Type</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/001.html#Layout">Layout</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/001.html#Device-storage">Device storage</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/001.html#Open-the-device">Open the device</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/001.html#Initialize-tensors-a-and-b-with-random-values-using-torch">Initialize tensors a and b with random values using torch</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/001.html#Add-tensor-a-and-b">Add tensor a and b</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/001.html#Inspect-the-output-tensor-of-the-add-in-ttnn">Inspect the output tensor of the add in ttnn</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/001.html#Convert-to-torch-and-inspect-the-attributes-of-the-torch-tensor">Convert to torch and inspect the attributes of the torch tensor</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/001.html#Close-the-device">Close the device</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1">
+<a class="reference internal" href="tutorials/matmul.html">Matmul Operation</a><ul>
+<li class="toctree-l2">
+<a class="reference internal" href="tutorials/ttnn_tutorials/002.html">Matrix Multiplication</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/002.html#Enable-program-cache">Enable program cache</a></li>
+</ul>
+</li>
+<li class="toctree-l2">
+<a class="reference internal" href="tutorials/ttnn_tutorials/002.html#Configuration">Configuration</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/002.html#Initialize-tensors-a-and-b-with-random-values-using-torch">Initialize tensors a and b with random values using torch</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/002.html#Matrix-multiply-tensor-a-and-b">Matrix multiply tensor a and b</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/002.html#Inspect-the-layout-of-matrix-multiplication-output">Inspect the layout of matrix multiplication output</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/002.html#Inspect-the-result-of-the-matrix-multiplication">Inspect the result of the matrix multiplication</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/002.html#Matrix-multiply-tensor-a-and-b-by-using-more-performant-config">Matrix multiply tensor a and b by using more performant config</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/002.html#Close-the-device">Close the device</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1">
+<a class="reference internal" href="tutorials/multihead-attention.html">Multi-Head Attention</a><ul>
+<li class="toctree-l2">
+<a class="reference internal" href="tutorials/ttnn_tutorials/003.html">Multi-Head Attention</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/003.html#Enable-program-cache">Enable program cache</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/003.html#Write-Multi-Head-Attention-using-ttnn">Write Multi-Head Attention using ttnn</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/003.html#Configuration">Configuration</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/003.html#Initialize-activations-and-weights-using-torch">Initialize activations and weights using torch</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/003.html#Convert-activations-and-weights-to-ttnn">Convert activations and weights to ttnn</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/003.html#Run-the-first-iteration-of-Multi-Head-Attention">Run the first iteration of Multi-Head Attention</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/003.html#Run-a-subsequent-iteration-of-Multi-Head-Attention">Run a subsequent iteration of Multi-Head Attention</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/003.html#Write-optimized-version-of-Multi-Head-Attention">Write optimized version of Multi-Head Attention</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/003.html#Pre-process-the-parameters-of-the-optimized-model">Pre-process the parameters of the optimized model</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/003.html#Run-the-first-iteration-of-the-optimized-Multi-Head-Attention">Run the first iteration of the optimized Multi-Head Attention</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/003.html#Run-a-subsequent-iteration-of-the-optimized-Multi-Head-Attention">Run a subsequent iteration of the optimized Multi-Head Attention</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/003.html#Check-that-the-output-of-the-optimized-version-matches-the-output-of-the-original-implementation">Check that the output of the optimized version matches the output of the original implementation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/003.html#Close-the-device">Close the device</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1">
+<a class="reference internal" href="tutorials/ttnn-tracer.html">ttnn Tracer</a><ul>
+<li class="toctree-l2">
+<a class="reference internal" href="tutorials/ttnn_tutorials/004.html">Tracing ttnn operations and torch modules/functions</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/004.html#Trace-torch-functions">Trace torch functions</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/004.html#Trace-torch-functions-and-ttnn-operations">Trace torch functions and ttnn operations</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/004.html#Trace-torch-functions,-torch-modules-and-ttnn-operations">Trace torch functions, torch modules and ttnn operations</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/004.html#Trace-models-written-using-ttnn">Trace models written using ttnn</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1">
+<a class="reference internal" href="tutorials/profiling.html">ttnn Profiling</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="tutorials/ttnn_tutorials/005.html">Profiling ttnn operations</a></li>
+</ul>
+</li>
+<li class="toctree-l1">
+<a class="reference internal" href="tutorials/resnet-basic-block.html">Resnet Basic Block</a><ul>
+<li class="toctree-l2">
+<a class="reference internal" href="tutorials/ttnn_tutorials/006.html">Resnet Block</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/006.html#Torch-Module-(from-torchvision)">Torch Module (from torchvision)</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/006.html#Create-torch-module-and-preprocess-it-to-get-ttnn-parameters">Create torch module and preprocess it to get ttnn parameters</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/006.html#Display-the-parameters-of-the-module">Display the parameters of the module</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/006.html#Display-the-traced-torch-graph">Display the traced torch graph</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/006.html#Implement-ttnn-version-of-the-module.-Pass-in-the-parameters-into-the-constructor.">Implement ttnn version of the module. Pass in the parameters into the constructor.</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/006.html#Run-ttnn-module-and-display-the-traced-graph">Run ttnn module and display the traced graph</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1">
+<a class="reference internal" href="tutorials/graphing_torch_dit.html">Graphing Torch DiT_XL_2 With TTNN</a><ul>
+<li class="toctree-l2">
+<a class="reference internal" href="tutorials/ttnn_tutorials/007.html">Build a graph of a pytorch based model</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/007.html#Clone-the-library-from-https://github.com/facebookresearch/DiT.git">Clone the library from https://github.com/facebookresearch/DiT.git</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/007.html#Download-DiT-XL/2-Models">Download DiT-XL/2 Models</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/007.html#Sample-from-Pre-trained-DiT-Models-and-build-the-graph">Sample from Pre-trained DiT Models and build the graph</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/ttnn_tutorials/007.html#Display-the-graph">Display the graph</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</div>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="api/ttnn.register_post_operation_hook.html" class="btn btn-neutral float-left" title="ttnn.register_post_operation_hook" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="tutorials/tensor_and_add_operation.html" class="btn btn-neutral float-right" title="Tensor and Add Operation" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

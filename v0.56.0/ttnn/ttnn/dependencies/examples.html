@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Examples of Tensor and TT-LIB Use &mdash; TT-NN  documentation</title>
+      <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../../_static/favicon.png"/>
+    <link rel="canonical" href="/ttnn/latest/ttnn/dependencies/examples.html" />
+  <!--[if lt IE 9]>
+    <script src="../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Building and Uplifting Demos" href="../demos.html" />
+    <link rel="prev" title="Tensor" href="tensor.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../index.html">
+    TT-NN
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">TTNN</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../about.html">What is ttnn?</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../installing.html">Install</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../usage.html">Using ttnn</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tensor.html">Tensor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../api.html">APIs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tutorials.html">Tutorials</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../onboarding.html">Onboarding New Functionality</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../converting_torch_model_to_ttnn.html">Converting torch Model to ttnn</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../adding_new_ttnn_operation.html">Adding New ttnn Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../profiling_ttnn_operations.html">Profiling ttnn Operations</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="index.html">Dependencies</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="tt_lib.html">TT-LIB</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tensor.html">Tensor</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Examples of Tensor and TT-LIB Use</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#run-one-op-from-tt-lib-on-tt-accelerator-device">Run one OP from <cite>TT-LIB</cite> on TT Accelerator device</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#run-tt-lib-and-pytorch-ops">Run <cite>TT-LIB</cite> and PyTorch OPs</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#tensors-with-odd-size-of-last-dim">Tensors with odd size of last dim</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../demos.html">Building and Uplifting Demos</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Models</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../tt_metal_models/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../tt_metal_models/get_performance.html">Performance</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">TT-NN</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">Dependencies</a></li>
+      <li class="breadcrumb-item active">Examples of Tensor and TT-LIB Use</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../_sources/ttnn/dependencies/examples.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="examples-of-tensor-and-tt-lib-use">
+<span id="example"></span><h1>Examples of Tensor and TT-LIB Use<a class="headerlink" href="#examples-of-tensor-and-tt-lib-use" title="Permalink to this heading"></a>
+</h1>
+<section id="run-one-op-from-tt-lib-on-tt-accelerator-device">
+<h2>Run one OP from <cite>TT-LIB</cite> on TT Accelerator device<a class="headerlink" href="#run-one-op-from-tt-lib-on-tt-accelerator-device" title="Permalink to this heading"></a>
+</h2>
+<p>In this code example we use TT Accelerator device to execute <code class="docutils literal notranslate"><span class="pre">relu</span></code> op from <cite>TT-LIB</cite> library.
+These are the steps:</p>
+<ul class="simple">
+<li><p>create and initialize TT Accelerator device and get handle for host machine</p></li>
+<li><p>create random PyTorch tensor, convert it to TT Tensor and send to TT Accelerator device</p></li>
+<li><p>execute <code class="docutils literal notranslate"><span class="pre">relu</span></code> on TT Accelerator device</p></li>
+<li><p>move output TT Tensor to host machine and print it</p></li>
+</ul>
+<div class="highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">tt_lib</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">tt_lib</span>
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">"__main__"</span><span class="p">:</span>
+    <span class="c1"># Initialize TT Accelerator device on PCI slot 0</span>
+    <span class="n">tt_device</span> <span class="o">=</span> <span class="n">tt_lib</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">CreateDevice</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+
+    <span class="c1"># Create random PyTorch tensor</span>
+    <span class="n">py_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">))</span>
+
+    <span class="c1"># Create TT tensor from PyTorch Tensor and send it to TT accelerator device</span>
+    <span class="n">tt_tensor</span> <span class="o">=</span> <span class="n">tt_lib</span><span class="o">.</span><span class="n">tensor</span><span class="o">.</span><span class="n">Tensor</span><span class="p">(</span>
+        <span class="n">py_tensor</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">tolist</span><span class="p">(),</span>
+        <span class="n">py_tensor</span><span class="o">.</span><span class="n">size</span><span class="p">(),</span>
+        <span class="n">tt_lib</span><span class="o">.</span><span class="n">tensor</span><span class="o">.</span><span class="n">DataType</span><span class="o">.</span><span class="n">BFLOAT16</span><span class="p">,</span>
+        <span class="n">tt_lib</span><span class="o">.</span><span class="n">tensor</span><span class="o">.</span><span class="n">Layout</span><span class="o">.</span><span class="n">ROW_MAJOR</span><span class="p">,</span>
+        <span class="n">tt_device</span>
+    <span class="p">)</span>
+
+    <span class="c1"># Run relu on TT accelerator device</span>
+    <span class="n">tt_relu_out</span> <span class="o">=</span> <span class="n">tt_lib</span><span class="o">.</span><span class="n">tensor</span><span class="o">.</span><span class="n">relu</span><span class="p">(</span><span class="n">tt_tensor</span><span class="p">)</span>
+
+    <span class="c1"># Move TT Tensor tt_relu_out from TT accelerator device to host</span>
+    <span class="n">tt_output</span> <span class="o">=</span> <span class="n">tt_relu_out</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span>
+
+    <span class="c1"># Print TT Tensor</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">tt_output</span><span class="p">)</span>
+
+    <span class="c1"># Close TT accelerator device</span>
+    <span class="n">tt_lib</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">CloseDevice</span><span class="p">(</span><span class="n">tt_device</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="run-tt-lib-and-pytorch-ops">
+<h2>Run <cite>TT-LIB</cite> and PyTorch OPs<a class="headerlink" href="#run-tt-lib-and-pytorch-ops" title="Permalink to this heading"></a>
+</h2>
+<p>In this code example we build on previous example and after <code class="docutils literal notranslate"><span class="pre">relu</span></code> also execute <code class="docutils literal notranslate"><span class="pre">pow</span></code>, <code class="docutils literal notranslate"><span class="pre">silu</span></code>, and <code class="docutils literal notranslate"><span class="pre">exp</span></code>.</p>
+<p>Since <code class="docutils literal notranslate"><span class="pre">pow</span></code> with exponent as tensor is not supported in <cite>TT-LIB</cite> library, we need to move TT Tensor produced by <code class="docutils literal notranslate"><span class="pre">relu</span></code> to host machine,
+convert it to PyTorch tensor, execute <code class="docutils literal notranslate"><span class="pre">pow</span></code> from PyTorch, and then convert the output of <code class="docutils literal notranslate"><span class="pre">pow</span></code> back to TT Tensor for <code class="docutils literal notranslate"><span class="pre">silu</span></code> to be executed on device. The <cite>TT-LIB</cite> supports <code class="docutils literal notranslate"><span class="pre">power</span></code> for integral scalar exponent, and <code class="docutils literal notranslate"><span class="pre">power_fp</span></code> for floating point positive valued exponent.</p>
+<p>After <code class="docutils literal notranslate"><span class="pre">pow</span></code> is executed as a fallback op; this means that the operation will actually execute as a PyTorch operation
+on host machine. But since <code class="docutils literal notranslate"><span class="pre">silu</span></code> is supported as on-device operation in <cite>TT-LIB</cite> library we can
+supply it with TT Tensor as input.</p>
+<p>Lastly, we run <code class="docutils literal notranslate"><span class="pre">exp</span></code> on TT Accelerator device (supplying it with output from <code class="docutils literal notranslate"><span class="pre">silu</span></code> without any conversion).</p>
+<div class="highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">tt_lib</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">tt_lib</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">tt_lib.fallback_ops</span><span class="w"> </span><span class="kn">import</span> <span class="n">fallback_ops</span>
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">"__main__"</span><span class="p">:</span>
+    <span class="c1"># Initialize TT Accelerator device on PCI slot 0</span>
+    <span class="n">tt_device</span> <span class="o">=</span> <span class="n">tt_lib</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">CreateDevice</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+
+    <span class="c1"># Create random PyTorch tensor</span>
+    <span class="n">py_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">))</span>
+    <span class="n">py_tensor_exp</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="mi">10</span><span class="p">,(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">))</span>
+
+    <span class="c1"># Create TT tensor from PyTorch Tensor and send it to TT accelerator device</span>
+    <span class="n">tt_tensor</span> <span class="o">=</span> <span class="n">tt_lib</span><span class="o">.</span><span class="n">tensor</span><span class="o">.</span><span class="n">Tensor</span><span class="p">(</span>
+        <span class="n">py_tensor</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">tolist</span><span class="p">(),</span>
+        <span class="n">py_tensor</span><span class="o">.</span><span class="n">size</span><span class="p">(),</span>
+        <span class="n">tt_lib</span><span class="o">.</span><span class="n">tensor</span><span class="o">.</span><span class="n">DataType</span><span class="o">.</span><span class="n">BFLOAT16</span><span class="p">,</span>
+        <span class="n">tt_lib</span><span class="o">.</span><span class="n">tensor</span><span class="o">.</span><span class="n">Layout</span><span class="o">.</span><span class="n">ROW_MAJOR</span><span class="p">,</span>
+        <span class="n">tt_device</span>
+    <span class="p">)</span>
+
+    <span class="c1"># Run relu on TT accelerator device</span>
+    <span class="n">tt_relu_out</span> <span class="o">=</span> <span class="n">tt_lib</span><span class="o">.</span><span class="n">tensor</span><span class="o">.</span><span class="n">relu</span><span class="p">(</span><span class="n">tt_tensor</span><span class="p">)</span>
+
+    <span class="c1"># Move TT Tensor tt_relu_out to host and convert it to PyTorch tensor py_relu_out</span>
+    <span class="n">tt_relu_out</span> <span class="o">=</span> <span class="n">tt_relu_out</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span>
+    <span class="n">py_relu_out</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">(</span><span class="n">tt_relu_out</span><span class="o">.</span><span class="n">data</span><span class="p">())</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">tt_relu_out</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+
+    <span class="c1"># Execute pow using PyTorch (since pow is not available from tt_lib)</span>
+    <span class="n">py_pow_out</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">pow</span><span class="p">(</span><span class="n">py_relu_out</span><span class="p">,</span> <span class="n">py_tensor_exp</span><span class="p">)</span>
+
+    <span class="c1"># Create TT Tensor from py_pow_out and move it to TT accelerator device</span>
+    <span class="n">tt_pow_out</span> <span class="o">=</span> <span class="n">tt_lib</span><span class="o">.</span><span class="n">tensor</span><span class="o">.</span><span class="n">Tensor</span><span class="p">(</span>
+        <span class="n">py_pow_out</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">tolist</span><span class="p">(),</span>
+        <span class="n">py_pow_out</span><span class="o">.</span><span class="n">size</span><span class="p">(),</span>
+        <span class="n">tt_lib</span><span class="o">.</span><span class="n">tensor</span><span class="o">.</span><span class="n">DataType</span><span class="o">.</span><span class="n">BFLOAT16</span><span class="p">,</span>
+        <span class="n">tt_lib</span><span class="o">.</span><span class="n">tensor</span><span class="o">.</span><span class="n">Layout</span><span class="o">.</span><span class="n">ROW_MAJOR</span><span class="p">,</span>
+        <span class="n">tt_device</span>
+    <span class="p">)</span>
+
+    <span class="c1"># Run silu on TT Tensor tt_pow_out</span>
+    <span class="c1"># This is a fallback op and it will behave like regular ops on TT accelerator device,</span>
+    <span class="c1"># even though under the hood this op is executed on host.</span>
+    <span class="n">tt_silu_out</span> <span class="o">=</span> <span class="n">tt_lib</span><span class="o">.</span><span class="n">tensor</span><span class="o">.</span><span class="n">silu</span><span class="p">(</span><span class="n">tt_pow_out</span><span class="p">)</span>
+
+    <span class="c1"># Run exp on TT accelerator device</span>
+    <span class="n">tt_exp_out</span> <span class="o">=</span> <span class="n">tt_lib</span><span class="o">.</span><span class="n">tensor</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">tt_silu_out</span><span class="p">)</span>
+
+    <span class="c1"># Move TT Tensor output from TT accelerator device to host</span>
+    <span class="n">tt_output</span> <span class="o">=</span> <span class="n">tt_exp_out</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span>
+
+    <span class="c1"># Print TT Tensor</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">tt_output</span><span class="p">)</span>
+
+    <span class="c1"># Close TT accelerator device</span>
+    <span class="n">tt_lib</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">CloseDevice</span><span class="p">(</span><span class="n">tt_device</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="tensors-with-odd-size-of-last-dim">
+<h2>Tensors with odd size of last dim<a class="headerlink" href="#tensors-with-odd-size-of-last-dim" title="Permalink to this heading"></a>
+</h2>
+<p>We can’t create or move to TT Accelerator device a TT Tensor that is in ROW_MAJOR layout and has odd size of last dimension.
+This type of TT Tensor can be created on host machine and can be passed to <cite>TT-LIB</cite> operations.</p>
+<p>A <cite>TT-LIB</cite> operation will automatically pad the tensor so that the size of last dimension is even, move it to TT Accelerator device,
+execute the operation, move output tensor back to host, and finally unpad the output tensor.</p>
+<p>To use this functionality, you must call <cite>tt_lib.device.SetDefaultDevice(tt_device)</cite> to set your TT Accelerator device
+as the default device that will be used to execute operations on tensors that are on host machine.</p>
+<p>So if you want to use a TT Tensor with odd size of last dimension,
+the first example with running one operation on TT Accelerator device
+can be modified as follow:</p>
+<div class="highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">tt_lib</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">tt_lib</span>
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">"__main__"</span><span class="p">:</span>
+    <span class="c1"># Initialize TT Accelerator device on PCI slot 0</span>
+    <span class="n">tt_device</span> <span class="o">=</span> <span class="n">tt_lib</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">CreateDevice</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+
+    <span class="c1"># Set default TT Accelerator device</span>
+    <span class="c1"># This device will be used to execute TT Tensors that are not assigned to a device</span>
+    <span class="n">tt_lib</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">SetDefaultDevice</span><span class="p">(</span><span class="n">tt_device</span><span class="p">)</span>
+
+    <span class="c1"># Create random PyTorch tensor</span>
+    <span class="n">py_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">31</span><span class="p">))</span>
+
+    <span class="c1"># Create TT tensor from PyTorch Tensor and leave it on host device</span>
+    <span class="n">tt_tensor</span> <span class="o">=</span> <span class="n">tt_lib</span><span class="o">.</span><span class="n">tensor</span><span class="o">.</span><span class="n">Tensor</span><span class="p">(</span>
+        <span class="n">py_tensor</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">tolist</span><span class="p">(),</span>
+        <span class="n">py_tensor</span><span class="o">.</span><span class="n">size</span><span class="p">(),</span>
+        <span class="n">tt_lib</span><span class="o">.</span><span class="n">tensor</span><span class="o">.</span><span class="n">DataType</span><span class="o">.</span><span class="n">BFLOAT16</span><span class="p">,</span>
+        <span class="n">tt_lib</span><span class="o">.</span><span class="n">tensor</span><span class="o">.</span><span class="n">Layout</span><span class="o">.</span><span class="n">ROW_MAJOR</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="c1"># Run relu on TT accelerator device</span>
+    <span class="c1"># The ops will pad tensor as needed and send to TT Accelerator device for execution,</span>
+    <span class="c1"># then it will return result to host and unpad</span>
+    <span class="n">tt_relu_out</span> <span class="o">=</span> <span class="n">tt_lib</span><span class="o">.</span><span class="n">tensor</span><span class="o">.</span><span class="n">relu</span><span class="p">(</span><span class="n">tt_tensor</span><span class="p">)</span>
+
+    <span class="c1"># Move TT Tensor output from TT accelerator device to host</span>
+    <span class="c1"># Note that in this example this call will not do anything since tt_relu_out is already on host machine</span>
+    <span class="n">tt_output</span> <span class="o">=</span> <span class="n">tt_relu_out</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span>
+
+    <span class="c1"># Print TT Tensor</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">tt_output</span><span class="p">)</span>
+
+    <span class="c1"># Close TT accelerator device</span>
+    <span class="n">tt_lib</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">CloseDevice</span><span class="p">(</span><span class="n">tt_device</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="tensor.html" class="btn btn-neutral float-left" title="Tensor" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="../demos.html" class="btn btn-neutral float-right" title="Building and Uplifting Demos" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

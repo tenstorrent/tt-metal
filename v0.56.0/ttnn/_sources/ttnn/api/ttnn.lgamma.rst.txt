@@ -1,0 +1,8 @@
+﻿ttnn.lgamma
+===========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.lgamma:
+
+.. autofastoperation:: ttnn.lgamma

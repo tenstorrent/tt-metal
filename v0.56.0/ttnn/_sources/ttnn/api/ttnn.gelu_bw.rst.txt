@@ -1,0 +1,8 @@
+﻿ttnn.gelu\_bw
+=============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.gelu_bw:
+
+.. autofastoperation:: ttnn.gelu_bw

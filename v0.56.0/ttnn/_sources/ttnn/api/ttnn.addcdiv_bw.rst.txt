@@ -1,0 +1,8 @@
+﻿ttnn.addcdiv\_bw
+================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.addcdiv_bw:
+
+.. autofastoperation:: ttnn.addcdiv_bw

@@ -1,0 +1,8 @@
+﻿ttnn.slice
+==========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.slice:
+
+.. autofastoperation:: ttnn.slice

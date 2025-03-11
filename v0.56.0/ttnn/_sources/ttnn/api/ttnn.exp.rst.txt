@@ -1,0 +1,8 @@
+﻿ttnn.exp
+========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.exp:
+
+.. autofastoperation:: ttnn.exp

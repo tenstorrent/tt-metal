@@ -1,0 +1,8 @@
+﻿ttnn.softmax
+============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.softmax:
+
+.. autofastoperation:: ttnn.softmax

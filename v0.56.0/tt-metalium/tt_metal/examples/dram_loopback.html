@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DRAM Loopback &mdash; TT-Metalium  documentation</title>
+      <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metalium/latest/tt_metal/examples/dram_loopback.html" />
+  <!--[if lt IE 9]>
+    <script src="../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Eltwise SFPU" href="eltwise_sfpu.html" />
+    <link rel="prev" title="Programming Examples" href="index.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../index.html">
+    TT-Metalium
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Get Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../get_started/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../installing.html">Install</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">TT-Metalium</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../programming_model/index.html">Programming Model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../apis/index.html">APIs</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="index.html">Programming Examples</a><ul class="current">
+<li class="toctree-l2 current"><a class="current reference internal" href="#">DRAM Loopback</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#silicon-accelerator-setup">Silicon accelerator setup</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#program-pre-compilation-setup">Program pre-compilation setup</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#building-a-data-movement-kernel">Building a data movement kernel</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#create-buffers-in-dram-and-l1">Create buffers in DRAM and L1</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#sending-real-data-into-dram">Sending real data into DRAM</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#setting-runtime-arguments-for-the-data-movement-kernel">Setting runtime arguments for the data movement kernel</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#running-the-program">Running the program</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#launch-and-verify-output">Launch and verify output</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#validation-and-teardown">Validation and teardown</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="eltwise_sfpu.html">Eltwise SFPU</a></li>
+<li class="toctree-l2"><a class="reference internal" href="eltwise_binary.html">Eltwise binary</a></li>
+<li class="toctree-l2"><a class="reference internal" href="matmul_single_core.html">Matmul (Single Core)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="matmul_multi_core.html">Matmul (Multi Core)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="matmul_multi_core_optimized.html">Matmul (Multi Core Optimized)</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../tools/index.html">Tools</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">TT-Metalium</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">Programming Examples</a></li>
+      <li class="breadcrumb-item active">DRAM Loopback</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../_sources/tt_metal/examples/dram_loopback.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="dram-loopback">
+<span id="dram-loopback-example"></span><h1>DRAM Loopback<a class="headerlink" href="#dram-loopback" title="Permalink to this heading"></a>
+</h1>
+<p>We will build a program in TT-Metal that will simply copy data from one DRAM
+buffer to another, using the compute engine and an intermediate L1 buffer to do
+so. We call this concept “loopback”.</p>
+<p>We’ll go through this code section by section. Note that we have this exact,
+full example program in
+<code class="docutils literal notranslate"><span class="pre">tt_metal/programming_examples/loopback/loopback.cpp</span></code>, so you can follow
+along.</p>
+<p>To build and execute, you may use the following commands. Note that we include
+the necessary environment variables here, but you may possibly need more
+depending on the most up-to-date installation methods.</p>
+<div class="highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="n">export</span> <span class="n">ARCH_NAME</span><span class="o">=&lt;</span><span class="n">arch</span> <span class="n">name</span><span class="o">&gt;</span>
+<span class="n">export</span> <span class="n">TT_METAL_HOME</span><span class="o">=&lt;</span><span class="n">this</span> <span class="n">repo</span> <span class="nb">dir</span><span class="o">&gt;</span>
+<span class="o">./</span><span class="n">build_metal</span><span class="o">.</span><span class="n">sh</span>
+<span class="o">./</span><span class="n">build</span><span class="o">/</span><span class="n">programming_examples</span><span class="o">/</span><span class="n">loopback</span>
+</pre></div>
+</div>
+<section id="silicon-accelerator-setup">
+<h2>Silicon accelerator setup<a class="headerlink" href="#silicon-accelerator-setup" title="Permalink to this heading"></a>
+</h2>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">constexpr</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">device_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">device</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateDevice</span><span class="p">(</span><span class="n">device_id</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>We instantiate a device to control our <code class="docutils literal notranslate"><span class="pre">GRAYSKULL</span></code> type
+accelerator.</p>
+</section>
+<section id="program-pre-compilation-setup">
+<h2>Program pre-compilation setup<a class="headerlink" href="#program-pre-compilation-setup" title="Permalink to this heading"></a>
+</h2>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">CommandQueue</span><span class="o">&amp;</span><span class="w"> </span><span class="n">cq</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">detail</span><span class="o">::</span><span class="n">GetCommandQueue</span><span class="p">(</span><span class="n">device</span><span class="p">);</span>
+<span class="n">Program</span><span class="w"> </span><span class="n">program</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateProgram</span><span class="p">();</span>
+</pre></div>
+</div>
+<p>We first obtain the global <code class="docutils literal notranslate"><span class="pre">CommandQueue</span></code> in order to use the fast dispatch
+capabilities of the software. This will be used when issuing commands for
+asynchronous reads/writes/program management.</p>
+<p>Next, we create a <code class="docutils literal notranslate"><span class="pre">Program</span></code> to be run on our Grayskull accelerator. This is how
+we’ll be keeping track of things in our session with the device.</p>
+</section>
+<section id="building-a-data-movement-kernel">
+<h2>Building a data movement kernel<a class="headerlink" href="#building-a-data-movement-kernel" title="Permalink to this heading"></a>
+</h2>
+<p>Declare a kernel for data movement. We’ll use a pre-written kernel that copies
+data from one place to another.</p>
+<p>We will be using the accelerator core with coordinates <code class="docutils literal notranslate"><span class="pre">{0,</span> <span class="pre">0}</span></code>.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">constexpr</span><span class="w"> </span><span class="n">CoreCoord</span><span class="w"> </span><span class="n">core</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">};</span>
+
+<span class="n">KernelHandle</span><span class="w"> </span><span class="n">dram_copy_kernel_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateKernel</span><span class="p">(</span>
+<span class="w">    </span><span class="n">program</span><span class="p">,</span>
+<span class="w">    </span><span class="s">"tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp"</span><span class="p">,</span>
+<span class="w">    </span><span class="n">core</span><span class="p">,</span>
+<span class="w">    </span><span class="n">DataMovementConfig</span><span class="p">{.</span><span class="n">processor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DataMovementProcessor</span><span class="o">::</span><span class="n">RISCV_0</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">noc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">NOC</span><span class="o">::</span><span class="n">RISCV_0_default</span><span class="p">}</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+</section>
+<section id="create-buffers-in-dram-and-l1">
+<h2>Create buffers in DRAM and L1<a class="headerlink" href="#create-buffers-in-dram-and-l1" title="Permalink to this heading"></a>
+</h2>
+<p>Next, we need to declare buffers that we will use during execution. We will
+need</p>
+<ul class="simple">
+<li><p>An L1 buffer within the core itself that will be used to store the compute
+engine’s work</p></li>
+<li><p>A DRAM buffer that will house input data</p></li>
+<li><p>A DRAM buffer that will be written to with output data</p></li>
+</ul>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">single_tile_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="p">(</span><span class="mi">32</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">32</span><span class="p">);</span>
+<span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">num_tiles</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">50</span><span class="p">;</span>
+<span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">dram_buffer_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">single_tile_size</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">num_tiles</span><span class="p">;</span>
+<span class="n">tt_metal</span><span class="o">::</span><span class="n">InterleavedBufferConfig</span><span class="w"> </span><span class="n">l1_config</span><span class="p">{</span>
+<span class="w">                                      </span><span class="p">.</span><span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
+<span class="w">                                      </span><span class="p">.</span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dram_buffer_size</span><span class="p">,</span>
+<span class="w">                                      </span><span class="p">.</span><span class="n">page_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dram_buffer_size</span><span class="p">,</span>
+<span class="w">                                      </span><span class="p">.</span><span class="n">buffer_type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">BufferType</span><span class="o">::</span><span class="n">L1</span>
+<span class="w">                                      </span><span class="p">};</span>
+
+<span class="n">Buffer</span><span class="w"> </span><span class="n">l1_buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateBuffer</span><span class="p">(</span><span class="n">l1_config</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>For simplicity, let’s make the size of all our buffers 50 tiles.</p>
+<p>Let’s make the input and output DRAM buffers.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">tt_metal</span><span class="o">::</span><span class="n">InterleavedBufferConfig</span><span class="w"> </span><span class="n">dram_config</span><span class="p">{</span>
+<span class="w">                                      </span><span class="p">.</span><span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
+<span class="w">                                      </span><span class="p">.</span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dram_buffer_size</span><span class="p">,</span>
+<span class="w">                                      </span><span class="p">.</span><span class="n">page_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dram_buffer_size</span><span class="p">,</span>
+<span class="w">                                      </span><span class="p">.</span><span class="n">buffer_type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">BufferType</span><span class="o">::</span><span class="n">DRAM</span>
+<span class="w">                                      </span><span class="p">};</span>
+
+<span class="n">Buffer</span><span class="w"> </span><span class="n">input_dram_buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateBuffer</span><span class="p">(</span><span class="n">dram_config</span><span class="p">);</span>
+<span class="k">const</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">input_dram_buffer_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">input_dram_buffer</span><span class="p">.</span><span class="n">address</span><span class="p">();</span>
+
+<span class="n">Buffer</span><span class="w"> </span><span class="n">output_dram_buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateBuffer</span><span class="p">(</span><span class="n">dram_config</span><span class="p">);</span>
+<span class="k">const</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">output_dram_buffer_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">output_dram_buffer</span><span class="p">.</span><span class="n">address</span><span class="p">();</span>
+
+<span class="k">const</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">input_bank_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="k">const</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">output_bank_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
+<section id="sending-real-data-into-dram">
+<h2>Sending real data into DRAM<a class="headerlink" href="#sending-real-data-into-dram" title="Permalink to this heading"></a>
+</h2>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">input_vec</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">create_random_vector_of_bfloat16</span><span class="p">(</span>
+<span class="w">    </span><span class="n">dram_buffer_size</span><span class="p">,</span><span class="w"> </span><span class="mi">100</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">chrono</span><span class="o">::</span><span class="n">system_clock</span><span class="o">::</span><span class="n">now</span><span class="p">().</span><span class="n">time_since_epoch</span><span class="p">().</span><span class="n">count</span><span class="p">());</span>
+<span class="n">EnqueueWriteBuffer</span><span class="p">(</span><span class="n">cq</span><span class="p">,</span><span class="w"> </span><span class="n">input_dram_buffer</span><span class="p">,</span><span class="w"> </span><span class="n">input_vec</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Send in a randomly-generated FP16 vector that will act as our input data
+tensor.</p>
+<p>We use a non-blocking call so we can continue setting up our program.</p>
+</section>
+<section id="setting-runtime-arguments-for-the-data-movement-kernel">
+<h2>Setting runtime arguments for the data movement kernel<a class="headerlink" href="#setting-runtime-arguments-for-the-data-movement-kernel" title="Permalink to this heading"></a>
+</h2>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">runtime_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">l1_buffer</span><span class="p">.</span><span class="n">address</span><span class="p">(),</span>
+<span class="w">    </span><span class="n">input_dram_buffer</span><span class="p">.</span><span class="n">address</span><span class="p">(),</span>
+<span class="w">    </span><span class="n">input_bank_id</span><span class="p">,</span>
+<span class="w">    </span><span class="n">output_dram_buffer</span><span class="p">.</span><span class="n">address</span><span class="p">(),</span>
+<span class="w">    </span><span class="n">output_bank_id</span><span class="p">,</span>
+<span class="w">    </span><span class="n">l1_buffer</span><span class="p">.</span><span class="n">size</span><span class="p">()</span>
+<span class="p">};</span>
+
+<span class="n">SetRuntimeArgs</span><span class="p">(</span>
+<span class="w">    </span><span class="n">program</span><span class="p">,</span>
+<span class="w">    </span><span class="n">dram_copy_kernel_id</span><span class="p">,</span>
+<span class="w">    </span><span class="n">core</span><span class="p">,</span>
+<span class="w">    </span><span class="n">runtime_args</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+<p>We now set runtime arguments for our data movement kernel. For this
+particular kernel, we have to provide:</p>
+<ul class="simple">
+<li><p>Where the L1 buffer starts (memory address)</p></li>
+<li><p>Where the input DRAM buffer starts (memory address)</p></li>
+<li><p>The location of the input DRAM buffer’s channel on the NOC</p></li>
+<li><p>Where the output DRAM buffer starts (memory address)</p></li>
+<li><p>The location of the output DRAM buffer’s channel on the NOC</p></li>
+<li><p>The size of the buffers</p></li>
+</ul>
+</section>
+<section id="running-the-program">
+<h2>Running the program<a class="headerlink" href="#running-the-program" title="Permalink to this heading"></a>
+</h2>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">EnqueueProgram</span><span class="p">(</span><span class="n">cq</span><span class="p">,</span><span class="w"> </span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">);</span>
+<span class="n">Finish</span><span class="p">(</span><span class="n">cq</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Now we finally launch our program. The <code class="docutils literal notranslate"><span class="pre">Finish</span></code> call waits for the program
+to return a finished status.</p>
+</section>
+<section id="launch-and-verify-output">
+<h2>Launch and verify output<a class="headerlink" href="#launch-and-verify-output" title="Permalink to this heading"></a>
+</h2>
+<p>Then we can finally read back the data from the output buffer and assert that
+it matches what we sent!</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">result_vec</span><span class="p">;</span>
+<span class="n">EnqueueReadBuffer</span><span class="p">(</span><span class="n">cq</span><span class="p">,</span><span class="n">output_dram_buffer</span><span class="p">,</span><span class="w"> </span><span class="n">result_vec</span><span class="p">,</span><span class="w"> </span><span class="nb">true</span><span class="p">);</span>
+
+<span class="n">pass</span><span class="w"> </span><span class="o">&amp;=</span><span class="w"> </span><span class="n">input_vec</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">result_vec</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>We use a blocking call this time because we want to get all the data before
+doing a comparison.</p>
+</section>
+<section id="validation-and-teardown">
+<h2>Validation and teardown<a class="headerlink" href="#validation-and-teardown" title="Permalink to this heading"></a>
+</h2>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">pass</span><span class="w"> </span><span class="o">&amp;=</span><span class="w"> </span><span class="n">CloseDevice</span><span class="p">(</span><span class="n">device</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>We now use <code class="docutils literal notranslate"><span class="pre">CloseDevice</span></code> to teardown our connection to the Tenstorrent
+device.</p>
+<p>Now we can start adding some compute to our program. Please refer to the
+<a class="reference internal" href="eltwise_sfpu.html#eltwise-sfpu-example"><span class="std std-ref">Eltwise sfpu example</span></a>.</p>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="index.html" class="btn btn-neutral float-left" title="Programming Examples" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="eltwise_sfpu.html" class="btn btn-neutral float-right" title="Eltwise SFPU" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

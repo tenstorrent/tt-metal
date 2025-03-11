@@ -1,0 +1,8 @@
+﻿ttnn.group\_norm
+================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.group_norm:
+
+.. autofastoperation:: ttnn.group_norm

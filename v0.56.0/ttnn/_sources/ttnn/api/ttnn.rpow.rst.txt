@@ -1,0 +1,8 @@
+﻿ttnn.rpow
+=========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.rpow:
+
+.. autofastoperation:: ttnn.rpow

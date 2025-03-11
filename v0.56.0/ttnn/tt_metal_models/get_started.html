@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Getting Started &mdash; TT-NN  documentation</title>
+      <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../_static/favicon.png"/>
+    <link rel="canonical" href="/ttnn/latest/tt_metal_models/get_started.html" />
+  <!--[if lt IE 9]>
+    <script src="../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../_static/doctools.js?v=888ff710"></script>
+        <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Performance" href="get_performance.html" />
+    <link rel="prev" title="Building and Uplifting Demos" href="../ttnn/demos.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../index.html">
+    TT-NN
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">TTNN</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../ttnn/about.html">What is ttnn?</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../ttnn/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../ttnn/installing.html">Install</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../ttnn/usage.html">Using ttnn</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../ttnn/tensor.html">Tensor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../ttnn/api.html">APIs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../ttnn/tutorials.html">Tutorials</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../ttnn/onboarding.html">Onboarding New Functionality</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../ttnn/converting_torch_model_to_ttnn.html">Converting torch Model to ttnn</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../ttnn/adding_new_ttnn_operation.html">Adding New ttnn Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../ttnn/profiling_ttnn_operations.html">Profiling ttnn Operations</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../ttnn/dependencies/index.html">Dependencies</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../ttnn/demos.html">Building and Uplifting Demos</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Models</span></p>
+<ul class="current">
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Getting Started</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#prerequisites">Prerequisites</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#running-an-example-model">Running an example model</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#next-steps">Next steps</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="get_performance.html">Performance</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">TT-NN</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Getting Started</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/tt_metal_models/get_started.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="getting-started">
+<span id="tt-metalium-models-get-started"></span><h1>Getting Started<a class="headerlink" href="#getting-started" title="Permalink to this heading"></a>
+</h1>
+<section id="prerequisites">
+<h2>Prerequisites<a class="headerlink" href="#prerequisites" title="Permalink to this heading"></a>
+</h2>
+<p>Ensure that you have the base TT-Metalium source and environment configuration
+<a class="reference external" href="https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md">built and ready</a>.</p>
+<p>Now, from the project root, activate the provided Python virtual environment in
+which you’ll be working.</p>
+<div class="highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="n">source</span> <span class="n">python_env</span><span class="o">/</span><span class="nb">bin</span><span class="o">/</span><span class="n">activate</span>
+</pre></div>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>You can use the <code class="docutils literal notranslate"><span class="pre">PYTHON_ENV_DIR</span></code> environment variable with the provided
+<code class="docutils literal notranslate"><span class="pre">create_venv.sh</span></code> script to control where the environment is created.</p>
+</div>
+<p>Set <code class="docutils literal notranslate"><span class="pre">PYTHONPATH</span></code> to the root for running models. This is a common practice.</p>
+<div class="highlight-default notranslate">
+<div class="highlight"><pre><span></span>export PYTHONPATH=$(pwd)
+</pre></div>
+</div>
+</section>
+<section id="running-an-example-model">
+<h2>Running an example model<a class="headerlink" href="#running-an-example-model" title="Permalink to this heading"></a>
+</h2>
+<p>We develop models in <code class="docutils literal notranslate"><span class="pre">models</span></code> folder, splitting them to <code class="docutils literal notranslate"><span class="pre">demo</span></code> and <code class="docutils literal notranslate"><span class="pre">experimental</span></code> sub-folders.
+In <code class="docutils literal notranslate"><span class="pre">models/demo</span></code> folder you will find models with prepared demos and a <code class="docutils literal notranslate"><span class="pre">README.md</span></code> file giving instructions how to run the model demo(s).</p>
+<p>Models in the <code class="docutils literal notranslate"><span class="pre">experimental</span></code> sub-folder are our work in progress and are not yet ready to be used by the users.</p>
+<p>Many models will have a <code class="docutils literal notranslate"><span class="pre">tests</span></code> sub-folder containing tests for parts of the model or the entire model.
+You can run these tests using <code class="docutils literal notranslate"><span class="pre">pytest</span></code>.</p>
+<div class="highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="n">pytest</span> <span class="o">&lt;</span><span class="n">path_to_test_file</span><span class="o">&gt;</span><span class="p">::</span><span class="o">&lt;</span><span class="n">test_in_file</span><span class="o">&gt;</span>
+</pre></div>
+</div>
+</section>
+<section id="next-steps">
+<h2>Next steps<a class="headerlink" href="#next-steps" title="Permalink to this heading"></a>
+</h2>
+<p>We write the models using TTNN which is a user-friendly Python Library that we developed on top of TT-Metalium. Refer to
+the docs under <em>Libraries</em> for documentation, such as the <a class="reference internal" href="../ttnn/dependencies/tensor.html#tensor"><span class="std std-ref">Tensor
+API</span></a> or the <a class="reference internal" href="../ttnn/dependencies/tt_lib.html#tt-lib"><span class="std std-ref">TT-LIB Dependencies</span></a>.</p>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="../ttnn/demos.html" class="btn btn-neutral float-left" title="Building and Uplifting Demos" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="get_performance.html" class="btn btn-neutral float-right" title="Performance" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

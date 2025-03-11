@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Matrix Multiplication &mdash; TT-NN  documentation</title>
+      <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/tt_theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/nbsphinx-code-cells.css" type="text/css" />
+    <link rel="shortcut icon" href="../../../_static/favicon.png"/>
+    <link rel="canonical" href="/ttnn/latest/ttnn/tutorials/ttnn_tutorials/002.html" />
+  <!--[if lt IE 9]>
+    <script src="../../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+        <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script src="../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+    <link rel="next" title="Multi-Head Attention" href="../multihead-attention.html" />
+    <link rel="prev" title="Matmul Operation" href="../matmul.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../../index.html">
+    TT-NN
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">TTNN</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../../about.html">What is ttnn?</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../installing.html">Install</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../usage.html">Using ttnn</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../tensor.html">Tensor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html">APIs</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../../tutorials.html">Tutorials</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../tensor_and_add_operation.html">Tensor and Add Operation</a></li>
+<li class="toctree-l2 current"><a class="reference internal" href="../matmul.html">Matmul Operation</a><ul class="current">
+<li class="toctree-l3 current"><a class="current reference internal" href="#">Matrix Multiplication</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#Enable-program-cache">Enable program cache</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#Configuration">Configuration</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#Initialize-tensors-a-and-b-with-random-values-using-torch">Initialize tensors a and b with random values using torch</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#Matrix-multiply-tensor-a-and-b">Matrix multiply tensor a and b</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#Inspect-the-layout-of-matrix-multiplication-output">Inspect the layout of matrix multiplication output</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#Inspect-the-result-of-the-matrix-multiplication">Inspect the result of the matrix multiplication</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#Matrix-multiply-tensor-a-and-b-by-using-more-performant-config">Matrix multiply tensor a and b by using more performant config</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#Close-the-device">Close the device</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../multihead-attention.html">Multi-Head Attention</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../ttnn-tracer.html">ttnn Tracer</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../profiling.html">ttnn Profiling</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../resnet-basic-block.html">Resnet Basic Block</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../graphing_torch_dit.html">Graphing Torch DiT_XL_2 With TTNN</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../onboarding.html">Onboarding New Functionality</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../converting_torch_model_to_ttnn.html">Converting torch Model to ttnn</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../adding_new_ttnn_operation.html">Adding New ttnn Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../profiling_ttnn_operations.html">Profiling ttnn Operations</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../dependencies/index.html">Dependencies</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../demos.html">Building and Uplifting Demos</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Models</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../tt_metal_models/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../tt_metal_models/get_performance.html">Performance</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../index.html">TT-NN</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../tutorials.html">Tutorials</a></li>
+          <li class="breadcrumb-item"><a href="../matmul.html">Matmul Operation</a></li>
+      <li class="breadcrumb-item active">Matrix Multiplication</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../../_sources/ttnn/tutorials/ttnn_tutorials/002.ipynb.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="Matrix-Multiplication">
+<h1>Matrix Multiplication<a class="headerlink" href="#Matrix-Multiplication" title="Permalink to this heading"></a>
+</h1>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[1]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+<br></pre></div>
+</div>
+</div>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[2]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
+
+<span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+
+<span class="n">device_id</span> <span class="o">=</span> <span class="mi">0</span>
+<span class="n">device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_device</span><span class="p">(</span><span class="n">device_id</span><span class="o">=</span><span class="n">device_id</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area stderr docutils container">
+<div class="highlight"><pre>
+2024-07-11 18:13:41.903 | DEBUG    | ttnn:&lt;module&gt;:136 - Initial ttnn.CONFIG:
+{'cache_path': PosixPath('/home/ubuntu/.cache/ttnn'),
+ 'comparison_mode_pcc': 0.9999,
+ 'enable_comparison_mode': False,
+ 'enable_detailed_buffer_report': False,
+ 'enable_detailed_tensor_report': False,
+ 'enable_fast_runtime_mode': True,
+ 'enable_graph_report': False,
+ 'enable_logging': False,
+ 'enable_model_cache': False,
+ 'model_cache_path': PosixPath('/home/ubuntu/.cache/ttnn/models'),
+ 'report_name': None,
+ 'root_report_path': PosixPath('generated/ttnn/reports'),
+ 'throw_exception_on_fallback': False,
+ 'tmp_dir': PosixPath('/tmp/ttnn')}
+2024-07-11 18:13:41.989 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.logical_xor be migrated to C++?
+2024-07-11 18:13:41.990 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.xlogy be migrated to C++?
+2024-07-11 18:13:41.990 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.maximum be migrated to C++?
+2024-07-11 18:13:41.991 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.minimum be migrated to C++?
+2024-07-11 18:13:41.992 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.atan2 be migrated to C++?
+2024-07-11 18:13:41.992 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.hypot be migrated to C++?
+2024-07-11 18:13:41.993 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.nextafter be migrated to C++?
+2024-07-11 18:13:41.993 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.polyval be migrated to C++?
+2024-07-11 18:13:41.994 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.isclose be migrated to C++?
+2024-07-11 18:13:41.995 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.all_gather be migrated to C++?
+2024-07-11 18:13:41.996 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.pearson_correlation_coefficient be migrated to C++?
+2024-07-11 18:13:42.001 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.conv2d be migrated to C++?
+2024-07-11 18:13:42.002 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.reshape be migrated to C++?
+2024-07-11 18:13:42.003 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.unsqueeze_to_4D be migrated to C++?
+2024-07-11 18:13:42.004 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.squeeze be migrated to C++?
+2024-07-11 18:13:42.004 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.from_torch be migrated to C++?
+2024-07-11 18:13:42.005 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.to_torch be migrated to C++?
+2024-07-11 18:13:42.006 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.to_device be migrated to C++?
+2024-07-11 18:13:42.006 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.from_device be migrated to C++?
+2024-07-11 18:13:42.007 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.allocate_tensor_on_device be migrated to C++?
+2024-07-11 18:13:42.008 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.copy_host_to_device_tensor be migrated to C++?
+2024-07-11 18:13:42.008 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.deallocate be migrated to C++?
+2024-07-11 18:13:42.009 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.clone be migrated to C++?
+2024-07-11 18:13:42.010 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.reallocate be migrated to C++?
+2024-07-11 18:13:42.010 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.load_tensor be migrated to C++?
+2024-07-11 18:13:42.011 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.dump_tensor be migrated to C++?
+2024-07-11 18:13:42.012 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.as_tensor be migrated to C++?
+2024-07-11 18:13:42.013 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.arange be migrated to C++?
+2024-07-11 18:13:42.015 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.mse_loss be migrated to C++?
+2024-07-11 18:13:42.016 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.l1_loss be migrated to C++?
+2024-07-11 18:13:42.017 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.matmul be migrated to C++?
+2024-07-11 18:13:42.018 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.linear be migrated to C++?
+2024-07-11 18:13:42.020 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.mac be migrated to C++?
+2024-07-11 18:13:42.021 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.addcmul be migrated to C++?
+2024-07-11 18:13:42.022 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.addcdiv be migrated to C++?
+2024-07-11 18:13:42.022 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.lerp be migrated to C++?
+2024-07-11 18:13:42.027 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.logit be migrated to C++?
+2024-07-11 18:13:42.027 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.polygamma be migrated to C++?
+2024-07-11 18:13:42.028 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.hardshrink be migrated to C++?
+2024-07-11 18:13:42.029 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.celu be migrated to C++?
+2024-07-11 18:13:42.029 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.softshrink be migrated to C++?
+2024-07-11 18:13:42.030 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.clip be migrated to C++?
+2024-07-11 18:13:42.030 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.threshold be migrated to C++?
+2024-07-11 18:13:42.031 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.glu be migrated to C++?
+2024-07-11 18:13:42.032 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.reglu be migrated to C++?
+2024-07-11 18:13:42.032 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.swiglu be migrated to C++?
+2024-07-11 18:13:42.033 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.geglu be migrated to C++?
+2024-07-11 18:13:42.035 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.matmul be migrated to C++?
+2024-07-11 18:13:42.036 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.linear be migrated to C++?
+2024-07-11 18:13:42.037 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.conv2d be migrated to C++?
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+<span style="color: rgb(0,128,0)">                 Device</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Opening user mode device driver
+
+<span class="ansi-green-fg">2024-07-11 18:13:42.053</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | <span class="ansi-cyan-fg">SiliconDriver  </span> - Detected 1 PCI device : {0}
+<span class="ansi-green-fg">2024-07-11 18:13:42.066</span> | <span class="ansi-bold" style="color: rgb(255,165,0)">WARNING </span> | <span class="ansi-cyan-fg">SiliconDriver  </span> - init_detect_tt_device_numanodes(): Could not determine NumaNodeSet for TT device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
+<span class="ansi-green-fg">2024-07-11 18:13:42.066</span> | <span class="ansi-bold" style="color: rgb(255,165,0)">WARNING </span> | <span class="ansi-cyan-fg">SiliconDriver  </span> - Could not find NumaNodeSet for TT Device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
+<span class="ansi-green-fg">2024-07-11 18:13:42.067</span> | <span class="ansi-bold" style="color: rgb(255,165,0)">WARNING </span> | <span class="ansi-cyan-fg">SiliconDriver  </span> - bind_area_memory_nodeset(): Unable to determine TT Device to NumaNode mapping for physical_device_id: 0. Skipping membind.
+<span class="ansi-yellow-fg">---- ttSiliconDevice::init_hugepage: bind_area_to_memory_nodeset() failed (physical_device_id: 0 ch: 0). Hugepage allocation is not on NumaNode matching TT Device. Side-Effect is decreased Device-&gt;Host perf (Issue #893).
+</span><span class="ansi-green-fg">2024-07-11 18:13:42.094</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | <span class="ansi-cyan-fg">SiliconDriver  </span> - Software version 6.0.0, Ethernet FW version 6.9.0 (Device 0)
+<span style="color: rgb(0,128,0)">                  Metal</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Initializing device 0. Program cache is NOT enabled
+<span style="color: rgb(0,128,0)">                  Metal</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | AI CLK for device 0 is:   800 MHz
+</pre></div>
+</div>
+</div>
+<section id="Enable-program-cache">
+<h2>Enable program cache<a class="headerlink" href="#Enable-program-cache" title="Permalink to this heading"></a>
+</h2>
+<p>Enabling the program cache will speed up the execution of operations that run repeatedly</p>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[3]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">ttnn</span><span class="o">.</span><span class="n">enable_program_cache</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+<span style="color: rgb(0,128,0)">                  Metal</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Enabling program cache on device 0
+</pre></div>
+</div>
+</div>
+</section>
+</section>
+
+<section id="Configuration">
+<h1>Configuration<a class="headerlink" href="#Configuration" title="Permalink to this heading"></a>
+</h1>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[4]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">m</span> <span class="o">=</span> <span class="mi">1024</span>
+<span class="n">k</span> <span class="o">=</span> <span class="mi">1024</span>
+<span class="n">n</span> <span class="o">=</span> <span class="mi">1024</span>
+</pre></div>
+</div>
+</div>
+<section id="Initialize-tensors-a-and-b-with-random-values-using-torch">
+<h2>Initialize tensors a and b with random values using torch<a class="headerlink" href="#Initialize-tensors-a-and-b-with-random-values-using-torch" title="Permalink to this heading"></a>
+</h2>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[5]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">torch_a</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">m</span><span class="p">,</span> <span class="n">k</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span>
+<span class="n">torch_b</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">k</span><span class="p">,</span> <span class="n">n</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[6]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">a</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch_a</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">b</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch_b</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Matrix-multiply-tensor-a-and-b">
+<h2>Matrix multiply tensor a and b<a class="headerlink" href="#Matrix-multiply-tensor-a-and-b" title="Permalink to this heading"></a>
+</h2>
+<p>The operation will run longer the first time because the kernels need to get compiled</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[7]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">output</span> <span class="o">=</span> <span class="n">a</span> <span class="o">@</span> <span class="n">b</span>
+</pre></div>
+</div>
+</div>
+<p>Re-running the operation shows significant speed up by utilizing program caching</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[8]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">output</span> <span class="o">=</span> <span class="n">a</span> <span class="o">@</span> <span class="n">b</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Inspect-the-layout-of-matrix-multiplication-output">
+<h2>Inspect the layout of matrix multiplication output<a class="headerlink" href="#Inspect-the-layout-of-matrix-multiplication-output" title="Permalink to this heading"></a>
+</h2>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[9]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="nb">print</span><span class="p">(</span><span class="n">output</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+Layout.TILE
+</pre></div>
+</div>
+</div>
+<p>As can be seen, matrix multiplication produces outputs in a tile layout. That is because it’s much more efficient to use this layout for computing matrix multiplications on TensTorrent accelerators compared to a row-major layout.</p>
+<p>And this is aslo why the logs show 2 tilize operations, as the inputs get automatically convered to the tile layout if they are in a row-major layout.</p>
+<p>Learn more about tile layout here: TODO</p>
+</section>
+<section id="Inspect-the-result-of-the-matrix-multiplication">
+<h2>Inspect the result of the matrix multiplication<a class="headerlink" href="#Inspect-the-result-of-the-matrix-multiplication" title="Permalink to this heading"></a>
+</h2>
+<p>To inspect the results we will first convert to row-major layout.</p>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[10]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_layout</span><span class="p">(</span><span class="n">output</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="s2">"Printing ttnn tensor"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"shape: </span><span class="si">{</span><span class="n">output</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"chunk of a tensor:</span><span class="se">\n</span><span class="si">{</span><span class="n">output</span><span class="p">[:</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="p">:</span><span class="mi">32</span><span class="p">]</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+Printing ttnn tensor
+shape: ttnn.Shape([1024, 1024])
+chunk of a tensor:
+ttnn.Tensor([[33.75000,  9.25000,  ..., -39.50000, -6.62500]], shape=Shape([1, 32]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Matrix-multiply-tensor-a-and-b-by-using-more-performant-config">
+<h2>Matrix multiply tensor a and b by using more performant config<a class="headerlink" href="#Matrix-multiply-tensor-a-and-b-by-using-more-performant-config" title="Permalink to this heading"></a>
+</h2>
+<p>By default, matrix multiplication might not be as effecient as it could be. To speed it up further, the user can specify how many cores they want matrix multiplication to use. This can speed up the operation significantly.</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[11]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">a</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch_a</span><span class="p">)</span>
+<span class="n">b</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch_b</span><span class="p">)</span>
+
+<span class="n">a</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_device</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">device</span><span class="p">,</span> <span class="n">memory_config</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">L1_MEMORY_CONFIG</span><span class="p">)</span>
+<span class="n">b</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_device</span><span class="p">(</span><span class="n">b</span><span class="p">,</span> <span class="n">device</span><span class="p">,</span> <span class="n">memory_config</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">L1_MEMORY_CONFIG</span><span class="p">)</span>
+
+<span class="n">a</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_layout</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">)</span>
+<span class="n">b</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_layout</span><span class="p">(</span><span class="n">b</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<p>Run once to compile the kernels</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[12]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">memory_config</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">L1_MEMORY_CONFIG</span><span class="p">,</span> <span class="n">core_grid</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">CoreGrid</span><span class="p">(</span><span class="n">y</span><span class="o">=</span><span class="mi">8</span><span class="p">,</span> <span class="n">x</span><span class="o">=</span><span class="mi">8</span><span class="p">))</span>
+</pre></div>
+</div>
+</div>
+<p>Enjoy a massive speed up on the subsequent runs</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[13]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">memory_config</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">L1_MEMORY_CONFIG</span><span class="p">,</span> <span class="n">core_grid</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">CoreGrid</span><span class="p">(</span><span class="n">y</span><span class="o">=</span><span class="mi">8</span><span class="p">,</span> <span class="n">x</span><span class="o">=</span><span class="mi">8</span><span class="p">))</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Close-the-device">
+<h2>Close the device<a class="headerlink" href="#Close-the-device" title="Permalink to this heading"></a>
+</h2>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[14]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">ttnn</span><span class="o">.</span><span class="n">close_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+<span style="color: rgb(0,128,0)">                  Metal</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Closing device 0
+<span style="color: rgb(0,128,0)">                  Metal</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Disabling and clearing program cache on device 0
+</pre></div>
+</div>
+</div>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="../matmul.html" class="btn btn-neutral float-left" title="Matmul Operation" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="../multihead-attention.html" class="btn btn-neutral float-right" title="Multi-Head Attention" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

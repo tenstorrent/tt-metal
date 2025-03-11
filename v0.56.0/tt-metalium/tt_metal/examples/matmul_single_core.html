@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Matmul (Single Core) &mdash; TT-Metalium  documentation</title>
+      <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metalium/latest/tt_metal/examples/matmul_single_core.html" />
+  <!--[if lt IE 9]>
+    <script src="../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Matmul (Multi Core)" href="matmul_multi_core.html" />
+    <link rel="prev" title="Eltwise binary" href="eltwise_binary.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../index.html">
+    TT-Metalium
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Get Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../get_started/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../installing.html">Install</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">TT-Metalium</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../programming_model/index.html">Programming Model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../apis/index.html">APIs</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="index.html">Programming Examples</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="dram_loopback.html">DRAM Loopback</a></li>
+<li class="toctree-l2"><a class="reference internal" href="eltwise_sfpu.html">Eltwise SFPU</a></li>
+<li class="toctree-l2"><a class="reference internal" href="eltwise_binary.html">Eltwise binary</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Matmul (Single Core)</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#host-code">Host Code</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#main-blocks-in-matmul-single-core-function">Main blocks in matmul_single_core function</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#create-program-enqueue-initialization-and-core-range-definition">Create Program, Enqueue initialization, and core range definition</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#create-dram-buffers-circular-buffers">Create DRAM buffers &amp; Circular buffers</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#compile-time-kernels-arguments">Compile-time kernels arguments</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#compute-kernel-declaration-and-compile-time-defines">Compute kernel declaration and compile-time defines</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#runtime-arguments-and-program-launch">Runtime arguments and program launch</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#conclusion">Conclusion</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="matmul_multi_core.html">Matmul (Multi Core)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="matmul_multi_core_optimized.html">Matmul (Multi Core Optimized)</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../tools/index.html">Tools</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">TT-Metalium</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">Programming Examples</a></li>
+      <li class="breadcrumb-item active">Matmul (Single Core)</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../_sources/tt_metal/examples/matmul_single_core.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="matmul-single-core">
+<span id="matmul-single-core-example"></span><h1>Matmul (Single Core)<a class="headerlink" href="#matmul-single-core" title="Permalink to this heading"></a>
+</h1>
+<p>We’ll build a program that will perform matmul operations on two tensors
+with equal-size inner dimension. We will then go through specific sections of
+the program.</p>
+<p>The full example program is in
+<code class="docutils literal notranslate"><span class="pre">tt_metal/programming_examples/matmul_single_core/matmul_single_core.cpp</span></code></p>
+<p>To build and execute, you may use the following commands. Note that we include
+the necessary environment variables here, but you may possibly need more
+depending on the most up-to-date installation methods.</p>
+<div class="highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="n">export</span> <span class="n">ARCH_NAME</span><span class="o">=&lt;</span><span class="n">arch</span> <span class="n">name</span><span class="o">&gt;</span>
+<span class="n">export</span> <span class="n">TT_METAL_HOME</span><span class="o">=&lt;</span><span class="n">this</span> <span class="n">repo</span> <span class="nb">dir</span><span class="o">&gt;</span>
+<span class="o">./</span><span class="n">build_metal</span><span class="o">.</span><span class="n">sh</span>
+<span class="o">./</span><span class="n">build</span><span class="o">/</span><span class="n">programming_examples</span><span class="o">/</span><span class="n">matmul_single_core</span>
+</pre></div>
+</div>
+<section id="host-code">
+<h2>Host Code<a class="headerlink" href="#host-code" title="Permalink to this heading"></a>
+</h2>
+<p>The initial level of host-side code can broken up into sections:</p>
+<ul class="simple">
+<li><p>Create Device</p></li>
+<li><p>Set input and output vector variables, using the user-defined parameters (M, N, K, B)</p></li>
+<li><p>Tilizing the input vector, and untilizing the device output to vector (row-major layout)</p></li>
+<li><p>Call <code class="docutils literal notranslate"><span class="pre">matmul_single_core()</span></code> program and retrieve output results (details in next section)</p></li>
+<li><p>Validate the device computation results vs. golden results on cpu</p></li>
+<li><p>Close Device</p></li>
+</ul>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="cm">/* Create source data */</span>
+<span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">M</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">640</span><span class="p">;</span><span class="w">  </span><span class="c1">// user-defined</span>
+<span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">N</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">640</span><span class="p">;</span><span class="w">  </span><span class="c1">// user-defined</span>
+<span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">K</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">640</span><span class="p">;</span><span class="w">  </span><span class="c1">// user-defined</span>
+<span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">B</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w">  </span><span class="c1">// user-defined</span>
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">Mt</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">M</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">TILE_HEIGHT</span><span class="p">;</span>
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">Kt</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">K</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">TILE_WIDTH</span><span class="p">;</span>
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">Nt</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">N</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">TILE_WIDTH</span><span class="p">;</span>
+<span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">single_tile_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">1024</span><span class="p">;</span>
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">dram_buffer_A_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">single_tile_size</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">Mt</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">Kt</span><span class="p">;</span><span class="w"> </span><span class="c1">// num_tiles of FP16_B</span>
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">dram_buffer_B_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">single_tile_size</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">Nt</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">Kt</span><span class="p">;</span><span class="w"> </span><span class="c1">// num_tiles of FP16_B</span>
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">dram_buffer_C_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">single_tile_size</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">Mt</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">Nt</span><span class="p">;</span><span class="w"> </span><span class="c1">// num_tiles of FP16_B</span>
+
+<span class="cm">/* input vectors */</span>
+<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">bfloat16</span><span class="o">&gt;</span><span class="w"> </span><span class="n">src0_vec</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">create_random_vector_of_bfloat16_native</span><span class="p">(</span><span class="n">dram_buffer_A_size</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">123</span><span class="p">);</span>
+<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">bfloat16</span><span class="o">&gt;</span><span class="w"> </span><span class="n">src1_vec</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">create_random_vector_of_bfloat16_native</span><span class="p">(</span><span class="n">dram_buffer_B_size</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">12522</span><span class="p">);</span>
+<span class="cm">/* Input vector tilizing */</span>
+<span class="n">tilize</span><span class="p">(</span><span class="n">src0_vec</span><span class="p">,</span><span class="w"> </span><span class="n">M</span><span class="p">,</span><span class="w"> </span><span class="n">K</span><span class="p">);</span>
+<span class="n">tilize</span><span class="p">(</span><span class="n">src1_vec</span><span class="p">,</span><span class="w"> </span><span class="n">K</span><span class="p">,</span><span class="w"> </span><span class="n">N</span><span class="p">);</span>
+<span class="cm">/* Calling the MatMul host program. Read in result into a host vector */</span>
+<span class="n">vector</span><span class="o">&lt;</span><span class="n">bfloat16</span><span class="o">&gt;</span><span class="w"> </span><span class="n">result_vec</span><span class="p">(</span><span class="n">dram_buffer_C_size</span><span class="o">/</span><span class="k">sizeof</span><span class="p">(</span><span class="n">bfloat16</span><span class="p">));</span>
+<span class="n">matmul_single_core</span><span class="p">(</span><span class="n">src0_vec</span><span class="p">,</span><span class="w"> </span><span class="n">src1_vec</span><span class="p">,</span><span class="w"> </span><span class="n">result_vec</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">,</span><span class="w"> </span><span class="n">M</span><span class="p">,</span><span class="w"> </span><span class="n">N</span><span class="p">,</span><span class="w"> </span><span class="n">K</span><span class="p">,</span><span class="w"> </span><span class="n">B</span><span class="p">,</span><span class="w"> </span><span class="n">device</span><span class="p">);</span>
+<span class="n">untilize</span><span class="p">(</span><span class="n">result_vec</span><span class="p">,</span><span class="w"> </span><span class="n">M</span><span class="p">,</span><span class="w"> </span><span class="n">N</span><span class="p">);</span>
+
+<span class="n">CloseDevice</span><span class="p">(</span><span class="n">device</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>We are keeping all code details with specific host API calls inside
+<code class="docutils literal notranslate"><span class="pre">matmul_single_core</span></code>, allowing for calling consecutive functions in the
+main function.</p>
+</section>
+<section id="main-blocks-in-matmul-single-core-function">
+<h2>Main blocks in matmul_single_core function<a class="headerlink" href="#main-blocks-in-matmul-single-core-function" title="Permalink to this heading"></a>
+</h2>
+<p>We will go through sections of the <code class="docutils literal notranslate"><span class="pre">matmul_single_core</span></code> function:</p>
+<ul class="simple">
+<li><p>Program, enqueue and core range settings</p></li>
+<li><p>Create DRAM buffers based on input and output vectors</p></li>
+<li><p>Create L1 Circular buffers</p></li>
+<li><p>Kernels declarations and related compile and runtime arguments</p></li>
+<li><p>Program launch and reading data from DRAM output buffer to result vector</p></li>
+</ul>
+</section>
+<section id="create-program-enqueue-initialization-and-core-range-definition">
+<h2>Create Program, Enqueue initialization, and core range definition<a class="headerlink" href="#create-program-enqueue-initialization-and-core-range-definition" title="Permalink to this heading"></a>
+</h2>
+<p>We want a just a single core, so we will restrict the core range to be just one
+core at (0, 0).</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">CommandQueue</span><span class="o">&amp;</span><span class="w"> </span><span class="n">cq</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">detail</span><span class="o">::</span><span class="n">GetCommandQueue</span><span class="p">(</span><span class="n">device</span><span class="p">);</span>
+<span class="n">Program</span><span class="w"> </span><span class="n">program</span><span class="p">{};</span>
+<span class="n">CoreRange</span><span class="w"> </span><span class="nf">core</span><span class="p">({</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">});</span>
+</pre></div>
+</div>
+</section>
+<section id="create-dram-buffers-circular-buffers">
+<h2>Create DRAM buffers &amp; Circular buffers<a class="headerlink" href="#create-dram-buffers-circular-buffers" title="Permalink to this heading"></a>
+</h2>
+<p>In terms of DRAM buffers, we need two source buffers and one destination buffer.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="c1">// MN = MK*KN</span>
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">Mt</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">M</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">TILE_HEIGHT</span><span class="p">;</span>
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">Kt</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">K</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">TILE_WIDTH</span><span class="p">;</span>
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">Nt</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">N</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">TILE_WIDTH</span><span class="p">;</span>
+
+<span class="n">DataFormat</span><span class="w"> </span><span class="n">cb_data_format</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DataFormat</span><span class="o">::</span><span class="n">Float16_b</span><span class="p">;</span>
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">single_tile_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">detail</span><span class="o">::</span><span class="n">TileSize</span><span class="p">(</span><span class="n">cb_data_format</span><span class="p">);</span>
+<span class="n">MathFidelity</span><span class="w"> </span><span class="n">math_fidelity</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">MathFidelity</span><span class="o">::</span><span class="n">HiFi4</span><span class="p">;</span>
+<span class="c1">//uint32_t single_tile_size = detail::TileSize(cb_data_format);</span>
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">single_tile_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">1024</span><span class="p">;</span>
+
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">dram_buffer_A_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">single_tile_size</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">Mt</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">Kt</span><span class="p">;</span><span class="w"> </span><span class="c1">// num_tiles of FP16_B, hard-coded in the reader/writer kernels</span>
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">dram_buffer_B_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">single_tile_size</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">Nt</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">Kt</span><span class="p">;</span><span class="w"> </span><span class="c1">// num_tiles of FP16_B, hard-coded in the reader/writer kernels</span>
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">dram_buffer_C_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">single_tile_size</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">Mt</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">Nt</span><span class="p">;</span><span class="w"> </span><span class="c1">// num_tiles of FP16_B, hard-coded in the reader/writer kernels</span>
+
+<span class="cm">/* DRAM buffer size == input full size */</span>
+<span class="cm">/* limiting page_size == single tile size; to allow DRAM channels interleaving */</span>
+
+<span class="n">tt_metal</span><span class="o">::</span><span class="n">InterleavedBufferConfig</span><span class="w"> </span><span class="n">buff_A_config</span><span class="p">{</span>
+<span class="w">                                    </span><span class="p">.</span><span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
+<span class="w">                                    </span><span class="p">.</span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dram_buffer_A_size</span><span class="p">,</span>
+<span class="w">                                    </span><span class="p">.</span><span class="n">page_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">single_tile_size</span><span class="p">,</span>
+<span class="w">                                    </span><span class="p">.</span><span class="n">buffer_type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">BufferType</span><span class="o">::</span><span class="n">DRAM</span>
+<span class="w">                                    </span><span class="p">};</span>
+<span class="n">tt_metal</span><span class="o">::</span><span class="n">InterleavedBufferConfig</span><span class="w"> </span><span class="n">buff_B_config</span><span class="p">{</span>
+<span class="w">                                    </span><span class="p">.</span><span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
+<span class="w">                                    </span><span class="p">.</span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dram_buffer_B_size</span><span class="p">,</span>
+<span class="w">                                    </span><span class="p">.</span><span class="n">page_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">single_tile_size</span><span class="p">,</span>
+<span class="w">                                    </span><span class="p">.</span><span class="n">buffer_type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">BufferType</span><span class="o">::</span><span class="n">DRAM</span>
+<span class="w">                                    </span><span class="p">};</span>
+<span class="n">tt_metal</span><span class="o">::</span><span class="n">InterleavedBufferConfig</span><span class="w"> </span><span class="n">buff_C_config</span><span class="p">{</span>
+<span class="w">                                    </span><span class="p">.</span><span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
+<span class="w">                                    </span><span class="p">.</span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dram_buffer_C_size</span><span class="p">,</span>
+<span class="w">                                    </span><span class="p">.</span><span class="n">page_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">single_tile_size</span><span class="p">,</span>
+<span class="w">                                    </span><span class="p">.</span><span class="n">buffer_type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">BufferType</span><span class="o">::</span><span class="n">DRAM</span>
+<span class="w">                                    </span><span class="p">};</span>
+<span class="n">Buffer</span><span class="w"> </span><span class="n">src0_dram_buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateBuffer</span><span class="p">(</span><span class="n">buff_A_config</span><span class="p">);</span>
+<span class="n">Buffer</span><span class="w"> </span><span class="n">src1_dram_buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateBuffer</span><span class="p">(</span><span class="n">buff_B_config</span><span class="p">);</span>
+<span class="n">Buffer</span><span class="w"> </span><span class="n">dst_dram_buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateBuffer</span><span class="p">(</span><span class="n">buff_C_config</span><span class="p">);</span>
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">src0_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">src0_dram_buffer</span><span class="p">.</span><span class="n">address</span><span class="p">();</span>
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">src1_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">src1_dram_buffer</span><span class="p">.</span><span class="n">address</span><span class="p">();</span>
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">dst_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dst_dram_buffer</span><span class="p">.</span><span class="n">address</span><span class="p">();</span>
+</pre></div>
+</div>
+<p>We need to declare three circular buffers to enable data transfer between the
+reader, compute, and writer engines. Input tiles count is 2 because although
+the computation is a single tile process, we want to get a performance boost by
+double buffering..</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">src0_cb_index</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_0</span><span class="p">;</span><span class="w"> </span><span class="c1">//0</span>
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">num_input_tiles</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="n">tt_metal</span><span class="o">::</span><span class="n">CircularBufferConfig</span><span class="w"> </span><span class="n">cb_src0_config</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CircularBufferConfig</span><span class="p">(</span><span class="n">num_input_tiles</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">single_tile_size</span><span class="p">,</span><span class="w"> </span><span class="p">{{</span><span class="n">src0_cb_index</span><span class="p">,</span><span class="w"> </span><span class="n">cb_data_format</span><span class="p">}})</span>
+<span class="w">    </span><span class="p">.</span><span class="n">set_page_size</span><span class="p">(</span><span class="n">src0_cb_index</span><span class="p">,</span><span class="w"> </span><span class="n">single_tile_size</span><span class="p">);</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">cb_src0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">v0</span><span class="o">::</span><span class="n">CreateCircularBuffer</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="n">cb_src0_config</span><span class="p">);</span>
+
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">src1_cb_index</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_1</span><span class="p">;</span><span class="w"> </span><span class="c1">// 1</span>
+<span class="n">tt_metal</span><span class="o">::</span><span class="n">CircularBufferConfig</span><span class="w"> </span><span class="n">cb_src1_config</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CircularBufferConfig</span><span class="p">(</span><span class="n">num_input_tiles</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">single_tile_size</span><span class="p">,</span><span class="w"> </span><span class="p">{{</span><span class="n">src1_cb_index</span><span class="p">,</span><span class="w"> </span><span class="n">cb_data_format</span><span class="p">}})</span>
+<span class="w">    </span><span class="p">.</span><span class="n">set_page_size</span><span class="p">(</span><span class="n">src1_cb_index</span><span class="p">,</span><span class="w"> </span><span class="n">single_tile_size</span><span class="p">);</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">cb_src1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">v0</span><span class="o">::</span><span class="n">CreateCircularBuffer</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="n">cb_src1_config</span><span class="p">);</span>
+
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">output_cb_index</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_16</span><span class="p">;</span>
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">num_output_tiles</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="n">tt_metal</span><span class="o">::</span><span class="n">CircularBufferConfig</span><span class="w"> </span><span class="n">cb_output_config</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CircularBufferConfig</span><span class="p">(</span><span class="n">num_output_tiles</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">single_tile_size</span><span class="p">,</span><span class="w"> </span><span class="p">{{</span><span class="n">output_cb_index</span><span class="p">,</span><span class="w"> </span><span class="n">cb_data_format</span><span class="p">}})</span>
+<span class="w">    </span><span class="p">.</span><span class="n">set_page_size</span><span class="p">(</span><span class="n">output_cb_index</span><span class="p">,</span><span class="w"> </span><span class="n">single_tile_size</span><span class="p">);</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">cb_output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">v0</span><span class="o">::</span><span class="n">CreateCircularBuffer</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="n">cb_output_config</span><span class="p">);</span>
+</pre></div>
+</div>
+</section>
+<section id="compile-time-kernels-arguments">
+<h2>Compile-time kernels arguments<a class="headerlink" href="#compile-time-kernels-arguments" title="Permalink to this heading"></a>
+</h2>
+<p>We have to declare some compile-time arguments for read/write kernels. Some default
+parameters here will suffice.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="kt">bool</span><span class="w"> </span><span class="n">src0_is_dram</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">src0_dram_buffer</span><span class="p">.</span><span class="n">buffer_type</span><span class="p">()</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">BufferType</span><span class="o">::</span><span class="n">DRAM</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="kt">bool</span><span class="w"> </span><span class="n">src1_is_dram</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">src1_dram_buffer</span><span class="p">.</span><span class="n">buffer_type</span><span class="p">()</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">BufferType</span><span class="o">::</span><span class="n">DRAM</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">reader_compile_time_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{(</span><span class="kt">uint32_t</span><span class="p">)</span><span class="n">src0_is_dram</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="p">)</span><span class="n">src1_is_dram</span><span class="p">};</span>
+
+<span class="kt">bool</span><span class="w"> </span><span class="n">dst_is_dram</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dst_dram_buffer</span><span class="p">.</span><span class="n">buffer_type</span><span class="p">()</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">BufferType</span><span class="o">::</span><span class="n">DRAM</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">writer_compile_time_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{(</span><span class="kt">uint32_t</span><span class="p">)</span><span class="n">dst_is_dram</span><span class="p">};</span>
+
+<span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">compute_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">B</span><span class="p">,</span><span class="w"> </span><span class="c1">// B</span>
+<span class="w">    </span><span class="n">Mt</span><span class="p">,</span><span class="w"> </span><span class="c1">// Mt</span>
+<span class="w">    </span><span class="n">Kt</span><span class="p">,</span><span class="w"> </span><span class="c1">// Kt</span>
+<span class="w">    </span><span class="n">Nt</span><span class="w"> </span><span class="c1">// Nt</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+</section>
+<section id="compute-kernel-declaration-and-compile-time-defines">
+<h2>Compute kernel declaration and compile-time defines<a class="headerlink" href="#compute-kernel-declaration-and-compile-time-defines" title="Permalink to this heading"></a>
+</h2>
+<p>We’re using a special reader kernel to take in data from DRAM into L1, and a
+special writer kernel to write out results from the compute engine back to the
+destination DRAM buffer.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">reader_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CreateDataMovementKernel</span><span class="p">(</span>
+<span class="w">    </span><span class="n">program</span><span class="p">,</span>
+<span class="w">    </span><span class="s">"tt_metal/programming_examples/matmul_common/kernels/dataflow/reader_bmm_8bank.cpp"</span><span class="p">,</span>
+<span class="w">    </span><span class="n">core</span><span class="p">,</span>
+<span class="w">    </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">DataMovementConfig</span><span class="p">{.</span><span class="n">processor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DataMovementProcessor</span><span class="o">::</span><span class="n">RISCV_1</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">noc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">NOC</span><span class="o">::</span><span class="n">RISCV_1_default</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">compile_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">reader_compile_time_args</span><span class="p">});</span>
+
+<span class="k">auto</span><span class="w"> </span><span class="n">writer_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CreateDataMovementKernel</span><span class="p">(</span>
+<span class="w">    </span><span class="n">program</span><span class="p">,</span>
+<span class="w">    </span><span class="s">"tt_metal/programming_examples/matmul_common/kernels/dataflow/writer_bmm_8bank.cpp"</span><span class="p">,</span>
+<span class="w">    </span><span class="n">core</span><span class="p">,</span>
+<span class="w">    </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">DataMovementConfig</span><span class="p">{.</span><span class="n">processor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DataMovementProcessor</span><span class="o">::</span><span class="n">RISCV_0</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">noc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">NOC</span><span class="o">::</span><span class="n">RISCV_0_default</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">compile_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">writer_compile_time_args</span><span class="p">});</span>
+
+<span class="k">auto</span><span class="w"> </span><span class="n">matmul_single_core_kernel_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CreateComputeKernel</span><span class="p">(</span>
+<span class="w">    </span><span class="n">program</span><span class="p">,</span>
+<span class="w">    </span><span class="s">"tt_metal/programming_examples/matmul_common/kernels/compute/bmm.cpp"</span><span class="p">,</span>
+<span class="w">    </span><span class="n">core</span><span class="p">,</span>
+<span class="w">    </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">ComputeConfig</span><span class="p">{.</span><span class="n">math_fidelity</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">math_fidelity</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">compile_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">compute_args</span><span class="p">}</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+</section>
+<section id="runtime-arguments-and-program-launch">
+<h2>Runtime arguments and program launch<a class="headerlink" href="#runtime-arguments-and-program-launch" title="Permalink to this heading"></a>
+</h2>
+<p>We will now set runtime arguments for the reader and writer kernels to run the
+matmul operation on a single core and a single tile at a time.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">tt_metal</span><span class="o">::</span><span class="n">SetRuntimeArgs</span><span class="p">(</span>
+<span class="w">    </span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">reader_id</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span>
+<span class="w">    </span><span class="p">{</span><span class="n">src0_addr</span><span class="p">,</span><span class="w"> </span><span class="n">src1_addr</span><span class="p">,</span><span class="w"> </span><span class="n">Mt</span><span class="p">,</span><span class="w"> </span><span class="n">Kt</span><span class="p">,</span><span class="w"> </span><span class="n">Nt</span><span class="p">,</span><span class="w"> </span><span class="n">Mt</span><span class="o">*</span><span class="n">Kt</span><span class="p">,</span><span class="w"> </span><span class="n">Kt</span><span class="o">*</span><span class="n">Nt</span><span class="p">,</span><span class="w"> </span><span class="n">B</span><span class="p">,</span><span class="w"> </span><span class="kt">uint32_t</span><span class="p">(</span><span class="n">bcast_batch</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="mi">0</span><span class="p">)}</span>
+<span class="p">);</span>
+
+<span class="n">tt_metal</span><span class="o">::</span><span class="n">SetRuntimeArgs</span><span class="p">(</span>
+<span class="w">    </span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">writer_id</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span>
+<span class="w">    </span><span class="p">{</span><span class="n">dst_addr</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">Mt</span><span class="p">,</span><span class="w"> </span><span class="n">Kt</span><span class="p">,</span><span class="w"> </span><span class="n">Nt</span><span class="p">,</span><span class="w"> </span><span class="n">Mt</span><span class="o">*</span><span class="n">Kt</span><span class="p">,</span><span class="w"> </span><span class="n">Kt</span><span class="o">*</span><span class="n">Nt</span><span class="p">,</span><span class="w"> </span><span class="n">B</span><span class="p">}</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+<p>Launch program, enqueue &amp; read in output buffer result into the host vector.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">EnqueueWriteBuffer</span><span class="p">(</span><span class="n">cq</span><span class="p">,</span><span class="w"> </span><span class="n">src0_dram_buffer</span><span class="p">,</span><span class="w"> </span><span class="n">a</span><span class="p">.</span><span class="n">data</span><span class="p">(),</span><span class="w"> </span><span class="nb">false</span><span class="p">);</span>
+<span class="n">EnqueueWriteBuffer</span><span class="p">(</span><span class="n">cq</span><span class="p">,</span><span class="w"> </span><span class="n">src1_dram_buffer</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">.</span><span class="n">data</span><span class="p">(),</span><span class="w"> </span><span class="nb">false</span><span class="p">);</span>
+<span class="n">EnqueueProgram</span><span class="p">(</span><span class="n">cq</span><span class="p">,</span><span class="w"> </span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">);</span>
+<span class="n">EnqueueReadBuffer</span><span class="p">(</span><span class="n">cq</span><span class="p">,</span><span class="w"> </span><span class="n">dst_dram_buffer</span><span class="p">,</span><span class="w"> </span><span class="n">output</span><span class="p">.</span><span class="n">data</span><span class="p">(),</span><span class="w"> </span><span class="nb">true</span><span class="p">);</span>
+</pre></div>
+</div>
+</section>
+<section id="conclusion">
+<h2>Conclusion<a class="headerlink" href="#conclusion" title="Permalink to this heading"></a>
+</h2>
+<p>Those are the additional steps for getting <code class="docutils literal notranslate"><span class="pre">matmul_single_core</span></code> operations up
+and running on the compute engine. To see a more complicated example using as
+many cores as possible, please refer to the <a class="reference internal" href="matmul_multi_core.html#matmul-multi-core-example"><span class="std std-ref">Matmul
+multi-core example</span></a>.</p>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="eltwise_binary.html" class="btn btn-neutral float-left" title="Eltwise binary" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="matmul_multi_core.html" class="btn btn-neutral float-right" title="Matmul (Multi Core)" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

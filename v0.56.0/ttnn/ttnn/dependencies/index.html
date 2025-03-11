@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dependencies &mdash; TT-NN  documentation</title>
+      <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../../_static/favicon.png"/>
+    <link rel="canonical" href="/ttnn/latest/ttnn/dependencies/index.html" />
+  <!--[if lt IE 9]>
+    <script src="../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="TT-LIB" href="tt_lib.html" />
+    <link rel="prev" title="Profiling ttnn Operations" href="../profiling_ttnn_operations.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../index.html">
+    TT-NN
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">TTNN</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../about.html">What is ttnn?</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../installing.html">Install</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../usage.html">Using ttnn</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tensor.html">Tensor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../api.html">APIs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tutorials.html">Tutorials</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../onboarding.html">Onboarding New Functionality</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../converting_torch_model_to_ttnn.html">Converting torch Model to ttnn</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../adding_new_ttnn_operation.html">Adding New ttnn Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../profiling_ttnn_operations.html">Profiling ttnn Operations</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Dependencies</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="tt_lib.html">TT-LIB</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tensor.html">Tensor</a></li>
+<li class="toctree-l2"><a class="reference internal" href="examples.html">Examples of Tensor and TT-LIB Use</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../demos.html">Building and Uplifting Demos</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Models</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../tt_metal_models/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../tt_metal_models/get_performance.html">Performance</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">TT-NN</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Dependencies</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../_sources/ttnn/dependencies/index.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="dependencies">
+<h1>Dependencies<a class="headerlink" href="#dependencies" title="Permalink to this heading"></a>
+</h1>
+<div class="toctree-wrapper compound">
+<ul>
+<li class="toctree-l1">
+<a class="reference internal" href="tt_lib.html">TT-LIB</a><ul>
+<li class="toctree-l2">
+<a class="reference internal" href="tt_lib.html#overview">Overview</a><ul>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_lib.html#operation-infrastructure">Operation Infrastructure</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tt_lib.html#new-device-operation">New Device Operation</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_lib.html#new-device-operation-with-a-member">New Device Operation with a member</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_lib.html#new-device-operation-with-optional-input-tensors">New Device Operation with Optional Input Tensors</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_lib.html#new-device-operation-with-optional-output-tensors">New Device Operation with Optional Output Tensors</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#profiler">Profiler</a></li>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_lib.html#fast-dispatch">Fast Dispatch</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tt_lib.html#ttnn.Tensor.cpu"><code class="docutils literal notranslate"><span class="pre">cpu()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#program-caching">Program Caching</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#logs">Logs</a></li>
+</ul>
+</li>
+<li class="toctree-l2">
+<a class="reference internal" href="tt_lib.html#tt-lib-api-through-tt-lib">TT-LIB API through <code class="docutils literal notranslate"><span class="pre">tt_lib</span></code></a><ul>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_lib.html#primary-operations">Primary Operations</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tt_lib.html#ttnn.operations.moreh.softmax"><code class="docutils literal notranslate"><span class="pre">softmax()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_lib.html#ttnn.operations.moreh.softmax_backward"><code class="docutils literal notranslate"><span class="pre">softmax_backward()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_lib.html#ttnn.operations.moreh.softmin"><code class="docutils literal notranslate"><span class="pre">softmin()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_lib.html#ttnn.operations.moreh.softmin_backward"><code class="docutils literal notranslate"><span class="pre">softmin_backward()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_lib.html#ttnn.operations.moreh.logsoftmax"><code class="docutils literal notranslate"><span class="pre">logsoftmax()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_lib.html#ttnn.operations.moreh.logsoftmax_backward"><code class="docutils literal notranslate"><span class="pre">logsoftmax_backward()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_lib.html#ttnn.operations.moreh.mean"><code class="docutils literal notranslate"><span class="pre">mean()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_lib.html#ttnn.operations.moreh.mean_backward"><code class="docutils literal notranslate"><span class="pre">mean_backward()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_lib.html#ttnn.operations.moreh.group_norm"><code class="docutils literal notranslate"><span class="pre">group_norm()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_lib.html#ttnn.operations.moreh.group_norm_backward"><code class="docutils literal notranslate"><span class="pre">group_norm_backward()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_lib.html#ttnn.operations.moreh.norm"><code class="docutils literal notranslate"><span class="pre">norm()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_lib.html#ttnn.operations.moreh.norm_backward"><code class="docutils literal notranslate"><span class="pre">norm_backward()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_lib.html#enums">Enums</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tt_lib.html#ttnn.BcastOpMath"><code class="docutils literal notranslate"><span class="pre">BcastOpMath</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_lib.html#ttnn.BcastOpDim"><code class="docutils literal notranslate"><span class="pre">BcastOpDim</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l2">
+<a class="reference internal" href="tt_lib.html#fallback-operations">Fallback Operations</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.full"><code class="docutils literal notranslate"><span class="pre">full()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.tensor_slice"><code class="docutils literal notranslate"><span class="pre">tensor_slice()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.reshape"><code class="docutils literal notranslate"><span class="pre">reshape()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.chunk"><code class="docutils literal notranslate"><span class="pre">chunk()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.conv2d"><code class="docutils literal notranslate"><span class="pre">conv2d()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.group_norm"><code class="docutils literal notranslate"><span class="pre">group_norm()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.layer_norm"><code class="docutils literal notranslate"><span class="pre">layer_norm()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.pad"><code class="docutils literal notranslate"><span class="pre">pad()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.interpolate"><code class="docutils literal notranslate"><span class="pre">interpolate()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.repeat"><code class="docutils literal notranslate"><span class="pre">repeat()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.repeat_interleave"><code class="docutils literal notranslate"><span class="pre">repeat_interleave()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.concat"><code class="docutils literal notranslate"><span class="pre">concat()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.silu"><code class="docutils literal notranslate"><span class="pre">silu()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.softmax"><code class="docutils literal notranslate"><span class="pre">softmax()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.Conv2d"><code class="docutils literal notranslate"><span class="pre">Conv2d</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.BatchNorm2d"><code class="docutils literal notranslate"><span class="pre">BatchNorm2d</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.GroupNorm"><code class="docutils literal notranslate"><span class="pre">GroupNorm</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.LayerNorm"><code class="docutils literal notranslate"><span class="pre">LayerNorm</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.MaxPool2d"><code class="docutils literal notranslate"><span class="pre">MaxPool2d</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.AdaptiveAvgPool2d"><code class="docutils literal notranslate"><span class="pre">AdaptiveAvgPool2d</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.ceil"><code class="docutils literal notranslate"><span class="pre">ceil</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.floor"><code class="docutils literal notranslate"><span class="pre">floor</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.trunc"><code class="docutils literal notranslate"><span class="pre">trunc</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.unary_fmod"><code class="docutils literal notranslate"><span class="pre">unary_fmod</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.binary_fmod"><code class="docutils literal notranslate"><span class="pre">binary_fmod</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.bitwise_not"><code class="docutils literal notranslate"><span class="pre">bitwise_not</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.unary_bitwise_or"><code class="docutils literal notranslate"><span class="pre">unary_bitwise_or</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.unary_bitwise_and"><code class="docutils literal notranslate"><span class="pre">unary_bitwise_and</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.unary_bitwise_xor"><code class="docutils literal notranslate"><span class="pre">unary_bitwise_xor</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.binary_bitwise_or"><code class="docutils literal notranslate"><span class="pre">binary_bitwise_or</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.binary_bitwise_and"><code class="docutils literal notranslate"><span class="pre">binary_bitwise_and</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.binary_bitwise_xor"><code class="docutils literal notranslate"><span class="pre">binary_bitwise_xor</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.unary_bitwise_left_shift"><code class="docutils literal notranslate"><span class="pre">unary_bitwise_left_shift</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.unary_bitwise_right_shift"><code class="docutils literal notranslate"><span class="pre">unary_bitwise_right_shift</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.binary_bitwise_left_shift"><code class="docutils literal notranslate"><span class="pre">binary_bitwise_left_shift</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.binary_bitwise_right_shift"><code class="docutils literal notranslate"><span class="pre">binary_bitwise_right_shift</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.torch_argmax"><code class="docutils literal notranslate"><span class="pre">torch_argmax</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#tt_lib.fallback_ops.torch_argmin"><code class="docutils literal notranslate"><span class="pre">torch_argmin</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l2">
+<a class="reference internal" href="tt_lib.html#experimental-operations">Experimental Operations</a><ul>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_lib.html#fused-operations-from-tt-lib-mini-graph-library">Fused Operations from <code class="docutils literal notranslate"><span class="pre">tt_lib</span></code> Mini-Graph Library</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tt_lib.html#tt_lib.fused_ops.linear.Linear"><code class="docutils literal notranslate"><span class="pre">Linear()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_lib.html#tt_lib.fused_ops.layernorm.Layernorm"><code class="docutils literal notranslate"><span class="pre">Layernorm()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_lib.html#tt_lib.fused_ops.add_and_norm.AddAndNorm"><code class="docutils literal notranslate"><span class="pre">AddAndNorm()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="tt_lib.html#complex-operations-type-2">Complex Operations (Type 2)</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1">
+<a class="reference internal" href="tensor.html">Tensor</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="tensor.html#overview">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tensor.html#tensor-storage">Tensor Storage</a></li>
+<li class="toctree-l2">
+<a class="reference internal" href="tensor.html#tensor-api">Tensor API</a><ul>
+<li class="toctree-l3">
+<a class="reference internal" href="tensor.html#ttnn.Tensor"><code class="docutils literal notranslate"><span class="pre">Tensor</span></code></a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tensor.html#ttnn.Tensor.__init__"><code class="docutils literal notranslate"><span class="pre">Tensor.__init__()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="tensor.html#ttnn.Tensor.buffer"><code class="docutils literal notranslate"><span class="pre">Tensor.buffer()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="tensor.html#ttnn.Tensor.device"><code class="docutils literal notranslate"><span class="pre">Tensor.device()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="tensor.html#ttnn.Tensor.get_dtype"><code class="docutils literal notranslate"><span class="pre">Tensor.get_dtype()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="tensor.html#ttnn.Tensor.get_layout"><code class="docutils literal notranslate"><span class="pre">Tensor.get_layout()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="tensor.html#ttnn.Tensor.pad"><code class="docutils literal notranslate"><span class="pre">Tensor.pad()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="tensor.html#ttnn.Tensor.pad_to_tile"><code class="docutils literal notranslate"><span class="pre">Tensor.pad_to_tile()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="tensor.html#ttnn.Tensor.storage_type"><code class="docutils literal notranslate"><span class="pre">Tensor.storage_type()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="tensor.html#ttnn.Tensor.to"><code class="docutils literal notranslate"><span class="pre">Tensor.to()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="tensor.html#ttnn.Tensor.unpad"><code class="docutils literal notranslate"><span class="pre">Tensor.unpad()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="tensor.html#ttnn.Tensor.unpad_from_tile"><code class="docutils literal notranslate"><span class="pre">Tensor.unpad_from_tile()</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l2">
+<a class="reference internal" href="tensor.html#memoryconfig">MemoryConfig</a><ul>
+<li class="toctree-l3">
+<a class="reference internal" href="tensor.html#ttnn.MemoryConfig"><code class="docutils literal notranslate"><span class="pre">MemoryConfig</span></code></a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tensor.html#ttnn.MemoryConfig.__init__"><code class="docutils literal notranslate"><span class="pre">MemoryConfig.__init__()</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l2">
+<a class="reference internal" href="tensor.html#examples-of-converting-between-pytorch-tensor-and-tt-tensor">Examples of converting between PyTorch Tensor and TT Tensor</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="tensor.html#converting-a-pytorch-tensor-to-a-tt-tensor">Converting a PyTorch Tensor to a TT Tensor</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tensor.html#converting-a-tt-tensor-to-a-pytorch-tensor">Converting a TT Tensor to a PyTorch Tensor</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1">
+<a class="reference internal" href="examples.html">Examples of Tensor and TT-LIB Use</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="examples.html#run-one-op-from-tt-lib-on-tt-accelerator-device">Run one OP from <cite>TT-LIB</cite> on TT Accelerator device</a></li>
+<li class="toctree-l2"><a class="reference internal" href="examples.html#run-tt-lib-and-pytorch-ops">Run <cite>TT-LIB</cite> and PyTorch OPs</a></li>
+<li class="toctree-l2"><a class="reference internal" href="examples.html#tensors-with-odd-size-of-last-dim">Tensors with odd size of last dim</a></li>
+</ul>
+</li>
+</ul>
+</div>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="../profiling_ttnn_operations.html" class="btn btn-neutral float-left" title="Profiling ttnn Operations" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="tt_lib.html" class="btn btn-neutral float-right" title="TT-LIB" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
