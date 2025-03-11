@@ -25,6 +25,8 @@
      #Script the one after the last successful one.
      echo $START_ID  > $ERROR_FILE
 
+     rm -rf built
+
      while true
      do
         timeout $TIME_LIMIT tt-smi -r 0 || exit 1
