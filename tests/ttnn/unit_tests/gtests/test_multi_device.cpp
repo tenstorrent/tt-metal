@@ -27,7 +27,7 @@ TEST_F(T3kMultiDeviceFixture, TestGetTensorsFromMultiDeviceStorage) {
     MeshDevice* mesh_device = this->mesh_device_.get();
     const auto input_tensor = ttnn::ones(ttnn::Shape({32, 32}), DataType::BFLOAT16);
     const auto replicated_tensor = create_host_multi_device_tensor(input_tensor, ReplicateTensor(8));
-    const auto device_tensors = get_tensors_from_multi_device_storage(replicated_tensor);
+    const auto device_tensors = get_device_tensors(replicated_tensor);
 
     EXPECT_EQ(device_tensors.size(), 8);
 }

@@ -36,7 +36,7 @@ std::shared_ptr<MeshDevice> open_mesh_device(
 
 void close_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device) { mesh_device->close(); }
 
-std::vector<ttnn::Tensor> get_device_tensors(const ttnn::Tensor& tensor) {
+std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
     if (std::holds_alternative<tt::tt_metal::MultiDeviceHostStorage>(tensor.get_storage())) {
         std::vector<ttnn::Tensor> tensors;
         auto& host_storage = std::get<tt::tt_metal::MultiDeviceHostStorage>(tensor.get_storage());
@@ -61,7 +61,6 @@ std::vector<ttnn::Tensor> get_device_tensors(const ttnn::Tensor& tensor) {
     } else {
         return {tensor};
     }
-    TT_THROW("Expected tensor to be on MultiDeviceHostStorage type!");
 }
 
 Tensor aggregate_as_tensor(
@@ -141,7 +140,9 @@ Tensor aggregate_as_tensor(
         auto storage = DeviceStorage(mesh_buffer, AllGatherTensor{}, specs);
         return Tensor(std::move(storage), reference_shard.get_tensor_spec());
     } else {
-        TT_THROW("TODO(jchu): Not implemented");
+        TT_THROW(
+            "Unsupported storage type for multi-device tensor: {}",
+            tt::stl::get_active_type_name_in_variant(reference_shard.get_storage()));
     }
 }
 
@@ -193,65 +194,24 @@ DistributedTensorConfig get_distributed_tensor_config_from_tensor(const Tensor& 
             "Unexpected type {}",
             tt::stl::get_active_type_name_in_variant(tensor.get_storage()));
         return multi_device_host_storage->strategy;
+    } else if (tensor.storage_type() == StorageType::DEVICE) {
+        const auto& device_storage = std::get<DeviceStorage>(tensor.get_storage());
+        TT_FATAL(device_storage.mesh_buffer != nullptr, "Device storage must be on a mesh buffer");
+        return device_storage.strategy;
+    } else {
+        TT_THROW("Tensor is not a multi-device tensor");
     }
-    TT_THROW("Tensor is not a multi-device tensor");
 }
 
 bool is_host_mesh_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::MULTI_DEVICE_HOST; }
 
-bool is_multi_device_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::MULTI_DEVICE_HOST; }
+bool is_multi_device_tensor(const Tensor& tensor) {
+    return tensor.storage_type() == StorageType::MULTI_DEVICE_HOST || is_mesh_buffer_tensor(tensor);
+}
 
 bool is_mesh_buffer_tensor(const Tensor& tensor) {
     auto* device_storage = std::get_if<DeviceStorage>(&tensor.get_storage());
     return device_storage != nullptr && device_storage->mesh_buffer != nullptr;
-}
-
-std::vector<Tensor> get_tensors_from_multi_device_storage(const Tensor& multi_device_tensor) {
-    std::vector<ttnn::Tensor> tensors;
-    if (multi_device_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST) {
-        TT_ASSERT(
-            std::holds_alternative<MultiDeviceHostStorage>(multi_device_tensor.get_storage()),
-            "Unexpected type {}",
-            tt::stl::get_active_type_name_in_variant(multi_device_tensor.get_storage()));
-        const auto& tensor_storage = std::get<MultiDeviceHostStorage>(multi_device_tensor.get_storage());
-        for (int i = 0; i < tensor_storage.num_buffers(); ++i) {
-            tensors.push_back(Tensor{OwnedStorage{tensor_storage.get_buffer(i)}, tensor_storage.specs[i]});
-        }
-    } else {
-        TT_THROW("get_tensors_from_multi_device_storage only support multi device tensors");
-    }
-    return tensors;
-}
-
-Tensor create_multi_device_tensor(
-    const std::vector<Tensor>& tensors, StorageType storage_type, const DistributedTensorConfig& strategy) {
-    if (tensors.empty()) {
-        TT_THROW("Cannot create multi-device tensor with empty tensor list");
-    }
-    if (storage_type == StorageType::MULTI_DEVICE_HOST) {
-        std::vector<OwnedBuffer> owned_buffers;
-        std::vector<ttnn::TensorSpec> specs;
-        for (const auto& tensor : tensors) {
-            TT_ASSERT(
-                std::holds_alternative<OwnedStorage>(tensor.get_storage()),
-                "Unexpected type {}",
-                tt::stl::get_active_type_name_in_variant(tensor.get_storage()));
-            owned_buffers.push_back(std::get<OwnedStorage>(tensor.get_storage()).buffer);
-            specs.push_back(tensor.get_tensor_spec());
-        }
-        return Tensor{
-            MultiDeviceHostStorage{strategy, owned_buffers, specs},
-            TensorSpec(
-                tensors.at(0).get_logical_shape(),
-                TensorLayout::fromPaddedShape(
-                    tensors.at(0).get_dtype(),
-                    PageConfig(tensors.at(0).get_layout()),
-                    MemoryConfig{},
-                    tensors.at(0).get_logical_shape(),
-                    tensors.at(0).get_padded_shape()))};
-    } else {
-        TT_THROW("Invalid storage type for multi-device tensor");
-    }
 }
 
 }  // namespace ttnn::distributed

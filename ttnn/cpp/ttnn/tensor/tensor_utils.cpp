@@ -69,17 +69,19 @@ bool is_cpu_tensor(const Tensor& tensor) {
 bool is_device_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::DEVICE; }
 
 Tensor transform(const Tensor& tensor, const std::function<Tensor(const Tensor&)>& transform_func) {
-    auto input_tensors = ttnn::distributed::get_tensors_from_multi_device_storage(tensor);
+    TT_FATAL(ttnn::distributed::is_multi_device_tensor(tensor), "transform only supports multi-device tensors");
+    auto input_tensors = ttnn::distributed::get_device_tensors(tensor);
     std::vector<Tensor> output_tensors(input_tensors.size());
     std::transform(input_tensors.begin(), input_tensors.end(), output_tensors.begin(), [&](const auto& device_tensor) {
         return transform_func(device_tensor);
     });
-    return ttnn::distributed::create_multi_device_tensor(
-        output_tensors, tensor.storage_type(), ttnn::distributed::get_distributed_tensor_config_from_tensor(tensor));
+    return ttnn::distributed::aggregate_as_tensor(
+        output_tensors, ttnn::distributed::get_distributed_tensor_config_from_tensor(tensor));
 }
 
 void apply(const Tensor& tensor, const std::function<void(const Tensor&)>& callable) {
-    auto input_tensors = ttnn::distributed::get_tensors_from_multi_device_storage(tensor);
+    TT_FATAL(ttnn::distributed::is_multi_device_tensor(tensor), "apply only supports multi-device tensors");
+    auto input_tensors = ttnn::distributed::get_device_tensors(tensor);
     for (const auto& device_tensor : input_tensors) {
         callable(device_tensor);
     }
@@ -95,9 +97,9 @@ Tensor get_shard_for_device(const Tensor& tensor, IDevice* target_device, std::o
                     OwnedStorage{s.get_buffer(buffer_index.value())}, s.get_tensor_spec(buffer_index.value())};
             },
             [&tensor]<OwnedOrBorrowedStorage T>(const T&) { return tensor; },
-            [](const DeviceStorage& s) {
-                TT_FATAL(s.mesh_buffer != nullptr, "get_shard_for_device does not support mesh buffer backed tensors");
-                return Tensor();
+            [&tensor](const DeviceStorage& s) {
+                TT_FATAL(s.mesh_buffer == nullptr, "get_shard_for_device does not support mesh buffer backed tensors");
+                return tensor;
             },
             [](const auto&) -> Tensor {
                 TT_THROW("get_shard_for_device only supports multi-device or device tensors");
@@ -117,14 +119,6 @@ void insert_buffer_and_shape_for_device(
                     buffer_index.value(),
                     std::get<OwnedStorage>(shard.tensor_attributes->storage).get_buffer(),
                     shard.tensor_attributes->tensor_spec);
-                /*
-                }
-    else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
-                    s.insert_buffer_and_spec_for_device(
-                        target_device,
-                        std::get<DeviceStorage>(shard.tensor_attributes->storage).get_buffer(),
-                        shard.tensor_attributes->tensor_spec);
-    */
             } else if constexpr (std::is_same_v<T, OwnedStorage>) {
                 TT_FATAL(shard.storage_type() == StorageType::OWNED, "Shard must be an owned tensor");
                 s.insert_buffer(std::get<OwnedStorage>(shard.tensor_attributes->storage).get_buffer());

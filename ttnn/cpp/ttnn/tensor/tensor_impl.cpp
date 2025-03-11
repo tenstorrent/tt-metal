@@ -479,7 +479,7 @@ std::string to_string(
             },
             [&](const MultiDeviceHostStorage& storage) -> std::string {
                 std::stringstream ss;
-                auto device_tensors = ttnn::distributed::get_tensors_from_multi_device_storage(tensor);
+                auto device_tensors = ttnn::distributed::get_device_tensors(tensor);
                 for (size_t i = 0; i < device_tensors.size(); i++) {
                     ss << to_string<T>(device_tensors[i]);
                     if (i + 1 != device_tensors.size()) {

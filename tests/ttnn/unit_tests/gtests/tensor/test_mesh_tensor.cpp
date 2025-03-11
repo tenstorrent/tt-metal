@@ -102,7 +102,7 @@ TEST_F(MeshTensorTest, ReplicateOwnedTensor) {
     EXPECT_TRUE(output_host_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST);
     EXPECT_EQ(output_host_tensor.get_tensor_spec().logical_shape(), shape);
 
-    for (const auto& tensor : get_tensors_from_multi_device_storage(output_host_tensor)) {
+    for (const auto& tensor : get_device_tensors(output_host_tensor)) {
         EXPECT_EQ(tensor.get_tensor_spec().logical_shape(), shape);
         EXPECT_THAT(tensor.to_vector<float>(), Pointwise(FloatEq(), host_data));
     }
