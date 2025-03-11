@@ -219,7 +219,6 @@ target_link_libraries(
         Metalium::Metal::Impl
         Metalium::Metal::STL
         metal_common_libs
-        profiler
         common
         jit_build
         llrt

@@ -14,7 +14,7 @@
 #include "program_impl.hpp"
 #include "profiler_state.hpp"
 #include "profiler_types.hpp"
-#include "common.hpp"
+#include "profiler_paths.hpp"
 #include "tracy/TracyTTDevice.hpp"
 #include "common/TracyTTDeviceData.hpp"
 
@@ -72,8 +72,7 @@ private:
         uint64_t timestamp);
 
     // Helper function for reading risc profile results
-    void readRiscProfilerResults(
-        IDevice* device, CoreCoord& worker_core);
+    void readRiscProfilerResults(IDevice* device, CoreCoord& worker_core);
 
     // Push device results to tracy
     void pushTracyDeviceResults();
@@ -98,17 +97,17 @@ public:
     // DRAM Vector
     std::vector<uint32_t> profile_buffer;
 
-    //Device events
+    // Device events
     std::set<tracy::TTDeviceEvent> device_events;
 
     std::set<tracy::TTDeviceEvent> device_sync_events;
 
     std::set<tracy::TTDeviceEvent> device_sync_new_events;
 
-    //shift
+    // shift
     int64_t shift = 0;
 
-    //frequency scale
+    // frequency scale
     double freqScale = 1.0;
 
     uint32_t my_device_id = 0;
