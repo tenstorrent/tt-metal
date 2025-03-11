@@ -272,11 +272,17 @@ void MeshCommandQueue::read_shard_from_device(
             }
         }
     } else {
-        auto dispatch_params = buffer_dispatch::initialize_interleaved_buf_read_dispatch_params(
-            *shard_view, id_, expected_num_workers_completed_, region);
+        buffer_dispatch::BufferReadDispatchParamsVariant dispatch_params_variant =
+            buffer_dispatch::initialize_interleaved_buf_read_dispatch_params(
+                *shard_view, id_, expected_num_workers_completed_, region);
+
+        buffer_dispatch::BufferReadDispatchParams* dispatch_params = std::visit(
+            [](auto& val) { return static_cast<buffer_dispatch::BufferReadDispatchParams*>(&val); },
+            dispatch_params_variant);
+
         buffer_dispatch::copy_interleaved_buffer_to_completion_queue(
-            dispatch_params, *shard_view, sub_device_ids, this->dispatch_core_type());
-        if (dispatch_params.pages_per_txn > 0) {
+            *dispatch_params, *shard_view, sub_device_ids, this->dispatch_core_type());
+        if (dispatch_params->pages_per_txn > 0) {
             num_txns_per_device[device]++;
             auto& read_descriptor_queue = this->get_read_descriptor_queue(device);
             read_descriptor_queue.push(
