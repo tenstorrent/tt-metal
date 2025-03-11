@@ -96,7 +96,7 @@ Tensor aggregate_as_tensor(
         }
         auto storage = MultiDeviceHostStorage{config, std::move(host_owned_buffers), specs};
         return Tensor(std::move(storage), reference_shard.get_tensor_spec());
-} else if (storage_type == StorageType::BORROWED) {
+    } else if (storage_type == StorageType::BORROWED) {
         std::vector<ttnn::TensorSpec> specs;
         std::vector<OwnedBuffer> host_owned_buffers;
         for (const auto& shard : tensor_shards) {
