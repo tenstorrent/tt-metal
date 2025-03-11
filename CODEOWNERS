@@ -229,6 +229,7 @@ models/experimental/stable_diffusion_xl_base @mbezuljTT @pavlepopovic @ipotkonja
 models/experimental/functional_mobilenetv2 @mbahnasTT @ssinghalTT @dvartaniansTT @arginugaTT
 models/experimental/yolov8s_world @tenstorrent/cse-developer-ttnn
 models/experimental/yolov10 @tenstorrent/cse-developer-ttnn
+models/experimental/functional_yolov9c @tenstorrent/cse-developer-ttnn
 
 # docs
 docs/Makefile @tenstorrent/metalium-developers-infra
