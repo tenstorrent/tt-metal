@@ -52,6 +52,13 @@ jobs:
       build-wheel: true
       tracy: true
     secrets: inherit
+  build-artifact-sd:
+    uses: ./.github/workflows/build-artifact-sd.yaml
+    with:
+      build-type: ${{ inputs.build-type || 'Release' }}
+      build-wheel: true
+      tracy: true
+    secrets: inherit
 
   smoke-tests:
     needs: build-artifact
@@ -83,9 +90,9 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch}}
       runner-label: ${{ matrix.test-group.runner-label}}
-      docker-image: ${{ needs.build-artifact-profiler.outputs.ci-build-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.build-artifact-sd.outputs.ci-build-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-sd.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-sd.outputs.wheel-artifact-name }}
   # Fast Dispatch Unit Tests
   fast-dispatch-unit-tests:
     needs: build-artifact
