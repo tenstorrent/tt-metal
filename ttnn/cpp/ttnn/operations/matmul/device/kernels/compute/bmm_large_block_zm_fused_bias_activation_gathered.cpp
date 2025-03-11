@@ -158,7 +158,7 @@ void MAIN {
     // Runtime args
     uint32_t rt_args_idx = 0;
     uint32_t core_type = get_arg_val<uint32_t>(rt_args_idx++);
-    if (core_type == (uint32_t)CORE_TYPE::IDLE_CORE) {
+    if (core_type == (uint32_t)CORE_TYPE::IDLE_CORE || core_type == (uint32_t)CORE_TYPE::HOP_CORE) {
         return;
     }
     // if (core_type == 0) {
