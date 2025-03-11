@@ -474,6 +474,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     DeviceComputeKernelConfig compute_kernel_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     bool rms_norm = true;
+    bool is_pre_all_gather = true;
     bool is_post_all_gather = false;
 
     uint32_t block_wt_resharded = output.shard_spec().value().shape[1] / TILE_WIDTH;
@@ -645,6 +646,10 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     // post_all_gather_stats_block_tiles
     uint32_t post_all_gather_stats_block_tiles = 1;
     uint32_t num_distributed_devices = 1;
+    if (is_post_all_gather && stats.has_value()) {
+        post_all_gather_stats_block_tiles = stats.value().get_padded_shape()[-1] / TILE_WIDTH;
+        num_distributed_devices = post_all_gather_stats_block_tiles / pre_all_gather_stats_block_tiles;
+    }
 
     uint32_t in0_CB_tiles = in0_block_tiles;
     uint32_t in0_CB_size = in0_CB_tiles * in_single_tile_size;
@@ -670,6 +675,10 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     uint32_t ex2pe_CB_size = num_rows_per_all_to_all_worker * single_tile_size;
     uint32_t stats_cb_size = 0;
     uint32_t stats_reduced_cb_size = 0;
+    if (is_post_all_gather) {
+        stats_cb_size = post_all_gather_stats_block_tiles * single_tile_size;
+        stats_reduced_cb_size = pre_all_gather_stats_block_tiles * single_tile_size;
+    }
     // output buffer size
     uint32_t out_CB_size;
     out_CB_size = pre_all_gather_stats_block_tiles * out_single_tile_size;
@@ -1196,12 +1205,14 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
                 .set_page_size(in1_cb_index, in_single_tile_size)
                 .set_globally_allocated_address(*b.value().buffer());
         cb_in1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in1_cb_config);
-        uint32_t add_out_cb_index = tt::CBIndex::c_14;
-        tt::tt_metal::CircularBufferConfig add_out_cb_config =
-            tt::tt_metal::CircularBufferConfig(in1_CB_size, {{add_out_cb_index, in_data_format}})
-                .set_page_size(add_out_cb_index, in_single_tile_size)
-                .set_globally_allocated_address(*a.buffer());
-        cb_add_out = tt::tt_metal::CreateCircularBuffer(program, all_cores, add_out_cb_config);
+        if (is_pre_all_gather) {
+            uint32_t add_out_cb_index = tt::CBIndex::c_14;
+            tt::tt_metal::CircularBufferConfig add_out_cb_config =
+                tt::tt_metal::CircularBufferConfig(in1_CB_size, {{add_out_cb_index, in_data_format}})
+                    .set_page_size(add_out_cb_index, in_single_tile_size)
+                    .set_globally_allocated_address(*a.buffer());
+            cb_add_out = tt::tt_metal::CreateCircularBuffer(program, all_cores, add_out_cb_config);
+        }
     }
     // in2 scaler
     uint32_t in2_cb_index = tt::CBIndex::c_2;
@@ -1338,7 +1349,11 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
         output_cb_config = output_cb_config.set_globally_allocated_address(*output.buffer());
     }
     CBHandle cb_output = 0;
-    cb_output = tt::tt_metal::CreateCircularBuffer(program, sender_cores, output_cb_config);
+    if (is_pre_all_gather) {
+        cb_output = tt::tt_metal::CreateCircularBuffer(program, sender_cores, output_cb_config);
+    } else {
+        cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
+    }
 
     uint32_t output_reshard_cb_index = tt::CBIndex::c_17;
     tt::tt_metal::CircularBufferConfig output_reshard_cb_config =
@@ -1693,6 +1708,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
          writer_mcast_sender_kernels_id,
          writer_mcast_receiver_kernels_id,
          num_none_all_to_all_workers,
+         is_pre_all_gather,
          cb_in0,
          cb_in1,
          cb_stats,
@@ -1715,7 +1731,9 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
 
             if (b_tensor.has_value()) {
                 UpdateDynamicCircularBufferAddress(program, cb_in1, *b_tensor.value().buffer());
-                UpdateDynamicCircularBufferAddress(program, cb_add_out, *src_buffer_a);
+                if (is_pre_all_gather) {
+                    UpdateDynamicCircularBufferAddress(program, cb_add_out, *src_buffer_a);
+                }
             }
             if (stats_tensor.has_value()) {
                 UpdateDynamicCircularBufferAddress(program, cb_stats, *stats_tensor.value().buffer());
