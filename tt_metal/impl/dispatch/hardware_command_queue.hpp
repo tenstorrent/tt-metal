@@ -23,7 +23,12 @@ namespace tt::tt_metal {
 
 class HWCommandQueue : public CommandQueue {
 public:
-    HWCommandQueue(IDevice* device, uint32_t id, NOC noc_index, uint32_t completion_queue_reader_core = 0);
+    HWCommandQueue(
+        IDevice* device,
+        std::shared_ptr<DispatchArray<LaunchMessageRingBufferState>>& worker_launch_message_buffer_state,
+        uint32_t id,
+        NOC noc_index,
+        uint32_t completion_queue_reader_core = 0);
 
     ~HWCommandQueue() override;
 
@@ -82,11 +87,15 @@ private:
     std::shared_ptr<TraceDescriptor> trace_ctx;
     std::thread completion_queue_thread;
     SystemMemoryManager& manager;
-    std::array<tt::tt_metal::WorkerConfigBufferMgr, DispatchSettings::DISPATCH_MESSAGE_ENTRIES> config_buffer_mgr;
+
+    // Shared across all CommandQueue instances for a Device.
+    std::shared_ptr<DispatchArray<LaunchMessageRingBufferState>> worker_launch_message_buffer_state;
+
+    DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr;
     // Expected value of DISPATCH_MESSAGE_ADDR in dispatch core L1
     //  Value in L1 incremented by worker to signal completion to dispatch. Value on host is set on each enqueue program
     //  call
-    std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES> expected_num_workers_completed;
+    DispatchArray<uint32_t> expected_num_workers_completed;
 
     volatile bool exit_condition;
     volatile uint32_t num_entries_in_completion_q;  // issue queue writer thread increments this when an issued command
@@ -99,11 +108,9 @@ private:
     // Trace capture is a fully host side operation, but it modifies the state of the wptrs above
     // To ensure that host and device are not out of sync, we reset the wptrs to their original values
     // post trace capture.
-    std::array<LaunchMessageRingBufferState, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>
-        worker_launch_message_buffer_state_reset;
-    std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES> expected_num_workers_completed_reset;
-    std::array<tt::tt_metal::WorkerConfigBufferMgr, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>
-        config_buffer_mgr_reset;
+    DispatchArray<LaunchMessageRingBufferState> worker_launch_message_buffer_state_reset;
+    DispatchArray<uint32_t> expected_num_workers_completed_reset;
+    DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_reset;
     IDevice* device_;
 
     std::condition_variable reader_thread_cv;
