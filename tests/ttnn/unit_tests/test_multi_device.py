@@ -499,14 +499,14 @@ def test_sharded_matmul(t3k_mesh_device):
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=t3k_mesh_device,
-        mesh_mapperttnn.replicate_tensor_to_mesh_mapper(t3k_mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(t3k_mesh_device),
     )
     keys_1BDP = ttnn.from_torch(
         torch.randn(1, 32, 128, 32),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=t3k_mesh_device,
-        mesh_mapperttnn.replicate_tensor_to_mesh_mapper(t3k_mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(t3k_mesh_device),
     )
 
     q_heads_1B4D = ttnn.to_device(q_heads_1B4D, t3k_mesh_device)

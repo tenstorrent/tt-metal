@@ -393,7 +393,7 @@ def test_t3k_falcon_causal_lm_with_trace(
             torch.full(scalar_shape, layer.self_attn.scalar),
             device=t3k_mesh_device,
             layout=ttnn.TILE_LAYOUT,
-            ttnn.replicate_tensor_to_mesh_mapper(t3k_mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(t3k_mesh_device),
         )
     # TODO: Generate embeddings and attention_mask on device
     tt_embeddings, tt_attention_mask = tt_FalconCausalLM.model_preprocessing(

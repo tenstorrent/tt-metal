@@ -46,7 +46,7 @@ def generate_cos_sin_cache(
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         memory_config=model_config["COS_CACHED_WEIGHTS_MEMCFG"],
-        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         cache_file_name=cos_cached_path,
     )
 
@@ -58,7 +58,7 @@ def generate_cos_sin_cache(
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         memory_config=model_config["SIN_CACHED_WEIGHTS_MEMCFG"],
-        ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         cache_file_name=sin_cached_path,
     )
 
