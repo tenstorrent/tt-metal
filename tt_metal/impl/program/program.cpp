@@ -10,7 +10,6 @@
 #include <profiler.hpp>
 #include "tt_metal/detail/kernel_cache.hpp"
 #include <persistent_kernel_cache.hpp>
-#include <compilation_reporter.hpp>
 #include <memory_reporter.hpp>
 #include <tt_metal.hpp>
 #include <graph_tracking.hpp>
@@ -1441,10 +1440,6 @@ void detail::Program_::compile(IDevice* device, bool fd_bootloader_mode) {
                     }
                     while (not detail::HashLookup::inst().is_bin_generated(kernel_hash)) {
                     }
-                    if (detail::CompilationReporter::enabled()) {
-                        detail::CompilationReporter::inst().add_kernel_compile_stats(
-                            get_id(), kernel, cache_hit, kernel_hash);
-                    }
                     kernel->set_binary_path(build_options.path);
                 },
                 events);
@@ -1458,15 +1453,10 @@ void detail::Program_::compile(IDevice* device, bool fd_bootloader_mode) {
         }
     }
     sync_events();
-
-    if (detail::CompilationReporter::enabled()) {
-        detail::CompilationReporter::inst().flush_program_entry(get_id(), num_kernels(), [this](size_t kernel_id) {
-            return get_kernel(kernel_id);
-        }, enable_persistent_kernel_cache);
-    }
     if (detail::MemoryReporter::enabled()) {
         detail::MemoryReporter::inst().flush_program_memory_usage(get_id(), device);
     }
+
     compiled_.insert(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
 }
 
