@@ -474,7 +474,6 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     DeviceComputeKernelConfig compute_kernel_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     bool rms_norm = true;
-    bool is_pre_all_gather = true;
     bool is_post_all_gather = false;
 
     uint32_t block_wt_resharded = output.shard_spec().value().shape[1] / TILE_WIDTH;
@@ -646,10 +645,6 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     // post_all_gather_stats_block_tiles
     uint32_t post_all_gather_stats_block_tiles = 1;
     uint32_t num_distributed_devices = 1;
-    if (is_post_all_gather && stats.has_value()) {
-        post_all_gather_stats_block_tiles = stats.value().get_padded_shape()[-1] / TILE_WIDTH;
-        num_distributed_devices = post_all_gather_stats_block_tiles / pre_all_gather_stats_block_tiles;
-    }
 
     uint32_t in0_CB_tiles = in0_block_tiles;
     uint32_t in0_CB_size = in0_CB_tiles * in_single_tile_size;
@@ -667,9 +662,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     uint32_t x_CB_size = in0_block_tiles * single_tile_size;
     uint32_t xmm_CB_size = in0_block_tiles * single_tile_size;
     uint32_t ex_partial_CB_size = in0_block_tiles * single_tile_size / block_wt;
-    if (is_pre_all_gather || is_post_all_gather) {
-        ex_partial_CB_size = ex_partial_CB_size * pre_all_gather_stats_block_tiles;
-    }
+    ex_partial_CB_size = ex_partial_CB_size * pre_all_gather_stats_block_tiles;
     uint32_t ex_CB_size = ex_partial_CB_size;
     uint32_t ex_global_CB_size = ex_partial_CB_size;
     uint32_t ex_external_CB_size = tt::div_up(Kt, block_wt) * single_tile_size;
@@ -677,17 +670,9 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     uint32_t ex2pe_CB_size = num_rows_per_all_to_all_worker * single_tile_size;
     uint32_t stats_cb_size = 0;
     uint32_t stats_reduced_cb_size = 0;
-    if (is_post_all_gather) {
-        stats_cb_size = post_all_gather_stats_block_tiles * single_tile_size;
-        stats_reduced_cb_size = pre_all_gather_stats_block_tiles * single_tile_size;
-    }
     // output buffer size
     uint32_t out_CB_size;
-    if (is_pre_all_gather) {
-        out_CB_size = pre_all_gather_stats_block_tiles * out_single_tile_size;
-    } else {
-        out_CB_size = in0_block_tiles * out_single_tile_size;
-    }
+    out_CB_size = pre_all_gather_stats_block_tiles * out_single_tile_size;
     uint32_t out_reshard_CB_size = out_CB_size;
     if (is_post_all_gather && !skip_write_back) {
         out_reshard_CB_size = block_wt_resharded * block_ht * out_single_tile_size;
@@ -723,9 +708,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     if (use_two_stage_reduce) {
         ex_external_CB_size = (num_blocks_first_stage + num_blocks_second_stage - 1) * single_tile_size;
     }
-    if (is_pre_all_gather) {
-        ex_external_CB_size = ex_external_CB_size * pre_all_gather_stats_block_tiles;
-    }
+    ex_external_CB_size = ex_external_CB_size * pre_all_gather_stats_block_tiles;
     uint32_t num_none_all_to_all_workers = num_blocks - num_cores_all_to_all;
     if (num_rows_per_all_to_all_worker_last == 0) {
         num_rows_per_all_to_all_worker_last = num_rows_per_all_to_all_worker;
@@ -986,28 +969,13 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     }
 
     // reader kernel
-    std::string sender_reader_kernel_file =
-        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-        "reader_mcast_sender_unary_sharded_ln.cpp";
-    std::string reciever_reader_kernel_file =
-        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-        "reader_mcast_receiver_unary_sharded_ln.cpp";
 
-    if (is_pre_all_gather) {
-        sender_reader_kernel_file =
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-            "reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp";
-        reciever_reader_kernel_file =
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-            "reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp";
-    } else if (is_post_all_gather) {
-        sender_reader_kernel_file =
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-            "reader_mcast_sender_unary_sharded_ln_post_allgather.cpp";
-        reciever_reader_kernel_file =
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-            "reader_mcast_receiver_unary_sharded_ln_post_allgather.cpp";
-    }
+    std::string sender_reader_kernel_file =
+        "ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/kernels/dataflow/"
+        "reader_mcast_sender_unary_sharded_rms.cpp";
+    std::string reciever_reader_kernel_file =
+        "ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/kernels/dataflow/"
+        "reader_mcast_receiver_unary_sharded_rms.cpp";
 
     auto reader_mcast_sender_kernels_id = CreateKernel(
         program,
@@ -1123,17 +1091,9 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     // writer kernel
     bool use_row_major_kernel = (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) or
                                 (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR);
-    std::string writer_kernel;
-    if (is_pre_all_gather) {
-        writer_kernel =
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-            "writer_unary_sharded_ln_pre_all_gather.cpp";
-    } else {
-        writer_kernel = use_row_major_kernel ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/"
-                                               "dataflow/writer_unary_sharded_ln_rm_gb.cpp"
-                                             : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/"
-                                               "dataflow/writer_unary_sharded_ln.cpp";
-    }
+    std::string writer_kernel =
+        "ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/kernels/dataflow/"
+        "writer_unary_sharded_rms.cpp";
     auto writer_mcast_sender_kernels_id = CreateKernel(
         program,
         writer_kernel,
@@ -1192,18 +1152,9 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
         num_blocks_second_stage};
     // compute kernel
     std::string compute_kernel_file;
-    if (is_pre_all_gather) {
-        compute_kernel_file =
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/"
-            "layernorm_sharded_pre_allgather.cpp";
-    } else if (is_post_all_gather) {
-        compute_kernel_file =
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/"
-            "layernorm_sharded_post_allgather.cpp";
-    } else {
-        compute_kernel_file =
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded.cpp";
-    }
+    compute_kernel_file =
+        "ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/kernels/compute/"
+        "rms_sharded.cpp";
     KernelHandle compute_kernels_id = -1;
     auto compute_kernels_id_all_to_all = CreateKernel(
         program,
@@ -1245,14 +1196,12 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
                 .set_page_size(in1_cb_index, in_single_tile_size)
                 .set_globally_allocated_address(*b.value().buffer());
         cb_in1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in1_cb_config);
-        if (is_pre_all_gather) {
-            uint32_t add_out_cb_index = tt::CBIndex::c_14;
-            tt::tt_metal::CircularBufferConfig add_out_cb_config =
-                tt::tt_metal::CircularBufferConfig(in1_CB_size, {{add_out_cb_index, in_data_format}})
-                    .set_page_size(add_out_cb_index, in_single_tile_size)
-                    .set_globally_allocated_address(*a.buffer());
-            cb_add_out = tt::tt_metal::CreateCircularBuffer(program, all_cores, add_out_cb_config);
-        }
+        uint32_t add_out_cb_index = tt::CBIndex::c_14;
+        tt::tt_metal::CircularBufferConfig add_out_cb_config =
+            tt::tt_metal::CircularBufferConfig(in1_CB_size, {{add_out_cb_index, in_data_format}})
+                .set_page_size(add_out_cb_index, in_single_tile_size)
+                .set_globally_allocated_address(*a.buffer());
+        cb_add_out = tt::tt_metal::CreateCircularBuffer(program, all_cores, add_out_cb_config);
     }
     // in2 scaler
     uint32_t in2_cb_index = tt::CBIndex::c_2;
@@ -1389,11 +1338,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
         output_cb_config = output_cb_config.set_globally_allocated_address(*output.buffer());
     }
     CBHandle cb_output = 0;
-    if (is_pre_all_gather) {
-        cb_output = tt::tt_metal::CreateCircularBuffer(program, sender_cores, output_cb_config);
-    } else {
-        cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
-    }
+    cb_output = tt::tt_metal::CreateCircularBuffer(program, sender_cores, output_cb_config);
 
     uint32_t output_reshard_cb_index = tt::CBIndex::c_17;
     tt::tt_metal::CircularBufferConfig output_reshard_cb_config =
@@ -1748,7 +1693,6 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
          writer_mcast_sender_kernels_id,
          writer_mcast_receiver_kernels_id,
          num_none_all_to_all_workers,
-         is_pre_all_gather,
          cb_in0,
          cb_in1,
          cb_stats,
@@ -1771,9 +1715,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
 
             if (b_tensor.has_value()) {
                 UpdateDynamicCircularBufferAddress(program, cb_in1, *b_tensor.value().buffer());
-                if (is_pre_all_gather) {
-                    UpdateDynamicCircularBufferAddress(program, cb_add_out, *src_buffer_a);
-                }
+                UpdateDynamicCircularBufferAddress(program, cb_add_out, *src_buffer_a);
             }
             if (stats_tensor.has_value()) {
                 UpdateDynamicCircularBufferAddress(program, cb_stats, *stats_tensor.value().buffer());

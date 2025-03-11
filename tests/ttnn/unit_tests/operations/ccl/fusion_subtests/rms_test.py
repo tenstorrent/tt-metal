@@ -55,7 +55,7 @@ def run_rms_fuse_impl(
         wrap_fabric_around_mesh=True,
     )
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
-    torch.manual_seed(4321)
+    torch.manual_seed(1234)
     num_cores = input_shard_grid.num_cores()
     total_cores = num_cores * num_devices
     padded_dim_per_core = int(math.ceil(elements_per_batch / total_cores / 32) * 32)
@@ -114,7 +114,10 @@ def run_rms_fuse_impl(
     )
 
     ccl_semaphore = ttnn.create_global_semaphore(mesh_device, input_shard_grid, 0)
-    tt_stats = ttnn.fused_rms_1_1_32_8192(input_tensor, ccl_semaphore, layer_norm_config)
+    tt_stats = ttnn.rms_norm_pre_all_gather(input_tensor, program_config=layer_norm_config)
+    new_tt_stats = ttnn.fused_rms_1_1_32_8192(input_tensor, ccl_semaphore, layer_norm_config)
+    print(tt_stats)
+    print(new_tt_stats)
     ag_memory_config = ttnn.create_sharded_memory_config(
         shape=(
             32,
