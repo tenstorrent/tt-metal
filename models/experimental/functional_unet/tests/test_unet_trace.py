@@ -462,7 +462,6 @@ def test_unet_trace_2cq_same_io(
 
 
 @skip_for_grayskull("UNet not currently supported on GS")
-@pytest.mark.parametrize("enable_async_mode", (True, False), indirect=True)
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 68864, "trace_region_size": 424960, "num_command_queues": 2}], indirect=True
 )
@@ -475,7 +474,6 @@ def test_unet_trace_2cq_same_io_multi_device(
     groups: int,
     iterations: int,
     mesh_device,
-    enable_async_mode,
     use_program_cache,
     reset_seeds,
 ):

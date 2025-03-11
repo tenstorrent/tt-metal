@@ -97,7 +97,8 @@ public:
         std::unique_ptr<MeshDeviceView> mesh_device_view,
         std::shared_ptr<MeshDevice> parent_mesh = {});
     ~MeshDevice() override;
-
+    void enqueue_to_thread_pool(std::function<void()>&& f);
+    void wait_for_thread_pool();
     MeshDevice(const MeshDevice&) = delete;
     MeshDevice& operator=(const MeshDevice&) = delete;
 

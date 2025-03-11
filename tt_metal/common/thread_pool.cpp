@@ -29,15 +29,23 @@ std::unordered_map<int, std::vector<uint32_t>> get_cpu_cores_per_numa_node() {
 
 uint32_t get_cpu_core_for_physical_device(uint32_t physical_device_id, uint32_t logical_cpu_offset) {
     static std::unordered_map<int, std::vector<uint32_t>> cpu_cores_per_numa_node = get_cpu_cores_per_numa_node();
+    static std::unordered_map<int, int> logical_cpu_id_per_numa_node = {};
+
     // Initialize to an invalid value. Determine the NUMA Node based on the physical device id.
     // If a NUMA Node is not found, use a round robin policy.
     int numa_node = -1;
-    if (physical_device_id < tt::Cluster::instance().number_of_user_devices()) {
-        numa_node = tt::Cluster::instance().get_numa_node_for_device(physical_device_id);
+    if (physical_device_id < tt::Cluster::instance().number_of_devices()) {
+        numa_node = physical_device_id % 2;  // tt::Cluster::instance().get_numa_node_for_device(physical_device_id);
     }
     if (cpu_cores_per_numa_node.find(numa_node) != cpu_cores_per_numa_node.end()) {
         auto& cpu_cores_on_node = cpu_cores_per_numa_node[numa_node];
-        return cpu_cores_on_node[(physical_device_id + logical_cpu_offset) % cpu_cores_on_node.size()];
+        if (logical_cpu_id_per_numa_node.find(numa_node) == logical_cpu_id_per_numa_node.end()) {
+            logical_cpu_id_per_numa_node[numa_node] = 0;
+        }
+        std::cout << "NUMA NODE " << numa_node << " LOGICAL CPU ID: " << logical_cpu_id_per_numa_node[numa_node]
+                  << " NUM CORES IN NODE: " << cpu_cores_on_node.size() << std::endl;
+        return cpu_cores_on_node[(logical_cpu_id_per_numa_node[numa_node]++) % cpu_cores_on_node.size()];
+
     } else {
         uint32_t num_threads = std::thread::hardware_concurrency();
         TT_FATAL(num_threads, "Could not detect the number of CPU cores on host.");
@@ -165,6 +173,7 @@ public:
         auto cpu_core_for_worker =
             thread_binding::get_cpu_core_for_physical_device(physical_device_id, logical_cpu_offset);
         thread_binding::set_worker_affinity(worker, cpu_core_for_worker);
+        std::cout << "Bind Worker: " << physical_device_id << " to " << cpu_core_for_worker << std::endl;
     }
 
     ~NumaAwareExecutor() {

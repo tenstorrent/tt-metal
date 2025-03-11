@@ -566,7 +566,6 @@ Tensor to_host<bfloat8_b>(const Tensor& tensor, bool blocking, ttnn::QueueId cq_
     return to_host<uint32_t>(tensor, blocking, cq_id);
 }
 
-// TODO: need to add cq_id to this function
 template <typename T>
 Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking, ttnn::QueueId cq_id) {
     // TT_FATAL(ttnn::distributed::is_mesh_buffer_tensor(tensor), "Tensor is not a mesh buffer tensor!");
@@ -578,26 +577,49 @@ Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking, ttnn::QueueId cq
     distributed::MeshCommandQueue& mesh_cq = device->mesh_command_queue(*cq_id);
     const auto num_buffers = storage.specs.size();
 
+    // Initialize vector of host buffers that data will be read into
+    std::vector<OwnedBuffer> buffers;
     std::vector<distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfers;
     std::vector<TensorSpec> specs;
-    std::vector<OwnedBuffer> buffers;
     buffers.reserve(num_buffers);
     specs.reserve(num_buffers);
     shard_data_transfers.reserve(num_buffers);
-    for (const auto& [coord, shard_tensor_spec] : storage.specs) {
-        std::vector<T> host_buffer;
-        const auto tensor_size_bytes = shard_tensor_spec.compute_packed_buffer_size_bytes();
-        host_buffer.resize(tensor_size_bytes / sizeof(T));
-        specs.push_back(shard_tensor_spec);
-        buffers.push_back(owned_buffer::create<T>(std::move(host_buffer)));
 
+    // Mutex guarding the list of buffers that allocated host memory will be inserted into
+    std::mutex buffers_mutex;
+    // Buffer index for current shard
+    uint32_t buffer_idx = 0;
+    for (const auto& [coord, shard_tensor_spec] : storage.specs) {
+        // Multithreaded memory allocation on host.
+        const auto tensor_size_bytes = shard_tensor_spec.compute_packed_buffer_size_bytes();
+        tensor.mesh_device()->enqueue_to_thread_pool([buffer_idx, &buffers_mutex, &buffers, tensor_size_bytes]() {
+            ZoneScopedN("AllocateBuffer");
+            std::vector<T> host_buffer(tensor_size_bytes / sizeof(T));
+            {
+                std::lock_guard lock(buffers_mutex);
+                buffers[buffer_idx] = owned_buffer::create<T>(std::move(host_buffer));
+            }
+        });
+        specs.push_back(shard_tensor_spec);
+        buffer_idx++;
+    }
+    // Wait for allocations to complete
+    tensor.mesh_device()->wait_for_thread_pool();
+    // Construct shard data transfers
+    buffer_idx = 0;
+    for (const auto& [coord, shard_tensor_spec] : storage.specs) {
+        const auto tensor_size_bytes = shard_tensor_spec.compute_packed_buffer_size_bytes();
         shard_data_transfers.push_back(distributed::MeshCommandQueue::ShardDataTransfer{
             .shard_coord = coord,
             .host_data = std::visit([](auto& b) { return reinterpret_cast<T*>(b.data()); }, buffers.back()),
             .region = BufferRegion(0, tensor_size_bytes)});
+        buffer_idx++;
     }
-
-    mesh_cq.enqueue_read_shards(shard_data_transfers, mesh_buffer, blocking);
+    // Issue read
+    {
+        ZoneScopedN("EnqueueReadShards");
+        mesh_cq.enqueue_read_shards(shard_data_transfers, mesh_buffer, blocking);
+    }
 
     MultiDeviceHostStorage host_storage(storage.strategy, std::move(buffers), std::move(specs));
     return Tensor(std::move(host_storage), tensor.get_tensor_spec());
