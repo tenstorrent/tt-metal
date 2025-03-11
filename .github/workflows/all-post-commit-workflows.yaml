@@ -70,7 +70,7 @@ jobs:
 
   # Slow Dispatch Unit Tests
   sd-unit-tests:
-    needs: build-artifact
+    needs: build-artifact-profiler
     secrets: inherit
     strategy:
       fail-fast: false
@@ -83,9 +83,9 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch}}
       runner-label: ${{ matrix.test-group.runner-label}}
-      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.build-artifact-profiler.outputs.ci-build-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
   # Fast Dispatch Unit Tests
   fast-dispatch-unit-tests:
     needs: build-artifact
