@@ -54,6 +54,13 @@ add_executable(
     ${CMAKE_CURRENT_SOURCE_DIR}/multi_thread/test_utils.cpp
 )
 
+target_link_libraries(
+    test_ccl_multi_cq_multi_device
+    PRIVATE
+        Boost::asio
+        Boost::lockfree
+)
+
 # Set up properties for all targets
 setup_ttnn_test_target(unit_tests_ttnn)
 setup_ttnn_test_target(unit_tests_ttnn_ccl)
