@@ -291,7 +291,7 @@ Tensor tensor_pad_to_tile(const Tensor& input_tensor, float pad_value) {
     ttnn::SmallVector<uint32_t> padded_shape;
     ttnn::SmallVector<uint32_t> input_tensor_start;
 
-    for (auto index = 0; index < input_tensor.get_padded_shape().rank() - 2; index++) {
+    for (auto index = 0; index < static_cast<int>(input_tensor.get_padded_shape().rank()) - 2; index++) {
         padded_shape.push_back(input_tensor.get_padded_shape()[index]);
         input_tensor_start.push_back(0);
     }

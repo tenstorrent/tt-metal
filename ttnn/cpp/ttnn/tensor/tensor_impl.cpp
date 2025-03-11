@@ -1215,7 +1215,10 @@ Tensor pad(
     }
 
     auto pad_value_ = static_cast<T>(pad_value);
-    const auto input_padded_shape = tensor.get_padded_shape();
+    auto input_padded_shape = tensor.get_padded_shape();
+    if (input_padded_shape.rank() < 2) {
+        input_padded_shape = input_padded_shape.to_rank(2);
+    }
     const auto input_strides = tensor.strides();
     const auto input_data_type = tensor.get_dtype();
 
@@ -1287,7 +1290,7 @@ Tensor pad(
         tensor.get_storage());
     return Tensor(
         OwnedStorage{output_buffer},
-        tensor.get_padded_shape(),
+        tensor.get_logical_shape(),
         output_padded_shape,
         tensor.get_dtype(),
         tensor.get_layout(),
