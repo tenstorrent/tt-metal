@@ -21,6 +21,7 @@ tt::tt_metal::operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     const std::optional<const Tensor>& b,
     const std::optional<const Tensor>& gamma,
     const std::optional<const Tensor>& beta,
+    const std::optional<const Tensor>& stats,
     Tensor& output,
     float eps,
     CoreCoord compute_grid_size,

@@ -288,6 +288,7 @@ operation::ProgramWithCallbacks RMSAllGather::create_program(
                     b,
                     gamma,
                     beta,
+                    std::nullopt,
                     output_tensor,
                     this->eps,
                     program_config.compute_with_storage_grid_size,
@@ -296,13 +297,26 @@ operation::ProgramWithCallbacks RMSAllGather::create_program(
                     program_config.block_w,
                     this->compute_kernel_config);
             } else {
+                TT_FATAL(false, "Program Config does not match");
+
                 using ProgramConfigType = std::decay_t<decltype(program_config)>;
                 uint32_t num_cores_x = 1;
                 uint32_t num_cores_y = 1;
                 CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
 
                 return frmsnorm_multi_core_sharded(
-                    a, b, gamma, beta, output_tensor, this->eps, grid_size, 1, 1, 1, this->compute_kernel_config);
+                    a,
+                    b,
+                    gamma,
+                    beta,
+                    std::nullopt,
+                    output_tensor,
+                    this->eps,
+                    grid_size,
+                    1,
+                    1,
+                    1,
+                    this->compute_kernel_config);
             }
         },
         this->program_config);
