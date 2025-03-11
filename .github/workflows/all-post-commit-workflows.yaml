@@ -52,8 +52,8 @@ jobs:
       build-wheel: true
       tracy: true
     secrets: inherit
-  build-artifact-sd:
-    uses: ./.github/workflows/build-artifact-sd.yaml
+  build-artifact-2204:
+    uses: ./.github/workflows/build-artifact-2204.yaml
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
@@ -75,7 +75,7 @@ jobs:
 
   # Slow Dispatch Unit Tests
   sd-unit-tests:
-    needs: build-artifact-sd
+    needs: build-artifact-2204
     secrets: inherit
     strategy:
       fail-fast: false
@@ -88,9 +88,9 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch}}
       runner-label: ${{ matrix.test-group.runner-label}}
-      docker-image: ${{ needs.build-artifact-sd.outputs.ci-build-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact-sd.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact-sd.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.build-artifact-2204.outputs.ci-build-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-2204.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-2204.outputs.wheel-artifact-name }}
   # Fast Dispatch Unit Tests
   fast-dispatch-unit-tests:
     needs: build-artifact
