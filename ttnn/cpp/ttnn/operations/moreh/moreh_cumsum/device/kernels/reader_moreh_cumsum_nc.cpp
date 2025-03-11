@@ -29,7 +29,7 @@ void kernel_main() {
         uint32_t u;
     } scaler;
     // scaler.f = 7.0f;
-    scaler.u = 7;
+    scaler.u = 0;
     fill_cb_with_value(cb_id_in1, scaler.u);
 
     uint32_t l1_write_addr_in0;
