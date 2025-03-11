@@ -57,17 +57,18 @@ uint32_t compare_conv_out_with_golden(
 uint32_t validate_generate_halo_kernel_config(
     tt::tt_metal::IDevice* device,
     const std::vector<ShardBoundary>& shard_boundaries,
-    const std::vector<std::vector<std::vector<uint16_t>>>& halo_kernel_config,
+    const std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int>& halo_kernel_config,
     const vector<bool>& pad_metadata,
     bool remote_read = false,
     bool is_block_sharded = false,
     bool transpose_mcast = false) {
-    auto flattened_pad_config1 = halo_kernel_config[0];
-    auto flattened_pad_config2 = halo_kernel_config[1];
-    auto flattened_local_config1 = halo_kernel_config[2];
-    auto flattened_local_config2 = halo_kernel_config[3];
-    auto flattened_remote_config1 = halo_kernel_config[4];
-    auto flattened_remote_config2 = halo_kernel_config[5];
+    auto flattened_pad_config1 = std::get<0>(halo_kernel_config)[0];
+    auto flattened_pad_config2 = std::get<0>(halo_kernel_config)[1];
+    auto flattened_local_config1 = std::get<0>(halo_kernel_config)[2];
+    auto flattened_local_config2 = std::get<0>(halo_kernel_config)[3];
+    auto flattened_remote_config1 = std::get<0>(halo_kernel_config)[4];
+    auto flattened_remote_config2 = std::get<0>(halo_kernel_config)[5];
+    uint32_t max_ref_size = std::get<1>(halo_kernel_config);
 
     uint32_t padded_input_tensor_buf_idx = 0;
     uint32_t invalid_pads = 0, invalid_indices = 0;
