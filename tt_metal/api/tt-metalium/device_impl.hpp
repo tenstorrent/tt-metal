@@ -10,7 +10,6 @@
 #include "device.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "work_executor_types.hpp"
-#include "l1_banking_allocator.hpp"
 #include "data_types.hpp"
 #include "program_device_map.hpp"
 #include "build.hpp"

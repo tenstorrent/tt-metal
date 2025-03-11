@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-#include "allocator.hpp"
+#include <tt-metalium/allocator.hpp>
 
 namespace tt {
 
