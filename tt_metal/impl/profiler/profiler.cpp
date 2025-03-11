@@ -9,9 +9,9 @@
 
 #include <host_api.hpp>
 #include <tt_metal.hpp>
-#include <profiler.hpp>
-#include <profiler_state.hpp>
-#include <common.hpp>
+#include "profiler.hpp"
+#include "profiler_state.hpp"
+#include "profiler_paths.hpp"
 #include "hostdevcommon/profiler_common.h"
 #include <rtoptions.hpp>
 #include <dev_msgs.h>
@@ -28,8 +28,7 @@ static kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
     return static_cast<kernel_profiler::PacketTypes>((timer_id >> 16) & 0x7);
 }
 
-void DeviceProfiler::readRiscProfilerResults(
-    IDevice* device, CoreCoord& worker_core) {
+void DeviceProfiler::readRiscProfilerResults(IDevice* device, CoreCoord& worker_core) {
     ZoneScoped;
     auto device_id = device->id();
 

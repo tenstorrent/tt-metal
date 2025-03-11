@@ -17,6 +17,7 @@
 #include <mutex>
 #include <utility>
 #include <buffer_constants.hpp>
+#include "hal.hpp"
 #include "umd/device/tt_soc_descriptor.h"
 #include "fmt/base.h"
 #include <reflection.hpp>
@@ -521,6 +522,16 @@ uint32_t Buffer::num_dev_pages() const {
     }
 
     return this->shard_spec().num_pages() * this->num_cores().value();
+}
+
+HalMemType Buffer::memory_type() const {
+    if (this->is_dram()) {
+        return HalMemType::DRAM;
+    } else if (this->is_l1()) {
+        return HalMemType::L1;
+    } else {
+        TT_THROW("Unknown HAL memory type for {} buffer type", this->buffer_type());
+    }
 }
 
 CoreType Buffer::core_type() const {
