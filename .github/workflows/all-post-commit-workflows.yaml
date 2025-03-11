@@ -77,7 +77,7 @@ jobs:
 
   # Slow Dispatch Unit Tests
   sd-unit-tests:
-    needs: build-artifact-profiler
+    needs: build-artifact-sd
     secrets: inherit
     strategy:
       fail-fast: false
