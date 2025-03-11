@@ -90,6 +90,8 @@ class Job(BaseModel):
     failure_signature: Optional[str] = Field(None, description="Failure signature.")
     failure_description: Optional[str] = Field(None, description="Failure description.")
     tests: List[Test] = []
+    job_label: Optional[str] = Field(description="CI job labels.")
+    tt_smi_version: Optional[str] = Field(description="Version of tt-smi used for the CI job.")
 
     # Model validator to check the unique combination constraint
     @model_validator(mode="before")
