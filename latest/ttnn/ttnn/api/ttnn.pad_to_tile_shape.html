@@ -129,7 +129,7 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.pad_to_tile_shape">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">pad_to_tile_shape</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">unpadded_shape</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Annotated[list[int],</span> <span class="pre">FixedSize(4)]</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pad_c</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pad_n</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pad_h</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pad_w</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#ttnn.pad_to_tile_shape" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">pad_to_tile_shape</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">unpadded_shape</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Annotated[list[int],</span> <span class="pre">FixedSize(4)]</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#ttnn.pad_to_tile_shape" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>Pads the given shape to tile shape based on specified padding options.</p>
@@ -137,13 +137,7 @@
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<ul class="simple">
-<li><p><strong>unpadded_shape</strong> (<em>List</em><em> of </em><em>[</em><em>int</em><em>]</em>) – The original shape of the tensor to pad.</p></li>
-<li><p><strong>pad_c</strong> (<em>bool</em><em>, </em><em>optional</em>) – Pad the channel dimension. Defaults to <cite>False</cite>.</p></li>
-<li><p><strong>pad_n</strong> (<em>bool</em><em>, </em><em>optional</em>) – Pad the batch dimension. Defaults to <cite>False</cite>.</p></li>
-<li><p><strong>pad_h</strong> (<em>bool</em><em>, </em><em>optional</em>) – Pad the height dimension. Defaults to <cite>True</cite>.</p></li>
-<li><p><strong>pad_w</strong> (<em>bool</em><em>, </em><em>optional</em>) – Pad the width dimension. Defaults to <cite>True</cite>.</p></li>
-</ul>
+<p><strong>unpadded_shape</strong> (<em>List</em><em> of </em><em>[</em><em>int</em><em>]</em>) – The original shape of the tensor to pad.</p>
 </dd>
 <dt class="field-even">Returns<span class="colon">:</span>
 </dt>
@@ -158,7 +152,7 @@
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
 <div class="doctest highlight-default notranslate">
-<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">padded_shape</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">pad_to_tile_shape</span><span class="p">(</span><span class="n">unpadded_shape</span><span class="o">=</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="n">pad_c</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">pad_n</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">pad_h</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">pad_w</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">padded_shape</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">pad_to_tile_shape</span><span class="p">(</span><span class="n">unpadded_shape</span><span class="o">=</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">])</span>
 </pre></div>
 </div>
 </div>
