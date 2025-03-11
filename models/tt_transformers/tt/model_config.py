@@ -118,6 +118,8 @@ class ModelArgs:
         self.from_hf_url = False  # updated below if true
         self.arch_name = ttnn.get_arch_name()
         self.prefill_len_cutoff = 512 if self.arch_name == "blackhole" else 1024
+        # TODO the following is parametrized for a vocab size of 128256 (used in LLama3). Should generalize for other models
+        self.max_columns_per_device_lm_head = 128256 // 8 if self.arch_name == "blackhole" else 128256 // 4
 
         assert not os.getenv(
             "FAKE_DEVICE"
@@ -204,17 +206,18 @@ class ModelArgs:
         # Set the max number of tokens for each prefill chunk based on the model and device
         max_prefill_chunk_size_div1024 = os.getenv("MAX_PREFILL_CHUNK_SIZE")
         if max_prefill_chunk_size_div1024 is None:
+            # TODO Improve this to be more general to more devices and models
             MAX_PREFILL_CHUNK_SIZES_DIV1024 = {
-                "Llama3.2-1B": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128},
-                "Llama3.2-3B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128},
-                "Llama3.1-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128},
-                "Llama3.2-11B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128},
-                "Llama3.1-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128},
-                "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128},
-                "Qwen2.5-7B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128},
-                "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 32, "TG": 128},
-                "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128},
-                "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128},
+                "Llama3.2-1B": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Llama3.2-3B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Llama3.1-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Llama3.2-11B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Llama3.1-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
+                "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
+                "Qwen2.5-7B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
+                "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
             }
             try:
                 max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.base_model_name][self.device_name]
