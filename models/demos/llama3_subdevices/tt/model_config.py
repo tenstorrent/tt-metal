@@ -136,11 +136,7 @@ class TtModelArgs:
     )
 
     LOCAL_LLAMA_PARAMS = {
-        "LLAMA3_2_1B_PARAMS": "models/demos/llama3/model_params/Llama3.2-1B-Instruct",
-        "LLAMA3_2_3B_PARAMS": "models/demos/llama3/model_params/Llama3.2-3B-Instruct",
-        "LLAMA3_1_8B_PARAMS": "models/demos/llama3/model_params/Llama3.1-8B-Instruct",
-        "LLAMA3_2_11B_PARAMS": "models/demos/llama3/model_params/Llama3.2-11B-Vision-Instruct",
-        "LLAMA3_1_70B_PARAMS": "models/demos/llama3/model_params/Llama3.1-70B-Instruct",
+        "LLAMA3_1_70B_PARAMS": "models/demos/llama3_subdevices/model_params/Llama3.1-70B-Instruct",
     }
 
     def __init__(
