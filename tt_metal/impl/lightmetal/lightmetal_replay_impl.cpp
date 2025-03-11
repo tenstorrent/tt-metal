@@ -21,6 +21,8 @@
 
 namespace tt::tt_metal {
 
+namespace detail {
+
 //////////////////////////////////////
 // Helper Functions                 //
 //////////////////////////////////////
@@ -65,8 +67,23 @@ TraceDescriptor from_flatbuffer(const tt::tt_metal::flatbuffer::TraceDescriptor*
     return trace_desc;
 }
 
+//////////////////////////////////////
+// LightMetalReplay Class           //
+//////////////////////////////////////
+
+LightMetalReplayImpl::LightMetalReplayImpl(LightMetalBinary&& binary, IDevice* device) :
+    binary_(std::move(binary)), fb_binary_(nullptr), device_(device) {
+    if (binary_.is_empty()) {
+        log_warning(tt::LogMetalTrace, "Empty LightMetalBinary provided to LightMetalReplay.");
+    }
+
+    show_reads_ = parse_env("TT_LIGHT_METAL_SHOW_READS", false);
+    disable_checking_ = parse_env("TT_LIGHT_METAL_DISABLE_CHECKING", false);
+    fb_binary_ = parse_flatbuffer_binary();  // Parse and store the FlatBuffer binary
+}
+
 // Needs access to BufferMap, so part of LightMetalReplay class
-std::shared_ptr<RuntimeArgs> LightMetalReplay::rt_args_from_flatbuffer(
+std::shared_ptr<RuntimeArgs> LightMetalReplayImpl::rt_args_from_flatbuffer(
     const FlatbufferRuntimeArgVector flatbuffer_args) {
     auto runtime_args = std::make_shared<RuntimeArgs>();
 
@@ -100,21 +117,6 @@ std::shared_ptr<RuntimeArgs> LightMetalReplay::rt_args_from_flatbuffer(
     }
 
     return runtime_args;
-}
-
-//////////////////////////////////////
-// LightMetalReplay Class           //
-//////////////////////////////////////
-
-LightMetalReplayImpl::LightMetalReplayImpl(LightMetalBinary&& binary, IDevice* device) :
-    binary_(std::move(binary)), fb_binary_(nullptr), device_(device) {
-    if (binary_.is_empty()) {
-        log_warning(tt::LogMetalTrace, "Empty LightMetalBinary provided to LightMetalReplay.");
-    }
-
-    show_reads_ = parse_env("TT_LIGHT_METAL_SHOW_READS", false);
-    disable_checking_ = parse_env("TT_LIGHT_METAL_DISABLE_CHECKING", false);
-    fb_binary_ = parse_flatbuffer_binary();  // Parse and store the FlatBuffer binary
 }
 
 const tt::tt_metal::flatbuffer::LightMetalBinary* LightMetalReplayImpl::parse_flatbuffer_binary() {
@@ -759,4 +761,5 @@ bool LightMetalReplayImpl::run() {
     }
 }
 
+}  // namespace detail
 }  // namespace tt::tt_metal
