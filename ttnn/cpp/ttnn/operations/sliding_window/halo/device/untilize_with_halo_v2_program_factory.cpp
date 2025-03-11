@@ -284,10 +284,9 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     reader_ct_args[3] = 0;
 
     KernelHandle reader_kernel_id1 = CreateKernel(
-        program,ß
-        in_place
-            ? "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather_in_place.cpp"
-            : "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather.cpp",
+        program,
+        in_place ? "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather_in_place.cpp"
+                 : "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather.cpp",
         all_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_ct_args});
