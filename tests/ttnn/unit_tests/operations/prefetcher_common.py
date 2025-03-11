@@ -458,6 +458,7 @@ def run_prefetcher_mm(
                     memory_config=output_mem_configs[t],
                     compute_kernel_config=compute_kernel_config,
                     global_cb=global_circular_buffer,
+                    sub_device_id=worker_sub_device_id,
                 )
                 outputs_l1.append(output_t)
 

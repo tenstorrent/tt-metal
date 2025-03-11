@@ -1752,6 +1752,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
     auto all_cores = device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX,
         sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
+    // tt::log_info("all_cores: {}", all_cores);
     constexpr bool row_major = true;
     CoreRangeSet all_worker_cores = a.shard_spec().value().grid;
     std::vector<CoreRange> ring_list = all_worker_cores.ranges();
@@ -2044,9 +2045,9 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
     auto all_cores_vec = corerange_to_cores(all_cores, std::nullopt, row_major);
     auto worker_cores_vec = corerange_to_cores(all_worker_cores, std::nullopt, row_major);
     auto hop_cores_vec = corerange_to_cores(hop_cores, std::nullopt, row_major);
-    tt::log_info("all_cores_vec: {}", all_cores_vec);
-    tt::log_info("worker_cores_vec: {}", worker_cores_vec);
-    tt::log_info("hop_cores_vec: {}", hop_cores_vec);
+    // tt::log_info("all_cores_vec: {}", all_cores_vec);
+    // tt::log_info("worker_cores_vec: {}", worker_cores_vec);
+    // tt::log_info("hop_cores_vec: {}", hop_cores_vec);
     std::vector<CoreCoord> idle_cores;
     for (uint32_t i = 0; i < all_cores_vec.size(); ++i) {
         auto core = all_cores_vec[i];
@@ -2080,18 +2081,6 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
             tt_metal::SetRuntimeArgs(program, mm_kernel, core, mm_kernel_args);
 
             idle_cores.push_back(core);
-        } else if (!core_is_in_all_worker_cores && core_is_in_hop_cores) {  // not worker core but hop core
-            // tt::log_info("HOP : {}", core);
-            auto core_type = CORE_TYPE::HOP_CORE;  // hop core
-            // in1
-            std::vector<uint32_t> mm_kernel_in1_sender_writer_args;
-            mm_kernel_in1_sender_writer_args.push_back((std::uint32_t)core_type);
-            tt_metal::SetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, core, mm_kernel_in1_sender_writer_args);
-
-            // compute
-            std::vector<uint32_t> mm_kernel_args;
-            mm_kernel_args.push_back((std::uint32_t)core_type);
-            tt_metal::SetRuntimeArgs(program, mm_kernel, core, mm_kernel_args);
         }
     }
 
@@ -2101,11 +2090,11 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
         const auto& core = worker_cores_vec[i];
         const auto& core_noc = device->worker_core_from_logical_core(core);
 
-        tt::log_info("core : {}", core);
+        // tt::log_info("core : {}", core);
 
-        if (std::find(idle_cores.begin(), idle_cores.end(), core) != idle_cores.end()) {
-            tt::log_info("FIND WORKER CORE in IDLE CORE RANGE : {}", core);
-        }
+        // if (std::find(idle_cores.begin(), idle_cores.end(), core) != idle_cores.end()) {
+        //     tt::log_info("FIND WORKER CORE in IDLE CORE RANGE : {}", core);
+        // }
 
         /* in0 */
         auto core_type = CORE_TYPE::WORKER_CORE;  // worker core
@@ -2162,10 +2151,10 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
         const auto& core = hop_cores_vec[i];
         const auto& core_noc = device->worker_core_from_logical_core(core);
 
-        if (std::find(idle_cores.begin(), idle_cores.end(), core) != idle_cores.end()) {
-            tt::log_info("FIND WORKER CORE in IDLE CORE RANGE : {}", core);
-        }
-        tt::log_info("hopcore : {}", core);
+        // if (std::find(idle_cores.begin(), idle_cores.end(), core) != idle_cores.end()) {
+        //     tt::log_info("FIND WORKER CORE in IDLE CORE RANGE : {}", core);
+        // }
+        // tt::log_info("hopcore : {}", core);
 
         /* in0 */
         CoreCoord next_core = end_of_hop ? worker_cores_vec[num_cores - 1] : hop_cores_vec[i + 1];
@@ -2181,6 +2170,16 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
             (std::uint32_t)end_of_hop,  // end_of_hop
         };
         tt_metal::SetRuntimeArgs(program, mm_kernel_in0_id, core, mm_in0_args);
+
+        // in1
+        std::vector<uint32_t> mm_kernel_in1_sender_writer_args;
+        mm_kernel_in1_sender_writer_args.push_back((std::uint32_t)core_type);
+        tt_metal::SetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, core, mm_kernel_in1_sender_writer_args);
+
+        // compute
+        std::vector<uint32_t> mm_kernel_args;
+        mm_kernel_args.push_back((std::uint32_t)core_type);
+        tt_metal::SetRuntimeArgs(program, mm_kernel, core, mm_kernel_args);
     }
 
     auto override_runtime_arguments_callback =
