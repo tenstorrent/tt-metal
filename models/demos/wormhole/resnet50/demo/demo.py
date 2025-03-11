@@ -40,7 +40,6 @@ def test_demo_sample(device, use_program_cache, batch_size, input_loc, imagenet_
     "batch_size, act_dtype, weight_dtype",
     ((16, ttnn.bfloat8_b, ttnn.bfloat8_b),),
 )
-# @pytest.mark.parametrize("enable_async_mode", (True), indirect=True)
 def test_demo_trace_with_imagenet(
     device,
     use_program_cache,
