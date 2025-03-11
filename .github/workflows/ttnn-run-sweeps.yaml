@@ -69,6 +69,9 @@ on:
           - eltwise.unary.ceil.ceil_pytorch2
           - eltwise.unary.trunc.trunc
           - eltwise.unary.trunc.trunc_sharded
+          - eltwise.unary.unary_chain.unary_chain_output
+          - eltwise.unary.unary_chain.unary_chain_sharded
+          - eltwise.unary.unary_chain.unary_chain
           - eltwise.unary.floor.floor
           - eltwise.unary.floor.floor_forge
           - eltwise.unary.floor.floor_pytorch2
