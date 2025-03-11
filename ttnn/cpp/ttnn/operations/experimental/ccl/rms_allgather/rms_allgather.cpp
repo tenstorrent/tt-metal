@@ -3,11 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-
-#include "ttnn/decorators.hpp"
-#include "ttnn/operations/normalization/layernorm/device/layernorm_types.hpp"
-
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "rms_allgather.hpp"
 
 namespace ttnn {
 namespace operations::fused::normalization {
@@ -15,10 +11,10 @@ namespace operations::fused::normalization {
 ttnn::Tensor ExecuteFusedRMSNorm::invoke(
     const ttnn::Tensor& input_tensor,
     const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+    const ttnn::operations::normalization::LayerNormProgramConfig& program_config,
     const ttnn::ccl::Topology topology,
     const std::optional<const DataType> dtype,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const LayerNormProgramConfig>& program_config,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const ttnn::Tensor>& residual_input_tensor,
     float epsilon,
@@ -29,17 +25,17 @@ ttnn::Tensor ExecuteFusedRMSNorm::invoke(
                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
+    // Todo deal with .semaphore when fusing all gather
     return operation::run(
                RMSAllGather{
-                   .dtype = dtype,
-                   .topology = topology,
-                   .global_semaphore = multi_device_global_semaphore,
                    .eps = epsilon,
                    .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
-                   .program_config = program_config.value_or(LayerNormDefaultProgramConfig{}),
-                   .compute_kernel_config = kernel_config_val},
+                   .program_config = program_config,
+                   .compute_kernel_config = kernel_config_val,
+                   .dtype = dtype,
+                   .topology = topology},
                {input_tensor},
-               {residual_input_tensor, weight, bias, std::nullopt})
+               {residual_input_tensor, weight, bias})
         .at(0);
 }
 
