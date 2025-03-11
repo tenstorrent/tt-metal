@@ -85,6 +85,17 @@ def run_conv(
     else:
         total_batch_size = batch_size
 
+    if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat8_b:
+        pytest.skip("Row major layout not compatible with bfloat8_b")
+    if (
+        shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        and output_channels > 256
+        and output_layout == ttnn.ROW_MAJOR_LAYOUT
+    ):
+        pytest.xfail(
+            "Untilize_out is not supported when out_c > 256 for Height Sharded. https://github.com/tenstorrent/tt-metal/issues/18633"
+        )
+
     torch.manual_seed(0)
     conv_input_shape = (total_batch_size, input_channels, input_height, input_width)
     conv_weight_shape = (output_channels, input_channels // groups, filter_height, filter_width)
@@ -758,109 +769,6 @@ def test_conv_for_segformer_512x512(
     )
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="This is test is for Grayskull only. Skipping")
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-@pytest.mark.parametrize(
-    "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override",
-    (
-        # unique convs in rn50 (complete list)
-        # first conv post folding and input_channels padding to tile width
-        # (64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True), act_block_h_ntiles % 2 == 0
-        # rn50 layer1
-        (64, 64, 56, 56, 1, 1, 1, 1, 0, 0, HS, None),
-        (64, 64, 56, 56, 1, 1, 2, 2, 0, 0, HS, None),
-        (64, 64, 56, 56, 3, 3, 1, 1, 1, 1, HS, None),
-        # rn50 layer2
-        (128, 128, 56, 56, 3, 3, 2, 2, 1, 1, HS, None),
-        (128, 128, 28, 28, 3, 3, 1, 1, 1, 1, HS, None),
-        # rn50 layer3
-        (256, 256, 28, 28, 3, 3, 2, 2, 1, 1, BS, None),
-        (256, 256, 14, 14, 3, 3, 1, 1, 1, 1, BS, None),
-        # rn50 layer4
-        (512, 512, 14, 14, 3, 3, 2, 2, 1, 1, BS, None),
-        (512, 512, 7, 7, 3, 3, 1, 1, 1, 1, BS, None),
-        ## 1x1s2
-        # (256, 256, 28, 28, 1, 1, 2, 2, 0, 0, HS, {"num_cores_nhw": 98}),
-    ),
-)
-@pytest.mark.parametrize(
-    "batch_size",
-    [8, 16, 20],
-)
-@pytest.mark.parametrize(
-    "weights_dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
-)
-@pytest.mark.parametrize(
-    "activations_dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
-)
-@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
-@pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
-def test_resnet50_conv_gs(
-    device,
-    torch_tensor_map,
-    use_program_cache,
-    math_fidelity,
-    activations_dtype,
-    weights_dtype,
-    batch_size,
-    output_channels,
-    input_channels,
-    input_height,
-    input_width,
-    filter_height,
-    filter_width,
-    stride_h,
-    stride_w,
-    pad_h,
-    pad_w,
-    shard_layout,
-    config_override,
-    auto_shard,
-):
-    if batch_size > 8 and (activations_dtype != ttnn.bfloat8_b or weights_dtype != ttnn.bfloat8_b):
-        pytest.skip("Batch > 8 must be run fully bfp8")
-    if batch_size == 20 and input_channels >= 128 and filter_width > 1:
-        pytest.skip("L1 Allocation error")
-    if (
-        activations_dtype == ttnn.bfloat16
-        and batch_size == 20
-        and (
-            output_channels == 64
-            or (
-                stride_h == 2
-                and (output_channels == 256 or (output_channels == 128 and weights_dtype == ttnn.bfloat16))
-            )
-        )
-    ):
-        pytest.skip("Skipping test because it won't fit in L1!")
-
-    run_conv(
-        device,
-        torch_tensor_map,
-        math_fidelity,
-        activations_dtype,
-        weights_dtype,
-        batch_size,
-        output_channels,
-        input_channels,
-        input_height,
-        input_width,
-        filter_height,
-        filter_width,
-        stride_h,
-        stride_w,
-        pad_h,
-        pad_w,
-        config_override=config_override,
-        use_shallow_conv_variant=input_channels == 16,
-        debug=not (batch_size == 20 and input_height == 115),
-        auto_shard=auto_shard,
-        shard_layout=shard_layout,
-    )
-
-
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override",
@@ -1357,8 +1265,8 @@ def test_sd_conv(
     [ttnn.bfloat8_b],
 )
 @pytest.mark.parametrize(
-    "activations_dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
+    "activations_dtype, output_layout",
+    [(ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT), (ttnn.bfloat8_b, ttnn.TILE_LAYOUT)],
 )
 @pytest.mark.parametrize(
     "fp32_accum",
@@ -1388,6 +1296,7 @@ def test_sd_conv_wh(
     pad_w,
     shard_layout,
     config_override,
+    output_layout,
 ):
     if device.core_grid.y == 7:
         pytest.skip("This test is not supported for N300")
@@ -1452,116 +1361,8 @@ def test_sd_conv_wh(
             use_shallow_conv_variant=(input_channels == 16),
             fp32_accum=fp32_accum,
             packer_l1_acc=True,
+            output_layout=output_layout,
         )
-
-
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-@pytest.mark.parametrize(
-    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override, use_shallow_conv_variant",
-    (
-        # unet convs with batch size 2
-        # unique convs in unet (complete list)
-        (2, 16, 3, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 64}, True),
-        (2, 16, 16, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 64}, True),
-        (2, 16, 16, 528, 80, 3, 3, 1, 1, 1, 1, HS, None, False),
-        (2, 32, 16, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, True),
-        (2, 32, 32, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, True),
-        (2, 32, 32, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False),
-        (2, 64, 32, 66, 10, 3, 3, 1, 1, 1, 1, HS, None, False),
-        (2, 64, 64, 66, 10, 3, 3, 1, 1, 1, 1, HS, None, False),
-        (2, 32, 96, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False),
-        (2, 32, 32, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False),
-        (2, 32, 64, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, True),
-        (2, 32, 32, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, True),
-        # fails. mismatch. It passes when input_channels=64. Probably an issue with padding when input_channels % 32 != 0.
-        (
-            2,
-            16,
-            48,
-            528,
-            80,
-            3,
-            3,
-            1,
-            1,
-            1,
-            1,
-            HS,
-            {"act_block_h": 32},
-            False,
-        ),
-        (2, 16, 16, 528, 80, 3, 3, 1, 1, 1, 1, HS, None, False),
-        (2, 16, 32, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 8 * 32}, False),
-        (2, 16, 16, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 8 * 32}, False),
-        (2, 1, 16, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 8 * 32}, False),
-    ),
-)
-@pytest.mark.parametrize(
-    "weights_dtype",
-    [ttnn.bfloat8_b],
-)
-@pytest.mark.parametrize(
-    "activations_dtype",
-    [ttnn.bfloat8_b, ttnn.bfloat16],
-)
-@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
-@pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("auto_shard", [True, BS], ids=["auto_shard", "no_auto_shard"])
-def test_unet_conv(
-    device,
-    torch_tensor_map,
-    use_program_cache,
-    math_fidelity,
-    activations_dtype,
-    weights_dtype,
-    batch_size,
-    output_channels,
-    input_channels,
-    input_height,
-    input_width,
-    filter_height,
-    filter_width,
-    stride_h,
-    stride_w,
-    pad_h,
-    pad_w,
-    shard_layout,
-    config_override,
-    use_shallow_conv_variant,
-    output_layout,
-    auto_shard,
-):
-    if is_blackhole():
-        pytest.skip("This test is for Grayskull only")
-
-    if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat8_b:
-        pytest.skip("Row major layout not compatible with bfloat8_b")
-    if output_layout == ttnn.ROW_MAJOR_LAYOUT and input_height >= 1056:
-        pytest.skip("OOM")
-    run_conv(
-        device,
-        torch_tensor_map,
-        math_fidelity,
-        activations_dtype,
-        weights_dtype,
-        batch_size,
-        output_channels,
-        input_channels,
-        input_height,
-        input_width,
-        filter_height,
-        filter_width,
-        stride_h,
-        stride_w,
-        pad_h,
-        pad_w,
-        config_override,
-        shard_layout=shard_layout,
-        use_shallow_conv_variant=use_shallow_conv_variant,
-        output_layout=output_layout,
-        auto_shard=auto_shard,
-    )
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
@@ -1594,11 +1395,10 @@ def test_unet_conv(
     [ttnn.bfloat8_b, ttnn.bfloat16],
 )
 @pytest.mark.parametrize(
-    "activations_dtype",
-    [ttnn.bfloat8_b, ttnn.bfloat16],
+    "activations_dtype, output_layout",
+    [(ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT), (ttnn.bfloat8_b, ttnn.TILE_LAYOUT)],
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
-@pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
 def test_unet_conv_wh(
     device,
@@ -2076,6 +1876,8 @@ def test_conv_core_nondivis(
 
 
 # The following test takes various shape sizes from resnet50, unet and stable diffusion and tests for different number of groups - all the way to num_groups = num_in_channels (depthwise conv)
+
+
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("stride", [1])
 @pytest.mark.parametrize("batch_size", [1])
@@ -2159,6 +1961,8 @@ def test_conv_dilation(
 
 
 # The following test takes various shape sizes from resnet50, unet and stable diffusion and tests for different number of groups - all the way to num_groups = num_in_channels (depthwise conv)
+
+
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, input_channels, output_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, groups, shard_layout, config_override, use_shallow_conv_variant",
