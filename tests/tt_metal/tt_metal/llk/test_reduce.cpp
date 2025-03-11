@@ -389,7 +389,7 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
     }
     // recover a linear view of input vector for consumption by gold_ function
     std::vector<uint16_t> src_linear = convert_layout<uint16_t>(
-        tt::stl::MakeConstSpan(u16_src0_vec),
+        u16_src0_vec,
         test_config.shape,
         tests::utils::TensorLayoutType::TILED_NFACES,
         tests::utils::TensorLayoutType::LIN_ROW_MAJOR);
@@ -398,7 +398,7 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
 
     // Tilize from row major and convert to pairs (uint32_t)
     auto gold_4f_u32 = u32_from_u16_vector(convert_layout<uint16_t>(
-        tt::stl::MakeConstSpan(gold_reduced),
+        gold_reduced,
         test_config.result_shape,
         tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
         tests::utils::TensorLayoutType::TILED_NFACES));

@@ -166,7 +166,7 @@ int main(int argc, char** argv) {
                 tests::utils::TensorLayoutType::TILED_NFACES,
                 tests::utils::TensorLayoutType::LIN_ROW_MAJOR);
             vector<uint16_t> src1_linear = convert_layout<uint16_t>(
-                tt::stl::MakeConstSpan(u16_src1_vec),
+                u16_src1_vec,
                 shapeB,
                 tests::utils::TensorLayoutType::TILED_NFACES,
                 tests::utils::TensorLayoutType::LIN_ROW_MAJOR);
@@ -174,7 +174,7 @@ int main(int argc, char** argv) {
 
             // Tilize gold from row major and convert to pairs (uint32_t)
             auto gold_4f_u32 = u32_from_u16_vector(convert_layout<uint16_t>(
-                tt::stl::MakeConstSpan(ref_bmm),
+                ref_bmm,
                 shapeC,
                 tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
                 tests::utils::TensorLayoutType::TILED_NFACES));

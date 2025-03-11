@@ -156,7 +156,7 @@ int main(int argc, char** argv) {
 
         // recover a linear view of input vector for consumption by gold_ function
         vector<uint16_t> src_linear = convert_layout<uint16_t>(
-            tt::stl::MakeConstSpan(src_4f_16),
+            src_4f_16,
             shape,
             tests::utils::TensorLayoutType::TILED_NFACES,
             tests::utils::TensorLayoutType::LIN_ROW_MAJOR);
@@ -165,7 +165,7 @@ int main(int argc, char** argv) {
         // Tilize from row major and convert to pairs (uint32_t)
         vector<uint32_t> shapeR{shape[0], shape[2], shape[1], shape[3]};
         auto gold_16_4f = convert_layout<uint16_t>(
-            tt::stl::MakeConstSpan(gold_reduced),
+            gold_reduced,
             shapeR,
             tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
             tests::utils::TensorLayoutType::TILED_NFACES);
