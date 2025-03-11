@@ -238,7 +238,7 @@ jobs:
       - name: Set wheel artifact name
         id: set_wheel_artifact_name
         run: |
-          WHEEL_ARTIFACT_NAME="eager-dist-${{ inputs.distro }}-${{ inputs.version }}-any${{ (inputs.tracy && '-profiler') || '' }}"
+          WHEEL_ARTIFACT_NAME="eager-dist-2204-${{ inputs.distro }}-${{ inputs.version }}-any${{ (inputs.tracy && '-profiler') || '' }}"
           echo "wheel_artifact_name=$WHEEL_ARTIFACT_NAME" >> "$GITHUB_ENV"
           echo "wheel_artifact_name=$WHEEL_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
 
