@@ -13,7 +13,8 @@
 #include "buffer.hpp"
 #include "program_impl.hpp"
 #include "profiler_state.hpp"
-#include "common.hpp"
+#include "profiler_types.hpp"
+#include "profiler_paths.hpp"
 #include "tracy/TracyTTDevice.hpp"
 #include "common/TracyTTDeviceData.hpp"
 
@@ -25,9 +26,6 @@ using std::chrono::steady_clock;
 namespace tt {
 
 namespace tt_metal {
-
-enum class ProfilerDumpState { NORMAL, CLOSE_DEVICE_SYNC, LAST_CLOSE_DEVICE };
-enum class ProfilerSyncState { INIT, CLOSE_DEVICE };
 
 class DeviceProfiler {
 private:
@@ -74,8 +72,7 @@ private:
         uint64_t timestamp);
 
     // Helper function for reading risc profile results
-    void readRiscProfilerResults(
-        IDevice* device, CoreCoord& worker_core);
+    void readRiscProfilerResults(IDevice* device, CoreCoord& worker_core);
 
     // Push device results to tracy
     void pushTracyDeviceResults();
@@ -100,17 +97,17 @@ public:
     // DRAM Vector
     std::vector<uint32_t> profile_buffer;
 
-    //Device events
+    // Device events
     std::set<tracy::TTDeviceEvent> device_events;
 
     std::set<tracy::TTDeviceEvent> device_sync_events;
 
     std::set<tracy::TTDeviceEvent> device_sync_new_events;
 
-    //shift
+    // shift
     int64_t shift = 0;
 
-    //frequency scale
+    // frequency scale
     double freqScale = 1.0;
 
     uint32_t my_device_id = 0;
