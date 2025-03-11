@@ -23,7 +23,7 @@ void DemuxKernel::GenerateStaticConfigs() {
     static_config_.rx_queue_size_words = 0x10000 >> 4;
     static_config_.demux_fan_out = downstream_kernels_.size();
 
-    static_config_.remote_rx_network_type = DispatchRemoteNetworkType::NOC0;
+    static_config_.remote_rx_network_type = tt::packet_queue::DispatchRemoteNetworkType::NOC0;
 
     static_config_.test_results_buf_addr_arg = 0;
     static_config_.test_results_buf_size_bytes = 0;
@@ -32,7 +32,7 @@ void DemuxKernel::GenerateStaticConfigs() {
     for (int idx = 0; idx < downstream_kernels_.size(); idx++) {
         FDKernel* k = downstream_kernels_[idx];
         static_config_.remote_tx_queue_id[idx] = 0;
-        static_config_.remote_tx_network_type[idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
+        static_config_.remote_tx_network_type[idx] = (uint32_t)tt::packet_queue::DispatchRemoteNetworkType::NOC0;
         static_config_.output_depacketize_cb_log_page_size[idx] = DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;
         static_config_.output_depacketize_local_sem_id[idx] =
             tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
@@ -61,7 +61,7 @@ void DemuxKernel::GenerateDependentConfigs() {
     }
 
     // Downstream, expect DISPATCH_H or DEMUX
-    TT_ASSERT(downstream_kernels_.size() <= MAX_SWITCH_FAN_OUT && downstream_kernels_.size() > 0);
+    TT_ASSERT(downstream_kernels_.size() <= tt::packet_queue::MAX_SWITCH_FAN_OUT && downstream_kernels_.size() > 0);
     dependent_config_.output_depacketize = 0;  // Populated per downstream kernel
     for (int idx = 0; idx < downstream_kernels_.size(); idx++) {
         FDKernel* k = downstream_kernels_[idx];
@@ -71,17 +71,14 @@ void DemuxKernel::GenerateDependentConfigs() {
         if (auto dispatch_kernel = dynamic_cast<DispatchKernel*>(k)) {
             dependent_config_.remote_tx_queue_start_addr_words[idx] =
                 dispatch_kernel->GetStaticConfig().dispatch_cb_base.value() >> 4;
-            dependent_config_.remote_tx_queue_size_words[idx] =
-                ((1 << dispatch_kernel->GetStaticConfig().dispatch_cb_log_page_size.value()) *
-                 dispatch_kernel->GetStaticConfig().dispatch_cb_pages.value()) >>
-                4;
+            dependent_config_.remote_tx_queue_size_words[idx] = dispatch_kernel->GetDispatchBufferSize() >> 4;
             dependent_config_.output_depacketize =
                 dependent_config_.output_depacketize.value() | (1 << idx);  // Only depacketize for dispatch downstream
             dependent_config_.output_depacketize_downstream_sem_id[idx] =
                 dispatch_kernel->GetStaticConfig().my_dispatch_cb_sem_id;
             uint32_t dest_map_array[4] = {0, 1, 2, 3};  // TODO: how to set these generically? Currently just matching
                                                         // the hard-coded previous implementation
-            uint64_t dest_endpoint_output_map = packet_switch_dest_pack(dest_map_array, 4);
+            uint64_t dest_endpoint_output_map = tt::packet_queue::packet_switch_dest_pack(dest_map_array, 4);
             dependent_config_.dest_endpoint_output_map_hi = (uint32_t)(dest_endpoint_output_map >> 32);
             dependent_config_.dest_endpoint_output_map_lo = (uint32_t)(dest_endpoint_output_map & 0xFFFFFFFF);
         } else if (auto demux_kernel = dynamic_cast<DemuxKernel*>(k)) {
@@ -92,10 +89,10 @@ void DemuxKernel::GenerateDependentConfigs() {
             if (device_->num_hw_cqs() == 1) {
                 uint32_t dest_map_array[4] = {0, 0, 1, 1};  // TODO: how to set these generically? Currently just
                                                             // matching the hard-coded previous implementation
-                dest_endpoint_output_map = packet_switch_dest_pack(dest_map_array, 4);
+                dest_endpoint_output_map = tt::packet_queue::packet_switch_dest_pack(dest_map_array, 4);
             } else {
                 uint32_t dest_map_array[8] = {0, 0, 0, 0, 1, 1, 1, 1};
-                dest_endpoint_output_map = packet_switch_dest_pack(dest_map_array, 8);
+                dest_endpoint_output_map = tt::packet_queue::packet_switch_dest_pack(dest_map_array, 8);
             }
             dependent_config_.dest_endpoint_output_map_hi = (uint32_t)(dest_endpoint_output_map >> 32);
             dependent_config_.dest_endpoint_output_map_lo = (uint32_t)(dest_endpoint_output_map & 0xFFFFFFFF);
@@ -138,7 +135,7 @@ void DemuxKernel::CreateKernel() {
         0,
         0  // Populate output_depacketize_config after
     };
-    for (int idx = 0; idx < MAX_SWITCH_FAN_OUT; idx++) {
+    for (int idx = 0; idx < tt::packet_queue::MAX_SWITCH_FAN_OUT; idx++) {
         if (dependent_config_.remote_tx_x[idx]) {
             compile_args[4 + idx] |= (dependent_config_.remote_tx_x[idx].value() & 0xFF);
             compile_args[4 + idx] |= (dependent_config_.remote_tx_y[idx].value() & 0xFF) << 8;
