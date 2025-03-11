@@ -21,6 +21,7 @@
 #include "dprint_server.hpp"
 #include "impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
+#include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include <utils.hpp>
 #include "llrt.hpp"
 #include <dev_msgs.h>
