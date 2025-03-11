@@ -157,7 +157,8 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
 
     mesh_device->initialize(num_command_queues, l1_small_size, trace_region_size, l1_bank_remap);
     for (auto device : root_devices) {
-        DevicePool::instance().set_mesh_device(device, mesh_device);
+        // Temorary commented out, until we merge MeshDevice integration PR
+        // DevicePool::instance().set_mesh_device(device, mesh_device);
     }
     DevicePool::instance().init_profiler();
     return mesh_device;
@@ -186,7 +187,8 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
     for (size_t i = 0; i < device_ids.size(); i++) {
         submeshes[i]->initialize(num_command_queues, l1_small_size, trace_region_size, l1_bank_remap);
         for (auto device : submeshes[i]->get_devices()) {
-            DevicePool::instance().set_mesh_device(device, submeshes[i]);
+            // Temorary commented out, until we merge MeshDevice integration PR
+            // DevicePool::instance().set_mesh_device(device, submeshes[i]);
         }
         result[device_ids[i]] = submeshes[i];
     }
