@@ -336,6 +336,135 @@ std::vector<PixelMetadata> generate_tensor_metadata(
     return tensor_metadata;
 }
 
+const uint16_t PAD_LOCAL_SENTINAL = 0xFFFF;
+
+using GatherStep = std::tuple<uint32_t, uint32_t, uint32_t>;
+using PerCoreGatherData = std::map<std::pair<uint32_t, uint32_t>, std::vector<GatherStep>>;
+using ReblockedData = std::map<std::pair<uint32_t, uint32_t>, std::map<uint32_t, std::vector<GatherStep>>>;
+
+// Split gather data up by a specified block size
+// This information is needed to interleave input untilization with gather
+ReblockedData reblock_per_core_gather_data(const PerCoreGatherData& per_core_gather_data, uint32_t block_size) {
+    ReblockedData block_data;
+    for (const auto& [core_src_dst, step] : per_core_gather_data) {
+        for (const auto& [src_start, dst_start, len] : step) {
+            uint32_t src_offset = src_start;
+            uint32_t dst_offset = dst_start;
+            uint32_t length = len;
+            while (length > 0) {
+                const uint32_t block_id = src_offset / block_size;
+                const uint32_t offset_in_block = src_offset % block_size;
+                const uint32_t remaining_space_in_block = block_size - offset_in_block;
+                const uint32_t transfer_size = (length <= remaining_space_in_block ? length : remaining_space_in_block);
+
+                block_data[core_src_dst][block_id].push_back({offset_in_block, dst_offset, transfer_size});
+
+                src_offset += transfer_size;
+                dst_offset += transfer_size;
+                length -= transfer_size;
+            }
+        }
+    }
+    return block_data;
+}
+
+// Local and remote fields map nhw_core_id => block_id => num_copies
+struct BlockingConfig {
+    std::vector<std::map<uint32_t, uint32_t>> local;
+    std::vector<std::map<uint32_t, uint32_t>> remote;
+};
+
+// Determined the number of transfers needed for each block
+BlockingConfig generate_blocking_configs(const ReblockedData& reblocked_gather_data, uint32_t num_cores_nhw) {
+    std::vector<std::map<uint32_t, uint32_t>> local_block_config(num_cores_nhw);
+    std::vector<std::map<uint32_t, uint32_t>> remote_block_config(num_cores_nhw);
+
+    // Given each route (src_core->dst_core) we want to count up the amount of transfers from each block
+    for (auto [src_dst, reblocked_data] : reblocked_gather_data) {
+        auto [src_core_id, dst_core_id] = src_dst;
+        bool is_pad = src_core_id == PAD_LOCAL_SENTINAL;
+        bool is_local = src_core_id == dst_core_id;
+        bool is_remote = !is_local && !is_pad;
+        if (is_pad) {
+            continue;  // We don't need blocking information for padding because it is not dependant on input
+        }
+        auto& config =
+            is_local ? local_block_config[src_core_id] : remote_block_config[is_remote ? dst_core_id : src_core_id];
+        for (const auto& [block_id, transfers] : reblocked_data) {
+            const auto transfers_in_block = transfers.size();
+            if (config.contains(block_id)) {
+                config[block_id] += transfers_in_block;
+            } else {
+                config[block_id] = transfers_in_block;
+            }
+        }
+    }
+    return {local_block_config, remote_block_config};
+}
+
+struct FlattenedBlockingConfig {
+    std::vector<std::vector<uint16_t>> local;
+    std::vector<std::vector<uint16_t>> remote;
+};
+
+FlattenedBlockingConfig flatten_blocking_config(const BlockingConfig& blocking, uint32_t num_cores_nhw) {
+    uint32_t max_block_id = 0;
+    for (const auto& core_map : blocking.local) {
+        if (!core_map.empty()) {
+            auto it = core_map.rbegin();  // last item = greatest block_id since map is ordered
+            if (it->first > max_block_id) {
+                max_block_id = it->first;
+            }
+        }
+    }
+    for (const auto& core_map : blocking.remote) {
+        if (!core_map.empty()) {
+            auto it = core_map.rbegin();
+            if (it->first > max_block_id) {
+                max_block_id = it->first;
+            }
+        }
+    }
+
+    // We want to return num_cores_nhw rows, each (max_block_id+1) columns
+    FlattenedBlockingConfig result;
+    result.local.resize(num_cores_nhw);
+    result.remote.resize(num_cores_nhw);
+
+    const uint32_t max_num_blocks = max_block_id + 1;
+
+    for (uint32_t core_id = 0; core_id < num_cores_nhw; ++core_id) {
+        // local
+        {
+            result.local[core_id].resize(max_num_blocks, 0);
+            const auto& core_map = blocking.local[core_id];
+            for (const auto& kv : core_map) {
+                auto block_id = kv.first;
+                auto transfers = kv.second;
+                if (block_id <= max_block_id) {
+                    result.local[core_id][block_id] = transfers;
+                }
+            }
+            result.local[core_id].insert(result.local[core_id].begin(), max_num_blocks);  // add a header
+        }
+        // remote
+        {
+            result.remote[core_id].resize(max_num_blocks, 0);  // include
+            const auto& core_map = blocking.remote[core_id];
+            for (const auto& kv : core_map) {
+                auto block_id = kv.first;
+                auto transfers = kv.second;
+                if (block_id <= max_block_id) {
+                    result.remote[core_id][block_id] = transfers;
+                }
+            }
+            result.remote[core_id].insert(result.remote[core_id].begin(), max_num_blocks);  // add a header
+        }
+    }
+
+    return result;
+}
+
 uint32_t generate_max_out_nsticks_per_core(const std::vector<ShardBoundary>& shard_boundaries) {
     // calculate max_out_nsticks_per_core
     uint32_t max_out_nsticks_per_core = 0;
@@ -360,8 +489,9 @@ std::vector<std::vector<std::vector<uint16_t>>> generate_halo_kernel_config_tens
         return device->worker_core_from_logical_core(core_coord);
     };
 
-    const uint16_t pad_local = 0xFFFF;
-    std::map<uint32_pair_t, std::vector<std::tuple<uint32_t, uint32_t, uint32_t>>> per_core_gather_data;
+    PerCoreGatherData
+        per_core_gather_data;  // This maps all routes (src_core->dst_core) onto a sequence of operations on the input
+                               // sticks that can be padding, local copy/transfer, or remote copy/transfer
 
     uint32_t num_cores_nhw = shard_boundaries.size();
 
@@ -372,10 +502,10 @@ std::vector<std::vector<std::vector<uint16_t>>> generate_halo_kernel_config_tens
             uint32_t dst_core_id = core_id;
             uint32_t local_idx = global_idx - input_start;
             auto [is_pad_stick, src_core_id, src_local_idx] = tensor_metadata[global_idx];
-            TT_ASSERT(local_idx < pad_local && src_local_idx < pad_local, "Index overflow");
+            TT_ASSERT(local_idx < PAD_LOCAL_SENTINAL && src_local_idx < PAD_LOCAL_SENTINAL, "Index overflow");
             if (is_pad_stick) {
                 TT_ASSERT(src_local_idx == 0);
-                src_core_id = pad_local;
+                src_core_id = PAD_LOCAL_SENTINAL;
             }
             if (per_core_gather_data.find({src_core_id, dst_core_id}) != per_core_gather_data.end()) {
                 auto& [src_start, dst_start, length] = per_core_gather_data[{src_core_id, dst_core_id}].back();
@@ -390,6 +520,16 @@ std::vector<std::vector<std::vector<uint16_t>>> generate_halo_kernel_config_tens
         }
         ++core_id;
     }
+
+    const int block_size = 32;
+    const auto blocked_gather_data = reblock_per_core_gather_data(per_core_gather_data, block_size);
+    const auto blocking_configs = generate_blocking_configs(blocked_gather_data, num_cores_nhw);
+    const auto flattened_blocking_configs = flatten_blocking_config(blocking_configs, num_cores_nhw);
+
+    tt::log_info("gather data = {}", per_core_gather_data);
+    tt::log_info("blocked_gather_data = {}", blocked_gather_data);
+    tt::log_info("blocked gather data = {}", blocking_configs);
+    tt::log_info("flattened configs = {}", flattened_blocking_configs);
 
     // construct the config tensors
     /**
@@ -412,7 +552,7 @@ std::vector<std::vector<std::vector<uint16_t>>> generate_halo_kernel_config_tens
 
     for (auto [src_dst, data] : per_core_gather_data) {
         auto [src_core_id, dst_core_id] = src_dst;
-        bool is_pad = src_core_id == pad_local;
+        bool is_pad = src_core_id == PAD_LOCAL_SENTINAL;
         bool is_local = src_core_id == dst_core_id;
         bool is_remote = !is_local && !is_pad;
         if (is_pad) {
