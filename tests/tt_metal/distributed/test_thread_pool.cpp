@@ -40,6 +40,15 @@ TEST(ThreadPoolTest, StressDeviceBound) {
     EXPECT_EQ(counter.load(), 2 * NUM_ITERS);
 }
 
+// Test that an exception generated in the thread pool is propagated to the main thread
+TEST(ThreadPoolTest, Exception) {
+    uint32_t num_threads = tt::Cluster::instance().number_of_user_devices();
+    auto thread_pool = create_device_bound_thread_pool(tt::Cluster::instance().number_of_user_devices());
+    auto exception_fn = []() { TT_THROW("Failed"); };
+    thread_pool->enqueue(exception_fn);
+    EXPECT_THROW(thread_pool->wait(), std::exception);
+}
+
 }  // namespace
 
 }  // namespace tt::tt_metal::distributed::test

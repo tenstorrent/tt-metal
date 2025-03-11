@@ -146,7 +146,14 @@ public:
                     }
                     task = std::move(tasks_.pop());
                 }
-                task();
+                // Execute task with exception handling
+                try {
+                    task();
+                } catch (...) {
+                    if (!stored_exception_) {
+                        stored_exception_ = std::current_exception();
+                    }
+                }
                 // Atomically decrement counter used to synchronize with main thread
                 // and notify the main thread if all tasks have completed
                 if (counter_.fetch_sub(1, std::memory_order_release) == 1) {
@@ -177,7 +184,7 @@ public:
         counter_++;
     }
 
-    void wait() const {
+    std::exception_ptr wait() const {
         // Wait until all tasks have completed (counter_ == 0)
         // To avoid spinning, sleep until notified by the worker threads
         // or counter_ changes (this only happens with a spurious wakeup)
@@ -185,6 +192,12 @@ public:
         while ((current = counter_.load(std::memory_order_acquire)) > 0) {
             counter_.wait(current, std::memory_order_relaxed);
         }
+        // Return the stored exception to the caller.
+        // If an exception was caught by the worker thread
+        // it is the caller's responsibility to handle it.
+        auto temp_exception = stored_exception_;
+        stored_exception_ = nullptr;
+        return temp_exception;
     }
 
 private:
@@ -193,6 +206,7 @@ private:
     std::atomic<int> counter_ = 0;
     std::counting_semaphore<> task_semaphore_{0};
     bool shutdown_ = false;
+    mutable std::exception_ptr stored_exception_;
 };
 
 }  // namespace threading_primitives
@@ -340,7 +354,10 @@ public:
     void wait() override {
         thread_idx_ = 0;  // Reset thread_idx for next call without Device ID specified.
         for (auto& worker : workers_) {
-            worker->wait();
+            auto exception = worker->wait();
+            if (exception) {
+                std::rethrow_exception(exception);
+            }
         }
     }
 
