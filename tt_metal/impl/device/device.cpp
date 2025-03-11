@@ -7,6 +7,9 @@
 #include <string>
 #include <thread>
 #include <tt_align.hpp>
+#include <tt-metalium/dispatch_mem_map.hpp>
+#include <tt-metalium/program_cache.hpp>
+
 #include "tt_metal/deprecated/device.hpp"
 #include "common/core_assignment.hpp"
 #include <host_api.hpp>
@@ -17,7 +20,7 @@
 #include <tt_metal.hpp>
 #include "dprint_server.hpp"
 #include "impl/debug/watcher_server.hpp"
-#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
+#include "tt_metal/impl/dispatch/topology.hpp"
 #include <utils.hpp>
 #include "llrt.hpp"
 #include <dev_msgs.h>
@@ -32,7 +35,6 @@
 #include <sub_device_types.hpp>
 #include <span.hpp>
 #include <types.hpp>
-#include <tt-metalium/program_cache.hpp>
 
 #include "impl/dispatch/topology.hpp"
 #include "impl/dispatch/hardware_command_queue.hpp"
@@ -803,8 +805,6 @@ void Device::clear_l1_state() {
 
 void Device::compile_command_queue_programs() {
     ZoneScoped;
-    auto command_queue_program_ptr = std::make_unique<Program>();
-    auto mmio_command_queue_program_ptr = std::make_unique<Program>();
     if (this->is_mmio_capable()) {
         auto command_queue_program_ptr = create_and_compile_cq_program(this);
         this->command_queue_programs_.push_back(std::move(command_queue_program_ptr));
@@ -900,7 +900,7 @@ void Device::init_command_queue_host() {
     command_queues_.reserve(num_hw_cqs());
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
         command_queues_.push_back(
-            std::make_unique<HWCommandQueue>(this, cq_id, dispatch_downstream_noc, completion_queue_reader_core_));
+            std::make_unique<HWCommandQueue>(this, cq_id, k_dispatch_downstream_noc, completion_queue_reader_core_));
     }
 }
 

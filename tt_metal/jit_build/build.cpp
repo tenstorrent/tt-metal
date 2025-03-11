@@ -17,6 +17,7 @@
 #include <command_queue_interface.hpp>
 #include <kernel.hpp>
 #include "tt_metal/llrt/tt_elffile.hpp"
+#include "env_lib.hpp"
 
 namespace fs = std::filesystem;
 
@@ -62,13 +63,25 @@ static void check_built_dir(const std::filesystem::path& dir_path, const std::fi
     }
 }
 
+std::string get_default_root_path() {
+    const std::string emptyString("");
+    const std::string home_path = parse_env<std::string>("HOME", emptyString);
+    if (!home_path.empty() && std::filesystem::exists(home_path)) {
+        return home_path + "/.cache/tt-metal-cache/";
+    } else {
+        return "/tmp/tt-metal-cache/";
+    }
+}
 JitBuildEnv::JitBuildEnv() {}
 
 void JitBuildEnv::init(
     uint32_t build_key, tt::ARCH arch, const std::map<std::string, std::string>& device_kernel_defines) {
     // Paths
     this->root_ = llrt::RunTimeOptions::get_instance().get_root_dir();
-    this->out_root_ = this->root_ + "built/";
+    this->out_root_ = llrt::RunTimeOptions::get_instance().is_cache_dir_specified()
+                          ? llrt::RunTimeOptions::get_instance().get_cache_dir()
+                          : get_default_root_path();
+
     this->arch_ = arch;
     this->arch_name_ = get_string_lowercase(arch);
     this->aliased_arch_name_ = get_string_aliased_arch_lowercase(arch);
@@ -140,13 +153,6 @@ void JitBuildEnv::init(
         } else {
             this->defines_ += "-DPROFILE_KERNEL=1 ";
         }
-    }
-    if (tt::llrt::RunTimeOptions::get_instance().get_profiler_noc_events_enabled()) {
-        // force profiler on if noc events are being profiled
-        if (not tt::tt_metal::getDeviceProfilerState()) {
-            this->defines_ += "-DPROFILE_KERNEL=1 ";
-        }
-        this->defines_ += "-DPROFILE_NOC_EVENTS=1 ";
     }
 
     if (tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
@@ -299,9 +305,13 @@ JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, const JitBuil
     this->default_linker_opt_level_ = "Os";
     this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
     this->cflags_ = env_.cflags_ + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
-    this->includes_ = env_.includes_ + "-I " + env_.root_ + "tt_metal/hw/firmware/src " + "-I " + env_.root_ +
-                      "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/common " + "-I " + env_.root_ +
-                      "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_io ";
+
+    // clang-format off
+    this->includes_ = env_.includes_ +
+        "-I " + env_.root_ + "tt_metal/hw/firmware/src " +
+        "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/common " +
+        "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_io ";
+    // clang-format on
 
     this->defines_ = env_.defines_;
 
@@ -381,13 +391,17 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConf
         this->defines_ += "-DDISABLE_L1_DATA_CACHE ";
     }
 
-    this->includes_ = env_.includes_ + "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/inc " + "-I" +
-                      env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/common " + "-I" + env_.root_ +
-                      "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_io " + "-I" + env_.root_ +
-                      "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_api " + "-I" + env_.root_ +
-                      "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_api/llk_sfpu " + "-I" + env_.root_ +
-                      "runtime/sfpi/include " + "-I" + env_.root_ + "tt_metal/hw/firmware/src " + "-I" + env_.root_ +
-                      "tt_metal/third_party/tt_llk/tt_llk_" + env.arch_name_ + "/llk_lib ";
+    // clang-format off
+    this->includes_ = env_.includes_ +
+        "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/inc " +
+        "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/common " +
+        "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_io " +
+        "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_api " +
+        "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_api/llk_sfpu " +
+        "-I" + env_.root_ + "runtime/sfpi/include " +
+        "-I" + env_.root_ + "tt_metal/hw/firmware/src " +
+        "-I" + env_.root_ + "tt_metal/third_party/tt_llk/tt_llk_" + env.arch_name_ + "/llk_lib ";
+    // clang-format on
 
     if (this->is_fw_) {
         this->srcs_.push_back("tt_metal/hw/firmware/src/trisc.cc");
@@ -462,9 +476,12 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
     this->default_linker_opt_level_ = "Os";
     this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
 
-    this->includes_ = env_.includes_ + "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ +
-                      "/metal/common " + "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ +
-                      "/metal/llk_io " + "-I " + env_.root_ + "tt_metal/hw/inc/ethernet ";
+    // clang-format off
+    this->includes_ = env_.includes_ +
+        "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/common " +
+        "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_io " +
+        "-I " + env_.root_ + "tt_metal/hw/inc/ethernet ";
+    // clang-format on
 
     this->defines_ = env_.defines_;
     uint32_t l1_cache_disable_mask = tt::llrt::RunTimeOptions::get_instance().get_feature_riscv_mask(
@@ -569,9 +586,11 @@ JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuil
     this->default_linker_opt_level_ = "Os";
     this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
 
-    this->includes_ = env_.includes_ + "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ +
-                      "/metal/common " + "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ +
-                      "/metal/llk_io ";
+    // clang-format off
+    this->includes_ = env_.includes_ +
+        "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/common " +
+        "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_io ";
+    // clang-format on
 
     this->defines_ = env_.defines_;
     uint32_t l1_cache_disable_mask = tt::llrt::RunTimeOptions::get_instance().get_feature_riscv_mask(

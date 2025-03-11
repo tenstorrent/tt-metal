@@ -372,11 +372,12 @@ bool use_matmul_for_1x1_conv(
            padding[1] == 0 && dilation[0] == 1 && dilation[1] == 1 && groups == 1 && (not is_width_sharded);
 }
 
+bool is_1d_conv(uint32_t kernel_width, uint32_t image_width) { return kernel_width == 1 && image_width == 1; }
+
 bool is_1d_deptwise_conv(
     uint32_t groups, uint32_t input_channels, uint32_t output_channels, uint32_t kernel_width, uint32_t image_width) {
     bool is_depthwise_conv = groups == input_channels && groups == output_channels;
-    bool is_conv1d = kernel_width == 1 && image_width == 1;
-    return is_depthwise_conv && is_conv1d;
+    return is_depthwise_conv && is_1d_conv(kernel_width, image_width);
 }
 
 template <typename DeviceType>
@@ -711,6 +712,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         Conv2dConfig conv_config;
     };
 
+    const bool conv_is_1d = is_1d_conv(kernel_size[1], input_width);
     const bool conv_is_1d_deptwise =
         is_1d_deptwise_conv(groups, in_channels, out_channels, kernel_size[1], input_width);
 
@@ -753,7 +755,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             compute_grid_size,
             shard_orientation,
             !is_mm_conv,
-            is_out_tiled,
+            true,
             conv_config.act_block_h_override);
 
         const ParallelConfig output_parallel_config = determine_output_parallel_config(
@@ -817,7 +819,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     core_count_and_size height = get_l1_usage_for_sharding(TensorMemoryLayout::HEIGHT_SHARDED, conv_config);
 
     // 1d deptwise convs support only height sharding
-    if (conv_is_1d_deptwise) {
+    if (conv_is_1d) {
         return height.conv_config;
     }
 
@@ -869,9 +871,12 @@ std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryC
             get_num_cores_nhw_from_parallel_config(largest_parallel_config),
             get_num_cores_channels_from_parallel_config(largest_parallel_config));
 
+    uint32_t input_channels_alignment =
+        (input_parallel_config.shard_scheme == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED)
+            ? conv_config.input_channels_alignment
+            : constants::TILE_WIDTH;
     uint32_t in_channels_padded = tt::round_up(
-        in_channels,
-        get_num_cores_channels_from_parallel_config(input_parallel_config) * conv_config.input_channels_alignment);
+        in_channels, get_num_cores_channels_from_parallel_config(input_parallel_config) * input_channels_alignment);
 
     uint32_t nhw_out_padded_ntile_per_core =
         conv_out_memory_config.shard_spec.value().shape[0] / tt::constants::TILE_HEIGHT;

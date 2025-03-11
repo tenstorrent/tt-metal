@@ -4,8 +4,9 @@
 
 #include <gtest/gtest.h>
 #include <memory>
+#include <random>
 
-#include <tt-metalium/env_lib.hpp>
+#include "env_lib.hpp"
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/distributed.hpp>

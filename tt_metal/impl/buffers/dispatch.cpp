@@ -6,6 +6,7 @@
 #include "assert.hpp"
 #include "dispatch.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
+#include "tt_metal/impl/dispatch/topology.hpp"
 
 #include <tt-metalium/command_queue_interface.hpp>
 #include "tt_metal/impl/dispatch/device_command.hpp"
@@ -215,7 +216,7 @@ void populate_sharded_buffer_write_dispatch_cmds(
     Buffer& buffer,
     ShardedBufferWriteDispatchParams& dispatch_params) {
     uint32_t data_size_bytes = dispatch_params.pages_per_txn * dispatch_params.page_size_to_write;
-    auto noc_index = dispatch_downstream_noc;
+    auto noc_index = k_dispatch_downstream_noc;
     const CoreCoord virtual_core =
         buffer.device()->virtual_core_from_logical_core(dispatch_params.core, buffer.core_type());
     command_sequence.add_dispatch_write_linear(
@@ -670,7 +671,7 @@ void issue_read_buffer_dispatch_command_sequence(
         const CoreCoord virtual_core =
             buffer.device()->virtual_core_from_logical_core(dispatch_params.core, buffer.core_type());
         command_sequence.add_prefetch_relay_linear(
-            dispatch_params.device->get_noc_unicast_encoding(dispatch_downstream_noc, virtual_core),
+            dispatch_params.device->get_noc_unicast_encoding(k_dispatch_downstream_noc, virtual_core),
             dispatch_params.padded_page_size * dispatch_params.pages_per_txn,
             dispatch_params.address);
     } else {

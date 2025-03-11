@@ -20,17 +20,12 @@
 #include <tt-metalium/trace.hpp>
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include <tt-metalium/hal_exp.hpp>
-#include "tools/profiler/op_profiler.hpp"
-
 using namespace tt::tt_metal;
 
 namespace py = pybind11;
 
 namespace {
-void DumpDeviceProfiler(IDevice* device) {
-    ProfilerOptionalMetadata prof_metadata(tt::tt_metal::op_profiler::runtime_id_to_opname_.export_map());
-    tt::tt_metal::detail::DumpDeviceProfileResults(device, ProfilerDumpState::NORMAL, prof_metadata);
-}
+inline void DumpDeviceProfiler(IDevice* device) { tt::tt_metal::detail::DumpDeviceProfileResults(device); }
 }  // namespace
 
 namespace ttnn {
@@ -498,29 +493,17 @@ void device_module(py::module& m_device) {
 
     m_device.def(
         "pad_to_tile_shape",
-        [](const std::array<uint32_t, 4>& unpadded_shape,
-           bool pad_c = false,
-           bool pad_n = false,
-           bool pad_h = true,
-           bool pad_w = true) -> std::vector<uint32_t> {
-            auto result = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(
-                ttnn::Shape(unpadded_shape), pad_c, pad_n, pad_h, pad_w);
+        [](const std::array<uint32_t, 4>& unpadded_shape) -> std::vector<uint32_t> {
+            auto result =
+                ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(ttnn::Shape(unpadded_shape));
             return std::vector<uint32_t>(result.cbegin(), result.cend());
         },
         py::arg("unpadded_shape"),
-        py::arg("pad_c") = false,
-        py::arg("pad_n") = false,
-        py::arg("pad_h") = true,
-        py::arg("pad_w") = true,
         R"doc(
         Pads the given shape to tile shape based on specified padding options.
 
         Args:
             unpadded_shape (List of [int]): The original shape of the tensor to pad.
-            pad_c (bool, optional): Pad the channel dimension. Defaults to `False`.
-            pad_n (bool, optional): Pad the batch dimension. Defaults to `False`.
-            pad_h (bool, optional): Pad the height dimension. Defaults to `True`.
-            pad_w (bool, optional): Pad the width dimension. Defaults to `True`.
 
         Returns:
             List of [int]: The padded shape.
@@ -529,7 +512,7 @@ void device_module(py::module& m_device) {
             This functionality is planned for deprecation in the future.
 
         Example:
-            >>> padded_shape = ttnn.pad_to_tile_shape(unpadded_shape=[1, 2, 2, 2], pad_c=False, pad_n=False, pad_h=True, pad_w=True)
+            >>> padded_shape = ttnn.pad_to_tile_shape(unpadded_shape=[1, 2, 2, 2])
 
         )doc");
 

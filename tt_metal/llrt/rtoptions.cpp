@@ -30,12 +30,21 @@ const char* RunTimeDebugClassNames[RunTimeDebugClassCount] = {"N/A", "worker", "
 
 static const char* TT_METAL_HOME_ENV_VAR = "TT_METAL_HOME";
 static const char* TT_METAL_KERNEL_PATH_ENV_VAR = "TT_METAL_KERNEL_PATH";
+// Set this var to change the cache dir.
+static const char* TT_METAL_CACHE_ENV_VAR = "TT_METAL_CACHE";
 
 RunTimeOptions::RunTimeOptions() {
     const char* root_dir_str = std::getenv(TT_METAL_HOME_ENV_VAR);
     if (root_dir_str != nullptr) {
         this->is_root_dir_env_var_set = true;
         this->root_dir = std::string(root_dir_str) + "/";
+    }
+
+    // Check if user has specified a cache path.
+    const char* cache_dir_str = std::getenv(TT_METAL_CACHE_ENV_VAR);
+    if (cache_dir_str != nullptr) {
+        this->is_cache_dir_env_var_set = true;
+        this->cache_dir_ = std::string(cache_dir_str) + "/";
     }
 
     const char* kernel_dir_str = std::getenv(TT_METAL_KERNEL_PATH_ENV_VAR);
@@ -72,19 +81,7 @@ RunTimeOptions::RunTimeOptions() {
             profiler_sync_enabled = true;
         }
     }
-
-    const char *profiler_noc_events_str = std::getenv("TT_METAL_DEVICE_PROFILER_NOC_EVENTS");
-    if (profiler_noc_events_str != nullptr && profiler_noc_events_str[0] == '1') {
-        profiler_enabled = true;
-        profiler_noc_events_enabled = true;
-    }
-
-    const char *profiler_noc_events_report_path_str = std::getenv("TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH");
-    if (profiler_noc_events_report_path_str != nullptr) {
-        profiler_noc_events_report_path = profiler_noc_events_report_path_str;
-    }
-
-    const char *profile_buffer_usage_str = std::getenv("TT_METAL_MEM_PROFILER");
+    const char* profile_buffer_usage_str = std::getenv("TT_METAL_MEM_PROFILER");
     if (profile_buffer_usage_str != nullptr && profile_buffer_usage_str[0] == '1') {
         profiler_buffer_usage_enabled = true;
     }
@@ -121,6 +118,9 @@ RunTimeOptions::RunTimeOptions() {
         }
     }
 
+    const char* fb_fabric = getenv("TT_METAL_FD_FABRIC");
+    fb_fabric_en = fb_fabric != nullptr;
+
     const char* dispatch_data_collection_str = std::getenv("TT_METAL_DISPATCH_DATA_COLLECTION");
     if (dispatch_data_collection_str != nullptr) {
         enable_dispatch_data_collection = true;
@@ -156,6 +156,13 @@ const std::string& RunTimeOptions::get_root_dir() {
     }
 
     return root_dir;
+}
+
+const std::string& RunTimeOptions::get_cache_dir() {
+    if (!this->is_cache_dir_specified()) {
+        TT_THROW("Env var {} is not set.", TT_METAL_CACHE_ENV_VAR);
+    }
+    return this->cache_dir_;
 }
 
 const std::string& RunTimeOptions::get_kernel_dir() const {
@@ -410,7 +417,7 @@ void RunTimeOptions::ParseFeaturePrependDeviceCoreRisc(RunTimeDebugFeatures feat
 
 // Can't create a DispatchCoreConfig as part of the RTOptions constructor because the DispatchCoreConfig constructor
 // depends on RTOptions settings.
-tt_metal::DispatchCoreConfig RunTimeOptions::get_dispatch_core_config() {
+tt_metal::DispatchCoreConfig RunTimeOptions::get_dispatch_core_config() const {
     tt_metal::DispatchCoreConfig dispatch_core_config = tt_metal::DispatchCoreConfig{};
     dispatch_core_config.set_dispatch_core_type(this->dispatch_core_type);
     return dispatch_core_config;
