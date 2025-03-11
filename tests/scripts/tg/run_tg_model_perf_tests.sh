@@ -28,6 +28,25 @@ run_tg_cnn_tests() {
   fi
 }
 
+
+run_llama_tg_perf_unit_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_llama_tg_perf_unit_tests"
+
+  pytest models/demos/llama3/tests/test_ccl_async_perf_TG_llama.py --timeout 900; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_llama_tg_perf_unit_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 main() {
   # Parse the arguments
   while [[ $# -gt 0 ]]; do
@@ -67,6 +86,8 @@ main() {
     run_tg_llm_tests
   elif [[ "$pipeline_type" == "cnn_model_perf_tg_device" ]]; then
     run_tg_cnn_tests
+  elif [[ "$pipeline_type" == "llama_tg_perf_unit_tests" ]]; then
+    run_llama_tg_perf_unit_tests
   else
     echo "$pipeline_type is invalid (supported: [cnn_model_perf_tg_device, cnn_model_perf_tg_device])" 2>&1
     exit 1
