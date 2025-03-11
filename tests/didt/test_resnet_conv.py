@@ -212,7 +212,7 @@ def test_resnet_conv(mesh_device, iterations, determinism_check_iterations, use_
         enable_subblock_padding=False,
     )
     # This sets subblocks to [2, 4] in underlying matmul
-    conv_config.act_block_h_override = 256
+    conv_config.act_block_h_override = 32 * 49
 
     ComputeConfigClass = ttnn.types.BlackholeComputeKernelConfig if is_blackhole() else ttnn.WormholeComputeKernelConfig
     compute_kernel_config = ComputeConfigClass(
