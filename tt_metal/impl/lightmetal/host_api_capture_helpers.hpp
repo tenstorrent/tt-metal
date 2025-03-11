@@ -19,12 +19,10 @@ struct DataMovementConfig;
 struct ComputeConfig;
 struct EthernetConfig;
 
-inline namespace v0 {
 class IDevice;
 struct BufferConfig;
 struct CircularBufferConfig;
 using RuntimeArgs = std::vector<std::variant<Buffer*, uint32_t>>;
-}  // namespace v0
 
 //////////////////////////////////////////////////////////////
 // TRACE GUARD & LIGHT METAL TRACE MACRO                    //

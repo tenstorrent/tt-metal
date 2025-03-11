@@ -35,7 +35,6 @@ namespace tt_metal {
 
 class CommandQueue;
 struct TraceDescriptor;
-inline namespace v0 {
 
 class Program;
 class IDevice;
@@ -1008,7 +1007,6 @@ void Synchronize(
     const std::optional<uint8_t> cq_id = std::nullopt,
     tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
-}  // namespace v0
 }  // namespace tt_metal
 
 }  // namespace tt

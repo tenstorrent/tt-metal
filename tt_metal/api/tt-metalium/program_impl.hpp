@@ -19,7 +19,6 @@ namespace tt {
 namespace tt_metal {
 
 // Fwd declares
-inline namespace v0 {
 
 class Buffer;
 class Kernel;
@@ -28,11 +27,8 @@ class IDevice;
 class Program;
 class CircularBufferConfig;
 
-}  // namespace v0
-
 struct ProgramCommandSequence;
 
-namespace v1 {
 namespace experimental {
 class GlobalCircularBuffer;
 CBHandle CreateCircularBuffer(
@@ -42,7 +38,6 @@ CBHandle CreateCircularBuffer(
     const GlobalCircularBuffer& global_circular_buffer);
 
 }  // namespace experimental
-}  // namespace v1
 
 namespace program_dispatch {
     void assemble_device_commands(
@@ -116,7 +111,6 @@ struct ProgramConfig {
     uint32_t kernel_text_size;   // max size of all kernel bins across all kernel groups
 };
 
-inline namespace v0 {
 // Represents the status of Program Kernel Binaries in Device DRAM with respect to the dispatcher
 enum class ProgramBinaryStatus : uint8_t {
     NotSent = 0, // Binaries have not been written
@@ -195,11 +189,11 @@ class Program {
     std::unique_ptr<detail::Program_> pimpl_;
 
     friend CBHandle CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config);
-    friend CBHandle v1::experimental::CreateCircularBuffer(
+    friend CBHandle experimental::CreateCircularBuffer(
         Program& program,
         const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
         const CircularBufferConfig& config,
-        const v1::experimental::GlobalCircularBuffer& global_circular_buffer);
+        const experimental::GlobalCircularBuffer& global_circular_buffer);
     friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program &program, CBHandle id);
     friend void detail::ValidateCircularBufferRegion(const Program &program, const IDevice* device);
 
@@ -212,7 +206,7 @@ class Program {
     CBHandle add_circular_buffer(
         const CoreRangeSet& core_range_set,
         const CircularBufferConfig& config,
-        const v1::experimental::GlobalCircularBuffer& global_circular_buffer);
+        const experimental::GlobalCircularBuffer& global_circular_buffer);
 
     void add_semaphore(const CoreRangeSet & crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
 
@@ -237,7 +231,6 @@ class Program {
     friend detail::Internal_;
 };
 
-}  // namespace v0
 }  // namespace tt_metal
 
 }  // namespace tt

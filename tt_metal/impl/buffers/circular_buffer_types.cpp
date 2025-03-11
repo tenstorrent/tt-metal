@@ -6,7 +6,6 @@
 #include <global_circular_buffer_impl.hpp>
 
 namespace tt::tt_metal {
-inline namespace v0 {
 
 // Static circular buffer spec
 CircularBufferConfig::CircularBufferConfig(
@@ -281,5 +280,4 @@ bool operator==(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs
 
 bool operator!=(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs) { return !(lhs == rhs); }
 
-}  // namespace v0
 }  // namespace tt::tt_metal

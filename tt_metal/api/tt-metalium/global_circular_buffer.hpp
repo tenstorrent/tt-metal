@@ -11,8 +11,6 @@
 //==================================================
 
 namespace tt::tt_metal {
-namespace v1 {
-
 namespace experimental {
 
 /**
@@ -32,5 +30,4 @@ GlobalCircularBuffer CreateGlobalCircularBuffer(
 
 }  // namespace experimental
 
-}  // namespace v1
 }  // namespace tt::tt_metal

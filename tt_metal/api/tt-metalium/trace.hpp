@@ -15,7 +15,6 @@
 #include "trace_buffer.hpp"
 
 namespace tt::tt_metal {
-inline namespace v0 {
 
 class Trace {
 private:
@@ -31,5 +30,4 @@ public:
     static std::shared_ptr<TraceBuffer> create_empty_trace_buffer();
 };
 
-}  // namespace v0
 }  // namespace tt::tt_metal

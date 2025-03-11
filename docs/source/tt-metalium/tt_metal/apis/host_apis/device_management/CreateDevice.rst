@@ -1,4 +1,4 @@
 CreateDevice
 =============
 
-.. doxygenfunction:: tt::tt_metal::v0::CreateDevice
+.. doxygenfunction:: tt::tt_metal::CreateDevice

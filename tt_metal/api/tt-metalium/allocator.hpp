@@ -18,11 +18,7 @@ namespace tt {
 
 namespace tt_metal {
 
-inline namespace v0 {
-
 class Buffer;
-
-}  // namespace v0
 
 // Fwd declares
 enum class BufferType;

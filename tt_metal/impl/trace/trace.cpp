@@ -56,31 +56,4 @@ void Trace::initialize_buffer(CommandQueue& cq, const std::shared_ptr<TraceBuffe
         trace_buffer->buffer->num_pages());
 }
 
-v1::CommandQueueHandle v1::GetCommandQueue(TraceHandle trace) { return trace.cq; }
-
-v1::TraceHandle v1::BeginTraceCapture(CommandQueueHandle cq) {
-    const auto tid = v0::BeginTraceCapture(GetDevice(cq), GetId(cq));
-    return v1::TraceHandle{cq, tid};
-}
-
-void v1::EndTraceCapture(TraceHandle trace) {
-    const auto cq = GetCommandQueue(trace);
-    v0::EndTraceCapture(GetDevice(cq), GetId(cq), static_cast<std::uint32_t>(trace));
-}
-
-void v1::ReplayTrace(TraceHandle trace, bool blocking) {
-    const auto cq = GetCommandQueue(trace);
-    v0::ReplayTrace(GetDevice(cq), GetId(cq), static_cast<std::uint32_t>(trace), blocking);
-}
-
-void v1::ReleaseTrace(TraceHandle trace) {
-    const auto cq = GetCommandQueue(trace);
-    v0::ReleaseTrace(GetDevice(cq), static_cast<std::uint32_t>(trace));
-}
-
-void v1::EnqueueTrace(TraceHandle trace, bool blocking) {
-    const auto cq = GetCommandQueue(trace);
-    v0::EnqueueTrace(GetDevice(cq)->command_queue(GetId(cq)), static_cast<std::uint32_t>(trace), blocking);
-}
-
 }  // namespace tt::tt_metal

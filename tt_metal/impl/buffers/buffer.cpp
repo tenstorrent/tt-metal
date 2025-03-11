@@ -643,26 +643,6 @@ DeviceAddr ShardSpecBuffer::num_pages() const {
     return shape_in_pages_[0] * shape_in_pages_[1];
 }
 
-v1::BufferHandle v1::CreateBuffer(InterleavedBufferConfig config) { return v1::BufferHandle{v0::CreateBuffer(config)}; }
-
-void v1::DeallocateBuffer(const BufferHandle& buffer) { v0::DeallocateBuffer(*buffer); }
-
-std::size_t v1::GetId(const BufferHandle& buffer) { return buffer->unique_id(); }
-
-void v1::WriteToBuffer(const BufferHandle& buffer, stl::Span<const std::byte> host_buffer) {
-    detail::WriteToBuffer(
-        *buffer,
-        stl::Span<const uint8_t>{reinterpret_cast<const std::uint8_t*>(host_buffer.data()), host_buffer.size()});
-}
-
-void v1::ReadFromBuffer(const BufferHandle& buffer, stl::Span<std::byte> host_buffer, bool shard_order) {
-    detail::ReadFromBuffer(*buffer, reinterpret_cast<std::uint8_t*>(host_buffer.data()), shard_order);
-}
-
-void v1::ReadFromShard(const BufferHandle& buffer, stl::Span<std::byte> host_buffer, std::uint32_t core_id) {
-    detail::ReadShard(*buffer, reinterpret_cast<std::uint8_t*>(host_buffer.data()), core_id);
-}
-
 }  // namespace tt::tt_metal
 
 namespace tt::stl::json {
