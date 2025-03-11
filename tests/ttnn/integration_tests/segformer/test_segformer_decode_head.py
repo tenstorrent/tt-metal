@@ -132,7 +132,7 @@ def test_segformer_decode_head(device, is_ci_env):
         )
 
     ttnn_model = TtSegformerDecodeHead(config, parameters)
-    ttnn_output = ttnn_model(ttnn_input_tensor, parameters)
+    ttnn_output = ttnn_model(device, ttnn_input_tensor, parameters)
     ttnn.deallocate(ttnn_input_tensor_0)
 
     ttnn_output = ttnn.to_torch(ttnn_output)

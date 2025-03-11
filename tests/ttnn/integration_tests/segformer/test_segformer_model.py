@@ -106,6 +106,7 @@ def test_segformer_model(
     )
 
     ttnn_output = ttnn_model(
+        device,
         ttnn_input_tensor,
         output_attentions=None,
         output_hidden_states=None,

@@ -107,7 +107,7 @@ def test_segformer_mix_ffn(
 
     ttnn_model = TtSegformerMixFFN(parameters, hidden_features)
 
-    ttnn_output = ttnn_model(ttnn_input_tensor, height=height, width=width, parameters=parameters, device=device)
+    ttnn_output = ttnn_model(device, ttnn_input_tensor, height=height, width=width, parameters=parameters)
     ttnn_output = ttnn.from_device(ttnn_output)
     ttnn_output = ttnn.to_torch(ttnn_output)[0]
 

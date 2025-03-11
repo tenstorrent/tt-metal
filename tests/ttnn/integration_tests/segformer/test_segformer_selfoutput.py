@@ -73,7 +73,7 @@ def test_segformer_selfoutput(device, block_i, self_output_i, batch_size, seq_le
     )
     ttnn_model = TtSegformerSelfOutput()
 
-    ttnn_output = ttnn_model(ttnn_input_tensor, parameters=parameters)
+    ttnn_output = ttnn_model(device, ttnn_input_tensor, parameters=parameters)
     ttnn_output = ttnn.from_device(ttnn_output)
     ttnn_output = ttnn.to_torch(ttnn_output)
 

@@ -120,6 +120,7 @@ def test_segformer_overlap_patch_embeddings(
         post_process_it = 1
 
     ttnn_output, height, width = ttnn_model(
+        device,
         ttnn_input_tensor,
         parameters=parameters,
     )

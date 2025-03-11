@@ -119,8 +119,8 @@ class TtSegformerEfficientSelfAttention:
                 hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
                 hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
 
-            # hidden_states, __, __ = self.sr(device, hidden_states)
-            hidden_states = self.sr(device, hidden_states)
+            hidden_states, __, __ = self.sr(device, hidden_states)
+            # hidden_states = self.sr(device, hidden_states)
             hidden_states = ttnn.to_memory_config(hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
 
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
