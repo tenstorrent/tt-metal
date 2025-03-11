@@ -1,0 +1,81 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+from loguru import logger
+import random
+import pytest
+import torch
+import ttnn
+import traceback
+
+from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import check_with_pcc
+from models.utility_functions import disable_persistent_kernel_cache
+
+aten = torch.ops.aten
+
+
+def run_moreh_cumsum_tests(
+    in_data,
+    device,
+):
+    x = torch.tensor(in_data[0]).to(torch.int32)
+
+    print(in_data[0])
+
+    try:
+        x = x.reshape(len(in_data[0]), 1, 1, 1)
+        ref_value = aten.cumsum.default(
+            x,
+            0,
+        )
+
+        tt_x = ttnn.from_torch(x, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)  # int32 uint32 bfloat16
+
+        # tt_x = ttnn.typecast(tt_x, ttnn.bfloat16)
+        tt_result = ttnn.moreh_cumsum(
+            tt_x,
+            0,
+        )
+        # tt_result = ttnn.typecast(tt_result, ttnn.uint32)
+
+        print(f"tt_result {ttnn.to_torch(tt_result)}")
+        print(f"ref_value {ref_value}")
+
+        passed, message = check_with_pcc(ref_value.reshape(1, 32, 1, 1), ttnn.to_torch(tt_result))
+        assert passed, f"{message, tt_x}"
+
+        tt_result = ttnn.to_layout(
+            tt_result,
+            ttnn.ROW_MAJOR_LAYOUT,
+        )
+        tt_result = ttnn.reshape(
+            tt_result,
+            (1, 32),
+        )
+
+        tt_result = ttnn.to_torch(tt_result)
+
+    except Exception as e:
+        logger.warning(f"Test execution crashed: {e}")
+        print(traceback.format_exc())
+        raise e
+
+    # assert len(tt_result.shape) == len(ref_value.shape)
+    assert tt_result.shape == ref_value.shape
+    assert_with_pcc(ref_value, tt_result, 0.999)
+
+
+test_sweep_args = [
+    ([3, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1],),
+]
+
+
+@pytest.mark.parametrize(
+    "x",
+    (test_sweep_args),
+)
+def test_moreh_cumsum(x, device):
+    disable_persistent_kernel_cache()
+    run_moreh_cumsum_tests(x, device)
