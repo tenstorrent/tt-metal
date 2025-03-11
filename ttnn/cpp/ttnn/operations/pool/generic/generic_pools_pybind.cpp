@@ -37,6 +37,7 @@ void bind_max_pool2d_operation(py::module& module) {
             memory_config (ttnn.MemoryConfig, optional): the memory configuration for the output tensor. Defaults to `None`.
             applied_shard_scheme (ttnn.TensorMemoryLayout, optional): the sharding scheme to apply to a non-pre-sharded input tensor. Defaults to `None`, which should be used with pre-sharded input tensors.
             ceil_mode (bool, optional): whether to use ceil mode for the output shape. Defaults to `False`.
+            in_place (bool, optional): whether to perform the halo operation in place. Defaults to `False`.
             queue_id (int, optional): the queue id to use for the operation. Defaults to `0`.
 
         Returns:
@@ -71,6 +72,7 @@ void bind_max_pool2d_operation(py::module& module) {
                                 memory_config=None,
                                 applied_shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                                 ceil_mode=False,
+                                in_place_halo=False,
                             )
 
         )doc",
@@ -88,6 +90,7 @@ void bind_max_pool2d_operation(py::module& module) {
                const std::optional<const MemoryConfig>& memory_config,
                const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
                bool ceil_mode,
+               bool in_place_halo,
                QueueId queue_id) -> ttnn::Tensor {
                 return self(
                     queue_id,
@@ -102,7 +105,8 @@ void bind_max_pool2d_operation(py::module& module) {
                     dilation,
                     memory_config,
                     applied_shard_scheme,
-                    ceil_mode);
+                    ceil_mode,
+                    in_place_halo);
             },
             py::arg("input_tensor"),
             py::arg("batch_size"),
@@ -117,6 +121,7 @@ void bind_max_pool2d_operation(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("applied_shard_scheme") = std::nullopt,
             py::arg("ceil_mode") = false,
+            py::arg("in_place_halo") = false,
             py::arg("queue_id") = DefaultQueueId});
 }
 

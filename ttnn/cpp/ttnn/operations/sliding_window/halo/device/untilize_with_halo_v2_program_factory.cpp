@@ -8,6 +8,8 @@
 
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
+#include <cstdint>
+#include <optional>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -45,14 +47,17 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     const Tensor& input_tensor,
     const uint32_t pad_val,
     const uint32_t ncores_nhw,
+    const uint32_t ncores_c,
     const uint32_t max_out_nsticks_per_core,
     const Tensor& padding_config,
     const Tensor& local_config,
     const Tensor& remote_config,
+    std::optional<std::reference_wrapper<const Tensor>> remote_temp,
     const bool remote_read,
     const bool transpose_mcast,
     Tensor& output_tensor,
-    const bool capture_buffers) {
+    const bool capture_buffers,
+    const bool in_place) {
     IDevice* device = input_tensor.device();
     Buffer* src_buffer = input_tensor.buffer();
     Buffer* dst_buffer = output_tensor.buffer();
@@ -194,6 +199,38 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     const bool is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
     const bool is_width_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED;
 
+    CoreCoord noc_00;
+    uint32_t num_cores_x = 0;
+    uint32_t num_cores_y = 0;
+    uint32_t semaphore_id = 0;
+    uint32_t remote_temp_cb_id = 0;
+    if (in_place) {
+        TT_ASSERT(!remote_read, "remote_read is not supported for in place operation");
+
+        // create the remote temp CB
+        if (remote_temp.has_value()) {
+            remote_temp_cb_id = cb_indices.get_next_cb_id();
+            auto remote_temp_buffer = remote_temp.value().get().device_buffer();
+            auto remote_temp_cb_config =
+                CircularBufferConfig(remote_temp_buffer->size() / num_cores, {{remote_temp_cb_id, kernel_config_df}})
+                    .set_page_size(remote_temp_cb_id, remote_temp_buffer->page_size())
+                    .set_globally_allocated_address(*remote_temp_buffer);
+            CBHandle remote_temp_cb = CreateCircularBuffer(program, all_cores, remote_temp_cb_config);
+        }
+
+        // compute core data and create semaphore
+        auto core_id_to_noc_coords = [is_block_sharded, transpose_mcast, device](uint32_t core_id) -> CoreCoord {
+            auto num_cores_x = device->compute_with_storage_grid_size().x;
+            auto core_coord = is_block_sharded ? (transpose_mcast ? CoreCoord(core_id, 0) : CoreCoord(0, core_id))
+                                               : CoreCoord(core_id % num_cores_x, core_id / num_cores_x);
+            return device->worker_core_from_logical_core(core_coord);
+        };
+        noc_00 = core_id_to_noc_coords(0);
+        num_cores_x = device->compute_with_storage_grid_size().x;
+        num_cores_y = device->compute_with_storage_grid_size().y;
+        semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+    }
+
     auto aligned_input_nstick_nbytes = out_stick_nbytes;
     log_debug(tt::LogOp, "out_stick_nbytes = {}", out_stick_nbytes);
     log_debug(tt::LogOp, "input_tensor.buffer()->alignment() = {}", input_tensor.buffer()->alignment());
@@ -206,6 +243,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         0,  // padding_config_cb_id
         0,  // local_config_cb_id
         0,  // remote_config_cb_id
+        0,  // remote_temp_cb_id
         cb_indices.src_cb_id,
         input_to_writer_cb_id,
         cb_indices.out_cb_id,
@@ -217,26 +255,39 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         remote_read,
         (uint32_t)(transpose_mcast ? 1 : 0),
         is_width_sharded,
-        aligned_input_nstick_nbytes};
+        aligned_input_nstick_nbytes,
+        noc_00.x,
+        noc_00.y,
+        ncores_nhw,
+        ncores_c,
+        num_cores_x,
+        semaphore_id,
+        max_out_nsticks_per_core};
 
     reader_ct_args[0] = 0;
     reader_ct_args[1] = cb_indices.local_config_cb_id;
-    reader_ct_args[2] = 0;
+    reader_ct_args[2] = in_place ? cb_indices.remote_config_cb_id : 0;
+    reader_ct_args[3] = in_place ? remote_temp_cb_id : 0;
 
     KernelHandle reader_kernel_id0 = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather.cpp",
+        in_place
+            ? "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather_in_place.cpp"
+            : "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather.cpp",
         all_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_ct_args});
 
     reader_ct_args[0] = cb_indices.padding_config_cb_id;
     reader_ct_args[1] = 0;
-    reader_ct_args[2] = cb_indices.remote_config_cb_id;
+    reader_ct_args[2] = in_place ? 0 : cb_indices.remote_config_cb_id;
+    reader_ct_args[3] = 0;
 
     KernelHandle reader_kernel_id1 = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather.cpp",
+        program,ß
+        in_place
+            ? "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather_in_place.cpp"
+            : "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather.cpp",
         all_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_ct_args});

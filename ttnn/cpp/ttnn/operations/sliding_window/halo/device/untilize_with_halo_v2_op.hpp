@@ -15,6 +15,7 @@ namespace ttnn::operations::data_movement {
 struct UntilizeWithHaloV2 {
     const uint32_t pad_val_;
     const uint32_t ncores_nhw_;
+    const uint32_t ncores_c_;
     const uint32_t max_out_nsticks_per_core_;
     const tt::tt_metal::MemoryConfig out_mem_config_;
     const bool remote_read_;

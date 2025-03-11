@@ -89,18 +89,18 @@ void kernel_main() {
     constexpr uint32_t padding_config_cb_id = get_compile_time_arg_val(0);  // has untilized input shard
     constexpr uint32_t local_config_cb_id = get_compile_time_arg_val(1);    // has untilized input shard
     constexpr uint32_t remote_config_cb_id = get_compile_time_arg_val(2);   // has untilized input shard
-    constexpr uint32_t src_cb_id = get_compile_time_arg_val(3);             // has untilized input shard
-    constexpr uint32_t in_cb_id = get_compile_time_arg_val(4);              // has untilized input shard
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(5);     // output shard with padding and halo goes here
-    constexpr uint32_t pad_cb_id = get_compile_time_arg_val(6);     // cb for const pad val buffer
-    constexpr uint32_t pad_val_u32 = get_compile_time_arg_val(7);   // pad value to fill pad buffer with
-    constexpr uint32_t in_nsticks = get_compile_time_arg_val(8);    // number of sticks
-    constexpr uint32_t stick_nbytes = get_compile_time_arg_val(9);  // stick size in bytes (post untilize)
-    constexpr uint32_t is_block_sharded = get_compile_time_arg_val(10);
-    constexpr uint32_t remote_read = get_compile_time_arg_val(11);
-    constexpr bool is_col_major = get_compile_time_arg_val(12) == 1;
-    constexpr uint32_t is_width_sharded = get_compile_time_arg_val(13);
-    constexpr uint32_t input_aligned_page_size = get_compile_time_arg_val(14);
+    constexpr uint32_t src_cb_id = get_compile_time_arg_val(4);             // has untilized input shard
+    constexpr uint32_t in_cb_id = get_compile_time_arg_val(5);              // has untilized input shard
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(6);      // output shard with padding and halo goes here
+    constexpr uint32_t pad_cb_id = get_compile_time_arg_val(7);      // cb for const pad val buffer
+    constexpr uint32_t pad_val_u32 = get_compile_time_arg_val(8);    // pad value to fill pad buffer with
+    constexpr uint32_t in_nsticks = get_compile_time_arg_val(9);     // number of sticks
+    constexpr uint32_t stick_nbytes = get_compile_time_arg_val(10);  // stick size in bytes (post untilize)
+    constexpr uint32_t is_block_sharded = get_compile_time_arg_val(11);
+    constexpr uint32_t remote_read = get_compile_time_arg_val(12);
+    constexpr bool is_col_major = get_compile_time_arg_val(13) == 1;
+    constexpr uint32_t is_width_sharded = get_compile_time_arg_val(14);
+    constexpr uint32_t input_aligned_page_size = get_compile_time_arg_val(15);
 
     constexpr uint32_t elem_nbytes = sizeof(uint16_t);
     constexpr uint16_t pad_core_id = 0xFFFF;
@@ -120,7 +120,6 @@ void kernel_main() {
         uint32_t padding_config_l1_addr = get_read_ptr(padding_config_cb_id);
         volatile tt_l1_ptr uint16_t* config_data =
             reinterpret_cast<volatile tt_l1_ptr uint16_t*>(padding_config_l1_addr);
-        // print_data_u16(padding_config_l1_addr, 1, 16);
         const uint64_t padding_l1_addr = get_noc_addr(my_noc_x, my_noc_y, get_read_ptr(pad_cb_id));
         const uint32_t dst_base_addr = out_base_l1_addr;
         uint16_t nsticks = 1;

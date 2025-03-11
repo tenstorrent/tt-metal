@@ -5,6 +5,7 @@
 #include "untilize_with_halo_v2_op.hpp"
 
 #include "ttnn/run_operation.hpp"
+#include <optional>
 #include <tt-metalium/work_split.hpp>
 #include "untilize_with_halo_v2_program_factory.hpp"
 
@@ -86,10 +87,12 @@ operation::ProgramWithCallbacks UntilizeWithHaloV2::create_program(
         input_tensor,
         pad_val_,
         ncores_nhw_,
+        ncores_c_,
         max_out_nsticks_per_core_,
         padding_config,
         local_config,
         remote_config,
+        std::nullopt,
         remote_read_,
         transpose_mcast_,
         output_tensor,
