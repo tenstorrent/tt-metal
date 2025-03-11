@@ -237,6 +237,7 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, distri
 
 void tensor_print(const Tensor& input_tensor) {
     GraphTracker::instance().track_function_start("Tensor::print", input_tensor);
+    std::cout << input_tensor.write_to_string() << std::endl;
     GraphTracker::instance().track_function_end();
 }
 

@@ -68,7 +68,7 @@ bool is_cpu_tensor(const Tensor& tensor) {
 
 bool is_device_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::DEVICE; }
 
-Tensor transform(const Tensor& tensor, std::function<Tensor(const Tensor&)> transform_func) {
+Tensor transform(const Tensor& tensor, const std::function<Tensor(const Tensor&)>& transform_func) {
     auto input_tensors = ttnn::distributed::get_tensors_from_multi_device_storage(tensor);
     std::vector<Tensor> output_tensors(input_tensors.size());
     std::transform(input_tensors.begin(), input_tensors.end(), output_tensors.begin(), [&](const auto& device_tensor) {

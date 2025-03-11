@@ -58,7 +58,7 @@ bool is_device_tensor(const Tensor& tensor);
 
 // Given a multi-device tensor, and a function that transforms a tensor, applies the function to all per-device
 // tensors.
-Tensor transform(const Tensor& tensor, std::function<Tensor(const Tensor&)> transform_func);
+Tensor transform(const Tensor& tensor, const std::function<Tensor(const Tensor&)>& transform_func);
 
 // Given a multi-device tensor, and a callable, applies the function to all per-device tensors.
 void apply(const Tensor& tensor, const std::function<void(const Tensor&)>& callable);
