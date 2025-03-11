@@ -28,6 +28,7 @@ on:
           - eltwise.unary.log10.log10_sharded
           - eltwise.unary.log2.log2_sharded
           - eltwise.unary.log10.log10_survey
+          - eltwise.unary.square.square_survey
           - eltwise.unary.nez.nez_sharded
           - eltwise.unary.relu6.relu6_sharded
           - composite.binary.gcd.gcd
