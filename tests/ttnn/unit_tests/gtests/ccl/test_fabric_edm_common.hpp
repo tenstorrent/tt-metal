@@ -2122,6 +2122,7 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
             view.get_device(MeshCoordinate(2, 0)),
             view.get_device(MeshCoordinate(3, 0))};
     } else {
+        // Choosing pcie devices so that more links are supported. More links == more (likelihood of) congestion.
         devices_ = {
             view.get_device(MeshCoordinate(0, 1)),
             view.get_device(MeshCoordinate(0, 2)),
