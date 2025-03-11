@@ -12,6 +12,10 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/global_circular_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/global_semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/semaphore.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/blockfloat/blockfloat_common.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/blockfloat/bfloat4.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/blockfloat/bfloat8.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/blockfloat/bfloat16.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel_types.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/algorithms/free_list.cpp
@@ -28,7 +32,10 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_query_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_core_common.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_core_manager.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/command_queue_interface.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/command_queue_common.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_mem_map.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/system_memory_cq_interface.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/system_memory_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/hardware_command_queue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/launch_message_ring_buffer_state.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/worker_config_buffer.cpp
@@ -42,6 +49,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/demux.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/eth_router.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/eth_tunneler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/fabric_router_vc.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/util/dispatch_settings.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/dprint_server.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/noc_logging.cpp
