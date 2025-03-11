@@ -621,7 +621,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     uint32_t input_width = ashape[2];
     uint32_t input_channels = ashape[3];
-    bool is_conv1d = filter_w == 1 && input_width == 1;
+    bool is_conv1d = is_1d_conv(filter_w, input_width);
     bool is_conv_1d_depthwise_conv =
         is_1d_deptwise_conv(groups, input_channels, output_channels, filter_w, input_width);
 
