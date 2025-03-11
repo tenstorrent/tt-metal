@@ -53,25 +53,11 @@ struct DropoutDeviceOperation {
         const std::optional<Tensor>& preallocated_output = std::nullopt);
 };
 
-struct DropoutAttributeCustomizer : public ttnn::AttributeCustomizerBase<operation_attributes_t> {
-    operation_attributes_t customize(
-        const operation_attributes_t& attrs,
-        const tt::tt_metal::distributed::MeshCoordinate& mesh_coordinate,
-        tt::tt_metal::distributed::MeshDevice* mesh_device) const override {
-        auto device_attrs = attrs;
-        device_attrs.seed = attrs.seed + mesh_device->get_device(mesh_coordinate)->id();
-        return device_attrs;
-    }
-};
-struct DropoutMeshDeviceOperation
-    : public ttnn::MeshDeviceOperationAdapter<DropoutDeviceOperation, DropoutAttributeCustomizer> {};
+struct DropoutMeshDeviceOperation : public ttnn::MeshDeviceOperationAdapter<DropoutDeviceOperation> {};
 
 }  // namespace ttnn::operations::experimental::dropout
 
 namespace ttnn::prim {
-constexpr auto dropout =
-    ttnn::register_operation<"ttnn::prim::dropout", ttnn::operations::experimental::dropout::DropoutDeviceOperation>();
-
-constexpr auto mdropout = ttnn::
-    register_operation<"ttnn::prim::mdropout", ttnn::operations::experimental::dropout::DropoutMeshDeviceOperation>();
+constexpr auto dropout = ttnn::
+    register_operation<"ttnn::prim::dropout", ttnn::operations::experimental::dropout::DropoutMeshDeviceOperation>();
 }  // namespace ttnn::prim

@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <functional>
+#include <concepts>
 #include <tt-metalium/program_cache.hpp>
 #include "ttnn/device_operation_helper.hpp"
 
@@ -21,6 +22,38 @@ struct AttributeCustomizerBase {
         tt::tt_metal::distributed::MeshDevice* mesh_device) const = 0;
 };
 
+// Define concept for customizer functions - ensures type safety
+template <typename F, typename AttributeType>
+concept AttributeCustomizerCallable = requires(
+    F f,
+    const AttributeType& attrs,
+    const tt::tt_metal::distributed::MeshCoordinate& coord,
+    tt::tt_metal::distributed::MeshDevice* device) {
+    { f(attrs, coord, device) } -> std::convertible_to<AttributeType>;
+};
+
+// Template class that adapts any callable to the AttributeCustomizerBase interface
+template <typename AttributeType, AttributeCustomizerCallable<AttributeType> F>
+struct FunctionAttributeCustomizer : public AttributeCustomizerBase<AttributeType> {
+    FunctionAttributeCustomizer(F func) : func_(std::move(func)) {}
+
+    AttributeType customize(
+        const AttributeType& attrs,
+        const tt::tt_metal::distributed::MeshCoordinate& coord,
+        tt::tt_metal::distributed::MeshDevice* device) const override {
+        return func_(attrs, coord, device);
+    }
+
+private:
+    F func_;
+};
+
+// Helper function to create a customizer from any callable
+template <typename AttributeType, AttributeCustomizerCallable<AttributeType> F>
+std::shared_ptr<AttributeCustomizerBase<AttributeType>> make_attribute_customizer(F func) {
+    return std::make_shared<FunctionAttributeCustomizer<AttributeType, F>>(std::move(func));
+}
+
 /**
  * A generic adapter that adds mesh device capabilities to any existing device operation.
  * This adapter delegates to the base operation for standard functionality while providing
@@ -33,6 +66,7 @@ struct AttributeCustomizerBase {
  *    e.g., using MyMeshOperation = MeshDeviceOperationAdapter<MyDeviceOperation, MyCustomizer>;
  *    This will be used to customize the attributes for each device in the mesh, which in turn allows
  *    different programs per-device in the mesh.
+ * 4. (Optional) Use set_attribute_customizer to provide a dynamic customizer at runtime
  */
 template <typename DeviceOperation, typename CustomizerType = void>
 struct MeshDeviceOperationAdapter {
@@ -144,9 +178,29 @@ struct MeshDeviceOperationAdapter {
         }
     }
 
+public:
+    // Method to set a dynamic customizer
+    static void set_attribute_customizer(std::shared_ptr<AttributeCustomizer> customizer) {
+        get_dynamic_customizer() = std::move(customizer);
+    }
+
+    // Reset to the default customizer
+    static void reset_attribute_customizer() { get_dynamic_customizer() = nullptr; }
+
 private:
+    // Thread-local storage for dynamic customizer
+    static std::shared_ptr<AttributeCustomizer>& get_dynamic_customizer() {
+        thread_local static std::shared_ptr<AttributeCustomizer> dynamic_customizer;
+        return dynamic_customizer;
+    }
+
     static std::shared_ptr<AttributeCustomizer> get_attribute_customizer() {
-        // Use the CustomizerType if provided, otherwise return nullptr
+        // Check for dynamic customizer first
+        if (auto& dynamic_customizer = get_dynamic_customizer()) {
+            return dynamic_customizer;
+        }
+
+        // Fall back to static customizer if specified
         if constexpr (!std::is_same_v<CustomizerType, void>) {
             // Create a shared pointer of CustomizerType and then cast it to AttributeCustomizer
             return std::static_pointer_cast<
