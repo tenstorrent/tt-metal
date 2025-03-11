@@ -44,7 +44,6 @@ jobs:
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
-      tracy: true
       build-wheel: true
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
@@ -56,10 +55,18 @@ jobs:
 
   smoke-tests:
     needs: build-artifact
-    uses: ./.github/workflows/zzz_smoke.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [
+          "N150",
+          "N300",
+        ]
+    uses: ./.github/workflows/smoke.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
       package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
+      runner: ${{ matrix.platform }}
 
   # Slow Dispatch Unit Tests
   sd-unit-tests:
@@ -74,8 +81,8 @@ jobs:
         ]
     uses: ./.github/workflows/build-and-unit-tests.yaml
     with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
+      arch: ${{ matrix.test-group.arch}}
+      runner-label: ${{ matrix.test-group.runner-label}}
       docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
@@ -92,7 +99,7 @@ jobs:
         ]
     uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
     with:
-      os: ubuntu-22.04
+      os: ubuntu-20.04
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
   # Fabric Unit Tests
@@ -107,7 +114,7 @@ jobs:
         ]
     uses: ./.github/workflows/fabric-build-and-unit-tests.yaml
     with:
-      os: ubuntu-22.04
+      os: ubuntu-20.04
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
   # TTNN FD Unit tests
@@ -125,9 +132,6 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # FD Model Tests
   models-unit-tests:
     needs: build-artifact
@@ -143,9 +147,6 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # FD C++ Unit Tests
   cpp-unit-tests:
     needs: build-artifact
@@ -161,9 +162,6 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   code-analysis:
     uses: ./.github/workflows/code-analysis.yaml
     secrets: inherit
@@ -205,6 +203,10 @@ jobs:
     needs: build-artifact
     uses: ./.github/workflows/docs-latest-public.yaml
     secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   build:
     uses: ./.github/workflows/build-artifact.yaml
     needs: build-artifact
@@ -212,11 +214,11 @@ jobs:
     strategy:
       matrix:
         config:
-          - version: "22.04"
+          - version: "20.04"
             toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
             build-type: "Debug"
             publish-artifact: false
-          - version: "22.04"
+          - version: "20.04"
             toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
             build-type: "RelWithDebInfo"
             publish-artifact: false
