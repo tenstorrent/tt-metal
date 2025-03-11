@@ -237,6 +237,11 @@ def run_conv(
     else:
         pcc = 0.997
 
+    if activation == "tanh":
+        # Scale down PCC for tanh.
+        # tanh has a range of -1 to 1. So discrepancies in output values which are close to 0 tend to disproportionately affect the PCC.
+        pcc = pcc * 0.99
+
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
     logger.info(f"PCC = {pcc_msg}. Threshold = {pcc}")
     assert passing
@@ -554,11 +559,11 @@ def test_conv_features_multi_device(
     [
         [ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT],
         [ttnn.bfloat8_b, ttnn.TILE_LAYOUT],
-    ]
+    ],
 )
 @pytest.mark.parametrize(
     "fp32_accum",
-    [False],  # Fp32 Accum, Packer L1 Accum and Row Major together fails.
+    [True],
 )
 @pytest.mark.parametrize(
     "has_bias",
@@ -622,7 +627,6 @@ def test_conv_activation(
         packer_l1_acc=False,
         activation=activation,
     )
-
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
