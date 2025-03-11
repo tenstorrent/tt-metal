@@ -208,7 +208,7 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, distri
                     "to(layout) must be called on host tensors with MULTI_DEVICE_HOST_STORAGE when multiple "
                     "workers "
                     "are specified");
-                ;
+
                 auto shard = get_shard_for_device(input_tensor, worker, worker_index);
                 shard = tensor_impl::to_layout_wrapper(shard, target_layout);
                 insert_buffer_and_shape_for_device(worker, shard, tensor_modified_layout, worker_index);

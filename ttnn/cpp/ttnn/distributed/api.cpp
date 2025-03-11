@@ -47,13 +47,12 @@ std::vector<ttnn::Tensor> get_device_tensors(const ttnn::Tensor& tensor) {
         return tensors;
     } else if (std::holds_alternative<tt::tt_metal::DeviceStorage>(tensor.get_storage())) {
         auto& device_storage = std::get<tt::tt_metal::DeviceStorage>(tensor.get_storage());
-        if (auto mesh_buffer = device_storage.mesh_buffer;
-            mesh_buffer != nullptr and mesh_buffer->device()->num_devices() > 1) {
+        if (auto mesh_buffer = device_storage.mesh_buffer; mesh_buffer != nullptr) {
             std::vector<ttnn::Tensor> tensors;
-            auto devices = mesh_buffer->device()->get_devices();
-            for (auto device : devices) {
-                auto shard = tt::tt_metal::get_shard_for_device(tensor, device);
-                tensors.push_back(shard);
+            tensors.reserve(device_storage.specs.size());
+            for (const auto& [coord, shard_spec] : device_storage.specs) {
+                DeviceStorage shard_storage(mesh_buffer, AllGatherTensor{}, {std::make_pair(coord, shard_spec)});
+                tensors.push_back(Tensor(std::move(shard_storage), shard_spec));
             }
             return tensors;
         } else {
@@ -117,6 +116,31 @@ Tensor aggregate_as_tensor(
         }
         auto storage = MultiDeviceHostStorage{config, std::move(host_owned_buffers), specs};
         return Tensor(std::move(storage), reference_shard.get_tensor_spec());
+    } else if (storage_type == StorageType::DEVICE) {
+        auto mesh_buffer = std::get<DeviceStorage>(reference_shard.get_storage()).mesh_buffer;
+        TT_FATAL(
+            mesh_buffer != nullptr,
+            "Does not support aggregating tensor shards that are not backed by a mesh buffer. Consider moving tensors "
+            "to host, aggregating, and re-uploading on device storage.");
+        std::vector<std::pair<MeshCoordinate, TensorSpec>> specs;
+
+        for (const auto& shard : tensor_shards) {
+            const auto& shard_storage = std::get<DeviceStorage>(shard.get_storage());
+            TT_FATAL(
+                shard_storage.mesh_buffer == mesh_buffer,
+                "Does not support aggregating tensor shards, allocated on different mesh buffers. Consider moving "
+                "tensors to host, aggregating, and re-uploading on device storage.");
+            for (const auto& [coord, shard_spec] : shard_storage.specs) {
+                specs.push_back(std::make_pair(coord, shard_spec));
+            }
+        }
+        std::sort(specs.begin(), specs.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        auto duplicate = std::adjacent_find(
+            specs.begin(), specs.end(), [](const auto& a, const auto& b) { return a.first == b.first; });
+        TT_FATAL(duplicate == specs.end(), "Found a tensor shard at duplicate coordiante {0}", duplicate->first);
+
+        auto storage = DeviceStorage(mesh_buffer, AllGatherTensor{}, specs);
+        return Tensor(std::move(storage), reference_shard.get_tensor_spec());
     } else {
         TT_THROW("TODO(jchu): Not implemented");
     }
@@ -136,9 +160,9 @@ std::vector<IDevice*> get_mapped_devices(const Tensor& tensor, MeshDevice& mesh_
     // For multi-device tensors, returns the number of workers capped by the number of buffers
     // Otherwise, returns all available workes from mesh_device.
     auto get_workers_for_tensor = [&tensor](const auto& workers) {
-        if (/*std::holds_alternative<MultiDeviceStorage>(tensor.get_storage()) or */
-            std::holds_alternative<MultiDeviceHostStorage>(tensor.get_storage())) {
-            return std::vector<IDevice*>(workers.begin(), workers.begin() + num_buffers_in_tensor(tensor));
+        if (std::holds_alternative<MultiDeviceHostStorage>(tensor.get_storage())) {
+            const auto num_buffers = std::get<MultiDeviceHostStorage>(tensor.get_storage()).num_buffers();
+            return std::vector<IDevice*>(workers.begin(), workers.begin() + num_buffers);
         }
         return workers;
     };
