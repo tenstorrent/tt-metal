@@ -86,7 +86,7 @@ def run_fabric_edm(
 
 @pytest.mark.parametrize("num_mcasts", [200000])
 @pytest.mark.parametrize("num_unicasts", [0])
-@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("num_links", [1, 2])
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [4])
@@ -113,7 +113,7 @@ def test_fabric_edm_mcast_bw(
 
 @pytest.mark.parametrize("num_mcasts", [0])
 @pytest.mark.parametrize("num_unicasts", [200000])
-@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("num_links", [1, 2])
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [2])
