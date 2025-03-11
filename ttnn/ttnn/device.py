@@ -95,8 +95,6 @@ def DumpDeviceProfiler(device):
 GetNumAvailableDevices = ttnn._ttnn.device.GetNumAvailableDevices
 EnablePersistentKernelCache = ttnn._ttnn.device.EnablePersistentKernelCache
 DisablePersistentKernelCache = ttnn._ttnn.device.DisablePersistentKernelCache
-EnableCompilationReports = ttnn._ttnn.device.EnableCompilationReports
-DisableCompilationReports = ttnn._ttnn.device.DisableCompilationReports
 EnableMemoryReports = ttnn._ttnn.device.EnableMemoryReports
 DisableMemoryReports = ttnn._ttnn.device.DisableMemoryReports
 DeallocateBuffers = ttnn._ttnn.device.deallocate_buffers

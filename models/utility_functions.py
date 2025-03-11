@@ -163,20 +163,6 @@ def disable_persistent_kernel_cache():
     ttnn.device.DisablePersistentKernelCache()
 
 
-def enable_compilation_reports():
-    """
-    Enables generating reports of compilation statistics in .reports/tt_metal dir
-    """
-    return ttnn.device.EnableCompilationReports()
-
-
-def disable_compilation_reports():
-    """
-    Disables generating reports of compilation statistics
-    """
-    return ttnn.device.DisableCompilationReports()
-
-
 def enable_memory_reports():
     """
     Enables generating reports of memory allocation statistics in .reports/tt_metal dir
