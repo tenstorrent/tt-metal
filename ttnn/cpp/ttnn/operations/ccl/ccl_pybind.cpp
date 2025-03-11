@@ -24,9 +24,16 @@ void py_bind_common(pybind11::module& module) {
         py::arg("mesh_device"),
         py::kw_only(),
         py::arg("wrap_fabric_around_mesh") = false,
-        py::arg("context_switch_interval_override") = std::nullopt);
+        py::arg("context_switch_interval_override") = std::nullopt,
+        py::arg("topology") = ttnn::ccl::Topology::Linear);
 
-    module.def("teardown_edm_fabric", &ttnn::ccl::teardown_edm_fabric, py::arg("mesh_device"), py::kw_only());
+    module.def(
+        "teardown_edm_fabric",
+        &ttnn::ccl::teardown_edm_fabric,
+        py::arg("mesh_device"),
+        py::kw_only(),
+        py::arg("wrap_fabric_around_mesh") = false,
+        py::arg("topology") = ttnn::ccl::Topology::Linear);
 }
 
 void py_module(py::module& module) {

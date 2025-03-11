@@ -110,12 +110,12 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     std::size_t channel_buffer_size_bytes,
     std::size_t sender_ratio_size,
     std::size_t receiver_ratio_size,
-    bool ring_topology) :
+    Topology topology) :
     FabricEriscDatamoverConfig() {
     this->num_used_sender_channels = FabricEriscDatamoverConfig::num_sender_channels;
     this->num_used_receiver_channels = FabricEriscDatamoverConfig::num_receiver_channels;
-    this->enable_ring_topology = ring_topology;
-    if (!ring_topology) {
+    this->topology = topology;
+    if (topology != Topology::Ring) {
         this->num_used_sender_channels -= 1;
         this->num_used_receiver_channels -= 1;
     }
@@ -172,7 +172,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     // TODO: Review
     size_t default_pow2_num_sender_buffer_slots = 8;
     size_t default_pow2_num_receiver_buffer_slots = 16;
-    if (ring_topology) {
+    if (topology == Topology::Ring) {
         default_pow2_num_sender_buffer_slots /= 2;
         default_pow2_num_receiver_buffer_slots /= 2;
     }
@@ -409,7 +409,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const
         this->firmware_context_switch_interval,
         this->enable_first_level_ack,
         this->fuse_receiver_flush_and_completion_ptr,
-        config.enable_ring_topology,
+        config.topology == Topology::Ring,
         is_handshake_master,
         this->handshake_address,
         this->channel_buffer_size,
@@ -672,11 +672,11 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     bool enable_persistent_mode,
     std::optional<size_t> desired_num_links,
     bool build_in_worker_connection_mode,
-    bool ring_topology) :
+    Topology topology) :
     device_sequence(device_sequence), programs(program_sequence) {
     static constexpr std::size_t edm_buffer_size =
         FabricEriscDatamoverBuilder::default_packet_payload_size_bytes + sizeof(tt::fabric::PacketHeader);
-    const auto config = FabricEriscDatamoverConfig(edm_buffer_size, 1, 2, ring_topology);
+    const auto config = FabricEriscDatamoverConfig(edm_buffer_size, 1, 2, topology);
     TT_ASSERT(device_sequence.size() == program_sequence.size());
 
     for (size_t i = 0; i < device_sequence.size(); i++) {
@@ -700,7 +700,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
         auto dest_device = device_sequence[hop + 1];
         min_link_count = get_min_link_count(src_device, dest_device, min_link_count);
     }
-    if (ring_topology) {
+    if (topology == Topology::Ring) {
         auto src_device = device_sequence.back();
         auto dest_device = device_sequence.front();
         min_link_count = get_min_link_count(src_device, dest_device, min_link_count);
@@ -762,7 +762,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
         a_builder = &edm_builders_backward_direction[dest_device->id()].front();
         this->buffer_size_bytes = a_builder->channel_buffer_size;
     }
-    if (ring_topology) {
+    if (topology == Topology::Ring) {
         auto src_device = device_sequence.back();
         auto dest_device = device_sequence.front();
         auto src_program = programs.back();
@@ -777,7 +777,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
         // Establish local connections between EDMs on the same chips to establish the line fabric
         uint32_t start_bidirectional_device_index = 1;
         uint32_t end_bidirectional_device_index = device_sequence.size() - 1;
-        if (ring_topology) {
+        if (topology == Topology::Ring) {
             start_bidirectional_device_index = 0;
             end_bidirectional_device_index = device_sequence.size();
         }
@@ -804,11 +804,11 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     bool enable_persistent_mode,
     std::optional<size_t> desired_num_links,
     bool build_in_worker_connection_mode,
-    bool ring_topology) :
+    Topology topology) :
     device_sequence({local_device}), programs({program}) {
     static constexpr std::size_t edm_buffer_size =
         FabricEriscDatamoverBuilder::default_packet_payload_size_bytes + sizeof(tt::fabric::PacketHeader);
-    const auto config = FabricEriscDatamoverConfig(edm_buffer_size, 1, 2, ring_topology);
+    const auto config = FabricEriscDatamoverConfig(edm_buffer_size, 1, 2, topology);
 
     log_trace(tt::LogOp, "device id={}", local_device->id());
     log_trace(tt::LogOp, "EDM Fabric Factory ctor on device: {}", local_device->id());
@@ -925,9 +925,9 @@ EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_
     const std::vector<Program*>& program_sequence,
     bool enable_persistent_mode,
     std::optional<size_t> desired_num_links,
-    bool ring_topology) {
+    Topology topology) {
     return EdmLineFabricOpInterface(
-        device_sequence, program_sequence, enable_persistent_mode, desired_num_links, true, ring_topology);
+        device_sequence, program_sequence, enable_persistent_mode, desired_num_links, true, topology);
 }
 
 EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
@@ -937,7 +937,7 @@ EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_
     Program* program,
     bool enable_persistent_mode,
     std::optional<size_t> desired_num_links,
-    bool ring_topology) {
+    Topology topology) {
     return EdmLineFabricOpInterface(
         local_device,
         forward_device == nullptr ? std::nullopt : std::optional<IDevice*>(forward_device),
@@ -946,7 +946,7 @@ EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_
         enable_persistent_mode,
         desired_num_links,
         true,
-        ring_topology);
+        topology);
 }
 
 void EdmLineFabricOpInterface::build_kernels() const {
@@ -1091,7 +1091,8 @@ void EdmLineFabricOpInterface::set_firmware_context_switch_interval(size_t inter
 void initialize_edm_fabric(
     distributed::MeshDevice* mesh_device,
     bool wrap_fabric_around_mesh,
-    std::optional<size_t> context_switch_interval_override) {
+    std::optional<size_t> context_switch_interval_override,
+    Topology topology) {
     if (wrap_fabric_around_mesh) {
         auto devices = mesh_device->get_view().get_ring_devices();
         std::vector<Program*> program_ptrs;
@@ -1100,7 +1101,8 @@ void initialize_edm_fabric(
 
         std::transform(
             programs.begin(), programs.end(), std::back_inserter(program_ptrs), [](Program& p) { return &p; });
-        EdmLineFabricOpInterface fabric_device_builders = EdmLineFabricOpInterface(devices, program_ptrs, true);
+        EdmLineFabricOpInterface fabric_device_builders =
+            EdmLineFabricOpInterface(devices, program_ptrs, true, std::nullopt, false, topology);
         if (context_switch_interval_override.has_value()) {
             fabric_device_builders.set_firmware_context_switch_interval(context_switch_interval_override.value());
         }
@@ -1132,8 +1134,8 @@ void initialize_edm_fabric(
             std::transform(programs[i].begin(), programs[i].end(), std::back_inserter(program_ptrs), [](Program& p) {
                 return &p;
             });
-            row_fabric_lines.push_back(
-                EdmLineFabricOpInterface(mesh_device->get_view().get_row_views()[i], program_ptrs, true));
+            row_fabric_lines.push_back(EdmLineFabricOpInterface(
+                mesh_device->get_view().get_row_views()[i], program_ptrs, true, std::nullopt, false, topology));
             if (context_switch_interval_override.has_value()) {
                 row_fabric_lines.back().set_firmware_context_switch_interval(context_switch_interval_override.value());
             }
@@ -1145,8 +1147,8 @@ void initialize_edm_fabric(
             for (size_t r = 0; r < num_rows; r++) {
                 program_ptrs.push_back(&programs[r][i]);
             }
-            col_fabric_lines.push_back(
-                EdmLineFabricOpInterface(mesh_device->get_view().get_column_views()[i], program_ptrs, true));
+            col_fabric_lines.push_back(EdmLineFabricOpInterface(
+                mesh_device->get_view().get_column_views()[i], program_ptrs, true, std::nullopt, false, topology));
             if (context_switch_interval_override.has_value()) {
                 col_fabric_lines.back().set_firmware_context_switch_interval(context_switch_interval_override.value());
             }
@@ -1168,23 +1170,26 @@ void initialize_edm_fabric(
     }
 }
 
-void teardown_edm_fabric(distributed::MeshDevice* mesh_device) {
-    auto teardown = [](std::vector<IDevice*> const& line_view) {
+void teardown_edm_fabric(distributed::MeshDevice* mesh_device, bool wrap_fabric_around_mesh, Topology topology) {
+    auto teardown = [topology](const std::vector<IDevice*>& line_view) {
         std::vector<Program> programs(line_view.size());
         std::vector<Program*> program_ptrs;
         program_ptrs.reserve(programs.size());
         std::transform(programs.begin(), programs.end(), std::back_inserter(program_ptrs), [](Program& p) { return &p; });
-        EdmLineFabricOpInterface edm_fabric(line_view, program_ptrs, true);
+        EdmLineFabricOpInterface edm_fabric(line_view, program_ptrs, true, std::nullopt, false, topology);
         edm_fabric.teardown_from_host(tt::fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
     };
-
-    for (auto const &row_view : mesh_device->get_view().get_row_views()) {
-        teardown(row_view);
-    }
-    for (auto const &col_view : mesh_device->get_view().get_column_views()) {
-        teardown(col_view);
+    if (wrap_fabric_around_mesh) {
+        auto devices = mesh_device->get_view().get_ring_devices();
+        teardown(devices);
+    } else {
+        for (const auto& row_view : mesh_device->get_view().get_row_views()) {
+            teardown(row_view);
+        }
+        for (const auto& col_view : mesh_device->get_view().get_column_views()) {
+            teardown(col_view);
+        }
     }
 }
-
 
 }  // namespace ttnn::ccl

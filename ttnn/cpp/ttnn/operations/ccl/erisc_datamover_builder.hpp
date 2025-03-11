@@ -10,6 +10,7 @@
 
 #include "ttnn/distributed/types.hpp"
 #include "umd/device/types/cluster_descriptor_types.h"
+#include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_types.hpp"
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
@@ -97,7 +98,7 @@ struct FabricEriscDatamoverConfig {
         std::size_t channel_buffer_size_bytes,
         std::size_t sender_ratio_size,
         std::size_t receiver_ratio_size,
-        bool ring_topology = false);
+        Topology topology = Topology::Linear);
 
     std::size_t channel_buffer_size_bytes = 0;
     std::size_t channel_buffer_size_bytes_with_channel_sync = 0;
@@ -113,7 +114,7 @@ struct FabricEriscDatamoverConfig {
     std::size_t num_used_sender_channels = 0;
     std::size_t num_used_receiver_channels = 0;
 
-    bool enable_ring_topology = false;
+    Topology topology = Topology::Linear;
 
 private:
     FabricEriscDatamoverConfig();
@@ -274,7 +275,7 @@ public:
         bool enable_persistent_mode,
         std::optional<size_t> desired_num_links = std::nullopt,
         bool build_in_worker_connection_mode = false,
-        bool ring_topology = false);
+        Topology topology = Topology::Linear);
 
     // Invocable per chip if we want to collectively build the fabric by building this separately per chip
     // (and implicitly building the fabric that way)
@@ -286,14 +287,14 @@ public:
         bool enable_persistent_mode,
         std::optional<size_t> desired_num_links,
         bool build_in_worker_connection_mode = false,
-        bool ring_topology = false);
+        Topology topology = Topology::Linear);
 
     static EdmLineFabricOpInterface build_program_builder_worker_connection_fabric(
         const std::vector<tt::tt_metal::IDevice*>& device_sequence,
         const std::vector<tt::tt_metal::Program*>& program_sequence,
         bool enable_persistent_mode,
         std::optional<size_t> desired_num_links = std::nullopt,
-        bool ring_topology = false);
+        Topology topology = Topology::Linear);
     static EdmLineFabricOpInterface build_program_builder_worker_connection_fabric(
         tt::tt_metal::IDevice* local_device,
         tt::tt_metal::IDevice* forward_device,
@@ -301,7 +302,7 @@ public:
         tt::tt_metal::Program* program,
         bool enable_persistent_mode,
         std::optional<size_t> desired_num_links = std::nullopt,
-        bool ring_topology = false);
+        Topology topology = Topology::Linear);
 
     // Will create a connection adapter for a worker which can be used to pass args to the worker kernel talking to the
     // corresponding fabric endpoint. This interface will guarantee unique connections only so requesting more unique
@@ -369,8 +370,10 @@ private:
 void initialize_edm_fabric(
     distributed::MeshDevice* mesh_device,
     bool wrap_fabric_around_mesh = false,
-    std::optional<size_t> context_switch_interval_override = std::nullopt);
-void teardown_edm_fabric(distributed::MeshDevice* mesh_device);
+    std::optional<size_t> context_switch_interval_override = std::nullopt,
+    Topology topology = Topology::Linear);
+void teardown_edm_fabric(
+    distributed::MeshDevice* mesh_device, bool wrap_fabric_around_mesh = false, Topology topology = Topology::Linear);
 
 };  // namespace ccl
 };  // namespace ttnn
