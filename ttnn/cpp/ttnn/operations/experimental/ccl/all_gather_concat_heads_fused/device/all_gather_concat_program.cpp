@@ -58,8 +58,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
-    TensorSpec output_intermediate_tensor_spec,
     const uint32_t dim,
+    Tensor& temp_tensor,
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
@@ -75,7 +75,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         "only persistent fabric mode is supported for all_gather_concat_llama_post_binary_matmul");
 
     IDevice* device = input_tensor.device();
-    printf("executing all_gather_concat_llama_post_binary_matmul\n");
+    TensorSpec output_intermediate_tensor_spec = temp_tensor.tensor_spec();
+    auto output_interm_padded_shape = output_intermediate_tensor_spec.padded_shape();
+
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
     log_trace(
@@ -97,7 +99,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors = {input_tensor};
     std::vector<Tensor> output_tensors = {output_tensor};
-    const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
+    std::vector<Tensor> temp_tensors = {temp_tensor};
+    const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, temp_tensors, topology);
     LineTopology line_topology(ring_size, ring_index);
     const size_t num_targets_forward =
         line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD);
@@ -114,62 +117,53 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     const auto input_tensor_cores = input_tensor.memory_config().shard_spec->grid;
     const auto input_tensor_shard_shape = input_tensor.memory_config().shard_spec->shape;
     const auto input_tensor_shard_num_pages = input_tensor_shard_shape[0] * input_tensor_shard_shape[1] / TILE_HW;
-    // const auto output_tensor_cores = output_tensor.memory_config().shard_spec->grid;
-    const auto output_tensor_cores = output_intermediate_tensor_spec.memory_config().shard_spec->grid;
-    const auto output_tensor_shard_shape = output_tensor.memory_config().shard_spec->shape;
-    const auto output_tensor_shard_num_pages = output_tensor_shard_shape[0] * output_tensor_shard_shape[1] / TILE_HW;
-    printf("output_tensor_cores: %u\n", output_tensor_cores.num_cores());
-    printf("output_tensor_shard_shape: %u, %u\n", output_tensor_shard_shape[0], output_tensor_shard_shape[1]);
-    printf("output_tensor_shard_num_pages: %u\n", output_tensor_shard_num_pages);
+
+    const auto output_interm_tensor_cores = temp_tensor.memory_config().shard_spec->grid;
+    const auto output_interm_tensor_shard_shape = temp_tensor.memory_config().shard_spec->shape;
+    const auto output_interm_tensor_shard_num_pages =
+        output_interm_tensor_shard_shape[0] * output_interm_tensor_shard_shape[1] / TILE_HW;
 
     tt::log_debug(tt::LogOp, "input_tensor_num_pages: {}", input_tensor_num_pages);
     tt::log_debug(tt::LogOp, "input_tensor_cores: {}", input_tensor_cores);
     tt::log_debug(tt::LogOp, "input_tensor_shard_shape: {}", input_tensor_shard_shape);
     tt::log_debug(tt::LogOp, "input_tensor_shard_num_pages: {}", input_tensor_shard_num_pages);
-    tt::log_debug(tt::LogOp, "output_tensor_cores: {}", output_tensor_cores);
-    tt::log_debug(tt::LogOp, "output_tensor_shard_shape: {}", output_tensor_shard_shape);
-    tt::log_debug(tt::LogOp, "output_tensor_shard_num_pages: {}", output_tensor_shard_num_pages);
 
-    /*
     //concat info
+    const auto& input_concat_shape = temp_tensor.get_padded_shape();
+    const uint32_t head_dim = input_concat_shape[-1];
+    const uint32_t batch = input_concat_shape[1];
     uint32_t single_tile_size =
     tt::tt_metal::detail::TileSize(tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype()));
 
-    uint32_t head_dim = 128;
-    uint32_t head_tiles = head_dim / TILE_WIDTH;
-    uint32_t head_size = head_tiles * single_tile_size;
+    auto tile_shape = temp_tensor.get_tensor_spec().tile().get_tile_shape();
+    auto tile_h = tile_shape[0];
+    auto tile_w = tile_shape[1];
+    auto tile_hw = tile_h * tile_w;
 
-    uint32_t element_size = output_tensor.element_size();
-    uint32_t sub_tile_line_bytes = 16 * element_size;
+    auto face_shape = temp_tensor.get_tensor_spec().tile().get_face_shape();
+    auto face_h = face_shape[0];
+    auto face_w = face_shape[1];
+    auto face_hw = face_h * face_w;
+
+    const uint32_t head_tiles = head_dim / tile_w;
+    const uint32_t head_size = head_tiles * single_tile_size;
+
+    uint32_t element_size = temp_tensor.element_size();
+    uint32_t sub_tile_line_bytes = face_w * element_size;
     auto q_shard_spec = output_tensor.shard_spec().value();
     auto q_cores = q_shard_spec.grid;
     auto q_num_tiles = q_shard_spec.shape[0] * q_shard_spec.shape[1] / TILE_HW;
-    auto in_shard_spec = output_intermediate_tensor_spec.memory_config().shard_spec;
-    auto in_cores = in_shard_spec->grid;
-    auto in_num_tiles = in_shard_spec->shape[0] * in_shard_spec->shape[1] / TILE_HW;
-
-    printf("single_tile_size: %u\n", single_tile_size);
-    printf("head_tiles: %u\n", head_tiles);
-    printf("head_size: %u\n", head_size);
-    printf("element_size: %u\n", element_size);
-    printf("sub_tile_line_bytes: %u\n", sub_tile_line_bytes);
-    printf("q_cores: %u\n", q_cores.num_cores());
-    printf("q_num_tiles: %u\n", q_num_tiles);
-    printf("in_cores: %u\n", in_cores.num_cores());
-    printf("in_num_tiles: %u\n", in_num_tiles);
-    */
+    auto in_shard_spec = temp_tensor.shard_spec().value();
+    auto in_cores = in_shard_spec.grid;
+    auto in_num_tiles = in_shard_spec.shape[0] * in_shard_spec.shape[1] / TILE_HW;
 
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = local_fabric_handle->get_edm_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
-    printf("packet_size_bytes: %zu\n", packet_size_bytes);
-    printf("l1_scratch_cb_page_size_bytes: %u\n", l1_scratch_cb_page_size_bytes);
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
-    printf("num_pages_per_packet: %u\n", num_pages_per_packet);
     uint32_t cb_num_pages =
         input_tensor_num_pages / num_links +
         1;  // We are dealing with small shapes, so assuming all pages for a worker can be fit into the CB
-    printf("cb_num_pages: %u\n", cb_num_pages);
     uint32_t src0_cb_index = tt::CB::c_in0;
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     tt::tt_metal::CircularBufferConfig cb_src0_config =
@@ -188,35 +182,66 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     auto reserved_packet_header_CB_handle =
         CreateCircularBuffer(program, sender_worker_core_range, cb_reserved_packet_header_config);
 
-    CoreRange concat_cores({1, 0}, {1, 0});
+    uint32_t q_output_cb_index = tt::CBIndex::c_16;
+    tt::tt_metal::CircularBufferConfig cb_q_output_config =
+        tt::tt_metal::CircularBufferConfig(q_num_tiles * single_tile_size, {{q_output_cb_index, df}})
+            .set_page_size(q_output_cb_index, single_tile_size)
+            .set_globally_allocated_address(*output_tensor.buffer());
+    auto cb_q_output = tt::tt_metal::CreateCircularBuffer(program, q_cores, cb_q_output_config);
 
     uint32_t tmp_cb_index = tt::CB::c_in2;
     tt::tt_metal::CircularBufferConfig tmp_cb_config =
         tt::tt_metal::CircularBufferConfig(2, {{tmp_cb_index, df}}).set_page_size(tmp_cb_index, 2);
-    auto tmp_cb_handle = CreateCircularBuffer(program, concat_cores, tmp_cb_config);
+    auto tmp_cb_handle = CreateCircularBuffer(program, q_cores, tmp_cb_config);
 
-    CoreRange all_cores({0, 0}, {1, 0});
+    uint32_t q_base_addr = temp_tensor.buffer()->address();
+    // cores to read and write to output
+    const uint32_t num_cores = q_cores.num_cores();  // number of cores of the output
+    const auto& cores = corerange_to_cores(q_cores, num_cores, true);
 
-    /*
-    uint32_t interm_out_cb_index = tt::CBIndex::c_16;
-    tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
-    tt::tt_metal::CircularBufferConfig interm_out_cb_config =
-        tt::tt_metal::CircularBufferConfig(128 * single_tile_size, {{interm_out_cb_index, out_df}})
-            .set_page_size(interm_out_cb_index, single_tile_size);
-    tt::tt_metal::CBHandle interm_out_cb_workers = CreateCircularBuffer(program, all_cores, interm_out_cb_config);
-    */
-    // WAIT KERNEL
+    const auto& q_cores_updated = CoreRangeSet(CoreRange({1, 0}, {7, 0}));
 
-    auto concat_reader_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
-    concat_reader_kernel_config.compile_args = {
-        tmp_cb_index,
-    };
+    // cores for input
+    const uint32_t in_num_cores = in_cores.num_cores();  // number of cores of the input
+    const auto& in_cores_vec = corerange_to_cores(in_cores, in_num_cores, true);
+
+    std::vector<uint32_t> noc_x_coords;
+    noc_x_coords.reserve(in_num_cores);
+    std::vector<uint32_t> noc_y_coords;
+    noc_y_coords.reserve(in_num_cores);
+    for (uint32_t i = 0; i < in_num_cores; ++i) {
+        noc_x_coords.push_back(device->worker_core_from_logical_core(in_cores_vec[i]).x);
+        noc_y_coords.push_back(device->worker_core_from_logical_core(in_cores_vec[i]).y);
+    }
+
+    std::vector<uint32_t> concat_reader_ct_args = {
+        (std::uint32_t)element_size,
+        (std::uint32_t)sub_tile_line_bytes,
+        q_output_cb_index,
+        head_size,
+        batch,
+        head_tiles,
+        1,  // read the first phase
+        in_num_cores,
+        face_h,
+        face_hw,
+        tmp_cb_index};
+
     auto concat_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/kernels/"
         "llama_concat_reader.cpp",
-        concat_cores,
-        concat_reader_kernel_config);
+        q_cores_updated,
+        tt::tt_metal::ReaderDataMovementConfig(concat_reader_ct_args));
+
+    concat_reader_ct_args[6] = 2;
+    auto concat_reader_2_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/kernels/"
+        "llama_concat_reader.cpp",
+        q_cores_updated,
+        tt::tt_metal::WriterDataMovementConfig(concat_reader_ct_args));
+
     // KERNEL CREATION
     // Reader
     auto reader_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
@@ -224,7 +249,17 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         ring_index,                 // my_chip_id
         src0_cb_index,              // cb0_id
         op_config.get_page_size(),  // tensor0_page_size
-    };
+        (std::uint32_t)element_size,
+        (std::uint32_t)sub_tile_line_bytes,
+        q_output_cb_index,
+        head_size,
+        batch,
+        head_tiles,
+        1,  // read the first phase
+        in_num_cores,
+        face_h,
+        face_hw,
+        tmp_cb_index};
     log_trace(tt::LogOp, "Reader Compile Args:");
     for (const auto& arg : reader_kernel_config.compile_args) {
         log_trace(tt::LogOp, "\t{}", arg);
@@ -247,7 +282,17 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         op_config.get_page_size(),        // tensor0_page_size
         num_targets_forward,              // num_targets_forward_direction
         num_targets_backward,             // num_targets_backward_direction
-    };
+        (std::uint32_t)element_size,
+        (std::uint32_t)sub_tile_line_bytes,
+        q_output_cb_index,
+        head_size,
+        batch,
+        head_tiles,
+        2,  // read the first phase
+        in_num_cores,
+        face_h,
+        face_hw,
+        tmp_cb_index};
     log_trace(tt::LogOp, "Writer Compile Args:");
     for (const auto& arg : writer_kernel_config.compile_args) {
         log_trace(tt::LogOp, "\t{}", arg);
@@ -263,14 +308,20 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     CoreCoord drain_sync_core;  // the first worker of each chip is the drain sync core, which contains the output ready
                                 // semaphore
     auto input_cores_vec = corerange_to_cores(input_tensor_cores, std::nullopt, true);
-    auto output_cores_vec = corerange_to_cores(output_tensor_cores, std::nullopt, true);
-    auto cores_per_device = output_cores_vec.size() / ring_size;
+    auto output_cores_vec = corerange_to_cores(output_interm_tensor_cores, std::nullopt, true);
+    auto cores_per_device = output_cores_vec.size() + ring_size - 1 / ring_size;
+    uint32_t start_core_index_for_device = output_cores_vec.size() / ring_size * ring_index;
+    uint32_t end_core_index_for_device = start_core_index_for_device + cores_per_device;
+
     TT_FATAL(
-        output_cores_vec.size() % ring_size == 0,
-        "output sharded cores must be divisible by num_links for this work distribution scheme");
+        output_cores_vec.size() % ring_size == 0 || output_cores_vec.size() == 1,
+        "output sharded cores ( {} ) must be divisible by num_links ( {} ) or 1 for this work distribution scheme",
+        output_cores_vec.size(),
+        ring_size);
     auto output_cores_this_device = std::vector<CoreCoord>(
-        output_cores_vec.begin() + ring_index * cores_per_device,
-        output_cores_vec.begin() + (ring_index + 1) * cores_per_device);
+        output_cores_vec.begin() + start_core_index_for_device, output_cores_vec.begin() + end_core_index_for_device);
+
+    log_trace(tt::LogOp, "output_cores_this_device: {}", output_cores_this_device);
 
     for (uint32_t link = 0; link < num_links; link++) {
         CoreCoord core = sender_worker_cores[link];
@@ -284,7 +335,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         uint32_t worker_num_tiles_to_read = input_tile_id_end - input_tile_id_start;
         uint32_t input_first_core_tile_start_offset = input_tile_id_start % input_tensor_shard_num_pages;
         uint32_t output_first_core_tile_start_offset =
-            (input_tensor_num_pages * ring_index + input_tile_id_start) % output_tensor_shard_num_pages;
+            (input_tensor_num_pages * ring_index + input_tile_id_start) % output_interm_tensor_shard_num_pages;
 
         std::vector<uint32_t> input_tensor_cores_x;
         std::vector<uint32_t> input_tensor_cores_y;
@@ -297,8 +348,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
             input_tensor_cores_x.push_back(this_core.x);
             input_tensor_cores_y.push_back(this_core.y);
         }
-        for (uint32_t i = input_tile_id_start / output_tensor_shard_num_pages;
-             i < (input_tile_id_end + output_tensor_shard_num_pages - 1) / output_tensor_shard_num_pages;
+        for (uint32_t i = input_tile_id_start / output_interm_tensor_shard_num_pages;
+             i < (input_tile_id_end + output_interm_tensor_shard_num_pages - 1) / output_interm_tensor_shard_num_pages;
              i++) {
             auto this_core = device->worker_core_from_logical_core(output_cores_this_device[i]);
             output_tensor_cores_x.push_back(this_core.x);
@@ -332,6 +383,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
 
         // Set reader runtime args
         std::vector<uint32_t> reader_rt_args = {
+            0,
             input_tensor.buffer()->address(),    // tensor_address0
             input_tensor_shard_num_pages,        // num_tiles_per_core
             worker_num_tiles_to_read,            // num_tiles_to_read
@@ -344,6 +396,21 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         for (const auto& arg : reader_rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);
         }
+        reader_rt_args[0] = reader_rt_args.size();
+        uint32_t in_tile_offset_by_batch_r = 0 < face_h ? 0 : (face_h)*sub_tile_line_bytes;
+        reader_rt_args.push_back(in_tile_offset_by_batch_r);
+        reader_rt_args.push_back(temp_tensor.buffer()->address());
+        for (auto nocx : noc_x_coords) {
+            reader_rt_args.push_back(nocx);
+        }
+        for (auto nocy : noc_y_coords) {
+            reader_rt_args.push_back(nocy);
+        }
+        reader_rt_args.push_back(semaphore.address());
+        reader_rt_args.push_back(ring_size * num_links);  // sem target value
+        reader_rt_args.push_back(drain_sync_core.x);
+        reader_rt_args.push_back(drain_sync_core.y);
+
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_reader_kernel_id, {core}, reader_rt_args);
 
         // Set writer runtime args
@@ -351,17 +418,18 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         bool reset_global_semaphore = (link == 0) && !enable_async_output_tensor;
         uint32_t out_ready_sem_wait_value = ring_size * num_links;
         std::vector<uint32_t> writer_rt_args = {
-            output_tensor.buffer()->address(),    // tensor_address0
-            semaphore.address(),                  // out_ready_sem_bank_addr (absolute address)
-            output_tensor_shard_num_pages,        // num_tiles_per_core
-            worker_num_tiles_to_read,             // num_tiles_to_read
-            output_first_core_tile_start_offset,  // first_core_tile_start_offset
-            output_tensor_cores_x.size(),         // num_cores
-            wait_output_semaphore,                // wait_output_semaphore
-            reset_global_semaphore,               // reset_global_semaphore
-            drain_sync_core.x,                    // out_ready_sem_noc0_x
-            drain_sync_core.y,                    // out_ready_sem_noc0_y
-            out_ready_sem_wait_value,             // out_ready_sem_wait_value
+            0,
+            temp_tensor.buffer()->address(),       // tensor_address0
+            semaphore.address(),                   // out_ready_sem_bank_addr (absolute address)
+            output_interm_tensor_shard_num_pages,  // num_tiles_per_core
+            worker_num_tiles_to_read,              // num_tiles_to_read
+            output_first_core_tile_start_offset,   // first_core_tile_start_offset
+            output_tensor_cores_x.size(),          // num_cores
+            wait_output_semaphore,                 // wait_output_semaphore
+            reset_global_semaphore,                // reset_global_semaphore
+            drain_sync_core.x,                     // out_ready_sem_noc0_x
+            drain_sync_core.y,                     // out_ready_sem_noc0_y
+            out_ready_sem_wait_value,              // out_ready_sem_wait_value
         };
         writer_rt_args.insert(writer_rt_args.end(), output_tensor_cores_x.begin(), output_tensor_cores_x.end());
         writer_rt_args.insert(writer_rt_args.end(), output_tensor_cores_y.begin(), output_tensor_cores_y.end());
@@ -371,28 +439,59 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         }
         append_fabric_connection_rt_arguments(forward_fabric_connection, core, program, writer_rt_args);
         append_fabric_connection_rt_arguments(backward_fabric_connection, core, program, writer_rt_args);
-        tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
+        writer_rt_args[0] = writer_rt_args.size();
+        uint32_t in_tile_offset_by_batch = 0 < face_h ? 0 : (face_h)*sub_tile_line_bytes;
 
-        std::vector<uint32_t> concat_reader_rt_args = {
-            semaphore.address(),
-            out_ready_sem_wait_value,
-            drain_sync_core.x,
-            drain_sync_core.y,
-            output_tensor_cores_x.size()};
-        concat_reader_rt_args.insert(
-            concat_reader_rt_args.end(), output_tensor_cores_x.begin(), output_tensor_cores_x.end());
-        concat_reader_rt_args.insert(
-            concat_reader_rt_args.end(), output_tensor_cores_y.begin(), output_tensor_cores_y.end());
-        tt::tt_metal::SetRuntimeArgs(program, concat_reader_kernel_id, {concat_cores}, concat_reader_rt_args);
+        writer_rt_args.push_back(in_tile_offset_by_batch);
+        writer_rt_args.push_back(temp_tensor.buffer()->address());
+        for (auto nocx : noc_x_coords) {
+            writer_rt_args.push_back(nocx);
+        }
+        for (auto nocy : noc_y_coords) {
+            writer_rt_args.push_back(nocy);
+        }
+        tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
+    }
+
+    /* rt for concat kernels*/
+    uint32_t q_start_addr = temp_tensor.buffer()->address();
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        // in_tile_offset_by_batch is the start address of each batch in the input tile. The first face_h batches are in
+        // the upper half of the tile and rest are in the lower half of tile.
+        uint32_t in_tile_offset_by_batch = i < face_h ? i * sub_tile_line_bytes : (i + face_h) * sub_tile_line_bytes;
+
+        const auto& core = cores[i];
+        if (core.x != 0 || core.y != 0) {
+            std::vector<uint32_t> reader_runtime_args;
+            reader_runtime_args.reserve(2 + 2 * in_num_cores);
+            reader_runtime_args = {
+                in_tile_offset_by_batch,
+                q_start_addr,
+            };
+            reader_runtime_args.insert(reader_runtime_args.end(), noc_x_coords.begin(), noc_x_coords.end());
+            reader_runtime_args.insert(reader_runtime_args.end(), noc_y_coords.begin(), noc_y_coords.end());
+            reader_runtime_args.push_back(semaphore.address());
+            reader_runtime_args.push_back(ring_size * num_links);  // sem target value
+            reader_runtime_args.push_back(drain_sync_core.x);
+            reader_runtime_args.push_back(drain_sync_core.y);
+
+            tt::tt_metal::SetRuntimeArgs(program, concat_reader_kernel_id, core, reader_runtime_args);
+            tt::tt_metal::SetRuntimeArgs(program, concat_reader_2_kernel_id, core, reader_runtime_args);
+        }
     }
 
     auto override_runtime_arguments_callback =
         [worker_sender_reader_kernel_id,
          worker_sender_writer_kernel_id,
-         concat_reader_kernel_id,
          semaphore,
          sender_worker_cores,
-         concat_cores](
+         num_cores,
+         cores,
+         temp_tensor,
+         concat_reader_kernel_id,
+         concat_reader_2_kernel_id,
+         face_h,
+         sub_tile_line_bytes](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -408,306 +507,33 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
             // update senders
             auto& worker_reader_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_reader_kernel_id);
             auto& worker_writer_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_writer_kernel_id);
-            auto& concat_reader_kernel_runtime_args_by_core = GetRuntimeArgs(program, concat_reader_kernel_id);
+
+            uint32_t q_base_addr = temp_tensor.buffer()->address();
+            uint32_t q_start_addr = q_base_addr;
             for (const auto& core : sender_worker_cores) {
-                // reader
                 auto& worker_reader_sender_runtime_args = worker_reader_sender_runtime_args_by_core[core.x][core.y];
                 worker_reader_sender_runtime_args[0] = input.buffer()->address();
-                // writer
+
                 auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
-                worker_writer_sender_runtime_args[0] = output.buffer()->address();
+                worker_writer_sender_runtime_args[0] = q_start_addr;
                 worker_writer_sender_runtime_args[1] = semaphore.address();
             }
-            for (const auto& concat_core : concat_cores) {
-                auto& concat_reader_runtime_args =
-                    concat_reader_kernel_runtime_args_by_core[concat_core.x][concat_core.y];
-                concat_reader_runtime_args[0] = semaphore.address();
-            }
-        };
 
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
-}
+            for (uint32_t i = 0; i < num_cores; ++i) {
+                if (cores[i].x != 0 || cores[i].y != 0) {
+                    uint32_t in_tile_offset_by_batch =
+                        i < face_h ? i * sub_tile_line_bytes : (i + face_h) * sub_tile_line_bytes;
+                    const auto& core = cores[i];
+                    auto& concat_reader_runtime_args = GetRuntimeArgs(program, concat_reader_kernel_id, core);
+                    concat_reader_runtime_args[0] = in_tile_offset_by_batch;
+                    concat_reader_runtime_args[1] = q_start_addr;
+                    concat_reader_runtime_args[3 + 2 * num_cores] = semaphore.address();
 
-tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded_subgrids(
-    const Tensor& input_tensor,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
-    Tensor& output_tensor,
-    TensorSpec output_intermediate_tensor_spec,
-    const uint32_t dim,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
-    ccl::Topology topology,
-    const GlobalSemaphore& semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    bool enable_persistent_fabric_mode,
-    const uint32_t num_heads) {
-    tt::tt_metal::Program program{};
-    const bool enable_async_output_tensor = false;
-    TT_FATAL(
-        enable_persistent_fabric_mode,
-        "only persistent fabric mode is supported for all_gather_concat_llama_post_binary_matmul");
-
-    IDevice* device = input_tensor.device();
-    printf("executing all_gather_concat_llama_post_binary_matmul\n");
-    bool is_first_chip = ring_index == 0;
-    bool is_last_chip = ring_index == ring_size - 1;
-    log_trace(
-        tt::LogOp,
-        "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
-        input_tensor.device()->id(),
-        is_first_chip,
-        is_last_chip);
-
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface> local_fabric_handle =
-        ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
-            device,
-            forward_device.value_or(nullptr),
-            backward_device.value_or(nullptr),
-            &program,
-            enable_persistent_fabric_mode,
-            num_links);
-
-    // Get OP Config, topology config
-    std::vector<Tensor> input_tensors = {input_tensor};
-    std::vector<Tensor> output_tensors = {output_tensor};
-    const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
-    LineTopology line_topology(ring_size, ring_index);
-    const size_t num_targets_forward =
-        line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD);
-    const size_t num_targets_backward =
-        line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD);
-
-    // Get worker cores, assuming 1 worker per link
-    uint32_t num_workers_per_link = 1;
-    const auto [sender_worker_core_range, sender_worker_cores] =
-        choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, device, sub_device_id);
-
-    // Tensor Info
-    const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
-    const auto input_tensor_cores = input_tensor.memory_config().shard_spec->grid;
-    const auto input_tensor_shard_shape = input_tensor.memory_config().shard_spec->shape;
-    const auto input_tensor_shard_num_pages = input_tensor_shard_shape[0] * input_tensor_shard_shape[1] / TILE_HW;
-    const auto output_tensor_cores = output_tensor.memory_config().shard_spec->grid;
-    const auto output_tensor_shard_shape = output_tensor.memory_config().shard_spec->shape;
-    const auto output_tensor_shard_num_pages = output_tensor_shard_shape[0] * output_tensor_shard_shape[1] / TILE_HW;
-
-    tt::log_debug(tt::LogOp, "input_tensor_num_pages: {}", input_tensor_num_pages);
-    tt::log_debug(tt::LogOp, "input_tensor_cores: {}", input_tensor_cores);
-    tt::log_debug(tt::LogOp, "input_tensor_shard_shape: {}", input_tensor_shard_shape);
-    tt::log_debug(tt::LogOp, "input_tensor_shard_num_pages: {}", input_tensor_shard_num_pages);
-    tt::log_debug(tt::LogOp, "output_tensor_cores: {}", output_tensor_cores);
-    tt::log_debug(tt::LogOp, "output_tensor_shard_shape: {}", output_tensor_shard_shape);
-    tt::log_debug(tt::LogOp, "output_tensor_shard_num_pages: {}", output_tensor_shard_num_pages);
-
-    // L1 Scratch CB Creation
-    const size_t packet_size_bytes = local_fabric_handle->get_edm_buffer_size_bytes();
-    uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
-    uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
-    uint32_t cb_num_pages =
-        input_tensor_num_pages / num_links +
-        1;  // We are dealing with small shapes, so assuming all pages for a worker can be fit into the CB
-    uint32_t src0_cb_index = tt::CB::c_in0;
-    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
-    tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{src0_cb_index, df}})
-            .set_page_size(src0_cb_index, l1_scratch_cb_page_size_bytes);
-    tt::tt_metal::CBHandle cb_src0_workers = CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
-    // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
-    const auto reserved_packet_header_CB_index = tt::CB::c_in1;
-    static constexpr auto num_packet_headers_storable = 8;
-    static constexpr auto packet_header_size_bytes = sizeof(tt::fabric::PacketHeader);
-    tt::tt_metal::CircularBufferConfig cb_reserved_packet_header_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_packet_headers_storable * packet_header_size_bytes * 2,
-            {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
-            .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
-    auto reserved_packet_header_CB_handle =
-        CreateCircularBuffer(program, sender_worker_core_range, cb_reserved_packet_header_config);
-
-    // KERNEL CREATION
-    // Reader
-    auto reader_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
-    reader_kernel_config.compile_args = {
-        ring_index,                 // my_chip_id
-        src0_cb_index,              // cb0_id
-        op_config.get_page_size(),  // tensor0_page_size
-    };
-    log_trace(tt::LogOp, "Reader Compile Args:");
-    for (const auto& arg : reader_kernel_config.compile_args) {
-        log_trace(tt::LogOp, "\t{}", arg);
-    }
-    auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/kernels/"
-        "llama_all_gather_concat_reader.cpp",
-        sender_worker_core_range,
-        reader_kernel_config);
-
-    // Writer
-    auto writer_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
-    writer_kernel_config.compile_args = {
-        ring_index,                       // my_chip_id
-        reserved_packet_header_CB_index,  // reserved_packet_header_cb_id
-        num_packet_headers_storable,      // num_packet_headers_storable
-        src0_cb_index,                    // cb0_id
-        num_pages_per_packet,             // packet_size_in_pages
-        op_config.get_page_size(),        // tensor0_page_size
-        num_targets_forward,              // num_targets_forward_direction
-        num_targets_backward,             // num_targets_backward_direction
-    };
-    log_trace(tt::LogOp, "Writer Compile Args:");
-    for (const auto& arg : writer_kernel_config.compile_args) {
-        log_trace(tt::LogOp, "\t{}", arg);
-    }
-    auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/kernels/"
-        "llama_all_gather_concat_writer.cpp",
-        sender_worker_core_range,
-        writer_kernel_config);
-
-    // Kernel Runtime Args
-    CoreCoord drain_sync_core;  // the first worker of each chip is the drain sync core, which contains the output ready
-                                // semaphore
-    auto input_cores_vec = corerange_to_cores(input_tensor_cores, std::nullopt, true);
-    auto output_cores_vec = corerange_to_cores(output_tensor_cores, std::nullopt, true);
-    auto cores_per_device = output_cores_vec.size() / ring_size;
-    TT_FATAL(
-        output_cores_vec.size() % ring_size == 0,
-        "output sharded cores must be divisible by num_links for this work distribution scheme");
-    auto output_cores_this_device = std::vector<CoreCoord>(
-        output_cores_vec.begin() + ring_index * cores_per_device,
-        output_cores_vec.begin() + (ring_index + 1) * cores_per_device);
-
-    for (uint32_t link = 0; link < num_links; link++) {
-        CoreCoord core = sender_worker_cores[link];
-
-        // construct input and output core x and y
-        uint32_t base_pages_per_worker = input_tensor_num_pages / num_links;
-        uint32_t remainder = input_tensor_num_pages % num_links;
-        uint32_t input_tile_id_start = link * base_pages_per_worker + std::min(link, remainder);
-        uint32_t input_tile_id_end = (link + 1) * base_pages_per_worker + std::min(link + 1, remainder);
-
-        uint32_t worker_num_tiles_to_read = input_tile_id_end - input_tile_id_start;
-        uint32_t input_first_core_tile_start_offset = input_tile_id_start % input_tensor_shard_num_pages;
-        uint32_t output_first_core_tile_start_offset =
-            (input_tensor_num_pages * ring_index + input_tile_id_start) % output_tensor_shard_num_pages;
-
-        std::vector<uint32_t> input_tensor_cores_x;
-        std::vector<uint32_t> input_tensor_cores_y;
-        std::vector<uint32_t> output_tensor_cores_x;
-        std::vector<uint32_t> output_tensor_cores_y;
-        for (uint32_t i = input_tile_id_start / input_tensor_shard_num_pages;
-             i < (input_tile_id_end + input_tensor_shard_num_pages - 1) / input_tensor_shard_num_pages;
-             i++) {
-            auto this_core = device->worker_core_from_logical_core(input_cores_vec[i]);
-            input_tensor_cores_x.push_back(this_core.x);
-            input_tensor_cores_y.push_back(this_core.y);
-        }
-        for (uint32_t i = input_tile_id_start / output_tensor_shard_num_pages;
-             i < (input_tile_id_end + output_tensor_shard_num_pages - 1) / output_tensor_shard_num_pages;
-             i++) {
-            auto this_core = device->worker_core_from_logical_core(output_cores_this_device[i]);
-            output_tensor_cores_x.push_back(this_core.x);
-            output_tensor_cores_y.push_back(this_core.y);
-        }
-
-        tt::log_debug(tt::LogOp, "input_tile_id_start: {}", input_tile_id_start);
-        tt::log_debug(tt::LogOp, "input_tile_id_end: {}", input_tile_id_end);
-        tt::log_debug(tt::LogOp, "worker_num_tiles_to_read: {}", worker_num_tiles_to_read);
-        tt::log_debug(tt::LogOp, "input_first_core_tile_start_offset: {}", input_first_core_tile_start_offset);
-        tt::log_debug(tt::LogOp, "output_first_core_tile_start_offset: {}", output_first_core_tile_start_offset);
-        tt::log_debug(tt::LogOp, "input_tensor_cores_x: {}", input_tensor_cores_x);
-        tt::log_debug(tt::LogOp, "input_tensor_cores_y: {}", input_tensor_cores_y);
-        tt::log_debug(tt::LogOp, "output_tensor_cores_x: {}", output_tensor_cores_x);
-        tt::log_debug(tt::LogOp, "output_tensor_cores_y: {}", output_tensor_cores_y);
-
-        if (link == 0) {
-            // drain sync core is the first worker core
-            drain_sync_core = device->worker_core_from_logical_core(core);
-        }
-        std::optional<ttnn::ccl::SenderWorkerAdapterSpec> forward_fabric_connection =
-            line_topology.is_first_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD)
-                ? std::nullopt
-                : std::optional<ttnn::ccl::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
-                      device, ttnn::ccl::EdmLineFabricOpInterface::FORWARD));
-        std::optional<ttnn::ccl::SenderWorkerAdapterSpec> backward_fabric_connection =
-            line_topology.is_last_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD)
-                ? std::nullopt
-                : std::optional<ttnn::ccl::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
-                      device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
-
-        // Set reader runtime args
-        std::vector<uint32_t> reader_rt_args = {
-            input_tensor.buffer()->address(),    // tensor_address0
-            input_tensor_shard_num_pages,        // num_tiles_per_core
-            worker_num_tiles_to_read,            // num_tiles_to_read
-            input_first_core_tile_start_offset,  // first_core_tile_start_offset
-            input_tensor_cores_x.size(),         // num_cores
-        };
-        reader_rt_args.insert(reader_rt_args.end(), input_tensor_cores_x.begin(), input_tensor_cores_x.end());
-        reader_rt_args.insert(reader_rt_args.end(), input_tensor_cores_y.begin(), input_tensor_cores_y.end());
-        log_trace(tt::LogOp, "Reader Runtime Args:");
-        for (const auto& arg : reader_rt_args) {
-            log_trace(tt::LogOp, "\t{}", arg);
-        }
-        tt::tt_metal::SetRuntimeArgs(program, worker_sender_reader_kernel_id, {core}, reader_rt_args);
-
-        // Set writer runtime args
-        bool wait_output_semaphore = (link == 0) && !enable_async_output_tensor;
-        bool reset_global_semaphore = (link == 0) && !enable_async_output_tensor;
-        uint32_t out_ready_sem_wait_value = ring_size * num_links;
-        std::vector<uint32_t> writer_rt_args = {
-            output_tensor.buffer()->address(),    // tensor_address0
-            semaphore.address(),                  // out_ready_sem_bank_addr (absolute address)
-            output_tensor_shard_num_pages,        // num_tiles_per_core
-            worker_num_tiles_to_read,             // num_tiles_to_read
-            output_first_core_tile_start_offset,  // first_core_tile_start_offset
-            output_tensor_cores_x.size(),         // num_cores
-            wait_output_semaphore,                // wait_output_semaphore
-            reset_global_semaphore,               // reset_global_semaphore
-            drain_sync_core.x,                    // out_ready_sem_noc0_x
-            drain_sync_core.y,                    // out_ready_sem_noc0_y
-            out_ready_sem_wait_value,             // out_ready_sem_wait_value
-        };
-        writer_rt_args.insert(writer_rt_args.end(), output_tensor_cores_x.begin(), output_tensor_cores_x.end());
-        writer_rt_args.insert(writer_rt_args.end(), output_tensor_cores_y.begin(), output_tensor_cores_y.end());
-        log_trace(tt::LogOp, "Writer Runtime Args:");
-        for (const auto& arg : writer_rt_args) {
-            log_trace(tt::LogOp, "\t{}", arg);
-        }
-        append_fabric_connection_rt_arguments(forward_fabric_connection, core, program, writer_rt_args);
-        append_fabric_connection_rt_arguments(backward_fabric_connection, core, program, writer_rt_args);
-        tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
-    }
-
-    auto override_runtime_arguments_callback =
-        [worker_sender_reader_kernel_id, worker_sender_writer_kernel_id, semaphore, sender_worker_cores](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            const auto& input = input_tensors[0];
-            const auto& output = output_tensors[0];
-
-            auto semaphore = static_cast<const ttnn::AllGatherConcat*>(operation)->semaphore;
-
-            log_trace(tt::LogOp, "DEBUG: semaphore: {}", semaphore.address());
-
-            // update senders
-            auto& worker_reader_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_reader_kernel_id);
-            auto& worker_writer_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_writer_kernel_id);
-            for (const auto& core : sender_worker_cores) {
-                // reader
-                auto& worker_reader_sender_runtime_args = worker_reader_sender_runtime_args_by_core[core.x][core.y];
-                worker_reader_sender_runtime_args[0] = input.buffer()->address();
-                // writer
-                auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
-                worker_writer_sender_runtime_args[0] = output.buffer()->address();
-                worker_writer_sender_runtime_args[1] = semaphore.address();
+                    auto& concat_reader_2_runtime_args = GetRuntimeArgs(program, concat_reader_2_kernel_id, core);
+                    concat_reader_2_runtime_args[0] = in_tile_offset_by_batch;
+                    concat_reader_2_runtime_args[1] = q_start_addr;
+                    concat_reader_2_runtime_args[3 + 2 * num_cores] = semaphore.address();
+                }
             }
         };
 

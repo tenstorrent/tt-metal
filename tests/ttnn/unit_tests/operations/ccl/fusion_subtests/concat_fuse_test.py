@@ -355,7 +355,7 @@ def run_concat_fuse_impl(
     output_tensor_goldens_list = []
 
     for i in range(num_iters):
-        output_tensor = torch.ones(output_shape).bfloat16()  # HERE switch to rand again
+        output_tensor = torch.rand(output_shape).bfloat16()
         output_tensor_goldens_list.append(output_tensor)
         input_tensors = torch.chunk(output_tensor, num_devices, dim)
         tt_input_tensors = []

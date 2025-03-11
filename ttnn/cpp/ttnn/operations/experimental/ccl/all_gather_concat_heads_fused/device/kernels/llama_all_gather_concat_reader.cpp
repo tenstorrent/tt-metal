@@ -4,6 +4,9 @@
 
 #include "dataflow_api.h"
 #include <tt-metalium/buffer_constants.hpp>
+#include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/fabric_connection_manager.hpp"
+#include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_ccl_common.hpp"
 #include <cstdint>
 #include <utility>
 
@@ -26,7 +29,7 @@ void kernel_main() {
     // ARGS
     ///////////////////////////////////////////////////
 
-    size_t arg_idx = 0;
+    size_t arg_idx = 1;
     // Load the input tensor spec
     address_t tensor_address0 = get_arg_val<address_t>(arg_idx++);
     uint32_t num_tiles_per_core = get_arg_val<uint32_t>(arg_idx++);
@@ -55,7 +58,37 @@ void kernel_main() {
         DPRINT << "core_noc_y[" << i << "]: " << (uint32_t)core_noc_y[i] << "\n";
     }
 
-    // interleaved addrgen
+    uint32_t concat_arg_start = get_arg_val<uint32_t>(0);
+    uint32_t in_tile_offset_by_head = get_arg_val<uint32_t>(concat_arg_start);
+    uint32_t q_start_addr = get_arg_val<uint32_t>(concat_arg_start + 1);
+
+    constexpr uint32_t ELEMENT_SIZE = get_compile_time_arg_val(3);
+    constexpr uint32_t SUBTILE_LINE_BYTES = get_compile_time_arg_val(4);
+    constexpr uint32_t cb_id_q_out = get_compile_time_arg_val(5);
+    constexpr uint32_t head_size = get_compile_time_arg_val(6);
+    constexpr uint32_t batch = get_compile_time_arg_val(7);
+    constexpr uint32_t head_size_num_tiles = get_compile_time_arg_val(8);
+    constexpr uint32_t PHASES_TO_READ =
+        get_compile_time_arg_val(9);  // 0 to read all phases, 1 to read only first phase, 2 to read only second phase
+
+    constexpr uint32_t in_num_cores = get_compile_time_arg_val(10);
+    constexpr uint32_t face_h = get_compile_time_arg_val(11);
+    constexpr uint32_t face_hw = get_compile_time_arg_val(12);
+
+    constexpr uint32_t temp_cb_id = get_compile_time_arg_val(13);
+
+    uint32_t arg_sem_idx = 2 + 2 * in_num_cores;
+    uint32_t out_ready_sem_bank_addr_concat = get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx);
+    uint32_t out_ready_sem_wait_value_concat = get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx + 1);
+    uint32_t out_ready_sem_noc0_x_concat = get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx + 2);
+    uint32_t out_ready_sem_noc0_y_concat = get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx + 3);
+
+    DPRINT << "temp_cb_id: " << (uint32_t)temp_cb_id << ENDL();
+    DPRINT << "out_ready_sem_bank_addr_concat: " << (uint32_t)out_ready_sem_bank_addr_concat << ENDL();
+    DPRINT << "out_ready_sem_wait_value: " << (uint32_t)out_ready_sem_wait_value_concat << ENDL();
+    DPRINT << "out_ready_sem_noc0_x: " << (uint32_t)out_ready_sem_noc0_x_concat << ENDL();
+    DPRINT << "out_ready_sem_noc0_y: " << (uint32_t)out_ready_sem_noc0_y_concat << ENDL();
+    DPRINT << "concat arg start: " << (uint32_t)concat_arg_start << ENDL();
 
     DPRINT << "tensor -> CB: " << (uint32_t)cb0_id << "\n";
 
@@ -81,5 +114,69 @@ void kernel_main() {
         core_id++;
     }
 
-    DPRINT << "DONE \n";
+    DPRINT << "DONE ALL GATHER READ\n";
+
+    uint64_t out_ready_sem_noc_addr_concat =
+        safe_get_noc_addr(out_ready_sem_noc0_x_concat, out_ready_sem_noc0_y_concat, out_ready_sem_bank_addr_concat);
+
+    cb_reserve_back(temp_cb_id, 1);
+    auto temp_writer_addr = get_write_ptr(temp_cb_id);
+    noc_async_read(out_ready_sem_noc_addr_concat, temp_writer_addr, 2);
+
+    volatile tt_l1_ptr uint16_t* tmp_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(temp_writer_addr);
+    while (tmp_ptr[0] != out_ready_sem_wait_value_concat) {
+        noc_async_read(out_ready_sem_noc_addr_concat, temp_writer_addr, 2);
+        tmp_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(temp_writer_addr);
+    }
+    noc_async_read_barrier();
+    cb_push_back(temp_cb_id, 1);
+
+    tt_l1_ptr uint32_t* in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(2 + concat_arg_start));
+    tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(2 + in_num_cores + concat_arg_start));
+
+    // Q
+    uint32_t cur_core_idx = 0;
+    uint32_t total_input_cores = in_num_cores;
+    uint32_t num_tiles_per_core_concat = (head_size_num_tiles * batch) / total_input_cores;
+
+    uint64_t qkv_read_addr = get_noc_addr(in0_mcast_noc_x[cur_core_idx], in0_mcast_noc_y[cur_core_idx], q_start_addr) +
+                             in_tile_offset_by_head;
+
+    uint32_t num_tiles_read_cur_core = 0;
+    uint32_t q_write_addr = 0;
+    uint32_t tile_size = head_size / head_size_num_tiles;
+    const uint32_t cb_write_ptr_base = get_write_ptr(cb_id_q_out);
+
+    for (uint32_t q = 0; q < batch; ++q) {
+        uint32_t wptr_offset = q < face_h ? q * SUBTILE_LINE_BYTES : (q + face_h) * SUBTILE_LINE_BYTES;
+        uint32_t q_write_addr = cb_write_ptr_base + wptr_offset;
+        for (uint32_t i = 0; i < head_size_num_tiles; ++i) {
+            // Read first phase
+            if constexpr (PHASES_TO_READ == 0 || PHASES_TO_READ == 1) {
+                noc_async_read(qkv_read_addr, q_write_addr, SUBTILE_LINE_BYTES);
+                noc_async_read_barrier();
+            }
+            // Read second phase
+            if constexpr (PHASES_TO_READ == 0 || PHASES_TO_READ == 2) {
+                noc_async_read(
+                    qkv_read_addr + face_hw * ELEMENT_SIZE, q_write_addr + face_hw * ELEMENT_SIZE, SUBTILE_LINE_BYTES);
+                noc_async_read_barrier();
+            }
+
+            qkv_read_addr += tile_size;
+            q_write_addr += tile_size;
+            num_tiles_read_cur_core++;
+
+            if (num_tiles_read_cur_core == num_tiles_per_core_concat) {
+                cur_core_idx++;
+                qkv_read_addr =
+                    get_noc_addr(in0_mcast_noc_x[cur_core_idx], in0_mcast_noc_y[cur_core_idx], q_start_addr) +
+                    in_tile_offset_by_head;
+                num_tiles_read_cur_core = 0;
+            }
+        }
+    }
+
+    noc_async_read_barrier();
+    DPRINT << "DONE\n";
 }

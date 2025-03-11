@@ -6,6 +6,7 @@
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/math.hpp"
 #include "cpp/ttnn/global_semaphore.hpp"
+#include <tt-metalium/work_split.hpp>
 
 #include "ttnn/tensor/tensor_utils.hpp"
 
@@ -16,6 +17,7 @@ namespace all_gather_concat_detail {
 AllGatherConcat create_all_gather_concat_struct(
     const Tensor& input_tensor,
     const uint32_t dim,
+    std::unordered_map<chip_id_t, Tensor> temp_tensor_map,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     const std::vector<IDevice*>& devices,
@@ -23,8 +25,7 @@ AllGatherConcat create_all_gather_concat_struct(
     const std::vector<GlobalSemaphore>& semaphores,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     bool enable_persistent_fabric_mode,
-    const uint32_t num_heads,
-    const bool on_subcoregrids) {
+    const uint32_t num_heads) {
     uint32_t num_devices = devices.size();
 
     std::optional<IDevice*> forward_device = std::nullopt;
@@ -48,6 +49,7 @@ AllGatherConcat create_all_gather_concat_struct(
         forward_device,
         backward_device,
         dim,
+        temp_tensor_map,
         num_links,
         num_devices,
         device_index,
@@ -56,8 +58,7 @@ AllGatherConcat create_all_gather_concat_struct(
         semaphore.value(),
         sub_device_id,
         enable_persistent_fabric_mode,
-        num_heads,
-        on_subcoregrids};
+        num_heads};
 }
 
 }  // namespace all_gather_concat_detail
@@ -119,16 +120,9 @@ std::vector<ttnn::TensorSpec> AllGatherConcat::compute_output_specs(const std::v
     Shape output_shape({sequence_length, 1, batch, hidden_dim});
 
     CoreRangeSet output_core_grid;
-    if (this->on_subcoregrids) {
-        const auto input_core_ranges = input_tensor.shard_spec().value().grid.ranges();
-        CoreRangeSet input_core_grid = input_tensor.shard_spec().value().grid;
-        const auto start_coord = input_core_ranges[0].start_coord;
-        output_core_grid =
-            tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(start_coord, num_heads, input_core_grid, true);
-    } else {
-        output_core_grid = tt::tt_metal::num_cores_to_corerangeset(
-            num_heads, input_tensor.device()->compute_with_storage_grid_size(), true);
-    }
+    output_core_grid = tt::tt_metal::num_cores_to_corerangeset(
+        num_heads, input_tensor.device()->compute_with_storage_grid_size(), true);
+
     tt::tt_metal::ShardSpec shard_spec{output_core_grid, {batch, head_dim}};
     auto mem_config =
         tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED, tt::tt_metal::BufferType::L1};
@@ -151,38 +145,44 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherConcat::create_program(
     log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
 
     log_trace(tt::LogOp, "Detected all gather specialized shape. all_gather_concat_llama_sharded is called");
-    printf("in create program before calling concat\n");
     CoreCoord compute_with_storage_grid_size = input_tensors[0].device()->compute_with_storage_grid_size();
     const auto& input_tensor = input_tensors[0];
-    auto shape = input_tensor.get_padded_shape();  // TODO: Replace with get_logical_shape()
-    shape[this->dim] *= this->ring_size;
-    auto output_intermediate_tensor_spec = TensorSpec(
-        shape, TensorLayout(input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config));
 
-    if (this->on_subcoregrids) {
-        return all_gather_concat_llama_sharded_subgrids(
-            input_tensors[0],
-            this->forward_device,
-            this->backward_device,
-            output_tensors[0],
-            output_intermediate_tensor_spec,
-            this->dim,
-            this->num_links,
-            this->ring_size,
-            this->ring_index,
-            this->topology,
-            this->semaphore,
-            this->sub_device_id,
-            this->enable_persistent_fabric_mode,
-            this->num_heads);
+    for (const auto& output_tensor : output_tensors) {
+        const auto& buffers = output_tensor.buffers();
+        const auto first_address = buffers.front()->address();
+        TT_FATAL(
+            std::all_of(
+                buffers.begin(),
+                buffers.end(),
+                [&first_address](const auto& buffer) {
+                    return buffer != nullptr && buffer->address() == first_address;
+                }),
+            "Output buffers for all_gather async must be lock-step allocated but some of the tensors were allocated at "
+            "different addresses across devices.");
     }
+    chip_id_t this_device_id = input_tensor.device()->id();
+
+    const auto& buffers_temp = temp_tensor_map.at(this_device_id).buffers();
+    const auto temp_first_address = buffers_temp.front()->address();
+    TT_FATAL(
+        std::all_of(
+            buffers_temp.begin(),
+            buffers_temp.end(),
+            [&temp_first_address](const auto& buffer) {
+                return buffer != nullptr && buffer->address() == temp_first_address;
+            }),
+        "TEMP buffers for all_gather async must be lock-step allocated but some of the tensors were allocated at "
+        "different addresses across devices.");
+
+    Tensor temp_tensor = this->temp_tensor_map.at(this_device_id);
     return all_gather_concat_llama_sharded(
         input_tensors[0],
         this->forward_device,
         this->backward_device,
         output_tensors[0],
-        output_intermediate_tensor_spec,
         this->dim,
+        temp_tensor,
         this->num_links,
         this->ring_size,
         this->ring_index,
@@ -204,6 +204,7 @@ const tt::tt_metal::operation::Hash AllGatherConcat::compute_program_hash(
     auto input_memory_config = input_tensors[0].memory_config();
     return tt::tt_metal::operation::hash_operation<AllGatherConcat>(
         this->dim,
+        this->temp_tensor_map,
         this->num_links,
         this->ring_size,
         this->ring_index,
@@ -223,14 +224,14 @@ namespace ccl {
 Tensor all_gather_concat(
     const Tensor& input_tensor,
     const uint32_t dim,
+    std::unordered_map<chip_id_t, Tensor> temp_tensor_map,
     const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
     const uint32_t num_heads,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    bool enable_persistent_fabric_mode,
-    bool on_subcoregrids) {
+    bool enable_persistent_fabric_mode) {
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
         "all_gather_concat op is only supported for Fast Dispatch");
@@ -256,6 +257,7 @@ Tensor all_gather_concat(
 
     tt::tt_metal::operation::launch_op(
         [dim,
+         temp_tensor_map,
          num_links,
          num_devices,
          memory_config,
@@ -264,8 +266,7 @@ Tensor all_gather_concat(
          semaphores,
          sub_device_id,
          enable_persistent_fabric_mode,
-         num_heads,
-         on_subcoregrids](
+         num_heads](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -275,6 +276,7 @@ Tensor all_gather_concat(
                 ttnn::ccl::all_gather_concat_detail::create_all_gather_concat_struct(
                     input_tensor,
                     dim,
+                    temp_tensor_map,
                     num_links,
                     memory_config,
                     devices,
@@ -282,8 +284,7 @@ Tensor all_gather_concat(
                     semaphores,
                     sub_device_id,
                     enable_persistent_fabric_mode,
-                    num_heads,
-                    on_subcoregrids),
+                    num_heads),
                 {input_tensor});
         },
         {input_tensor},

@@ -33,6 +33,7 @@ struct AllGatherConcat {
     std::optional<IDevice*> forward_device;
     std::optional<IDevice*> backward_device;
     const uint32_t dim;
+    std::unordered_map<chip_id_t, Tensor> temp_tensor_map;
     const uint32_t num_links;
     const uint32_t ring_size;
     const uint32_t ring_index;
@@ -42,12 +43,12 @@ struct AllGatherConcat {
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     bool enable_persistent_fabric_mode;
     const uint32_t num_heads;
-    const bool on_subcoregrids;
 
     AllGatherConcat(
         std::optional<IDevice*> forward_device,
         std::optional<IDevice*> backward_device,
         uint32_t dim,
+        std::unordered_map<chip_id_t, Tensor> temp_tensor_map,
         uint32_t num_links,
         uint32_t ring_size,
         uint32_t ring_index,
@@ -56,11 +57,11 @@ struct AllGatherConcat {
         GlobalSemaphore semaphore,
         std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
         bool enable_persistent_fabric_mode,
-        uint32_t num_heads,
-        bool on_subcoregrids) :
+        uint32_t num_heads) :
         forward_device(forward_device),
         backward_device(backward_device),
         dim(dim),
+        temp_tensor_map(temp_tensor_map),
         num_links(num_links),
         ring_size(ring_size),
         ring_index(ring_index),
@@ -69,8 +70,7 @@ struct AllGatherConcat {
         semaphore(semaphore),
         sub_device_id(sub_device_id),
         enable_persistent_fabric_mode(enable_persistent_fabric_mode),
-        num_heads(num_heads),
-        on_subcoregrids(on_subcoregrids) {}
+        num_heads(num_heads) {}
 
     // Add attributes method for reflection
     auto attributes() const {
@@ -85,7 +85,6 @@ struct AllGatherConcat {
         attrs.emplace_back("topology", topology);
         attrs.emplace_back("semaphore", semaphore);
         attrs.emplace_back("num_heads", num_heads);
-        attrs.emplace_back("on_subcoregrids", on_subcoregrids);
 
         return attrs;
     }
@@ -104,6 +103,7 @@ namespace all_gather_concat_detail {
 AllGatherConcat create_all_gather_concat_struct(
     const Tensor& input_tensor,
     const uint32_t dim,
+    std::unordered_map<chip_id_t, Tensor> temp_tensor_map,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     const std::vector<IDevice*>& devices,
@@ -111,8 +111,7 @@ AllGatherConcat create_all_gather_concat_struct(
     const std::vector<GlobalSemaphore>& semaphores,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     bool enable_persistent_fabric_mode,
-    const uint32_t num_heads,
-    const bool on_subcoregrids);
+    const uint32_t num_heads);
 }  // namespace all_gather_concat_detail
 }  // namespace ccl
 
@@ -129,8 +128,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
-    TensorSpec output_intermediate_tensor_spec,
     const uint32_t dim,
+    Tensor& temp_tensor,
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
@@ -145,8 +144,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded_su
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
-    TensorSpec output_intermediate_tensor_spec,
     const uint32_t dim,
+    Tensor& temp_tensor,
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
@@ -163,14 +162,14 @@ namespace ccl {
 Tensor all_gather_concat(
     const Tensor& input_tensor,
     const uint32_t dim,
+    std::unordered_map<chip_id_t, Tensor> temp_tensor_map,
     const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
     const uint32_t num_heads,
     const uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
-    bool enable_persistent_fabric_mode = false,
-    const bool on_subcoregrids = false);  // TODO make reference
+    bool enable_persistent_fabric_mode = false);
 
 }  // namespace ccl
 }  // namespace experimental

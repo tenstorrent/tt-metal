@@ -74,6 +74,21 @@ public:
 
     std::unordered_map<chip_id_t, eth_coord_t> get_user_chip_ethernet_coordinates() const;
 
+    std::unordered_set<chip_id_t> user_exposed_chip_ids() const {
+        if (this->cluster_type_ == ClusterType::TG) {
+            std::unordered_set<chip_id_t> galaxy_boards;
+            const auto& chips = this->cluster_desc_->get_all_chips();
+            for (const auto& id : chips) {
+                if (this->cluster_desc_->get_board_type(id) == BoardType::GALAXY) {
+                    galaxy_boards.insert(id);
+                }
+            }
+            return galaxy_boards;
+        } else {
+            return this->cluster_desc_->get_all_chips();
+        }
+    }
+
     size_t number_of_devices() const { return this->cluster_desc_->get_number_of_chips(); }
 
     size_t number_of_pci_devices() const { return this->cluster_desc_->get_chips_with_mmio().size(); }
