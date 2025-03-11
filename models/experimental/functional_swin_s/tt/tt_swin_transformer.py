@@ -73,22 +73,31 @@ class TtSwinTransformer:
         self.flatten = nn.Flatten(1)
 
     def __call__(self, x):
-        # x = x.to(self.device)
         # conv starts
-        x = ttnn.permute(x, (0, 2, 3, 1))
-        x = ttnn.from_device(x)
-        x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.permute(x, (0, 2, 3, 1), memory_config=ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = self.conv2d(self.device, x)
-        x = ttnn.to_device(x, device=self.device)
-        x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
-        x = ttnn.permute(x, (0, 3, 1, 2))
+        x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.permute(
+            x,
+            (0, 3, 1, 2),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
 
         # conv ends
 
-        x = ttnn.permute(x, (0, 2, 3, 1))
+        x = ttnn.permute(
+            x,
+            (0, 2, 3, 1),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )  # 27
         if self.norm_layer is None:
             x = ttnn.layer_norm(
-                x, weight=self.parameters.features[0][2].weight, bias=self.parameters.features[0][2].bias
+                x,
+                weight=self.parameters.features[0][2].weight,
+                bias=self.parameters.features[0][2].bias,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
         else:
             pass
@@ -99,23 +108,25 @@ class TtSwinTransformer:
                     x = self.layers[i_stage][j](x)
             else:
                 x = self.layers[i_stage](x)
+
         if self.norm_layer is None:
             x = ttnn.layer_norm(
-                x, weight=self.parameters.norm.weight, bias=self.parameters.norm.bias
-            )  # pcc drops starts from here
+                x,
+                weight=self.parameters.norm.weight,
+                bias=self.parameters.norm.bias,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
         else:
             pass
-        x = ttnn.permute(x, (0, 3, 1, 2))
+        x = ttnn.permute(x, (0, 3, 1, 2), memory_config=ttnn.L1_MEMORY_CONFIG)
         # AdaptiveAvgPool2d starts
-        x = ttnn.permute(x, (0, 2, 3, 1))
-        x = ttnn.global_avg_pool2d(x)
-        x = ttnn.permute(x, (0, 3, 1, 2))
+        x = ttnn.permute(x, (0, 2, 3, 1), memory_config=ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.global_avg_pool2d(x, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.permute(x, (0, 3, 1, 2), memory_config=ttnn.L1_MEMORY_CONFIG)
         # AdaptiveAvgPool2d  ends
-        x = ttnn.from_device(x)
-        x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.reshape(x, (x.shape[0], -1))  # Replace for flatten, self.flatten(x)
-        x = ttnn.to_device(x, device=self.device)
-        x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
+        x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.linear(
             x,
             self.parameters.head.weight,
@@ -123,5 +134,6 @@ class TtSwinTransformer:
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.LoFi,
             ),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         return x

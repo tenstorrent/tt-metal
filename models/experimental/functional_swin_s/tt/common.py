@@ -19,6 +19,7 @@ class Conv:
         activation="",
         groups=1,
         dtype=ttnn.bfloat16,
+        use_shallow_conv_variant=False,
     ) -> None:
         self.weights = parameters["weight"]
         self.bias = parameters["bias"]
@@ -37,29 +38,33 @@ class Conv:
         self.shard_layout = (
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED if height_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
         )
+        self.use_shallow_conv_variant = (use_shallow_conv_variant,)
 
     def __call__(self, device, input_tensor):
         conv_config = ttnn.Conv2dConfig(
             dtype=self.dtype,
             weights_dtype=ttnn.bfloat16,
-            math_fidelity=ttnn.MathFidelity.LoFi,
             activation=self.activation,
             shard_layout=self.shard_layout,
-            math_approx_mode_enabled=True,
-            fp32_dest_acc_enabled=False,
-            packer_l1_accum_enabled=False,
-            input_channels_alignment=16 if input_tensor.shape[3] < 16 else 32,
-            transpose_shards=False,
-            reshard_if_not_optimal=self.reshard,
+            input_channels_alignment=(
+                16 if self.use_shallow_conv_variant or (input_channels == 16 and input_height == 115) else 32
+            ),
             deallocate_activation=self.deallocate,
-            reallocate_halo_output=True,
-            enable_act_double_buffer=True,
-            enable_split_reader=False,
+        )
+
+        compute_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+            # math_approx_mode=True,
         )
         if self.act_block_h is not None:
             conv_config.act_block_h_override = self.act_block_h
 
-        [output_tensor, _out_height, _out_width, self.weights, self.bias] = ttnn.conv2d(
+        reader_patterns_cache = {}
+
+        [output_tensor, [_out_height, _out_width], [self.weights, self.bias]] = ttnn.conv2d(
             input_tensor=input_tensor,
             weight_tensor=self.weights,
             bias_tensor=self.bias,
@@ -73,11 +78,12 @@ class Conv:
             input_height=input_tensor.shape[1],
             input_width=input_tensor.shape[2],
             conv_config=conv_config,
+            compute_config=compute_config,
+            conv_op_cache=reader_patterns_cache,
             groups=self.groups,
+            return_output_dim=True,
+            return_weights_and_bias=True,
         )
-
-        output_tensor = ttnn.from_device(output_tensor)
-        output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         output_tensor = ttnn.reshape(
             output_tensor, (input_tensor.shape[0], _out_height, _out_width, output_tensor.shape[3])

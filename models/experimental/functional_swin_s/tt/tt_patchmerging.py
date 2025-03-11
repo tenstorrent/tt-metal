@@ -37,21 +37,30 @@ class TtPatchMerging:
         self.parameters = parameters
 
     def __call__(self, x):
-        _, H, W, _ = x.get_legacy_shape()
+        _, H, W, _ = x.shape  # get_legacy_shape()
         x = ttnn.pad(
             x, x.shape, [0, 0, 0, 0], 0
         )  # This is not needed(check on this) x = F.pad(x, (0, 0, 0, W % 2, 0, H % 2)) , No difference in shape
-        x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         x0 = x[..., 0::2, 0::2, :]  # ... H/2 W/2 C
         x1 = x[..., 1::2, 0::2, :]  # ... H/2 W/2 C
         x2 = x[..., 0::2, 1::2, :]  # ... H/2 W/2 C
         x3 = x[..., 1::2, 1::2, :]  # ... H/2 W/2 C
-        x0 = ttnn.to_layout(x0, layout=ttnn.TILE_LAYOUT)
-        x1 = ttnn.to_layout(x1, layout=ttnn.TILE_LAYOUT)
-        x2 = ttnn.to_layout(x2, layout=ttnn.TILE_LAYOUT)
-        x3 = ttnn.to_layout(x3, layout=ttnn.TILE_LAYOUT)
-        x = ttnn.concat([x0, x1, x2, x3], -1)
-        x = ttnn.layer_norm(x, weight=self.parameters.norm["weight"], bias=self.parameters.norm["bias"])
+        x0 = ttnn.to_layout(x0, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x1 = ttnn.to_layout(x1, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x2 = ttnn.to_layout(x2, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x3 = ttnn.to_layout(x3, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.concat([x0, x1, x2, x3], -1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.layer_norm(
+            x,
+            weight=self.parameters.norm["weight"],
+            bias=self.parameters.norm["bias"],
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(x0)
+        ttnn.deallocate(x1)
+        ttnn.deallocate(x2)
+        ttnn.deallocate(x3)
         if x.shape[-1] == 384:
             x = ttnn.to_memory_config(
                 x,
@@ -61,14 +70,14 @@ class TtPatchMerging:
                     strategy=ttnn.ShardStrategy.HEIGHT,
                     orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 ),
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
             )
 
             x = ttnn.linear(
                 x,
                 self.parameters.reduction["weight"],
                 memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                     math_fidelity=ttnn.MathFidelity.LoFi,
                 ),
@@ -83,13 +92,13 @@ class TtPatchMerging:
                     strategy=ttnn.ShardStrategy.BLOCK,
                     orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 ),
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
             )
             x = ttnn.linear(
                 x,
                 self.parameters.reduction["weight"],
                 memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                     math_fidelity=ttnn.MathFidelity.LoFi,
                 ),
@@ -99,11 +108,12 @@ class TtPatchMerging:
             x = ttnn.linear(
                 x,
                 self.parameters.reduction["weight"],
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                     math_fidelity=ttnn.MathFidelity.LoFi,
                 ),
                 core_grid=ttnn.CoreGrid(y=8, x=8),
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
 
         x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
