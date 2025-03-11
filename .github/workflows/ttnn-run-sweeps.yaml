@@ -30,6 +30,7 @@ on:
           - eltwise.unary.log10.log10_survey
           - eltwise.unary.nez.nez_survey
           - eltwise.unary.ltz.ltz_survey
+          - eltwise.unary.lez.lez_survey
           - eltwise.unary.square.square_survey
           - eltwise.unary.sign.sign_survey
           - eltwise.unary.nez.nez_sharded
