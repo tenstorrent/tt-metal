@@ -93,13 +93,13 @@ class TtSegformerEncoder:
         for idx, x in enumerate(zip(self.patch_embeddings, self.block)):
             embedding_layer, block_layer = x[0], x[1]
             # first, obtain patch embeddings
-            # hidden_states, height, width = embedding_layer(
-            hidden_states = embedding_layer(
+            hidden_states, height, width = embedding_layer(
+                # hidden_states = embedding_layer(
                 device,
                 pixel_values=hidden_states,
                 parameters=parameters[f"patch_embeddings"][idx],
             )
-            height = width = int(math.sqrt(hidden_states.shape[-2]))
+            # height = width = int(math.sqrt(hidden_states.shape[-2]))
 
             # second, send embeddings through blocks
             for i, blk in enumerate(block_layer):

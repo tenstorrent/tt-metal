@@ -155,7 +155,7 @@ def test_segformer_encoder(batch_size, num_channels, height, width, device, rese
             memory_config=input_mem_config,
         )
 
-    ttnn_output = ttnn_model(ttnn_input_tensor, parameters=parameters)
+    ttnn_output = ttnn_model(device, ttnn_input_tensor, parameters=parameters)
 
     ttnn_final_output = ttnn.to_torch(ttnn_output.last_hidden_state)
     torch_final_output = torch.permute(torch_output.last_hidden_state, (0, 2, 3, 1))

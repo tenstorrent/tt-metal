@@ -112,7 +112,7 @@ def test_segformer_attention(
         sequence_reduction_ratio=sequence_reduction_ratio,
     )
 
-    ttnn_output = ttnn_model(ttnn_input_tensor, height, width, parameters=parameters)
+    ttnn_output = ttnn_model(device, ttnn_input_tensor, height, width, parameters=parameters)
     ttnn_final_output = ttnn.to_torch(ttnn_output[0])
     if len(ttnn_final_output.shape) == 4:
         ttnn_final_output = ttnn_final_output[0]

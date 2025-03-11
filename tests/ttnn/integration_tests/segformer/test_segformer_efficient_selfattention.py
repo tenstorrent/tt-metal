@@ -130,7 +130,7 @@ def test_segformer_efficient_selfattention(
         parameters=parameters,
         sequence_reduction_ratio=reference_model.sr_ratio,
     )
-    ttnn_output = ttnn_model(ttnn_input_tensor, height, width, parameters=parameters)
+    ttnn_output = ttnn_model(device, ttnn_input_tensor, height, width, parameters=parameters)
     ttnn_final_output = ttnn.to_torch(ttnn_output[0])
     if len(ttnn_final_output.shape) == 4:
         ttnn_final_output = ttnn_final_output[0]

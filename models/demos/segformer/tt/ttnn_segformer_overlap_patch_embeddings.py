@@ -32,8 +32,8 @@ class TtSegformerOverlapPatchEmbeddings:
 
         # print(pixel_values_rm)
 
-        # embeddings, input_height, input_width = self.proj(device, pixel_values)
-        embeddings = self.proj(device, pixel_values)
+        embeddings, input_height, input_width = self.proj(device, pixel_values)
+        # embeddings = self.proj(device, pixel_values)
         embeddings = ttnn.to_memory_config(embeddings, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # needed only if input is on L1 nor DRAM
@@ -50,4 +50,4 @@ class TtSegformerOverlapPatchEmbeddings:
             ),
         )
 
-        return embeddings  # , input_height, input_width
+        return embeddings, input_height, input_width
