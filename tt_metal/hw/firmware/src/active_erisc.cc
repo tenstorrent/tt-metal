@@ -88,6 +88,8 @@ int main() {
     noc_index = 0;
     my_logical_x = mailboxes->core_info.absolute_logical_x;
     my_logical_y = mailboxes->core_info.absolute_logical_y;
+    my_sub_device_x = 0xab;
+    my_sub_device_y = 0xcd;
 
     risc_init();
 

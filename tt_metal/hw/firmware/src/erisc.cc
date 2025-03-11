@@ -95,6 +95,8 @@ void __attribute__((noinline)) Application(void) {
 
     my_logical_x = mailboxes->core_info.absolute_logical_x;
     my_logical_y = mailboxes->core_info.absolute_logical_y;
+    my_sub_device_x = 0xab;
+    my_sub_device_y = 0xcd;
 
     noc_bank_table_init(eth_l1_mem::address_map::ERISC_MEM_BANK_TO_NOC_SCRATCH);
 

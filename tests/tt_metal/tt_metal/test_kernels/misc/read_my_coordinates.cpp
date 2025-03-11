@@ -10,6 +10,7 @@
 //
 
 #include "compile_time_args.h"
+#include "risc_common.h"
 
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || \
     defined(COMPILE_FOR_IDLE_ERISC)

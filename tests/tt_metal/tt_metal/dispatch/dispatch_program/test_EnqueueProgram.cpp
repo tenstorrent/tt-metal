@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -833,14 +833,15 @@ bool test_increment_runtime_args_sanity(
         idle_eth);
 }
 
-void test_my_coordinates(IDevice* device, tt::RISCV processor_class, size_t cq_id = 0) {
-    const std::string kernel_path = "tests/tt_metal/tt_metal/test_kernels/misc/read_my_coordinates.cpp";
+void test_my_coordinates(IDevice* device, tt::RISCV processor_class, size_t cq_id = 0, bool idle_eth = false) {
+    const std::string k_kernel_path = "tests/tt_metal/tt_metal/test_kernels/misc/read_my_coordinates.cpp";
 
     // All logical cores
     CoreRangeSet cr{CoreRange{{2, 2}, {6, 6}}};
     if (processor_class == tt::RISCV::ERISC) {
-        const auto unused_activ_eth_cores = device->get_active_ethernet_cores(true);
-        cr = CoreRangeSet{std::set<CoreRange>{unused_activ_eth_cores.begin(), unused_activ_eth_cores.end()}};
+        const auto eth_cores =
+            idle_eth ? device->get_inactive_ethernet_cores() : device->get_active_ethernet_cores(true);
+        cr = CoreRangeSet{std::set<CoreRange>{eth_cores.begin(), eth_cores.end()}};
     }
 
     uint32_t cb_addr = processor_class == tt::RISCV::ERISC ? experimental::hal::get_erisc_l1_unreserved_base()
@@ -850,48 +851,13 @@ void test_my_coordinates(IDevice* device, tt::RISCV processor_class, size_t cq_i
     };
 
     Program program = tt::tt_metal::CreateProgram();
-    KernelHandle kernel = create_kernel(processor_class, program, CoreRangeSet{cr}, compile_args, kernel_path);
+    KernelHandle kernel =
+        create_kernel(processor_class, program, CoreRangeSet{cr}, compile_args, k_kernel_path, idle_eth);
 
     EnqueueProgram(device->command_queue(cq_id), program, false);
     Finish(device->command_queue(cq_id));
 
-    struct CoreCoordsL1 {
-        uint32_t my_x;
-        uint32_t my_y;
-        uint32_t my_logical_x;
-        uint32_t my_logical_y;
-        uint32_t my_sub_device_x;
-        uint32_t my_sub_device_y;
-    };
-    static_assert(sizeof(CoreCoordsL1) == 24);  // Must match kernel
-
-    for (const auto& core_range : cr.ranges()) {
-        for (auto coord = core_range.begin(); coord != core_range.end(); ++coord) {
-            const auto& virtual_coord = device->virtual_core_from_logical_core(
-                *coord, processor_class == tt::RISCV::ERISC ? CoreType::ETH : CoreType::WORKER);
-            const auto& origin = device
-                                     ->worker_cores(
-                                         processor_class == tt::RISCV::ERISC ? HalProgrammableCoreType::ACTIVE_ETH
-                                                                             : HalProgrammableCoreType::TENSIX,
-                                         SubDeviceId{0})
-                                     .bounding_box()
-                                     .start_coord;
-            CoreCoord relative_coord{(*coord).x - origin.x, (*coord).y - origin.y};
-            auto read_coords_raw =
-                llrt::read_hex_vec_from_core(device->id(), virtual_coord, cb_addr, sizeof(CoreCoordsL1));
-            auto read_coords = reinterpret_cast<volatile CoreCoordsL1*>(read_coords_raw.data());
-            if (processor_class != tt::RISCV::COMPUTE) {
-                // my_x and my_y are not available on compute
-                EXPECT_EQ(read_coords->my_x, virtual_coord.x) << "Virtual X";
-                EXPECT_EQ(read_coords->my_y, virtual_coord.y) << "Virtual Y";
-            }
-            EXPECT_EQ(read_coords->my_logical_x, (*coord).x) << "Logical X";
-            EXPECT_EQ(read_coords->my_logical_y, (*coord).y) << "Logical Y";
-
-            EXPECT_EQ(read_coords->my_sub_device_x, (relative_coord).x) << "SubDevice Logical X";
-            EXPECT_EQ(read_coords->my_sub_device_y, (relative_coord).y) << "SubDevice Logical Y";
-        }
-    }
+    tt::tt_metal::verify_kernel_coordinates(processor_class, cr, device, tt::tt_metal::SubDeviceId{0}, cb_addr);
 }
 
 }  // namespace local_test_functions
@@ -1513,6 +1479,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TestLogicalCoordinatesEth) {
 TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TestLogicalCoordinatesCompute) {
     for (IDevice* device : devices_) {
         local_test_functions::test_my_coordinates(device, tt::RISCV::COMPUTE);
+        local_test_functions::test_my_coordinates(device, tt::RISCV::COMPUTE, 1);
     }
 }
 
@@ -1520,14 +1487,17 @@ TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TestLogicalCoordinatesComput
 TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TestLogicalCoordinatesDataMovement) {
     for (IDevice* device : devices_) {
         local_test_functions::test_my_coordinates(device, tt::RISCV::BRISC);
+        local_test_functions::test_my_coordinates(device, tt::RISCV::BRISC, 1);
         local_test_functions::test_my_coordinates(device, tt::RISCV::NCRISC);
+        local_test_functions::test_my_coordinates(device, tt::RISCV::NCRISC, 1);
     }
 }
 
 // Ensure the eth core can access their own logical coordinate. Same binary enqueued to multiple cores.
 TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TestLogicalCoordinatesEth) {
     for (IDevice* device : devices_) {
-        local_test_functions::test_my_coordinates(device, tt::RISCV::ERISC);
+        local_test_functions::test_my_coordinates(device, tt::RISCV::ERISC, 0);
+        local_test_functions::test_my_coordinates(device, tt::RISCV::ERISC, 1);
     }
 }
 

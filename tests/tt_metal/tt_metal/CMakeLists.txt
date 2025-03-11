@@ -141,6 +141,7 @@ target_sources(
             test_kernels/misc/watcher_pause.cpp
             test_kernels/misc/watcher_ringbuf.cpp
             test_kernels/misc/watcher_waypoints.cpp
+            test_kernels/misc/read_my_coordinates.cpp
 )
 
 install(
