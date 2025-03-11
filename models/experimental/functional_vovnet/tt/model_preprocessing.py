@@ -26,32 +26,38 @@ import torch
 
 
 def preprocess_bn_weight(state_dict, path, eps=1e-05, device=None):
-    bn_weight = state_dict[path + f".weight"]  # .unsqueeze(1).unsqueeze(1).unsqueeze(1)
-    bn_bias = state_dict[path + f".bias"]  # .unsqueeze(1).unsqueeze(1).unsqueeze(1)
-    bn_running_mean = state_dict[path + f".running_mean"]  # .unsqueeze(1).unsqueeze(1).unsqueeze(1)
-    bn_running_var = state_dict[path + f".running_var"]  # .unsqueeze(1).unsqueeze(1).unsqueeze(1)
+    bn_weight = state_dict[path + f".weight"].reshape(1, -1, 1, 1)  # .unsqueeze(1).unsqueeze(1).unsqueeze(1)
+    bn_bias = state_dict[path + f".bias"].reshape(1, -1, 1, 1)  # .unsqueeze(1).unsqueeze(1).unsqueeze(1)
+    bn_running_mean = state_dict[path + f".running_mean"].reshape(
+        1, -1, 1, 1
+    )  # .unsqueeze(1).unsqueeze(1).unsqueeze(1)
+    bn_running_var = state_dict[path + f".running_var"].reshape(1, -1, 1, 1)  # .unsqueeze(1).unsqueeze(1).unsqueeze(1)
 
     return (
         ttnn.from_torch(
             bn_weight,
-            dtype=ttnn.bfloat16,  # , device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
+            dtype=ttnn.bfloat16,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,  # , memory_config=ttnn.L1_MEMORY_CONFIG
         ),
         ttnn.from_torch(
             bn_bias,
-            dtype=ttnn.bfloat16,  # , device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
+            dtype=ttnn.bfloat16,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,  # , memory_config=ttnn.L1_MEMORY_CONFIG
         ),
         ttnn.from_torch(
             bn_running_mean,
             dtype=ttnn.bfloat16,
-            # device=device,
-            # layout=ttnn.TILE_LAYOUT,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
             # memory_config=ttnn.L1_MEMORY_CONFIG,
         ),
         ttnn.from_torch(
             bn_running_var,
             dtype=ttnn.bfloat16,
-            # device=device,
-            # layout=ttnn.TILE_LAYOUT,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
             # memory_config=ttnn.L1_MEMORY_CONFIG,
         ),
     )

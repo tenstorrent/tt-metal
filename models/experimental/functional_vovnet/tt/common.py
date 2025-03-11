@@ -86,13 +86,10 @@ class Conv:
             self.conv_config.act_block_h_override = act_block_h
 
         if self.fused_op:
-            self.bn = nn.BatchNorm2d(num_features=self.weights.shape[0])
-
-            self.bn.weight.data = ttnn.to_torch(parameters[f"{path}.bn.weight"])  # Example values
-            self.bn.bias.data = ttnn.to_torch(parameters[f"{path}.bn.bias"])
-            # Assign new values to running mean and variance (used during inference)
-            self.bn.running_mean = ttnn.to_torch(parameters[f"{path}.bn.running_mean"])
-            self.bn.running_var = ttnn.to_torch(parameters[f"{path}.bn.running_var"])
+            self.bn_weight = parameters[f"{path}.bn.weight"]
+            self.bn_bias = parameters[f"{path}.bn.bias"]
+            self.bn_running_mean = parameters[f"{path}.bn.running_mean"]
+            self.bn_running_var = parameters[f"{path}.bn.running_var"]
 
     def __str__(self) -> str:
         return f"Conv: {self.weights.shape} {self.bias.shape} {self.kernel_size}"
@@ -136,10 +133,14 @@ class Conv:
         output_tensor = ttnn.reshape(output_tensor, (N, _out_height, _out_width, output_tensor.shape[-1]))
         output_tensor = ttnn.permute(output_tensor, (0, 3, 1, 2))
         if self.fused_op:
-            output_tensor = ttnn.to_torch(output_tensor)
-            output_tensor = self.bn(output_tensor)
-            output_tensor = ttnn.from_torch(
-                output_tensor, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT)
+            self.bn = ttnn.batch_norm(
+                output_tensor,
+                running_mean=self.bn_running_mean,
+                running_var=self.bn_running_var,
+                weight=self.bn_weight,
+                bias=self.bn_bias,
+                training=False,
             )
             output_tensor = ttnn.relu(output_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
         return output_tensor, _out_height, _out_width
