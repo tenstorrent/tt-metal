@@ -73,15 +73,15 @@ tests/tt_metal/distributed/ @cfjchu @tt-asaigal @omilyutin-tt
 tests/tt_metal/distributed/**/requirements*.txt @tenstorrent/metalium-developers-infra @cfjchu @tt-asaigal @omilyutin-tt
 
 # metal - fw, llks, risc-v
-tt_metal/hw/ckernels/ @rtawfik01 @rdjogoTT @ttmtrajkovic
+tt_metal/hw/ckernels/ @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelickovicTT
 tt_metal/include/compute_kernel_api.h @davorchap @mywoodstock
-tt_metal/include/compute_kernel_api/ @rtawfik01 @rdjogoTT @ttmtrajkovic
+tt_metal/include/compute_kernel_api/ @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelickovicTT
 tt_metal/include/dataflow_kernel_api.h @davorchap @mywoodstock @ntarafdar
 tt_metal/hw/firmware/riscv/common/dataflow_internals.h @davorchap @mywoodstock
 tt_metal/hw/firmware/src/*erisc* @aliuTT @ubcheema
 tt_metal/hw/inc/ethernet/ @aliuTT @ubcheema
 tt_metal/hw/inc/wormhole/eth_l1_address_map.h @aliuTT @ubcheema
-tt_metal/third_party/tt_llk_* @rtawfik01 @ttmtrajkovic @rdjogoTT
+tt_metal/third_party/tt_llk @rtawfik01 @ttmtrajkovic @rdjogoTT @nvelickovicTT
 tt_metal/tt_stl/ @patrickroberts @ayerofieiev-tt @dmakoviichuk-tt @sminakov-tt @omilyutin-tt
 
 sfpi/ @pgkeller
@@ -168,7 +168,7 @@ models/demos @uaydonat
 models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu
 models/demos/wormhole @uaydonat
 models/demos/t3000 @uaydonat
-models/demos/llama3 @cglagovichTT @yieldthought @mtairum @uaydonat
+models/tt_transformers @cglagovichTT @yieldthought @mtairum @uaydonat
 models/demos/qwen @sraizada-tt @mtairum @uaydonat @yieldthought
 models/demos/falcon7b_common @skhorasganiTT @djordje-tt @uaydonat
 models/demos/wormhole/mamba @esmalTT @uaydonat @kpaigwar

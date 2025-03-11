@@ -12,7 +12,7 @@
 #include <set>
 #include <utility>
 
-#include <tt-metalium/env_lib.hpp>
+#include "env_lib.hpp"
 
 #include "dispatch_core_manager.hpp"
 #include "dispatch_settings.hpp"
@@ -259,7 +259,7 @@ void DevicePool::initialize(
     _inst->init_profiler_devices();
 }
 
-void DevicePool::initialize_device(IDevice* dev) const {
+void DevicePool::initialize_host(IDevice* dev) const {
     detail::ClearProfilerControlBuffer(dev);
 
     // Create system memory writer for this device to have an associated interface to hardware command queue (i.e.
@@ -283,17 +283,55 @@ void DevicePool::initialize_device(IDevice* dev) const {
     dev->initialize_and_launch_firmware();
 
     watcher_attach(dev);
+}
 
+void DevicePool::initialize_active_devices() const {
+    const auto& active_devices = this->get_all_active_devices();
+
+    // Activate fabric (must be before FD)
     // TODO: add handling of EDM
     FabricConfig fabric_config = tt::Cluster::instance().get_fabric_config();
     if (fabric_config == FabricConfig::FABRIC_2D || fabric_config == FabricConfig::FABRIC_2D_PUSH) {
+        // Initialize control plane, does not configure kernels/routing tables
+        // We always need a control plane for mapping of logical devices to physical devices
+        // TODO: add single device support
+        _inst->initialize_control_plane();  // not const
+        // write routing tables to all ethernet cores
+        // TODO: writing to device normally goes through cluster
+        this->control_plane->configure_routing_tables();
         // Initialize fabric on mmio device
-        dev->init_fabric();
+        for (const auto& dev : active_devices) {
+            dev->init_fabric();
+        }
     }
 
-    // Set up HW command queues on device for FD
-    if (this->using_fast_dispatch) {
+    // Activate FD kernels
+    // Remaining steps are for setting up FD
+    if (!this->using_fast_dispatch) {
+        return;
+    }
+
+    for (auto dev : active_devices) {
+        // For Galaxy init, we only need to loop over mmio devices
+        const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(dev->id());
+        if (mmio_device_id != dev->id()) {
+            continue;
+        }
+
+        auto tunnels_from_mmio = tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_device_id);
+        populate_cq_static_args(dev);
         dev->init_command_queue_device();
+        if (not this->skip_remote_devices) {
+            for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
+                // Need to create devices from farthest to the closest.
+                for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0; ts--) {
+                    uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
+                    auto device = get_device(mmio_controlled_device_id);
+                    populate_cq_static_args(device);
+                    device->init_command_queue_device();
+                }
+            }
+        }
     }
 }
 
@@ -399,15 +437,6 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
         }
     }
 
-    // TODO: add handling of EDM
-    if (fabric_config == FabricConfig::FABRIC_2D || fabric_config == FabricConfig::FABRIC_2D_PUSH) {
-        // Initialize control plane, does not configure kernels/routing tables
-        // We always need a control plane for mapping of logical devices to physical devices
-        // TODO: add single device support
-        _inst->initialize_control_plane();
-        // write routing tables to all ethernet cores
-        this->control_plane->configure_routing_tables();
-    }
     this->using_fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
     if (this->using_fast_dispatch) {
         populate_fd_kernels(devices_to_activate, this->num_hw_cqs);
@@ -480,7 +509,8 @@ void DevicePool::unregister_worker_thread_for_device(IDevice* device) {
 const std::unordered_set<std::thread::id>& DevicePool::get_worker_thread_ids() const { return this->worker_thread_ids; }
 
 void DevicePool::init_firmware_on_active_devices() const {
-    for (const auto& dev : this->get_all_active_devices()) {
+    const auto& active_devices = this->get_all_active_devices();
+    for (const auto& dev : active_devices) {
         // For Galaxy init, we only need to loop over mmio devices
         const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(dev->id());
         if (mmio_device_id != dev->id()) {
@@ -503,7 +533,7 @@ void DevicePool::init_firmware_on_active_devices() const {
             tt::Cluster::instance().get_device_tunnel_depth(mmio_device_id));
 
         auto tunnels_from_mmio = tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_device_id);
-        this->initialize_device(dev);
+        this->initialize_host(dev);
         if (not this->skip_remote_devices) {
             for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
                 // Need to create devices from farthest to the closest.
@@ -511,11 +541,13 @@ void DevicePool::init_firmware_on_active_devices() const {
                     uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
                     log_debug(tt::LogMetal, "Tunnel {} Device {} Tunnel Stop: {}", t, mmio_controlled_device_id, ts);
                     auto device = get_device(mmio_controlled_device_id);
-                    this->initialize_device(device);
+                    this->initialize_host(device);
                 }
             }
         }
     }
+
+    this->initialize_active_devices();
 }
 
 void DevicePool::initialize_control_plane() {
@@ -537,7 +569,9 @@ void DevicePool::initialize_control_plane() {
     this->control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
 }
 
-tt::tt_fabric::ControlPlane* DevicePool::get_control_plane() const { return this->control_plane.get(); }
+tt::tt_fabric::ControlPlane* DevicePool::get_control_plane() const {
+    return this->control_plane.get();
+}  // TODO: Don't use get to expose the raw pointer
 
 DevicePool::DevicePool() {
     ZoneScoped;
