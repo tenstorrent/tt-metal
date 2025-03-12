@@ -136,11 +136,10 @@ void RMSAllGather::validate(
                 const auto shape = a.get_padded_shape();
                 uint32_t M = a.volume() / shape[-1];
                 uint32_t K = shape[-1];
-                uint32_t Mt = M / TILE_WIDTH;
+                uint32_t Mt = M / TILE_HEIGHT;
                 uint32_t Kt = K / TILE_WIDTH;
                 // block
                 uint32_t block_w = program_config.block_w * TILE_WIDTH;
-                uint32_t block_h = program_config.block_h * TILE_HEIGHT;
                 const auto shard_spec = a.shard_spec().value();
                 uint32_t num_subblocks_w = program_config.block_w / program_config.subblock_w;
                 // check dims
@@ -155,36 +154,18 @@ void RMSAllGather::validate(
                         bbox.end_coord.y - bbox.start_coord.y < program_config.compute_with_storage_grid_size.y,
                     "Error");
 
-                bool mcast_1d = M == block_h;
+                TT_FATAL(M == TILE_HEIGHT, "Minimal version assumes (1,1,TILE_HEIGHT,N) shape");
+                TT_FATAL(program_config.block_h == 1, "Minimal version assumes block_h is 1");
                 bool row_wise = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
-                if (mcast_1d) {
-                    TT_FATAL(
-                        tt::div_up(Kt, shard_spec.num_cores()) == program_config.block_w,
-                        "block_w must equal to K / num_cores.");
-                    TT_FATAL(Mt == program_config.block_h, "block_h must equal to M.");
-                    TT_FATAL(a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED, "Error");
-                } else {
-                    if (row_wise) {
-                        TT_FATAL(
-                            tt::div_up(Kt, (bbox.end_coord.x + 1)) == program_config.block_w,
-                            "block_w must equal to K / num_cores_c.");
-                        TT_FATAL(
-                            Mt / (bbox.end_coord.y + 1) == program_config.block_h,
-                            "block_h must equal to M / num_cores_r.");
-                    } else {
-                        TT_FATAL(
-                            tt::div_up(Kt, (bbox.end_coord.y + 1)) == program_config.block_w,
-                            "block_w must equal to K / num_cores_r.");
-                        TT_FATAL(
-                            Mt / (bbox.end_coord.x + 1) == program_config.block_h,
-                            "block_h must equal to M / num_cores_c.");
-                    }
-                }
+                TT_FATAL(
+                    tt::div_up(Kt, shard_spec.num_cores()) == program_config.block_w,
+                    "block_w must equal to K / num_cores.");
+                TT_FATAL(Mt == program_config.block_h, "block_h must equal to M.");
+                TT_FATAL(a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED, "Error");
                 if (b.has_value()) {
                     TT_FATAL(b.value().is_sharded(), "Error");
                     TT_FATAL(b.value().shard_spec() == shard_spec, "Error");
                 }
-                TT_FATAL(program_config.block_h * TILE_HEIGHT == shard_spec.shape[0], "Error");
                 TT_FATAL(program_config.block_w * TILE_WIDTH == shard_spec.shape[1], "Error");
                 TT_FATAL(
                     program_config.block_w % program_config.subblock_w == 0,
@@ -288,12 +269,10 @@ operation::ProgramWithCallbacks RMSAllGather::create_program(
                     b,
                     gamma,
                     beta,
-                    std::nullopt,
                     output_tensor,
                     this->eps,
                     program_config.compute_with_storage_grid_size,
                     program_config.subblock_w,
-                    program_config.block_h,
                     program_config.block_w,
                     this->compute_kernel_config);
             } else {
@@ -305,18 +284,7 @@ operation::ProgramWithCallbacks RMSAllGather::create_program(
                 CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
 
                 return frmsnorm_multi_core_sharded(
-                    a,
-                    b,
-                    gamma,
-                    beta,
-                    std::nullopt,
-                    output_tensor,
-                    this->eps,
-                    grid_size,
-                    1,
-                    1,
-                    1,
-                    this->compute_kernel_config);
+                    a, b, gamma, beta, output_tensor, this->eps, grid_size, 1, 1, this->compute_kernel_config);
             }
         },
         this->program_config);

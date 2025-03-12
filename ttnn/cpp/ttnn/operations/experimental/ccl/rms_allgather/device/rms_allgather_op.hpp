@@ -18,15 +18,13 @@ namespace ttnn::operations::fused::normalization {
 
 tt::tt_metal::operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     const Tensor& a,
-    const std::optional<const Tensor>& b,
-    const std::optional<const Tensor>& gamma,
-    const std::optional<const Tensor>& beta,
-    const std::optional<const Tensor>& stats,
+    const std::optional<const Tensor>& b,      // residual
+    const std::optional<const Tensor>& gamma,  // weight
+    const std::optional<const Tensor>& beta,   // bias
     Tensor& output,
     float eps,
     CoreCoord compute_grid_size,
     uint32_t subblock_wt,
-    uint32_t block_ht,
     uint32_t block_wt,
     DeviceComputeKernelConfig compute_kernel_config);
 
