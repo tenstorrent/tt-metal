@@ -475,11 +475,11 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_halo_k
         // Find max length for vector which is going to be processed on each core
         size_t max_len = 0;
         for (const auto& data : config) {
-            max_len = std::max(
-                max_len,
-                data.size() +
-                    4);  // For split reader, each vector size is ((2 * data.size()) / 2 + 2) and 2 for null plug.
+            max_len =
+                in_place ? std::max(max_len, 2 * data.size())
+                         : std::max(max_len, data.size());  // For split reader, each vector size is 2 * data.size() / 2
         }
+        max_len += 2;  // account for the null plug
 
         std::vector<std::vector<std::vector<uint16_t>>> flattened_config(2);
         for (const auto& data : config) {
@@ -507,8 +507,12 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_halo_k
         // find max length
         size_t max_len = 0;
         for (const auto& [_, data] : config) {
-            max_len = std::max(max_len, 3 * (data.size() / 2 + 1));  // For split reader, each vector is ( 3 *
-                                                                     // data.size() / 2 + 1).
+            max_len =
+                in_place
+                    ? std::max(max_len, 3 * data.size())
+                    : std::max(
+                          max_len,
+                          3 * (data.size() / 2 + 1));  // For split reader, each vector is (3 * data.size() / 2 + 1).
         }
         max_len += 6;  // account for the key tuple and null plug
 
@@ -574,12 +578,15 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_halo_k
         for (const auto& core_config : config) {
             size_t curr_len = 0;
             for (const auto& [key, subdata] : core_config) {
-                curr_len += 3 + (3 * (subdata.size() / 2 + 1));  // For split reader,  3 for source[nocx, nocy, length]
-                                                                 // and each vector is ( 3 * data.size() / 2 + 1).
+                curr_len +=
+                    in_place
+                        ? 3 + 3 * subdata.size()
+                        : 3 + (3 * (subdata.size() / 2 + 1));  // For split reader, 3 for source[nocx, nocy, length] and
+                                                               // each vector is (3 * data.size() / 2 + 1).
             }
             max_len = std::max(max_len, curr_len);
         }
-        max_len += 3;  // account for null plug
+        max_len += 3;  // account for the null plug
 
         std::vector<std::vector<std::vector<uint16_t>>> flattened_config(2);
         int num_cores_x = device->compute_with_storage_grid_size().x;
@@ -613,6 +620,7 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_halo_k
                         flat_data[0][idx1++] = dst_start;
                         flat_data[0][idx1++] = length;
                         flat_data[0][len_idx1] += 3;
+                        ref_size += length;
                     } else {
                         flat_data[1][idx2++] = src_start;
                         flat_data[1][idx2++] = dst_start;

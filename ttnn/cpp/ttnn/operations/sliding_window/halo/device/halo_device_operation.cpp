@@ -146,7 +146,6 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
     auto remote_config_device_tensor2 =
         sliding_window::move_config_tensor_to_device(remote_config_tensor2, parallel_config_, is_block_sharded, device);
 
-
     DataType type = input_tensor.get_dtype();
     int num_cores = this->parallel_config_.grid.num_cores();
     int num_cores_c = conv::get_num_cores_channels_from_parallel_config(this->parallel_config_);
