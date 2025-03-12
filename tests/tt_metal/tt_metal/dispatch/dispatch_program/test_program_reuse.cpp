@@ -61,7 +61,6 @@ std::shared_ptr<Program> create_program_multi_core_rta(
 
     uint32_t coord_base_dm0 = tt::align(base_addr + 4096 * sizeof(uint32_t), hal.get_alignment(HalMemType::L1));
     uint32_t coord_base_dm1 = coord_base_dm0 + 1024 * sizeof(uint32_t);
-    uint32_t coord_base_compute = coord_base_dm1 + 2048 * sizeof(uint32_t);
 
     std::map<string, string> dm_defines0 = {
         {"DATA_MOVEMENT", "1"},
@@ -76,8 +75,7 @@ std::shared_ptr<Program> create_program_multi_core_rta(
     std::map<string, string> compute_defines = {
         {"COMPUTE", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(256)},
-        {"RESULTS_ADDR", std::to_string(rta_base_compute)},
-        {"COORDS_ADDR", std::to_string(coord_base_compute)}};
+        {"RESULTS_ADDR", std::to_string(rta_base_compute)}};
 
     auto dummy_kernel0 = CreateKernel(
         *program,
@@ -188,7 +186,6 @@ TEST_F(CommandQueueMultiDeviceFixture, TestProgramReuseSanity) {
     // Put the coordinates way above the maximum RTAs
     uint32_t coord_base_dm0 = tt::align(rta_base_addr + 4096 * sizeof(uint32_t), hal.get_alignment(HalMemType::L1));
     uint32_t coord_base_dm1 = coord_base_dm0 + 1024 * sizeof(uint32_t);
-    uint32_t coord_base_compute = coord_base_dm1 + 2048 * sizeof(uint32_t);
     uint32_t semaphore_buffer_size = dummy_sems.size() * hal.get_alignment(HalMemType::L1);
     uint32_t cb_config_buffer_size =
         NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
@@ -202,8 +199,6 @@ TEST_F(CommandQueueMultiDeviceFixture, TestProgramReuseSanity) {
             const auto& virtual_core_coord = device->worker_core_from_logical_core(core_coord);
             std::vector<uint32_t> expected_core_coordinates_dm{
                 virtual_core_coord.x, virtual_core_coord.y, core_coord.x, core_coord.y, core_coord.x, core_coord.y};
-            std::vector<uint32_t> expected_core_coordinates_compute{
-                0, 0, core_coord.x, core_coord.y, core_coord.x, core_coord.y};
             std::vector<uint32_t> dummy_kernel0_args_readback;
             detail::ReadFromDeviceL1(
                 device,
@@ -240,11 +235,6 @@ TEST_F(CommandQueueMultiDeviceFixture, TestProgramReuseSanity) {
                 num_runtime_args_for_cr0 * sizeof(uint32_t),
                 dummy_compute_args_readback);
             EXPECT_EQ(dummy_cr0_args, dummy_compute_args_readback);
-
-            std::vector<uint32_t> dummy_compute_coords_readback;
-            detail::ReadFromDeviceL1(
-                device, core_coord, coord_base_compute, coordinate_readback_size, dummy_compute_coords_readback);
-            EXPECT_EQ(expected_core_coordinates_compute, dummy_compute_coords_readback);
         }
 
         for (const CoreCoord& core_coord : cr1) {

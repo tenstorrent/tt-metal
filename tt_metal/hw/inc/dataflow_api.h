@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,7 +22,7 @@
 #include "debug/waypoint.h"
 #include "eth_l1_address_map.h"
 #include "hostdevcommon/common_values.hpp"
-#include "risc_attribs.h"
+#include "hw/inc/risc_attribs.h"
 #include "utils/utils.h"
 #include "debug/assert.h"
 #include "dev_msgs.h"
@@ -38,8 +38,10 @@
  * Return value: X coordinate value.
  */
 // clang-format on
-FORCE_INLINE
-uint32_t get_absolute_logical_x() { return 0; }
+inline uint8_t get_absolute_logical_x() {
+    extern uint8_t my_logical_x_;  // Set in FW
+    return my_logical_x_;
+}
 
 // clang-format off
 /**
@@ -49,32 +51,36 @@ uint32_t get_absolute_logical_x() { return 0; }
  * Return value: Y coordinate value.
  */
 // clang-format on
-FORCE_INLINE
-uint32_t get_absolute_logical_y() { return 0; }
+inline uint8_t get_absolute_logical_y() {
+    extern uint8_t my_logical_y_;  // Set in FW
+    return my_logical_y_;
+}
 
 // clang-format off
 /**
  * Returns the relative logical X coordinate value that this kernel is running on. The relative coordinate
- * is the one relative to the origin of the sub device. If there is no sub device then this is equivalent
- * to the absolute logical coordinate.
+ * is with respect to the origin of the sub device for this core type.
  *
  * Return value: X coordinate value.
  */
 // clang-format on
-FORCE_INLINE
-uint32_t get_relative_logical_x() { return 0; }
+inline uint8_t get_relative_logical_x() {
+    extern uint8_t my_relative_x_;  // Set in FW
+    return my_relative_x_;
+}
 
 // clang-format off
 /**
  * Returns the relative logical Y coordinate value that this kernel is running on. The relative coordinate
- * is the one relative to the origin of the sub device. If there is no sub device then this is equivalent
- * to the absolute logical coordinate.
+ * is with respect to the origin of the sub device for this core type.
  *
  * Return value: Y coordinate value.
  */
 // clang-format on
-FORCE_INLINE
-uint32_t get_relative_logical_y() { return 0; }
+inline uint8_t get_relative_logical_y() {
+    extern uint8_t my_relative_y_;  // Set in FW
+    return my_relative_y_;
+}
 
 // clang-format off
 /**

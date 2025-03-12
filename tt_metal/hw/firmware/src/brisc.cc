@@ -66,17 +66,17 @@ uint8_t my_x[NUM_NOCS] __attribute__((used));
 // Register
 uint8_t my_y[NUM_NOCS] __attribute__((used));
 
-// Set during FW initialization. Available before main begins.
-uint8_t my_logical_x __attribute__((used));
+// Logical X coordinate relative to the physical origin. Set during FW initialization.
+uint8_t my_logical_x_ __attribute__((used));
 
-// Set during FW initialization. Available before main begins.
-uint8_t my_logical_y __attribute__((used));
+// Logical Y coordinate relative to the physical origin. Set during FW initialization.
+uint8_t my_logical_y_ __attribute__((used));
 
-// Updated by the launch message for the kernel.
-uint8_t my_sub_device_x __attribute__((used));
+// Logical X coordinate relative to the sub device origin. Updated by the launch message for the kernel.
+uint8_t my_relative_x_ __attribute__((used));
 
-// Updated by the launch message for the kernel.
-uint8_t my_sub_device_y __attribute__((used));
+// Logical Y coordinate relative to the sub device origin. Updated by the launch message for the kernel.
+uint8_t my_relative_y_ __attribute__((used));
 
 uint32_t noc_reads_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
@@ -396,10 +396,10 @@ int main() {
 
     mailboxes->launch_msg_rd_ptr = 0; // Initialize the rdptr to 0
     noc_index = 0;
-    my_logical_x = mailboxes->core_info.absolute_logical_x;
-    my_logical_y = mailboxes->core_info.absolute_logical_y;
-    my_sub_device_x = 0xab;
-    my_sub_device_y = 0xcd;
+    my_logical_x_ = mailboxes->core_info.absolute_logical_x;
+    my_logical_y_ = mailboxes->core_info.absolute_logical_y;
+    my_relative_x_ = 0xab;
+    my_relative_y_ = 0xcd;
     risc_init();
     device_setup();
 
@@ -498,8 +498,8 @@ int main() {
 
             noc_index = launch_msg_address->kernel_config.brisc_noc_id;
             noc_mode = launch_msg_address->kernel_config.brisc_noc_mode;
-            my_sub_device_x = my_logical_x - launch_msg_address->kernel_config.sub_device_origin_x;
-            my_sub_device_y = my_logical_y - launch_msg_address->kernel_config.sub_device_origin_y;
+            my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
+            my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
 
             // re-initialize the NoCs
             uint8_t cmd_buf;

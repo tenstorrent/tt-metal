@@ -31,24 +31,15 @@ void kernel_main() {
         }
 
 #ifdef COORDS_ADDR
-        volatile uint32_t tt_l1_ptr* coords = (volatile uint32_t tt_l1_ptr*)COORDS_ADDR;
 #ifdef DATA_MOVEMENT
+        volatile uint32_t tt_l1_ptr* coords = (volatile uint32_t tt_l1_ptr*)COORDS_ADDR;
         coords[0] = my_x[noc_index];
         coords[1] = my_y[noc_index];
-#else
-#ifdef COMPUTE
-        coords[0] = 0;
-        coords[1] = 0;
-#else
-        coords[0] = 0xdeadbeef;
-        coords[1] = 0xdeadbeef;
+        coords[2] = get_absolute_logical_x();
+        coords[3] = get_absolute_logical_y();
+        coords[4] = get_relative_logical_x();
+        coords[5] = get_relative_logical_y();
 #endif
-#endif
-
-        coords[2] = my_logical_x;
-        coords[3] = my_logical_y;
-        coords[4] = my_sub_device_x;
-        coords[5] = my_sub_device_y;
 #endif
     }
     }

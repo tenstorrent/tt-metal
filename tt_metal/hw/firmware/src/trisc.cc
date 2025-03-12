@@ -74,18 +74,6 @@ constexpr bool cb_init_write = true;
 constexpr bool cb_init_write = false;
 #endif
 
-// Logical X coordinate relative to the physical origin. Set during FW initialization.
-uint8_t my_logical_x __attribute__((used));
-
-// Logical Y coordinate relative to the physical origin. Set during FW initialization.
-uint8_t my_logical_y __attribute__((used));
-
-// Logical X coordinate relative to the sub device origin. Updated by the launch message for the kernel.
-uint8_t my_sub_device_x __attribute__((used));
-
-// Logical Y coordinate relative to the sub device origin. Updated by the launch message for the kernel.
-uint8_t my_sub_device_y __attribute__((used));
-
 using namespace ckernel;
 
 void init_sync_registers() {
@@ -111,11 +99,6 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < 64; i++) regfile[i] = 0;
 
     reset_cfg_state_id();
-
-    my_logical_x = mailboxes->core_info.absolute_logical_x;
-    my_logical_y = mailboxes->core_info.absolute_logical_y;
-    my_sub_device_x = 0xab;
-    my_sub_device_y = 0xcd;
 
     // Cleanup profiler buffer incase we never get the go message
     while (1) {
@@ -150,10 +133,9 @@ int main(int argc, char *argv[]) {
 
         rta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
             launch_msg->kernel_config.rta_offset[DISPATCH_CLASS_TENSIX_COMPUTE].rta_offset);
-        crta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
-            launch_msg->kernel_config.rta_offset[DISPATCH_CLASS_TENSIX_COMPUTE].crta_offset);
-        my_sub_device_x = my_logical_x - launch_msg->kernel_config.sub_device_origin_x;
-        my_sub_device_y = my_logical_y - launch_msg->kernel_config.sub_device_origin_y;
+        crta_l1_base =
+            (uint32_t tt_l1_ptr*)(kernel_config_base +
+                                  launch_msg->kernel_config.rta_offset[DISPATCH_CLASS_TENSIX_COMPUTE].crta_offset);
 
         WAYPOINT("R");
         int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::MATH0) + thread_id;

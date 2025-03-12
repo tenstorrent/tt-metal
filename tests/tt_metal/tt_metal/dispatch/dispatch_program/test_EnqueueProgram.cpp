@@ -1453,13 +1453,6 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixIncrementRuntimeArgsSanityMul
     }
 }
 
-// Ensure the compute core can access their own logical coordinate. Same binary enqueued to multiple cores.
-TEST_F(CommandQueueSingleCardProgramFixture, TestLogicalCoordinatesCompute) {
-    for (IDevice* device : devices_) {
-        local_test_functions::test_my_coordinates(device, tt::RISCV::COMPUTE);
-    }
-}
-
 // Ensure the data movement core can access their own logical coordinate. Same binary enqueued to multiple cores.
 TEST_F(CommandQueueSingleCardProgramFixture, TestLogicalCoordinatesDataMovement) {
     for (IDevice* device : devices_) {
@@ -1472,14 +1465,6 @@ TEST_F(CommandQueueSingleCardProgramFixture, TestLogicalCoordinatesDataMovement)
 TEST_F(CommandQueueSingleCardProgramFixture, TestLogicalCoordinatesEth) {
     for (IDevice* device : devices_) {
         local_test_functions::test_my_coordinates(device, tt::RISCV::ERISC);
-    }
-}
-
-// Ensure the compute core can access their own logical coordinate. Same binary enqueued to multiple cores.
-TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TestLogicalCoordinatesCompute) {
-    for (IDevice* device : devices_) {
-        local_test_functions::test_my_coordinates(device, tt::RISCV::COMPUTE);
-        local_test_functions::test_my_coordinates(device, tt::RISCV::COMPUTE, 1);
     }
 }
 

@@ -42,18 +42,6 @@ extern uint8_t my_x[NUM_NOCS];
 // Virtual Y coordinate
 extern uint8_t my_y[NUM_NOCS];
 
-// Logical X coordinate relative to the physical origin.
-extern uint8_t my_logical_x;
-
-// Logical Y coordinate relative to the physical origin.
-extern uint8_t my_logical_y;
-
-// Logical X coordinate relative to the sub device origin.
-extern uint8_t my_sub_device_x;
-
-// Logical Y coordinate relative to the sub device origin.
-extern uint8_t my_sub_device_y;
-
 inline void WRITE_REG(uint32_t addr, uint32_t val) {
     volatile tt_reg_ptr uint32_t* ptr = (volatile tt_reg_ptr uint32_t*)addr;
     ptr[0] = val;
