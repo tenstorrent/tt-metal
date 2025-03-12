@@ -91,4 +91,5 @@ enum SfpuType {
     cumsum,
     fill,
     prelu,
+    round,
 };

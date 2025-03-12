@@ -21,6 +21,7 @@ void validate_supported_arch_dtype(
         case UnaryOpType::REMAINDER:
         case UnaryOpType::FLOOR:
         case UnaryOpType::CEIL:
+        case UnaryOpType::ROUND:
         case UnaryOpType::LEFT_SHIFT:
         case UnaryOpType::RIGHT_SHIFT:
             TT_FATAL(

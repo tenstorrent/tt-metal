@@ -64,6 +64,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::REMAINDER: return "SFPU_OP_REMAINDER_INCLUDE";
         case UnaryOpType::FMOD: return "SFPU_OP_FMOD_INCLUDE";
         case UnaryOpType::FILL: return "SFPU_OP_FILL_INCLUDE";
+        case UnaryOpType::ROUND: return "SFPU_OP_ROUND_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -77,6 +78,9 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
         case UnaryOpType::FILL:
             op_init_and_name = {
                 "fill_tile_init();", fmt::format("fill_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            break;
+        case UnaryOpType::ROUND:
+            op_init_and_name = {"round_tile_init();", fmt::format("round_tile({}, {});", idst, (int)param0)};
             break;
         case UnaryOpType::RELU_MAX:
             op_init_and_name = {
