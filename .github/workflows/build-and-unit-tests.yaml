@@ -169,5 +169,3 @@ jobs:
           rm -rf /__w/tt-metal/tt-metal/docker-job
           echo "post rm"
           ls -al /__w/tt-metal/tt-metal
-
-
