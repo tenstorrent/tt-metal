@@ -9,7 +9,7 @@
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernel_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
-#include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 
 inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
@@ -70,31 +70,44 @@ void kernel_main() {
             ? num_pages_per_packet
             : input_shard_cores_per_device * tiles_per_core_width % num_pages_per_packet;
 
+    DPRINT << "num_packets_total_per_device: " << num_packets_total_per_device << ENDL();
+    DPRINT << "last_packet_num_pages: " << last_packet_num_pages << ENDL();
+    DPRINT << "input_shard_cores_per_device: " << input_shard_cores_per_device << ENDL();
+    DPRINT << "tiles_per_core_width: " << tiles_per_core_width << ENDL();
+    DPRINT << "num_pages_per_packet: " << num_pages_per_packet << ENDL();
+    DPRINT << "num_devices: " << num_devices << ENDL();
+    DPRINT << "page_size_bytes: " << page_size_bytes << ENDL();
+    DPRINT << "output_cores_per_device: " << output_cores_per_device << ENDL();
+
     constexpr uint32_t device_order[num_devices - 1] =
         DEVICE_ORDER;  // this is code gen'd in the program factory using the defines
-    constexpr uint32_t receiver_core_for_device[num_devices][2] = DEVICE_CORE_HANDLES;
+    constexpr uint32_t receiver_core_for_device[num_devices][2] = RECEIVER_CORE_XY;
     constexpr uint32_t input_core_xy[input_tensor_cores][2] = INPUT_CORE_XY;
     constexpr uint32_t output_core_xy[output_cores_per_device][2] = OUTPUT_CORE_XY;
 
-    uint32_t receiver_semaphore = get_arg_val<uint32_t>(rt_arg_idx++);
-    uint32_t local_receiver_semaphore = get_arg_val<uint32_t>(rt_arg_idx++);
-    bool sender_core = get_arg_val<uint32_t>(rt_arg_idx++);
-    bool receiver_core = get_arg_val<uint32_t>(rt_arg_idx++);
+    uint32_t receiver_semaphore_address = get_arg_val<uint32_t>(rt_arg_idx++);
+    uint32_t local_semaphore_address = get_semaphore(get_arg_val<uint32_t>(rt_arg_idx++));
+    bool sender_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
+    bool receiver_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t receiver_for_device_id = get_arg_val<uint32_t>(rt_arg_idx++);
 
-    DPRINT << "Fabric connection opened " << ENDL();
-    DPRINT << "semaphore value: " << (*((uint32_t*)(receiver_semaphore))) << ENDL();
-    DPRINT << "my_x[0]: " << (uint32_t)my_x[0] << " my_y[0]: " << (uint32_t)my_y[0] << ENDL();
+    DPRINT << "receiver_semaphore_address " << receiver_semaphore_address << " local_semaphore_address "
+           << local_semaphore_address << ENDL();
+    DPRINT << "receiver_semaphore_address value: " << *(uint32_t*)receiver_semaphore_address
+           << " local_semaphore_address value: " << *(uint32_t*)local_semaphore_address << ENDL();
+    DPRINT << "Is receiver_core: " << (uint32_t)receiver_core << " Is sender_core: " << (uint32_t)sender_core << ENDL();
+
     if (sender_core) {
         auto packet_header_buffer_addr = get_write_ptr(packet_header_cb_id);
         auto* unicast_packet_header = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
         auto* sem_inc_packet_header =
             reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_addr + sizeof(PACKET_HEADER_TYPE));
-
+        DPRINT << "Opening fabric connection" << ENDL();
         auto fabric_connection = FabricConnectionManager::build_from_args(rt_arg_idx);
         if (fabric_connection.is_logically_connected()) {
             fabric_connection.open();
         }
+        DPRINT << "Fabric connection opened " << ENDL();
         for (auto target_device_id : device_order) {
             if (target_device_id == chip_id) {
                 break;
@@ -114,16 +127,18 @@ void kernel_main() {
             for (uint32_t packet = 0; packet < num_packets_total_per_device; packet++) {
                 uint32_t curr_packet_num_pages =
                     packet == num_packets_total_per_device - 1 ? last_packet_num_pages : num_pages_per_packet;
-
+                DPRINT << "curr_packet_num_pages: " << curr_packet_num_pages << ENDL();
                 cb_wait_front(fabric_sender_cb_id, curr_packet_num_pages);
+                DPRINT << "cb_wait_front done" << ENDL();
                 auto sender_l1_addr = get_write_ptr(fabric_sender_cb_id);
-                print_tiles(fabric_sender_cb_id, 0, tiles_per_core_width, true);
+                print_tiles(fabric_sender_cb_id, 0, curr_packet_num_pages, true);
 
                 uint64_t noc0_dest_noc_addr =
                     get_noc_addr(receiver_core_x, receiver_core_y, base_receiver_l1_addr + packet_offset);
 
                 unicast_packet_header->to_noc_unicast_write(
-                    tt::fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, curr_packet_num_pages * page_size_bytes);
+                    tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr},
+                    curr_packet_num_pages * page_size_bytes);
 
                 fabric_conn.wait_for_empty_write_slot();
                 fabric_conn.send_payload_without_header_non_blocking_from_address(
@@ -135,11 +150,12 @@ void kernel_main() {
                 cb_pop_front(fabric_sender_cb_id, curr_packet_num_pages);
                 packet_offset += curr_packet_num_pages;
             }
+            DPRINT << "Finished sending packets" << ENDL();
 
             // 2. mcast to current core 6,6 for now
-            uint64_t sem_noc_addr = safe_get_noc_addr(receiver_core_x, receiver_core_y, receiver_semaphore, 0);
+            uint64_t sem_noc_addr = safe_get_noc_addr(receiver_core_x, receiver_core_y, receiver_semaphore_address, 0);
 
-            sem_inc_packet_header->to_noc_unicast_atomic_inc(tt::fabric::NocUnicastAtomicIncCommandHeader{
+            sem_inc_packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
                 sem_noc_addr,
                 static_cast<uint16_t>(1),  // increment 1
                 32});
@@ -152,12 +168,18 @@ void kernel_main() {
             if (fabric_connection.is_logically_connected()) {
                 fabric_connection.close();
             }
+            DPRINT << "Closing fabric connection" << ENDL();
         }
     } else if (receiver_core) {
+        DPRINT << "Receiver for device id: " << receiver_for_device_id << " chip_id: " << chip_id << ENDL();
+        if (receiver_for_device_id == chip_id) {
+            // If I'm the receiver for the current device, I don't need to do anything as all the data is already here
+            return;
+        }
         uint32_t base_receiver_l1_addr = get_read_ptr(fabric_receiver_cb_id);
 
         uint32_t curr_output_core = 0;
-        while (*(uint32_t*)receiver_semaphore < 1) {
+        while (*(uint32_t*)receiver_semaphore_address < 1) {
             // Wait for the semaphore to be set
             DPRINT << "Waiting for semaphore to be set" << ENDL();
         }
@@ -174,12 +196,12 @@ void kernel_main() {
             uint32_t noc_accumulator_addr =
                 get_noc_addr(output_core_x, output_core_y, accumulator_l1_addr + output_tile_offset);
             uint64_t local_receiver_semaphore_noc_addr =
-                get_noc_addr(output_core_x, output_core_y, local_receiver_semaphore);
+                get_noc_addr(output_core_x, output_core_y, local_semaphore_address);
             noc_async_write(base_receiver_l1_addr + tile * page_size_bytes, noc_accumulator_addr, page_size_bytes);
             noc_async_write_barrier();
             noc_semaphore_inc(local_receiver_semaphore_noc_addr, 1);  // mcast inc is needed, this will tank latency
         }
-        *(uint32_t*)receiver_semaphore = 0;
+        *(uint32_t*)receiver_semaphore_address = 0;
     } else {
         // Do nothing
         // win

@@ -64,14 +64,20 @@ void kernel_main() {
 
     constexpr uint32_t device_order[num_devices - 1] =
         DEVICE_ORDER;  // this is code gen'd in the program factory using the defines
-    constexpr uint32_t receiver_core_for_device[num_devices][2] = DEVICE_CORE_HANDLES;
+    constexpr uint32_t receiver_core_for_device[num_devices][2] = RECEIVER_CORE_XY;
     constexpr uint32_t input_core_xy[input_tensor_cores][2] = INPUT_CORE_XY;
     constexpr uint32_t output_core_xy[ncores_output][2] = OUTPUT_CORE_XY;
 
-    uint32_t semaphore_address = get_arg_val<uint32_t>(rt_arg_idx++);
-    uint32_t local_semaphore_address = get_arg_val<uint32_t>(rt_arg_idx++);
+    uint32_t receiver_semaphore_address = get_arg_val<uint32_t>(rt_arg_idx++);
+    uint32_t local_semaphore_address = get_semaphore(get_arg_val<uint32_t>(rt_arg_idx++));
     bool sender_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
     bool worker_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
+
+    DPRINT << "receiver_semaphore_address " << receiver_semaphore_address << " local_semaphore_address "
+           << local_semaphore_address << ENDL();
+    DPRINT << "receiver_semaphore_address value: " << *(uint32_t*)receiver_semaphore_address
+           << " local_semaphore_address value: " << *(uint32_t*)local_semaphore_address << ENDL();
+    DPRINT << "sender_core: " << (uint32_t)sender_core << " worker_core: " << (uint32_t)worker_core << ENDL();
 
     bool receiver_core = true;
     uint32_t receiver_for_device_id = 0;
@@ -91,8 +97,9 @@ void kernel_main() {
                 uint32_t x = input_core_xy[curr_core][x_index];
                 uint32_t y = input_core_xy[curr_core][y_index];
                 uint64_t shard_noc_addr = get_noc_addr(x, y, bank_base_address);
-
+                DPRINT << "Reserving back " << tiles_per_core_width << " tiles for fabric sender cb" << ENDL();
                 cb_reserve_back(fabric_sender_cb_id, tiles_per_core_width);
+                DPRINT << "Reserving back done" << ENDL();
                 uint32_t sender_read_addr = get_read_ptr(fabric_sender_cb_id);
                 noc_async_read(shard_noc_addr, sender_read_addr, tiles_per_core_width * page_size_bytes);
                 noc_async_read_barrier();
@@ -100,7 +107,9 @@ void kernel_main() {
                 DPRINT << "Pushing back " << tiles_per_core_width << " tiles to fabric sender cb" << ENDL();
                 cb_push_back(fabric_sender_cb_id, tiles_per_core_width);
             }
+            DPRINT << "Finished pushing back all tiles to fabric sender cb for device " << target_device_id << ENDL();
         }
+        DPRINT << "Finished pushing back all tiles to fabric sender cb" << ENDL();
     } else if (worker_core) {
         while (*(uint32_t*)local_semaphore_address != num_devices - 1) {
             // Wait for the semaphore to be set
