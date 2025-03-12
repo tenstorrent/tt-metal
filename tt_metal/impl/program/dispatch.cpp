@@ -413,7 +413,7 @@ void insert_empty_program_dispatch_preamble_cmd(ProgramCommandSequence& program_
 
 void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDeviceId sub_device_id, IDevice* device) {
     // Initialize stall command sequences for this program.
-    auto dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
+    auto dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
     auto dispatch_core_type = dispatch_core_config.get_core_type();
     uint32_t dispatch_message_addr =
         DispatchMemMap::get(dispatch_core_type)
@@ -534,7 +534,7 @@ void assemble_runtime_args_commands(
     ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device) {
     static const uint32_t packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);
     NOC noc_index = k_dispatch_downstream_noc;
-    auto dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
+    auto dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
     auto dispatch_core_type = dispatch_core_config.get_core_type();
     const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
 
@@ -787,7 +787,7 @@ void assemble_runtime_args_commands(
 void assemble_device_commands(
     ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device, SubDeviceId sub_device_id) {
     DeviceCommandCalculator calculator;
-    auto dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
+    auto dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
     auto dispatch_core_type = dispatch_core_config.get_core_type();
     NOC noc_index = k_dispatch_downstream_noc;
     const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
@@ -1853,7 +1853,7 @@ void reset_worker_dispatch_state_on_device(
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
     bool clear_count = true;
     DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
-    const auto& dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
+    const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
     uint32_t dispatch_message_base_addr =
         DispatchMemMap::get(dispatch_core_type)

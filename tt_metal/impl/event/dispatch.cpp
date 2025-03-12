@@ -57,7 +57,7 @@ void issue_record_event_commands(
 
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
 
-    auto dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
+    auto dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
 
     uint32_t dispatch_message_base_addr =
@@ -127,7 +127,7 @@ void issue_wait_for_event_commands(
     uint32_t cmd_sequence_sizeB =
         hal.get_alignment(HalMemType::HOST);  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
 
-    auto dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
+    auto dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
 
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);

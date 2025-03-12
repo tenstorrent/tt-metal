@@ -227,7 +227,7 @@ int main(int argc, char** argv) {
         uint32_t hugepage_size = tt::Cluster::instance().get_host_channel_size(mmio_device_id, channel);
         uint32_t host_write_ptr = 0;
 
-        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device_id);
+        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type();
         uint32_t prefetch_q_base = DispatchMemMap::get(dispatch_core_type)
                                        .get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
 

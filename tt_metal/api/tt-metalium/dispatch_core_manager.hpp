@@ -154,9 +154,9 @@ class dispatch_core_manager {
 
     const tt_cxy_pair& dispatcher_s_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id);
 
-    CoreType get_dispatch_core_type(chip_id_t device_id);
+    CoreType get_dispatch_core_type();
 
-    DispatchCoreConfig get_dispatch_core_config(chip_id_t device_id);
+    DispatchCoreConfig get_dispatch_core_config();
 
     // TODO: remove this API, we should read the core descriptor once, should not have backdoors like this to add cores
     void add_dispatch_core_to_device(chip_id_t device_id, const CoreCoord& core);
@@ -192,7 +192,7 @@ private:
     std::unordered_map<chip_id_t, std::unordered_map<uint16_t, std::unordered_map<uint8_t, dispatch_core_placement_t>>>
         dispatch_core_assignments;
     std::unordered_map<chip_id_t, std::list<CoreCoord>> available_dispatch_cores_by_device;
-    std::unordered_map<chip_id_t, DispatchCoreConfig> dispatch_core_config_by_device;  //TODO: dispatch_core_type_by_device should probably be for all devices, not per device
+    DispatchCoreConfig dispatch_core_config_;
     uint8_t num_hw_cqs;
     static dispatch_core_manager *_inst;
 
