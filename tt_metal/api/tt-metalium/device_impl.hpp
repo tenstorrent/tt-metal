@@ -24,8 +24,6 @@
 
 namespace tt::tt_metal {
 
-inline namespace v0 {
-
 // A physical PCIexpress Tenstorrent device
 class Device : public IDevice {
 public:
@@ -274,5 +272,4 @@ private:
         false;  // To avoid spam with warnings about calling Device methods when it's not initialized.
 };
 
-}  // namespace v0
 }  // namespace tt::tt_metal

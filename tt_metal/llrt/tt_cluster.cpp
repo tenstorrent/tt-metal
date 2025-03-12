@@ -272,8 +272,7 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
         const std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_);
         // umd::Cluster::detect_available_device_ids only lists MMIO device ids, since we need remote chip ids
         // generate the cluster desc and pull chip ids from there
-        auto temp_cluster_desc =
-            tt_ClusterDescriptor::create_from_yaml(tt_ClusterDescriptor::get_cluster_descriptor_file_path());
+        auto temp_cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
         std::unordered_set<chip_id_t> all_chips = temp_cluster_desc->get_all_chips();
         std::set<chip_id_t> all_chips_set(all_chips.begin(), all_chips.end());
         // This is the target/desired number of mem channels per arch/device.
@@ -347,6 +346,32 @@ std::unordered_map<chip_id_t, eth_coord_t> Cluster::get_user_chip_ethernet_coord
         });
     }
     return user_chip_ethernet_coordinates;
+}
+
+size_t Cluster::number_of_user_devices() const {
+    if (this->cluster_type_ == ClusterType::TG) {
+        const auto& chips = this->cluster_desc_->get_all_chips();
+        return std::count_if(chips.begin(), chips.end(), [&](const auto& id) {
+            return this->cluster_desc_->get_board_type(id) == BoardType::GALAXY;
+        });
+    } else {
+        return this->cluster_desc_->get_number_of_chips();
+    }
+}
+
+std::unordered_set<chip_id_t> Cluster::user_exposed_chip_ids() const {
+    if (this->cluster_type_ == ClusterType::TG) {
+        std::unordered_set<chip_id_t> galaxy_boards;
+        const auto& chips = this->cluster_desc_->get_all_chips();
+        for (const auto& id : chips) {
+            if (this->cluster_desc_->get_board_type(id) == BoardType::GALAXY) {
+                galaxy_boards.insert(id);
+            }
+        }
+        return galaxy_boards;
+    } else {
+        return this->cluster_desc_->get_all_chips();
+    }
 }
 
 const metal_SocDescriptor &Cluster::get_soc_desc(chip_id_t chip) const {

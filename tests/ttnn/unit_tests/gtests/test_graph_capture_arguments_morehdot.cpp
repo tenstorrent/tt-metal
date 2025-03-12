@@ -99,7 +99,7 @@ TEST_P(TestGraphCaptureArgumentsMorehDot, MorehDot) {
     EXPECT_EQ(operation3.arguments[0], "Shape([1, 1, 1, 1])");
     EXPECT_EQ(operation3.arguments[1], "DataType::BFLOAT16");
     EXPECT_EQ(operation3.arguments[2], "Tile");
-    EXPECT_EQ(operation3.arguments[3], "[ unsupported type , std::__1::reference_wrapper<tt::tt_metal::v0::IDevice*>]");
+    EXPECT_EQ(operation3.arguments[3], "[ unsupported type , std::__1::reference_wrapper<tt::tt_metal::IDevice*>]");
     EXPECT_EQ(
         operation3.arguments[4],
         "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::"

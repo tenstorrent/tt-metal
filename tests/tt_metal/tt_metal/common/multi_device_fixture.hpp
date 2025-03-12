@@ -91,6 +91,7 @@ protected:
     enum class MeshDeviceType {
         N300,
         T3000,
+        TG,
     };
 
     struct Config {
@@ -128,7 +129,8 @@ protected:
                 magic_enum::enum_name(*config_.mesh_device_type));
         }
         // Use ethernet dispatch for more than 1 CQ on T3K/N300
-        auto core_type = (config_.num_cqs >= 2) ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
+        auto core_type = (config_.num_cqs >= 2 and *mesh_device_type != MeshDeviceType::TG) ? DispatchCoreType::ETH
+                                                                                            : DispatchCoreType::WORKER;
         mesh_device_ = MeshDevice::create(
             MeshDeviceConfig{.mesh_shape = get_mesh_shape(*mesh_device_type)},
             0,
@@ -153,6 +155,7 @@ private:
         switch (mesh_device_type) {
             case MeshDeviceType::N300: return MeshShape(2, 1);
             case MeshDeviceType::T3000: return MeshShape(2, 4);
+            case MeshDeviceType::TG: return MeshShape(4, 8);
             default: TT_FATAL(false, "Querying shape for unspecified Mesh Type.");
         }
     }
@@ -162,6 +165,7 @@ private:
         switch (num_devices) {
             case 2: return MeshDeviceType::N300;
             case 8: return MeshDeviceType::T3000;
+            case 32: return MeshDeviceType::TG;
             default: return std::nullopt;
         }
     }
@@ -181,11 +185,6 @@ protected:
     GenericMultiCQMeshDeviceFixture() : MeshDeviceFixtureBase(Config{.num_cqs = 2}) {}
 };
 
-class GenericMeshDeviceTraceFixture : public MeshDeviceFixtureBase {
-protected:
-    GenericMeshDeviceTraceFixture() : MeshDeviceFixtureBase(Config{.num_cqs = 1, .trace_region_size = (64 << 20)}) {}
-};
-
 // Fixtures that specify the mesh device type explicitly.
 // The associated test will be run if the cluster topology matches
 // what is specified.
@@ -199,6 +198,11 @@ protected:
     T3000MeshDeviceFixture() : MeshDeviceFixtureBase(Config{.mesh_device_type = MeshDeviceType::T3000}) {}
 };
 
+class TGMeshDeviceFixture : public MeshDeviceFixtureBase {
+protected:
+    TGMeshDeviceFixture() : MeshDeviceFixtureBase(Config{.mesh_device_type = MeshDeviceType::TG}) {}
+};
+
 class N300MultiCQMeshDeviceFixture : public MeshDeviceFixtureBase {
 protected:
     N300MultiCQMeshDeviceFixture() :
@@ -209,6 +213,12 @@ class T3000MultiCQMeshDeviceFixture : public MeshDeviceFixtureBase {
 protected:
     T3000MultiCQMeshDeviceFixture() :
         MeshDeviceFixtureBase(Config{.mesh_device_type = MeshDeviceType::T3000, .num_cqs = 2}) {}
+};
+
+class TGMultiCQMeshDeviceFixture : public MeshDeviceFixtureBase {
+protected:
+    TGMultiCQMeshDeviceFixture() :
+        MeshDeviceFixtureBase(Config{.mesh_device_type = MeshDeviceType::TG, .num_cqs = 2}) {}
 };
 
 }  // namespace tt::tt_metal

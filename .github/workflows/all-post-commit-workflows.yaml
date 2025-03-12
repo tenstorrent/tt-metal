@@ -17,7 +17,6 @@ on:
           - Release
           - Debug
           - RelWithDebInfo
-          - CI
       with-retries:
         default: false
         type: boolean

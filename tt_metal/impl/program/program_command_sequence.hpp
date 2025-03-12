@@ -14,11 +14,7 @@ struct launch_msg_t;
 
 namespace tt::tt_metal {
 
-inline namespace v0 {
-
 class CircularBuffer;
-
-}  // namespace v0
 
 constexpr uint32_t UncachedStallSequenceIdx = 0;
 constexpr uint32_t CachedStallSequenceIdx = 1;
