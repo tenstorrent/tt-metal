@@ -101,6 +101,7 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> groupe
     auto out_k = autograd::create_tensor(k);
     auto out_v = autograd::create_tensor(v);
 
+    // FIXME: fix q grad fn
     autograd::GradFunction grad_q = [out_q, out_k, out_v, qs, kvs]() {
         auto grad_q = out_q->get_grad();
         auto grad_k = out_k->get_grad();
@@ -111,9 +112,10 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> groupe
         grad_v = ttnn::experimental::nlp_concat_heads(grad_v);
         qs->add_grad(grad_q);
         auto kvs_grad = ttnn::concat(std::vector<ttnn::Tensor>({grad_k, grad_v}), /* dim */ 3);
-        kvs->add_grad(kvs_grad);
+        kvs->add_grad(kvs_grad);  // FIXME: correct? have to think unfortunately.
     };
 
+    // FIXME: check links, they look ok intuitively but need to be sure.
     auto links_q = autograd::get_links(qs, kvs);
     // grad_q function depends on gradients of q, k and v
     out_q->set_node(autograd::ctx().add_backward_node(std::move(grad_q), links_q));
@@ -122,6 +124,36 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> groupe
     out_k->set_node(autograd::ctx().add_backward_node([]() {}, links_kv));
     out_v->set_node(autograd::ctx().add_backward_node([]() {}, links_kv));
     return {out_q, out_k, out_v};
+}
+
+autograd::TensorPtr grouped_heads_fusion(const autograd::TensorPtr& all_heads) {
+    auto all_heads_shape = all_heads->get_value().get_logical_shape();
+
+    uint32_t batch_size = all_heads_shape[0];
+    uint32_t num_groups = all_heads_shape[1];
+    uint32_t sequence_length = all_heads_shape[2];
+    uint32_t embedding_dim = all_heads_shape[3];
+
+    // (B, G, S, E/G) -> (B, 1, S, E)
+    auto fused_heads = ttnn::experimental::nlp_concat_heads(all_heads->get_value());
+    auto out = autograd::create_tensor(fused_heads);
+
+    autograd::GradFunction grad = [out, all_heads, num_groups, batch_size, sequence_length, embedding_dim]() {
+        auto grad_output = out->get_grad();
+        // (B, 1, S, E) -> (B, 1, E, S)
+        auto grad_result = ttnn::transpose(grad_output, -2, -1);
+        // (B, 1, E, S) -> (B, H, E/H, S)
+        grad_result =
+            ttnn::reshape(grad_result, core::create_shape({batch_size, num_groups, embedding_dim, sequence_length}));
+        // (B, G, S, E/G) -> (B, 1, S, E)
+        grad_result = ttnn::transpose(grad_result, -2, -1);
+        all_heads->add_grad(grad_result);
+    };
+
+    auto links = autograd::get_links(all_heads);
+    out->set_node(ttml::autograd::ctx().add_backward_node(std::move(grad), links));
+
+    return out;
 }
 
 }  // namespace ttml::ops
