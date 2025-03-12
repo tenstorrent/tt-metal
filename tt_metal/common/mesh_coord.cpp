@@ -8,8 +8,8 @@
 
 #include <assert.hpp>
 #include <mesh_coord.hpp>
-#include <reflection.hpp>
-#include <span.hpp>
+#include <tt_stl/reflection.hpp>
+#include <tt_stl/span.hpp>
 
 namespace tt::tt_metal::distributed {
 namespace {
