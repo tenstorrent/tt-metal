@@ -7,6 +7,7 @@
 #include <program_impl.hpp>
 #include "core_coord.hpp"
 #include "mesh_graph.hpp"
+#include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "tt_cluster.hpp"
 

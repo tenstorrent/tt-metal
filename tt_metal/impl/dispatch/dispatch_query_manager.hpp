@@ -4,7 +4,7 @@
 
 #include <mutex>
 
-#include <dispatch_core_manager.hpp>
+#include "dispatch_core_manager.hpp"
 
 namespace tt::tt_metal {
 

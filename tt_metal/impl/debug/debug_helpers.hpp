@@ -7,7 +7,9 @@
 #include <set>
 
 #include <tt-metalium/dev_msgs.h>
+#include <tt-metalium/core_descriptor.hpp>
 #include "hostdevcommon/dprint_common.h"
+#include "impl/dispatch/dispatch_core_manager.hpp"
 #include <device.hpp>
 
 // Helper function for comparing CoreDescriptors for using in sets.

@@ -31,7 +31,7 @@
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
-#include <dispatch_core_manager.hpp>
+#include "dispatch_core_manager.hpp"
 #include <event.hpp>
 #include <kernel.hpp>
 #include "tt_metal/impl/program/dispatch.hpp"

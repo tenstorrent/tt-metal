@@ -14,7 +14,6 @@
 
 #include "env_lib.hpp"
 
-#include "dispatch_core_manager.hpp"
 #include "dispatch_settings.hpp"
 #include "dprint_server.hpp"
 #include "host_api.hpp"
@@ -23,6 +22,7 @@
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
+#include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 

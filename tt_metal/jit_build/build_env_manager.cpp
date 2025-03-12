@@ -5,6 +5,7 @@
 #include "build_env_manager.hpp"
 #include <command_queue_interface.hpp>
 #include "tt_cluster.hpp"
+#include "impl/dispatch/dispatch_core_manager.hpp"
 
 namespace tt::tt_metal {
 

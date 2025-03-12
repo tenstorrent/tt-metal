@@ -5,7 +5,7 @@
 #include <tt-metalium/command_queue_common.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
 #include <tt-metalium/dispatch_mem_map.hpp>
-#include <tt-metalium/dispatch_core_manager.hpp>
+#include "dispatch_core_manager.hpp"
 
 #include "tt_cluster.hpp"
 
