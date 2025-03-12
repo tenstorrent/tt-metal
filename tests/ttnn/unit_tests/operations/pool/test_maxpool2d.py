@@ -435,3 +435,36 @@ def test_run_max_pool_mem_config(device, dtype, input_spec, memory_config):
         ceil_mode=ceil_mode,
         memory_config=memory_config,
     )
+
+
+@pytest.mark.parametrize(
+    "act_shape, kernel_size, padding, stride, ceil_mode",
+    [
+        ((1, 64, 256, 256), (2, 2), (0, 0), (2, 2), False),
+        ((1, 128, 128, 128), (2, 2), (0, 0), (2, 2), False),
+        ((1, 256, 64, 64), (2, 2), (0, 0), (2, 2), False),
+        ((1, 512, 32, 32), (2, 2), (0, 0), (2, 2), False),
+    ],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("dilation", ((1, 1),))  ## default
+@pytest.mark.parametrize("memory_config", [ttnn.L1_MEMORY_CONFIG])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_vgg_unet_maxpool(act_shape, kernel_size, padding, stride, dilation, ceil_mode, device, dtype, memory_config):
+    run_max_pool2d(
+        act_shape[0],
+        act_shape[1],
+        act_shape[2],
+        act_shape[3],
+        kernel_size[0],
+        kernel_size[1],
+        stride[0],
+        stride[1],
+        padding[0],
+        padding[1],
+        dilation[0],
+        dilation[1],
+        dtype,
+        device,
+        memory_config=memory_config,
+    )

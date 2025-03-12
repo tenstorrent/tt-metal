@@ -2852,3 +2852,80 @@ def test_block_sharding_relu_act_block_h(
         shard_layout=shard_layout,
         activation=activation,
     )
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, input_channels, output_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, groups, shard_layout, config_override, use_shallow_conv_variant",
+    (
+        (1 , 3 , 64 , 256 , 256 , 3 , 3 , 1 , 1 , 1 , 1 , 1 , None, None , False),
+        (1 , 64 , 64 , 256 , 256 , 3 , 3 , 1 , 1 , 1 , 1 , 1 , None, None , False),
+        (1 , 64 , 128 , 128 , 128 , 3 , 3 , 1 , 1 , 1 , 1 , 1 , None, None , False),
+        (1 , 128 , 128 , 128 , 128 , 3 , 3 , 1 , 1 , 1 , 1 , 1 , None, None , False),
+        (1 , 128 , 256 , 64 , 64 , 3 , 3 , 1 , 1 , 1 , 1 , 1 , None, None , False),
+        (1 , 256 , 256 , 64 , 64 , 3 , 3 , 1 , 1 , 1 , 1 , 1 , None, None , False),
+        (1 , 256 , 512 , 32 , 32 , 3 , 3 , 1 , 1 , 1 , 1 , 1 , None, None , False),
+        (1 , 512 , 512 , 32 , 32 , 3 , 3 , 1 , 1 , 1 , 1 , 1 , None, None , False),
+        (1 , 512 , 512 , 16 , 16 , 3 , 3 , 1 , 1 , 1 , 1 , 1 , None, None , False),
+    ),
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat16],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat16, ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+@skip_for_grayskull()
+def test_conv_for_vgg_unet(
+    device,
+    torch_tensor_map,
+    use_program_cache,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    groups,
+    shard_layout,
+    config_override,
+    use_shallow_conv_variant,
+    output_layout,
+):
+    if device.core_grid.y == 7:
+        pytest.skip("This test is not supported for N300")
+    run_conv(
+        device,
+        torch_tensor_map,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        config_override,
+        shard_layout=shard_layout,
+        use_shallow_conv_variant=use_shallow_conv_variant,
+        groups=groups,
+        output_layout=output_layout,
+        has_bias=False,
+    )

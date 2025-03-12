@@ -245,3 +245,77 @@ def test_simple_conv_t2d(
         auto_shard=True,
         mirror_kernel=mirror_kernel,
     )
+
+
+@skip_for_grayskull()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, input_channels, output_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w, config, shard_layout",
+    (
+        (1, 512, 512, 16, 16, 2, 2, 2, 2, 0, 0, 0, 0, None, None),
+        (1, 512, 256, 32, 32, 2, 2, 2, 2, 0, 0, 0, 0, None, None),
+        (1, 256, 128, 64, 64, 2, 2, 2, 2, 0, 0, 0, 0, None, None),
+        (1, 128, 64, 128, 128, 2, 2, 2, 2, 0, 0, 0, 0, None, None),
+    ),
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [
+        ttnn.bfloat16,
+    ],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
+    ],
+)
+@pytest.mark.parametrize("mirror_kernel", [True, False])
+def test_vgg_unet_deconv(
+    device,
+    use_program_cache,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    out_pad_h,
+    out_pad_w,
+    config,
+    shard_layout,
+    mirror_kernel,
+):
+    if device.core_grid.y != 8:
+        pytest.skip("Needs 8x8 Grid")
+    run_conv_transpose2d(
+        device,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        activations_dtype=activations_dtype,
+        weights_dtype=weights_dtype,
+        batch_size=batch_size,
+        output_channels=output_channels,
+        input_channels=input_channels,
+        input_height=input_height,
+        input_width=input_width,
+        filter_height=filter_height,
+        filter_width=filter_width,
+        stride_h=stride_h,
+        stride_w=stride_w,
+        pad_h=pad_h,
+        pad_w=pad_w,
+        out_pad_h=out_pad_h,
+        out_pad_w=out_pad_w,
+        config_override=config,
+        shard_layout=shard_layout,
+        auto_shard=True,
+        mirror_kernel=mirror_kernel,
+    )
