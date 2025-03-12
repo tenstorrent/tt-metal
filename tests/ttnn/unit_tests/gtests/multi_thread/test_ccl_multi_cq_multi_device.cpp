@@ -26,7 +26,7 @@
 #include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include "ttnn/operations/ccl/erisc_datamover_builder.hpp"
+#include "ttnn/operations/ccl/erisc_datamover_builder_helper.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -192,7 +192,10 @@ TEST_F(T3kMultiDeviceMultiQueueFixture, AsyncExecutionWorksCQ0) {
 
     if (enable_persistent_fabric) {
         persistent_fabric_teardown_sequence(
-            devices, subdevice_managers, fabric_handle.value(), tt::fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
+            devices,
+            subdevice_managers,
+            fabric_handle.value(),
+            tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
     }
     for (auto device : devices) {
         ttnn::queue_synchronize(device->command_queue(op_cq_id));
@@ -370,7 +373,10 @@ TEST_F(T3kMultiDeviceMultiQueueFixture, AsyncExecutionWorksCQ0CQ1) {
 
     if (enable_persistent_fabric) {
         persistent_fabric_teardown_sequence(
-            devices, subdevice_managers, fabric_handle.value(), tt::fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
+            devices,
+            subdevice_managers,
+            fabric_handle.value(),
+            tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
     }
     for (auto device : devices) {
         ttnn::queue_synchronize(device->command_queue(op_cq_id));
