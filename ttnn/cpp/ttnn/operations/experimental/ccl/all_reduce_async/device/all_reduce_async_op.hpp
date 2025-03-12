@@ -97,6 +97,9 @@ uint32_t find_scatter_dim(const ttnn::Shape& input_tensor_padded_shape, size_t n
 }  // namespace all_reduce_async_detail
 }  // namespace ccl
 
+std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
+    size_t num_links, size_t num_workers_per_link, bool persistent_fabric_mode, const CoreRangeSet& available_cores);
+
 tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers(
     const Tensor& input_tensor,
     const Tensor& all_gather_output_tensor,
