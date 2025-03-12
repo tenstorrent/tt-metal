@@ -83,12 +83,13 @@ uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num1, uint32_t n
 
 // If shard width is tile width, and it is allowed to have half tile shard width, and we have enough cores to do it,
 // double number of cores
-static void set_shard_width_to_half_tile_if_possible(
-    uint32_t& num_cores, uint32_t channels_ntiles, uint32_t max_num_cores, bool width_shard_half_tile_possible) {
+static uint32_t set_shard_width_to_half_tile_if_possible(
+    uint32_t num_cores, uint32_t channels_ntiles, uint32_t max_num_cores, bool width_shard_half_tile_possible) {
     if (width_shard_half_tile_possible && (div_up(channels_ntiles, num_cores) == 1) &&
         (2 * num_cores <= max_num_cores)) {
-        num_cores *= 2;
+        return 2 * num_cores;
     }
+    return num_cores;
 }
 
 ParallelConfig determine_parallel_config(
@@ -136,7 +137,7 @@ ParallelConfig determine_parallel_config(
                 ? find_closest_largest_divisor_with_num_padding(
                       out_channels_ntiles, input_channles_ntiles, start_divisor_c)
                 : find_closest_largest_divisor(out_channels_ntiles, input_channles_ntiles, start_divisor_c);
-        set_shard_width_to_half_tile_if_possible(
+        num_cores_c = set_shard_width_to_half_tile_if_possible(
             num_cores_c, input_channles_ntiles, start_divisor_c, !is_shard_width_tile_multiple);
         uint32_t cores_x = block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_nhw : num_cores_c;
         uint32_t cores_y = block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_c : num_cores_nhw;
@@ -146,7 +147,7 @@ ParallelConfig determine_parallel_config(
         uint32_t num_cores_c = enable_channels_padding
                                    ? find_closest_largest_divisor_with_num_padding(input_channles_ntiles, max_num_cores)
                                    : find_closest_largest_divisor(input_channles_ntiles, max_num_cores);
-        set_shard_width_to_half_tile_if_possible(
+        num_cores_c = set_shard_width_to_half_tile_if_possible(
             num_cores_c, input_channles_ntiles, max_num_cores, !is_shard_width_tile_multiple);
         grid = tt::tt_metal::num_cores_to_corerangeset(num_cores_c, compute_grid_size, true);
     } else {
