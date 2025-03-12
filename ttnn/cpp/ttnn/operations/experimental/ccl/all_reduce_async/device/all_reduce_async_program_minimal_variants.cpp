@@ -126,6 +126,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
             output_cores.push_back(intersection.bounding_box());
         }
     }
+
     // output_cores_all is the bounding box of the output_tensor_cores but respecting boundaries of subdevice grids
     CoreRangeSet output_cores_all(output_cores);
 
