@@ -13,10 +13,61 @@
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
 #include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "cpp/ttnn/operations/ccl/sharding_addrgen_helper.hpp"
+#include <"tt_metal/api/>tt-metalium/core_coord.hpp>
 
 namespace ttnn::operations::experimental::ccl {
 
 namespace detail {
+CoreCoord next_core(const CoreCoord& current, const CoreCoord& grid_size, bool row_wise = true) {
+    CoreCoord next = current;
+    if (row_wise) {
+        // Move right, then down
+        next.x++;
+        if (next.x >= grid_size.x) {
+            next.x = 0;
+            next.y++;
+            if (next.y >= grid_size.y) {
+                next.y = 0;
+            }
+        }
+    } else {
+        // Move down, then right
+        next.y++;
+        if (next.y >= grid_size.y) {
+            next.y = 0;
+            next.x++;
+            if (next.x >= grid_size.x) {
+                next.x = 0;
+            }
+        }
+    }
+    return next;
+}
+
+// Get the next core in the core range set that is outside of the bounding box
+// This is used to get the next core to assign as a receiver worker
+CoreCoord next_core_bounded(const CoreRangeSet& range, const CoreCoord& grid_size, bool row_wise = true) {
+    // Get the bounding box of the range set and use its end coordinate
+    CoreRange bbox = range.bounding_box();
+    return next_core(bbox.end_coord, grid_size, row_wise);
+}
+
+CoreRangeSet next_core_range_set(
+    const CoreRangeSet& range, const CoreCoord& grid_size, const uint32_t num_cores, bool row_wise = true) {
+    TT_FATAL(num_cores > 0, "num_cores requested must be greater than 0");
+    TT_FATAL(
+        num_cores <= range.num_cores(),
+        "num_cores requested must be less than or equal to the number of cores in the range set");
+    auto first = next_core_bounded(range, grid_size, row_wise);
+    CoreCoord last = first;
+    for (uint32_t i = 0; i < num_cores - 1; i++) {
+        last = next_core(last, grid_size, row_wise);
+    }
+    auto res = CoreRangeSet({CoreRange(first, last)});
+    TT_FATAL(res.num_cores() == num_cores, "num_cores requested must be equal to the number of cores in the range set");
+    return res;
+}
+
 std::string device_order_array_string(uint32_t ring_size, uint32_t ring_index) {
     ttnn::SmallVector<uint32_t> device_order;
     device_order.reserve(ring_size - 1);
@@ -40,6 +91,15 @@ std::string device_order_array_string(uint32_t ring_size, uint32_t ring_index) {
         if (i < device_order.size() - 1) {
             result += ", ";
         }
+    }
+    result += "}";
+    return result;
+}
+
+std::string cores_to_string(std::vector<CoreCoord> cores) {
+    std::string result = "{";
+    for (const auto& core : cores) {
+        result += "{" + std::to_string(core.x) + ", " + std::to_string(core.y) + "}, ";
     }
     result += "}";
     return result;
@@ -104,10 +164,15 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     // All of them should have the same address, noticed that the address value is uint64_t though, which we can't pass
     // into NOC
     TT_FATAL(cross_device_semaphore.has_value(), "Cross device semaphore is not present");
-    uint32_t semaphore_address = cross_device_semaphore->address();
-
     auto src_buffer = input_tensor.buffer();
     auto dst_buffer = output_tensor.buffer();
+
+    // Get OP Config, topology config
+    std::vector<Tensor> input_tensors = {input_tensor};
+    std::vector<Tensor> output_tensors = {output_tensor};
+
+    const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, ttnn::ccl::Topology::Linear);
+    LineTopology line_topology(ring_size, ring_index);
 
     uint32_t shard_height = shard_spec.shape[0];
     uint32_t shard_width = shard_spec.shape[1];
@@ -116,6 +181,15 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     uint32_t shard_height_output = output_shard_spec.shape[0];
     uint32_t shard_width_output = output_shard_spec.shape[1];
     uint32_t tiles_per_core_width_output = shard_width_output / tile_shape[1];
+    auto input_grid = shard_spec.grid;
+    auto output_grid = output_shard_spec.grid;
+    auto receiver_grid = detail::next_core_range_set(
+        output_grid,
+        device->compute_with_storage_grid_size(),
+        num_devices,
+        shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+
+    TT_FATAL(output_grid.intersects(receiver_grid) == false, "output_grid and receiver_grid must not intersect");
 
     tt::tt_metal::Program program{};
 
@@ -127,41 +201,38 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
             &program,
             enable_persistent_fabric,
             num_links);
-    // Get OP Config, topology config
-    std::vector<Tensor> input_tensors = {input_tensor};
-    std::vector<Tensor> output_tensors = {output_tensor};
 
-    const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, ttnn::ccl::Topology::Linear);
-    LineTopology line_topology(ring_size, ring_index);
-    const size_t num_targets_forward =
-        line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD);
-    const size_t num_targets_backward =
-        line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD);
-
-    // Get worker cores, assuming 1 worker per link
+    // One sender per link - rn hardcoded to 6,6 for testing
     uint32_t num_workers_per_link = 1;
     const auto [sender_worker_core_range, sender_worker_cores] = choose_worker_cores(
         num_links, num_workers_per_link, enable_persistent_fabric, device, operation_attributes.subdevice_id);
+
     auto sender_core = sender_worker_cores.at(0);
 
-    uint32_t element_size = input_tensor.element_size();
+    auto all_cores = input_grid.merge(receiver_grid).merge(output_grid).merge(sender_core);
+
+    std::cout << "input_grid: " << input_grid.str() << std::endl;
+    std::cout << "output_grid: " << output_grid.str() << std::endl;
+    std::cout << "receiver_grid: " << receiver_grid.str() << std::endl;
+    std::cout << "sender_cores: " << CoreRange(sender_core).str() << std::endl;
+    std::cout << "all_cores: " << all_cores.str() << std::endl;
 
     // input sharded buffer
-    uint32_t src_cb_index = tt::CBIndex::c_0;
+    uint32_t input_tensor_cb_id = tt::CBIndex::c_0;
     // output sharded buffer
-    uint32_t dst_cb_index = tt::CBIndex::c_1;
+    uint32_t output_tensor_cb_id = tt::CBIndex::c_1;
     // client interface
     uint32_t packet_header_cb_index = tt::CBIndex::c_2;
     // fabric sender
     uint32_t fabric_sender_cb_index = tt::CBIndex::c_3;
+    // fabric receiver where we receive the data from the other device
     uint32_t fabric_receiver_cb_index = tt::CBIndex::c_4;
+    // accumulator before we perform the reduction
+    uint32_t accumulator_cb_index = tt::CBIndex::c_5;
 
-    uint32_t num_input_pages_to_read = tiles_per_core_width;
-    uint32_t num_output_pages_per_core = tiles_per_core_width_output;
-
-    auto all_cores = shard_spec.grid;
-    uint32_t ncores = shard_spec.num_cores();
-    uint32_t cores_per_device = ncores / num_devices;
+    uint32_t ncores_input = shard_spec.num_cores();
+    uint32_t input_shard_cores_per_device = ncores_input / num_devices;
+    uint32_t ncores_output = output_grid.num_cores();
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
 
@@ -170,8 +241,9 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     uint32_t output_page_size = tile_size(cb_data_format);
 
     tt::tt_metal::CircularBufferConfig cb_src_config =
-        tt::tt_metal::CircularBufferConfig(tiles_per_core_width * input_page_size, {{src_cb_index, cb_data_format}})
-            .set_page_size(src_cb_index, input_page_size)
+        tt::tt_metal::CircularBufferConfig(
+            tiles_per_core_width * input_page_size, {{input_tensor_cb_id, cb_data_format}})
+            .set_page_size(input_tensor_cb_id, input_page_size)
             .set_globally_allocated_address(*src_buffer);
 
     std::cout << "CB src config total size: " << tiles_per_core_width * input_page_size
@@ -180,100 +252,172 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     // CB to represent the output sharded buffer
     tt::tt_metal::CircularBufferConfig cb_dst_config =
         tt::tt_metal::CircularBufferConfig(
-            tiles_per_core_width_output * input_page_size, {{dst_cb_index, cb_data_format}})
-            .set_page_size(dst_cb_index, input_page_size)
+            tiles_per_core_width_output * input_page_size, {{output_tensor_cb_id, cb_data_format}})
+            .set_page_size(output_tensor_cb_id, input_page_size)
             .set_globally_allocated_address(*dst_buffer);
 
     std::cout << "CB dst config total size: " << tiles_per_core_width_output * input_page_size
               << " page size: " << input_page_size << std::endl;
 
+    constexpr uint32_t buffering_factor = 2;
     // Allocate space for the client interface
     static constexpr auto num_packet_headers_storable = 8;
     static constexpr auto packet_header_size_bytes = sizeof(tt::fabric::PacketHeader);
     tt::tt_metal::CircularBufferConfig packet_header_cb_config =
         tt::tt_metal::CircularBufferConfig(
-            num_packet_headers_storable * packet_header_size_bytes, {{packet_header_cb_index, DataFormat::UInt32}})
+            num_packet_headers_storable * packet_header_size_bytes * buffering_factor,
+            {{packet_header_cb_index, DataFormat::RawUInt32}})
             .set_page_size(packet_header_cb_index, packet_header_size_bytes);
 
-    std::cout << "CB packet header config total size: " << num_packet_headers_storable * packet_header_size_bytes * 2
+    std::cout << "CB packet header config total size: "
+              << num_packet_headers_storable * packet_header_size_bytes * buffering_factor
               << " page size: " << packet_header_size_bytes << std::endl;
-    // Add buffer for the packet + next packet (entire shard x 2)
-    uint32_t buffering_factor = 2;
+
     // input shards are 5 tiles wide, and each goes to a different core on the next device
+    // max packet size is 4 tiles wide, so we only send 4/5 of the tiles at once
+    // ideally we send 5/5 of the tiles at once, but we need to make sure we don't overflow the fabric buffer
+    // so we send 0-3 of the first shard, then 4 of the first shard + 0-2 of the second shard, etc.
+    const size_t packet_size_bytes = local_fabric_handle->get_edm_buffer_size_bytes();
+    uint32_t num_pages_per_packet = packet_size_bytes / input_page_size;
+    TT_FATAL(num_pages_per_packet <= tiles_per_core_width, "num_pages_per_packet is less than tiles_per_core_width");
+    std::cout << "num_pages_per_packet: " << num_pages_per_packet << std::endl;
+    std::cout << "tiles_per_core_width: " << tiles_per_core_width << std::endl;
+
     tt::tt_metal::CircularBufferConfig fabric_sender_cb_config =
         tt::tt_metal::CircularBufferConfig(
-            buffering_factor * tiles_per_core_width * input_page_size, {{fabric_sender_cb_index, cb_data_format}})
-            .set_page_size(fabric_sender_cb_index, tiles_per_core_width * input_page_size);
+            buffering_factor * num_pages_per_packet * input_page_size, {{fabric_sender_cb_index, cb_data_format}})
+            .set_page_size(fabric_sender_cb_index, num_pages_per_packet * input_page_size);
 
-    std::cout << "CB fabric sender config total size: " << buffering_factor * tiles_per_core_width * input_page_size
-              << " page size: " << tiles_per_core_width * input_page_size << std::endl;
-    // buffer for receiving shards from the other device(s) - size is num_devices for simplicity, but could be reduced
-    // to num_devicees - 1
+    std::cout << "CB fabric sender config total size: " << buffering_factor * num_pages_per_packet * input_page_size
+              << " page size: " << num_pages_per_packet * input_page_size << std::endl;
+
+    // buffer for receiving shards from the another device. Each receiver core will take each device's shard. The
+    // receiver core for the local device will do nothing.
     tt::tt_metal::CircularBufferConfig fabric_receiver_cb_config =
         tt::tt_metal::CircularBufferConfig(
-            tiles_per_core_width_output * input_page_size * num_devices, {{fabric_receiver_cb_index, cb_data_format}})
+            buffering_factor * input_shard_cores_per_device * tiles_per_core_width * input_page_size,
+            {{fabric_receiver_cb_index, cb_data_format}})
             .set_page_size(fabric_receiver_cb_index, input_page_size);
 
-    std::cout << "CB fabric receiver config total size: " << tiles_per_core_width_output * input_page_size * num_devices
+    std::cout << "CB fabric receiver config total size: " << buffering_factor * num_pages_per_packet * input_page_size
               << " page size: " << input_page_size << std::endl;
 
-    auto cb_src = tt::tt_metal::CreateCircularBuffer(program, sender_worker_core_range, cb_src_config);  // input buffer
-    auto cb_dst =
-        tt::tt_metal::CreateCircularBuffer(program, sender_worker_core_range, cb_dst_config);  // output buffer
-    auto cb_client_interface = tt::tt_metal::CreateCircularBuffer(
-        program, sender_worker_core_range, packet_header_cb_config);  // client interface
-    // fabric receiver - we put the reduced shards here after we receive them from the other device, then we reduce with
-    // the input buffer shard and pack into the fabric sender buffer
-    auto cb_fabric_receiver =
-        tt::tt_metal::CreateCircularBuffer(program, sender_worker_core_range, fabric_receiver_cb_config);
-    // fabric sender - we put the payload and packet header here after we apply the reduction, and then send it to the
-    // next device, or if it's the last device, we write it to the output buffer
-    auto cb_fabric_sender =
-        tt::tt_metal::CreateCircularBuffer(program, sender_worker_core_range, fabric_sender_cb_config);
+    tt::tt_metal::CircularBufferConfig accumulator_cb_config =
+        tt::tt_metal::CircularBufferConfig(
+            buffering_factor * tiles_per_core_width_output * input_page_size * num_devices,
+            {{accumulator_cb_index, cb_data_format}})
+            .set_page_size(accumulator_cb_index, input_page_size);
+
+    std::cout << "CB accumulator config total size: "
+              << buffering_factor * tiles_per_core_width_output * input_page_size
+              << " page size: " << tiles_per_core_width_output * input_page_size << std::endl;
+
+    auto cb_src = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src_config);  // input buffer
+    auto cb_dst = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_dst_config);  // output buffer
+    auto cb_client_interface =
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, packet_header_cb_config);  // client interface
+    auto cb_fabric_receiver = tt::tt_metal::CreateCircularBuffer(program, all_cores, fabric_receiver_cb_config);
+    auto cb_fabric_sender = tt::tt_metal::CreateCircularBuffer(program, all_cores, fabric_sender_cb_config);
+    auto cb_accumulator = tt::tt_metal::CreateCircularBuffer(program, all_cores, accumulator_cb_config);
 
     const uint32_t chip_id = ring_index;
 
     std::vector<uint32_t> reader_compile_time_args = {
-        src_cb_index,
+        input_tensor_cb_id,
         fabric_sender_cb_index,
+        packet_header_cb_index,
+        fabric_receiver_cb_index,
+        accumulator_cb_index,
+        output_tensor_cb_id,
         (uint32_t)chip_id,
         tiles_per_core_width,
-        cores_per_device,
+        tiles_per_core_width_output,
+        num_pages_per_packet,
+        input_shard_cores_per_device,
         num_devices,
         input_page_size,
-    };
+        ncores_output,
 
-    shard_builder::extend_sharding_compile_time_args(input_tensor, reader_compile_time_args);
-    std::vector<uint32_t> reader_runtime_args;
-    shard_builder::extend_sharding_run_time_args(input_tensor, reader_runtime_args);
+    };
+    reader_compile_time_args.push_back(fabric_receiver_cb_index);
+    reader_compile_time_args.push_back(accumulator_cb_index);
+    reader_compile_time_args.push_back(tiles_per_core_width_output);
+    reader_compile_time_args.push_back(num_pages_per_packet);
+
+    auto to_worker_cores = [device](const std::vector<CoreCoord>& cores) -> std::vector<CoreCoord> {
+        std::vector<CoreCoord> worker_cores;
+        for (const auto& core : cores) {
+            worker_cores.push_back(device->worker_core_from_logical_core(core));
+        }
+        return worker_cores;
+    };
+    auto input_cores = corerange_to_cores(input_grid, std::nullopt);
+    auto output_cores = corerange_to_cores(output_grid, std::nullopt);
+    auto receiver_cores = corerange_to_cores(receiver_grid, std::nullopt);
+    auto sender_cores = corerange_to_cores(sender_worker_core_range, std::nullopt);
+
+    reader_defines["INPUT_CORE_XY"] = detail::cores_to_string(to_worker_cores(input_cores));
+    reader_defines["OUTPUT_CORE_XY"] = detail::cores_to_string(to_worker_cores(output_cores));
+    reader_defines["RECEIVER_CORE_XY"] = detail::cores_to_string(to_worker_cores(receiver_cores));
+
+    std::cout << "input_cores: " << reader_defines["INPUT_CORE_XY"] << std::endl;
+    std::cout << "output_cores: " << reader_defines["OUTPUT_CORE_XY"] << std::endl;
+
+    // create local semaphore
+    auto local_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+
+    std::vector<uint32_t> reader_runtime_args = {cross_device_semaphore->address(), local_semaphore, false, false};
+    uint32_t is_reader_sender_core_idx = reader_runtime_args.size() - 2;
+    uint32_t is_worker_core_idx = reader_runtime_args.size() - 1;
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/device/kernels/dataflow/"
         "reader_llama_reduce_scatter.cpp",
-        sender_core,
+        all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
-    tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, sender_core, reader_runtime_args);
+    for (auto core : sender_cores) {
+        reader_runtime_args[is_reader_sender_core_idx] = true;
+        reader_runtime_args[is_worker_core_idx] = false;
+        tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
+    }
+
+    for (auto core : input_cores) {
+        reader_runtime_args[is_reader_sender_core_idx] = false;
+        reader_runtime_args[is_worker_core_idx] = true;
+        tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
+    }
 
     std::vector<uint32_t> compute_kernel_args = {};
 
     std::vector<uint32_t> writer_compile_time_args = {
-        dst_cb_index,
+        input_tensor_cb_id,
         fabric_sender_cb_index,
-        fabric_receiver_cb_index,
         packet_header_cb_index,
+        fabric_receiver_cb_index,
+        accumulator_cb_index,
+        output_tensor_cb_id,
         (uint32_t)chip_id,
         tiles_per_core_width,
-        cores_per_device,
+        tiles_per_core_width_output,
+        num_pages_per_packet,
+        input_shard_cores_per_device,
         num_devices,
         input_page_size,
     };
 
-    shard_builder::extend_sharding_compile_time_args(output_tensor, writer_compile_time_args);
+    auto writer_defines = reader_defines;
+    tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/device/kernels/dataflow/"
+        "writer_llama_reduce_scatter.cpp",
+        all_cores,
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
 
-    std::vector<uint32_t> writer_runtime_args = {semaphore_address};
-    shard_builder::extend_sharding_run_time_args(output_tensor, writer_runtime_args);
+    std::vector<uint32_t> writer_runtime_args = {cross_device_semaphore->address(), local_semaphore, false, false};
+    uint32_t is_writer_sender_core_idx = writer_runtime_args.size() - 2;
+    uint32_t is_receiver_core_idx = writer_runtime_args.size() - 1;
 
     std::optional<ttnn::ccl::SenderWorkerAdapterSpec> forward_fabric_connection =
         line_topology.is_first_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD)
@@ -286,25 +430,33 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
             : std::optional<ttnn::ccl::SenderWorkerAdapterSpec>(
                   local_fabric_handle->uniquely_connect_worker(device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
 
-    auto writer_defines = reader_defines;
-    tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/device/kernels/dataflow/"
-        "writer_llama_reduce_scatter.cpp",
-        sender_core,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
-
     detail::append_fabric_connection_rt_args(forward_fabric_connection, sender_core, program, writer_runtime_args);
+    std::cout << "Writer runtime args after appending forward fabric connection: " << writer_runtime_args.size()
+              << std::endl;
     detail::append_fabric_connection_rt_args(backward_fabric_connection, sender_core, program, writer_runtime_args);
+    std::cout << "Writer runtime args after appending backward fabric connection: " << writer_runtime_args.size()
+              << std::endl;
 
     std::cout << "Sender core: " << sender_core.x << ", " << sender_core.y << std::endl;
-    tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, sender_core, writer_runtime_args);
+
+    for (auto core : sender_cores) {
+        writer_runtime_args[is_writer_sender_core_idx] = true;
+        writer_runtime_args[is_receiver_core_idx] = false;
+        tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
+    }
+
+    for (auto core : receiver_cores) {
+        writer_runtime_args[is_writer_sender_core_idx] = false;
+        writer_runtime_args[is_receiver_core_idx] = true;
+        tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
+    }
+
     std::cout << "Made it to return " << chip_id << std::endl;
     return {
         std::move(program),
         {.unary_reader_kernel_id = unary_reader_kernel_id,
          .unary_writer_kernel_id = unary_writer_kernel_id,
-         .cb_ids = {src_cb_index, dst_cb_index},
+         .cb_ids = {input_tensor_cb_id, output_tensor_cb_id},
          .core_range = all_cores,
          .sender_core_range = sender_worker_core_range}};
 }
@@ -332,7 +484,7 @@ void LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::override_runtime_
     UpdateDynamicCircularBufferAddress(program, cached_program.shared_variables.cb_ids[0], *src_buffer);
     UpdateDynamicCircularBufferAddress(program, cached_program.shared_variables.cb_ids[1], *dst_buffer);
 
-    for (const auto& core : sender_cores_list) {
+    for (const auto& core : cores) {
         auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, core);
         writer_runtime_args[0] = (uint32_t)operation_attributes.cross_device_semaphore->address();
     }

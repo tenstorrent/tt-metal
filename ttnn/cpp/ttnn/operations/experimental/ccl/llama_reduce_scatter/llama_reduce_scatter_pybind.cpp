@@ -4,7 +4,7 @@
 
 #include "llama_reduce_scatter_pybind.hpp"
 #include "llama_reduce_scatter.hpp"
-
+#include <tt-metalium/sub_device_types.hpp>
 namespace ttnn::operations::experimental::ccl {
 namespace py = pybind11;
 
@@ -40,7 +40,7 @@ void py_bind_llama_reduce_scatter(py::module& module) {
                const ttnn::Tensor& input_tensor,
                uint32_t dim,
                const global_semaphore::MultiDeviceGlobalSemaphore& cross_device_semaphore,
-               const SubDeviceId& subdevice_id,
+               const tt::tt_metal::SubDeviceId& subdevice_id,
                const uint32_t cluster_axis,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                QueueId queue_id) {
