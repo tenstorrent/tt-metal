@@ -102,20 +102,7 @@ autograd::TensorPtr scaled_dot_product_attention(
     // - G != H:
     //   bcast keys to query group then reshape back to query shape:
     //   (B*G,H/G,S,E) x (B*G, 1, E, S) -> (B*G, H/G, S, S) -> (B, H, S, S)
-    ttnn::Tensor qk_scaled;
-    if (G != H) {
-        q_scaled = ttnn::reshape(q_scaled, ttnn::Shape{B * G, group_size, S, E});
-        key_tensor = ttnn::reshape(key_tensor, ttnn::Shape{B * G, 1U, S, E});
-        // key = B*G,1,S,E -> B*G, S, E
-        // q = B*G, H/G, S, E -> B*H, E, S
-
-        // repeat key to group size for each group (manual bcast)
-        ttnn::Tensor key_repeated = ttnn::repeat(key_tensor, ttnn::Shape{1U, group_size, 1U, 1U});
-        qk_scaled = matmul(q_scaled, key_repeated, /* transpose_a */ false, /* transpose_b */ true);
-        qk_scaled = ttnn::reshape(qk_scaled, ttnn::Shape{B, H, S, S});
-    } else {
-        qk_scaled = matmul(q_scaled, key_tensor, /* transpose_a */ false, /* transpose_b */ true);
-    }
+    ttnn::Tensor qk_scaled = group_shared_matmul(q_scaled, key_tensor, /*transpose_a=*/false, /*transpose_b=*/true);
 
     if (mask.has_value()) {
         auto mask_tensor = mask.value()->get_value();
@@ -137,19 +124,8 @@ autograd::TensorPtr scaled_dot_product_attention(
     //    reshape value to (B*G, 1, S, V)
     //    bcast values over groupsize then reshape to (B, H, S, V)
     //    (B*G, H/G, S, S) x (B*G, 1, S, V) -> (B*G, H/G, S, V) -> (B, H, S, V)
-    ttnn::Tensor attention_qkv;
-    auto value_tensor = value->get_value();
-    uint32_t V = E;
-    if (G != H) {
-        auto attention_weights_for_bcast = ttnn::reshape(attention_weights, ttnn::Shape{B * G, H / G, S, S});
-        value_tensor = ttnn::reshape(value_tensor, ttnn::Shape{B * G, 1, S, V});
-        auto repeated_value_tensor = ttnn::repeat(value_tensor, ttnn::Shape{1, group_size, 1, 1});
-        attention_qkv = matmul(
-            attention_weights_for_bcast, repeated_value_tensor, /* transpose_a */ false, /* transpose_b */ false);
-        attention_qkv = ttnn::reshape(attention_qkv, ttnn::Shape{B, H, S, V});
-    } else {
-        attention_qkv = matmul(attention_weights, value_tensor, /* transpose_a */ false, /* transpose_b */ false);
-    }
+    ttnn::Tensor attention_qkv =
+        group_shared_matmul(attention_weights, value->get_value(), /*transpose_a=*/false, /*transpose_b=*/false);
     auto out = ttml::autograd::create_tensor(attention_qkv);
 
     ttml::autograd::GradFunction grad = [scale, query, key, value, attention_weights, out, mask, B, H, S, E, V, G]() {
@@ -158,18 +134,8 @@ autograd::TensorPtr scaled_dot_product_attention(
         // two cases:
         // - G == H: (B, H, S, V) x (B, H, V, S) -> (B, H, S, S)
         // - G != H: (B*G, H/G, S, V) x (B*G, 1, S, V) -> (B*G, H/G, V, S) -> (B, H, S, S)
-        ttnn::Tensor dL_dattention_weights;
-        if (G == H) {
-            dL_dattention_weights =
-                matmul(dL_dout, value->get_value(), /* transpose_a */ false, /* transpose_b */ true);
-        } else {
-            // FIXME: double check, but bcast approach should be fine
-            auto dL_dout_reshaped = ttnn::reshape(dL_dout, ttnn::Shape{B * G, H / G, S, V});
-            auto value_tensor = ttnn::reshape(value->get_value(), ttnn::Shape{B * G, 1, S, V});
-            value_tensor = ttnn::repeat(value_tensor, ttnn::Shape{1, H / G, 1, 1});
-            dL_dattention_weights = matmul(dL_dout_reshaped, value_tensor, /*transpose_a=*/false, /*transpose_b=*/true);
-            dL_dattention_weights = ttnn::reshape(dL_dattention_weights, ttnn::Shape{B, H, S, S});
-        }
+        ttnn::Tensor dL_dattention_weights =
+            group_shared_matmul(dL_dout, value->get_value(), /*transpose_a=*/false, /*transpose_b=*/true);
 
         auto dL_dscaled_dot = ttnn::moreh_softmax_backward(
             attention_weights,
@@ -184,70 +150,36 @@ autograd::TensorPtr scaled_dot_product_attention(
 
         dL_dscaled_dot = ttnn::experimental::mul(dL_dscaled_dot, scale);  // [B,H,S,S]
 
-        // FIXME: double check, but bcast approach should be fine for queries
         // dL_dQ = dL_dscaled_dot @ key
         // H == G: [B,H,S,S] x [B,H,S,E] -> [B,H,S,E]
         // H != G: [B*G,H/G,S,S] x [B*G,1,S,E] -> [B*G,H/G,S,E] -> [B,H,S,E]
-        ttnn::Tensor dL_dQ;
-        if (G == H) {
-            dL_dQ = matmul(
-                dL_dscaled_dot,
-                key->get_value(),
-                /*transpose_a=*/false,
-                /*transpose_b=*/false);
-        } else {
-            // [B*G,H/G,S,S] x [B*G,1,S,E] -> [B*G,H/G,S,E] -> [B,H,S,E]
-            auto dL_dscaled_dot_reshaped = ttnn::reshape(dL_dscaled_dot, ttnn::Shape{B * G, H / G, S, S});
-            auto key_reshaped = ttnn::reshape(key->get_value(), ttnn::Shape{B * G, 1, S, E});
-            key_reshaped = ttnn::repeat(key_reshaped, ttnn::Shape{1, H / G, 1, 1});
-            dL_dQ = matmul(
-                dL_dscaled_dot_reshaped,
-                key_reshaped,
-                /*transpose_a=*/false,
-                /*transpose_b=*/false);
-            dL_dQ = ttnn::reshape(dL_dQ, ttnn::Shape{B, H, S, E});
-        }
+        ttnn::Tensor dL_dQ =
+            group_shared_matmul(dL_dscaled_dot, key->get_value(), /*transpose_a=*/false, /*transpose_b=*/false);
 
         // dL_dK = dL_dscaled_dot^T @ query
-        ttnn::Tensor dL_dK;
-        if (G == H) {
-            // [B,H,S,S] x [B,H,E,S] -> [B,H,E,S]
-            dL_dK = matmul(
-                dL_dscaled_dot,
-                query->get_value(),
-                /*transpose_a=*/true,
-                /*transpose_b=*/false);
-        } else {
+        ttnn::Tensor dL_dK = matmul(
+            dL_dscaled_dot,
+            query->get_value(),
+            /*transpose_a=*/true,
+            /*transpose_b=*/false);
+        if (G != H) {
             // sum over groups:
             // [B*G,H/G,S,S] x [B*G,1,S,E] -> [B*G,H/G,S,E] -> [B*G,1,S,E] -> [B,G,S,E]
-            auto lumped_grads = matmul(
-                dL_dscaled_dot,
-                query->get_value(),
-                /*transpose_a=*/true,
-                /*transpose_b=*/false);
-            auto grouped_grads = ttnn::reshape(lumped_grads, ttnn::Shape{B * G, H / G, S, E});
+            auto grouped_grads = ttnn::reshape(dL_dK, ttnn::Shape{B * G, H / G, S, E});
             auto summed_grads = ttnn_fixed::sum_moreh(grouped_grads, /*dim=*/1, /*keep_dim=*/true);
             dL_dK = ttnn::reshape(summed_grads, ttnn::Shape{B, G, S, E});
         }
 
         // dL_dV = attention_weights^T @ dL_dout
-        ttnn::Tensor dL_dV;
-        if (G == H) {
-            // [B,H,S,S] x [B,H,S,V] -> [B,H,S,V]
-            dL_dV = matmul(
-                attention_weights,
-                dL_dout,
-                /*transpose_a=*/true,
-                /*transpose_b=*/false);
-        } else {
+        ttnn::Tensor dL_dV = matmul(
+            attention_weights,
+            dL_dout,
+            /*transpose_a=*/true,
+            /*transpose_b=*/false);
+        if (G != H) {
             // sum over groups
             // [B*G,H/G,S,S] x [B*G,1,S,V] -> [B*G,H/G,S,V] -> [B*G,1,S,V] -> [B,G,S,V]
-            auto lumped_grads = matmul(
-                attention_weights,
-                dL_dout,
-                /*transpose_a=*/true,
-                /*transpose_b=*/false);
-            auto grouped_grads = ttnn::reshape(lumped_grads, ttnn::Shape{B * G, H / G, S, V});
+            auto grouped_grads = ttnn::reshape(dL_dV, ttnn::Shape{B * G, H / G, S, V});
             auto summed_grads = ttnn_fixed::sum_moreh(grouped_grads, /*dim=*/1, /*keep_dim=*/true);
             dL_dV = ttnn::reshape(summed_grads, ttnn::Shape{B, G, S, V});
         }
