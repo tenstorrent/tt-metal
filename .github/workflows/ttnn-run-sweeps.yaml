@@ -34,6 +34,8 @@ on:
           - eltwise.unary.signbit.signbit_survey
           - eltwise.unary.square.square_survey
           - eltwise.unary.sign.sign_survey
+          - eltwise.unary.relu_max.relu_max_survey
+          - eltwise.unary.relu_min.relu_min_survey
           - eltwise.unary.nez.nez_sharded
           - eltwise.unary.relu6.relu6_sharded
           - composite.binary.gcd.gcd
