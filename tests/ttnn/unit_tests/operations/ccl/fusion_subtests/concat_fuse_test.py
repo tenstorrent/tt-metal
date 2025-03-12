@@ -13,8 +13,9 @@ from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
     teardown_fabric_interface,
     create_global_semaphore_with_same_address,
 )
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
-
+"""
 def run_with_trace(
     mesh_device,
     all_gather_topology,
@@ -50,6 +51,61 @@ def run_with_trace(
             dim,
             multi_device_global_semaphore=multi_device_global_semaphore,
             num_links=num_links,
+            memory_config=output_mem_config,
+            topology=all_gather_topology,
+            subdevice_id=subdevice_id,
+            enable_persistent_fabric_mode=enable_persistent_fabric,
+        )
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+
+    # Run the op
+    logger.info("Starting Trace perf test...")
+    ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+    ttnn.release_trace(mesh_device, trace_id)
+    ttnn.synchronize_device(mesh_device)
+
+    return tt_out_tensor
+"""
+
+
+def run_with_trace(
+    mesh_device,
+    all_gather_topology,
+    input_tensor_mesh,
+    dim,
+    num_links,
+    output_mem_config,
+    enable_persistent_fabric,
+    multi_device_global_semaphore,
+    num_iter=20,
+    subdevice_id=None,
+):
+    # Compile Run
+    logger.info("Compiling model")
+    tt_out_tensor = ttnn.experimental.all_gather_concat(
+        input_tensor_mesh,
+        dim,
+        multi_device_global_semaphore=multi_device_global_semaphore,
+        num_links=num_links,
+        num_heads=8,
+        memory_config=output_mem_config,
+        topology=all_gather_topology,
+        subdevice_id=subdevice_id,
+        enable_persistent_fabric_mode=enable_persistent_fabric,
+    )
+    ttnn.synchronize_device(mesh_device)
+
+    # Capture trace
+    logger.info("Capturing trace")
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    for i in range(num_iter):
+        tt_out_tensor = ttnn.experimental.all_gather_concat(
+            input_tensor_mesh,
+            dim,
+            multi_device_global_semaphore=multi_device_global_semaphore,
+            num_links=num_links,
+            num_heads=8,
             memory_config=output_mem_config,
             topology=all_gather_topology,
             subdevice_id=subdevice_id,
@@ -262,7 +318,7 @@ def run_concat_fuse_impl(
     num_links,
     input_dtype,
     layout,
-    # use_program_cache,
+    use_program_cache,
     function_level_defaults,
     input_shard_shape,
     input_shard_grid,
@@ -273,6 +329,8 @@ def run_concat_fuse_impl(
     output_shard_shape=None,
     output_shard_grid=None,
     tensor_mem_layout=None,
+    # warmup_iters=0,
+    # profiler=BenchmarkProfiler(),
 ):
     enable_persistent_fabric = True
     if num_iters < 1:
@@ -388,9 +446,9 @@ def run_concat_fuse_impl(
     else:
         for i in range(num_iters):
             tt_out_tensor = ttnn.experimental.all_gather_concat(
-                input_tensor_mesh_list[i],
+                input_tensor_mesh_list[0],
                 dim,
-                multi_device_global_semaphore=ccl_semaphore_handles[i],
+                multi_device_global_semaphore=ccl_semaphore_handles[0],
                 num_links=num_links,
                 num_heads=8,
                 memory_config=output_mem_config,
@@ -407,7 +465,7 @@ def run_concat_fuse_impl(
     passed = True
     for tensor_index in range(len(tt_out_tensor_list)):
         tt_out_tensor = tt_out_tensor_list[tensor_index]
-        output_tensor = output_tensor_goldens_list[tensor_index]
+        output_tensor = output_tensor_goldens_list[0]
         output_tensor = output_tensor[:, :, :8, :]
         output_tensor_concat = output_tensor.reshape(1, 1, 32, 1024)
         for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):

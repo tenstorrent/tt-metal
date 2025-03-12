@@ -515,6 +515,9 @@ def test_reduce_scatter(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ),
     ],
+    ids=[
+        "concat_heads",
+    ],
 )
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize(
@@ -524,8 +527,8 @@ def test_reduce_scatter(
         # ttnn.bfloat8_b,
     ],
 )
-@pytest.mark.parametrize("num_iters", [2])
-@pytest.mark.parametrize("enable_async", [False])
+@pytest.mark.parametrize("num_iters", [10])  # @pytest.mark.parametrize("num_iters, warmup_iters", [10])
+@pytest.mark.parametrize("enable_async", [True])
 def test_concat_fuse(
     t3k_mesh_device,
     num_devices,
@@ -535,7 +538,8 @@ def test_concat_fuse(
     input_dtype,
     layout,
     num_iters,
-    # use_program_cache,
+    # warmup_iters,
+    use_program_cache,
     function_level_defaults,
     enable_async,
     input_shard_shape,
@@ -543,7 +547,9 @@ def test_concat_fuse(
     output_shard_shape,
     output_shard_grid,
     tensor_mem_layout,
+    # trace_mode,
 ):
+    # profiler = BenchmarkProfiler()
     run_concat_fuse_impl(
         t3k_mesh_device,
         num_devices,
@@ -552,16 +558,19 @@ def test_concat_fuse(
         num_links,
         input_dtype,
         layout,
-        # use_program_cache,
+        use_program_cache,
         function_level_defaults,
         input_shard_shape,
         input_shard_grid,
         all_gather_topology=ttnn.Topology.Linear,
+        # warmup_iters=warmup_iters,
         num_iters=num_iters,
         enable_async=enable_async,
         output_shard_shape=output_shard_shape,
         output_shard_grid=output_shard_grid,
         tensor_mem_layout=tensor_mem_layout,
+        # trace_mode=trace_mode,
+        # profiler=profiler,
     )
 
 
