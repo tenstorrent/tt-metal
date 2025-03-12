@@ -471,7 +471,7 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_halo_k
     }
 
     // flatten and uniformize the lengths of each config list
-    auto flatten_pad_config = [](auto& config) -> std::vector<std::vector<std::vector<uint16_t>>> {
+    auto flatten_pad_config = [in_place](auto& config) -> std::vector<std::vector<std::vector<uint16_t>>> {
         // Find max length for vector which is going to be processed on each core
         size_t max_len = 0;
         for (const auto& data : config) {
@@ -502,8 +502,8 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_halo_k
         return flattened_config;
     };
 
-    auto flatten_local_config = [max_out_nsticks_per_core,
-                                 in_nsticks_per_core](auto& config) -> std::vector<std::vector<std::vector<uint16_t>>> {
+    auto flatten_local_config = [in_place, max_out_nsticks_per_core, in_nsticks_per_core](
+                                    auto& config) -> std::vector<std::vector<std::vector<uint16_t>>> {
         // find max length
         size_t max_len = 0;
         for (const auto& [_, data] : config) {
@@ -540,21 +540,24 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_halo_k
                 }
             }
             else {
+                int32_t rev_i_end = data.size();
                 for (uint32_t i = 0; i < data.size(); ++i) {  // normal forward direction local config in region where input / output shards don't overlap (for in place operation)
                     auto [src_start, dst_start, length] = data[i];
                     if (dst_start > src_start + in_out_shard_size_delta) {
                         rev_i_end = i;
                         break;
                     }
-                    flat_data[0][idx++] = src_start;
-                    flat_data[0][idx++] = dst_start;
-                    flat_data[0][idx++] = length;
+                    flat_data[0][idx1++] = src_start;
+                    flat_data[0][idx1++] = dst_start;
+                    flat_data[0][idx1++] = length;
+                    flat_data[0][2] += 3;
                 }
                 for (int32_t i = data.size() - 1; i >= rev_i_end; --i) { // reverse direction local config in region where input / output shards overlap (for in place operation)
                     auto [src_start, dst_start, length] = data[i];
-                    flat_data[0][idx++] = src_start;
-                    flat_data[0][idx++] = dst_start;
-                    flat_data[0][idx++] = length;
+                    flat_data[0][idx1++] = src_start;
+                    flat_data[0][idx1++] = dst_start;
+                    flat_data[0][idx1++] = length;
+                    flat_data[0][2] += 3;
                 }
             }
 
@@ -564,8 +567,8 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_halo_k
         return flattened_config;
     };
 
-    auto flatten_remote_config = [core_id_to_noc_coords,
-                                  &device](auto& config) -> std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> {
+    auto flatten_remote_config = [in_place, core_id_to_noc_coords, &device](
+                                     auto& config) -> std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> {
         // find max length
         size_t max_len = 0;
         for (const auto& core_config : config) {
@@ -661,13 +664,14 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_halo_k
     align_config(flattened_remote_config[0], 2);
     align_config(flattened_remote_config[1], 2);
 
-    return std::make_tuple({flattened_pad_config[0],
-                               flattened_pad_config[1],
-                               flattened_local_config[0],
-                               flattened_local_config[1],
-                               flattened_remote_config[0],
-                               flattened_remote_config[1]},
-                               max_ref_size);
+    std::vector<std::vector<std::vector<uint16_t>>> config{
+        flattened_pad_config[0],
+        flattened_pad_config[1],
+        flattened_local_config[0],
+        flattened_local_config[1],
+        flattened_remote_config[0],
+        flattened_remote_config[1]};
+    return std::make_tuple(std::move(config), max_ref_size);
 }
 
 std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
