@@ -447,7 +447,7 @@ void device_module(py::module& m_device) {
            Layout target_layout,
            std::optional<MemoryConfig> target_mem_config) {
             return ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
-                input, device, padded_shape, pad_value, target_layout, target_mem_config);
+                input, device, padded_shape, pad_value, target_layout, std::move(target_mem_config));
         },
         py::arg("input").noconvert(),
         py::arg("device").noconvert(),
