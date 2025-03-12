@@ -206,11 +206,13 @@ DistributedTensorConfig get_distributed_tensor_config_from_tensor(const Tensor& 
 bool is_host_mesh_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::MULTI_DEVICE_HOST; }
 
 bool is_multi_device_tensor(const Tensor& tensor) {
-    return tensor.storage_type() == StorageType::MULTI_DEVICE_HOST || is_mesh_buffer_tensor(tensor);
+    const auto* device_storage = std::get_if<DeviceStorage>(&tensor.get_storage());
+    return (tensor.storage_type() == StorageType::MULTI_DEVICE_HOST) ||
+           (device_storage != nullptr && device_storage->specs.size() > 1);
 }
 
 bool is_mesh_buffer_tensor(const Tensor& tensor) {
-    auto* device_storage = std::get_if<DeviceStorage>(&tensor.get_storage());
+    const auto* device_storage = std::get_if<DeviceStorage>(&tensor.get_storage());
     return device_storage != nullptr && device_storage->mesh_buffer != nullptr;
 }
 
