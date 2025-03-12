@@ -2,48 +2,42 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "impl/buffers/buffer.hpp"
-#include "impl/buffers/circular_buffer_types.hpp"
-#include "generic_op_device_operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
-
 #include <cstdint>
-#include <iostream>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/work_split.hpp>
+
+#include "generic_op_device_operation.hpp"
+#include "tt-metalium/kernel_types.hpp"
 
 namespace ttnn::operations::generic {
 GenericOpDeviceOperation::GenericProgram::cached_program_t GenericOpDeviceOperation::GenericProgram::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    using namespace tt;
-    using namespace tt::tt_metal;
-
-    // // just debug print
-    // std::cout << "input buffer 0x" << std::hex << tensor_args.io_tensors.front().buffer()->address() << std::dec << std::endl;
-    // std::cout << "output buffer 0x" << std::hex << tensor_args.io_tensors.back().buffer()->address() << std::dec << std::endl;
-    // size_t i = 0;
-    // for (const auto& tensor : tensor_args.io_tensors) {
-    //     std::cout << "[" << i++ << "] 0x=" << tensor.buffer()->address() << std::endl;
-    // }
-    // // end of debug
-
     tt::tt_metal::Program program{};
 
     // create circular buffers
-    std::map<uint8_t, tt::tt_metal::CBHandle> cb_handles;
     for (const auto& [buffer_index, circular_buffer_attributes] : operation_attributes.circular_buffer_attributes) {
-        tt::tt_metal::CircularBufferConfig cb_config = tt::tt_metal::CircularBufferConfig(
-            circular_buffer_attributes.total_size,
-            {{buffer_index, circular_buffer_attributes.data_format}})
-            .set_page_size(buffer_index, circular_buffer_attributes.page_size);
-
-        // used for sharding to point to the existing buffer
-        if (circular_buffer_attributes.set_globally_allocated_address.has_value()) {
-
-            cb_config.set_globally_allocated_address(*tensor_args.io_tensors[circular_buffer_attributes.set_globally_allocated_address.value()].buffer());
+        tt::DataFormat resolved_data_format;
+        if (std::holds_alternative<tt::DataFormat>(circular_buffer_attributes.data_format)) {
+            resolved_data_format = std::get<tt::DataFormat>(circular_buffer_attributes.data_format);
+        } else {
+            resolved_data_format = tt::tt_metal::datatype_to_dataformat_converter(
+                std::get<ttnn::DataType>(circular_buffer_attributes.data_format));
         }
 
-        cb_handles[buffer_index] = tt::tt_metal::CreateCircularBuffer(program, circular_buffer_attributes.core_spec, cb_config);
+        tt::tt_metal::CircularBufferConfig cb_config =
+            tt::tt_metal::CircularBufferConfig(
+                circular_buffer_attributes.total_size, {{buffer_index, resolved_data_format}})
+                .set_page_size(buffer_index, circular_buffer_attributes.page_size);
+
+        // WIP: Sharding
+        // if (circular_buffer_attributes.set_globally_allocated_address.has_value()) {
+        //     cb_config.set_globally_allocated_address(*tensor_args.io_tensors[circular_buffer_attributes.set_globally_allocated_address.value()].buffer());
+        // }
+
+        tt::tt_metal::CreateCircularBuffer(program, circular_buffer_attributes.core_spec, cb_config);
     }
 
     // create data movement kernels
@@ -68,7 +62,7 @@ GenericOpDeviceOperation::GenericProgram::cached_program_t GenericOpDeviceOperat
 
         for (const auto& [core, args] : compute_attributes.runtime_args_per_core)
         {
-            // assuming core is in the compute_attributes.core_spec, would be better to check
+            // assuming core is in the compute_attributes.core_spec
             tt::tt_metal::SetRuntimeArgs(program, kernel_id, core, args);
         }
     }
@@ -92,31 +86,6 @@ void GenericOpDeviceOperation::GenericProgram::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    auto& program = cached_program.program;
-    auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
-    auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
-
-    // Not implemented
-    const auto& input_tensor = tensor_args.io_tensors.front();
-    auto& output_tensor = tensor_args.io_tensors.back();
-
-    auto src_buffer = input_tensor.buffer();
-    auto dst_buffer = output_tensor.buffer();
-
-    // for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
-    //     CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-    //     {
-    //         auto& runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
-    //         runtime_args[0] = src_buffer->address();
-    //     }
-
-    //     {
-    //         auto& runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
-    //         runtime_args[0] = dst_buffer->address();
-    //     }
-    // }
-}
+    tensor_return_value_t& tensor_return_value) {}
 
 }  // namespace ttnn::operations::generic
