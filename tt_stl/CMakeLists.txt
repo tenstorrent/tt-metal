@@ -3,7 +3,7 @@ add_library(TT:STL ALIAS tt_stl)
 
 target_sources(
     tt_stl
-    PUBLIC
+    INTERFACE
         FILE_SET tt_stl
         TYPE HEADERS
         BASE_DIRS tt_stl
