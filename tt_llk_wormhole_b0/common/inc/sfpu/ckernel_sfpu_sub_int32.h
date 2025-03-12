@@ -35,8 +35,6 @@ inline void _sub_int32_(const uint dst_offset)
         TT_SFPLOAD(0 /*lreg*/, sfpload_instr_mod, 3 /*addr_mode*/, dst_offset * 64 /*dest*/);
         // Use 6 as imod to convert operand B to 2's complement
         TTI_SFPIADD(0 /*imm*/, 1 /*lreg*/, 0 /*ldest*/, 6 /*imod*/);
-        // MAD has a 2-cycle pipeline latency so we need one cycle latency until next instr can consume the result
-        TTI_NOP;
         // LREG_0 -> dest as int32
         TTI_SFPSTORE(0 /*lreg_ind*/, sfpload_instr_mod, 3 /*addr_mode*/, 0 /*dest*/);
         dst_reg++;
