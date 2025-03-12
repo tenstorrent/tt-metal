@@ -26,7 +26,7 @@ namespace ckernel {
  *
  * | Argument       | Description                                                                 | Type     | Valid Range                                           | Required |
  * |----------------|-----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst           | The index of the tile in DST register buffer to perform remainder operation | uint32_t | Must be less than the size of the DST register buffer | True     | 
+ * | idst           | The index of the tile in DST register buffer to perform remainder operation | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | param0         | Denominator value to perform remainder operation                            | uint32_t |                                                       | True     |
  * | param1         | Reciprocal of param0, calculated on-host                                    | uint32_t |                                                       | False    |
  */
@@ -38,6 +38,8 @@ ALWI void remainder_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void remainder_tile_init() { MATH((llk_math_eltwise_unary_sfpu_remainder_init<APPROX>())); }
+ALWI void remainder_tile_init(uint32_t param0, uint32_t param1) {
+    MATH((llk_math_eltwise_unary_sfpu_remainder_init<APPROX>(param0, param1)));
+}
 
 }  // namespace ckernel
