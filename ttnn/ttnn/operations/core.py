@@ -623,7 +623,7 @@ def as_tensor(
         else:
             storage_type = ""
 
-        cache_file_name = f"{cache_file_name}{storage_type}_dtype_{dtype_name}_layout_{layout_name}.bin"
+        cache_file_name = f"tt-mesh/{cache_file_name}{storage_type}_dtype_{dtype_name}_layout_{layout_name}.bin"
 
         cache_path = pathlib.Path(cache_file_name)
         if not cache_path.exists() or not cache_path.is_file():
