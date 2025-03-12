@@ -34,8 +34,6 @@ inline void _add_int32_(const uint dst_offset)
         // operand B - int32
         TT_SFPLOAD(1, sfpload_instr_mod, 3, dst_offset * 64);
         TTI_SFPIADD(0, 1, 0, 4);
-        // MAD has a 2-cycle pipeline latency so we need one cycle latency until next instr can consume the result
-        TTI_NOP;
         // LREG_0 -> dest as int32
         TTI_SFPSTORE(0, sfpload_instr_mod, 3, 0);
         dst_reg++;

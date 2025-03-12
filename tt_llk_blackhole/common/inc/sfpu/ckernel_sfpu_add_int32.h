@@ -51,8 +51,6 @@ inline void _add_int32_(const uint dst_offset)
         }
 
         TTI_SFPIADD(0 /*imm*/, 1 /*lreg_c*/, 0 /*lreg_dest*/, 4 /*imod*/);
-        // MAD has a 2-cycle pipeline latency so we need one cycle latency until next instr can consume the result
-        TTI_NOP;
 
         // LREG_0 -> dest as int32
         if constexpr (SIGN_MAGNITUDE_FORMAT)

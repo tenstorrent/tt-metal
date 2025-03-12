@@ -52,8 +52,6 @@ inline void _sub_int32_(const uint dst_offset)
 
         // Set instruction modifier to 6 to get B's 2's complement
         TTI_SFPIADD(0 /*imm*/, 1 /*lreg_c*/, 0 /*lreg_dest*/, 6 /*imod*/);
-        // MAD has a 2-cycle pipeline latency so we need one cycle latency until next instr can consume the result
-        TTI_NOP;
 
         // LREG_0 -> dest as int32
         if constexpr (SIGN_MAGNITUDE_FORMAT)
