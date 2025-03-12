@@ -97,7 +97,12 @@ def manage_config(name, value):
 from ttnn._ttnn.multi_device import (
     MeshDevice,
     CppMeshToTensor,
-    CppTensorToMesh,
+    TensorToMesh,
+    ReplicateTensorToMesh,
+    ShardTensorToMesh,
+    ShardTensorTo2dMesh,
+    CppConcatMeshToTensor,
+    CppConcat2dMeshToTensor,
     ReplicateTensor,
     ShardTensor,
     ShardTensor2d,
