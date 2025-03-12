@@ -144,6 +144,9 @@ run_tg_tests() {
   elif [[ "$1" == "distributed-ops" ]]; then
     run_tg_distributed_op_tests
 
+  elif [[ "$1" == "distributed-runtime" ]]; then
+    ./build/test/tt_metal/distributed/distributed_unit_tests_wormhole_b0
+
   else
     echo "LOG_METAL: Unknown model type: $1"
     return 1
