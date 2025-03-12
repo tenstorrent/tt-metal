@@ -21,6 +21,7 @@
 #include "dprint_server.hpp"
 #include "impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
+#include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include <utils.hpp>
 #include "llrt.hpp"
 #include <dev_msgs.h>
@@ -897,15 +898,15 @@ void Device::update_dispatch_cores_for_multi_cq_eth_dispatch() {
 void Device::init_command_queue_host() {
     using_fast_dispatch_ = true;
     sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
+    auto worker_launch_message_buffer_state = std::make_shared<DispatchArray<LaunchMessageRingBufferState>>();
     command_queues_.reserve(num_hw_cqs());
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
-        command_queues_.push_back(
-            std::make_unique<HWCommandQueue>(this, cq_id, k_dispatch_downstream_noc, completion_queue_reader_core_));
+        command_queues_.push_back(std::make_unique<HWCommandQueue>(
+            this, worker_launch_message_buffer_state, cq_id, k_dispatch_downstream_noc, completion_queue_reader_core_));
     }
 }
 
 void Device::init_command_queue_device() {
-
     if (llrt::RunTimeOptions::get_instance().get_skip_loading_fw()) {
         detail::EnablePersistentKernelCache();
         this->compile_command_queue_programs();

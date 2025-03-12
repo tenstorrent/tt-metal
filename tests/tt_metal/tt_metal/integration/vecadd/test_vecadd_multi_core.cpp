@@ -4,7 +4,7 @@
 
 #include <tt-metalium/bfloat16.hpp>
 #include "dispatch_fixture.hpp"
-#include <tt-metalium/test_tiles.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 #include "tests/tt_metal/test_utils/print_helpers.hpp"
 #include "tests/tt_metal/test_utils/tilization.hpp"
 #include <tt-metalium/tt_metal.hpp>

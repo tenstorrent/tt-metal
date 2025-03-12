@@ -349,6 +349,32 @@ std::unordered_map<chip_id_t, eth_coord_t> Cluster::get_user_chip_ethernet_coord
     return user_chip_ethernet_coordinates;
 }
 
+size_t Cluster::number_of_user_devices() const {
+    if (this->cluster_type_ == ClusterType::TG) {
+        const auto& chips = this->cluster_desc_->get_all_chips();
+        return std::count_if(chips.begin(), chips.end(), [&](const auto& id) {
+            return this->cluster_desc_->get_board_type(id) == BoardType::GALAXY;
+        });
+    } else {
+        return this->cluster_desc_->get_number_of_chips();
+    }
+}
+
+std::unordered_set<chip_id_t> Cluster::user_exposed_chip_ids() const {
+    if (this->cluster_type_ == ClusterType::TG) {
+        std::unordered_set<chip_id_t> galaxy_boards;
+        const auto& chips = this->cluster_desc_->get_all_chips();
+        for (const auto& id : chips) {
+            if (this->cluster_desc_->get_board_type(id) == BoardType::GALAXY) {
+                galaxy_boards.insert(id);
+            }
+        }
+        return galaxy_boards;
+    } else {
+        return this->cluster_desc_->get_all_chips();
+    }
+}
+
 const metal_SocDescriptor &Cluster::get_soc_desc(chip_id_t chip) const {
     if (this->sdesc_per_chip_.find(chip) == this->sdesc_per_chip_.end()) {
         TT_THROW(
@@ -847,7 +873,7 @@ void Cluster::reserve_ethernet_cores_for_tunneling() {
         }
         std::map<std::tuple<chip_id_t, chip_id_t>, bool> reserved_chip_connections = {};
         for (const auto &chip_id : devices) {
-            if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
+            if (TT_METAL_SLOW_DISPATCH_MODE == nullptr and arch_ == ARCH::WORMHOLE_B0) {
                 for (const auto &[connected_chip_id, active_eth_cores] :
                      this->get_ethernet_cores_grouped_by_connected_chips(chip_id)) {
                     for (const auto &eth_core : active_eth_cores) {

@@ -2,6 +2,11 @@ name: "[internal] T3000 perplexity tests impl"
 
 on:
   workflow_call:
+    inputs:
+      extra-tag:
+        required: false
+        type: string
+        default: "in-service"
 
 jobs:
 
@@ -24,7 +29,11 @@ jobs:
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     environment: dev
-    runs-on: ["arch-wormhole_b0", "config-t3000", "in-service", "pipeline-perf"]
+    runs-on:
+      - arch-wormhole_b0
+      - config-t3000
+      - pipeline-perf
+      - ${{ inputs.extra-tag }}
     steps:
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - uses: ./.github/actions/ensure-active-weka-mount

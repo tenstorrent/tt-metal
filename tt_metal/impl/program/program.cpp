@@ -10,7 +10,6 @@
 #include <profiler.hpp>
 #include "tt_metal/detail/kernel_cache.hpp"
 #include <persistent_kernel_cache.hpp>
-#include <compilation_reporter.hpp>
 #include <memory_reporter.hpp>
 #include <tt_metal.hpp>
 #include <graph_tracking.hpp>
@@ -1383,9 +1382,8 @@ void detail::Program_::compile(IDevice* device, bool fd_bootloader_mode) {
 
         const auto& dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
         CoreType dispatch_core_type = dispatch_core_config.get_core_type();
-        auto physical_device_id = device->id() % tt::Cluster::instance().number_of_devices();
         const std::vector<CoreCoord>& storage_cores =
-            DispatchQueryManager::instance().get_logical_storage_cores(physical_device_id);
+            DispatchQueryManager::instance().get_logical_storage_cores_on_user_chips();
         bool on_storage_only_core =  std::any_of(storage_cores.begin(), storage_cores.end(), [&kernel](const CoreCoord& storage_core) {
             return kernel->is_on_logical_core(storage_core);
         });
@@ -1394,7 +1392,7 @@ void detail::Program_::compile(IDevice* device, bool fd_bootloader_mode) {
         // Kernels used to implement fast dispatch can be placed on dispatch cores
         if (not slow_dispatch and not fd_bootloader_mode) {
             const std::vector<CoreCoord>& dispatch_cores =
-                DispatchQueryManager::instance().get_logical_dispatch_cores(physical_device_id);
+                DispatchQueryManager::instance().get_logical_dispatch_cores_on_user_chips();
             bool on_dispatch_core = std::any_of(dispatch_cores.begin(), dispatch_cores.end(), [&kernel, &dispatch_core_type](const CoreCoord &dispatch_core) {
                 if (kernel->get_kernel_core_type() != dispatch_core_type) {
                     return false;
@@ -1441,10 +1439,6 @@ void detail::Program_::compile(IDevice* device, bool fd_bootloader_mode) {
                     }
                     while (not detail::HashLookup::inst().is_bin_generated(kernel_hash)) {
                     }
-                    if (detail::CompilationReporter::enabled()) {
-                        detail::CompilationReporter::inst().add_kernel_compile_stats(
-                            get_id(), kernel, cache_hit, kernel_hash);
-                    }
                     kernel->set_binary_path(build_options.path);
                 },
                 events);
@@ -1458,15 +1452,10 @@ void detail::Program_::compile(IDevice* device, bool fd_bootloader_mode) {
         }
     }
     sync_events();
-
-    if (detail::CompilationReporter::enabled()) {
-        detail::CompilationReporter::inst().flush_program_entry(get_id(), num_kernels(), [this](size_t kernel_id) {
-            return get_kernel(kernel_id);
-        }, enable_persistent_kernel_cache);
-    }
     if (detail::MemoryReporter::enabled()) {
         detail::MemoryReporter::inst().flush_program_memory_usage(get_id(), device);
     }
+
     compiled_.insert(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
 }
 

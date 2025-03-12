@@ -12,8 +12,8 @@
 #include "common/executor.hpp"
 #include "jit_build/genfiles.hpp"
 #include "jit_build/kernel_args.hpp"
-#include <common.hpp>
-#include <profiler_state.hpp>
+#include "profiler_paths.hpp"
+#include "profiler_state.hpp"
 #include <command_queue_interface.hpp>
 #include <kernel.hpp>
 #include "tt_metal/llrt/tt_elffile.hpp"
@@ -108,8 +108,15 @@ void JitBuildEnv::init(
     this->out_firmware_root_ = this->out_root_ + to_string(build_key) + "/firmware/";
     this->out_kernel_root_ = this->out_root_ + to_string(build_key) + "/kernels/";
 
+    const static bool use_ccache = std::getenv("TT_METAL_CCACHE_KERNEL_SUPPORT") != nullptr;
+    if (use_ccache) {
+        this->gpp_ = "ccache ";
+    } else {
+        this->gpp_ = "";
+    }
+
     // Tools
-    this->gpp_ = this->root_ + "runtime/sfpi/compiler/bin/riscv32-unknown-elf-g++ ";
+    this->gpp_ += this->root_ + "runtime/sfpi/compiler/bin/riscv32-unknown-elf-g++ ";
 
     // Flags
     string common_flags;
