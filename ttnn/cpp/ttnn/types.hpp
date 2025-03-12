@@ -15,6 +15,8 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
+#include <stdexcept>  // Required for exception handling
+
 namespace ttnn {
 namespace types {
 
@@ -68,8 +70,33 @@ using tt::tt_metal::SubDevice;
 using tt::tt_metal::SubDeviceManagerId;
 using tt::tt_metal::v1::experimental::GlobalCircularBuffer;
 
+// ----------------------------------------
+// New Feature: DataType to C++ Type Mapping
+// ----------------------------------------
+
+// Compile-time mapping from DataType to C++ type
+template <DataType DT> struct data_type_to_ctype;
+
+template <> struct data_type_to_ctype<DataType::UINT32> { using type = uint32_t; };
+template <> struct data_type_to_ctype<DataType::UINT16> { using type = uint16_t; };
+template <> struct data_type_to_ctype<DataType::FLOAT32> { using type = float; };
+template <> struct data_type_to_ctype<DataType::BFLOAT16> { using type = uint16_t; };  // Typically stored as uint16
+
+// Helper alias for easier access
+template <DataType DT>
+using data_type_to_ctype_t = typename data_type_to_ctype<DT>::type;
+
+// Runtime dispatch function for operations on types
+template <typename Visitor>
+auto dispatch(DataType dt, Visitor&& visitor) {
+    switch (dt) {
+        case DataType::UINT32: return visitor.template operator()<uint32_t>();
+        case DataType::UINT16: return visitor.template operator()<uint16_t>();
+        case DataType::FLOAT32: return visitor.template operator()<float>();
+        case DataType::BFLOAT16: return visitor.template operator()<uint16_t>();
+        default: throw std::invalid_argument("Unsupported DataType");
+    }
+}
+
 }  // namespace types
-
-using namespace types;
-
 }  // namespace ttnn
