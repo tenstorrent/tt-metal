@@ -20,14 +20,9 @@
 #include "control_plane.hpp"
 
 namespace tt {
-namespace tt_metal {
-namespace detail {
+namespace tt_metal::detail {
 void CloseDevices(const std::map<chip_id_t, tt_metal::IDevice*>& devices);
-}
-namespace distributed {
-class MeshDevice;
-}
-}  // namespace tt_metal
+}  // namespace tt_metal::detail
 
 class DevicePool {
     friend void tt_metal::detail::CloseDevices(const std::map<chip_id_t, tt_metal::IDevice*>& devices);
@@ -62,11 +57,6 @@ public:
     const std::unordered_set<std::thread::id>& get_worker_thread_ids() const;
     void init_profiler() const;
 
-    // Allowing to get corresponding MeshDevice for a given device to properly schedule programs / create buffers for
-    // it. This is currently used exclusively by profiler.
-    void set_mesh_device(tt_metal::IDevice* device, std::weak_ptr<tt_metal::distributed::MeshDevice> mesh);
-    std::shared_ptr<tt_metal::distributed::MeshDevice> get_mesh_device(tt_metal::IDevice* device) const;
-
     tt::tt_fabric::ControlPlane* get_control_plane() const;
 
 private:
@@ -80,7 +70,6 @@ private:
     std::mutex lock;
     // TODO replace std::vector<std::unique_ptr<IDevice>> with stl::SlotMap<v1::DeviceKey, Device> when removing v0
     std::vector<std::unique_ptr<tt_metal::IDevice>> devices;
-    std::unordered_map<chip_id_t, std::weak_ptr<tt_metal::distributed::MeshDevice>> device_to_mesh;
     // Used to track worker thread handles (1 worker thread created per device)
     // when we need to check if a call is made from an application thread or a
     // worker thread

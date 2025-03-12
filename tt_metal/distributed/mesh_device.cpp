@@ -160,7 +160,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     mesh_device->initialize(num_command_queues, l1_small_size, trace_region_size, l1_bank_remap);
     for (auto device : root_devices) {
         // Temorary commented out, until we merge MeshDevice integration PR
-        // DevicePool::instance().set_mesh_device(device, mesh_device);
+        // dynamic_cast<Device*>(device)->mesh_device = mesh_device;
     }
     DevicePool::instance().init_profiler();
     return mesh_device;
@@ -190,7 +190,7 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
         submeshes[i]->initialize(num_command_queues, l1_small_size, trace_region_size, l1_bank_remap);
         for (auto device : submeshes[i]->get_devices()) {
             // Temorary commented out, until we merge MeshDevice integration PR
-            // DevicePool::instance().set_mesh_device(device, submeshes[i]);
+            // dynamic_cast<Device*>(device)->mesh_device = mesh_device;
         }
         result[device_ids[i]] = submeshes[i];
     }
@@ -919,6 +919,8 @@ void MeshDevice::mesh_reset_sub_device_stall_group() {
         device->push_work([device]() { device->reset_sub_device_stall_group(); });
     }
 }
+
+std::shared_ptr<distributed::MeshDevice> MeshDevice::get_mesh_device() { return shared_from_this(); }
 
 MeshSubDeviceManagerId::MeshSubDeviceManagerId(const MeshDevice& mesh_device) {
     this->sub_device_manager_ids.reserve(mesh_device.num_devices());

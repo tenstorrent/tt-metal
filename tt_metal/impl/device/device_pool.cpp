@@ -511,17 +511,6 @@ void DevicePool::unregister_worker_thread_for_device(IDevice* device) {
 
 const std::unordered_set<std::thread::id>& DevicePool::get_worker_thread_ids() const { return this->worker_thread_ids; }
 
-void DevicePool::set_mesh_device(tt_metal::IDevice* device, std::weak_ptr<tt_metal::distributed::MeshDevice> mesh) {
-    device_to_mesh[device->id()] = std::move(mesh);
-}
-
-std::shared_ptr<tt_metal::distributed::MeshDevice> DevicePool::get_mesh_device(tt_metal::IDevice* device) const {
-    if (auto it = device_to_mesh.find(device->id()); it != device_to_mesh.end()) {
-        return it->second.lock();
-    }
-    return nullptr;
-}
-
 void DevicePool::init_firmware_on_active_devices() const {
     const auto& active_devices = this->get_all_active_devices();
     for (const auto& dev : active_devices) {

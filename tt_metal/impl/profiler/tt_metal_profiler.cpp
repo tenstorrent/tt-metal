@@ -133,7 +133,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
             .defines = kernel_defines});
 
     // Using MeshDevice APIs if the current device is managed by MeshDevice
-    if (auto mesh_device = DevicePool::instance().get_mesh_device(device)) {
+    if (auto mesh_device = device->get_mesh_device()) {
         auto device_coord = mesh_device->get_view().find_device(device_id);
         distributed::MeshWorkload workload;
         workload.add_program(distributed::MeshCoordinateRange(device_coord, device_coord), std::move(sync_program));
@@ -167,7 +167,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
         writeTimes[i] = (TracyGetCpuTime() - writeStart);
     }
 
-    if (auto mesh_device = DevicePool::instance().get_mesh_device(device)) {
+    if (auto mesh_device = device->get_mesh_device()) {
         mesh_device->mesh_command_queue().finish();
     } else {
         Finish(device->command_queue());
@@ -354,10 +354,10 @@ void syncDeviceDevice(chip_id_t device_id_sender, chip_id_t device_id_receiver) 
 
     if (device_sender != nullptr and device_receiver != nullptr) {
         // Not supported for MeshDevice
-        if (auto mesh_sender = DevicePool::instance().get_mesh_device(device_sender)) {
+        if (auto mesh_sender = device_sender->get_mesh_device()) {
             return;
         }
-        if (auto mesh_receiver = DevicePool::instance().get_mesh_device(device_receiver)) {
+        if (auto mesh_receiver = device_receiver->get_mesh_device()) {
             return;
         }
         constexpr std::uint16_t sample_count = 240;
@@ -623,7 +623,7 @@ void InitDeviceProfiler(IDevice* device) {
 
         uint32_t pageSize = PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * PROFILER_RISC_COUNT * coreCountPerDram;
 
-        auto mesh_device = DevicePool::instance().get_mesh_device(device);
+        auto mesh_device = device->get_mesh_device();
         auto& profiler = tt_metal_device_profiler_map.at(device_id);
         if (profiler.output_dram_buffer.get_buffer() == nullptr && mesh_device) {
             // If buffer is not allocated, trying to re-use a buffer already allocated for another device within a
@@ -676,7 +676,7 @@ void DumpDeviceProfileResults(IDevice* device, ProfilerDumpState state) {
         workerCores.push_back(virtualCore);
     }
     IDevice* push_work_device = device;
-    if (auto mesh_device = DevicePool::instance().get_mesh_device(device)) {
+    if (auto mesh_device = device->get_mesh_device()) {
         push_work_device = mesh_device.get();
     }
     push_work_device->push_work([device, workerCores, state]() mutable {
@@ -714,7 +714,7 @@ void DumpDeviceProfileResults(IDevice* device, std::vector<CoreCoord>& worker_co
         if (state != ProfilerDumpState::LAST_CLOSE_DEVICE) {
             const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
             if (USE_FAST_DISPATCH) {
-                if (auto mesh_device = DevicePool::instance().get_mesh_device(device)) {
+                if (auto mesh_device = device->get_mesh_device()) {
                     mesh_device->mesh_command_queue().finish();
                 } else {
                     Finish(device->command_queue());
