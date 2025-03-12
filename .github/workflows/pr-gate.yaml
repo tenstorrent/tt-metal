@@ -36,6 +36,7 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     with:
       version: "22.04"
+      build-type: Debug
 
   find-changed-files:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
