@@ -5,28 +5,27 @@
 #pragma once
 
 #include "ttnn/decorators.hpp"
-#include <unordered_map>
 #include "generic_op_types.hpp"
 
 namespace ttnn::operations::generic {
 
-enum CBIndex : std::uint8_t;
+// GenericOp exposes everything needed to construct and write an operation on device for the user.
+// This includes: cb attributes, data movement attributes, compute attributes, rt args, compile time args.
+// Unlike other operations, must create and pass in output tensor with the input tensors.
+// See tests/ttnn/unit_tests/gtests/test_generic_op.cpp for some examples.
+// The main use case right now is an interface for PyKernel to pass dynamic kernel paths.
 
 struct GenericOp {
+    // TODO: #20830 - Split io_tensors into input_tensors and output_tensor properly.
     static Tensor invoke(
-        QueueId queue_id,
-        const std::vector<ttnn::Tensor>& input_tensors,
-        const program_attributes_t&,
-        const std::vector<Tensor>& io_tensors = {});
-
-    static Tensor invoke(
-        const std::vector<ttnn::Tensor>& input_tensors,
-        const program_attributes_t&,
-        const std::vector<Tensor>& io_tensors = {});
+        const std::vector<Tensor>& io_tensors,
+        const program_attributes_t& program_attributes
+    );
 };  // struct GenericOp
 
-}   // namespace ttnn::operations::generic
+}  // namespace ttnn::operations::generic
 
 namespace ttnn {
-constexpr auto generic_op = ttnn::register_operation<"ttnn::generic_op", ttnn::operations::generic::GenericOp>();
+constexpr auto generic_op =
+    ttnn::register_operation_with_auto_launch_op<"ttnn::generic_op", ttnn::operations::generic::GenericOp>();
 }  // namespace ttnn
