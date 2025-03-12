@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -149,77 +149,114 @@ template <
     uint32_t input_aligned_page_size,
     bool is_block_sharded,
     bool is_width_sharded,
-    bool is_read,
-    bool is_col_major,
-    bool blocking = false>
-static inline void copy_sticks_async(
-    const tt_l1_ptr uint16_t* config_data,
-    const tt_l1_ptr uint16_t* blocking_config_data,
+    bool remote_read,  // for remote config transfers
+    bool is_col_major>
+static inline void copy_remote_local_sticks_by_block(
+    const tt_l1_ptr uint16_t* remote_config_data,
+    const tt_l1_ptr uint16_t* blocking_remote_config_data,
+    const tt_l1_ptr uint16_t* local_config_data,
+    const tt_l1_ptr uint16_t* blocking_local_config_data,
     uint16_t my_noc_x,
     uint16_t my_noc_y,
     uint32_t in_base_l1_addr,
     uint32_t out_base_l1_addr,
     uint16_t num_blocks) {
-    uint32_t config_data_offset = 0;
-    uint16_t length = config_data[config_data_offset + 2];  // # instructions in the first command
+    uint32_t remote_offset = 0;
+    uint32_t local_offset = 0;
+    uint16_t remote_length = remote_config_data[remote_offset + 2];
+    uint16_t local_length = local_config_data[local_offset + 2];
 
-    while (length) {
-        GatherConfigHeader header;
-        decode_gather_config_header(config_data, config_data_offset, header);
-        config_data_offset += GATHER_CONFIG_HEADER_NUM_ELEMENTS;
+    while (remote_length || local_length) {
+        GatherConfigHeader remote_header, local_header;
+        if (remote_length) {
+            decode_gather_config_header(remote_config_data, remote_offset, remote_header);
+            remote_offset += GATHER_CONFIG_HEADER_NUM_ELEMENTS;
+            remote_length = remote_header.length;
+        }
+        if (local_length) {
+            decode_gather_config_header(local_config_data, local_offset, local_header);
+            local_offset += GATHER_CONFIG_HEADER_NUM_ELEMENTS;
+            local_length = local_header.length;
+        }
 
-        const uint16_t real_noc_x = ((is_block_sharded && !is_col_major) || is_width_sharded) ? my_noc_x : header.noc_x;
-        const uint16_t real_noc_y = ((is_block_sharded && is_col_major) || is_width_sharded) ? my_noc_y : header.noc_y;
-        const uint64_t base_addr = get_noc_addr(real_noc_x, real_noc_y, is_read ? in_base_l1_addr : out_base_l1_addr);
+        uint64_t remote_base_addr = 0;
+        if (remote_length) {
+            const uint16_t real_noc_x =
+                ((is_block_sharded && !is_col_major) || is_width_sharded) ? my_noc_x : remote_header.noc_x;
+            const uint16_t real_noc_y =
+                ((is_block_sharded && is_col_major) || is_width_sharded) ? my_noc_y : remote_header.noc_y;
+            remote_base_addr = get_noc_addr(real_noc_x, real_noc_y, remote_read ? in_base_l1_addr : out_base_l1_addr);
+        }
 
-        length = header.length;
+        uint64_t local_base_addr = 0;
+        if (local_length) {
+            const uint16_t real_noc_x =
+                ((is_block_sharded && !is_col_major) || is_width_sharded) ? my_noc_x : local_header.noc_x;
+            const uint16_t real_noc_y =
+                ((is_block_sharded && is_col_major) || is_width_sharded) ? my_noc_y : local_header.noc_y;
+            // For local transfers, is_read is false.
+            local_base_addr = get_noc_addr(real_noc_x, real_noc_y, false ? in_base_l1_addr : out_base_l1_addr);
+        }
 
-        if constexpr (blocking) {
-            uint16_t block_offset = 0;
-            for (uint16_t block_id = 0; block_id < num_blocks; block_id++) {
-                uint16_t old_offset = block_offset;
-                block_offset = copy_block_sticks_async<
+        uint16_t remote_block_offset = 0;
+        uint16_t local_block_offset = 0;
+        // Outer loop over blocks: process remote and local for each block before moving on.
+        for (uint16_t block_id = 0; block_id < num_blocks; block_id++) {
+            if (remote_length) {
+                uint16_t old_offset = remote_block_offset;
+                remote_block_offset = copy_block_sticks_async<
                     stick_nbytes,
                     input_aligned_page_size,
                     is_block_sharded,
                     is_width_sharded,
-                    is_read,
+                    remote_read,
                     is_col_major>(
-                    config_data,
-                    config_data_offset,
+                    remote_config_data,
+                    remote_offset,
                     block_id,
-                    block_offset,
-                    length,
-                    blocking_config_data,
-                    base_addr,
+                    remote_block_offset,
+                    remote_length,
+                    blocking_remote_config_data,
+                    remote_base_addr,
                     in_base_l1_addr,
                     out_base_l1_addr);
-                if (block_offset > old_offset) {
+                if (remote_block_offset > old_offset) {
                     noc_async_read_barrier();
                     noc_async_write_barrier();
                 }
-                if (block_offset >= length) {
-                    break;
-                }
             }
-            config_data_offset += length;
-        } else {
-            GatherStep step;
-            for (uint16_t j = 0; j < length; j += GATHER_CONFIG_HEADER_NUM_ELEMENTS) {
-                decode_gather_config_step(config_data, config_data_offset + j, step);
-                copy_stick<
+            if (local_length) {
+                uint16_t old_offset = local_block_offset;
+                local_block_offset = copy_block_sticks_async<
                     stick_nbytes,
                     input_aligned_page_size,
                     is_block_sharded,
                     is_width_sharded,
-                    is_read,
-                    is_col_major>(step, base_addr, in_base_l1_addr, out_base_l1_addr);
+                    false,  // local transfers are writes from L1, so is_read is false
+                    is_col_major>(
+                    local_config_data,
+                    local_offset,
+                    block_id,
+                    local_block_offset,
+                    local_length,
+                    blocking_local_config_data,
+                    local_base_addr,
+                    in_base_l1_addr,
+                    out_base_l1_addr);
+                if (local_block_offset > old_offset) {
+                    noc_async_read_barrier();
+                    noc_async_write_barrier();
+                }
             }
-            config_data_offset += length;
         }
-
-        // Move to the next command (if any)
-        length = config_data[config_data_offset + 2];
+        if (remote_length) {
+            remote_offset += remote_length;
+            remote_length = remote_config_data[remote_offset + 2];
+        }
+        if (local_length) {
+            local_offset += local_length;
+            local_length = local_config_data[local_offset + 2];
+        }
     }
 }
 
@@ -285,55 +322,35 @@ void kernel_main() {
         }
     }
 
-    if constexpr (local_config_cb_id) {
-        cb_reserve_back(src_cb_id, in_nsticks);
-        cb_push_back(src_cb_id, in_nsticks);
-    }
+    cb_reserve_back(src_cb_id, in_nsticks);
+    cb_push_back(src_cb_id, in_nsticks);
 
     cb_wait_front(in_cb_id, in_nsticks);
 
-    if constexpr (remote_config_cb_id) {
-        const uint32_t config_data_l1_addr = get_read_ptr(remote_config_cb_id);
-        const tt_l1_ptr uint16_t* config_data = reinterpret_cast<const tt_l1_ptr uint16_t*>(config_data_l1_addr);
-        copy_sticks_async<
-            stick_nbytes,
-            input_aligned_page_size,
-            is_block_sharded,
-            is_width_sharded,
-            remote_read,  // is_read
-            is_col_major,
-            true  // blocking
-            >(
-            config_data,
-            blocking_remote_config_data + 1,  // skip the first element (num_blocks)
-            my_noc_x,
-            my_noc_y,
-            in_base_l1_addr,
-            out_base_l1_addr,
-            num_blocks);
-    }
+    const uint32_t remote_config_data_l1_addr = get_read_ptr(remote_config_cb_id);
+    const tt_l1_ptr uint16_t* remote_config_data =
+        reinterpret_cast<const tt_l1_ptr uint16_t*>(remote_config_data_l1_addr);
 
-    // Local config
-    if constexpr (local_config_cb_id) {
-        const uint32_t config_data_l1_addr = get_read_ptr(local_config_cb_id);
-        const tt_l1_ptr uint16_t* config_data = reinterpret_cast<const tt_l1_ptr uint16_t*>(config_data_l1_addr);
-        copy_sticks_async<
-            stick_nbytes,
-            input_aligned_page_size,
-            is_block_sharded,
-            is_width_sharded,
-            false,  // is_read
-            is_col_major,
-            true  // blocking
-            >(
-            config_data,
-            blocking_local_config_data + 1,  // skip first element (num_blocks)
-            my_noc_x,
-            my_noc_y,
-            in_base_l1_addr,
-            out_base_l1_addr,
-            num_blocks);
-    }
+    const uint32_t local_config_data_l1_addr = get_read_ptr(local_config_cb_id);
+    const tt_l1_ptr uint16_t* local_config_data =
+        reinterpret_cast<const tt_l1_ptr uint16_t*>(local_config_data_l1_addr);
+
+    copy_remote_local_sticks_by_block<
+        stick_nbytes,
+        input_aligned_page_size,
+        is_block_sharded,
+        is_width_sharded,
+        remote_read,  // remote config: use the provided remote_read flag
+        is_col_major>(
+        remote_config_data,
+        blocking_remote_config_data + 1,  // skip header element (num_blocks)
+        local_config_data,
+        blocking_local_config_data + 1,  // skip header element (num_blocks)
+        my_noc_x,
+        my_noc_y,
+        in_base_l1_addr,
+        out_base_l1_addr,
+        num_blocks);
 
     noc_async_read_barrier();
     noc_async_write_barrier();
