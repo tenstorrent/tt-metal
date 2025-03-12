@@ -576,6 +576,14 @@ void launch_on_mesh_device(
     }
 }
 
+/**
+ * @brief Concept that defines a device operation that has a mesh device adapter.
+ *
+ * This concept requires that the type satisfies both the DeviceOperationConcept
+ * and the MeshDeviceOperationAdapterType concept. It represents operations that
+ * can be executed across multiple devices in a mesh configuration using the
+ * adapter pattern.
+ */
 template <typename device_operation_t>
 concept DeviceOperationWithMeshDeviceAdapter =
     DeviceOperationConcept<device_operation_t> && MeshDeviceOperationAdapterType<device_operation_t>;
@@ -780,7 +788,7 @@ typename device_operation_t::tensor_return_value_t launch_on_single_device(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
 
-    // Automatically use mesh adapter version if not already an adapter
+    // TODO(jchu): Revisit whether we should automatically use mesh adapter version if not already an adapter
     /*
     if constexpr (!is_mesh_device_operation_adapter<device_operation_t>::value) {
         using MeshCompatibleOp = MeshDeviceOperationAdapter<device_operation_t>;

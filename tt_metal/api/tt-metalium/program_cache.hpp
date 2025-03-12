@@ -9,7 +9,7 @@
 #include "program_impl.hpp"
 #include "unique_any.hpp"
 #include "mesh_workload.hpp"
-
+#include <tt-metalium/overloaded.hpp>
 namespace tt::tt_metal::program_cache::detail {
 template <typename shared_variables_t>
 struct CachedMeshWorkload {
@@ -104,26 +104,22 @@ public:
 
     ProgramAdapter(ProgramAdapter&& other) noexcept :
         cached_object_{std::move(other.cached_object_)},
-        program{[&]() -> tt::tt_metal::Program& {
-            const size_t idx = cached_object_.index();
-            if (idx == 0) {
-                return get_first_program(std::get<CachedMeshWorkload<shared_variables_t>>(cached_object_));
-            } else if (idx == 1) {
-                return std::get<CachedProgram<shared_variables_t>>(cached_object_).program;
-            } else {
-                return std::get<CachedProgramRef<shared_variables_t>>(cached_object_).program;
-            }
-        }()},
-        shared_variables{[&]() -> shared_variables_t& {
-            const size_t idx = cached_object_.index();
-            if (idx == 0) {
-                return get_first_shared_variables(std::get<CachedMeshWorkload<shared_variables_t>>(cached_object_));
-            } else if (idx == 1) {
-                return std::get<CachedProgram<shared_variables_t>>(cached_object_).shared_variables;
-            } else {
-                return std::get<CachedProgramRef<shared_variables_t>>(cached_object_).shared_variables;
-            }
-        }()} {}
+        program{std::visit(
+            tt::stl::overloaded{
+                [&](CachedMeshWorkload<shared_variables_t>& obj) -> tt::tt_metal::Program& {
+                    return get_first_program(obj);
+                },
+                [&](CachedProgram<shared_variables_t>& obj) -> tt::tt_metal::Program& { return obj.program; },
+                [&](CachedProgramRef<shared_variables_t>& obj) -> tt::tt_metal::Program& { return obj.program; }},
+            cached_object_)},
+        shared_variables{std::visit(
+            tt::stl::overloaded{
+                [&](CachedMeshWorkload<shared_variables_t>& obj) -> shared_variables_t& {
+                    return get_first_shared_variables(obj);
+                },
+                [&](CachedProgram<shared_variables_t>& obj) -> shared_variables_t& { return obj.shared_variables; },
+                [&](CachedProgramRef<shared_variables_t>& obj) -> shared_variables_t& { return obj.shared_variables; }},
+            cached_object_)} {}
 
     // Get the CachedMeshWorkload (throws if not a mesh workload)
     CachedMeshWorkload<shared_variables_t>& get_cached_mesh_workload() {

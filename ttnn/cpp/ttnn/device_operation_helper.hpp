@@ -96,9 +96,8 @@ public:
             tt::tt_metal::distributed::MeshDevice*)> attribute_customizer = nullptr) {
         ProgramFactoryT program_factory;
 
-        for (auto& [coordinate_range, shared_variables] : cached_workload.coordinate_range_to_shared_variables) {
-            auto& mesh_workload = cached_workload.workload;
-            auto& program = mesh_workload.get_program(coordinate_range);
+        for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+            auto& shared_variables = cached_workload.coordinate_range_to_shared_variables[coordinate_range];
 
             if (attribute_customizer) {
                 for (auto coordinate : coordinate_range) {
