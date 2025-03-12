@@ -33,7 +33,7 @@ autograd::TensorPtr scaled_dot_product_attention(
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,
     const std::optional<autograd::TensorPtr>& mask) {
-    if (!std::ranges::all_of(std::array{query, key, value}, [](const auto& t) { return t->get_rank() == 4; })) {
+    if (!std::ranges::all_of(std::array{query, key, value}, [](const auto& t) { return t->get_rank() == 4U; })) {
         throw std::invalid_argument("query, key, and value must have rank 4");
     }
 
@@ -46,7 +46,7 @@ autograd::TensorPtr scaled_dot_product_attention(
     }
 
     uint32_t G = H;           // number of KV groups, H for MHA mode
-    uint32_t group_size = 1;  // number of query heads per group, 1 for MHA mode
+    uint32_t group_size = 1U;  // number of query heads per group, 1 for MHA mode
     if (H != HK || H != HV) {
         // grouped query mode
         if (HV != HK) {
@@ -73,12 +73,12 @@ autograd::TensorPtr scaled_dot_product_attention(
     ttnn::Tensor qk_scaled;
     if (G != H) {
         q_scaled = ttnn::reshape(q_scaled, ttnn::Shape{B * G, group_size, S, E});
-        key_tensor = ttnn::reshape(key_tensor, ttnn::Shape{B * G, 1, S, E});
+        key_tensor = ttnn::reshape(key_tensor, ttnn::Shape{B * G, 1U, S, E});
         // key = B*G,1,S,E -> B*G, S, E
         // q = B*G, H/G, S, E -> B*H, E, S
 
         // repeat key to group size for each group (manual bcast)
-        ttnn::Tensor key_repeated = ttnn::repeat(key_tensor, ttnn::Shape{1, group_size, 1, 1});
+        ttnn::Tensor key_repeated = ttnn::repeat(key_tensor, ttnn::Shape{1U, group_size, 1U, 1U});
         qk_scaled = matmul(q_scaled, key_repeated, /* transpose_a */ false, /* transpose_b */ true);
         qk_scaled = ttnn::reshape(qk_scaled, ttnn::Shape{B, H, S, S});
     } else {
