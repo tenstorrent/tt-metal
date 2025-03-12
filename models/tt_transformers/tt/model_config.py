@@ -109,7 +109,7 @@ class ModelArgs:
     ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
-        self.device_name = {0: "CPU", 1: "N150", 2: "N300", 4: "N150x4", 8: "T3K", 32: "TG"}[self.num_devices]
+        self.device_name = {0: "CPU", 1: "N150", 2: "N300", 4: "P150x4", 8: "T3K", 32: "TG"}[self.num_devices]
         self.model_name = "Unknown"  # Llama model name will be dependent on the checkpoint directory
         self.max_seq_len = max_seq_len
         self.max_batch_size = max_batch_size
