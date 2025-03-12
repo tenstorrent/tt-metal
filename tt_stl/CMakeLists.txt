@@ -8,17 +8,17 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS tt_stl
         FILES
-            aligned_allocator.hpp
-            any_range.hpp
-            concepts.hpp
-            indestructible.hpp
-            overloaded.hpp
-            reflection.hpp
-            slotmap.hpp
-            span.hpp
-            strong_type.hpp
-            type_name.hpp
-            unique_any.hpp
+            tt_stl/aligned_allocator.hpp
+            tt_stl/any_range.hpp
+            tt_stl/concepts.hpp
+            tt_stl/indestructible.hpp
+            tt_stl/overloaded.hpp
+            tt_stl/reflection.hpp
+            tt_stl/slotmap.hpp
+            tt_stl/span.hpp
+            tt_stl/strong_type.hpp
+            tt_stl/type_name.hpp
+            tt_stl/unique_any.hpp
 )
 
 target_include_directories(tt_stl INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
