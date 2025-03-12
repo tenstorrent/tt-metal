@@ -2,15 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-# TODO: All of the TensorTo and MeshTo classes will eventually be migrated to the mapper/composer paths
+# TODO: All of the TensorTo and MeshTo classes will be slowly cut out over the next few days
 from .distributed import (
     MeshDevice,
     DispatchCoreType,
     MeshToTensor,
-    TensorToMesh,
-    ReplicateTensorToMesh,
-    ShardTensorToMesh,
-    ShardTensor2dMesh,
     ConcatMeshToTensor,
     ConcatMesh2dToTensor,
     open_mesh_device,
@@ -20,6 +16,7 @@ from .distributed import (
     get_pcie_device_ids,
     get_device_ids,
     create_mesh_device,
+    synchronize_devices,
     visualize_mesh_device,
     distribute,
 )
