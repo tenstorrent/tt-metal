@@ -10,7 +10,6 @@ import transformers
 import ttnn
 import evaluate
 from models.utility_functions import (
-    disable_compilation_reports,
     disable_persistent_kernel_cache,
     profiler,
 )
@@ -275,7 +274,6 @@ def run_roberta_question_and_answering_inference_squad_v2(
 )
 def test_demo(device, use_program_cache, model_name, input_loc, bert, batch_size, sequence_size):
     disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     return run_roberta_question_and_answering_inference(
         device=device,
@@ -303,7 +301,6 @@ def test_demo_squadv2(
     n_iterations,
 ):
     disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     return run_roberta_question_and_answering_inference_squad_v2(
         device=device,

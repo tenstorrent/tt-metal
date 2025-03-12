@@ -31,7 +31,6 @@ from models.utility_functions import (
     profiler,
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
-    disable_compilation_reports,
     is_e75,
     is_wormhole_b0,
     is_wormhole_b0,
@@ -407,7 +406,6 @@ def test_perf_bare_metal(
     tt_cache_path = get_tt_cache_path(model_version)
 
     disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     run_test_FalconCausalLM_end_to_end(
         device,

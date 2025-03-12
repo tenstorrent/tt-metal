@@ -17,7 +17,6 @@ from models.demos.ttnn_falcon7b.tt.common import create_custom_preprocessor
 from models.demos.ttnn_falcon7b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_cache_path, model_config_entries
 from models.utility_functions import (
-    disable_compilation_reports,
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
     profiler,
@@ -449,7 +448,6 @@ def test_demo(
     use_program_cache,
 ):
     disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     return run_falcon_demo_kv(
         user_input=user_input,

@@ -22,7 +22,6 @@ from models.utility_functions import (
     profiler,
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
-    disable_compilation_reports,
     nearest_32,
     skip_for_grayskull,
     get_devices_for_t3000,
@@ -315,7 +314,6 @@ def test_Llama_perf_host(
 
     t3k_mesh_device.enable_async(True)
     t3k_mesh_device.enable_program_cache()
-    disable_compilation_reports()
 
     run_test_LlamaModel_end_to_end(
         t3k_mesh_device,

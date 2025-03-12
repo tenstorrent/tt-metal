@@ -19,7 +19,6 @@ from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.falcon7b_common.tt.falcon_common import PytorchFalconCausalLM
 from models.demos.falcon7b_common.tt.model_config import get_model_config
 from models.utility_functions import (
-    disable_compilation_reports,
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
     is_e75,
@@ -347,7 +346,6 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
     )
 
     disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     run_test_FalconCausalLM_end_to_end(
         mesh_device,

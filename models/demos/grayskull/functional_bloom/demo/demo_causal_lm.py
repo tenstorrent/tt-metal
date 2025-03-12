@@ -10,7 +10,6 @@ import numpy as np
 from loguru import logger
 
 from models.utility_functions import (
-    disable_compilation_reports,
     disable_persistent_kernel_cache,
     profiler,
 )
@@ -236,7 +235,6 @@ def test_demo(
     num_tokens_to_decode=10,
 ):
     disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     return run_bloom_causal_LM_inference(
         model_version="bigscience/bloom-560m",
@@ -267,7 +265,6 @@ def test_demo_hellaswag(
     num_tokens_to_decode=10,
 ):
     disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     return run_bloom_causal_LM_inference_hellaswag(
         model_version="bigscience/bloom-560m",

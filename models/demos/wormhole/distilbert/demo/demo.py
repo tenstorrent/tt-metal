@@ -6,7 +6,6 @@ import torch
 from loguru import logger
 import ttnn
 from models.utility_functions import (
-    disable_compilation_reports,
     disable_persistent_kernel_cache,
     profiler,
 )
@@ -307,7 +306,6 @@ def run_distilbert_question_and_answering_inference_squad_v2(
 @pytest.mark.parametrize("distilbert", [ttnn_optimized_distilbert])
 def test_demo(input_loc, model_name, distilbert, batch_size, model_location_generator, mesh_device):
     disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     if ttnn.GetNumAvailableDevices() == 2:
         batch_size = batch_size * 2
@@ -335,7 +333,6 @@ def test_demo_squadv2(
     model_name, distilbert, batch_size, n_iterations, model_location_generator, use_program_cache, mesh_device
 ):
     disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     if ttnn.GetNumAvailableDevices() == 2:
         batch_size = batch_size * 2
