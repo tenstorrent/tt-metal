@@ -15,6 +15,39 @@ import signal
 import psutil
 import json
 import matplotlib.pyplot as plt
+import numpy as np
+
+from models.tt_transformers.tt.model_config import parse_optimizations
+
+# NOTE: the following settings are used to override the default settings for Pareto analysis
+# default setting: precision_cfg = {ff1_3: bfp8, ff2: bfp8, wqkv: bfp8, wo: bfp8, kv_cache: bfp8, activation: mixed}, fidelity_cfg = {li_ff1_3: hifi2, li_ff2: hifi2, li_qkv_decode: hifi2, sdpa_decode: hifi2na, li_o_decode: hifi2, li_qkv_prefill: hifi2, sdpa_prefill: hifi4, li_o_prefill: hifi2_fp16}
+dtype_mf_settings = [
+    "precision_cfg = {ff1_3: bfp4, ff2: bfp4}, fidelity_cfg = {li_ff1_3: lofi, li_ff2: lofi}",
+    "precision_cfg = {ff1_3: bfp4, ff2: bfp8}, fidelity_cfg = {li_ff1_3: lofi, li_ff2: hifi2}",
+    "precision_cfg = {ff1_3: bfp4, ff2: bf16}, fidelity_cfg = {li_ff1_3: lofi, li_ff2: hifi4}",
+    "precision_cfg = {ff1_3: bfp8, ff2: bfp4}, fidelity_cfg = {li_ff1_3: hifi2, li_ff2: lofi}",
+    "precision_cfg = {ff1_3: bfp8, ff2: bfp8}, fidelity_cfg = {li_ff1_3: hifi2, li_ff2: hifi2}",
+    "precision_cfg = {ff1_3: bfp8, ff2: bf16}, fidelity_cfg = {li_ff1_3: hifi2, li_ff2: hifi4}",
+    "precision_cfg = {ff1_3: bf16, ff2: bfp4}, fidelity_cfg = {li_ff1_3: hifi4, li_ff2: lofi}",
+    "precision_cfg = {ff1_3: bf16, ff2: bfp8}, fidelity_cfg = {li_ff1_3: hifi4, li_ff2: hifi2}",
+    "precision_cfg = {ff1_3: bf16, ff2: bf16}, fidelity_cfg = {li_ff1_3: hifi4, li_ff2: hifi4}",
+    "precision_cfg = {ff1_3: bfp8, ff2: bfp8, wqkv: bfp8, wo: bfp4, kv_cache: bfp8, activation: bf16}, fidelity_cfg = {li_ff1_3: hifi2, sdpa_decode: hifi2na, li_o_decode: lofi, li_qkv_prefill: hifi2, sdpa_prefill: hifi4, li_o_prefill: lofi}",
+    "precision_cfg = {ff1_3: bfp8, ff2: bfp8, wqkv: bfp8, wo: bfp4, kv_cache: bfp8, activation: bfp8}, fidelity_cfg = {li_ff1_3: hifi2, sdpa_decode: hifi2na, li_o_decode: lofi, li_qkv_prefill: hifi2, sdpa_prefill: hifi4, li_o_prefill: lofi}",
+    "precision_cfg = {ff1_3: bfp8, ff2: bfp8, wqkv: bfp8, wo: bfp4, kv_cache: bfp8}, fidelity_cfg = {li_ff1_3: hifi2, li_ff2: hifi2, li_o_decode: lofi, li_qkv_prefill: hifi2, sdpa_prefill: hifi4, li_o_prefill: lofi}",
+]
+
+pareto_commands = {
+    k: v
+    for cmd in [
+        {
+            # dmf is short for "dtype and math fidelity"
+            f"accuracy-dmf-{i}": f"pytest models/tt_transformers/tests/test_accuracy.py -k 'attention-accuracy and file' --optimizations '{setting}'",
+            f"demo-dmf-{i}": f"pytest models/tt_transformers/demo/simple_text_demo.py -k 'params0-performance and batch-1' --optimizations '{setting}'",
+        }
+        for i, setting in enumerate(dtype_mf_settings)
+    ]
+    for k, v in cmd.items()
+}
 
 
 def ensure_less_installed():
@@ -482,8 +515,8 @@ def main(stdscr):
                         if command_input == "vision":
                             command_input = "vision-mlp,vision-attn,vision-block,vision-xfmr,vision-xattn,vision-xblock,vision-conv,vision-class,vision-tile-pos,vision-pos,vision-encoder,vision-text-xfmr,vision-vision-xfmr"
 
-                        if command_input == "precision":
-                            command_input = "accuracy-precision_bfp4_bfp4_bfp8_bfp8_bfp8_orig__lofi_lofi_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4,accuracy-precision_bfp4_bfp8_bfp8_bfp8_bfp8_orig__lofi_hifi2_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4,accuracy-precision_bfp4_bf16_bfp8_bfp8_bfp8_orig__lofi_hifi4_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4,accuracy-precision_bfp8_bfp4_bfp8_bfp8_bfp8_orig__hifi2_lofi_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4,accuracy-precision_bfp8_bfp8_bfp8_bfp8_bfp8_orig__hifi2_hifi2_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4,accuracy-precision_bfp8_bf16_bfp8_bfp8_bfp8_orig__hifi2_hifi4_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4,accuracy-precision_bf16_bfp4_bfp8_bfp8_bfp8_orig__hifi4_lofi_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4,accuracy-precision_bf16_bfp8_bfp8_bfp8_bfp8_orig__hifi4_hifi2_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4,accuracy-precision_bf16_bf16_bfp8_bfp8_bfp8_orig__hifi4_hifi4_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4,accuracy-precision_bfp8_bfp8_bfp8_bfp4_bfp8_bf16__hifi2_hifi2_hifi2_lofi_hifi2na_hifi2_lofi_hifi4,accuracy-precision_bfp8_bfp8_bfp8_bfp4_bfp8_bfp8__hifi2_hifi2_hifi2_lofi_hifi2na_hifi2_lofi_hifi4,accuracy-precision_bfp8_bfp8_bfp8_bfp4_bfp8_orig__hifi2_hifi2_hifi2_lofi_hifi2na_hifi2_lofi_hifi4,demo-precision_bfp4_bfp4_bfp8_bfp8_bfp8_orig__lofi_lofi_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4,demo-precision_bfp4_bfp8_bfp8_bfp8_bfp8_orig__lofi_hifi2_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4,demo-precision_bfp4_bf16_bfp8_bfp8_bfp8_orig__lofi_hifi4_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4,demo-precision_bfp8_bfp4_bfp8_bfp8_bfp8_orig__hifi2_lofi_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4,demo-precision_bfp8_bfp8_bfp8_bfp8_bfp8_orig__hifi2_hifi2_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4,demo-precision_bfp8_bf16_bfp8_bfp8_bfp8_orig__hifi2_hifi4_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4,demo-precision_bf16_bfp4_bfp8_bfp8_bfp8_orig__hifi4_lofi_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4,demo-precision_bf16_bfp8_bfp8_bfp8_bfp8_orig__hifi4_hifi2_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4,demo-precision_bf16_bf16_bfp8_bfp8_bfp8_orig__hifi4_hifi4_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4,demo-precision_bfp8_bfp8_bfp8_bfp4_bfp8_bf16__hifi2_hifi2_hifi2_lofi_hifi2na_hifi2_lofi_hifi4,demo-precision_bfp8_bfp8_bfp8_bfp4_bfp8_bfp8__hifi2_hifi2_hifi2_lofi_hifi2na_hifi2_lofi_hifi4,demo-precision_bfp8_bfp8_bfp8_bfp4_bfp8_orig__hifi2_hifi2_hifi2_lofi_hifi2na_hifi2_lofi_hifi4"
+                        if command_input == "pareto":
+                            command_input = ",".join(pareto_commands.keys())
 
                         # Parse models, devices, and commands
                         models = parse_list(model_input)
@@ -877,31 +910,8 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
         "model": "pytest models/tt_transformers/tests/test_model.py -k 'performance-256 and full'",
         "model-quick": "pytest models/tt_transformers/tests/test_model.py -k 'performance-256 and quick'",
         "model-prefill": "pytest models/tt_transformers/tests/test_model_prefill.py -k performance-4096",
-        # Precision and Math Fidelity tests
-        "accuracy-precision_bfp4_bfp4_bfp8_bfp8_bfp8_orig__lofi_lofi_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4": "pytest models/tt_transformers/tests/test_accuracy.py -k 'bfp4_bfp4_bfp8_bfp8_bfp8_orig__lofi_lofi_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4 and file'",
-        "accuracy-precision_bfp4_bfp8_bfp8_bfp8_bfp8_orig__lofi_hifi2_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4": "pytest models/tt_transformers/tests/test_accuracy.py -k 'bfp4_bfp8_bfp8_bfp8_bfp8_orig__lofi_hifi2_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4 and file'",
-        "accuracy-precision_bfp4_bf16_bfp8_bfp8_bfp8_orig__lofi_hifi4_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4": "pytest models/tt_transformers/tests/test_accuracy.py -k 'bfp4_bf16_bfp8_bfp8_bfp8_orig__lofi_hifi4_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4 and file'",
-        "accuracy-precision_bfp8_bfp4_bfp8_bfp8_bfp8_orig__hifi2_lofi_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4": "pytest models/tt_transformers/tests/test_accuracy.py -k 'bfp8_bfp4_bfp8_bfp8_bfp8_orig__hifi2_lofi_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4 and file'",
-        "accuracy-precision_bfp8_bfp8_bfp8_bfp8_bfp8_orig__hifi2_hifi2_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4": "pytest models/tt_transformers/tests/test_accuracy.py -k 'bfp8_bfp8_bfp8_bfp8_bfp8_orig__hifi2_hifi2_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4 and file'",
-        "accuracy-precision_bfp8_bf16_bfp8_bfp8_bfp8_orig__hifi2_hifi4_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4": "pytest models/tt_transformers/tests/test_accuracy.py -k 'bfp8_bf16_bfp8_bfp8_bfp8_orig__hifi2_hifi4_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4 and file'",
-        "accuracy-precision_bf16_bfp4_bfp8_bfp8_bfp8_orig__hifi4_lofi_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4": "pytest models/tt_transformers/tests/test_accuracy.py -k 'bf16_bfp4_bfp8_bfp8_bfp8_orig__hifi4_lofi_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4 and file'",
-        "accuracy-precision_bf16_bfp8_bfp8_bfp8_bfp8_orig__hifi4_hifi2_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4": "pytest models/tt_transformers/tests/test_accuracy.py -k 'bf16_bfp8_bfp8_bfp8_bfp8_orig__hifi4_hifi2_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4 and file'",
-        "accuracy-precision_bf16_bf16_bfp8_bfp8_bfp8_orig__hifi4_hifi4_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4": "pytest models/tt_transformers/tests/test_accuracy.py -k 'bf16_bf16_bfp8_bfp8_bfp8_orig__hifi4_hifi4_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4 and file'",
-        "accuracy-precision_bfp8_bfp8_bfp8_bfp4_bfp8_bf16__hifi2_hifi2_hifi2_lofi_hifi2na_hifi2_lofi_hifi4": "pytest models/tt_transformers/tests/test_accuracy.py -k 'bfp8_bfp8_bfp8_bfp4_bfp8_bf16__hifi2_hifi2_hifi2_lofi_hifi2na_hifi2_lofi_hifi4 and file'",
-        "accuracy-precision_bfp8_bfp8_bfp8_bfp4_bfp8_bfp8__hifi2_hifi2_hifi2_lofi_hifi2na_hifi2_lofi_hifi4": "pytest models/tt_transformers/tests/test_accuracy.py -k 'bfp8_bfp8_bfp8_bfp4_bfp8_bfp8__hifi2_hifi2_hifi2_lofi_hifi2na_hifi2_lofi_hifi4 and file'",
-        "accuracy-precision_bfp8_bfp8_bfp8_bfp4_bfp8_orig__hifi2_hifi2_hifi2_lofi_hifi2na_hifi2_lofi_hifi4": "pytest models/tt_transformers/tests/test_accuracy.py -k 'bfp8_bfp8_bfp8_bfp4_bfp8_orig__hifi2_hifi2_hifi2_lofi_hifi2na_hifi2_lofi_hifi4 and file'",
-        "demo-precision_bfp4_bfp4_bfp8_bfp8_bfp8_orig__lofi_lofi_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4": "pytest models/tt_transformers/demo/simple_text_demo.py -k 'bfp4_bfp4_bfp8_bfp8_bfp8_orig__lofi_lofi_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4 and batch-1'",
-        "demo-precision_bfp4_bfp8_bfp8_bfp8_bfp8_orig__lofi_hifi2_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4": "pytest models/tt_transformers/demo/simple_text_demo.py -k 'bfp4_bfp8_bfp8_bfp8_bfp8_orig__lofi_hifi2_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4 and batch-1'",
-        "demo-precision_bfp4_bf16_bfp8_bfp8_bfp8_orig__lofi_hifi4_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4": "pytest models/tt_transformers/demo/simple_text_demo.py -k 'bfp4_bf16_bfp8_bfp8_bfp8_orig__lofi_hifi4_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4 and batch-1'",
-        "demo-precision_bfp8_bfp4_bfp8_bfp8_bfp8_orig__hifi2_lofi_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4": "pytest models/tt_transformers/demo/simple_text_demo.py -k 'bfp8_bfp4_bfp8_bfp8_bfp8_orig__hifi2_lofi_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4 and batch-1'",
-        "demo-precision_bfp8_bfp8_bfp8_bfp8_bfp8_orig__hifi2_hifi2_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4": "pytest models/tt_transformers/demo/simple_text_demo.py -k 'bfp8_bfp8_bfp8_bfp8_bfp8_orig__hifi2_hifi2_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4 and batch-1'",
-        "demo-precision_bfp8_bf16_bfp8_bfp8_bfp8_orig__hifi2_hifi4_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4": "pytest models/tt_transformers/demo/simple_text_demo.py -k 'bfp8_bf16_bfp8_bfp8_bfp8_orig__hifi2_hifi4_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4 and batch-1'",
-        "demo-precision_bf16_bfp4_bfp8_bfp8_bfp8_orig__hifi4_lofi_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4": "pytest models/tt_transformers/demo/simple_text_demo.py -k 'bf16_bfp4_bfp8_bfp8_bfp8_orig__hifi4_lofi_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4 and batch-1'",
-        "demo-precision_bf16_bfp8_bfp8_bfp8_bfp8_orig__hifi4_hifi2_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4": "pytest models/tt_transformers/demo/simple_text_demo.py -k 'bf16_bfp8_bfp8_bfp8_bfp8_orig__hifi4_hifi2_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4 and batch-1'",
-        "demo-precision_bf16_bf16_bfp8_bfp8_bfp8_orig__hifi4_hifi4_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4": "pytest models/tt_transformers/demo/simple_text_demo.py -k 'bf16_bf16_bfp8_bfp8_bfp8_orig__hifi4_hifi4_hifi2_hifi2_hifi2na_hifi2_hifi2fp16_hifi4 and batch-1'",
-        "demo-precision_bfp8_bfp8_bfp8_bfp4_bfp8_bf16__hifi2_hifi2_hifi2_lofi_hifi2na_hifi2_lofi_hifi4": "pytest models/tt_transformers/demo/simple_text_demo.py -k 'bfp8_bfp8_bfp8_bfp4_bfp8_bf16__hifi2_hifi2_hifi2_lofi_hifi2na_hifi2_lofi_hifi4 and batch-1'",
-        "demo-precision_bfp8_bfp8_bfp8_bfp4_bfp8_bfp8__hifi2_hifi2_hifi2_lofi_hifi2na_hifi2_lofi_hifi4": "pytest models/tt_transformers/demo/simple_text_demo.py -k 'bfp8_bfp8_bfp8_bfp4_bfp8_bfp8__hifi2_hifi2_hifi2_lofi_hifi2na_hifi2_lofi_hifi4 and batch-1'",
-        "demo-precision_bfp8_bfp8_bfp8_bfp4_bfp8_orig__hifi2_hifi2_hifi2_lofi_hifi2na_hifi2_lofi_hifi4": "pytest models/tt_transformers/demo/simple_text_demo.py -k 'bfp8_bfp8_bfp8_bfp4_bfp8_orig__hifi2_hifi2_hifi2_lofi_hifi2na_hifi2_lofi_hifi4 and batch-1'",
+        # Precision and Math Fidelity tests for Pareto analysis
+        **pareto_commands,
         # Vision tests (require 11B weights)
         "vision-mlp": "pytest models/tt_transformers/tests/multimodal/test_image_mlp.py",
         "vision-attn": "pytest models/tt_transformers/tests/multimodal/test_image_attention.py",
@@ -1270,7 +1280,7 @@ def export_results_to_markdown(output_entries, stdscr):
     # Initialize ordered lists to maintain entry order
     perf_entries = []
     acc_entries = []
-    precision_entries = {}
+    dmf_entries = {}
 
     # Collect results from entries in their original order
     for entry in output_entries:
@@ -1321,19 +1331,19 @@ def export_results_to_markdown(output_entries, stdscr):
                 else:
                     acc_entries.append([key, top1, top5, speed or "N/A", ttft])
 
-            elif entry.command_name.startswith("demo-precision"):
+            elif entry.command_name.startswith("demo-dmf"):
                 # get speed from demo-precision entries
                 speed = entry.speed
                 ttft = entry.ttft
 
-                setting = entry.command_name[len("demo-precision_") :]
-                if setting not in precision_entries:
-                    precision_entries[setting] = {key: ["N/A", "N/A", speed or "N/A", ttft]}
+                setting_idx = int(entry.command_name[len("demo-dmf-") :])
+                if setting_idx not in dmf_entries:
+                    dmf_entries[setting_idx] = {key: ["N/A", "N/A", speed or "N/A", ttft]}
                 else:
-                    precision_entries[setting][key][-2] = speed or "N/A"
-                    precision_entries[setting][key][-1] = ttft or "N/A"
+                    dmf_entries[setting_idx][key][2] = speed or "N/A"
+                    dmf_entries[setting_idx][key][3] = ttft or "N/A"
 
-            elif entry.command_name.startswith("accuracy-precision"):
+            elif entry.command_name.startswith("accuracy-dmf"):
                 # get accuracy from accuracy-precision entries
                 top1, top5 = "N/A", "N/A"
                 if entry.pcc:
@@ -1341,11 +1351,11 @@ def export_results_to_markdown(output_entries, stdscr):
                     if match:
                         top1, top5 = match.group(1), match.group(2)
 
-                setting = entry.command_name[len("accuracy-precision_") :]
-                if setting not in precision_entries:
-                    precision_entries[setting] = {key: [top1, top5, "N/A", "N/A"]}
+                setting_idx = int(entry.command_name[len("accuracy-dmf-") :])
+                if setting_idx not in dmf_entries:
+                    dmf_entries[setting_idx] = {key: [top1, top5, "N/A", "N/A"]}
                 else:
-                    precision_entries[setting][key][0:2] = [top1, top5]
+                    dmf_entries[setting_idx][key][0:2] = [top1, top5]
 
     # Create markdown content
     fullname = {
@@ -1396,40 +1406,13 @@ def export_results_to_markdown(output_entries, stdscr):
             markdown_lines.append(f"| {fullname[model]} | {device} | {top1} | {top5} | {speed} | {ttft} |")
 
     # add precision tables
-    # self._full_name = "precision_cfg, fidelity_cfg = {" + self._names["TensorPrecision"]["full_name"] + "}, {" + self._names["OpFidelity"]["full_name"] + "}"
-    def gen_description(setting):
-        precision_desc = ", ".join(
-            [
-                f"{k}: {v}"
-                for k, v in zip(
-                    ("ff1_3", "ff2", "wqkv", "wo", "kv_cache", "activation"), setting.split("__")[0].split("_")
-                )
-            ]
-        )
-        fidelity_desc = ", ".join(
-            [
-                f"{k}: {v}"
-                for k, v in zip(
-                    (
-                        "li_ff1_3",
-                        "li_ff2",
-                        "li_qkv_decode",
-                        "li_o_decode",
-                        "sdpa_decode",
-                        "li_qkv_prefill",
-                        "li_o_prefill",
-                        "sdpa_prefill",
-                    ),
-                    setting.split("__")[1].split("_"),
-                )
-            ]
-        )
-        return "precision_cfg, fidelity_cfg = {" + precision_desc + "}, {" + fidelity_desc + "}"
+    def gen_description(setting_idx: int) -> str:
+        return parse_optimizations(dtype_mf_settings[setting_idx]).__name__
 
-    if precision_entries:
+    if dmf_entries:
         data_to_plot = {}
-        for setting, entries in precision_entries.items():
-            desc = gen_description(setting)
+        for setting_idx, entries in dmf_entries.items():
+            desc = gen_description(setting_idx)
             markdown_lines.extend(
                 [
                     "",
@@ -1444,19 +1427,18 @@ def export_results_to_markdown(output_entries, stdscr):
                 top1, top5, speed, ttft = entry
                 markdown_lines.append(f"| {fullname[model]} | {device} | {top1} | {top5} | {speed} | {ttft} |")
 
-                code_name = fullname[model] + "_" + device
-                if code_name in data_to_plot:
-                    data_to_plot[code_name][0].append(float(speed))
-                    data_to_plot[code_name][1].append(float(top1))
-                    data_to_plot[code_name][2].append(float(top5))
-                    data_to_plot[code_name][3].append(desc)
+                model_device_name = fullname[model] + "_" + device
+                if model_device_name in data_to_plot:
+                    data_to_plot[model_device_name][0].append(float(speed))
+                    data_to_plot[model_device_name][1].append(float(top1))
+                    data_to_plot[model_device_name][2].append(desc)
                 else:
-                    data_to_plot[code_name] = ([float(speed)], [float(top1)], [float(top5)], [desc])
+                    data_to_plot[model_device_name] = ([float(speed)], [float(top1)], [desc])
 
         # plot the data between speed and top1 for each mode-device pair
-        for code_name, data in data_to_plot.items():
-            speed, top1, top5, desc = data
-            plot_data_with_desc(speed, top1, "Speed (t/s/u)", "Top-1 (%)", desc, code_name)
+        for model_device_name, data in data_to_plot.items():
+            speed, top1, desc = data
+            plot_data_with_desc(speed, top1, "Speed (t/s/u)", "Top-1 (%)", desc, model_device_name)
 
     # Write to PERF.md
     with open("PERF.md", "w") as f:
@@ -1529,29 +1511,109 @@ def reparse_log_file(entry, screen_needs_update):
         pass  # Log file doesn't exist
 
 
-def plot_data_with_desc(objective1, objective2, objective1_label, objective2_label, point_desc, code_name):
-    # Plot all data points.
-    plt.scatter(objective1, objective2, label="Data Points", color="blue")
+def get_pareto_front(objective1: np.ndarray, objective2: np.ndarray) -> np.ndarray:
+    # Compute the Pareto front where larger is better for both objectives.
+    # A point is Pareto optimal if no other point is strictly better in both objectives.
+    # One simple method for 2D data: sort by objective1 from largest to smallest
+    # and then select points that have the largest objective2 value seen so far.
+    indices = np.argsort(objective1)[::-1]
 
+    pareto_indices = []
+    current_best = -1.0  # smaller than both objectives' smallest possible values
+    for idx in indices:
+        if objective2[idx] > current_best:
+            pareto_indices.append(idx)
+            current_best = objective2[idx]
+    return np.array(pareto_indices)
+
+
+def plot_data_with_desc(objective1, objective2, objective1_label, objective2_label, point_desc, model_device_name):
+    # Plot all data points but highlight the Pareto points
+    objective1 = np.array(objective1)
+    objective2 = np.array(objective2)
+    plt.scatter(objective1, objective2, label="Data Points", color="blue")
     # add point_desc to all the points near the bottom of the plot
     for i, (x, y) in enumerate(zip(objective1, objective2)):
-        plt.annotate(f"id:{i}", (x, y), textcoords="offset points", xytext=(0, -10), ha="center")
+        plt.annotate(f"{i}", (x, y), textcoords="offset points", xytext=(0, -10), ha="center")
+    # Get one Pareto point for each objective
+    pareto_indices = get_pareto_front(objective1, objective2)
+    pareto_obj1 = objective1[pareto_indices]
+    pareto_obj2 = objective2[pareto_indices]
+    # Plot the Pareto front as a connected red line.
+    plt.plot(pareto_obj1, pareto_obj2, "r-", label="Pareto Front")
+    plt.scatter(pareto_obj1, pareto_obj2, color="red")
 
     # write point_desc to a csv file in the same directory as the plot
     os.makedirs("data_plots", exist_ok=True)
-    with open(f"data_plots/{code_name}_point_desc.csv", "w") as f:
+    with open(f"data_plots/{model_device_name}_point_desc.csv", "w") as f:
         f.write(f"index,{objective1_label},{objective2_label},point_desc\n")
         for i, (x, y) in enumerate(zip(objective1, objective2)):
             f.write(f"{i},{x},{y},{point_desc[i]}\n")
 
     plt.xlabel(objective1_label)
     plt.ylabel(objective2_label)
-    plt.title(
-        f"Pareto Plot between {objective1_label} and {objective2_label}\n (use data-point index to find details in *_point_desc.csv)"
-    )
+    model_name = model_device_name.split("_")[0]
+    device_name = model_device_name.split("_")[1]
+    plt.title(f"Pareto Analysis between {objective1_label} and {objective2_label}\n of {model_name} on {device_name}")
     plt.legend()
+
+    # Get figure size
+    fig = plt.gcf()
+    fig_width, fig_height = fig.get_size_inches()
+    height_incr = 0.7
+    height_incr_total = height_incr * len(pareto_indices)
+    new_fig_height = fig_height + height_incr_total
+    fig.set_size_inches(fig_width, new_fig_height)
+
+    # Add more bottom margin
+    plt.subplots_adjust(bottom=height_incr_total / fig_height)
+
+    # Calculate x,y position for footnote relative to figure size
+    # relative to the bottom left corner of the plot with normalized coordinates (0-1)
+    x = 0.1
+    y = height_incr / 4
+
+    # add footnote to the plot
+    for i in pareto_indices:
+        desc_splits = point_desc[i].split("}")
+        fidelity_desc = desc_splits[1][2:] + "}"  # 2: slice to remove the leading ", "
+        # find substring "li_qkv_prefill" in fidelity_desc and insert a new line before it so the text fits in the plot
+        idx = fidelity_desc.find("li_qkv_prefill")
+        assert idx != -1, f"li_qkv_prefill not found in {fidelity_desc}"
+        fidelity_desc_part2 = " " * len("fidelity_cfg = {") + fidelity_desc[idx:]
+        plt.figtext(
+            x, y, f"{fidelity_desc_part2}", ha="left", transform=fig.dpi_scale_trans, family="monospace", fontsize=6
+        )
+        y += height_incr / 8
+        fidelity_desc_part1 = fidelity_desc[:idx]
+        plt.figtext(
+            x, y, f"{fidelity_desc_part1}", ha="left", transform=fig.dpi_scale_trans, family="monospace", fontsize=6
+        )
+        y += height_incr / 8
+        dtype_desc = desc_splits[0] + "}"
+        plt.figtext(x, y, f"{dtype_desc}", ha="left", transform=fig.dpi_scale_trans, family="monospace", fontsize=6)
+        y += height_incr / 8
+        plt.figtext(
+            x,
+            y,
+            f"{i}: {objective1_label}={objective1[i]}, {objective2_label}={objective2[i]}",
+            ha="left",
+            transform=fig.dpi_scale_trans,
+            fontsize=10,
+        )
+        y += height_incr / 3
+
+    x = fig_width / 2
+    plt.figtext(
+        x,
+        y,
+        f"(use data-point id for details in {model_device_name}_point_desc.csv)",
+        ha="center",
+        transform=fig.dpi_scale_trans,
+        fontsize=10,
+    )
     plt.grid(True)
-    plt.savefig(f"data_plots/{code_name}_precision_fidelity.svg")
+    plt.savefig(f"data_plots/{model_device_name}_pareto.svg")
     plt.close()
 
 

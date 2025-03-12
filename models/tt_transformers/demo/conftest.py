@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.tt_transformers.tt.model_config import parse_optimizations
+
 
 # These inputs override the default inputs used by simple_text_demo.py. Check the main demo to see the default values.
 def pytest_addoption(parser):
@@ -20,4 +22,11 @@ def pytest_addoption(parser):
     parser.addoption("--sampling_params", action="store", type=dict, help="Sampling parameters for decoding")
     parser.addoption(
         "--stop_at_eos", action="store", type=int, help="Whether to stop decoding when the model generates an EoS token"
+    )
+    parser.addoption(
+        "--optimizations",
+        action="store",
+        default=None,
+        type=parse_optimizations,
+        help="Precision and fidelity configuration diffs over default (i.e., accuracy)",
     )
