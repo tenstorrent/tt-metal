@@ -162,7 +162,7 @@ If you want to provide your own demo configuration, please take a look at the py
 - `page_params (dict)`: Page parameters for paged attention - [`block_size`, `max_num_blocks`]. For smaller context lengths use `block_size=32` and `max_num_blocks=1024`, for larger context use block_size=64 and max_num_blocks=2048
 - `sampling_params (dict)`: Sampling parameters for decoding -[`temperature`, `top_p`]. If temperature is set to 0, argmax (greedy decode) is used.
 - `stop_at_eos (bool)`: Flag to stop decoding when the model generates an EoS token
-- `optimizations (ModelOptimizations)`: Optimization level to use for the model [`accuracy`, `performance`, `pareto_accuracy`, `pareto_performance`]
+- `optimizations (ModelOptimizations)`: Optimization level to use for the model [`accuracy`, `performance`]
 
 Please note that using `argmax` with `batch_size > 1` or using `top-p` sampling with any batch size, these ops will be run on host. This is because those ops are not yet fully supported on device. A decrease in performance is expected when these configurations are enabled.
 

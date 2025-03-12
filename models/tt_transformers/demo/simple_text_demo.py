@@ -268,8 +268,6 @@ def create_tt_model(
     [
         ModelOptimizations.performance,
         ModelOptimizations.accuracy,
-        ModelOptimizations.pareto_accuracy,
-        ModelOptimizations.pareto_performance,
     ],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 23887872, "num_command_queues": 2}], indirect=True)
