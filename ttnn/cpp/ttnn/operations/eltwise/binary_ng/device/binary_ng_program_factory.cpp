@@ -512,24 +512,8 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
 
     auto kernel_config = CMAKE_UNIQUE_NAMESPACE::BinaryNgKernelConfig(operation_attributes.subtile_broadcast_type);
 
-    std::map<std::string, std::string> dataflow_defines;
-    if (is_sfpu_op && a_dtype == DataType::FLOAT32) {
-        dataflow_defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
-        dataflow_defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
-        dataflow_defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<float>";
-        dataflow_defines["FILL_WITH_VALUE_FLOAT"] = "fill_with_val<1024, float>";
-    } else if (is_sfpu_op && a_dtype == DataType::INT32) {
-        dataflow_defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
-        dataflow_defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
-        dataflow_defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<int32_t>";
-        dataflow_defines["FILL_WITH_VALUE"] = "fill_with_val<1024, int32_t>";
-    } else {
-        dataflow_defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column_bfloat16";
-        dataflow_defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row_bfloat16";
-        dataflow_defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element_bfloat16";
-        dataflow_defines["FILL_WITH_VALUE"] = "fill_with_val_bfloat16";
-    }
-    auto reader_defines = dataflow_defines;
+    std::map<std::string, std::string> reader_defines;
+    add_dataflow_defines(reader_defines, a_dtype, is_sfpu_op);
     reader_defines["SRC_SHARDED"] = a_sharded ? "1" : "0";
 
     // READER KERNEL
@@ -547,7 +531,8 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         writer_kernel = kernel_config.writer_kernel;
         compute_kernel = kernel_config.compute_kernel;
     }
-    auto writer_defines = dataflow_defines;
+    std::map<std::string, std::string> writer_defines;
+    add_dataflow_defines(writer_defines, b_dtype, is_sfpu_op);
     writer_defines["SRC_SHARDED"] = b_sharded ? "1" : "0";
     writer_defines["DST_SHARDED"] = c_sharded ? "1" : "0";
 
