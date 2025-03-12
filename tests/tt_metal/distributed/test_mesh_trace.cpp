@@ -35,6 +35,19 @@ const MeshCoordinateRange& t3k_full_grid() {
     return full_grid.get();
 }
 
+const MeshCoordinateRange& tg_full_grid() {
+    static tt::stl::Indestructible<MeshCoordinateRange> full_grid(MeshCoordinate{0, 0}, MeshCoordinate{3, 7});
+    return full_grid.get();
+}
+
+std::vector<MeshCoordinateRange> tg_all_devices() {
+    std::vector<MeshCoordinateRange> devices = {};
+    for (const auto& coord : tg_full_grid()) {
+        devices.push_back(MeshCoordinateRange(coord, coord));
+    }
+    return devices;
+}
+
 // Define custom fixtures initializing a trace region on the MeshDevice
 class MeshTraceTestSuite : public MeshDeviceFixtureBase {
 protected:
@@ -45,6 +58,12 @@ class MeshTraceTestT3000 : public MeshDeviceFixtureBase {
 protected:
     MeshTraceTestT3000() :
         MeshDeviceFixtureBase(Config{.mesh_device_type = MeshDeviceType::T3000, .trace_region_size = (64 << 20)}) {}
+};
+
+class MeshTraceTestTG : public MeshDeviceFixtureBase {
+protected:
+    MeshTraceTestTG() :
+        MeshDeviceFixtureBase(Config{.mesh_device_type = MeshDeviceType::TG, .trace_region_size = (64 << 20)}) {}
 };
 
 TEST_F(MeshTraceTestSuite, Sanity) {
@@ -93,144 +112,6 @@ TEST_F(MeshTraceTestSuite, Sanity) {
         ReleaseTrace(mesh_device_.get(), trace_id);
     }
 }
-
-class MeshTraceSweepTest : public MeshTraceTestT3000,
-                           public testing::WithParamInterface<std::vector<std::vector<MeshCoordinateRange>>> {};
-
-TEST_P(MeshTraceSweepTest, Sweep) {
-    auto random_seed = 10;
-    uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
-    log_info(tt::LogTest, "Using Test Seed: {}", seed);
-    srand(seed);
-
-    auto workload_grids = GetParam();
-    uint32_t num_workloads = 10;
-
-    std::vector<std::shared_ptr<MeshWorkload>> mesh_workloads = {};
-
-    for (auto& workload_grid : workload_grids) {
-        for (int i = 0; i < num_workloads; i++) {
-            auto workload = std::make_shared<MeshWorkload>();
-            for (auto& program_grid : workload_grid) {
-                auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
-                    1, mesh_device_->compute_with_storage_grid_size(), seed);
-                AddProgramToMeshWorkload(*workload, std::move(*programs[0]), program_grid);
-            }
-            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
-            mesh_workloads.push_back(workload);
-        }
-    }
-    auto trace_id = BeginTraceCapture(mesh_device_.get(), 0);
-    for (auto& workload : mesh_workloads) {
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
-    }
-    EndTraceCapture(mesh_device_.get(), 0, trace_id);
-    for (int i = 0; i < 50; i++) {
-        ReplayTrace(mesh_device_.get(), 0, trace_id, false);
-    }
-    Finish(mesh_device_->mesh_command_queue());
-    ReleaseTrace(mesh_device_.get(), trace_id);
-}
-
-INSTANTIATE_TEST_SUITE_P(
-    MeshTraceSweepTests,
-    MeshTraceSweepTest,
-    ::testing::Values(
-        std::vector<std::vector<MeshCoordinateRange>>({
-            {t3k_full_grid()},
-            // Run on single center column:
-            {MeshCoordinateRange({0, 1}, {1, 1})},
-            // Run on single device - top row, center:
-            {MeshCoordinateRange({0, 2}, {0, 2})},
-            // Run on bottom right device:
-            {MeshCoordinateRange({1, 3}, {1, 3})},
-            // Run on top left device:
-            {MeshCoordinateRange({0, 0}, {0, 0})},
-            {t3k_full_grid()},
-        }),
-        std::vector<std::vector<MeshCoordinateRange>>({
-            {t3k_full_grid()},
-            // Split grid into 4 columns:
-            {MeshCoordinateRange({0, 1}, {1, 1}),
-             MeshCoordinateRange({0, 2}, {1, 2}),
-             MeshCoordinateRange({0, 3}, {1, 3}),
-             MeshCoordinateRange({0, 0}, {1, 0})},
-            // Split grid into 2 rows:
-            {t3k_top_row(), t3k_bottom_row()},
-        }),
-        std::vector<std::vector<MeshCoordinateRange>>({
-            {t3k_full_grid()},
-            // Split grid into 2 rows:
-            {t3k_top_row(), t3k_bottom_row()},
-            // Split grid into 2 columns:
-            {MeshCoordinateRange({0, 0}, {1, 1}),  //
-             MeshCoordinateRange({0, 2}, {1, 3})},
-            // Split grid into 3 columns:
-            {MeshCoordinateRange({0, 0}, {1, 1}),  //
-             MeshCoordinateRange({0, 2}, {1, 2}),  //
-             MeshCoordinateRange({0, 3}, {1, 3})},
-            // Split grid into 4 columns:
-            {MeshCoordinateRange({0, 0}, {1, 0}),  //
-             MeshCoordinateRange({0, 1}, {1, 1}),  //
-             MeshCoordinateRange({0, 2}, {1, 2}),  //
-             MeshCoordinateRange({0, 3}, {1, 3})},
-        }),
-        std::vector<std::vector<MeshCoordinateRange>>({
-            {t3k_full_grid()},
-            // Run on individual devices:
-            {MeshCoordinateRange({0, 0}, {0, 0}),
-             MeshCoordinateRange({0, 1}, {0, 1}),
-             MeshCoordinateRange({0, 2}, {0, 2}),
-             MeshCoordinateRange({0, 3}, {0, 3}),
-             MeshCoordinateRange({1, 0}, {1, 0}),
-             MeshCoordinateRange({1, 1}, {1, 1}),
-             MeshCoordinateRange({1, 2}, {1, 2}),
-             MeshCoordinateRange({1, 3}, {1, 3})},
-            // Run on 2 center columns:
-            {MeshCoordinateRange({0, 1}, {1, 2})},
-            // Run on single center column:
-            {MeshCoordinateRange({0, 2}, {1, 2})},
-            // Run on 2 devices on the bottom row:
-            {MeshCoordinateRange({1, 1}, {1, 2})},
-        }),
-        std::vector<std::vector<MeshCoordinateRange>>({
-            // Split grid into 4 columns:
-            {MeshCoordinateRange({0, 0}, {1, 0}),
-             MeshCoordinateRange({0, 1}, {1, 1}),
-             MeshCoordinateRange({0, 2}, {1, 2}),
-             MeshCoordinateRange({0, 3}, {1, 3})},
-            // Split grid into 2 rows:
-            {t3k_top_row(), t3k_bottom_row()},
-            {t3k_full_grid()},
-            {t3k_top_row()},
-            {t3k_bottom_row()},
-        }),
-        std::vector<std::vector<MeshCoordinateRange>>({
-            {t3k_top_row()},
-            {t3k_bottom_row()},
-            // Run on left most column only:
-            {MeshCoordinateRange({0, 0}, {1, 0})},
-            // Run on right most 3-columns only:
-            {MeshCoordinateRange({0, 1}, {1, 3})},
-            // Run on left most 2-columns only:
-            {MeshCoordinateRange({0, 0}, {1, 1})},
-            // Full grid:
-            {MeshCoordinateRange({0, 0}, {1, 3})},
-        }),
-        std::vector<std::vector<MeshCoordinateRange>>({
-            // Run on individual devices:
-            {MeshCoordinateRange({0, 0}, {0, 0}),
-             MeshCoordinateRange({0, 1}, {0, 1}),
-             MeshCoordinateRange({0, 2}, {0, 2}),
-             MeshCoordinateRange({0, 3}, {0, 3}),
-             MeshCoordinateRange({1, 0}, {1, 0}),
-             MeshCoordinateRange({1, 1}, {1, 1}),
-             MeshCoordinateRange({1, 2}, {1, 2}),
-             MeshCoordinateRange({1, 3}, {1, 3})},
-            {t3k_top_row()},
-            {t3k_bottom_row()},
-            {t3k_full_grid()},
-        })));
 
 TEST_F(MeshTraceTestT3000, EltwiseBinaryMeshTrace) {
     std::vector<std::shared_ptr<MeshBuffer>> src0_bufs = {};
@@ -339,10 +220,12 @@ TEST_F(MeshTraceTestSuite, SyncWorkloadsOnSubDeviceTrace) {
     auto [waiter_program_2, syncer_program_2, incrementer_program_2, global_sem_2] =
         create_basic_sync_program(mesh_device_.get(), sub_device_1, sub_device_2);
 
+    uint32_t num_rows_in_workload = mesh_device_->num_rows() / 2;
     // Top row - first MeshWorkload set
-    MeshCoordinateRange top_row({0, 0}, {0, mesh_device_->num_cols() - 1});
+    MeshCoordinateRange top_row({0, 0}, {num_rows_in_workload - 1, mesh_device_->num_cols() - 1});
     // Bottom row - second MeshWorkload set
-    MeshCoordinateRange bottom_row({1, 0}, {1, mesh_device_->num_cols() - 1});
+    MeshCoordinateRange bottom_row(
+        {num_rows_in_workload, 0}, {mesh_device_->num_rows() - 1, mesh_device_->num_cols() - 1});
     // All devices: third MeshWorkload set
     MeshCoordinateRange all_devices(mesh_device_->shape());
 
@@ -513,9 +396,11 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
     SetRuntimeArgs(add_program_2, add_kernel_2, add_core, add_rt_args_2);
     CBHandle add_cb_2 = CreateCircularBuffer(add_program_2, add_core, cb_src0_config);
 
+    uint32_t num_rows_in_workload = mesh_device_->num_rows() / 2;
     MeshCoordinateRange devices(mesh_device_->shape());
-    MeshCoordinateRange top_row({0, 0}, {0, mesh_device_->num_cols() - 1});
-    MeshCoordinateRange bottom_row({1, 0}, {1, mesh_device_->num_cols() - 1});
+    MeshCoordinateRange top_row({0, 0}, {num_rows_in_workload - 1, mesh_device_->num_cols() - 1});
+    MeshCoordinateRange bottom_row(
+        {num_rows_in_workload, 0}, {mesh_device_->num_rows() - 1, mesh_device_->num_cols() - 1});
 
     // Create and initialize MeshWorkloads
     auto syncer_mesh_workload = CreateMeshWorkload();
@@ -595,6 +480,215 @@ TEST_F(MeshTraceTestSuite, MeshTraceAsserts) {
     EXPECT_THROW(Finish(mesh_device_->mesh_command_queue()), std::runtime_error);
     EndTraceCapture(mesh_device_.get(), 0, trace_id);
 }
+
+// Sweep Tests on T3K and TG
+void run_heterogenous_trace_sweep(
+    const std::shared_ptr<MeshDevice>& mesh_device,
+    const std::vector<std::vector<MeshCoordinateRange>>& workload_grids) {
+    auto random_seed = 10;
+    uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
+    log_info(tt::LogTest, "Using Test Seed: {}", seed);
+    srand(seed);
+
+    uint32_t num_workloads = 10;
+
+    std::vector<std::shared_ptr<MeshWorkload>> mesh_workloads = {};
+
+    for (auto& workload_grid : workload_grids) {
+        for (int i = 0; i < num_workloads; i++) {
+            auto workload = std::make_shared<MeshWorkload>();
+            for (auto& program_grid : workload_grid) {
+                auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+                    1, mesh_device->compute_with_storage_grid_size(), seed);
+                AddProgramToMeshWorkload(*workload, std::move(*programs[0]), program_grid);
+            }
+            EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *workload, false);
+            mesh_workloads.push_back(workload);
+        }
+    }
+    auto trace_id = BeginTraceCapture(mesh_device.get(), 0);
+    for (auto& workload : mesh_workloads) {
+        EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *workload, false);
+    }
+    EndTraceCapture(mesh_device.get(), 0, trace_id);
+    for (int i = 0; i < 50; i++) {
+        ReplayTrace(mesh_device.get(), 0, trace_id, false);
+    }
+    Finish(mesh_device->mesh_command_queue());
+    ReleaseTrace(mesh_device.get(), trace_id);
+}
+
+class T3KMeshTraceSweepTest : public MeshTraceTestT3000,
+                              public testing::WithParamInterface<std::vector<std::vector<MeshCoordinateRange>>> {};
+
+class TGMeshTraceSweepTest : public MeshTraceTestTG,
+                             public testing::WithParamInterface<std::vector<std::vector<MeshCoordinateRange>>> {};
+
+TEST_P(T3KMeshTraceSweepTest, Sweep) { run_heterogenous_trace_sweep(mesh_device_, GetParam()); }
+
+TEST_P(TGMeshTraceSweepTest, Sweep) { run_heterogenous_trace_sweep(mesh_device_, GetParam()); }
+
+INSTANTIATE_TEST_SUITE_P(
+    T3KMeshTraceSweepTests,
+    T3KMeshTraceSweepTest,
+    ::testing::Values(
+        std::vector<std::vector<MeshCoordinateRange>>({
+            {t3k_full_grid()},
+            // Run on single center column:
+            {MeshCoordinateRange({0, 1}, {1, 1})},
+            // Run on single device - top row, center:
+            {MeshCoordinateRange({0, 2}, {0, 2})},
+            // Run on bottom right device:
+            {MeshCoordinateRange({1, 3}, {1, 3})},
+            // Run on top left device:
+            {MeshCoordinateRange({0, 0}, {0, 0})},
+            {t3k_full_grid()},
+        }),
+        std::vector<std::vector<MeshCoordinateRange>>({
+            {t3k_full_grid()},
+            // Split grid into 4 columns:
+            {MeshCoordinateRange({0, 1}, {1, 1}),
+             MeshCoordinateRange({0, 2}, {1, 2}),
+             MeshCoordinateRange({0, 3}, {1, 3}),
+             MeshCoordinateRange({0, 0}, {1, 0})},
+            // Split grid into 2 rows:
+            {t3k_top_row(), t3k_bottom_row()},
+        }),
+        std::vector<std::vector<MeshCoordinateRange>>({
+            {t3k_full_grid()},
+            // Split grid into 2 rows:
+            {t3k_top_row(), t3k_bottom_row()},
+            // Split grid into 2 columns:
+            {MeshCoordinateRange({0, 0}, {1, 1}),  //
+             MeshCoordinateRange({0, 2}, {1, 3})},
+            // Split grid into 3 columns:
+            {MeshCoordinateRange({0, 0}, {1, 1}),  //
+             MeshCoordinateRange({0, 2}, {1, 2}),  //
+             MeshCoordinateRange({0, 3}, {1, 3})},
+            // Split grid into 4 columns:
+            {MeshCoordinateRange({0, 0}, {1, 0}),  //
+             MeshCoordinateRange({0, 1}, {1, 1}),  //
+             MeshCoordinateRange({0, 2}, {1, 2}),  //
+             MeshCoordinateRange({0, 3}, {1, 3})},
+        }),
+        std::vector<std::vector<MeshCoordinateRange>>({
+            {t3k_full_grid()},
+            // Run on individual devices:
+            {MeshCoordinateRange({0, 0}, {0, 0}),
+             MeshCoordinateRange({0, 1}, {0, 1}),
+             MeshCoordinateRange({0, 2}, {0, 2}),
+             MeshCoordinateRange({0, 3}, {0, 3}),
+             MeshCoordinateRange({1, 0}, {1, 0}),
+             MeshCoordinateRange({1, 1}, {1, 1}),
+             MeshCoordinateRange({1, 2}, {1, 2}),
+             MeshCoordinateRange({1, 3}, {1, 3})},
+            // Run on 2 center columns:
+            {MeshCoordinateRange({0, 1}, {1, 2})},
+            // Run on single center column:
+            {MeshCoordinateRange({0, 2}, {1, 2})},
+            // Run on 2 devices on the bottom row:
+            {MeshCoordinateRange({1, 1}, {1, 2})},
+        }),
+        std::vector<std::vector<MeshCoordinateRange>>({
+            // Split grid into 4 columns:
+            {MeshCoordinateRange({0, 0}, {1, 0}),
+             MeshCoordinateRange({0, 1}, {1, 1}),
+             MeshCoordinateRange({0, 2}, {1, 2}),
+             MeshCoordinateRange({0, 3}, {1, 3})},
+            // Split grid into 2 rows:
+            {t3k_top_row(), t3k_bottom_row()},
+            {t3k_full_grid()},
+            {t3k_top_row()},
+            {t3k_bottom_row()},
+        }),
+        std::vector<std::vector<MeshCoordinateRange>>({
+            {t3k_top_row()},
+            {t3k_bottom_row()},
+            // Run on left most column only:
+            {MeshCoordinateRange({0, 0}, {1, 0})},
+            // Run on right most 3-columns only:
+            {MeshCoordinateRange({0, 1}, {1, 3})},
+            // Run on left most 2-columns only:
+            {MeshCoordinateRange({0, 0}, {1, 1})},
+            // Full grid:
+            {MeshCoordinateRange({0, 0}, {1, 3})},
+        }),
+        std::vector<std::vector<MeshCoordinateRange>>({
+            // Run on individual devices:
+            {MeshCoordinateRange({0, 0}, {0, 0}),
+             MeshCoordinateRange({0, 1}, {0, 1}),
+             MeshCoordinateRange({0, 2}, {0, 2}),
+             MeshCoordinateRange({0, 3}, {0, 3}),
+             MeshCoordinateRange({1, 0}, {1, 0}),
+             MeshCoordinateRange({1, 1}, {1, 1}),
+             MeshCoordinateRange({1, 2}, {1, 2}),
+             MeshCoordinateRange({1, 3}, {1, 3})},
+            {t3k_top_row()},
+            {t3k_bottom_row()},
+            {t3k_full_grid()},
+        })));
+
+INSTANTIATE_TEST_SUITE_P(
+    TGMeshTraceSweepTests,
+    TGMeshTraceSweepTest,
+    ::testing::Values(
+        std::vector<std::vector<MeshCoordinateRange>>({
+            // Run on full grid
+            {tg_full_grid()},
+            // Run on top two rows
+            {MeshCoordinateRange({0, 0}, {1, 7})},
+            // Run on bottom two rows:
+            {MeshCoordinateRange({2, 0}, {3, 7})},
+            // Run on middle column
+            {MeshCoordinateRange({0, 1}, {3, 2})},
+            {tg_full_grid()},
+        }),
+        std::vector<std::vector<MeshCoordinateRange>>({
+            // Split into 4 columns
+            {MeshCoordinateRange({0, 0}, {3, 1}),
+             MeshCoordinateRange({0, 2}, {3, 3}),
+             MeshCoordinateRange({0, 4}, {3, 5}),
+             MeshCoordinateRange({0, 6}, {3, 7})},
+            // Run on full grid
+            {tg_full_grid()},
+        }),
+        std::vector<std::vector<MeshCoordinateRange>>({
+            // Run on full grid
+            {tg_full_grid()},
+            // Run on middle columns
+            {MeshCoordinateRange({0, 1}, {3, 2})},
+            // Split into 4 rows
+            {MeshCoordinateRange({0, 0}, {0, 7}),
+             MeshCoordinateRange({1, 0}, {1, 7}),
+             MeshCoordinateRange({2, 0}, {2, 7}),
+             MeshCoordinateRange({3, 0}, {3, 7})},
+            // Split into 8 columns
+            {MeshCoordinateRange({0, 0}, {3, 0}),
+             MeshCoordinateRange({0, 1}, {3, 1}),
+             MeshCoordinateRange({0, 2}, {3, 2}),
+             MeshCoordinateRange({0, 3}, {3, 3}),
+             MeshCoordinateRange({0, 4}, {3, 4}),
+             MeshCoordinateRange({0, 5}, {3, 5}),
+             MeshCoordinateRange({0, 6}, {3, 6}),
+             MeshCoordinateRange({0, 7}, {3, 7})},
+        }),
+        std::vector<std::vector<MeshCoordinateRange>>({// Run on full grid
+                                                       {tg_full_grid()},
+                                                       // Run on top left device
+                                                       {MeshCoordinateRange({0, 0}, {0, 0})},
+                                                       // Run on individual devices
+                                                       tg_all_devices(),
+                                                       // Run on top 3 rows (split into 2)
+                                                       {MeshCoordinateRange({0, 0}, {0, 7}),
+                                                        MeshCoordinateRange({1, 0}, {2, 7})},
+                                                       // Run on all columns but the first
+                                                       {MeshCoordinateRange({0, 1}, {3, 7})}}),
+        std::vector<std::vector<MeshCoordinateRange>>({// Run on individual devices
+                                                       tg_all_devices(),
+                                                       // Run on full grid
+                                                       {tg_full_grid()},
+                                                       // Run on middle columns
+                                                       {MeshCoordinateRange({0, 1}, {3, 3})}})));
 
 }  // namespace
 }  // namespace tt::tt_metal::distributed::test

@@ -1382,9 +1382,8 @@ void detail::Program_::compile(IDevice* device, bool fd_bootloader_mode) {
 
         const auto& dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
         CoreType dispatch_core_type = dispatch_core_config.get_core_type();
-        auto physical_device_id = device->id() % tt::Cluster::instance().number_of_devices();
         const std::vector<CoreCoord>& storage_cores =
-            DispatchQueryManager::instance().get_logical_storage_cores(physical_device_id);
+            DispatchQueryManager::instance().get_logical_storage_cores_on_user_chips();
         bool on_storage_only_core =  std::any_of(storage_cores.begin(), storage_cores.end(), [&kernel](const CoreCoord& storage_core) {
             return kernel->is_on_logical_core(storage_core);
         });
@@ -1393,7 +1392,7 @@ void detail::Program_::compile(IDevice* device, bool fd_bootloader_mode) {
         // Kernels used to implement fast dispatch can be placed on dispatch cores
         if (not slow_dispatch and not fd_bootloader_mode) {
             const std::vector<CoreCoord>& dispatch_cores =
-                DispatchQueryManager::instance().get_logical_dispatch_cores(physical_device_id);
+                DispatchQueryManager::instance().get_logical_dispatch_cores_on_user_chips();
             bool on_dispatch_core = std::any_of(dispatch_cores.begin(), dispatch_cores.end(), [&kernel, &dispatch_core_type](const CoreCoord &dispatch_core) {
                 if (kernel->get_kernel_core_type() != dispatch_core_type) {
                     return false;
