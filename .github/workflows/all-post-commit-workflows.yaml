@@ -17,7 +17,6 @@ on:
           - Release
           - Debug
           - RelWithDebInfo
-          - CI
       with-retries:
         default: false
         type: boolean
@@ -52,12 +51,7 @@ jobs:
       build-wheel: true
       tracy: true
     secrets: inherit
-  build-artifact-2204:
-    uses: ./.github/workflows/build-artifact-2204.yaml
-    secrets: inherit
-    with:
-      build-type: ${{ inputs.build-type || 'Release' }}
-      build-wheel: true
+
   smoke-tests:
     needs: build-artifact
     strategy:
@@ -75,7 +69,7 @@ jobs:
 
   # Slow Dispatch Unit Tests
   sd-unit-tests:
-    needs: build-artifact-2204
+    needs: build-artifact
     secrets: inherit
     strategy:
       fail-fast: false
@@ -86,11 +80,8 @@ jobs:
         ]
     uses: ./.github/workflows/build-and-unit-tests.yaml
     with:
-      arch: ${{ matrix.test-group.arch}}
-      runner-label: ${{ matrix.test-group.runner-label}}
-      docker-image: ${{ needs.build-artifact-2204.outputs.ci-build-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact-2204.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact-2204.outputs.wheel-artifact-name }}
+      arch: ${{ matrix.test-group.arch }}
+      runner-label: ${{ matrix.test-group.runner-label }}
   # Fast Dispatch Unit Tests
   fast-dispatch-unit-tests:
     needs: build-artifact
