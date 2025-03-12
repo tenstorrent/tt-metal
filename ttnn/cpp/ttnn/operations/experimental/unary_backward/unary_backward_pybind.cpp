@@ -26,13 +26,13 @@ void bind_experimental_gelu_backward_operation(py::module& module) {
                const Tensor& input_tensor,
                const string& approximate,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<Tensor>& input_grad_tensor) {
+               std::optional<Tensor>& input_grad_tensor) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(grad_output_tensor, input_tensor, approximate, memory_config, input_grad_tensor);
             },
             py::arg("grad_output_tensor"),
             py::arg("input_tensor"),
-            py::arg("approximate"),
             py::kw_only(),
+            py::arg("approximate") = "none",
             py::arg("memory_config") = std::nullopt,
             py::arg("input_grad_tensor") = std::nullopt});
 }
