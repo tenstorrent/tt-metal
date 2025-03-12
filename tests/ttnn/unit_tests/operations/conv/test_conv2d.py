@@ -37,6 +37,25 @@ def randomize_torch_tensor(torch_tensor_map, tensor_shape):
     return torch_tensor
 
 
+def get_torch_act_func_from_string(act_string):
+    act_func_map = {
+        "relu": torch.nn.functional.relu,
+        "silu": torch.nn.functional.silu,
+        "mish": torch.nn.functional.mish,
+        "sigmoid": torch.nn.functional.sigmoid,
+        "tanh": torch.nn.functional.tanh,
+        "log": torch.log,
+        "softplus": torch.nn.functional.softplus,
+        "gelu": torch.nn.functional.gelu,
+        "sqrt": torch.sqrt,
+    }
+    if act_string == "":
+        return None
+    if act_string in act_func_map:
+        return act_func_map[act_string]
+    raise RuntimeError(f"Activation function {act_string} not supported")
+
+
 def run_conv(
     device,
     torch_tensor_map,
@@ -115,8 +134,9 @@ def run_conv(
         dilation=(dilation, dilation),
         groups=groups,
     )
-    if activation == "relu":
-        torch_out_golden_tensor = torch.nn.functional.relu(torch_out_golden_tensor)
+    act_func = get_torch_act_func_from_string(activation)
+    if act_func:
+        torch_out_golden_tensor = act_func(torch_out_golden_tensor)
 
     reader_patterns_cache = {}
 
@@ -216,6 +236,11 @@ def run_conv(
         pcc = 0.996
     else:
         pcc = 0.997
+
+    if activation == "tanh":
+        # Scale down PCC for tanh.
+        # tanh has a range of -1 to 1. So discrepancies in output values which are close to 0 tend to disproportionately affect the PCC.
+        pcc = pcc * 0.99
 
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
     logger.info(f"PCC = {pcc_msg}. Threshold = {pcc}")
@@ -511,6 +536,96 @@ def test_conv_features_multi_device(
         weight_mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         output_mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
         groups=groups,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("stride", [2])
+@pytest.mark.parametrize("batch_size", [2])
+@pytest.mark.parametrize(
+    "output_channels, input_channels, input_height, input_width, shard_layout, config",
+    (
+        (256, 256, 8, 8, WS, None),
+        (128, 128, 32, 32, BS, None),
+        (32, 32, 256, 256, HS, {"act_block_h": 32}),
+    ),
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat16],
+)
+@pytest.mark.parametrize(
+    "activations_dtype, output_layout",
+    [
+        [ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT],
+        [ttnn.bfloat8_b, ttnn.TILE_LAYOUT],
+    ],
+)
+@pytest.mark.parametrize(
+    "fp32_accum",
+    [True],
+)
+@pytest.mark.parametrize(
+    "has_bias",
+    [True],
+)
+@pytest.mark.parametrize(
+    "filter, pad",
+    [
+        [3, 1],
+    ],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi4])
+@pytest.mark.parametrize("activation", ["", "relu", "silu", "sigmoid", "tanh", "sqrt", "gelu"])
+def test_conv_activation(
+    device,
+    torch_tensor_map,
+    use_program_cache,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    shard_layout,
+    config,
+    filter,
+    stride,
+    pad,
+    output_layout,
+    fp32_accum,
+    has_bias,
+    activation,
+):
+    if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat8_b:
+        pytest.skip("Row major layout not compatible with bfloat8_b")
+
+    run_conv(
+        device,
+        torch_tensor_map,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter,
+        filter,
+        stride,
+        stride,
+        pad,
+        pad,
+        config,
+        shard_layout=shard_layout,
+        output_layout=output_layout,
+        has_bias=has_bias,
+        fp32_accum=fp32_accum,
+        packer_l1_acc=False,
+        activation=activation,
     )
 
 

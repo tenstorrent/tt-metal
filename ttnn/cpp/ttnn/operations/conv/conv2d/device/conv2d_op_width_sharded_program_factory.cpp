@@ -6,6 +6,7 @@
 #include "tt-metalium/circular_buffer.hpp"
 #include "tt-metalium/circular_buffer_types.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_op_program_factory_common.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -34,7 +35,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     uint32_t groups,
     bool untilize_out,
     bool has_bias,
-    bool fuse_relu,
+    const std::optional<unary::UnaryWithParam>& fused_activation,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
     bool use_shallow_conv_variant,
@@ -585,8 +586,13 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         compute_defines["FUSE_BIAS"] = "1";
     }
 
-    if (fuse_relu) {
-        compute_defines["PACK_RELU"] = "1";
+    if (fused_activation.has_value()) {
+        if (fused_activation.value().op_type == unary::UnaryOpType::RELU) {
+            compute_defines["PACK_RELU"] = "1";
+        } else {
+            compute_defines.merge(ttnn::operations::unary::utils::get_defines(
+                fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i"));
+        }
     }
 
     if (split_reader) {
@@ -597,6 +603,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     if (packer_l1_acc) {
         compute_defines["PACKER_L1_ACC"] = "1";
     }
+
+    for (auto elem : compute_defines) {
+        log_debug(LogOp, "compute_defines: {} = {}", elem.first, elem.second);
+    }
+
     uint32_t num_output_tiles = per_core_out_matrix_height_ntiles * p_config.per_core_out_matrix_width_ntile;
     uint32_t act_tile_size = tt_metal::detail::TileSize(act_df);
     uint32_t tilized_act_tile_size = tt_metal::detail::TileSize(tilized_act_df);
