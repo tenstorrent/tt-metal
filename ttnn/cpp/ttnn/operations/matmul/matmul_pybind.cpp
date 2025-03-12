@@ -415,7 +415,7 @@ void py_module(py::module& module) {
             >>> print(output.shape)
             [10, 64, 128]
         )doc",
-        ttnn::pybind_overload_t {
+        ttnn::pybind_overload_t{
             [](decltype(::ttnn::linear)& self,
                const ttnn::Tensor& input_tensor_a,
                const ttnn::Tensor& input_tensor_b,
@@ -430,12 +430,7 @@ void py_module(py::module& module) {
                const std::optional<const ttnn::CoreGrid> core_grid,
                const std::optional<const tt::tt_metal::Tile>& output_tile,
                std::optional<Tensor>& optional_output_tensor,
-<<<<<<< HEAD
-               const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb)
-                -> ttnn::Tensor {
-=======
                const std::optional<const GlobalCircularBuffer>& global_cb) -> ttnn::Tensor {
->>>>>>> jchu/ttnn-integration-with-mesh
                 return self(
                     input_tensor_a,
                     input_tensor_b,
@@ -452,13 +447,21 @@ void py_module(py::module& module) {
                     optional_output_tensor,
                     global_cb);
             },
-                py::arg("input_tensor_a"), py::arg("input_tensor_b"), py::kw_only(),
-                py::arg("bias") = std::nullopt, py::arg("transpose_a") = false, py::arg("transpose_b") = false,
-                py::arg("memory_config") = std::nullopt, py::arg("dtype") = std::nullopt,
-                py::arg("program_config") = std::nullopt, py::arg("activation") = std::nullopt,
-                py::arg("compute_kernel_config") = std::nullopt, py::arg("core_grid") = std::nullopt,
-                py::arg("output_tile") = std::nullopt, py::arg("optional_output_tensor") = std::nullopt,
-                py::arg("global_cb") = std::nullopt,
+            py::arg("input_tensor_a"),
+            py::arg("input_tensor_b"),
+            py::kw_only(),
+            py::arg("bias") = std::nullopt,
+            py::arg("transpose_a") = false,
+            py::arg("transpose_b") = false,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("dtype") = std::nullopt,
+            py::arg("program_config") = std::nullopt,
+            py::arg("activation") = std::nullopt,
+            py::arg("compute_kernel_config") = std::nullopt,
+            py::arg("core_grid") = std::nullopt,
+            py::arg("output_tile") = std::nullopt,
+            py::arg("optional_output_tensor") = std::nullopt,
+            py::arg("global_cb") = std::nullopt,
         });
 }
 

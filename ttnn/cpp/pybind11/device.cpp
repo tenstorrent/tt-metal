@@ -322,7 +322,7 @@ void device_module(py::module& m_device) {
            size_t l1_small_size,
            size_t trace_region_size,
            const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
-            return MeshDevice::create_single_device(
+            return MeshDevice::create_unit_mesh(
                 device_id, l1_small_size, trace_region_size, num_command_queues, dispatch_core_config);
         },
         R"doc(
@@ -346,7 +346,7 @@ void device_module(py::module& m_device) {
            size_t l1_small_size,
            size_t trace_region_size,
            const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
-            return MeshDevice::create_single_devices(
+            return MeshDevice::create_unit_meshes(
                 device_ids, l1_small_size, trace_region_size, num_command_queues, dispatch_core_config);
         },
         R"doc(

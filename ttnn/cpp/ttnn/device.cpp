@@ -14,7 +14,7 @@ std::shared_ptr<MeshDevice> open_mesh_device(
     size_t l1_small_size,
     size_t trace_region_size,
     const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
-    return MeshDevice::create_single_device(device_id, l1_small_size, trace_region_size, 1, dispatch_core_config);
+    return MeshDevice::create_unit_mesh(device_id, l1_small_size, trace_region_size, 1, dispatch_core_config);
 }
 
 IDevice& open_device(

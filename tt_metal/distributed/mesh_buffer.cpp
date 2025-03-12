@@ -214,7 +214,7 @@ std::pair<bool, bool> MeshBuffer::replicated_dims() const {
 
 AnyBuffer::AnyBuffer(std::shared_ptr<Buffer> buffer) : buffer_(buffer.get()), holder_(std::move(buffer)) {}
 AnyBuffer::AnyBuffer(std::shared_ptr<MeshBuffer> buffer) :
-    buffer_(buffer->get_device_buffer()), holder_(std::move(buffer)) {}
+    buffer_(buffer->get_reference_buffer()), holder_(std::move(buffer)) {}
 
 AnyBuffer AnyBuffer::create(const tt::tt_metal::ShardedBufferConfig& config) {
     auto mesh_device = dynamic_cast<MeshDevice*>(config.device);
