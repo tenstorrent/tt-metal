@@ -23,7 +23,6 @@ from models.utility_functions import (
     profiler,
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
-    disable_compilation_reports,
     skip_for_grayskull,
 )
 from models.perf.perf_utils import prep_perf_report
@@ -387,7 +386,6 @@ def test_perf_bare_metal(
     )
 
     disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     run_test_FalconCausalLM_end_to_end(
         t3k_mesh_device,
@@ -461,7 +459,6 @@ def test_device_perf_bare_metal(
     )
 
     disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     run_test_FalconCausalLM_end_to_end(
         t3k_mesh_device,

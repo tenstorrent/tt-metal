@@ -143,7 +143,6 @@ def test_Llama_stress_test(
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
     t3k_mesh_device.enable_program_cache()
-    disable_compilation_reports()
     run_test_LlamaModel_stress_test(
         devices,
         batch,

@@ -20,7 +20,6 @@ from models.demos.falcon7b_common.tests.test_utils import (
 )
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf, check_tokens_match
 from models.utility_functions import (
-    disable_compilation_reports,
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
     nearest_32,
@@ -154,7 +153,6 @@ def run_falcon_demo_kv(
         N_warmup_iter = {}
 
     disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     num_devices = get_num_devices(mesh_device)
     global_batch = batch_size * num_devices

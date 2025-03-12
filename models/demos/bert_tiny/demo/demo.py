@@ -9,7 +9,6 @@ from loguru import logger
 
 import ttnn
 from models.utility_functions import (
-    disable_compilation_reports,
     disable_persistent_kernel_cache,
     profiler,
 )
@@ -261,7 +260,6 @@ def test_demo(
     use_program_cache,
 ):
     disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     return run_bert_question_and_answering_inference(
         device=device,
@@ -292,7 +290,6 @@ def test_demo_squadv2(
     use_program_cache,
 ):
     disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     return run_bert_question_and_answering_inference_squad_v2(
         device=device,

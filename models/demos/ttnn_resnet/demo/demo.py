@@ -10,7 +10,6 @@ import pytest
 import ttnn
 
 from models.utility_functions import (
-    disable_compilation_reports,
     profiler,
 )
 
@@ -35,7 +34,6 @@ def run_resnet_imagenet_inference(
     model_config=resnet_model_config,
     model_version="microsoft/resnet-50",
 ):
-    disable_compilation_reports()
     profiler.clear()
 
     # set up image processor
@@ -114,8 +112,6 @@ def run_resnet_inference(
     model_config=resnet_model_config,
     model_version="microsoft/resnet-50",
 ):
-    disable_compilation_reports()
-
     # set up image processor
     image_processor = AutoImageProcessor.from_pretrained(model_version)
 

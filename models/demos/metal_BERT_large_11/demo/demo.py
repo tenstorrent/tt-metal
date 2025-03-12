@@ -10,7 +10,6 @@ from loguru import logger
 
 import ttnn
 from models.utility_functions import (
-    disable_compilation_reports,
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
     profiler,
@@ -375,7 +374,6 @@ def test_demo(
     model_config_str = "BFLOAT8_B-SHARDED"
     skip_unsupported_config(device, model_config_str, batch)
     disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     return run_bert_question_and_answering_inference(
         model_version="phiyodr/bert-large-finetuned-squad2",
@@ -401,7 +399,6 @@ def test_demo_squadv2(model_location_generator, device, use_program_cache, batch
     model_config_str = "BFLOAT8_B-SHARDED"
     skip_unsupported_config(device, model_config_str, batch)
     disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     return run_bert_question_and_answering_inference_squadv2(
         model_version="phiyodr/bert-large-finetuned-squad2",

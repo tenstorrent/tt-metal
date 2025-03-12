@@ -9,7 +9,6 @@ import evaluate
 from loguru import logger
 
 from models.utility_functions import (
-    disable_compilation_reports,
     disable_persistent_kernel_cache,
     profiler,
 )
@@ -291,7 +290,6 @@ def test_demo(
     num_tokens_to_decode=10,
 ):
     disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     return run_bloom_qa_inference(
         model_version="bigscience/bloom-560m",
@@ -321,7 +319,6 @@ def test_demo_squadv2(
     num_tokens_to_decode=10,
 ):
     disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     return run_bloom_qa_inference_squad(
         model_version="bigscience/bloom-560m",
