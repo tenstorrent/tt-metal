@@ -13,7 +13,48 @@ namespace ttnn::operations::experimental::gelu_backward::detail {
 namespace py = pybind11;
 
 void bind_experimental_gelu_backward_operation(py::module& module) {
-    auto doc = fmt::format("TODO!");
+    auto doc = fmt::format(
+        R"doc(
+        Applies the backward pass of the GELU function using ttnn experimental kernels.
+
+        Args:
+            grad_tensor (ttnn.Tensor): The input gradient tensor.
+            input_tensor (ttnn.Tensor): The input tensor.
+
+        Keyword args:
+            approximate (str, optional): "tanh" or "none" (default). The gelu approximation algorithm to use.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for this operation. Defaults to None.
+            output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to None.
+
+        Returns:
+            List of ttnn.Tensor: The output tensor.
+
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+            :header-rows: 1
+
+            * - Dtypes
+                - Layouts
+                - Ranks
+            * - BFLOAT16
+                - TILE
+                - 2, 3, 4
+
+
+        Example:
+
+            >>> grad_tensor = ttnn.from_torch(
+            ...     torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16),
+            ...     layout=ttnn.TILE_LAYOUT, device=device
+            ... )
+            >>> input_tensor = ttnn.from_torch(
+            ...     torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True),
+            ...     layout=ttnn.TILE_LAYOUT, device=device
+            ... )
+            >>> output = ttnn.experimental.gelu_bw(grad_tensor, input_tensor)
+        )doc");
 
     using OperationType = decltype(ttnn::experimental::gelu_bw);
     bind_registered_operation(
