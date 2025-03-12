@@ -18,7 +18,7 @@ from models.utility_functions import nearest_32
     indirect=True,
 )
 @pytest.mark.parametrize("dtype", [ttnn.uint16, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.float32])
-def test_replicate_to_tensor_mesh_equality(mesh_device, dtype):
+def test_direct_replicate_to_tensor_mesh(mesh_device, dtype):
     torch.manual_seed(1234)
 
     mapper = ttnn.ReplicateTensorToMesh(mesh_device)
@@ -35,26 +35,15 @@ def test_replicate_to_tensor_mesh_equality(mesh_device, dtype):
         device=mesh_device,
     )
 
-    orig_out_tensors = ttnn.to_torch(ttnn.get_device_tensors(replicated_tensors)[0])
+    out_tensors = ttnn.get_device_tensors(replicated_tensors)
 
-    to_repl = ttnn.from_torch(
-        torch_tensor,
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-    )
-
-    mapper = ttnn.replicate_tensor_to_mesh_mapper(mesh_device)
-    replicated_tensors = ttnn.distribute_tensor(to_repl, mapper, mesh_device)
-    out_tensors = ttnn.to_torch(ttnn.get_device_tensors(replicated_tensors)[0])
-
-    out_pass, out_pcc = comp_pcc(orig_out_tensors, out_tensors, pcc=0.99)
+    out_pass, out_pcc = comp_pcc(torch_tensor, ttnn.to_torch(out_tensors[0]), pcc=0.99)
     logger.info(f"PCC value: {out_pcc}")
     assert out_pass
 
 
 @pytest.mark.parametrize("dtype", [ttnn.uint16, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.float32])
-def test_shard_to_tensor_mesh_equality(mesh_device, dtype):
+def test_direct_shard_to_tensor_mesh(mesh_device, dtype):
     torch.manual_seed(1234)
 
     mapper = ttnn.ShardTensorToMesh(mesh_device, dim=3)
@@ -63,7 +52,7 @@ def test_shard_to_tensor_mesh_equality(mesh_device, dtype):
         torch_tensor = torch.randint(0, 32767, (1, 1, 32, 256))
     else:
         torch_tensor = torch.randn(1, 1, 32, 256)
-    orig_sharded_tensor = ttnn.from_torch(
+    sharded_tensor = ttnn.from_torch(
         torch_tensor,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
@@ -71,19 +60,7 @@ def test_shard_to_tensor_mesh_equality(mesh_device, dtype):
         device=mesh_device,
     )
 
-    to_shard = ttnn.from_torch(
-        torch_tensor,
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-    )
-
-    mapper = ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=3)
-
-    sharded_tensor = ttnn.to_torch(ttnn.distribute_tensor(to_shard, mapper, mesh_device))
-    orig_sharded_tensor = ttnn.to_torch(orig_sharded_tensor)
-
-    out_pass, out_pcc = comp_pcc(orig_sharded_tensor, sharded_tensor, pcc=0.99)
+    out_pass, out_pcc = comp_pcc(torch_tensor, ttnn.to_torch(sharded_tensor), pcc=0.99)
     logger.info(f"PCC value: {out_pcc}")
     assert out_pass
 
@@ -96,7 +73,7 @@ def test_shard_to_tensor_mesh_equality(mesh_device, dtype):
     [pytest.param(32, 64, 128), pytest.param(32, 128, 64)],
 )
 @pytest.mark.parametrize("dtype", [ttnn.uint16, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.float32])
-def test_shard2d_to_tensor_mesh_equality(M, K, N, dtype, mesh_shape, mesh_device):
+def test_direct_shard2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device):
     torch.manual_seed(1234)
 
     if dtype == ttnn.uint16:
@@ -114,7 +91,7 @@ def test_shard2d_to_tensor_mesh_equality(M, K, N, dtype, mesh_shape, mesh_device
 
     mapper = ttnn.ShardTensorTo2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dim)
 
-    orig_sharded_tensor = ttnn.from_torch(
+    sharded_tensor = ttnn.from_torch(
         torch_tensor,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
@@ -123,26 +100,13 @@ def test_shard2d_to_tensor_mesh_equality(M, K, N, dtype, mesh_shape, mesh_device
         device=mesh_device,
     )
 
-    to_shard = ttnn.from_torch(
-        torch_tensor,
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        device=mesh_device,
-    )
-
-    mapper = ttnn.shard_tensor_to_2d_mesh_mapper(mesh_device, mesh_shape=mesh_shape, dims=shard_dim)
-
-    sharded_tensor = ttnn.to_torch(ttnn.distribute_tensor(to_shard, mapper, mesh_device))
-    orig_sharded_tensor = ttnn.to_torch(orig_sharded_tensor)
-
-    out_pass, out_pcc = comp_pcc(orig_sharded_tensor, sharded_tensor, pcc=0.99)
+    out_pass, out_pcc = comp_pcc(torch_tensor, ttnn.to_torch(sharded_tensor), pcc=0.99)
     logger.info(f"PCC value: {out_pcc}")
     assert out_pass
 
 
 @pytest.mark.parametrize("dtype", [ttnn.uint16, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.float32])
-def test_concat_to_tensor_mesh_equality(mesh_device, dtype):
+def test_direct_concat_to_tensor_mesh(mesh_device, dtype):
     torch.manual_seed(1234)
 
     mapper = ttnn.ShardTensorToMesh(mesh_device, dim=3)
@@ -151,7 +115,7 @@ def test_concat_to_tensor_mesh_equality(mesh_device, dtype):
         torch_tensor = torch.randint(0, 32767, (1, 1, 32, 256))
     else:
         torch_tensor = torch.randn(1, 1, 32, 256)
-    orig_sharded_tensor = ttnn.from_torch(
+    sharded_tensor = ttnn.from_torch(
         torch_tensor,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
@@ -159,26 +123,11 @@ def test_concat_to_tensor_mesh_equality(mesh_device, dtype):
         device=mesh_device,
     )
 
-    composer = ttnn.ConcatMeshToTensor(mesh_device, dim=3)
+    composer = ttnn.CppConcatMeshToTensor(dim=3)
 
-    orig_concat_tensor = ttnn.to_torch(orig_sharded_tensor, mesh_composer=composer)
+    concat_tensor = ttnn.to_torch(sharded_tensor, mesh_composer=composer)
 
-    to_shard = ttnn.from_torch(
-        torch_tensor,
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-    )
-
-    mapper = ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=3)
-
-    composer = ttnn.concat_mesh_to_tensor_composer(dim=3)
-
-    concat_tensor = ttnn.to_torch(
-        ttnn.aggregate_tensor(ttnn.distribute_tensor(to_shard, mapper, mesh_device), composer)
-    )
-
-    out_pass, out_pcc = comp_pcc(orig_concat_tensor, concat_tensor, pcc=0.99)
+    out_pass, out_pcc = comp_pcc(torch_tensor, concat_tensor, pcc=0.99)
     logger.info(f"PCC value: {out_pcc}")
     assert out_pass
 
@@ -191,7 +140,7 @@ def test_concat_to_tensor_mesh_equality(mesh_device, dtype):
     [pytest.param(32, 64, 128), pytest.param(32, 128, 64)],
 )
 @pytest.mark.parametrize("dtype", [ttnn.uint16, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.float32])
-def test_concat2d_to_tensor_mesh_equality(M, K, N, dtype, mesh_shape, mesh_device):
+def test_direct_concat2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device):
     torch.manual_seed(1234)
 
     if dtype == ttnn.uint16:
@@ -219,27 +168,11 @@ def test_concat2d_to_tensor_mesh_equality(M, K, N, dtype, mesh_shape, mesh_devic
         device=mesh_device,
     )
 
-    composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape, dims=concat_dim)
+    composer = ttnn.CppConcat2dMeshToTensor(mesh_device, dims=concat_dim)
 
-    orig_concat_tensor = ttnn.to_torch(sharded_tensor, mesh_composer=composer)
+    concat_tensor = ttnn.to_torch(sharded_tensor, mesh_composer=composer)
 
-    to_shard = ttnn.from_torch(
-        torch_tensor,
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        device=mesh_device,
-    )
-
-    mapper = ttnn.shard_tensor_to_2d_mesh_mapper(mesh_device, mesh_shape=mesh_shape, dims=shard_dim)
-
-    composer = ttnn.concat_2d_mesh_to_tensor_composer(mesh_device, dims=concat_dim)
-
-    concat_tensor = ttnn.to_torch(
-        ttnn.aggregate_tensor(ttnn.distribute_tensor(to_shard, mapper, mesh_device), composer)
-    )
-
-    out_pass, out_pcc = comp_pcc(orig_concat_tensor, concat_tensor, pcc=0.99)
+    out_pass, out_pcc = comp_pcc(torch_tensor, concat_tensor, pcc=0.99)
     logger.info(f"PCC value: {out_pcc}")
     assert out_pass
 
@@ -259,7 +192,6 @@ def test_replicate_to_tensor_mesh(mesh_device, dtype):
         torch_tensor = torch.randint(0, 32767, (1, 1, 32, 256))
     else:
         torch_tensor = torch.randn(1, 1, 32, 256)
-
     to_repl = ttnn.from_torch(
         torch_tensor,
         dtype=dtype,
