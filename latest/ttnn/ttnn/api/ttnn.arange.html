@@ -173,7 +173,7 @@
 <div class="doctest highlight-default notranslate">
 <div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">start</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">step</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">tensor</span><span class="p">)</span>
-<span class="go">ttnn.Tensor([[[[0.00000,  2.00000,  ...,  8.00000,  0.00000]]]], shape=Shape([1, 1, 1, 6]), dtype=DataType::FLOAT32, layout=Layout::ROW_MAJOR)</span>
+<span class="go">ttnn.Tensor([ 0.00000,  2.00000,  ...,  6.00000,  8.00000], shape=Shape([5]), dtype=DataType::FLOAT32, layout=Layout::ROW_MAJOR)</span>
 </pre></div>
 </div>
 </div>
