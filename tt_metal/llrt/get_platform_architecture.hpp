@@ -59,7 +59,7 @@ inline tt::ARCH get_platform_architecture() {
         auto devices_info = PCIDevice::enumerate_devices_info();
         if (devices_info.size() > 0) {
             arch = devices_info.begin()->second.get_arch();
-            for (auto &[device_id, device_info] : devices_info) {
+            for (auto& [device_id, device_info] : devices_info) {
                 tt::ARCH detected_arch = device_info.get_arch();
                 TT_FATAL(
                     arch == detected_arch,
