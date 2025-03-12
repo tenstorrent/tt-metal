@@ -12,11 +12,11 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
 from models.utility_functions import skip_for_grayskull, skip_for_blackhole, nearest_32, skip_for_wormhole_b0
-from models.demos.llama3.tt.llama_common import (
+from models.tt_transformers.tt.common import (
     precompute_freqs,
     get_rot_transformation_mat,
 )
-from models.demos.llama3.tt.llama_rope import TtLlamaRotarySetup
+from models.tt_transformers.tt.rope import RotarySetup
 
 MAX_SEQ_LEN = 128 * 1024
 
@@ -181,7 +181,7 @@ def run_test_rotary_embedding_llama(
 
         if fuse_qk:
             # Set up rope with 2 * batch size (for fused qk) (no scaling)
-            rope_setup_decode = TtLlamaRotarySetup(
+            rope_setup_decode = RotarySetup(
                 device, batch * 2, head_dim, max_seq_len, rope_theta=10000, scale_factor=None, orig_context_len=131072
             )
             tt_model.transformation_mat = rope_setup_decode.transformation_mat
@@ -222,7 +222,7 @@ def run_test_rotary_embedding_llama(
 
         else:
             # Set up rope with batch size (no scaling)
-            rope_setup_decode = TtLlamaRotarySetup(
+            rope_setup_decode = RotarySetup(
                 device, batch, head_dim, max_seq_len, rope_theta=10000, scale_factor=None, orig_context_len=131072
             )
 

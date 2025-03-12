@@ -263,7 +263,11 @@ void py_module(py::module& module) {
 
     module.def(
         "copy_host_to_device_tensor",
-        &ttnn::operations::core::copy_host_to_device_tensor,
+        [](const ttnn::Tensor& host_tensor, ttnn::Tensor device_tensor, QueueId cq_id = ttnn::DefaultQueueId) {
+            // Copies `device_tensor`, to be able to asynchronously populate metadata in tensor attributes, stored as a
+            // shared pointer.
+            tt::tt_metal::write_tensor(host_tensor, std::move(device_tensor), cq_id);
+        },
         py::arg("host_tensor"),
         py::arg("device_tensor"),
         py::arg("cq_id") = ttnn::DefaultQueueId);

@@ -680,10 +680,6 @@ bool Tensor::is_scalar() const {
 }
 
 Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
-    if (distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device)) {
-        return allocate_tensor_on_mesh(tensor_spec, mesh_device);
-    }
-
     ZoneScoped;
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::create_device_tensor",
@@ -693,8 +689,13 @@ Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
         device,
         tensor_spec.tensor_layout().get_memory_config());
 
-    auto device_buffer = tensor_impl::allocate_buffer_on_device(device, tensor_spec);
-    auto output = Tensor(DeviceStorage{device_buffer}, tensor_spec);
+    Tensor output;
+    if (distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device)) {
+        output = allocate_tensor_on_mesh(tensor_spec, mesh_device);
+    } else {
+        auto device_buffer = tensor_impl::allocate_buffer_on_device(device, tensor_spec);
+        output = Tensor(DeviceStorage{device_buffer}, tensor_spec);
+    }
     output = tt::tt_metal::set_tensor_id(output);
 
     GraphTracker::instance().track_function_end(output);
@@ -720,7 +721,7 @@ void* get_raw_host_data_ptr(const Tensor& tensor) {
         tt::stl::overloaded{
             [](const OwnedStorage& s) {
                 auto buffer = owned_buffer::get_as<DataType>(s.buffer);
-                return buffer.data();
+                return reinterpret_cast<void*>(buffer.data());
             },
             [](const BorrowedStorage& s) {
                 if constexpr (
@@ -728,7 +729,7 @@ void* get_raw_host_data_ptr(const Tensor& tensor) {
                     std::is_same_v<DataType, std::uint32_t> or std::is_same_v<DataType, std::int32_t> or
                     std::is_same_v<DataType, std::uint8_t> or std::is_same_v<DataType, std::uint16_t>) {
                     auto buffer = borrowed_buffer::get_as<DataType>(s.buffer);
-                    return buffer.data();
+                    return reinterpret_cast<void*>(buffer.data());
                 } else {
                     TT_THROW("Borrowed storage doesn't support this data type");
                 }
@@ -925,7 +926,12 @@ Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshD
     TT_FATAL(
         tt::tt_metal::detail::InMainThread(), "Allocation of a tensor on mesh must be called from the main thread");
     auto mesh_buffer = tensor_impl::allocate_mesh_buffer_on_device(mesh_device, tensor_spec);
-    DeviceStorage device_storage(std::move(mesh_buffer));
+    std::vector<std::pair<distributed::MeshCoordinate, TensorSpec>> specs;
+    specs.reserve(mesh_device->shape().mesh_size());
+    for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
+        specs.push_back(std::make_pair(coord, tensor_spec));
+    }
+    DeviceStorage device_storage(std::move(mesh_buffer), ReplicateTensor(), std::move(specs));
     return Tensor(std::move(device_storage), tensor_spec);
 }
 
@@ -965,10 +971,12 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id
                         void* host_data = std::visit(
                             tt::stl::overloaded{
                                 [](BorrowedStorage s) {
-                                    return std::visit([](auto&& b) { return b.data(); }, s.buffer);
+                                    return std::visit(
+                                        [](auto&& b) { return reinterpret_cast<void*>(b.data()); }, s.buffer);
                                 },
                                 [](OwnedStorage s) {
-                                    return std::visit([](auto&& b) { return static_cast<void*>(b.begin()); }, s.buffer);
+                                    return std::visit(
+                                        [](auto&& b) { return reinterpret_cast<void*>(b.begin()); }, s.buffer);
                                 },
                                 [](const MultiDeviceHostStorage& host_storage) {
                                     TT_ASSERT(

@@ -73,15 +73,15 @@ tests/tt_metal/distributed/ @cfjchu @tt-asaigal @omilyutin-tt
 tests/tt_metal/distributed/**/requirements*.txt @tenstorrent/metalium-developers-infra @cfjchu @tt-asaigal @omilyutin-tt
 
 # metal - fw, llks, risc-v
-tt_metal/hw/ckernels/ @rtawfik01 @rdjogoTT @ttmtrajkovic
+tt_metal/hw/ckernels/ @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelickovicTT
 tt_metal/include/compute_kernel_api.h @davorchap @mywoodstock
-tt_metal/include/compute_kernel_api/ @rtawfik01 @rdjogoTT @ttmtrajkovic
+tt_metal/include/compute_kernel_api/ @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelickovicTT
 tt_metal/include/dataflow_kernel_api.h @davorchap @mywoodstock @ntarafdar
 tt_metal/hw/firmware/riscv/common/dataflow_internals.h @davorchap @mywoodstock
 tt_metal/hw/firmware/src/*erisc* @aliuTT @ubcheema
 tt_metal/hw/inc/ethernet/ @aliuTT @ubcheema
 tt_metal/hw/inc/wormhole/eth_l1_address_map.h @aliuTT @ubcheema
-tt_metal/third_party/tt_llk_* @rtawfik01 @ttmtrajkovic @rdjogoTT
+tt_metal/third_party/tt_llk @rtawfik01 @ttmtrajkovic @rdjogoTT @nvelickovicTT
 tt_metal/tt_stl/ @patrickroberts @ayerofieiev-tt @dmakoviichuk-tt @sminakov-tt @omilyutin-tt
 
 sfpi/ @pgkeller
@@ -122,6 +122,7 @@ ttnn/cpp/ttnn/operations/data_movement/fold/ @tenstorrent/metalium-developers-co
 ttnn/cpp/ttnn/operations/data_movement/untilize_with_halo_v2/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @vsureshTT @edwinleeTT
 ttnn/cpp/ttnn/operations/experimental/ccl/ @SeanNijjar @jvegaTT @tt-aho
+ttnn/cpp/ttnn/operations/experimental/conv3d/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/experimental/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @vsureshTT @edwinleeTT
 ttnn/cpp/ttnn/operations/eltwise/ @patrickroberts @sjameelTT @ntarafdar @dchenTT
 ttnn/cpp/ttnn/operations/reduction/ @bbradelTT @sjameelTT @vsureshTT @edwinleeTT
@@ -140,6 +141,10 @@ tests/ttnn/ @ayerofieiev-tt @dmakoviichuk-tt @rfurko-tt @cfjchu @TT-BrianLiu @ra
 tests/ttnn/unit_tests/gtests/ccl/ @SeanNijjar @jvegaTT @cfjchu @tt-aho
 tests/ttnn/unit_tests/operations/ccl/ @SeanNijjar @jvegaTT @tt-aho
 tests/ttnn/unit_tests/operations/eltwise/ @patrickroberts @sjameelTT @ntarafdar @dchenTT
+tests/ttnn/unit_tests/operations/conv/ @tenstorrent/metalium-developers-convolutions
+tests/ttnn/unit_tests/operations/pool/ @tenstorrent/metalium-developers-convolutions
+tests/ttnn/nightly/unit_tests/operations/conv/ @tenstorrent/metalium-developers-convolutions
+tests/ttnn/nightly/unit_tests/operations/pool/ @tenstorrent/metalium-developers-convolutions
 tests/sweep_framework/ @xanderchin @jdesousa-TT @sjameelTT
 tests/sweep_framework/sweeps
 tests/sweep_framework/sweeps/eltwise/ @patrickroberts @sjameelTT @ntarafdar @dchenTT
@@ -163,7 +168,7 @@ models/demos @uaydonat
 models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu
 models/demos/wormhole @uaydonat
 models/demos/t3000 @uaydonat
-models/demos/llama3 @cglagovichTT @yieldthought @mtairum @uaydonat
+models/tt_transformers @cglagovichTT @yieldthought @mtairum @uaydonat
 models/demos/qwen @sraizada-tt @mtairum @uaydonat @yieldthought
 models/demos/falcon7b_common @skhorasganiTT @djordje-tt @uaydonat
 models/demos/wormhole/mamba @esmalTT @uaydonat @kpaigwar
@@ -177,6 +182,7 @@ models/demos/t3000/llama3_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-
 models/demos/t3000/mixtral8x7b @yieldthought @mtairum @uaydonat
 models/demos/tg/llama3_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar
 models/demos/tg/falcon7b @skhorasganiTT @djordje-tt @uaydonat
+models/demos/whisper @skhorasganiTT @uaydonat
 models/demos/grayskull @uaydonat
 models/demos/yolov4 @dvartaniansTT @mbahnasTT @tenstorrent/metalium-developers-convolutions
 models/demos/wormhole/yolov4 @dvartaniansTT @mbahnasTT @tenstorrent/metalium-developers-convolutions
@@ -194,9 +200,6 @@ docs/source/ttnn/ttnn/dependencies/tt_lib.rst @patrickroberts @sminakov-tt @ayer
 docs/source/ttnn/ @patrickroberts @ayerofieiev-tt @razorback3 @dongjin-na
 
 # misc
-tests/**/dtx/ @tenstorrent/metalium-developers-convolutions
-tests/**/*test*conv*.py @tenstorrent/metalium-developers-convolutions
-tests/ttnn/unit_tests/operations/convolution @tenstorrent/metalium-developers-convolutions
 tests/python_api_testing/unit_testing/fallback_ops @tt-aho
 scripts/profiler/ @mo-tenstorrent
 scripts/docker @tenstorrent/metalium-developers-infra

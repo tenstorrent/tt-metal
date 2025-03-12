@@ -14,8 +14,10 @@
 #include <vector>
 
 #include "tt_metal/impl/dispatch/data_collection.hpp"
+#include "tt_metal/impl/program/program_command_sequence.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
+#include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 
 namespace tt::tt_metal {
@@ -531,7 +533,7 @@ void generate_runtime_args_cmds(
 void assemble_runtime_args_commands(
     ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device) {
     static const uint32_t packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);
-    NOC noc_index = dispatch_downstream_noc;
+    NOC noc_index = k_dispatch_downstream_noc;
     auto dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
     auto dispatch_core_type = dispatch_core_config.get_core_type();
     const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
@@ -787,7 +789,7 @@ void assemble_device_commands(
     DeviceCommandCalculator calculator;
     auto dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
     auto dispatch_core_type = dispatch_core_config.get_core_type();
-    NOC noc_index = dispatch_downstream_noc;
+    NOC noc_index = k_dispatch_downstream_noc;
     const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
     static const uint32_t packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);
     const auto& program_transfer_info = program.get_program_transfer_info();
@@ -1811,8 +1813,8 @@ uint32_t program_base_addr_on_core(
 }
 
 void reset_config_buf_mgrs_and_expected_workers(
-    std::array<WorkerConfigBufferMgr, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>& config_buffer_mgrs,
-    std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed,
+    DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgrs,
+    DispatchArray<uint32_t>& expected_num_workers_completed,
     uint32_t num_entries_to_reset) {
     for (uint32_t i = 0; i < num_entries_to_reset; ++i) {
         config_buffer_mgrs[i] = WorkerConfigBufferMgr();
@@ -1826,7 +1828,7 @@ void reset_worker_dispatch_state_on_device(
     SystemMemoryManager& manager,
     uint8_t cq_id,
     CoreCoord dispatch_core,
-    const std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed,
+    const DispatchArray<uint32_t>& expected_num_workers_completed,
     bool reset_launch_msg_state) {
     auto num_sub_devices = device->num_sub_devices();
     uint32_t go_signals_cmd_size = 0;

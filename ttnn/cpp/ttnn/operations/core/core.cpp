@@ -98,10 +98,6 @@ ttnn::Tensor allocate_tensor_on_device(const ttnn::TensorSpec& spec, MeshDevice*
     return tt::tt_metal::allocate_tensor_on_mesh(spec, mesh_device);
 }
 
-void copy_host_to_device_tensor(const ttnn::Tensor& host_tensor, ttnn::Tensor device_tensor, QueueId cq_id) {
-    tt::tt_metal::write_tensor(std::move(host_tensor), std::move(device_tensor), cq_id);
-}
-
 ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking, QueueId cq_id) {
     return tensor.cpu(blocking, cq_id);
 }

@@ -100,7 +100,11 @@ public:
     const ShardedBufferConfig& global_shard_spec() const;
     const DeviceLocalBufferConfig& device_local_config() const { return device_local_config_; }
 
-    Buffer* get_device_buffer(const MeshCoordinate& device_coord = MeshCoordinate(0, 0)) const;
+    Buffer* get_device_buffer(const MeshCoordinate& device_coord) const;
+
+    // TODO: Remove this method, once there is no need to interop MeshBuffer with Buffer.
+    Buffer* get_reference_buffer() const;
+
     uint32_t datum_size_bytes() const;
     Shape2D physical_shard_shape() const;
     std::pair<bool, bool> replicated_dims() const;

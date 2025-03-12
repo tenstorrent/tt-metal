@@ -5,6 +5,7 @@
 #pragma once
 
 #include <memory>
+#include "tt-metalium/mesh_coord.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 
@@ -41,11 +42,19 @@ struct OwnedStorage {
 
 // TODO: #17215 - Replace `DeviceStorage` with "mesh storage".
 struct DeviceStorage {
+    // TODO: come up with a better abstraction for this.
+    DistributedTensorConfig strategy;
+    std::vector<std::pair<distributed::MeshCoordinate, TensorSpec>> specs;
+
     std::shared_ptr<Buffer> buffer;
     std::shared_ptr<distributed::MeshBuffer> mesh_buffer;
+
     DeviceStorage() = default;
     DeviceStorage(std::shared_ptr<Buffer> buffer_);
-    DeviceStorage(std::shared_ptr<distributed::MeshBuffer> mesh_buffer_);
+    DeviceStorage(
+        std::shared_ptr<distributed::MeshBuffer> mesh_buffer_,
+        DistributedTensorConfig strategy_,
+        std::vector<std::pair<distributed::MeshCoordinate, TensorSpec>> specs_);
 
     MemoryConfig memory_config() const;
     void insert_buffer(const std::shared_ptr<Buffer>& buffer_);
@@ -55,17 +64,13 @@ struct DeviceStorage {
     const auto attribute_values() const { return std::make_tuple(this->memory_config()); }
 
     bool is_allocated() const;
+
     std::shared_ptr<distributed::MeshBuffer> get_mesh_buffer() const {
         TT_FATAL(mesh_buffer != nullptr, "Mesh buffer is not allocated");
         return mesh_buffer;
     }
-    IDevice* get_device() const {
-        if (mesh_buffer != nullptr) {
-            return mesh_buffer->device();
-        }
-        TT_FATAL(buffer != nullptr, "Buffer is not allocated");
-        return buffer->device();
-    }
+
+    IDevice* get_device() const;
 };
 
 using BorrowedBuffer = std::variant<
@@ -187,19 +192,19 @@ struct MultiDeviceHostStorage {
 
     OwnedBuffer get_buffer(int buffer_index) const {
         std::lock_guard<std::mutex> lock(mtx);
-        TT_ASSERT(buffer_index < buffers.size(), "Buffer not found for buffer_index {}", buffer_index);
+        TT_FATAL(buffer_index < buffers.size(), "Buffer not found for buffer_index {}", buffer_index);
         return buffers[buffer_index];
     }
 
     OwnedBuffer& get_buffer(int buffer_index) {
         std::lock_guard<std::mutex> lock(mtx);
-        TT_ASSERT(buffer_index < buffers.size(), "Buffer not found for buffer_index {}", buffer_index);
+        TT_FATAL(buffer_index < buffers.size(), "Buffer not found for buffer_index {}", buffer_index);
         return buffers[buffer_index];
     }
 
     TensorSpec get_tensor_spec(int spec_index) const {
         std::lock_guard<std::mutex> lock(mtx);
-        TT_ASSERT(spec_index < specs.size(), "Buffer not found for device {}", spec_index);
+        TT_FATAL(spec_index < specs.size(), "Spec for device {} not found in spec list", spec_index);
         return specs[spec_index];
     }
 

@@ -33,8 +33,12 @@ MeshCommandQueue::MeshCommandQueue(
     MeshDevice* mesh_device,
     uint32_t id,
     std::shared_ptr<ThreadPool>& dispatch_thread_pool,
-    std::shared_ptr<ThreadPool>& reader_thread_pool) :
-    dispatch_thread_pool_(dispatch_thread_pool), reader_thread_pool_(reader_thread_pool) {
+    std::shared_ptr<ThreadPool>& reader_thread_pool,
+    std::shared_ptr<DispatchArray<LaunchMessageRingBufferState>>& worker_launch_message_buffer_state) :
+    dispatch_thread_pool_(dispatch_thread_pool),
+    reader_thread_pool_(reader_thread_pool),
+    worker_launch_message_buffer_state_(worker_launch_message_buffer_state)  //
+{
     mesh_device_ = mesh_device;
     id_ = id;
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
@@ -153,8 +157,8 @@ void MeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool b
         program_dispatch::update_program_dispatch_commands(
             program,
             program_cmd_seq,
-            sysmem_manager.get_worker_launch_message_buffer_state()[*sub_device_id].get_mcast_wptr(),
-            sysmem_manager.get_worker_launch_message_buffer_state()[*sub_device_id].get_unicast_wptr(),
+            (*worker_launch_message_buffer_state_)[*sub_device_id].get_mcast_wptr(),
+            (*worker_launch_message_buffer_state_)[*sub_device_id].get_unicast_wptr(),
             expected_num_workers_completed,
             this->virtual_program_dispatch_core(),
             dispatch_core_type,
@@ -197,10 +201,10 @@ void MeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool b
     }
     // Increment Launch Message Buffer Write Pointers
     if (mcast_go_signals) {
-        sysmem_manager.get_worker_launch_message_buffer_state()[*sub_device_id].inc_mcast_wptr(1);
+        (*worker_launch_message_buffer_state_)[*sub_device_id].inc_mcast_wptr(1);
     }
     if (unicast_go_signals) {
-        sysmem_manager.get_worker_launch_message_buffer_state()[*sub_device_id].inc_unicast_wptr(1);
+        (*worker_launch_message_buffer_state_)[*sub_device_id].inc_unicast_wptr(1);
     }
 
     if (sysmem_manager.get_bypass_mode()) {
@@ -233,6 +237,7 @@ void MeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
 
 void MeshCommandQueue::write_shard_to_device(
     Buffer* shard_view, const void* src, const BufferRegion& region, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture.");
     auto device = shard_view->device();
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
     buffer_dispatch::write_to_device_buffer(
@@ -245,6 +250,7 @@ void MeshCommandQueue::read_shard_from_device(
     const BufferRegion& region,
     std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
     auto device = shard_view->device();
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
 
@@ -264,11 +270,17 @@ void MeshCommandQueue::read_shard_from_device(
             }
         }
     } else {
-        auto dispatch_params = buffer_dispatch::initialize_interleaved_buf_read_dispatch_params(
-            *shard_view, id_, expected_num_workers_completed_, region);
+        buffer_dispatch::BufferReadDispatchParamsVariant dispatch_params_variant =
+            buffer_dispatch::initialize_interleaved_buf_read_dispatch_params(
+                *shard_view, id_, expected_num_workers_completed_, region);
+
+        buffer_dispatch::BufferReadDispatchParams* dispatch_params = std::visit(
+            [](auto& val) { return static_cast<buffer_dispatch::BufferReadDispatchParams*>(&val); },
+            dispatch_params_variant);
+
         buffer_dispatch::copy_interleaved_buffer_to_completion_queue(
-            dispatch_params, *shard_view, sub_device_ids, this->dispatch_core_type());
-        if (dispatch_params.pages_per_txn > 0) {
+            *dispatch_params, *shard_view, sub_device_ids, this->dispatch_core_type());
+        if (dispatch_params->pages_per_txn > 0) {
             num_txns_per_device[device]++;
             auto& read_descriptor_queue = this->get_read_descriptor_queue(device);
             read_descriptor_queue.push(
@@ -423,15 +435,14 @@ void MeshCommandQueue::enqueue_write_shard_to_sub_grid(
         // Multi-Threaded writes supported for Replicated buffers.
         // Currently not supported when doing TT-Mesh Native sharding, since we
         // rely on TTNN to perform sharding and call enqueue_write_shards
-        auto dispatch_lambda =
-            std::function<void(MeshCoordinate)>([this, &buffer, host_data, &region](MeshCoordinate&& coord) {
-                auto device_shard_view = buffer.get_device_buffer(coord);
-                const BufferRegion buffer_region = region.value_or(BufferRegion(0, device_shard_view->size()));
-                this->write_shard_to_device(device_shard_view, host_data, buffer_region);
-            });
-
+        auto dispatch_lambda = [this, &buffer, host_data, &region](const MeshCoordinate& coord) {
+            auto device_shard_view = buffer.get_device_buffer(coord);
+            const BufferRegion buffer_region = region.value_or(BufferRegion(0, device_shard_view->size()));
+            this->write_shard_to_device(device_shard_view, host_data, buffer_region);
+        };
         for (const auto& coord : device_range) {
-            dispatch_thread_pool_->enqueue([&dispatch_lambda, coord]() { dispatch_lambda(std::move(coord)); });
+            dispatch_thread_pool_->enqueue(
+                [&dispatch_lambda, coord]() { dispatch_lambda(coord); }, mesh_device_->get_device(coord)->id());
         }
         dispatch_thread_pool_->wait();
     } else {
@@ -464,18 +475,19 @@ void MeshCommandQueue::enqueue_write_shards(
     bool blocking) {
     // TODO: #17215 - this API is used by TTNN, as it currently implements rich ND sharding API for multi-devices.
     // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
-
-    auto dispatch_lambda = std::function<void(uint32_t)>([&shard_data_transfers, &buffer, this](uint32_t shard_idx) {
+    auto dispatch_lambda = [&shard_data_transfers, &buffer, this](uint32_t shard_idx) {
         auto& shard_data_transfer = shard_data_transfers[shard_idx];
         auto device_shard_view = buffer->get_device_buffer(shard_data_transfer.shard_coord);
         this->write_shard_to_device(
             device_shard_view,
             shard_data_transfer.host_data,
             shard_data_transfer.region.value_or(BufferRegion(0, device_shard_view->size())));
-    });
+    };
 
     for (std::size_t shard_idx = 0; shard_idx < shard_data_transfers.size(); shard_idx++) {
-        dispatch_thread_pool_->enqueue([&dispatch_lambda, shard_idx]() { dispatch_lambda(shard_idx); });
+        dispatch_thread_pool_->enqueue(
+            [&dispatch_lambda, shard_idx]() { dispatch_lambda(shard_idx); },
+            mesh_device_->get_device(shard_data_transfers[shard_idx].shard_coord)->id());
     }
     dispatch_thread_pool_->wait();
 
@@ -526,6 +538,7 @@ MeshEvent MeshCommandQueue::enqueue_record_event_helper(
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     bool notify_host,
     const std::optional<MeshCoordinateRange>& device_range) {
+    TT_FATAL(!trace_id_.has_value(), "Event Synchronization is not supported during trace capture.");
     auto& sysmem_manager = this->reference_sysmem_manager();
     auto event = MeshEvent(
         sysmem_manager.get_next_event(id_),
@@ -564,6 +577,7 @@ MeshEvent MeshCommandQueue::enqueue_record_event_to_host(
 }
 
 void MeshCommandQueue::enqueue_wait_for_event(const MeshEvent& sync_event) {
+    TT_FATAL(!trace_id_.has_value(), "Event Synchronization is not supported during trace capture.");
     for (const auto& coord : sync_event.device_range()) {
         event_dispatch::issue_wait_for_event_commands(
             id_, sync_event.mesh_cq_id(), mesh_device_->get_device(coord)->sysmem_manager(), sync_event.id());
@@ -634,9 +648,11 @@ void MeshCommandQueue::copy_buffer_data_to_user_space(MeshBufferReadDescriptor& 
         // physical device).
         std::lock_guard<std::mutex> lock(reader_thread_pool_mutex_);
         for (auto& metadata : read_buffer_descriptor.num_reads_per_dev) {
-            reader_thread_pool_->enqueue([&reader_lambda, device = metadata.first, num_reads = metadata.second]() {
-                reader_lambda(device, num_reads);
-            });
+            reader_thread_pool_->enqueue(
+                [&reader_lambda, device = metadata.first, num_reads = metadata.second]() {
+                    reader_lambda(device, num_reads);
+                },
+                metadata.first->id());
         }
         reader_thread_pool_->wait();
     }
@@ -672,8 +688,10 @@ void MeshCommandQueue::reset_worker_state(
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
         config_buffer_mgr_, expected_num_workers_completed_, mesh_device_->num_sub_devices());
     if (reset_launch_msg_state) {
-        auto& sysmem_manager = this->reference_sysmem_manager();
-        sysmem_manager.reset_worker_launch_message_buffer_state(num_sub_devices);
+        std::for_each(
+            this->worker_launch_message_buffer_state_->begin(),
+            this->worker_launch_message_buffer_state_->begin() + num_sub_devices,
+            std::mem_fn(&LaunchMessageRingBufferState::reset));
     }
 }
 
@@ -793,7 +811,7 @@ void MeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blocking)
     }
     trace_dispatch::update_worker_state_post_trace_execution(
         trace_inst->desc->descriptors,
-        this->reference_sysmem_manager(),
+        *worker_launch_message_buffer_state_,
         config_buffer_mgr_,
         expected_num_workers_completed_);
 
@@ -805,7 +823,7 @@ void MeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blocking)
 void MeshCommandQueue::record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) {
     trace_dispatch::reset_host_dispatch_state_for_trace(
         mesh_device_->num_sub_devices(),
-        this->reference_sysmem_manager(),
+        *worker_launch_message_buffer_state_,
         expected_num_workers_completed_,
         config_buffer_mgr_,
         worker_launch_message_buffer_state_reset_,
@@ -826,7 +844,7 @@ void MeshCommandQueue::record_end() {
 
     trace_dispatch::load_host_dispatch_state(
         mesh_device_->num_sub_devices(),
-        this->reference_sysmem_manager(),
+        *worker_launch_message_buffer_state_,
         expected_num_workers_completed_,
         config_buffer_mgr_,
         worker_launch_message_buffer_state_reset_,

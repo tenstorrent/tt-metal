@@ -27,6 +27,9 @@
 #include <hal.hpp>
 #include <mesh_coord.hpp>
 #include <small_vector.hpp>
+#include <env_lib.hpp>
+
+#include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 
 namespace tt::tt_metal::distributed {
 
@@ -34,6 +37,16 @@ namespace {
 MeshDeviceID generate_unique_mesh_id() {
     static std::atomic<MeshDeviceID> next_id{0};
     return next_id++;
+}
+
+std::shared_ptr<ThreadPool> create_default_thread_pool(
+    const std::vector<IDevice*>& physical_devices, uint32_t logical_cpu_offset = 0) {
+    // Bind the thread-pool to the physical devices being used.
+    if (tt::parse_env("TT_MESH_BOOST_THREAD_POOL", false)) {
+        return create_boost_thread_pool(physical_devices.size());
+    } else {
+        return create_device_bound_thread_pool(physical_devices, logical_cpu_offset);
+    }
 }
 
 // Helper function to verify all devices in the MeshDevice have the same value
@@ -72,21 +85,13 @@ MeshDevice::ScopedDevices::ScopedDevices(
     size_t trace_region_size,
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
-    const MeshDeviceConfig& config) {
-    auto physical_device_ids = SystemMesh::instance().request_available_devices(config);
-    opened_devices_ = tt::tt_metal::detail::CreateDevices(
-        physical_device_ids,
-        num_command_queues,
+    const MeshDeviceConfig& config) :
+    ScopedDevices(
+        SystemMesh::instance().request_available_devices(config),
         l1_small_size,
         trace_region_size,
-        dispatch_core_config,
-        {},
-        /*init_profiler*/ false);
-
-    for (auto physical_device_id : physical_device_ids) {
-        devices_.push_back(opened_devices_.at(physical_device_id));
-    }
-}
+        num_command_queues,
+        dispatch_core_config) {}
 
 MeshDevice::ScopedDevices::ScopedDevices(
     const std::vector<int>& device_ids,
@@ -102,6 +107,7 @@ MeshDevice::ScopedDevices::ScopedDevices(
         dispatch_core_config,
         {},
         /*init_profiler*/ false);
+
     for (auto device_id : device_ids) {
         devices_.push_back(opened_devices_.at(device_id));
     }
@@ -152,8 +158,8 @@ MeshDevice::MeshDevice(
     view_(std::move(mesh_device_view)),
     mesh_id_(generate_unique_mesh_id()),
     parent_mesh_(std::move(parent_mesh)),
-    dispatch_thread_pool_(create_boost_thread_pool(view_->shape().mesh_size())),
-    reader_thread_pool_(create_boost_thread_pool(view_->shape().mesh_size())) {}
+    dispatch_thread_pool_(create_default_thread_pool(scoped_devices_->root_devices())),
+    reader_thread_pool_(create_default_thread_pool(scoped_devices_->root_devices(), view_->shape().mesh_size())) {}
 
 std::shared_ptr<MeshDevice> MeshDevice::create(
     const MeshDeviceConfig& config,
@@ -177,7 +183,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     return mesh_device;
 }
 
-std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_single_devices(
+std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
     const std::vector<int>& device_ids,
     size_t l1_small_size,
     size_t trace_region_size,
@@ -194,7 +200,7 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_single_devices(
     auto submeshes = mesh_device->create_submeshes(MeshShape(1, 1));
     TT_FATAL(
         device_ids.size() == submeshes.size(),
-        "Create unexpected number of submeshes {} instead of {}",
+        "Created an unexpected number of submeshes: {} instead of {}",
         submeshes.size(),
         device_ids.size());
     std::map<int, std::shared_ptr<MeshDevice>> result;
@@ -210,14 +216,14 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_single_devices(
     return result;
 }
 
-std::shared_ptr<MeshDevice> MeshDevice::create_single_device(
+std::shared_ptr<MeshDevice> MeshDevice::create_unit_mesh(
     int device_id,
     size_t l1_small_size,
     size_t trace_region_size,
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap) {
-    return create_single_devices(
+    return create_unit_meshes(
                {device_id}, l1_small_size, trace_region_size, num_command_queues, dispatch_core_config, l1_bank_remap)
         .at(device_id);
 }
@@ -411,9 +417,7 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
 bool MeshDevice::close() {
     mesh_command_queues_.clear();
     sub_device_manager_tracker_.reset();
-    if (scoped_devices_) {
-        scoped_devices_.reset();
-    }
+    scoped_devices_.reset();
     parent_mesh_.reset();
     view_.reset();
     return true;
@@ -433,6 +437,17 @@ MeshDeviceID MeshDevice::id() const { return mesh_id_; }
 chip_id_t MeshDevice::build_id() const { return reference_device()->id(); }
 
 bool MeshDevice::is_parent_mesh() const { return parent_mesh_ == nullptr; }
+
+std::vector<std::shared_ptr<MeshDevice>> MeshDevice::get_submeshes() const {
+    std::vector<std::shared_ptr<MeshDevice>> result;
+    result.reserve(submeshes_.size());
+    for (const auto& weak_submesh : submeshes_) {
+        if (auto submesh = weak_submesh.lock()) {
+            result.push_back(std::move(submesh));
+        }
+    }
+    return result;
+}
 
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device) { return os << mesh_device.to_string(); }
 
@@ -727,14 +742,22 @@ bool MeshDevice::initialize(
     auto sub_devices = {
         SubDevice(std::array{CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}))})};
 
+    // Resource shared across mesh command queues.
+    auto worker_launch_message_buffer_state = std::make_shared<DispatchArray<LaunchMessageRingBufferState>>();
+
     const auto& allocator = reference_device()->allocator();
     sub_device_manager_tracker_ = std::make_unique<SubDeviceManagerTracker>(
         this, std::make_unique<L1BankingAllocator>(allocator->get_config()), sub_devices);
     mesh_command_queues_.reserve(this->num_hw_cqs());
     if (this->using_fast_dispatch()) {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
-            mesh_command_queues_.push_back(
-                std::make_unique<MeshCommandQueue>(this, cq_id, dispatch_thread_pool_, reader_thread_pool_));
+            mesh_command_queues_.push_back(std::make_unique<MeshCommandQueue>(
+                this,
+                cq_id,
+                dispatch_thread_pool_,
+                reader_thread_pool_,
+                worker_launch_message_buffer_state  //
+                ));
         }
     }
     return true;

@@ -9,7 +9,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/test_tiles.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 
 using namespace tt;
 
@@ -31,7 +31,7 @@ int main(int argc, char** argv) {
 
         std::vector<uint32_t> shape_vec = {1, 1, 32, 32};
         std::vector<float> tiled_fp32_vec = convert_layout(
-            fp32_vec,
+            tt::stl::MakeConstSpan(fp32_vec),
             shape_vec,
             tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
             tests::utils::TensorLayoutType::TILED_NFACES);
@@ -50,12 +50,12 @@ int main(int argc, char** argv) {
         // //                      Validation
         // ////////////////////////////////////////////////////////////////////////////
         std::vector<float> tiled_to_rm_fp32_vec = convert_layout(
-            unpacked_bfp8b_tile_vec_tile_out,
+            tt::stl::MakeConstSpan(unpacked_bfp8b_tile_vec_tile_out),
             shape_vec,
             tests::utils::TensorLayoutType::TILED_NFACES,
             tests::utils::TensorLayoutType::LIN_ROW_MAJOR);
         std::vector<float> rm_to_tiled_fp32_vec = convert_layout(
-            unpacked_bfp8b_tile_vec_rm_out,
+            tt::stl::MakeConstSpan(unpacked_bfp8b_tile_vec_rm_out),
             shape_vec,
             tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
             tests::utils::TensorLayoutType::TILED_NFACES);

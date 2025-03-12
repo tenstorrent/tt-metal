@@ -103,7 +103,7 @@ inline std::vector<T> convert_layout_row_major_to_tile(
     auto transpose_of_faces = tile.get_transpose_of_faces();
 
     return convert_layout(
-        data_to_convert,
+        tt::stl::MakeConstSpan(data_to_convert),
         shape,
         tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
         tests::utils::TensorLayoutType::TILED_NFACES,
@@ -122,7 +122,7 @@ inline std::vector<T> convert_layout_tile_to_row_major(
     auto transpose_of_faces = tile.get_transpose_of_faces();
 
     return convert_layout(
-        data_to_convert,
+        tt::stl::MakeConstSpan(data_to_convert),
         shape,
         tests::utils::TensorLayoutType::TILED_NFACES,
         tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
@@ -213,7 +213,7 @@ Tensor to_device_mesh_tensor(
     QueueId cq_id = ttnn::DefaultQueueId);
 
 template <typename T>
-void copy_to_mesh_tensor(const Tensor& host_tensor, const Tensor& mesh_tensor, QueueId cq_id = ttnn::DefaultQueueId);
+void copy_to_mesh_tensor(const Tensor& host_tensor, Tensor& mesh_tensor, QueueId cq_id = ttnn::DefaultQueueId);
 
 // ======================================================================================
 //                                  .to_layout()

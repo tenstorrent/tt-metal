@@ -80,8 +80,7 @@ std::vector<ttnn::TensorSpec> DramPrefetcher::compute_output_specs(const std::ve
 }
 tt::tt_metal::operation::ProgramWithCallbacks DramPrefetcher::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    auto global_cb = *this->global_cb;
-    return dram_prefetcher_multi_core(input_tensors, this->num_layers, global_cb);
+    return dram_prefetcher_multi_core(input_tensors, this->num_layers, *this->global_cb);
 }
 
 }  // namespace ttnn::operations::dram_prefetcher

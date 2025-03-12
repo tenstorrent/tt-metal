@@ -44,6 +44,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     bool enable_act_double_buffer,
     bool enable_split_reader,
     bool enable_subblock_padding) {
+    using tt::tt_metal::CBHandle;
+    using tt::tt_metal::CircularBuffer;
+    using tt::tt_metal::CircularBufferConfig;
+
     CBIndices cb_indices = CBIndices();
     bool pass = true;
     enable_split_reader = false;
@@ -696,7 +700,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     cb_indices.matmul_partials_cb = cb_indices.get_next_cb_index();
     // Share buffer if same data format
     CBHandle cb_output = 0;
-    if (interm0_df == out_df) {
+    CBHandle cb_matmul_partials = 0;
+    if (untilize_out == false && interm0_df == out_df) {
         cb_indices.out0_cb = cb_indices.get_next_cb_index();
         // CoreRangeSet cores(std::set<CoreRange>({core}));
         std::map<uint8_t, tt::DataFormat> cb_output_data_format_spec = {
@@ -716,13 +721,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
                 out_tile_size);
         }
         cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_matmul_partials_config);
+        cb_matmul_partials = cb_output;
     } else {
         // Separate buffer if not same data format
         CircularBufferConfig cb_matmul_partials_config =
             CircularBufferConfig(
                 num_output_tiles * interm0_single_tile_size, {{cb_indices.matmul_partials_cb, interm0_df}})
                 .set_page_size(cb_indices.matmul_partials_cb, interm0_single_tile_size);
-        auto cb_matmul_partials = tt_metal::CreateCircularBuffer(program, all_cores, cb_matmul_partials_config);
+        cb_matmul_partials = tt_metal::CreateCircularBuffer(program, all_cores, cb_matmul_partials_config);
         log_debug(
             LogOp,
             "Matmul Partials CB: {}, npages: {}, pagesize: {}",
@@ -737,6 +743,16 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
             cb_output_config = cb_output_config.set_globally_allocated_address(*output.buffer());
         }
         cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+    }
+
+    CircularBufferConfig cb_config_output = GetCircularBufferConfig(program, cb_output);
+    CircularBufferConfig cb_config_matmul_partials = GetCircularBufferConfig(program, cb_matmul_partials);
+
+    bool partials_cb_uses_output = false;
+    if (cb_config_matmul_partials.globally_allocated_address().has_value() &&
+        cb_config_output.globally_allocated_address().has_value()) {
+        partials_cb_uses_output = cb_config_matmul_partials.globally_allocated_address().value() ==
+                                  cb_config_output.globally_allocated_address().value();
     }
 
     compute_kernel_args = {
@@ -772,6 +788,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         cb_indices.tilize_mode_tilized_act_cb,
         cb_indices.out0_cb,
         0,
+        partials_cb_uses_output,
         input_num_cores,  // in0_nblocks_w_tilize. Repeat tilize after all cores have done one round of MCAST.
 
     };

@@ -9,6 +9,7 @@
 #include "tt-metalium/mesh_device.hpp"
 #include "tt-metalium/mesh_command_queue.hpp"
 #include "tt-metalium/overloaded.hpp"
+#include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
@@ -570,9 +571,7 @@ Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking, ttnn::QueueId cq
     const auto& mesh_buffer = storage.mesh_buffer;
     ttnn::MeshDevice* device = mesh_buffer->device();
     distributed::MeshCommandQueue& mesh_cq = device->mesh_command_queue(*cq_id);
-    const auto num_rows = device->num_rows();
-    const auto num_cols = device->num_cols();
-    auto num_buffers = device->num_devices();
+    const auto num_buffers = device->num_devices();
 
     std::vector<distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfers;
     std::vector<TensorSpec> specs;
@@ -580,26 +579,22 @@ Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking, ttnn::QueueId cq
     specs.reserve(num_buffers);
     buffers.reserve(num_buffers);
     shard_data_transfers.reserve(num_buffers);
-    distributed::MeshCoordinateRange coord_range(device->shape());
-    auto shard_coord = coord_range.begin();
-    for (int id = 0; id < device->num_devices(); ++id) {
+    for (const auto& [coord, shard_tensor_spec] : storage.specs) {
         std::vector<T> host_buffer;
-        const auto& shard_tensor_spec = tensor.get_tensor_spec();
         const auto tensor_size_bytes = shard_tensor_spec.compute_packed_buffer_size_bytes();
         host_buffer.resize(tensor_size_bytes / sizeof(T));
         specs.push_back(shard_tensor_spec);
         buffers.push_back(owned_buffer::create<T>(std::move(host_buffer)));
 
         shard_data_transfers.push_back(distributed::MeshCommandQueue::ShardDataTransfer{
-            .shard_coord = *shard_coord,
-            .host_data = std::visit([](auto& b) { return b.data(); }, buffers.back()),
+            .shard_coord = coord,
+            .host_data = std::visit([](auto& b) { return reinterpret_cast<T*>(b.data()); }, buffers.back()),
             .region = BufferRegion(0, tensor_size_bytes)});
-        ++shard_coord;
     }
 
     mesh_cq.enqueue_read_shards(shard_data_transfers, mesh_buffer, blocking);
 
-    MultiDeviceHostStorage host_storage(AllGatherTensor{}, std::move(buffers), std::move(specs));
+    MultiDeviceHostStorage host_storage(storage.strategy, std::move(buffers), std::move(specs));
     return Tensor(std::move(host_storage), tensor.get_tensor_spec());
 }
 
@@ -747,7 +742,13 @@ DeviceStorage replicate_to_mesh_buffer(
 
     mesh_device->mesh_command_queue(*cq_id).enqueue_write_mesh_buffer(
         mesh_buffer, data_to_write.data(), /*blocking=*/false);
-    return DeviceStorage(mesh_buffer);
+
+    std::vector<std::pair<distributed::MeshCoordinate, TensorSpec>> specs;
+    specs.reserve(mesh_device->shape().mesh_size());
+    for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
+        specs.push_back(std::make_pair(coord, tensor_spec));
+    }
+    return DeviceStorage(mesh_buffer, ReplicateTensor(), std::move(specs));
 }
 
 template <typename T>
@@ -767,12 +768,23 @@ DeviceStorage shard_to_mesh_buffer(
     std::vector<distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfers;
     shard_data_transfers.reserve(storage.buffers.size());
 
-    distributed::MeshCoordinateRange coord_range(mesh_shape);
+    const auto coord_range = [&storage, &mesh_shape]() {
+        if (auto* shard2d_strategy = std::get_if<ShardTensor2D>(&storage.strategy)) {
+            distributed::MeshShape distribution_shape(shard2d_strategy->shard_mesh.y, shard2d_strategy->shard_mesh.x);
+            return distributed::MeshCoordinateRange(distribution_shape);
+        } else {
+            return distributed::MeshCoordinateRange(mesh_shape);
+        }
+    }();
+
+    std::vector<std::pair<distributed::MeshCoordinate, TensorSpec>> specs;
+    specs.reserve(storage.buffers.size());
     auto shard_coord = coord_range.begin();
     for (int i = 0; i < storage.buffers.size(); ++shard_coord, i++) {
         TensorSpec shard_tensor_spec(
             storage.specs[i].logical_shape(),
             storage.specs[i].tensor_layout().with_memory_config(tensor_spec.memory_config()));
+        specs.push_back(std::make_pair(*shard_coord, shard_tensor_spec));
         const auto& shard_host_buffer = storage.buffers[i];
 
         const auto& shard_buffer = mesh_buffer->get_device_buffer(*shard_coord);
@@ -796,7 +808,7 @@ DeviceStorage shard_to_mesh_buffer(
 
     mesh_device->mesh_command_queue(*cq_id).enqueue_write_shards(mesh_buffer, shard_data_transfers, /*blocking=*/false);
 
-    return DeviceStorage(mesh_buffer);
+    return DeviceStorage(mesh_buffer, storage.strategy, std::move(specs));
 }
 
 template <typename T>
@@ -835,11 +847,12 @@ Tensor to_device_mesh_tensor(
 }
 
 template <typename T>
-void copy_to_mesh_tensor(const Tensor& host_tensor, const Tensor& mesh_tensor, ttnn::QueueId cq_id) {
+void copy_to_mesh_tensor(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::QueueId cq_id) {
     TT_FATAL(host_tensor.storage_type() != StorageType::DEVICE, "Host tensor is on device.");
     TT_FATAL(mesh_tensor.storage_type() == StorageType::DEVICE, "Mesh tensor is not on device.");
     TT_FATAL(tt::tt_metal::detail::InMainThread(), "copy_to_mesh_tensor must be called from the main thread");
     TT_FATAL(mesh_tensor.is_allocated(), "Need data to exist in order to move it to device");
+
     TT_FATAL(host_tensor.get_logical_shape() == mesh_tensor.get_logical_shape(), "Host tensor has different shape");
     TT_FATAL(host_tensor.get_dtype() == mesh_tensor.get_dtype(), "Host tensor has different dtype");
     TT_FATAL(
@@ -863,6 +876,9 @@ void copy_to_mesh_tensor(const Tensor& host_tensor, const Tensor& mesh_tensor, t
             },
             [](const auto& s) -> DeviceStorage { TT_THROW("Unexpected storage type {}", tt::stl::get_type_name(s)); }},
         host_tensor.get_storage());
+
+    // Set storage with the populated metadata.
+    mesh_tensor.set_storage(mesh_storage);
 }
 
 template Tensor to_device_mesh_tensor<bfloat16>(
@@ -914,20 +930,20 @@ Tensor to_device_mesh_tensor<bfloat8_b>(
     return to_device_mesh_tensor<uint32_t>(tensor, target_device, memory_config, cq_id);
 }
 
-template void copy_to_mesh_tensor<bfloat16>(const Tensor& host_tensor, const Tensor& mesh_tensor, ttnn::QueueId cq_id);
-template void copy_to_mesh_tensor<float>(const Tensor& host_tensor, const Tensor& mesh_tensor, ttnn::QueueId cq_id);
-template void copy_to_mesh_tensor<int32_t>(const Tensor& host_tensor, const Tensor& mesh_tensor, ttnn::QueueId cq_id);
-template void copy_to_mesh_tensor<uint32_t>(const Tensor& host_tensor, const Tensor& mesh_tensor, ttnn::QueueId cq_id);
-template void copy_to_mesh_tensor<uint16_t>(const Tensor& host_tensor, const Tensor& mesh_tensor, ttnn::QueueId cq_id);
-template void copy_to_mesh_tensor<uint8_t>(const Tensor& host_tensor, const Tensor& mesh_tensor, ttnn::QueueId cq_id);
+template void copy_to_mesh_tensor<bfloat16>(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::QueueId cq_id);
+template void copy_to_mesh_tensor<float>(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::QueueId cq_id);
+template void copy_to_mesh_tensor<int32_t>(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::QueueId cq_id);
+template void copy_to_mesh_tensor<uint32_t>(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::QueueId cq_id);
+template void copy_to_mesh_tensor<uint16_t>(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::QueueId cq_id);
+template void copy_to_mesh_tensor<uint8_t>(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::QueueId cq_id);
 
 template <>
-void copy_to_mesh_tensor<bfloat4_b>(const Tensor& host_tensor, const Tensor& mesh_tensor, ttnn::QueueId cq_id) {
+void copy_to_mesh_tensor<bfloat4_b>(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::QueueId cq_id) {
     copy_to_mesh_tensor<uint32_t>(host_tensor, mesh_tensor, cq_id);
 }
 
 template <>
-void copy_to_mesh_tensor<bfloat8_b>(const Tensor& host_tensor, const Tensor& mesh_tensor, ttnn::QueueId cq_id) {
+void copy_to_mesh_tensor<bfloat8_b>(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::QueueId cq_id) {
     copy_to_mesh_tensor<uint32_t>(host_tensor, mesh_tensor, cq_id);
 }
 
@@ -1270,7 +1286,10 @@ Tensor pad(
     }
 
     auto pad_value_ = static_cast<T>(pad_value);
-    const auto input_padded_shape = tensor.get_padded_shape();
+    auto input_padded_shape = tensor.get_padded_shape();
+    if (input_padded_shape.rank() < 2) {
+        input_padded_shape = input_padded_shape.to_rank(2);
+    }
     const auto input_strides = tensor.strides();
     const auto input_data_type = tensor.get_dtype();
 
@@ -1341,7 +1360,7 @@ Tensor pad(
         tensor.get_storage());
     return Tensor(
         OwnedStorage{output_buffer},
-        tensor.get_padded_shape(),
+        tensor.get_logical_shape(),
         output_padded_shape,
         tensor.get_dtype(),
         tensor.get_layout(),
