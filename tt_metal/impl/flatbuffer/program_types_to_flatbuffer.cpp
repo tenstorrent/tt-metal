@@ -4,11 +4,12 @@
 
 #include "flatbuffer/base_types_to_flatbuffer.hpp"
 #include "flatbuffer/program_types_to_flatbuffer.hpp"
-#include "lightmetal/host_api_capture_helpers.hpp"
 #include "lightmetal/lightmetal_capture.hpp"  // For LightMetalCaptureContext
 #include <overloaded.hpp>
 
 namespace tt::tt_metal {
+
+using RuntimeArgs = std::vector<std::variant<Buffer*, uint32_t>>;
 
 flatbuffers::Offset<flatbuffer::CoreCoord> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const CoreCoord& coord) {
