@@ -18,3 +18,21 @@
   ```python
   pytest tests/ttnn/integration_tests/segformer/test_segformer_for_semantic_segmentation.py
   ```
+
+## Segformer Semantic Segmentation Demo
+
+- Use the following command to run the demo script(Segmentation) which returns **mIoU** score for both Reference,ttnn models:
+  ```python
+  pytest --disable-warnings models/demos/segformer/demo/demo_for_semantic_segmentation.py
+  ```
+- This script downloads 30 validation images and their annotations of [ADE20K](https://www.kaggle.com/datasets/awsaf49/ade20k-dataset) Dataset.
+  ```python
+  models/demos/segformer/demo/data_download.sh
+  ```
+- For Running Demo with Custom Images and their Annotations(Masks), add them to this path:
+  ```python
+  models/demos/segformer/demo/validation_data_ade20k/images/image.jpg
+  ```
+  ```python
+  models/demos/segformer/demo/validation_data_ade20k/annotations/annotation.png
+  ```
