@@ -16,7 +16,7 @@ static constexpr size_t DESTINATION_HOP_COUNT = 1;
 // TODO: make 0 and the associated field to num mcast destinations
 static constexpr size_t LAST_MCAST_DESTINATION = 1;
 
-static constexpr uint8_t edm_to_local_chip_noc = 1;
+static constexpr uint8_t edm_to_local_chip_noc = 0;
 
 FORCE_INLINE void print_pkt_hdr_routing_fields(volatile tt::fabric::PacketHeader *const packet_start) {
 #ifdef DEBUG_PRINT_ENABLED
