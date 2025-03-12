@@ -249,11 +249,11 @@ def run_reduce_scatter_impl(
 def test_fabric_reduce_scatter(n300_mesh_device):
     torch.manual_seed(2005)
     dim = 3
-    input = torch.ones((1, 1, 32, 128), dtype=torch.bfloat16)
-    input[:, :, :, :64] = 2
+    input = torch.ones((1, 1, 32, 160 * 4), dtype=torch.bfloat16)
+    input[:, :, :, :160] = 2
     n300_mesh_device.enable_async(True)
     sharded_mem_config = ttnn.create_sharded_memory_config(
-        (32, 32),
+        (32, 160),
         core_grid=ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1)),
@@ -274,7 +274,9 @@ def test_fabric_reduce_scatter(n300_mesh_device):
     print(tt_input)
     enable_persistent_fabric = True
     compute_grid_size = n300_mesh_device.compute_with_storage_grid_size()
-    ccl_sub_device_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(6, 6), ttnn.CoreCoord(6, 6))})
+    ccl_sub_device_crs = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
+    )
     worker_sub_device = ttnn.SubDevice(
         [
             ccl_sub_device_crs,
