@@ -112,7 +112,6 @@ def run_resnet_inference(
     model_config=resnet_model_config,
     model_version="microsoft/resnet-50",
 ):
-
     # set up image processor
     image_processor = AutoImageProcessor.from_pretrained(model_version)
 
