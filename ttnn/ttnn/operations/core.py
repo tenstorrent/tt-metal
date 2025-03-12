@@ -281,18 +281,6 @@ def from_torch(
         if memory_config.shard_spec.mode == ttnn.ShardMode.LOGICAL:
             return ttnn.Tensor(tensor, dtype, device, layout, memory_config, tile)
 
-    logical_shape = None
-    padded_shape = None
-    if dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b:
-        if layout != ttnn.TILE_LAYOUT:
-            raise RuntimeError("ttnn.from_torch: bfloat8_b/bfloat4_b requires TILE_LAYOUT!")
-        # Tilize tensor
-        tensor = ttnn.from_torch(tensor, layout=ttnn.TILE_LAYOUT, tile=tile, pad_value=pad_value, mesh_mapper=None)
-        logical_shape = tensor.shape
-        padded_shape = tensor.padded_shape
-        tensor = tensor.reshape(tensor.padded_shape)
-        tensor = ttnn.to_torch(tensor)
-
     if memory_config is not None:
         if device is None:
             raise RuntimeError("ttnn.from_torch: device must be specified when memory_config is specified")
@@ -301,27 +289,45 @@ def from_torch(
         if layout != ttnn.TILE_LAYOUT:
             raise RuntimeError("ttnn.from_torch: layout must be TILE_LAYOUT when pad_value is specified")
 
-    if mesh_mapper:
-        shards = mesh_mapper.map(tensor)
-        if tile is not None:
-            tensor = ttnn.Tensor(shards, dtype, mesh_mapper.config(), tile)
-        else:
-            tensor = ttnn.Tensor(shards, dtype, mesh_mapper.config())
+    logical_shape = None
+    padded_shape = None
+
+    if dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b:
+        if layout != ttnn.TILE_LAYOUT:
+            raise RuntimeError("ttnn.from_torch: bfloat8_b/bfloat4_b requires TILE_LAYOUT!")
+        # Tilize tensor, TODO: this is non-performant when done on host
+        tensor = ttnn.from_torch(tensor, layout=ttnn.TILE_LAYOUT, tile=tile, pad_value=pad_value, mesh_mapper=None)
+        logical_shape = tensor.shape
+        padded_shape = tensor.padded_shape
+        tensor = tensor.reshape(tensor.padded_shape)
     else:
-        if tile is not None:
-            tensor = ttnn.Tensor(tensor, dtype, {}, tile)
-        else:
-            tensor = ttnn.Tensor(tensor, dtype)
+        tensor = ttnn.Tensor(tensor, dtype)
+
+    strategy = {}
+    tilize_input = []
+
+    if mesh_mapper:
+        tensor = ttnn.distribute_tensor(tensor, mesh_mapper, device)
+        tilize_input = ttnn.to_torch(tensor)
+
+    # TODO: find cleaner way of tilizing
+    if tile is not None:
+        tensor = ttnn.Tensor(tilize_input, dtype, strategy, tile)
 
     if layout is not None and not (dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b):
         if pad_value is not None:
             tensor = tensor.pad_to_tile(pad_value)
+        if ttnn.is_tensor_storage_on_device(tensor):
+            # TODO: support tilizing non bfloat/float types on device tensors making this conversion unnecessary
+            tensor = ttnn.from_device(tensor, cq_id=cq_id)
         tensor = ttnn.to_layout(tensor, layout, device=device)
 
     if device is not None:
         if memory_config is None:
             memory_config = ttnn.DRAM_MEMORY_CONFIG
-        tensor = ttnn.to_device(tensor, device, memory_config=memory_config, cq_id=cq_id)
+        # Handle sharding case which would have already output to a multidevice
+        if not ttnn.is_tensor_storage_on_device(tensor):
+            tensor = ttnn.to_device(tensor, device, memory_config=memory_config, cq_id=cq_id)
 
     if logical_shape is not None and logical_shape != tensor.shape and mesh_mapper is None:
         tensor = ttnn.reshape(tensor, logical_shape, padded_shape)
@@ -356,7 +362,7 @@ def to_torch(
     dtype: Optional[torch.dtype] = None,
     *,
     torch_rank: Optional[int] = None,
-    mesh_composer: Optional[ttnn.MeshToTensor] = None,
+    mesh_composer: Optional[Union[ttnn.MeshToTensor, ttnn.CppMeshToTensor]] = None,
     device: Optional[ttnn.Device] = None,
     cq_id: Optional[int] = ttnn.DefaultQueueId,
 ) -> "torch.Tensor":
@@ -389,7 +395,10 @@ def to_torch(
         tensor = ttnn.from_device(tensor, cq_id=cq_id)
 
     if mesh_composer:
-        return mesh_composer.compose(tensor)
+        if isinstance(mesh_composer, ttnn.MeshToTensor):
+            return mesh_composer.compose(tensor)
+        else:
+            return ttnn.aggregate_tensor(tensor, mesh_composer).to_torch()
 
     if tensor.storage_type() == ttnn.DEVICE_STORAGE_TYPE:
         raise RuntimeError("ttnn.Tensor cannot be on device when converting to torch.Tensor!")
@@ -413,7 +422,6 @@ def to_torch(
             if tensor.shape[0] != 1:
                 raise RuntimeError("ttnn: Unable to squeeze to desired rank!")
             tensor = tensor.squeeze(0)
-
     torch_tensor = TorchTensor(tensor)
 
     if dtype is not None:
@@ -703,9 +711,7 @@ def as_tensor(
             ttnn._ttnn.tensor.dump_tensor(cache_file_name, tensor, distributed_config)
             return tensor
 
-        if isinstance(mesh_mapper, ttnn.ReplicateTensorToMesh):
-            storage_type = f"_multi_device" if mesh_mapper else ""
-        elif mesh_mapper:
+        if mesh_mapper:
             storage_type = f"_multi_device_{device.get_num_devices()}"
         else:
             storage_type = ""
