@@ -23,7 +23,6 @@ from models.tt_transformers.tt.common import (
 from typing import Tuple
 from models.utility_functions import nearest_32
 from pathlib import Path
-from dataclasses import dataclass
 from enum import Enum, auto
 from models.tt_transformers.tt.load_checkpoints import (
     load_meta_state_dict,
@@ -49,11 +48,6 @@ class PrecisionSetting(Enum):
     BFP8 = "bfp8"
     BF16 = "bf16"
 
-    @classmethod
-    def index(cls, value):
-        """Returns the 0-based index of the enum value"""
-        return list(cls).index(value)
-
 
 class OpGroup(Enum):
     LI_FF1_FF3 = "li_ff1_3"
@@ -72,11 +66,6 @@ class MathFidelitySetting(Enum):
     HIFI2_NA = "hifi2na"
     HIFI2_FP16 = "hifi2fp16"
     HIFI4 = "hifi4"
-
-    @classmethod
-    def index(cls, value):
-        """Returns the 0-based index of the enum value"""
-        return list(cls).index(value)
 
 
 class ModelOptimizations:
@@ -106,35 +95,106 @@ class ModelOptimizations:
         inst.__name__ = "performance"
         return inst
 
+    @classmethod
+    def pareto_accuracy(cls, model_name):
+        """Configuration found through Pareto front analysis"""
+        inst = cls(
+            {
+                "TensorPrecision": {
+                    TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
+                    TensorGroup.FF2: PrecisionSetting.BFP8,
+                    TensorGroup.WQKV: PrecisionSetting.BFP8,
+                    TensorGroup.WO: PrecisionSetting.BFP8,
+                    TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
+                },
+                "OpFidelity": {
+                    OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2,
+                    OpGroup.LI_FF2: MathFidelitySetting.HIFI2,
+                    OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI2,
+                    OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2_NA,
+                    OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI2,
+                    OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
+                    OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
+                    OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI2_FP16,
+                },
+            }
+        )
+        inst.__name__ = "pareto_accuracy"
+        return inst
+
+    @classmethod
+    def pareto_performance(cls, model_name):
+        """Configuration found through Pareto front analysis"""
+        inst = cls(
+            {
+                "TensorPrecision": {
+                    TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
+                    TensorGroup.FF2: PrecisionSetting.BFP8,
+                    TensorGroup.WQKV: PrecisionSetting.BFP8,
+                    TensorGroup.WO: PrecisionSetting.BFP4,
+                    TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
+                    TensorGroup.ACTIVATION: PrecisionSetting.BFP8,
+                },
+                "OpFidelity": {
+                    OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2,
+                    OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2_NA,
+                    OpGroup.LI_O_DECODE: MathFidelitySetting.LOFI,
+                    OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
+                    OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
+                    OpGroup.LI_O_PREFILL: MathFidelitySetting.LOFI,
+                },
+            }
+        )
+        inst.__name__ = "pareto_performance"
+        return inst
+
     def __init__(self, settings: dict = None):
+        if settings:
+            self._validate_settings(settings)
+
         self._opt_settings = self._default_settings()
         self._names = {}
-        self._name_mixed_precision = "mixed"
         for key, enum_type in (("TensorPrecision", TensorGroup), ("OpFidelity", OpGroup)):
             self._opt_settings[key].update((settings or {}).get(key, {}))
             curr = self._opt_settings[key]
-            self._names[key] = {
-                "full_name": ", ".join(
-                    [f"{k.value}: {curr[k].value if curr[k] else self._name_mixed_precision}" for k in list(enum_type)]
-                ),
-                "half_name": "_".join(
-                    [f"{curr[k].value if curr[k] else self._name_mixed_precision}" for k in list(enum_type)]
-                ),
-            }
+            self._names[key] = ", ".join(
+                [f"{k.value}: {curr[k].value if curr[k] else 'mixed'}" for k in list(enum_type)]
+            )
 
         self._full_name = (
-            "precision_cfg, fidelity_cfg = {"
-            + self._names["TensorPrecision"]["full_name"]
-            + "}, {"
-            + self._names["OpFidelity"]["full_name"]
+            "precision_cfg = {"
+            + self._names["TensorPrecision"]
+            + "}, fidelity_cfg = {"
+            + self._names["OpFidelity"]
             + "}"
         )
         # NOTE: self.__name__ is used as section header in PERF.md; It is also used by, for example test_llama_accuracy.py to look for comparative results in PERF.md
         self.__name__ = self._full_name
-        # NOTE: _half_name is used as pytest marker ids -- it can uniquely identify the optimization setting
-        self._half_name = self._names["TensorPrecision"]["half_name"] + "__" + self._names["OpFidelity"]["half_name"]
 
         # TODO: maybe we could warn about some unwanted settings here
+
+    def _validate_settings(self, settings: dict):
+        # Check that only valid top-level keys are used
+        valid_keys = {"TensorPrecision", "OpFidelity"}
+        invalid_keys = set(settings.keys()) - valid_keys
+        if invalid_keys:
+            raise ValueError(f"Invalid settings keys: {invalid_keys}. Must be one of {valid_keys}")
+
+        # Validate TensorPrecision settings
+        if "TensorPrecision" in settings:
+            for key, value in settings["TensorPrecision"].items():
+                if not isinstance(key, TensorGroup):
+                    raise ValueError(f"Invalid TensorPrecision key: {key}. Must be a TensorGroup enum value")
+                if not isinstance(value, PrecisionSetting):
+                    raise ValueError(f"Invalid TensorPrecision value: {value}. Must be a PrecisionSetting enum value")
+
+        # Validate OpFidelity settings
+        if "OpFidelity" in settings:
+            for key, value in settings["OpFidelity"].items():
+                if not isinstance(key, OpGroup):
+                    raise ValueError(f"Invalid OpFidelity key: {key}. Must be an OpGroup enum value")
+                if not isinstance(value, MathFidelitySetting):
+                    raise ValueError(f"Invalid OpFidelity value: {value}. Must be a MathFidelitySetting enum value")
 
     def _default_settings(self):
         return {
@@ -166,180 +226,59 @@ class ModelOptimizations:
     def op_fidelity_settings(self):
         return self._opt_settings["OpFidelity"]
 
-    @property
-    def id(self):
-        return self._half_name
 
+def parse_optimizations(string):
+    """
+    Parse the optimizations full name and return a ModelOptimizations instance.
+    """
+    # Find the precision and fidelity config sections
+    precision_start = string.find("precision_cfg")
+    fidelity_start = string.find("fidelity_cfg")
 
-dtype_mf_settings = [
-    ModelOptimizations(
-        {
-            "TensorPrecision": {
-                TensorGroup.FF1_FF3: PrecisionSetting.BFP4,
-                TensorGroup.FF2: PrecisionSetting.BFP4,
-            },
-            "OpFidelity": {
-                OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI,
-                OpGroup.LI_FF2: MathFidelitySetting.LOFI,
-            },
-        }
-    ),
-    ModelOptimizations(
-        {
-            "TensorPrecision": {
-                TensorGroup.FF1_FF3: PrecisionSetting.BFP4,
-                TensorGroup.FF2: PrecisionSetting.BFP8,
-            },
-            "OpFidelity": {
-                OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI,
-                OpGroup.LI_FF2: MathFidelitySetting.HIFI2,
-            },
-        }
-    ),
-    ModelOptimizations(
-        {
-            "TensorPrecision": {
-                TensorGroup.FF1_FF3: PrecisionSetting.BFP4,
-                TensorGroup.FF2: PrecisionSetting.BF16,
-            },
-            "OpFidelity": {
-                OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI,
-                OpGroup.LI_FF2: MathFidelitySetting.HIFI4,
-            },
-        }
-    ),
-    ModelOptimizations(
-        {
-            "TensorPrecision": {
-                TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
-                TensorGroup.FF2: PrecisionSetting.BFP4,
-            },
-            "OpFidelity": {
-                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2,
-                OpGroup.LI_FF2: MathFidelitySetting.LOFI,
-            },
-        }
-    ),
-    ModelOptimizations(
-        {
-            "TensorPrecision": {
-                TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
-                TensorGroup.FF2: PrecisionSetting.BFP8,
-            },
-            "OpFidelity": {
-                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2,
-                OpGroup.LI_FF2: MathFidelitySetting.HIFI2,
-            },
-        }
-    ),
-    ModelOptimizations(
-        {
-            "TensorPrecision": {
-                TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
-                TensorGroup.FF2: PrecisionSetting.BF16,
-            },
-            "OpFidelity": {
-                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2,
-                OpGroup.LI_FF2: MathFidelitySetting.HIFI4,
-            },
-        }
-    ),
-    ModelOptimizations(
-        {
-            "TensorPrecision": {
-                TensorGroup.FF1_FF3: PrecisionSetting.BF16,
-                TensorGroup.FF2: PrecisionSetting.BFP4,
-            },
-            "OpFidelity": {
-                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI4,
-                OpGroup.LI_FF2: MathFidelitySetting.LOFI,
-            },
-        }
-    ),
-    ModelOptimizations(
-        {
-            "TensorPrecision": {
-                TensorGroup.FF1_FF3: PrecisionSetting.BF16,
-                TensorGroup.FF2: PrecisionSetting.BFP8,
-            },
-            "OpFidelity": {
-                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI4,
-                OpGroup.LI_FF2: MathFidelitySetting.HIFI2,
-            },
-        }
-    ),
-    ModelOptimizations(
-        {
-            "TensorPrecision": {
-                TensorGroup.FF1_FF3: PrecisionSetting.BF16,
-                TensorGroup.FF2: PrecisionSetting.BF16,
-            },
-            "OpFidelity": {
-                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI4,
-                OpGroup.LI_FF2: MathFidelitySetting.HIFI4,
-            },
-        }
-    ),
-    ModelOptimizations(
-        {
-            "TensorPrecision": {
-                TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
-                TensorGroup.FF2: PrecisionSetting.BFP8,
-                TensorGroup.WQKV: PrecisionSetting.BFP8,
-                TensorGroup.WO: PrecisionSetting.BFP4,
-                TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
-                TensorGroup.ACTIVATION: PrecisionSetting.BF16,
-            },
-            "OpFidelity": {
-                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2,
-                OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2_NA,
-                OpGroup.LI_O_DECODE: MathFidelitySetting.LOFI,
-                OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
-                OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
-                OpGroup.LI_O_PREFILL: MathFidelitySetting.LOFI,
-            },
-        }
-    ),
-    ModelOptimizations(
-        {
-            "TensorPrecision": {
-                TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
-                TensorGroup.FF2: PrecisionSetting.BFP8,
-                TensorGroup.WQKV: PrecisionSetting.BFP8,
-                TensorGroup.WO: PrecisionSetting.BFP4,
-                TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
-                TensorGroup.ACTIVATION: PrecisionSetting.BFP8,
-            },
-            "OpFidelity": {
-                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2,
-                OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2_NA,
-                OpGroup.LI_O_DECODE: MathFidelitySetting.LOFI,
-                OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
-                OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
-                OpGroup.LI_O_PREFILL: MathFidelitySetting.LOFI,
-            },
-        }
-    ),
-    ModelOptimizations(
-        {
-            "TensorPrecision": {
-                TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
-                TensorGroup.FF2: PrecisionSetting.BFP8,
-                TensorGroup.WQKV: PrecisionSetting.BFP8,
-                TensorGroup.WO: PrecisionSetting.BFP4,
-                TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
-            },
-            "OpFidelity": {
-                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2,
-                OpGroup.LI_FF2: MathFidelitySetting.HIFI2,
-                OpGroup.LI_O_DECODE: MathFidelitySetting.LOFI,
-                OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
-                OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
-                OpGroup.LI_O_PREFILL: MathFidelitySetting.LOFI,
-            },
-        }
-    ),
-]
+    if precision_start == -1 and fidelity_start == -1:
+        raise ValueError("String must contain either precision_cfg or fidelity_cfg")
+
+    # Extract the config dictionaries between { }
+    def extract_config(start_idx, cfg_name):
+        open_brace = string.find("{", start_idx)
+        if open_brace == -1:
+            raise ValueError(f"Missing opening brace for {cfg_name}")
+
+        close_brace = string.find("}", open_brace)
+        if close_brace == -1:
+            raise ValueError(f"Missing closing brace for {cfg_name}")
+
+        return string[open_brace + 1 : close_brace].strip()
+
+    precision_dict = extract_config(precision_start, "precision_cfg") if precision_start != -1 else {}
+    fidelity_dict = extract_config(fidelity_start, "fidelity_cfg") if fidelity_start != -1 else {}
+
+    # Create ModelOptimizations instance with the parsed configs
+    settings = {"TensorPrecision": {}, "OpFidelity": {}}
+
+    # Parse precision config
+    for pair in precision_dict.split(","):
+        if ":" not in pair:
+            raise ValueError("Invalid format - missing ':' separator")
+        key, value = pair.split(":")
+        key = TensorGroup(key.strip())
+        value = value.strip()
+        if key == TensorGroup.ACTIVATION and value == "mixed":
+            # special case for activation's mixed precision, which is the default configuration
+            continue
+
+        settings["TensorPrecision"][key] = PrecisionSetting(value)
+
+    # Parse fidelity config
+    for pair in fidelity_dict.split(","):
+        if ":" not in pair:
+            raise ValueError("Invalid format - missing ':' separator")
+        key, value = pair.split(":")
+        key = OpGroup(key.strip())
+        value = MathFidelitySetting(value.strip())
+        settings["OpFidelity"][key] = value
+
+    return ModelOptimizations(settings)
 
 
 class CheckpointType(Enum):

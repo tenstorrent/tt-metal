@@ -13,11 +13,7 @@ from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
 )
 from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.model_config import (
-    ModelArgs,
-    ModelOptimizations,
-    dtype_mf_settings,
-)
+from models.tt_transformers.tt.model_config import ModelArgs, ModelOptimizations
 from pathlib import Path
 
 
@@ -79,9 +75,10 @@ def get_accuracy_thresholds(base_model_name: str, device_name: str, optimization
 @pytest.mark.parametrize(
     "optimizations",
     [
-        *[pytest.param(setting, id=setting.id) for setting in dtype_mf_settings],
-        pytest.param(ModelOptimizations.accuracy, id="accuracy"),
-        pytest.param(ModelOptimizations.performance, id="performance"),
+        ModelOptimizations.accuracy,
+        ModelOptimizations.performance,
+        ModelOptimizations.pareto_accuracy,
+        ModelOptimizations.pareto_performance,
     ],
 )
 @pytest.mark.parametrize(
@@ -124,6 +121,7 @@ def test_tt_model_acc(
     reset_seeds,
     ensure_gc,
     is_ci_env,
+    request,
 ):
     if is_ci_env and not use_reference_file:
         pytest.skip("CI test only runs vs reference file")
@@ -132,8 +130,11 @@ def test_tt_model_acc(
 
     mesh_device.enable_async(True)
 
+    optimizations = request.config.getoption("--optimizations") or optimizations
+
     # Load model args and tokenizer
     model_args = ModelArgs(mesh_device, optimizations=optimizations, max_batch_size=batch_size, max_seq_len=max_seq_len)
+    logger.info(f"Optimizations: {model_args.optimizations._full_name}")
 
     tokenizer = model_args.tokenizer
 
