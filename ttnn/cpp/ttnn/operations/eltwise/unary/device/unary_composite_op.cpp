@@ -704,39 +704,6 @@ Tensor is_odd(const Tensor& input, const std::optional<MemoryConfig>& output_mem
     return ttnn::ne(result, floor_res, std::nullopt, output_mem_config);
 }
 
-Tensor _round(const Tensor& input, int32_t decimals, const std::optional<MemoryConfig>& output_mem_config) {
-    auto arch = input.device()->arch();
-    TT_FATAL(
-        arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE, "Op is only supported on Wormhole & Blackhole");
-    Tensor floor_res = ttnn::floor(input, output_mem_config);
-    if (decimals != 0) {  // TODO: For decimal value!=0
-        Tensor power_10 = ttnn::power(ttnn::full_like(input, 10.0f), decimals, output_mem_config);
-        Tensor rounded_non_half = ttnn::floor(
-            ttnn::add(
-                ttnn::multiply(input, power_10, std::nullopt, output_mem_config), 0.5, std::nullopt, output_mem_config),
-            output_mem_config);
-        rounded_non_half = ttnn::div(rounded_non_half, power_10);
-        return rounded_non_half;
-    } else {  // Bankers' Rounding
-        Tensor rounded_non_half = ttnn::floor(
-            ttnn::add(
-                input,
-                ttnn::where(
-                    ttnn::logical_and(ttnn::ge(input, 0.4), ttnn::le(input, 0.5)),
-                    0.4f,
-                    0.5f,
-                    output_mem_config.value()),
-                std::nullopt,
-                output_mem_config),
-            output_mem_config.value());
-        Tensor fractional_part = ttnn::subtract(input, floor_res, std::nullopt, output_mem_config);
-        Tensor is_half = ttnn::eq(fractional_part, 0.5, std::nullopt, output_mem_config);
-        Tensor rounded_half =
-            ttnn::add(floor_res, is_odd(floor_res, output_mem_config), std::nullopt, output_mem_config);
-        return ttnn::where(is_half, rounded_half, rounded_non_half, output_mem_config.value());
-    }
-}
-
 // polygamma support for the range of input(1, 10) and n(1, 10)
 Tensor _polygamma(const Tensor& input_a, int32_t k, const std::optional<MemoryConfig>& output_mem_config) {
     float k_der = 1.0f + k;
