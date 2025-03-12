@@ -13,8 +13,6 @@
 
 namespace tt::tt_metal {
 
-inline namespace v0 {
-
 class Buffer;
 class IDevice;
 
@@ -50,8 +48,6 @@ private:
     IDevice* device_;
     CoreRangeSet cores_;
 };
-
-}  // namespace v0
 
 }  // namespace tt::tt_metal
 

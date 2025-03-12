@@ -15,17 +15,14 @@
 #include "base_types.hpp"
 #include "kernel_types.hpp"
 #include "tt_memory.h"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "runtime_args_data.hpp"
 
 namespace tt {
 
 namespace tt_metal {
-inline namespace v0 {
 
 class IDevice;
-
-}  // namespace v0
 
 constexpr uint32_t max_runtime_args = 256;
 
@@ -51,8 +48,6 @@ struct KernelSource {
         return name;
     }
 };
-
-inline namespace v0 {
 
 class Kernel : public JitBuildSettings {
    public:
@@ -253,8 +248,6 @@ private:
 
     std::string config_hash() const override;
 };
-
-}  // namespace v0
 
 std::ostream& operator<<(std::ostream& os, const DataMovementProcessor& processor);
 
