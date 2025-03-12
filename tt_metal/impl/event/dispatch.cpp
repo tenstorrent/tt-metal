@@ -4,7 +4,9 @@
 
 #include "tt_metal/impl/event/dispatch.hpp"
 #include <tt-metalium/dispatch_settings.hpp>
+#include "dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
+#include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 #include <tt-metalium/program_impl.hpp>
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
@@ -36,22 +38,27 @@ void issue_record_event_commands(
 
     uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
     uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
-    uint32_t packed_event_payload_sizeB =
-        align(sizeof(CQDispatchCmd) + num_command_queues * sizeof(CQDispatchWritePackedUnicastSubCmd), l1_alignment) +
-        (align(DispatchSettings::EVENT_PADDED_SIZE, l1_alignment) * num_command_queues);
-    uint32_t packed_write_sizeB = align(sizeof(CQPrefetchCmd) + packed_event_payload_sizeB, pcie_alignment);
-    uint32_t num_worker_counters = sub_device_ids.size();
+    // uint32_t packed_event_payload_sizeB =
+    //     align(sizeof(CQDispatchCmd) + num_command_queues * sizeof(CQDispatchWritePackedUnicastSubCmd), l1_alignment)
+    //     + (align(DispatchSettings::EVENT_PADDED_SIZE, l1_alignment) * num_command_queues);
+    // uint32_t packed_write_sizeB = align(sizeof(CQPrefetchCmd) + packed_event_payload_sizeB, pcie_alignment);
 
-    uint32_t cmd_sequence_sizeB =
-        hal.get_alignment(HalMemType::HOST) *
-            num_worker_counters +  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
-        packed_write_sizeB +       // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_PACKED +
-                                   // unicast subcmds + event payload
-        align(
-            sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd) + DispatchSettings::EVENT_PADDED_SIZE,
-            pcie_alignment) *
-            notify_host;  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_LINEAR_HOST + event ID ===> Write
-                          // event notification back to host, if requested by user
+    uint32_t num_worker_counters = sub_device_ids.size();
+    tt::tt_metal::DeviceCommandCalculator calculator;
+    const uint32_t packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);
+    calculator.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
+        num_command_queues, DispatchSettings::EVENT_PADDED_SIZE, packed_write_max_unicast_sub_cmds, false);
+    // used for prefetch size
+    const uint32_t packed_event_payload_sizeB =
+        tt::align(calculator.write_offset_bytes() - sizeof(CQPrefetchCmd), l1_alignment);
+    for (int i = 0; i < num_worker_counters; ++i) {
+        calculator.add_dispatch_wait();
+    }
+    // Extra event for notifying host
+    if (notify_host) {
+        calculator.add_dispatch_write_linear_host_event(DispatchSettings::EVENT_PADDED_SIZE);
+    }
+    const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
 
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
 
@@ -95,7 +102,6 @@ void issue_record_event_commands(
         DispatchMemMap::get(dispatch_core_type)
             .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT);
     uint32_t address = cq_id == 0 ? completion_q0_last_event_addr : completion_q1_last_event_addr;
-    const uint32_t packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);
     command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
         num_command_queues,
         address,
@@ -119,8 +125,9 @@ void issue_record_event_commands(
 
 void issue_wait_for_event_commands(
     uint8_t cq_id, uint8_t event_cq_id, SystemMemoryManager& sysmem_manager, uint32_t event_id) {
-    uint32_t cmd_sequence_sizeB =
-        hal.get_alignment(HalMemType::HOST);  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
+    tt::tt_metal::DeviceCommandCalculator calculator;
+    calculator.add_dispatch_wait();
+    const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
 
     auto dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
