@@ -8,7 +8,7 @@ inputs:
   docker_os_arch:
     description: 'Docker image architecture'
     required: false
-    default: tt-metalium/ubuntu-20.04-amd64
+    default: tt-metalium/ubuntu-22.04-amd64
   docker_image:
     description: 'Specify Docker image to use.'
     required: false
