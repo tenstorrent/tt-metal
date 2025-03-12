@@ -8,7 +8,6 @@ jobs:
     secrets: inherit
     with:
       build-wheel: true
-      version: "20.04"
   publish-release-image:
     needs: build-artifact
     uses: ./.github/workflows/publish-release-image.yaml

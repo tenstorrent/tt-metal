@@ -64,6 +64,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-20.04]
+        arch: [wormhole_b0]
         test_group:
           [
               {
@@ -83,7 +84,7 @@ jobs:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
-        ARCH_NAME: ${{ matrix.test-group.arch }}
+        ARCH_NAME: ${{ matrix.arch }}
         GITHUB_ACTIONS: true
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
