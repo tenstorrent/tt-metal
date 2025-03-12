@@ -38,22 +38,11 @@ uint32_t tt_l1_ptr *rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr *crta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr *sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
 
-// Register
 uint8_t my_x[NUM_NOCS] __attribute__((used));
-
-// Register
 uint8_t my_y[NUM_NOCS] __attribute__((used));
-
-// Logical X coordinate relative to the physical origin. Set during FW initialization.
 uint8_t my_logical_x_ __attribute__((used));
-
-// Logical Y coordinate relative to the physical origin. Set during FW initialization.
 uint8_t my_logical_y_ __attribute__((used));
-
-// Logical X coordinate relative to the sub device origin. Updated by the launch message for the kernel.
 uint8_t my_relative_x_ __attribute__((used));
-
-// Logical Y coordinate relative to the sub device origin. Updated by the launch message for the kernel.
 uint8_t my_relative_y_ __attribute__((used));
 
 // These arrays are stored in local memory of FW, but primarily used by the kernel which shares
@@ -126,8 +115,6 @@ int main() {
 
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
-    my_relative_x_ = 0xab;
-    my_relative_y_ = 0xcd;
 
     risc_init();
 

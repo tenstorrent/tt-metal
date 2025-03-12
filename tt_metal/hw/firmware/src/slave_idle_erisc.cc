@@ -24,22 +24,11 @@ volatile tt_l1_ptr uint8_t *const slave_idle_erisc_run = &mailboxes->slave_sync.
 
 uint8_t noc_index = 0;  // TODO: hardcoding needed for profiler
 
-// Virtual X coordinate
 uint8_t my_x[NUM_NOCS] __attribute__((used));
-
-// Virtual Y coordinate
 uint8_t my_y[NUM_NOCS] __attribute__((used));
-
-// Logical X coordinate relative to the physical origin. Set during FW initialization.
 uint8_t my_logical_x_ __attribute__((used));
-
-// Logical Y coordinate relative to the physical origin. Set during FW initialization.
 uint8_t my_logical_y_ __attribute__((used));
-
-// Logical X coordinate relative to the sub device origin. Updated by the launch message for the kernel.
 uint8_t my_relative_x_ __attribute__((used));
-
-// Logical Y coordinate relative to the sub device origin. Updated by the launch message for the kernel.
 uint8_t my_relative_y_ __attribute__((used));
 
 uint32_t noc_reads_num_issued[NUM_NOCS] __attribute__((used));
@@ -84,8 +73,6 @@ int main(int argc, char *argv[]) {
 
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
-    my_relative_x_ = 0xab;
-    my_relative_y_ = 0xcd;
     risc_init();
 
     // Cleanup profiler buffer incase we never get the go message

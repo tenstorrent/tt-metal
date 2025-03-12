@@ -39,22 +39,11 @@ uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
 
-// Register
 uint8_t my_x[NUM_NOCS] __attribute__((used));
-
-// Register
 uint8_t my_y[NUM_NOCS] __attribute__((used));
-
-// Set during FW initialization. Available before main begins.
 uint8_t my_logical_x __attribute__((used));
-
-// Set during FW initialization. Available before main begins.
 uint8_t my_logical_y __attribute__((used));
-
-// Updated by the launch message for the kernel.
 uint8_t my_relative_x __attribute__((used));
-
-// Updated by the launch message for the kernel.
 uint8_t my_relative_y __attribute__((used));
 
 // These arrays are stored in local memory of FW, but primarily used by the kernel which shares
@@ -88,8 +77,6 @@ int main() {
     noc_index = 0;
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
-    my_relative_x_ = 0xab;
-    my_relative_y_ = 0xcd;
 
     risc_init();
 

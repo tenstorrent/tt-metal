@@ -22,7 +22,7 @@
 #include "debug/waypoint.h"
 #include "eth_l1_address_map.h"
 #include "hostdevcommon/common_values.hpp"
-#include "hw/inc/risc_attribs.h"
+#include "risc_attribs.h"
 #include "utils/utils.h"
 #include "debug/assert.h"
 #include "dev_msgs.h"

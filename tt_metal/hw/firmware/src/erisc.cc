@@ -22,22 +22,11 @@ namespace kernel_profiler {
 
 uint8_t noc_index = 0;  // TODO: remove hardcoding
 
-// Register
 uint8_t my_x[NUM_NOCS] __attribute__((used));
-
-// Register
 uint8_t my_y[NUM_NOCS] __attribute__((used));
-
-// Logical X coordinate relative to the physical origin. Set during FW initialization.
 uint8_t my_logical_x_ __attribute__((used));
-
-// Logical Y coordinate relative to the physical origin. Set during FW initialization.
 uint8_t my_logical_y_ __attribute__((used));
-
-// Logical X coordinate relative to the sub device origin. Updated by the launch message for the kernel.
 uint8_t my_relative_x_ __attribute__((used));
-
-// Logical Y coordinate relative to the sub device origin. Updated by the launch message for the kernel.
 uint8_t my_relative_y_ __attribute__((used));
 
 uint32_t noc_reads_num_issued[NUM_NOCS] __attribute__((used));
@@ -95,8 +84,6 @@ void __attribute__((noinline)) Application(void) {
 
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
-    my_relative_x_ = 0xab;
-    my_relative_y_ = 0xcd;
 
     noc_bank_table_init(eth_l1_mem::address_map::ERISC_MEM_BANK_TO_NOC_SCRATCH);
 
