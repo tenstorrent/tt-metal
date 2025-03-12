@@ -270,4 +270,45 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixActiveEthTestSubDeviceMyLogic
         tt::RISCV::ERISC, sub_device_2_eth_cores, device, tt::tt_metal::SubDeviceId{1}, cb_addr_eth);
 }
 
+// Ensure the relative coordinate for the worker is updated correctly when it is used for multiple sub device
+// configurations
+TEST_F(CommandQueueSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordinatesSubDeviceSwitch) {
+    auto* device = devices_[0];
+    SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
+    SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})})});
+    SubDevice sub_device_3(std::array{CoreRangeSet(CoreRange({4, 4}, {6, 6}))});
+    SubDevice sub_device_4(std::array{CoreRangeSet(std::vector{CoreRange({2, 2}, {2, 2}), CoreRange({3, 3}, {3, 3})})});
+    std::vector<SubDeviceManagerId> sub_device_managers{
+        device->create_sub_device_manager({sub_device_1, sub_device_2}, k_local_l1_size),
+        device->create_sub_device_manager({sub_device_3, sub_device_4}, k_local_l1_size),
+    };
+
+    uint32_t cb_addr = experimental::hal::get_tensix_l1_unreserved_base();
+    std::vector<uint32_t> compile_args{cb_addr};
+
+    for (int i = 0; i < sub_device_managers.size(); ++i) {
+        device->load_sub_device_manager(sub_device_managers[i]);
+        const auto sub_device_cores = device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{i});
+
+        Program program = tt::tt_metal::CreateProgram();
+        tt::tt_metal::CreateKernel(
+            program,
+            k_coordinates_kernel_path,
+            sub_device_cores,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = compile_args});
+
+        EnqueueProgram(device->command_queue(), program, false);
+        Finish(device->command_queue());
+        device->reset_sub_device_stall_group();
+        Synchronize(device);  // Ensure this CQ is cleared. Each CQ can only work on 1 sub device
+
+        // Check coordinates
+        tt::tt_metal::verify_kernel_coordinates(
+            tt::BRISC, sub_device_cores, device, tt::tt_metal::SubDeviceId{i}, cb_addr);
+    }
+}
+
 }  // namespace tt::tt_metal
