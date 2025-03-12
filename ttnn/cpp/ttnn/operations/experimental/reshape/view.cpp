@@ -60,28 +60,24 @@ Tensor tensor_reshape(
                 }
                 return Tensor(updated_storage, new_spec);
             }
-            /*
-            if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
-                MultiDeviceStorage updated_storage = std::get<T>(tensor.get_storage());
-                std::unordered_map<int, ttnn::TensorSpec> new_specs;
-                for (auto device_id : updated_storage.ordered_device_ids) {
-                    const auto& prev_spec = updated_storage.specs.at(device_id);
-                    TensorSpec spec(
-                        new_logical_shape,
-                        TensorLayout::fromPaddedShape(
-                            prev_spec.data_type(),
-                            prev_spec.page_config(),
-                            prev_spec.memory_config(),
-                            new_logical_shape,
-                            new_padded_shape));
-                    new_specs.insert({device_id, spec});
-                }
-                updated_storage.specs = new_specs;
-                return Tensor(updated_storage, new_spec);
-            }
-            */
             if constexpr (std::is_same_v<T, tt::tt_metal::DeviceStorage>) {
-                if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
+                auto device_storage = std::get<tt::tt_metal::DeviceStorage>(tensor.get_storage());
+                if (device_storage.mesh_buffer != nullptr) {
+                    auto updated_storage = device_storage;
+                    for (auto& [_, spec] : updated_storage.specs) {
+                        const auto& prev_spec = spec;
+                        TensorSpec new_spec(
+                            new_logical_shape,
+                            TensorLayout::fromPaddedShape(
+                                prev_spec.data_type(),
+                                prev_spec.page_config(),
+                                prev_spec.memory_config(),
+                                new_logical_shape,
+                                new_padded_shape));
+                        spec = new_spec;
+                    }
+                    return Tensor(std::move(updated_storage), new_spec);
+                } else if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
                     if (tensor.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
                         tt::tt_metal::DeviceStorage device_storage = std::get<T>(tensor.get_storage());
                         auto device_buffer = device_storage.get_buffer();

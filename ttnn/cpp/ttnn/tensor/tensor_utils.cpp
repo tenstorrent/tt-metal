@@ -97,10 +97,7 @@ Tensor get_shard_for_device(const Tensor& tensor, IDevice* target_device, std::o
                     OwnedStorage{s.get_buffer(buffer_index.value())}, s.get_tensor_spec(buffer_index.value())};
             },
             [&tensor]<OwnedOrBorrowedStorage T>(const T&) { return tensor; },
-            [&tensor](const DeviceStorage& s) {
-                TT_FATAL(s.mesh_buffer == nullptr, "get_shard_for_device does not support mesh buffer backed tensors");
-                return tensor;
-            },
+            [&tensor](const DeviceStorage& s) { return tensor; },
             [](const auto&) -> Tensor {
                 TT_THROW("get_shard_for_device only supports multi-device or device tensors");
             }},
