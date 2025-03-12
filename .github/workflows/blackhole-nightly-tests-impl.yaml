@@ -1,0 +1,47 @@
+name: "[internal] Blackhole nightly tests impl"
+
+on:
+  workflow_call:
+
+jobs:
+  nightly-bh-models:
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      matrix:
+        test-group: [
+            { model: whisper, card: BH, owner_id: U05RWH3QUPM},  #Salar Hosseini
+          ]
+    name: Nightly ${{ matrix.test-group.card }} ${{ matrix.test-group.model }}
+    env:
+      ARCH_NAME: blackhole
+      LOGURU_LEVEL: INFO
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+    runs-on: ["cloud-virtual-machine", "in-service", "${{ matrix.test-group.card }}"]
+    steps:
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
+      - name: Set up dyanmic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - uses: ./.github/actions/prepare-metal-run
+      - uses: ./.github/actions/install-python-deps
+      - name: Run frequent reg tests scripts
+        timeout-minutes: 30
+        run: |
+          source ${{ github.workspace }}/python_env/bin/activate
+          cd $TT_METAL_HOME
+          export PYTHONPATH=$TT_METAL_HOME
+          pytest tests/nightly/single_card/${{ matrix.test-group.model }}
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          path: |
+            generated/test_reports/
+          prefix: "test_reports_"
+      - uses: ./.github/actions/slack-report
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: ${{ matrix.test-group.owner_id }}
