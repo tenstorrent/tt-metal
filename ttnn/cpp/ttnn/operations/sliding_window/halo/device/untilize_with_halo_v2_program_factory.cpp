@@ -329,7 +329,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     reader_ct_args[1] = in_place ? 0 : cb_indices.local_config_cb_id1;
     reader_ct_args[2] = in_place ? 0 : cb_indices.remote_config_cb_id2;
     reader_ct_args[3] = 0;
-    reader_ct_args[15] = false;
+    reader_ct_args[16] = false;
     KernelHandle reader_kernel_id1 = CreateKernel(
         program,
         in_place ? "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather_in_place.cpp"
