@@ -1223,11 +1223,6 @@ Tensor to_layout(const Tensor& tensor, Layout target_layout) {
 
     return std::visit(
         [&tensor, &target_layout](auto&& storage) -> Tensor {
-            using StorageType = std::decay_t<decltype(storage)>;
-            if constexpr (
-                !std::is_same_v<StorageType, OwnedStorage> && !std::is_same_v<StorageType, MultiDeviceHostStorage>) {
-                // raise_unsupported_storage<StorageType>();
-            }
             return Tensor(
                 storage,
                 TensorSpec(
@@ -1283,7 +1278,7 @@ Tensor pad(
     const ttnn::Shape& output_padded_shape,
     const ttnn::Shape& input_tensor_start,
     float pad_value) {
-    if (ttnn::distributed::is_host_mesh_tensor(tensor)) {
+    if (ttnn::distributed::is_multi_device_tensor(tensor)) {
         return transform(tensor, [&](const Tensor& device_tensor) {
             return pad<T>(device_tensor, output_padded_shape, input_tensor_start, pad_value);
         });

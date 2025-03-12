@@ -71,10 +71,12 @@ bool is_device_tensor(const Tensor& tensor) { return tensor.storage_type() == St
 Tensor transform(const Tensor& tensor, const std::function<Tensor(const Tensor&)>& transform_func) {
     TT_FATAL(ttnn::distributed::is_multi_device_tensor(tensor), "transform only supports multi-device tensors");
     auto input_tensors = ttnn::distributed::get_device_tensors(tensor);
-    std::vector<Tensor> output_tensors(input_tensors.size());
-    std::transform(input_tensors.begin(), input_tensors.end(), output_tensors.begin(), [&](const auto& device_tensor) {
-        return transform_func(device_tensor);
-    });
+    std::vector<Tensor> output_tensors;
+    output_tensors.reserve(input_tensors.size());
+    std::transform(
+        input_tensors.begin(), input_tensors.end(), std::back_inserter(output_tensors), [&](const auto& device_tensor) {
+            return transform_func(device_tensor);
+        });
     return ttnn::distributed::aggregate_as_tensor(
         output_tensors, ttnn::distributed::get_distributed_tensor_config_from_tensor(tensor));
 }
