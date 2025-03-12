@@ -256,8 +256,8 @@ def test_simple_conv_t2d(
     "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w, config, enable_split_reader, enable_act_double_buffer, shard_layout",
     (
         (1, 64, 8, 64, 64, 4, 4, 2, 2, 1, 1, 0, 0, {"act_block_h": 32*2}, True, True, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
-        (1, 128, 16, 128, 2, 4, 4, 2, 2, 1, 1, 0, 0, {"act_block_h": 32*2}, True, True, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
-        (1, 256, 32, 128, 2, 4, 4, 2, 2, 1, 1, 0, 0, {"act_block_h": 32*2}, True, True, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        (1, 128, 16, 128, 64, 4, 4, 2, 2, 1, 1, 0, 0, {"act_block_h": 32*2}, True, True, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        (1, 256, 32, 128, 64, 4, 4, 2, 2, 1, 1, 0, 0, {"act_block_h": 32*2}, True, True, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
         (1, 512, 64, 128, 2, 4, 4, 2, 2, 1, 1, 0, 0, {"act_block_h": 32*2}, True, True, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
     ),
 )
