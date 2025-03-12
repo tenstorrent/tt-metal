@@ -10,8 +10,3 @@ CircularBuffers
 .. doxygenfunction:: tt::tt_metal::UpdateCircularBufferPageSize
 
 .. doxygenfunction:: tt::tt_metal::UpdateDynamicCircularBufferAddress
-
-
-Version 1
--------------------------
-.. doxygenfunction:: tt::tt_metal::CreateCircularBuffer
