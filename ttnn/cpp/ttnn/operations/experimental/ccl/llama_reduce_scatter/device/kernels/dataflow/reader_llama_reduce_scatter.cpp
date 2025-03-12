@@ -40,48 +40,83 @@ void kernel_main() {
 
     constexpr uint32_t input_tensor_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t fabric_sender_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t chip_id = get_compile_time_arg_val(2);
-    constexpr uint32_t tiles_per_core_width = get_compile_time_arg_val(3);
-    constexpr uint32_t cores_per_device = get_compile_time_arg_val(4);
-    constexpr uint32_t num_devices = get_compile_time_arg_val(5);
-    constexpr uint32_t page_size_bytes = get_compile_time_arg_val(6);
+    constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(2);
+    constexpr uint32_t fabric_receiver_cb_id = get_compile_time_arg_val(3);
+    constexpr uint32_t accumulator_cb_id = get_compile_time_arg_val(4);
+    constexpr uint32_t output_tensor_cb_id = get_compile_time_arg_val(5);
+
+    constexpr uint32_t chip_id = get_compile_time_arg_val(6);
+
+    constexpr uint32_t tiles_per_core_width = get_compile_time_arg_val(7);
+    constexpr uint32_t tiles_per_core_width_output = get_compile_time_arg_val(8);
+    constexpr uint32_t num_pages_per_packet = get_compile_time_arg_val(9);
+
+    constexpr uint32_t input_shard_cores_per_device = get_compile_time_arg_val(10);
+    constexpr uint32_t num_devices = get_compile_time_arg_val(11);
+    constexpr uint32_t page_size_bytes = get_compile_time_arg_val(12);
+    constexpr uint32_t ncores_output = get_compile_time_arg_val(13);
+
+    constexpr uint32_t input_tensor_cores = input_shard_cores_per_device * num_devices;
+
+    // Calculate the total number of packets needed to send all the tiles
+    constexpr uint32_t num_packets_total_per_device =
+        (input_shard_cores_per_device * tiles_per_core_width + num_pages_per_packet - 1) / num_pages_per_packet;
 
     constexpr uint32_t device_order[num_devices - 1] =
         DEVICE_ORDER;  // this is code gen'd in the program factory using the defines
+    constexpr uint32_t receiver_core_for_device[num_devices][2] = DEVICE_CORE_HANDLES;
+    constexpr uint32_t input_core_xy[input_tensor_cores][2] = INPUT_CORE_XY;
+    constexpr uint32_t output_core_xy[ncores_output][2] = OUTPUT_CORE_XY;
 
-    typedef ShardedInfo<
-        get_compile_time_arg_val(7),   // Memory layout
-        get_compile_time_arg_val(8),   // The number of sharding cores
-        get_compile_time_arg_val(9),   // The page size we offset each write to
-        get_compile_time_arg_val(10),  // The number of pages in each sharding row not including padding pages
-        get_compile_time_arg_val(11),  // This defines times when contiguous pages can't be calculated
-        get_compile_time_arg_val(12),  // pages_per_shard_x
-        get_compile_time_arg_val(13)>  // pages_per_shard_y
-        tensor_shard_info;
+    uint32_t semaphore_address = get_arg_val<uint32_t>(rt_arg_idx++);
+    uint32_t local_semaphore_address = get_arg_val<uint32_t>(rt_arg_idx++);
+    bool sender_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
+    bool worker_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
 
-    const auto [mapping_table, rt_increment] =
-        experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(rt_arg_idx));
-    rt_arg_idx += rt_increment;
-    experimental::ShardedAddrGen<tensor_shard_info> s0 = {
-        .bank_base_address = get_read_ptr(input_tensor_cb_id), .shard_array = mapping_table};
+    bool receiver_core = true;
+    uint32_t receiver_for_device_id = 0;
 
-    for (auto target_device_id : device_order) {
-        if (target_device_id == chip_id) {
-            break;
+    uint32_t bank_base_address = get_read_ptr(input_tensor_cb_id);
+    uint32_t x_index = 0;
+    uint32_t y_index = 1;
+    if (sender_core) {
+        for (auto target_device_id : device_order) {
+            if (target_device_id == chip_id) {
+                break;
+            }
+            uint32_t base_core = target_device_id * input_shard_cores_per_device;
+            uint32_t curr_tile = 0;  // this is 0 to tiles_per_core_width - 1
+
+            for (uint32_t curr_core = base_core; curr_core < base_core + input_shard_cores_per_device; ++curr_core) {
+                uint32_t x = input_core_xy[curr_core][x_index];
+                uint32_t y = input_core_xy[curr_core][y_index];
+                uint64_t shard_noc_addr = get_noc_addr(x, y, bank_base_address);
+
+                cb_reserve_back(fabric_sender_cb_id, tiles_per_core_width);
+                uint32_t sender_read_addr = get_read_ptr(fabric_sender_cb_id);
+                noc_async_read(shard_noc_addr, sender_read_addr, tiles_per_core_width * page_size_bytes);
+                noc_async_read_barrier();
+                print_tiles(fabric_sender_cb_id, 0, tiles_per_core_width, true);
+                DPRINT << "Pushing back " << tiles_per_core_width << " tiles to fabric sender cb" << ENDL();
+                cb_push_back(fabric_sender_cb_id, tiles_per_core_width);
+            }
         }
-        uint32_t base_page = target_device_id * cores_per_device * tiles_per_core_width;
-        uint32_t page_offset = base_page;
-        uint32_t target_device_core_offset = target_device_id * cores_per_device;
-        for (uint32_t core_id = 0; core_id < cores_per_device; ++core_id) {
-            const auto [noc_addr, num_pages] = s0.get_contiguous_noc_addr(page_offset);  // might as well use this as
-            cb_reserve_back(fabric_sender_cb_id, num_pages);
-            noc_async_read(noc_addr, get_read_ptr(fabric_sender_cb_id), num_pages * page_size_bytes);
-
-            page_offset += num_pages;
-            noc_async_read_barrier();
-            print_tiles(fabric_sender_cb_id, 0, num_pages, true);
-            DPRINT << "Pushing back " << num_pages << " tiles to fabric sender cb" << ENDL();
-            cb_push_back(fabric_sender_cb_id, num_pages);
+    } else if (worker_core) {
+        while (*(uint32_t*)local_semaphore_address != num_devices - 1) {
+            // Wait for the semaphore to be set
+            DPRINT << "Waiting for semaphore to be set" << ENDL();
         }
+        for (uint32_t target_device_id = 0; target_device_id < num_devices; ++target_device_id) {
+            if (target_device_id == chip_id) {
+                continue;
+            }
+            print_full_tile(accumulator_cb_id, target_device_id * tiles_per_core_width_output, true);
+        }
+        DPRINT << "Pushing back " << tiles_per_core_width_output * num_devices << " tiles to accumulator cb" << ENDL();
+        cb_push_back(accumulator_cb_id, tiles_per_core_width_output * num_devices);
+        *(uint32_t*)local_semaphore_address = 0;
+    } else {
+        // Do nothing
+        // win
     }
 }

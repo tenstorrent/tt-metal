@@ -6,6 +6,8 @@
 
 #include "ttnn/decorators.hpp"
 #include "cpp/ttnn/global_semaphore.hpp"
+#include <tt-metalium/sub_device_types.hpp>
+
 namespace ttnn {
 namespace operations::experimental::ccl {
 
@@ -15,7 +17,7 @@ struct ExecuteLlamaReduceScatter {
         const ttnn::Tensor& input_tensor,
         const int32_t dim,
         const global_semaphore::MultiDeviceGlobalSemaphore& cross_device_semaphore,
-        const SubDeviceId& subdevice_id,
+        const tt::tt_metal::SubDeviceId& subdevice_id,
         const uint32_t cluster_axis,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
 };
