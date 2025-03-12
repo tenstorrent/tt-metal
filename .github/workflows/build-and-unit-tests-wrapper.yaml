@@ -5,7 +5,7 @@ on:
 
 jobs:
   build-artifact:
-    uses: ./.github/workflows/build-artifact-sd.yaml
+    uses: ./.github/workflows/build-artifact-2204.yaml
     secrets: inherit
     with:
       tracy: true
