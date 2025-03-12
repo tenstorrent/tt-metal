@@ -215,6 +215,7 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers, is_functional_tes
         ]
     else:
         sender_cores = [ttnn.CoreCoord(0, y) for y in range(num_reader_cores)]
+        active_sender_cores = sender_cores
 
         active_receiver_cores_list = [
             (x, y) for y in range(num_reader_cores) for x in range(1, num_global_cb_receivers + 1)
