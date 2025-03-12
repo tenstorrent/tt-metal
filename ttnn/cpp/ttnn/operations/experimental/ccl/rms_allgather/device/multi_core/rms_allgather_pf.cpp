@@ -503,10 +503,6 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
         reader_mcast_sender_defines["FUSE_BETA"] = "1";
         reader_mcast_receiver_defines["FUSE_BETA"] = "1";
     }
-    if (rms_norm) {
-        reader_mcast_sender_defines["RMSNORM"] = "1";
-        reader_mcast_receiver_defines["RMSNORM"] = "1";
-    }
     // reader compile time args
     std::vector<uint32_t> reader_mcast_sender_compile_time_args = {
         (std::uint32_t)reduce_receiver_semaphore_id,
@@ -612,9 +608,6 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
 
     // writer defines
     std::map<string, string> writer_defines;
-    if (rms_norm) {
-        writer_defines["RMSNORM"] = 1;
-    }
     if (skip_write_back) {
         writer_defines["SKIP_WRITE_BACK"] = "1";
     }
@@ -718,9 +711,6 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     std::map<string, string> compute_defines;
     if (b) {
         compute_defines["FUSE_PRE_ADD"] = "1";
-    }
-    if (rms_norm) {
-        compute_defines["RMSNORM"] = "1";
     }
     // compute kernel compile time args
     std::vector<uint32_t> all_to_all_except_top_compute_compile_time_args = {

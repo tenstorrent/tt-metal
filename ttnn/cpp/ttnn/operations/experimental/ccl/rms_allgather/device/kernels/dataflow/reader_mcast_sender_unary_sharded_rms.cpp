@@ -85,14 +85,9 @@ void kernel_main() {
     const auto& global_reduce_sender = [&](const uint32_t cb_partial,
                                            const uint32_t cb_external,
                                            const uint32_t cb_reduce_first_stage) __attribute__((always_inline)) {
-        uint32_t num_tiles_per_partial_result = 2;
-#ifdef RMSNORM
-        num_tiles_per_partial_result = 1;
-#endif
-
         // global reduce
         // wait for local data ready
-        cb_wait_front(cb_partial, num_tiles_per_partial_result * block_h);  // TODO test for layernorm
+        cb_wait_front(cb_partial, 1 * block_h);  // TODO test for layernorm
 
         // inc semaphore of other cores, tell other all-to-all workers to start
         if constexpr (num_blocks > 1) {
@@ -121,16 +116,13 @@ void kernel_main() {
             cb_reserve_back(cb_external, num_blocks_first_stage);
             uint32_t l1_write_addr_external = get_write_ptr(cb_external);
             for (uint32_t block = 0; block < num_blocks_first_stage; ++block) {
-                for (uint32_t tile_idx = 0; tile_idx < num_tiles_per_partial_result; ++tile_idx) {
-                    uint64_t noc_addr_ex_par =
-                        remote_noc_addrs[block] | (l1_read_addr_ex_par + tile_idx * single_tile_size_bytes);
-                    noc_async_read_one_packet(noc_addr_ex_par, l1_write_addr_external, single_tile_size_bytes);
-                    l1_write_addr_external += single_tile_size_bytes;
-                }
+                uint64_t noc_addr_ex_par = remote_noc_addrs[block] | (l1_read_addr_ex_par);
+                noc_async_read_one_packet(noc_addr_ex_par, l1_write_addr_external, single_tile_size_bytes);
+                l1_write_addr_external += single_tile_size_bytes;
             }
             l1_read_addr_ex_par += single_tile_size_bytes;
             noc_async_read_barrier();
-            cb_push_back(cb_external, num_tiles_per_partial_result * num_blocks_first_stage);
+            cb_push_back(cb_external, num_blocks_first_stage);
 
             // sync with second-stage all-to-all workers
             if constexpr (use_two_stage_reduce) {
@@ -141,21 +133,17 @@ void kernel_main() {
 
                 uint32_t curr_block_index = block_index_stride;
                 for (uint32_t block = 0; block < num_blocks_second_stage - 1; ++block) {
-                    for (uint32_t tile_idx = 0; tile_idx < num_tiles_per_partial_result; ++tile_idx) {
-                        uint64_t noc_addr_ex =
-                            remote_noc_addrs[curr_block_index] | (l1_read_addr_ex + tile_idx * single_tile_size_bytes);
-                        noc_async_read_one_packet(noc_addr_ex, l1_write_addr_external, single_tile_size_bytes);
-                        l1_write_addr_external += single_tile_size_bytes;
-                    }
+                    uint64_t noc_addr_ex = remote_noc_addrs[curr_block_index] | (l1_read_addr_ex);
+                    noc_async_read_one_packet(noc_addr_ex, l1_write_addr_external, single_tile_size_bytes);
+                    l1_write_addr_external += single_tile_size_bytes;
                     curr_block_index += block_index_stride;
                 }
                 l1_read_addr_ex += single_tile_size_bytes;
                 noc_async_read_barrier();
                 cb_push_back(
                     cb_external,
-                    num_tiles_per_partial_result *
-                        (num_blocks_second_stage -
-                         1));  // push back partials from all cores -> compute can start reducing now
+                    (num_blocks_second_stage -
+                     1));  // push back partials from all cores -> compute can start reducing now
             }
         }
     };

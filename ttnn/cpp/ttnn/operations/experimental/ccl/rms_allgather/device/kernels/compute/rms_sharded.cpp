@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -46,6 +46,7 @@ void MAIN {
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t dst1 = 1;
     constexpr uint32_t scaler0 = 0;
+
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_in1 = tt::CBIndex::c_1;
 #ifdef FUSE_PRE_ADD
@@ -104,37 +105,9 @@ void MAIN {
     binary_op_init_common(cb_in, cb_in, cb_x2);
 #endif
 
-#ifndef RMSNORM
-    cb_wait_front(cb_scaler, 1);
-#ifdef FUSE_PRE_ADD
-    reconfig_data_format(cb_in0, cb_in, cb_in1, cb_scaler);
-#else
-    reconfig_data_format_srcb(cb_in, cb_scaler);
-#endif
-    // E[x],
-    index_h_offset = 0;
-    reduce_init_delta<false>(cb_in0, cb_scaler, cb_ex_partial2);
-
-    cb_reserve_back(cb_ex_partial2, block_h);
-    for (uint32_t i = 0; i < block_h; i++) {
-        tile_regs_acquire();
-        for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
-            reduce_tile(cb_in, cb_scaler, w + index_h_offset, scaler0, dst0);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(dst0, cb_ex_partial2);
-        tile_regs_release();
-        index_h_offset += block_w;
-    }
-    reduce_revert_delta(cb_ex_partial2);
-    cb_push_back(cb_ex_partial2, block_h);
-    reconfig_data_format_srcb(cb_scaler, cb_in);
-#else
 #ifdef FUSE_PRE_ADD
     reconfig_data_format(cb_in0, cb_in, cb_in1, cb_in);
 #endif
-#endif  // not RMSNORM
 
     // X^2
     mul_tiles_init(cb_in0, cb_in0);
@@ -165,9 +138,7 @@ void MAIN {
     reconfig_data_format_srcb(cb_in, cb_scaler);
 
     cb_wait_front(cb_x2, num_tiles_per_block);
-#ifdef RMSNORM
     cb_wait_front(cb_scaler, 1);
-#endif  // RMSNORM
 
     cb_reserve_back(cb_ex_partial2, block_h);  // RMS E(x2) #Layernorm //E(x) and E(x^2)
 
@@ -207,16 +178,13 @@ void MAIN {
                     cb_scaler_global,
                     0,
                     scaler0,
-                    1);  // E(x) and E(x^2) interleaved so we reduce each one into
+                    0);  // E(x) and E(x^2) interleaved so we reduce each one into
                          // different dest reg
                 cb_pop_front(cb_ex_external2, 1);
             }
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(dst0, cb_reduction_out);
-#ifndef RMSNORM
-            pack_tile(dst1, cb_reduction_out);
-#endif
             tile_regs_release();
         }
         reduce_revert_delta(cb_reduction_out);
