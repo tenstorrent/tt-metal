@@ -243,7 +243,7 @@ def from_torch(
     layout: Optional[ttnn.Layout] = ttnn.ROW_MAJOR_LAYOUT,
     device: Optional[ttnn.Device] = None,
     memory_config: Optional[ttnn.MemoryConfig] = None,
-    mesh_mapper: Optional[ttnn.TensorToMesh] = None,
+    mesh_mapper: Optional[Union[ttnn.TensorToMesh, ttnn.CppTensorToMesh]] = None,
     cq_id: Optional[int] = ttnn.DefaultQueueId,
 ) -> ttnn.Tensor:
     """
@@ -306,9 +306,18 @@ def from_torch(
     strategy = {}
     tilize_input = []
 
+    # TODO: remove once all integration is done
     if mesh_mapper:
-        tensor = ttnn.distribute_tensor(tensor, mesh_mapper, device)
-        tilize_input = ttnn.to_torch(tensor)
+        if isinstance(mesh_mapper, ttnn.TensorToMesh):
+            strategy = mesh_mapper.config()
+            shards = mesh_mapper.map(ttnn.to_torch(tensor))
+            tilize_input = shards
+            if tile is None:
+                tensor = ttnn.Tensor(tilize_input, dtype, strategy)
+        else:
+            assert isinstance(mesh_mapper, ttnn.CppTensorToMesh)
+            tensor = ttnn.distribute_tensor(tensor, mesh_mapper, device)
+            tilize_input = ttnn.to_torch(tensor)
 
     # TODO: find cleaner way of tilizing
     if tile is not None:
@@ -615,7 +624,7 @@ def as_tensor(
     memory_config: Optional[ttnn.MemoryConfig] = None,
     cache_file_name: Optional[Union[str, pathlib.Path]] = None,
     preprocess: Optional[Callable[[ttnn.Tensor], ttnn.Tensor]] = None,
-    mesh_mapper: Optional[ttnn.TensorToMesh] = None,
+    mesh_mapper: Optional[Union[ttnn.TensorToMesh, ttnn.CppTensorToMesh]] = None,
     use_device_tilizer: bool = False,
 ) -> ttnn.Tensor:
     """
@@ -667,7 +676,7 @@ def as_tensor(
         layout: Optional[ttnn.Layout],
         device: Optional[ttnn.Device],
         memory_config: Optional[ttnn.MemoryConfig],
-        mesh_mapper: Optional[ttnn.TensorToMesh],
+        mesh_mapper: Optional[Union[ttnn.TensorToMesh, ttnn.CppTensorToMesh]],
     ):
         if preprocess:
             tensor = preprocess(tensor)
@@ -700,7 +709,7 @@ def as_tensor(
             dtype: Optional[ttnn.DataType],
             layout: Optional[ttnn.Layout],
             cache_file_name: str,
-            mesh_mapper: Optional[ttnn.TensorToMesh],
+            mesh_mapper: Optional[Union[ttnn.TensorToMesh, ttnn.CppTensorToMesh]],
         ):
             tensor = torch_to_ttnn(tensor, dtype, layout, device, memory_config, mesh_mapper)
             logger.debug(
