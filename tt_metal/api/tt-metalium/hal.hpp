@@ -167,7 +167,6 @@ private:
     float nan_ = 0.0f;
     float inf_ = 0.0f;
 
-    void initialize_gs();
     void initialize_wh();
     void initialize_bh();
 

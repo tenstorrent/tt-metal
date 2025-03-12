@@ -16,8 +16,6 @@ namespace tt_metal {
 // Once it knows the architecture it can self initialize architecture specific memory maps
 Hal::Hal() : arch_(get_platform_architecture()) {
     switch (this->arch_) {
-        case tt::ARCH::GRAYSKULL: initialize_gs(); break;
-
         case tt::ARCH::WORMHOLE_B0: initialize_wh(); break;
 
         case tt::ARCH::BLACKHOLE: initialize_bh(); break;
