@@ -95,59 +95,6 @@ class ModelOptimizations:
         inst.__name__ = "performance"
         return inst
 
-    @classmethod
-    def pareto_accuracy(cls, model_name):
-        """Configuration found through Pareto front analysis"""
-        inst = cls(
-            {
-                "TensorPrecision": {
-                    TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
-                    TensorGroup.FF2: PrecisionSetting.BFP8,
-                    TensorGroup.WQKV: PrecisionSetting.BFP8,
-                    TensorGroup.WO: PrecisionSetting.BFP8,
-                    TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
-                },
-                "OpFidelity": {
-                    OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2,
-                    OpGroup.LI_FF2: MathFidelitySetting.HIFI2,
-                    OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI2,
-                    OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2_NA,
-                    OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI2,
-                    OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
-                    OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
-                    OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI2_FP16,
-                },
-            }
-        )
-        inst.__name__ = "pareto_accuracy"
-        return inst
-
-    @classmethod
-    def pareto_performance(cls, model_name):
-        """Configuration found through Pareto front analysis"""
-        inst = cls(
-            {
-                "TensorPrecision": {
-                    TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
-                    TensorGroup.FF2: PrecisionSetting.BFP8,
-                    TensorGroup.WQKV: PrecisionSetting.BFP8,
-                    TensorGroup.WO: PrecisionSetting.BFP4,
-                    TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
-                    TensorGroup.ACTIVATION: PrecisionSetting.BFP8,
-                },
-                "OpFidelity": {
-                    OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2,
-                    OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2_NA,
-                    OpGroup.LI_O_DECODE: MathFidelitySetting.LOFI,
-                    OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
-                    OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
-                    OpGroup.LI_O_PREFILL: MathFidelitySetting.LOFI,
-                },
-            }
-        )
-        inst.__name__ = "pareto_performance"
-        return inst
-
     def __init__(self, settings: dict = None):
         if settings:
             self._validate_settings(settings)
