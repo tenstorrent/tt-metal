@@ -5,6 +5,7 @@
 namespace ttnn::operations::experimental {
 
 OptionalTensors GeluBackwardOperation::invoke(
+    QueueId queue_id,
     const Tensor& grad_output_tensor,
     const Tensor& input_tensor,
     const string& approximate,
@@ -17,10 +18,17 @@ OptionalTensors GeluBackwardOperation::invoke(
                                                               : memory_config.value_or(input_tensor.memory_config());
 
     return {std::optional<Tensor>(ttnn::prim::gelu_bw(
-        grad_output_tensor, input_tensor, approximate, output_dtype, output_memory_config, input_grad_tensor))};
+        queue_id,
+        grad_output_tensor,
+        input_tensor,
+        approximate,
+        output_dtype,
+        output_memory_config,
+        input_grad_tensor))};
 }
 
 OptionalTensors GeluBackwardOperation::create_async_optional_output_tensors(
+    QueueId queue_id,
     const Tensor& grad_output_tensor,
     const Tensor& input_tensor,
     const string& approximate,
