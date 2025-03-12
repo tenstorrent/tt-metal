@@ -18,20 +18,21 @@ void GenericOpDeviceOperation::validate_on_program_cache_miss(
 void GenericOpDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {}
 
-GenericOpDeviceOperation::shape_return_value_t GenericOpDeviceOperation::compute_output_shapes(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+// will different tensors have different specs????
+GenericOpDeviceOperation::spec_return_value_t GenericOpDeviceOperation::compute_output_specs(
+    const operation_attributes_t&, const tensor_args_t& tensor_args) const{
     // User has to do this. Just referencing last element (preallocated output tensor).
-    return tensor_args.io_tensors.back().shape();
+    return tensor_args.io_tensors.back().get_tensor_spec();
 }
 
 GenericOpDeviceOperation::tensor_return_value_t GenericOpDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) const {
     // Don't create anything, user is passing output tensor.
     return create_device_tensor(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
 }
 
-std::tuple<operation_attributes_t, GenericOpDeviceOperation::tensor_args_t> GenericOpDeviceOperation::invoke(
+std::tuple<GenericOpDeviceOperation::operation_attributes_t, GenericOpDeviceOperation::tensor_args_t> GenericOpDeviceOperation::invoke(
     const Tensor& input, const operation_attributes_t& operation_attributes, const std::vector<Tensor>& io_tensors) {
     return {operation_attributes, tensor_args_t{.input_tensor = input, .io_tensors = io_tensors}};
 }
