@@ -10,6 +10,7 @@
 #include "autograd/graph.hpp"
 #include "autograd/graph_utils.hpp"
 #include "autograd/tensor.hpp"
+#include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "core/ttnn_all_includes.hpp"
 #include "core/xtensor_utils.hpp"
@@ -63,7 +64,7 @@ void validate_rope_input_and_params(const autograd::TensorPtr& input, const Rota
             params.neg_sin_cache.get_logical_shape()));
     }
 
-    auto expected_trans_mat_shape = ttnn::Shape{1U, 1U, 32U, 32U};
+    auto expected_trans_mat_shape = ttnn::Shape{1U, 1U, ttnn::TILE_SIZE, ttnn::TILE_SIZE};
     if (trans_mat_shape != expected_trans_mat_shape) {
         throw std::runtime_error(fmt::format(
             "RoPE trans_mat must be of shape {}, but has shape {}", expected_trans_mat_shape, trans_mat_shape));
@@ -74,21 +75,52 @@ void validate_rope_input_and_params(const autograd::TensorPtr& input, const Rota
 // the module hierarchy and passed to the operation.
 autograd::TensorPtr rope(const autograd::TensorPtr& input, const RotaryEmbeddingParams& params) {
     validate_rope_input_and_params(input, params);
+    auto input_logical_shape = input->get_value().get_logical_shape();
+    auto num_batch = input_logical_shape[0];
+    auto num_heads = input_logical_shape[1];
+    auto seq_len = input_logical_shape[2];
+    auto head_dim = input_logical_shape[3];
+
+    auto squish_batch = [num_batch, num_heads, seq_len, head_dim](const ttnn::Tensor& input) {
+        auto shape = input.get_logical_shape();
+        auto seq_len = shape[2];
+        auto head_dim = shape[3];
+        auto unbatched_input = ttnn::reshape(input, ttnn::Shape{1U, num_batch * num_heads, seq_len, head_dim});
+        return unbatched_input;
+    };
+
+    auto unsquish_batch = [num_batch, num_heads, seq_len, head_dim](const ttnn::Tensor& input) {
+        auto unbatched_input = ttnn::reshape(input, ttnn::Shape{num_batch, num_heads, seq_len, head_dim});
+        return unbatched_input;
+    };
 
     auto out_tensor = ttnn::experimental::rotary_embedding_llama(
-        input->get_value(), params.cos_cache, params.sin_cache, params.trans_mat);
-    auto out = autograd::create_tensor(out_tensor);
+        squish_batch(input->get_value()),
+        params.cos_cache,
+        params.sin_cache,
+        params.trans_mat,
+        /*is_decode_mode=*/false,
+        /*memory_config=*/std::nullopt,
+        /*compute_kernel_config=*/core::ComputeKernelConfig::precise());
+    auto batched_output = unsquish_batch(out_tensor);
+    auto out = autograd::create_tensor(batched_output);
 
     // In the backward pass we rotate by -θ, so we need negated cos and sin
     // caches. Note: we can just reuse trans_mat here since the data movement
     // should be the same on the backward pass (we use the same trick to speed
     // up the matmul, and the matrix used is specified by the cos/sin caches.)
-    autograd::GradFunction grad_fn = [input, params, out]() {
+    autograd::GradFunction grad_fn = [squish_batch, unsquish_batch, input, params, out]() {
         auto dL_dout = out->get_grad();
 
         auto dL_dinput = ttnn::experimental::rotary_embedding_llama(
-            dL_dout, params.neg_cos_cache, params.neg_sin_cache, params.trans_mat);
-        input->add_grad(dL_dinput);
+            squish_batch(dL_dout),
+            params.neg_cos_cache,
+            params.neg_sin_cache,
+            params.trans_mat,
+            /*is_decode_mode=*/false,
+            /*memory_config=*/std::nullopt,
+            /*compute_kernel_config=*/core::ComputeKernelConfig::precise());
+        input->add_grad(unsquish_batch(dL_dinput));
     };
 
     auto links = autograd::get_links(input);
@@ -126,12 +158,12 @@ std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(uint32_t head_dim, uint32_t sequ
     return {core::from_xtensor(sin_freqs, device), core::from_xtensor(cos_freqs, device)};
 }
 
-ttnn::Tensor gen_trans_mat(int head_dim) {
-    xt::xarray<float> trans_mat = xt::zeros<float>({1, 1, head_dim, head_dim});
-    for (int i = 0; i < head_dim; i += 2) {
+ttnn::Tensor gen_trans_mat() {
+    xt::xarray<float> trans_mat = xt::zeros<float>({1, 1, ttnn::TILE_SIZE, ttnn::TILE_SIZE});
+    for (int i = 0; i < ttnn::TILE_SIZE; i += 2) {
         trans_mat(0, 0, i, i + 1) = 1.0F;
     }
-    for (int j = 1; j < head_dim; j += 2) {
+    for (int j = 1; j < ttnn::TILE_SIZE; j += 2) {
         trans_mat(0, 0, j, j - 1) = -1.0F;
     }
 
@@ -150,7 +182,7 @@ RotaryEmbeddingParams build_rope_params(uint32_t sequence_length, uint32_t head_
         throw std::invalid_argument("RoPE head_dim must be greater than 0");
     }
     auto [sin_freqs, cos_freqs] = gen_freqs(head_dim, sequence_length, theta);
-    auto trans_mat = gen_trans_mat(head_dim);
+    auto trans_mat = gen_trans_mat();
 
     return {
         .cos_cache = cos_freqs,
