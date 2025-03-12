@@ -32,6 +32,7 @@ on:
           - eltwise.unary.ltz.ltz_survey
           - eltwise.unary.lez.lez_survey
           - eltwise.unary.signbit.signbit_survey
+          - eltwise.unary.power.power_survey
           - eltwise.unary.square.square_survey
           - eltwise.unary.sign.sign_survey
           - eltwise.unary.relu_max.relu_max_survey
