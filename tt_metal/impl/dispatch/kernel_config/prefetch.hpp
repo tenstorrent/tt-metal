@@ -1,12 +1,14 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+
 #pragma once
+
 #include "fd_kernel.hpp"
+#include "mesh_graph.hpp"
+#include "umd/device/types/cluster_descriptor_types.h"
 
 typedef struct prefetch_static_config {
-    std::optional<uint32_t> downstream_cb_log_page_size;
-    std::optional<uint32_t> downstream_cb_pages;
     std::optional<uint32_t> my_downstream_cb_sem_id;
 
     std::optional<uint32_t> pcie_base;
@@ -38,19 +40,31 @@ typedef struct prefetch_static_config {
 
     std::optional<bool> is_d_variant;
     std::optional<bool> is_h_variant;
+
+    // Populated if fabric is being used to talk to downstream
+    std::optional<uint32_t> client_interface_addr;
 } prefetch_static_config_t;
 
 typedef struct prefetch_dependent_config {
-    std::optional<tt_cxy_pair> upstream_logical_core;      // Dependant
-    std::optional<tt_cxy_pair> downstream_logical_core;    // Dependant
-    std::optional<tt_cxy_pair> downstream_s_logical_core;  // Dependant
+    std::optional<tt_cxy_pair> upstream_logical_core;
+    std::optional<tt_cxy_pair> downstream_logical_core;
+    std::optional<tt_cxy_pair> downstream_s_logical_core;
 
-    std::optional<uint32_t> downstream_cb_base;    // Dependent
-    std::optional<uint32_t> downstream_cb_sem_id;  // Dependant
+    std::optional<uint32_t> downstream_cb_base;
+    std::optional<uint32_t> downstream_cb_log_page_size;
+    std::optional<uint32_t> downstream_cb_pages;
+    std::optional<uint32_t> downstream_cb_sem_id;
 
-    std::optional<uint32_t> upstream_cb_sem_id;  // Dependant
+    std::optional<uint32_t> upstream_cb_sem_id;
 
-    std::optional<uint32_t> downstream_dispatch_s_cb_sem_id;  // Dependant
+    std::optional<uint32_t> downstream_dispatch_s_cb_sem_id;
+
+    // Populated if fabric is being used to talk to downstream
+    std::optional<uint32_t> fabric_router_noc_xy;
+    std::optional<uint32_t> upstream_mesh_id;
+    std::optional<uint32_t> upstream_chip_id;
+    std::optional<uint32_t> downstream_mesh_id;
+    std::optional<uint32_t> downstream_chip_id;
 } prefetch_dependent_config_t;
 
 class PrefetchKernel : public FDKernel {
@@ -68,9 +82,7 @@ public:
         static_config_.is_h_variant = h_variant;
         static_config_.is_d_variant = d_variant;
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
-        TT_FATAL(
-            noc_selection.downstream_noc == tt::tt_metal::dispatch_downstream_noc,
-            "Invalid downstream NOC specified for Prefetcher kernel");
+
         if (h_variant && d_variant) {
             this->logical_core_ = core_manager.prefetcher_core(device_id, channel, cq_id);
         } else if (h_variant) {
@@ -84,6 +96,12 @@ public:
     void GenerateStaticConfigs() override;
     void GenerateDependentConfigs() override;
     void ConfigureCore() override;
+    void UpdateArgsForFabric(
+        const CoreCoord& fabric_router,
+        tt::tt_fabric::mesh_id_t src_mesh_id,
+        chip_id_t src_chip_id,
+        tt::tt_fabric::mesh_id_t dst_mesh_id,
+        chip_id_t dst_chip_id) override;
     const prefetch_static_config_t& GetStaticConfig() { return static_config_; }
 
 private:

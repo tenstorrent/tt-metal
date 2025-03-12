@@ -59,7 +59,7 @@ struct input_queue_raw_state_t {
         uint32_t max_packet_size_words,
         uint64_t total_data_words) {
         this->curr_packet_dest = this->num_dests_sent_last_packet + dest_endpoint_start_id;
-        this->curr_packet_flags = DispatchPacketFlag::PACKET_TEST_LAST;
+        this->curr_packet_flags = tt::packet_queue::DispatchPacketFlag::PACKET_TEST_LAST;
         this->curr_packet_size_words = 2;
         this->curr_packet_words_remaining = this->curr_packet_size_words;
         this->data_words_input += 2;
@@ -174,10 +174,10 @@ constexpr auto select_input_queue() {
 }
 
 inline void fill_packet_data(tt_l1_ptr uint32_t* start_addr, uint32_t num_words, uint32_t start_val) {
-    tt_l1_ptr uint32_t* addr = start_addr + (PACKET_WORD_SIZE_BYTES / 4 - 1);
+    tt_l1_ptr uint32_t* addr = start_addr + (tt::packet_queue::PACKET_WORD_SIZE_BYTES / 4 - 1);
     for (uint32_t i = 0; i < num_words; i++) {
         *addr = start_val++;
-        addr += (PACKET_WORD_SIZE_BYTES / 4);
+        addr += (tt::packet_queue::PACKET_WORD_SIZE_BYTES / 4);
     }
 }
 
@@ -188,7 +188,7 @@ inline bool check_packet_data(
     uint32_t& mismatch_addr,
     uint32_t& mismatch_val,
     uint32_t& expected_val) {
-    tt_l1_ptr uint32_t* addr = start_addr + (PACKET_WORD_SIZE_BYTES / 4 - 1);
+    tt_l1_ptr uint32_t* addr = start_addr + (tt::packet_queue::PACKET_WORD_SIZE_BYTES / 4 - 1);
     for (uint32_t i = 0; i < num_words; i++) {
         if (*addr != start_val) {
             mismatch_addr = reinterpret_cast<uint32_t>(addr);
@@ -197,7 +197,7 @@ inline bool check_packet_data(
             return false;
         }
         start_val++;
-        addr += (PACKET_WORD_SIZE_BYTES / 4);
+        addr += (tt::packet_queue::PACKET_WORD_SIZE_BYTES / 4);
     }
     return true;
 }

@@ -7,6 +7,8 @@
 #include <mesh_workload.hpp>
 #include <tt_metal.hpp>
 
+#include <tt_metal/impl/program/program_command_sequence.hpp>
+#include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
 
 namespace tt::tt_metal::distributed {

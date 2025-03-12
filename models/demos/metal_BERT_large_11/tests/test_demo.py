@@ -16,7 +16,7 @@ from models.utility_functions import is_e75, is_wormhole_b0, skip_for_grayskull,
     (("models/demos/metal_BERT_large_11/demo/input_data.json"),),
     ids=["default_input"],
 )
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="#7525: hangs on wh b0")
+@pytest.mark.skipif(is_blackhole(), reason="Not functional on BH yet")
 def test_demo_batch_7(batch, input_path, model_location_generator, device, use_program_cache):
     if is_e75(device):
         pytest.skip(f"Bert large 11 is not supported on E75")
@@ -51,7 +51,7 @@ def test_demo_batch_7(batch, input_path, model_location_generator, device, use_p
     (("models/demos/metal_BERT_large_11/demo/input_data.json"),),
     ids=["default_input"],
 )
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="#7525: hangs on wh b0")
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="#7525: only runs GS")
 def test_demo_batch_12(batch, input_path, model_location_generator, device, use_program_cache):
     if is_e75(device):
         pytest.skip(f"Bert large 11 is not supported on E75")
@@ -81,14 +81,14 @@ def test_demo_batch_12(batch, input_path, model_location_generator, device, use_
 
 
 @skip_for_grayskull()
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="#7525: hangs on wh b0")
+@pytest.mark.skipif(is_blackhole(), reason="#7525: Not functional on BH yet")
 @pytest.mark.parametrize(
     "batch, exact, f1",
     (
         (
             7,
-            78.57,
-            84.37,
+            77.14,
+            84.21,
         ),
     ),
     ids=["batch_7"],
@@ -112,7 +112,7 @@ def test_demo_squadv2_batch_7(batch, exact, f1, model_location_generator, device
     ),
     ids=["batch_12"],
 )
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="#7525: hangs on wh b0")
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="#7525: only runs GS")
 def test_demo_squadv2_batch_12(batch, exact, f1, model_location_generator, device, use_program_cache):
     loop_count = 10
     evals = demo_squadv2(model_location_generator, device, use_program_cache, batch, loop_count)

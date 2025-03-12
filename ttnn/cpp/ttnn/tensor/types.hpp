@@ -43,6 +43,8 @@ enum class DataType {
     INVALID = 8,
 };
 
+std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& data_type);
+
 template <typename T>
 consteval inline DataType convert_to_data_type() {
     if constexpr (std::is_same_v<T, uint8_t>) {

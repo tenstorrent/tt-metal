@@ -42,8 +42,12 @@ table BufferCreateCommand {
   sub_device_id: Uint8Optional;
 }
 
-table DeallocateBufferCommand {
+table BufferDeallocateCommand {
   global_id: uint32;   // Reference to Buffer to be deallocated
+}
+
+table BufferDeleteCommand {
+  global_id: uint32;   // Reference to Buffer to be deleted
 }
 
 table EnqueueWriteBufferCommand {
@@ -122,7 +126,8 @@ union CommandType {
   LoadTraceCommand,
   ReleaseTraceCommand,
   BufferCreateCommand,
-  DeallocateBufferCommand,
+  BufferDeallocateCommand,
+  BufferDeleteCommand,
   EnqueueWriteBufferCommand,
   EnqueueReadBufferCommand,
   FinishCommand,

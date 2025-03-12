@@ -109,7 +109,7 @@ jobs:
           name: perf-report-csv-${{ matrix.test-group.model-type }}-${{ matrix.test-group.arch }}-${{ matrix.test-group.model }}-bare-metal
           path:
             ${{ steps.check-perf-report.outputs.perf_report_filename_all_gather }}
-      - uses: ./.github/actions/upload-artifact-with-job-uuid
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:

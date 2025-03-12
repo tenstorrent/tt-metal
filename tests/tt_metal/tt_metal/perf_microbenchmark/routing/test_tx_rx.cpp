@@ -12,10 +12,10 @@
 #include "utils.hpp"
 #include "llrt.hpp"
 
-using std::vector;
-using namespace tt;
-
 int main(int argc, char **argv) {
+    using std::vector;
+    using namespace tt;
+    using namespace tt::packet_queue;
 
     bool pass = true;
     try {

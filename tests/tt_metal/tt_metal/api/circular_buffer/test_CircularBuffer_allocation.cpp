@@ -179,7 +179,7 @@ TEST_F(DeviceFixture, TensixTestCircularBuffersAndL1BuffersCollision) {
         auto l1_buffer = CreateBuffer(buff_config);
 
         // L1 buffer is entirely in bank 0
-        auto core = l1_buffer->logical_core_from_bank_id(0);
+        auto core = l1_buffer->allocator()->get_logical_core_from_bank_id(0);
         CoreRange cr(core, core);
         CoreRangeSet cr_set({cr});
         initialize_program(program, cr_set);

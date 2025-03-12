@@ -449,28 +449,32 @@ void ControlPlane::write_routing_tables_to_chip(mesh_id_t mesh_id, chip_id_t chi
             }
 
             if (chip_eth_chans_map.find(RoutingDirection::N) != chip_eth_chans_map.end()) {
-                fabric_router_config.port_direction.north =
+                fabric_router_config.port_direction.directions[eth_chan_directions::NORTH] =
                     this->get_downstream_eth_chan_id(eth_chan, chip_eth_chans_map.at(RoutingDirection::N));
             } else {
-                fabric_router_config.port_direction.north = eth_chan_magic_values::INVALID_DIRECTION;
+                fabric_router_config.port_direction.directions[eth_chan_directions::NORTH] =
+                    eth_chan_magic_values::INVALID_DIRECTION;
             }
             if (chip_eth_chans_map.find(RoutingDirection::S) != chip_eth_chans_map.end()) {
-                fabric_router_config.port_direction.south =
+                fabric_router_config.port_direction.directions[eth_chan_directions::SOUTH] =
                     this->get_downstream_eth_chan_id(eth_chan, chip_eth_chans_map.at(RoutingDirection::S));
             } else {
-                fabric_router_config.port_direction.south = eth_chan_magic_values::INVALID_DIRECTION;
+                fabric_router_config.port_direction.directions[eth_chan_directions::SOUTH] =
+                    eth_chan_magic_values::INVALID_DIRECTION;
             }
             if (chip_eth_chans_map.find(RoutingDirection::E) != chip_eth_chans_map.end()) {
-                fabric_router_config.port_direction.east =
+                fabric_router_config.port_direction.directions[eth_chan_directions::EAST] =
                     this->get_downstream_eth_chan_id(eth_chan, chip_eth_chans_map.at(RoutingDirection::E));
             } else {
-                fabric_router_config.port_direction.east = eth_chan_magic_values::INVALID_DIRECTION;
+                fabric_router_config.port_direction.directions[eth_chan_directions::EAST] =
+                    eth_chan_magic_values::INVALID_DIRECTION;
             }
             if (chip_eth_chans_map.find(RoutingDirection::W) != chip_eth_chans_map.end()) {
-                fabric_router_config.port_direction.west =
+                fabric_router_config.port_direction.directions[eth_chan_directions::WEST] =
                     this->get_downstream_eth_chan_id(eth_chan, chip_eth_chans_map.at(RoutingDirection::W));
             } else {
-                fabric_router_config.port_direction.west = eth_chan_magic_values::INVALID_DIRECTION;
+                fabric_router_config.port_direction.directions[eth_chan_directions::WEST] =
+                    eth_chan_magic_values::INVALID_DIRECTION;
             }
 
             fabric_router_config.my_mesh_id = mesh_id;
@@ -643,6 +647,17 @@ size_t ControlPlane::get_num_active_fabric_routers(mesh_id_t mesh_id, chip_id_t 
         num_routers += eth_chans.size();
     }
     return num_routers;
+}
+
+std::vector<chan_id_t> ControlPlane::get_active_fabric_eth_channels_in_direction(
+    mesh_id_t mesh_id, chip_id_t chip_id, RoutingDirection routing_direction) const {
+    for (const auto& [direction, eth_chans] :
+         this->router_port_directions_to_physical_eth_chan_map_[mesh_id][chip_id]) {
+        if (routing_direction == direction) {
+            return eth_chans;
+        }
+    }
+    return {};
 }
 
 void ControlPlane::configure_routing_tables() const {

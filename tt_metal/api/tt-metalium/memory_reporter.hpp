@@ -14,12 +14,10 @@
 #include "allocator.hpp"
 
 namespace tt::tt_metal {
-inline namespace v0 {
 
 class Program;
 class IDevice;
 
-}  // namespace v0
 namespace detail {
 struct MemoryView;
 

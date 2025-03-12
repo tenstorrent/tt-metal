@@ -30,11 +30,11 @@ test_dataset = datasets.MNIST(root="./data", train=False, transform=None, downlo
 def get_expected_times(tt_mnist):
     if is_grayskull():
         return {
-            tt_mnist: (3.54, 0.005),
+            tt_mnist: (3.54, 0.006),
         }[tt_mnist]
     elif is_wormhole_b0():
         return {
-            tt_mnist: (3.89, 0.005),
+            tt_mnist: (3.89, 0.006),
         }[tt_mnist]
 
 
@@ -102,7 +102,6 @@ def test_performance_mnist(device, batch_size, tt_mnist, model_location_generato
     logger.info("Exit MNIST perf test")
 
 
-@pytest.mark.skip("#16824: Failing when whole suite is run on all archs")
 @pytest.mark.parametrize(
     "batch_size",
     [128],

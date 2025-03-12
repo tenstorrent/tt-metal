@@ -10,6 +10,7 @@
 #include <optional>
 #include <tt-metalium/lightmetal_binary.hpp>
 
+#include <tt-metalium/program_impl.hpp>
 #include <tt-metalium/device.hpp>
 
 // Forward decl for trace_buffer.hpp
@@ -25,7 +26,8 @@ struct EnqueueTraceCommand;
 struct LoadTraceCommand;
 struct ReleaseTraceCommand;
 struct BufferCreateCommand;
-struct DeallocateBufferCommand;
+struct BufferDeallocateCommand;
+struct BufferDeleteCommand;
 struct EnqueueWriteBufferCommand;
 struct EnqueueReadBufferCommand;
 struct FinishCommand;
@@ -49,7 +51,6 @@ using FlatbufferRuntimeArgVector =
 using RuntimeArgs = std::vector<std::variant<tt::tt_metal::Buffer*, uint32_t>>;
 
 namespace tt::tt_metal {
-inline namespace v0 {
 
 class LightMetalReplay {
 public:
@@ -69,7 +70,8 @@ private:
     void execute(const tt::tt_metal::flatbuffer::LoadTraceCommand* command);
     void execute(const tt::tt_metal::flatbuffer::ReleaseTraceCommand* command);
     void execute(const tt::tt_metal::flatbuffer::BufferCreateCommand* cmd);
-    void execute(const tt::tt_metal::flatbuffer::DeallocateBufferCommand* command);
+    void execute(const tt::tt_metal::flatbuffer::BufferDeallocateCommand* command);
+    void execute(const tt::tt_metal::flatbuffer::BufferDeleteCommand* command);
     void execute(const tt::tt_metal::flatbuffer::EnqueueWriteBufferCommand* command);
     void execute(const tt::tt_metal::flatbuffer::EnqueueReadBufferCommand* command);
     void execute(const tt::tt_metal::flatbuffer::FinishCommand* command);
@@ -133,5 +135,4 @@ private:
     std::unordered_map<uint32_t, tt::tt_metal::CBHandle> cb_handle_map_;
 };
 
-}  // namespace v0
 }  // namespace tt::tt_metal

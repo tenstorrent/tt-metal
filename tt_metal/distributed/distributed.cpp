@@ -36,9 +36,10 @@ MeshEvent EnqueueRecordEventToHost(
 void EnqueueWaitForEvent(MeshCommandQueue& mesh_cq, const MeshEvent& event) { mesh_cq.enqueue_wait_for_event(event); }
 
 void EventSynchronize(const MeshEvent& event) {
-    auto& mesh_cq = event.device()->mesh_command_queue(event.mesh_cq_id());
-    mesh_cq.drain_events_from_completion_queue();
-    mesh_cq.verify_reported_events_after_draining(event);
+    for (const auto& coord : event.device_range()) {
+        auto physical_device = event.device()->get_device(coord);
+        while (physical_device->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) < event.id());
+    }
 }
 
 MeshTraceId BeginTraceCapture(MeshDevice* device, uint8_t cq_id) {

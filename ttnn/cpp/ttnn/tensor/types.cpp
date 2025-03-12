@@ -8,6 +8,21 @@
 
 namespace tt::tt_metal {
 
+std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& data_type) {
+    switch (data_type) {
+        case DataType::BFLOAT16: return os << "DataType::BFLOAT16";
+        case DataType::FLOAT32: return os << "DataType::FLOAT32";
+        case DataType::UINT32: return os << "DataType::UINT32";
+        case DataType::BFLOAT8_B: return os << "DataType::BFLOAT8_B";
+        case DataType::BFLOAT4_B: return os << "DataType::BFLOAT4_B";
+        case DataType::UINT8: return os << "DataType::UINT8";
+        case DataType::UINT16: return os << "DataType::UINT16";
+        case DataType::INT32: return os << "DataType::INT32";
+        case DataType::INVALID:
+        default: return os << "Invalid";
+    }
+}
+
 bool is_floating_point(DataType dtype) {
     switch (dtype) {
         case DataType::BFLOAT16:

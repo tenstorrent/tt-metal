@@ -30,11 +30,8 @@
 #include "hal.hpp"
 
 namespace tt::tt_metal {
-inline namespace v0 {
 
 class IDevice;
-
-}  // namespace v0
 
 class Allocator;
 
@@ -53,20 +50,33 @@ struct ShardSpec {
     std::optional<std::array<uint32_t, 2>> physical_shard_shape = std::nullopt;
 
     ShardSpec(
-        const CoreRangeSet &core_sets_,
-        const std::array<uint32_t, 2> &shard_shape_,
-        const ShardOrientation &shard_orientation_ = ShardOrientation::ROW_MAJOR,
-        const ShardMode &shard_mode_ = ShardMode::PHYSICAL) :
-        grid(core_sets_), shape(shard_shape_), orientation(shard_orientation_), mode(shard_mode_), physical_shard_shape(std::nullopt) {
-    }
+        const CoreRangeSet& core_sets_,
+        const std::array<uint32_t, 2>& shard_shape_,
+        const ShardOrientation& shard_orientation_ = ShardOrientation::ROW_MAJOR,
+        const ShardMode& shard_mode_ = ShardMode::PHYSICAL) :
+        grid(core_sets_),
+        shape(shard_shape_),
+        orientation(shard_orientation_),
+        mode(shard_mode_),
+        physical_shard_shape(std::nullopt) {}
 
     ShardSpec(
-        const CoreRangeSet &core_sets_,
-        const std::array<uint32_t, 2> &shard_shape_,
-        const std::array<uint32_t, 2> &physical_shard_shape_,
-        const ShardOrientation &shard_orientation_ = ShardOrientation::ROW_MAJOR) :
-        grid(core_sets_), shape(shard_shape_), orientation(shard_orientation_), mode(ShardMode::LOGICAL), physical_shard_shape(physical_shard_shape_) {
-        TT_FATAL(physical_shard_shape_[0] >= shard_shape_[0] and physical_shard_shape_[1] >= shard_shape_[1], "Physical shard shape ({}, {}) must be greater or equal to logical shard shape ({}, {})!", physical_shard_shape_[0], physical_shard_shape_[1], shard_shape_[0], shard_shape_[1]);
+        const CoreRangeSet& core_sets_,
+        const std::array<uint32_t, 2>& shard_shape_,
+        const std::array<uint32_t, 2>& physical_shard_shape_,
+        const ShardOrientation& shard_orientation_ = ShardOrientation::ROW_MAJOR) :
+        grid(core_sets_),
+        shape(shard_shape_),
+        orientation(shard_orientation_),
+        mode(ShardMode::LOGICAL),
+        physical_shard_shape(physical_shard_shape_) {
+        TT_FATAL(
+            physical_shard_shape_[0] >= shard_shape_[0] and physical_shard_shape_[1] >= shard_shape_[1],
+            "Physical shard shape ({}, {}) must be greater or equal to logical shard shape ({}, {})!",
+            physical_shard_shape_[0],
+            physical_shard_shape_[1],
+            shard_shape_[0],
+            shard_shape_[1]);
     }
 
     const uint32_t num_cores() const { return this->grid.num_cores(); }
@@ -75,9 +85,11 @@ struct ShardSpec {
     bool operator==(const ShardSpec& other) const;
     bool operator!=(const ShardSpec& other) const;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("grid", "shape", "orientation", "mode", "physical_shard_shape");
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("grid", "shape", "orientation", "mode", "physical_shard_shape");
     constexpr auto attribute_values() const {
-        return std::forward_as_tuple(this->grid, this->shape, this->orientation, this->mode, this->physical_shard_shape);
+        return std::forward_as_tuple(
+            this->grid, this->shape, this->orientation, this->mode, this->physical_shard_shape);
     }
 };
 
@@ -115,10 +127,8 @@ struct ShardSpecBuffer {
     DeviceAddr num_pages() const;
 };
 
-inline namespace v0 {
-
 struct BufferConfig {
-    IDevice *device;
+    IDevice* device;
     DeviceAddr size;       // Size in bytes
     DeviceAddr page_size;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
     BufferType buffer_type;
@@ -130,7 +140,7 @@ typedef BufferConfig InterleavedBufferConfig;
 // copied from above instead of using inheritance such that we can use
 // designator constructor
 struct ShardedBufferConfig {
-    IDevice *device;
+    IDevice* device;
     DeviceAddr size;       // Size in bytes
     DeviceAddr page_size;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
     BufferType buffer_type = BufferType::L1;
@@ -138,9 +148,7 @@ struct ShardedBufferConfig {
     ShardSpecBuffer shard_parameters;
 };
 
-}  // namespace v0
-
-bool is_sharded(const TensorMemoryLayout &layout);
+bool is_sharded(const TensorMemoryLayout& layout);
 
 struct BufferPageMapping {
     std::vector<CoreCoord> all_cores_;
@@ -156,8 +164,6 @@ struct BufferPageMapping {
     std::vector<std::array<uint32_t, 2>> core_shard_shape_;
 };
 
-inline namespace v0 {
-
 struct BufferRegion {
     DeviceAddr offset = 0;
     DeviceAddr size = 0;
@@ -167,11 +173,15 @@ struct BufferRegion {
 };
 
 class Buffer final {
-    struct Private { explicit Private() = default; };
+    // Used in public Buffer constructors so they are only callable within Buffer
+    // Buffer constructors are public so we can call std::make_shared on Buffer
+    struct Private {
+        explicit Private() = default;
+    };
 
-   public:
+public:
     static std::shared_ptr<Buffer> create(
-        IDevice *device,
+        IDevice* device,
         DeviceAddr size,
         DeviceAddr page_size,
         BufferType buffer_type,
@@ -180,7 +190,7 @@ class Buffer final {
         std::optional<bool> bottom_up = std::nullopt,
         std::optional<SubDeviceId> sub_device_id = std::nullopt);
     static std::shared_ptr<Buffer> create(
-        IDevice *device,
+        IDevice* device,
         DeviceAddr address,
         DeviceAddr size,
         DeviceAddr page_size,
@@ -190,12 +200,14 @@ class Buffer final {
         std::optional<bool> bottom_up = std::nullopt,
         std::optional<SubDeviceId> sub_device_id = std::nullopt);
 
-    Buffer(const Buffer &other) = delete;
-    Buffer &operator=(const Buffer &other) = delete;
-    Buffer(Buffer &&other) = delete;
-    Buffer &operator=(Buffer &&other) = delete;
+    Buffer(const Buffer& other) = delete;
+    Buffer& operator=(const Buffer& other) = delete;
+    Buffer(Buffer&& other) = delete;
+    Buffer& operator=(Buffer&& other) = delete;
+    ~Buffer();
 
     IDevice* device() const { return device_; }
+    Allocator* allocator() const { return allocator_; }
     DeviceAddr size() const { return size_; }
     bool is_allocated() const;
 
@@ -209,6 +221,7 @@ class Buffer final {
     uint32_t num_dev_pages() const;
 
     BufferType buffer_type() const { return buffer_type_; }
+    HalMemType memory_type() const;
     CoreType core_type() const;
 
     bool is_l1() const;
@@ -221,10 +234,6 @@ class Buffer final {
     TensorMemoryLayout buffer_layout() const { return buffer_layout_; }
 
     bool bottom_up() const { return bottom_up_; }
-
-    uint32_t dram_channel_from_bank_id(uint32_t bank_id) const;
-
-    CoreCoord logical_core_from_bank_id(uint32_t bank_id) const;
 
     DeviceAddr page_address(uint32_t bank_id, uint32_t page_index) const;
 
@@ -265,7 +274,7 @@ class Buffer final {
         bool owns_data,
         Private);
 
-   private:
+private:
     enum class AllocationStatus : uint8_t {
         ALLOCATION_REQUESTED,
         ALLOCATION_FAILED,
@@ -279,12 +288,12 @@ class Buffer final {
     void deallocate();
     static void deleter(Buffer* buffer);
     void deallocate_impl();
-    friend void DeallocateBuffer(Buffer &buffer);
+    friend void DeallocateBuffer(Buffer& buffer);
 
     DeviceAddr translate_page_address(uint64_t offset, uint32_t bank_id) const;
 
     IDevice* const device_;
-    const DeviceAddr size_; // Size in bytes
+    const DeviceAddr size_;  // Size in bytes
     const BufferType buffer_type_;
     const TensorMemoryLayout buffer_layout_;
     const bool bottom_up_;
@@ -292,7 +301,7 @@ class Buffer final {
     const bool owns_data_;
 
     std::optional<SubDeviceManagerId> sub_device_manager_id_;
-    Allocator * allocator_;
+    Allocator* allocator_;
 
     std::atomic<AllocationStatus> allocation_status_ = AllocationStatus::ALLOCATION_REQUESTED;
     DeviceAddr address_ = 0;
@@ -302,7 +311,7 @@ class Buffer final {
     std::atomic<bool> deallocation_requested_ = false;
 
     // These members must be only accessed on the device worker thread
-    DeviceAddr page_size_; // Size of unit being interleaved. For non-interleaved buffers: size == page_size
+    DeviceAddr page_size_;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
     std::optional<ShardSpecBuffer> shard_parameters_;
     std::shared_ptr<const BufferPageMapping> buffer_page_mapping_;
 
@@ -311,11 +320,7 @@ class Buffer final {
     static std::atomic<size_t> next_unique_id;
 };
 
-}  // namespace v0
-
-BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer);
-
-inline namespace v0 {
+BufferPageMapping generate_buffer_page_mapping(const Buffer& buffer);
 
 using HostDataType = std::variant<
     const std::shared_ptr<std::vector<uint8_t>>,
@@ -324,14 +329,13 @@ using HostDataType = std::variant<
     const std::shared_ptr<std::vector<uint32_t>>,
     const std::shared_ptr<std::vector<float>>,
     const std::shared_ptr<std::vector<bfloat16>>,
-    const void *>;
+    const void*>;
 
-}  // namespace v0
 }  // namespace tt::tt_metal
 
 namespace tt::stl::json {
 template <>
 struct from_json_t<tt_metal::ShardSpec> {
-    tt_metal::ShardSpec operator()(const nlohmann::json &json_object) const;
+    tt_metal::ShardSpec operator()(const nlohmann::json& json_object) const;
 };
 }  // namespace tt::stl::json

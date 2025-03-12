@@ -63,8 +63,13 @@ constexpr uint32_t w_depth = get_compile_time_arg_val(25);
 constexpr uint32_t n_depth = get_compile_time_arg_val(26);
 constexpr uint32_t s_depth = get_compile_time_arg_val(27);
 
+#ifdef FVC_MODE_PULL
 volatile tt_l1_ptr fabric_pull_client_interface_t* client_interface =
     (volatile tt_l1_ptr fabric_pull_client_interface_t*)client_interface_addr;
+#else
+volatile tt_l1_ptr fabric_push_client_interface_t* client_interface =
+    (volatile tt_l1_ptr fabric_push_client_interface_t*)client_interface_addr;
+#endif
 
 uint32_t target_address;
 uint32_t noc_offset;
@@ -136,7 +141,7 @@ void kernel_main() {
     }
 
     // initalize client
-    fabric_endpoint_init<RoutingType::ROUTING_TABLE>(client_interface, outbound_eth_chan);
+    fabric_endpoint_init<decltype(client_interface), RoutingType::ROUTING_TABLE>(client_interface, outbound_eth_chan);
 
     // notify the controller kernel that this worker is ready to proceed
     notify_traffic_controller();
@@ -146,6 +151,7 @@ void kernel_main() {
     // all tx workers are ready to send data
     while (*(volatile tt_l1_ptr uint32_t*)signal_address == 0);
 
+#ifdef FVC_MODE_PULL
     fabric_setup_pull_request(
         client_interface,           // fabric client interface
         data_buffer_start_addr,     // source address in sender’s memory
@@ -194,6 +200,31 @@ void kernel_main() {
             break;
         }
     }
+#else
+    fabric_client_router_reserve(client_interface, 0, dest_device >> 16, dest_device & 0xFFFF);
+    uint64_t start_timestamp = get_timestamp();
+
+    while (true) {
+        fabric_async_write<AsyncWriteMode::PUSH>(
+            client_interface,
+            0,                       // the network plane to use for this transaction
+            data_buffer_start_addr,  // source address in sender’s memory
+            dest_device >> 16,
+            dest_device & 0xFFFF,
+            dst_addr,                   // destination write address
+            max_packet_size_words * 16  // number of bytes to write to remote destination
+        );
+        data_words_sent += max_packet_size_words;
+        packet_count++;
+        // noc_async_writes_flushed();
+
+        if (data_words_sent >= total_data_words) {
+            break;
+        }
+    }
+    noc_async_writes_flushed();
+
+#endif
 
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
 

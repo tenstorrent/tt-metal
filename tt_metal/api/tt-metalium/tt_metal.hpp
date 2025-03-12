@@ -12,15 +12,13 @@
 #include "core_coord.hpp"
 #include "dispatch_core_manager.hpp"
 #include "buffer.hpp"
-#include "profiler.hpp"
+#include "profiler_types.hpp"
 #include "llrt/tt_cluster.hpp"
 
 namespace tt::tt_metal {
-inline namespace v0 {
 class Program;
 class Buffer;
 class IDevice;
-}  // namespace v0
 
 namespace detail {
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,20 +16,15 @@
 
 namespace tt::tt_metal {
 
-inline namespace v0 {
 class Event;
 class Program;
 class Kernel;
-}  // namespace v0
 
 class CommandQueue {
 public:
     virtual ~CommandQueue() = default;
 
     virtual const CoreCoord& virtual_enqueue_program_dispatch_core() const = 0;
-
-    virtual volatile bool is_dprint_server_hung() = 0;
-    virtual volatile bool is_noc_hung() = 0;
 
     virtual void record_begin(const uint32_t tid, const std::shared_ptr<TraceDescriptor>& ctx) = 0;
     virtual void record_end() = 0;
@@ -79,5 +74,10 @@ public:
 
     virtual void finish(tt::stl::Span<const SubDeviceId> sub_device_ids) = 0;
 };
+
+struct ReadBufferDescriptor;
+struct ReadEventDescriptor;
+
+using CompletionReaderVariant = std::variant<std::monostate, ReadBufferDescriptor, ReadEventDescriptor>;
 
 }  // namespace tt::tt_metal

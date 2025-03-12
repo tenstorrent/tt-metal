@@ -160,7 +160,11 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
         core,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    std::vector<uint32_t> compute_args = {uint32_t(num_tiles / num_tiles_per_block), uint32_t(num_tiles_per_block)};
+    std::vector<uint32_t> compute_args = {
+        uint32_t(num_tiles / num_tiles_per_block),
+        uint32_t(num_tiles_per_block),
+        uint32_t(src0_cb_index),
+        uint32_t(output_cb_index)};
 
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
@@ -767,7 +771,9 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
             program,
             compute_kernel,
             core_range,
-            ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = {nblocks_per_core, num_tiles_per_row}});
+            ComputeConfig{
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .compile_args = {nblocks_per_core, num_tiles_per_row, tt::CBIndex::c_0, tt::CBIndex::c_16}});
     }
     if (has_cliff) {
         auto tilize_cliff_kernel_id = CreateKernel(
@@ -775,7 +781,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
             compute_kernel,
             core_range_cliff,
             ComputeConfig{
-                .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = {nblocks_per_core_cliff, num_tiles_per_row}});
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .compile_args = {nblocks_per_core_cliff, num_tiles_per_row, tt::CBIndex::c_0, tt::CBIndex::c_16}});
     }
 
     uint32_t tile_height = output.get_tensor_spec().tile().get_height();
@@ -997,6 +1004,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
     std::vector<uint32_t> compute_args = {
         (uint32_t)nblocks_per_core,  // per_core_block_cnt
         (uint32_t)ntiles_per_block,  // per_block_ntiles
+        (uint32_t)src0_cb_index,
+        (uint32_t)output_cb_index,
     };
 
     std::string compute_kernel(

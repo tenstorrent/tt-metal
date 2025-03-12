@@ -6,6 +6,7 @@
 
 #include <utility>
 #include <device.hpp>
+#include <tt_metal.hpp>
 #include "buffer.hpp"
 
 namespace tt::tt_metal {
@@ -18,6 +19,17 @@ TraceBuffer::~TraceBuffer() {
         const auto current_trace_buffers_size = this->buffer->device()->get_trace_buffers_size();
         this->buffer->device()->set_trace_buffers_size(current_trace_buffers_size - this->buffer->size());
     }
+}
+
+// there is a cost to validation, please use it judiciously
+void TraceBuffer::validate() {
+    std::vector<uint32_t> backdoor_data;
+    detail::ReadFromBuffer(this->buffer, backdoor_data);
+    if (backdoor_data != this->desc->data) {
+        log_error(LogMetalTrace, "Trace buffer expected: {}", this->desc->data);
+        log_error(LogMetalTrace, "Trace buffer observed: {}", backdoor_data);
+    }
+    // add more checks
 }
 
 }  // namespace tt::tt_metal

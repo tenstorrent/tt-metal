@@ -6,10 +6,9 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/test_tiles.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/command_queue.hpp>
 #include <matmul_common/bmm_op.hpp>
-#include <tt-metalium/tilize_untilize.hpp>
 #include <tt-metalium/device_impl.hpp>
 
 using namespace tt::constants;

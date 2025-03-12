@@ -16,9 +16,7 @@
 namespace tt::tt_metal {
 
 // Forward decl to avoid including header
-inline namespace v0 {
 class Buffer;
-}
 
 struct TraceWorkerDescriptor {
     uint32_t num_completion_worker_cores = 0;
@@ -41,6 +39,8 @@ struct TraceBuffer {
 
     TraceBuffer(std::shared_ptr<TraceDescriptor> desc, std::shared_ptr<Buffer> buffer);
     ~TraceBuffer();
+
+    void validate();
 };
 
 }  // namespace tt::tt_metal

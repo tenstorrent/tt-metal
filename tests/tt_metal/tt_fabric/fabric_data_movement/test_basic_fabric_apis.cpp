@@ -12,7 +12,7 @@
 
 namespace tt::tt_fabric {
 
-TEST_F(FabricFixture, TestAsyncWrite) {
+TEST_F(Fabric2DFixture, TestAsyncWrite) {
     using tt::tt_metal::ShardedBufferConfig;
     using tt::tt_metal::ShardOrientation;
     using tt::tt_metal::ShardSpecBuffer;
@@ -117,6 +117,8 @@ TEST_F(FabricFixture, TestAsyncWrite) {
         tt::tt_metal::CreateCircularBuffer(sender_program, sender_logical_core, client_interface_cb_config);
 
     std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index};
+    std::map<string, string> defines = {};
+    defines["FVC_MODE_PULL"] = "";
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
         "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_async_write_sender.cpp",
@@ -124,7 +126,8 @@ TEST_F(FabricFixture, TestAsyncWrite) {
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = sender_compile_time_args});
+            .compile_args = sender_compile_time_args,
+            .defines = defines});
 
     auto& sender_virtual_router_coord = routers[0].second;
     auto sender_router_noc_xy =
@@ -147,7 +150,9 @@ TEST_F(FabricFixture, TestAsyncWrite) {
         "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_receiver.cpp",
         {receiver_logical_core},
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .defines = defines});
 
     std::vector<uint32_t> receiver_runtime_args = {
         receiver_buffer->address(),
@@ -167,7 +172,7 @@ TEST_F(FabricFixture, TestAsyncWrite) {
     EXPECT_EQ(receiver_buffer_data, received_buffer_data);
 }
 
-TEST_F(FabricFixture, TestAtomicInc) {
+TEST_F(Fabric2DFixture, TestAtomicInc) {
     using tt::tt_metal::ShardedBufferConfig;
     using tt::tt_metal::ShardOrientation;
     using tt::tt_metal::ShardSpecBuffer;
@@ -270,6 +275,8 @@ TEST_F(FabricFixture, TestAtomicInc) {
     auto client_interface_cb =
         tt::tt_metal::CreateCircularBuffer(sender_program, sender_logical_core, client_interface_cb_config);
 
+    std::map<string, string> defines = {};
+    defines["FVC_MODE_PULL"] = "";
     std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index};
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
@@ -278,7 +285,8 @@ TEST_F(FabricFixture, TestAtomicInc) {
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = sender_compile_time_args});
+            .compile_args = sender_compile_time_args,
+            .defines = defines});
 
     auto& sender_virtual_router_coord = routers[0].second;
     auto sender_router_noc_xy =
@@ -301,7 +309,9 @@ TEST_F(FabricFixture, TestAtomicInc) {
         "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_receiver.cpp",
         {receiver_logical_core},
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .defines = defines});
 
     std::vector<uint32_t> receiver_runtime_args = {
         receiver_buffer->address(),
@@ -321,7 +331,7 @@ TEST_F(FabricFixture, TestAtomicInc) {
     EXPECT_EQ(receiver_buffer_data, received_buffer_data);
 }
 
-TEST_F(FabricFixture, TestAsyncWriteAtomicInc) {
+TEST_F(Fabric2DFixture, TestAsyncWriteAtomicInc) {
     using tt::tt_metal::ShardedBufferConfig;
     using tt::tt_metal::ShardOrientation;
     using tt::tt_metal::ShardSpecBuffer;
@@ -439,6 +449,8 @@ TEST_F(FabricFixture, TestAsyncWriteAtomicInc) {
     auto client_interface_cb =
         tt::tt_metal::CreateCircularBuffer(sender_program, sender_logical_core, client_interface_cb_config);
 
+    std::map<string, string> defines = {};
+    defines["FVC_MODE_PULL"] = "";
     std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index};
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
@@ -447,7 +459,8 @@ TEST_F(FabricFixture, TestAsyncWriteAtomicInc) {
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = sender_compile_time_args});
+            .compile_args = sender_compile_time_args,
+            .defines = defines});
 
     auto& sender_virtual_router_coord = routers[0].second;
     auto sender_router_noc_xy =
@@ -472,7 +485,9 @@ TEST_F(FabricFixture, TestAsyncWriteAtomicInc) {
         "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_receiver.cpp",
         {receiver_logical_core},
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .defines = defines});
 
     std::vector<uint32_t> receiver_runtime_args = {
         receiver_buffer->address(),
@@ -495,7 +510,7 @@ TEST_F(FabricFixture, TestAsyncWriteAtomicInc) {
     EXPECT_EQ(atomic_inc, received_buffer_data[0]);
 }
 
-TEST_F(FabricFixture, TestAsyncWriteMulticast) {
+TEST_F(Fabric2DFixture, TestAsyncWriteMulticast) {
     using tt::tt_metal::ShardedBufferConfig;
     using tt::tt_metal::ShardOrientation;
     using tt::tt_metal::ShardSpecBuffer;
@@ -571,6 +586,8 @@ TEST_F(FabricFixture, TestAsyncWriteMulticast) {
     // Reset buffer space for test validation
     std::vector<uint32_t> receiver_buffer_data(data_size / sizeof(uint32_t), 0);
 
+    std::map<string, string> defines = {};
+    defines["FVC_MODE_PULL"] = "";
     std::vector<tt_metal::Program> receiver_programs;
     std::vector<std::shared_ptr<tt_metal::Buffer>> receiver_buffers;
     for (auto& [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
@@ -594,7 +611,9 @@ TEST_F(FabricFixture, TestAsyncWriteMulticast) {
                 "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_receiver.cpp",
                 {receiver_logical_core},
                 tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                    .defines = defines});
 
             std::vector<uint32_t> receiver_runtime_args = {
                 receiver_buffer->address(),
@@ -665,7 +684,8 @@ TEST_F(FabricFixture, TestAsyncWriteMulticast) {
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = sender_compile_time_args});
+            .compile_args = sender_compile_time_args,
+            .defines = defines});
 
     std::unordered_map<RoutingDirection, uint32_t> sender_router_noc_xys;
     for (auto& [routing_direction, end_mesh_chip_ids] : end_mesh_chip_ids_by_dir) {
@@ -711,7 +731,7 @@ TEST_F(FabricFixture, TestAsyncWriteMulticast) {
     }
 }
 
-TEST_F(FabricFixture, TestAsyncWriteMulticastMultidirectional) {
+TEST_F(Fabric2DFixture, TestAsyncWriteMulticastMultidirectional) {
     using tt::tt_metal::ShardedBufferConfig;
     using tt::tt_metal::ShardOrientation;
     using tt::tt_metal::ShardSpecBuffer;
@@ -788,6 +808,8 @@ TEST_F(FabricFixture, TestAsyncWriteMulticastMultidirectional) {
     // Reset buffer space for test validation
     std::vector<uint32_t> receiver_buffer_data(data_size / sizeof(uint32_t), 0);
 
+    std::map<string, string> defines = {};
+    defines["FVC_MODE_PULL"] = "";
     std::vector<tt_metal::Program> receiver_programs;
     std::vector<std::shared_ptr<tt_metal::Buffer>> receiver_buffers;
     for (auto& [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
@@ -811,7 +833,9 @@ TEST_F(FabricFixture, TestAsyncWriteMulticastMultidirectional) {
                 "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_receiver.cpp",
                 {receiver_logical_core},
                 tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                    .defines = defines});
 
             std::vector<uint32_t> receiver_runtime_args = {
                 receiver_buffer->address(),
@@ -883,7 +907,8 @@ TEST_F(FabricFixture, TestAsyncWriteMulticastMultidirectional) {
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = sender_compile_time_args});
+            .compile_args = sender_compile_time_args,
+            .defines = defines});
 
     std::unordered_map<RoutingDirection, uint32_t> sender_router_noc_xys;
     for (auto& [routing_direction, end_mesh_chip_ids] : end_mesh_chip_ids_by_dir) {

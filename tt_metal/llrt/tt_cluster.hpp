@@ -48,7 +48,7 @@ enum class EthRouterMode : uint32_t {
     FABRIC_ROUTER = 2,
 };
 
-enum class FabricConfig { DISABLED = 0, FABRIC_1D = 1, FABRIC_2D = 2, CUSTOM = 4 };
+enum class FabricConfig { DISABLED = 0, FABRIC_1D = 1, FABRIC_2D = 2, FABRIC_2D_PUSH = 3, CUSTOM = 4 };
 
 class Cluster {
 public:
@@ -59,20 +59,11 @@ public:
 
     static Cluster& instance();
 
-    // For TG Galaxy systems, mmio chips are gateway chips that are only used for dispatc, so user_devices are meant for
-    // user facing host apis
-    size_t number_of_user_devices() const {
-        if (this->cluster_type_ == ClusterType::TG) {
-            const auto& chips = this->cluster_desc_->get_all_chips();
-            return std::count_if(chips.begin(), chips.end(), [&](const auto& id) {
-                return this->cluster_desc_->get_board_type(id) == BoardType::GALAXY;
-            });
-        } else {
-            return this->cluster_desc_->get_number_of_chips();
-        }
-    }
-
+    // For TG Galaxy systems, mmio chips are gateway chips that are only used for dispatch, so user_devices are meant
+    // for user facing host apis
     std::unordered_map<chip_id_t, eth_coord_t> get_user_chip_ethernet_coordinates() const;
+    size_t number_of_user_devices() const;
+    std::unordered_set<chip_id_t> user_exposed_chip_ids() const;
 
     size_t number_of_devices() const { return this->cluster_desc_->get_number_of_chips(); }
 
@@ -318,6 +309,9 @@ private:
     // UMD static APIs `detect_available_device_ids` and `detect_number_of_chips` only returns number of MMIO mapped
     // devices
     tt_ClusterDescriptor* cluster_desc_ = nullptr;
+    // In case of mock cluster descriptor, the tt_cluster holds the ownership of the created object;
+    // This is obviously a design issue. This should go away once the design is fixed.
+    std::unique_ptr<tt_ClusterDescriptor> mock_cluster_desc_ptr_;
     // There is an entry for every device that can be targeted (MMIO and remote)
     std::unordered_map<chip_id_t, metal_SocDescriptor> sdesc_per_chip_;
 

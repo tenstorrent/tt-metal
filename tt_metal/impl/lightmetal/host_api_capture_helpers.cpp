@@ -5,6 +5,9 @@
 #include <overloaded.hpp>
 #include <circular_buffer_types.hpp>
 #include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/program_impl.hpp>
+
 #include <kernel_types.hpp>
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "command_generated.h"
@@ -139,7 +142,7 @@ void CaptureBufferCreate(
     CaptureCommand(tt::tt_metal::flatbuffer::CommandType::BufferCreateCommand, cmd.Union());
 }
 
-void CaptureDeallocateBuffer(Buffer& buffer) {
+void CaptureBufferDeallocate(const Buffer& buffer) {
     auto& ctx = LightMetalCaptureContext::get();
 
     // Kind of a workaround, but Program Binaries buffer is created via Buffer::create() but can be
@@ -160,8 +163,36 @@ void CaptureDeallocateBuffer(Buffer& buffer) {
         buffer.size(),
         buffer.address());
 
-    auto cmd = tt::tt_metal::flatbuffer::CreateDeallocateBufferCommand(ctx.get_builder(), buffer_global_id);
-    CaptureCommand(tt::tt_metal::flatbuffer::CommandType::DeallocateBufferCommand, cmd.Union());
+    auto cmd = tt::tt_metal::flatbuffer::CreateBufferDeallocateCommand(ctx.get_builder(), buffer_global_id);
+    CaptureCommand(tt::tt_metal::flatbuffer::CommandType::BufferDeallocateCommand, cmd.Union());
+}
+
+void CaptureBufferDelete(const Buffer& buffer) {
+    auto& ctx = LightMetalCaptureContext::get();
+
+    // Kind of a workaround, but Program Binaries buffer is created via Buffer::create() but can be
+    // deallocated on Program destruction while capturing is still enabled depending on test structure (scope)
+    // so let's just not capture these DeallocateBuffer() calls since they will occur on playback naturally.
+    if (!ctx.is_in_map(&buffer)) {
+        log_debug(
+            tt::LogMetalTrace,
+            "Cannot capture Buffer Delete without CreateBuffer() - ignoring Buffer w/ addr: 0x{:x}",
+            buffer.address());
+        return;
+    }
+
+    auto buffer_global_id = ctx.get_global_id(&buffer);
+
+    log_debug(
+        tt::LogMetalTrace,
+        "{}: buffer_global_id: {} size: {} address: {}",
+        __FUNCTION__,
+        buffer_global_id,
+        buffer.size(),
+        buffer.address());
+
+    auto cmd = tt::tt_metal::flatbuffer::CreateBufferDeleteCommand(ctx.get_builder(), buffer_global_id);
+    CaptureCommand(tt::tt_metal::flatbuffer::CommandType::BufferDeleteCommand, cmd.Union());
 }
 
 void CaptureEnqueueWriteBuffer(

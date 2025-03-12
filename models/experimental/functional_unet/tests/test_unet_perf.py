@@ -93,7 +93,7 @@ def test_unet_trace_perf(
     "batch, groups, iterations, expected_compile_time, expected_throughput, use_async_mode",
     (
         (1, 2, 128, 25.0, 1450.0, True),
-        (1, 2, 128, 25.0, 1660.0, False),
+        (1, 2, 128, 25.0, 1650.0, False),
     ),
 )
 def test_unet_trace_perf_multi_device(

@@ -6,6 +6,7 @@ on:
   pull_request:
     branches:
       - "main"
+  merge_group:
 
 jobs:
   pre-commit:
@@ -102,7 +103,7 @@ jobs:
           pip install pyyaml
           python tests/sweep_framework/framework/sweeps_workflow_verification.py
   cmake-version:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
       with:

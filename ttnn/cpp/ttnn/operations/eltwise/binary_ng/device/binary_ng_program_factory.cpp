@@ -588,6 +588,8 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
 
     compute_kernel_defines["BCAST_INPUT"] = kernel_config.bcast_input_str();
 
+    const uint32_t num_tiles_per_cycle = 1;  // we produce 1 output tile per read-compute-write cycle
+
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
         get_kernel_file_path(compute_kernel, is_sfpu_op),
@@ -595,6 +597,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         tt_metal::ComputeConfig{
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
+            .compile_args = {num_tiles_per_cycle},
             .defines = std::move(compute_kernel_defines)});
 
     auto set_runtime_args = [](Program& program, KernelHandle kernel_id, CoreCoord core, auto&& args) {

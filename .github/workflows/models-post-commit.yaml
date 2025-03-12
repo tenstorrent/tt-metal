@@ -79,7 +79,7 @@ jobs:
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: U06CXU895AP # Michael Chiou
-      - uses: ./.github/actions/upload-artifact-with-job-uuid
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
@@ -131,7 +131,7 @@ jobs:
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: U06CXU895AP # Michael Chiou
-      - uses: ./.github/actions/upload-artifact-with-job-uuid
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:

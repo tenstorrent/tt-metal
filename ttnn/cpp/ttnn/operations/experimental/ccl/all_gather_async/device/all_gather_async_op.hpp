@@ -28,7 +28,7 @@ using ccl::EriscDatamoverBuilder;
 enum class AllGatherAsyncVersion {
     GENERIC = 0,
     MINIMAL_INTERLEAVED_32 = 1,
-    LLAMA_POST_BINARY_MATMUL = 2,
+    LLAMA_MINIMAL_SHARDED = 2,
 };
 
 struct AllGatherAsync {
@@ -141,7 +141,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode);
-tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_post_binary_matmul(
+tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     const Tensor& input_tensor,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,

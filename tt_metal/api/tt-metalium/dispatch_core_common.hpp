@@ -31,12 +31,9 @@ enum DispatchWorkerType : uint32_t {
     US_TUNNELER_REMOTE = 14,
     PACKET_ROUTER_MUX = 15,
     PACKET_ROUTER_DEMUX = 16,
-    COUNT = 17
+    FABRIC_ROUTER_VC = 17,
+    COUNT,
 };
-
-// NOC ID used by dispatch kernels to communicate with downstream cores. This parameter
-// is required when setting up Command Queue objects on host.
-static constexpr NOC dispatch_downstream_noc = NOC::NOC_0;
 
 enum class DispatchCoreType : uint32_t { WORKER, ETH, COUNT };
 

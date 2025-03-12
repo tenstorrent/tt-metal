@@ -262,7 +262,6 @@ def pad_and_fold_with_permute_and_reshape_on_device_sharded(device, tt_input_ten
 def test_fold_with_permute_reshape_on_device_sharded(
     device, n, c, h, w, pad_h, pad_w, stride_h, stride_w, use_program_cache
 ):
-    pytest.skip("skipped to unblock P0 issue 16975 but needs to be fixed and removed for issue 17030")
     if device.core_grid.y < 8:
         pytest.skip("n300 does not have 8x8 grid")
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
@@ -280,6 +279,10 @@ def test_fold_with_permute_reshape_on_device_sharded(
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_sharded_memory_config
     )
+    compute_grid_size = device.compute_with_storage_grid_size()
+    grid_size = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
+    )
     tt_output_tensor = ttnn.fold(
         tt_input_tensor,
         stride_h,
@@ -288,7 +291,7 @@ def test_fold_with_permute_reshape_on_device_sharded(
         pad_c=_nearest_y(c, 4) - c,
         pad_h=pad_h,
         pad_w=pad_w,
-        grid_size=(8, 8),
+        grid_size=grid_size,
     )
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 1)

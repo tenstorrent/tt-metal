@@ -356,7 +356,7 @@ void bind_arange_operation(py::module& module, const creation_operation_t& opera
         Example:
             >>> tensor = ttnn.arange(start=0, end=10, step=2, dtype=ttnn.float32)
             >>> print(tensor)
-            ttnn.Tensor([[[[0.00000,  2.00000,  ...,  8.00000,  0.00000]]]], shape=Shape([1, 1, 1, 6]), dtype=DataType::FLOAT32, layout=Layout::ROW_MAJOR)
+            ttnn.Tensor([ 0.00000,  2.00000,  ...,  6.00000,  8.00000], shape=Shape([5]), dtype=DataType::FLOAT32, layout=Layout::ROW_MAJOR)
         )doc",
         operation.base_name());
 

@@ -9,9 +9,8 @@
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"
+#include "impl/allocator/l1_banking_allocator.hpp"
 #include "work_executor_types.hpp"
-#include "basic_allocator.hpp"
-#include "l1_banking_allocator.hpp"
 #include "data_types.hpp"
 #include "program_device_map.hpp"
 #include "build.hpp"
@@ -20,11 +19,14 @@
 #include "sub_device_manager.hpp"
 #include "sub_device_types.hpp"
 #include "span.hpp"
-#include "program_cache.hpp"
 
 namespace tt {
 
 namespace tt_metal {
+
+namespace program_cache::detail {
+class ProgramCache;
+}
 /*
 MemoryBlockTable is a list of memory blocks in the following format:
 [{"blockID": "0", "address": "0", "size": "0", "prevID": "0", "nextID": "0", "allocated": true}]
@@ -34,13 +36,9 @@ size: bytes
 using MemoryBlockTable = std::vector<std::unordered_map<std::string, std::string>>;
 enum class BufferType;
 
-inline namespace v0 {
-
 class Buffer;
 class Program;
 class SubDevice;
-
-}  // namespace v0
 
 class CommandQueue;
 class TraceBuffer;
@@ -49,8 +47,6 @@ struct TraceDescriptor;
 namespace detail {
 struct TraceDescriptor;
 }
-
-inline namespace v0 {
 
 class IDevice {
 public:
@@ -207,8 +203,6 @@ public:
 
     static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
 };
-
-}  // namespace v0
 
 template <typename T>
 inline T IDevice::get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const {

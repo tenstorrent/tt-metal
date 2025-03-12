@@ -5,7 +5,6 @@
 #pragma once
 
 #include <stdint.h>
-#include <array>
 #include "noc_parameters.h"
 #include <dev_msgs.h>
 #include "noc_overlay_parameters.h"
@@ -74,51 +73,34 @@ enum class NocBarrierType : uint8_t {
 
 static constexpr uint8_t NUM_BARRIER_TYPES = static_cast<uint32_t>(NocBarrierType::COUNT);
 
-constexpr std::array<std::array<std::array<uint32_t, NUM_NOCS>, NUM_BARRIER_TYPES>, MaxDMProcessorsPerCoreType>
-initialize_noc_counter_addresses() {
-    std::array<std::array<std::array<uint32_t, NUM_NOCS>, NUM_BARRIER_TYPES>, MaxDMProcessorsPerCoreType> arr = {};
-    uint32_t addr = MEM_NOC_COUNTER_BASE;
-    for (uint8_t proc = 0; proc < MaxDMProcessorsPerCoreType; proc++) {
-        for (uint8_t barrier = 0; barrier < NUM_BARRIER_TYPES; barrier++) {
-            for (uint8_t noc = 0; noc < NUM_NOCS; noc++) {
-                arr[proc][barrier][noc] = addr;
-                addr += MEM_NOC_COUNTER_SIZE;
-            }
-        }
-    }
-    return arr;
-}
-
-inline constexpr std::array<std::array<std::array<uint32_t, NUM_NOCS>, NUM_BARRIER_TYPES>, MaxDMProcessorsPerCoreType>
-    noc_counter_addresses = initialize_noc_counter_addresses();
-
-static_assert(
-    noc_counter_addresses[MaxDMProcessorsPerCoreType - 1][NUM_BARRIER_TYPES - 1][NUM_NOCS - 1] + MEM_NOC_COUNTER_SIZE ==
-    MEM_MAP_END);
-
 template <uint8_t proc_t, NocBarrierType barrier_type>
 inline __attribute__((always_inline)) uint32_t get_noc_counter_address(uint32_t noc) {
-    return noc_counter_addresses[proc_t][static_cast<std::underlying_type_t<NocBarrierType>>(barrier_type)][noc];
+    static_assert(proc_t < MaxDMProcessorsPerCoreType);
+    static_assert(static_cast<std::underlying_type_t<NocBarrierType>>(barrier_type) < NUM_BARRIER_TYPES);
+    constexpr uint32_t offset =
+        MEM_NOC_COUNTER_BASE +
+        (proc_t * NUM_BARRIER_TYPES + static_cast<std::underlying_type_t<NocBarrierType>>(barrier_type)) * NUM_NOCS *
+            MEM_NOC_COUNTER_SIZE;
+    return offset + noc * MEM_NOC_COUNTER_SIZE;
 }
 
 // noc_nonposted_writes_acked
 template <uint8_t proc_t, NocBarrierType barrier_type>
 inline __attribute__((always_inline)) uint32_t get_noc_counter_val(uint32_t noc) {
     uint32_t counter_addr = get_noc_counter_address<proc_t, barrier_type>(noc);
-    return NOC_READ_REG(counter_addr);
+    return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counter_addr);
 }
 
 template <uint8_t proc_t, NocBarrierType barrier_type>
 inline __attribute__((always_inline)) void inc_noc_counter_val(uint32_t noc, uint32_t inc = 1) {
     uint32_t counter_addr = get_noc_counter_address<proc_t, barrier_type>(noc);
-    uint32_t val = NOC_READ_REG(counter_addr) + inc;
-    NOC_WRITE_REG(counter_addr, val);
+    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counter_addr) += inc;
 }
 
 template <uint8_t proc_t, NocBarrierType barrier_type>
 inline __attribute__((always_inline)) void set_noc_counter_val(uint32_t noc, uint32_t val) {
     uint32_t counter_addr = get_noc_counter_address<proc_t, barrier_type>(noc);
-    NOC_WRITE_REG(counter_addr, val);
+    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counter_addr) = val;
 }
 
 inline __attribute__((always_inline)) void NOC_CMD_BUF_WRITE_REG(
@@ -413,25 +395,42 @@ inline __attribute__((always_inline)) void noc_local_state_init(int noc) {
 }
 
 template <NocBarrierType barrier_type, uint32_t status_register>
-inline __attribute__((always_inline)) void dynamic_noc_local_barrier_init() {
+inline __attribute__((always_inline)) void dynamic_noc_local_barrier_init(
+    uint32_t noc0_status_reg, uint32_t noc1_status_reg) {
     using underlying_tensix_processor_types_t = std::underlying_type_t<TensixProcessorTypes>;
     constexpr underlying_tensix_processor_types_t dm0 =
         static_cast<underlying_tensix_processor_types_t>(TensixProcessorTypes::DM0);
     constexpr underlying_tensix_processor_types_t dm1 =
         static_cast<underlying_tensix_processor_types_t>(TensixProcessorTypes::DM1);
 
-    set_noc_counter_val<dm0, barrier_type>(NOC_0, NOC_STATUS_READ_REG(NOC_0, status_register));
+    set_noc_counter_val<dm0, barrier_type>(NOC_0, noc0_status_reg);
     set_noc_counter_val<dm0, barrier_type>(NOC_1, 0);
     set_noc_counter_val<dm1, barrier_type>(NOC_0, 0);
-    set_noc_counter_val<dm1, barrier_type>(NOC_1, NOC_STATUS_READ_REG(NOC_1, status_register));
+    set_noc_counter_val<dm1, barrier_type>(NOC_1, noc1_status_reg);
 }
 
 inline __attribute__((always_inline)) void dynamic_noc_local_state_init() {
-    dynamic_noc_local_barrier_init<NocBarrierType::READS_NUM_ISSUED, NIU_MST_RD_RESP_RECEIVED>();
-    dynamic_noc_local_barrier_init<NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED, NIU_MST_NONPOSTED_WR_REQ_SENT>();
-    dynamic_noc_local_barrier_init<NocBarrierType::NONPOSTED_WRITES_ACKED, NIU_MST_WR_ACK_RECEIVED>();
-    dynamic_noc_local_barrier_init<NocBarrierType::NONPOSTED_ATOMICS_ACKED, NIU_MST_ATOMIC_RESP_RECEIVED>();
-    dynamic_noc_local_barrier_init<NocBarrierType::POSTED_WRITES_NUM_ISSUED, NIU_MST_POSTED_WR_REQ_SENT>();
+    // Pipeline all register reads first to hide latency
+    uint32_t noc0_reads_num_issued = NOC_STATUS_READ_REG(NOC_0, NIU_MST_RD_RESP_RECEIVED);
+    uint32_t noc1_reads_num_issued = NOC_STATUS_READ_REG(NOC_1, NIU_MST_RD_RESP_RECEIVED);
+    uint32_t noc0_nonposted_writes_num_issued = NOC_STATUS_READ_REG(NOC_0, NIU_MST_NONPOSTED_WR_REQ_SENT);
+    uint32_t noc1_nonposted_writes_num_issued = NOC_STATUS_READ_REG(NOC_1, NIU_MST_NONPOSTED_WR_REQ_SENT);
+    uint32_t noc0_nonposted_writes_acked = NOC_STATUS_READ_REG(NOC_0, NIU_MST_WR_ACK_RECEIVED);
+    uint32_t noc1_nonposted_writes_acked = NOC_STATUS_READ_REG(NOC_1, NIU_MST_WR_ACK_RECEIVED);
+    uint32_t noc0_nonposted_atomics_acked = NOC_STATUS_READ_REG(NOC_0, NIU_MST_ATOMIC_RESP_RECEIVED);
+    uint32_t noc1_nonposted_atomics_acked = NOC_STATUS_READ_REG(NOC_1, NIU_MST_ATOMIC_RESP_RECEIVED);
+    uint32_t noc0_posted_writes_num_issued = NOC_STATUS_READ_REG(NOC_0, NIU_MST_POSTED_WR_REQ_SENT);
+    uint32_t noc1_posted_writes_num_issued = NOC_STATUS_READ_REG(NOC_1, NIU_MST_POSTED_WR_REQ_SENT);
+    dynamic_noc_local_barrier_init<NocBarrierType::READS_NUM_ISSUED, NIU_MST_RD_RESP_RECEIVED>(
+        noc0_reads_num_issued, noc1_reads_num_issued);
+    dynamic_noc_local_barrier_init<NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED, NIU_MST_NONPOSTED_WR_REQ_SENT>(
+        noc0_nonposted_writes_num_issued, noc1_nonposted_writes_num_issued);
+    dynamic_noc_local_barrier_init<NocBarrierType::NONPOSTED_WRITES_ACKED, NIU_MST_WR_ACK_RECEIVED>(
+        noc0_nonposted_writes_acked, noc1_nonposted_writes_acked);
+    dynamic_noc_local_barrier_init<NocBarrierType::NONPOSTED_ATOMICS_ACKED, NIU_MST_ATOMIC_RESP_RECEIVED>(
+        noc0_nonposted_atomics_acked, noc1_nonposted_atomics_acked);
+    dynamic_noc_local_barrier_init<NocBarrierType::POSTED_WRITES_NUM_ISSUED, NIU_MST_POSTED_WR_REQ_SENT>(
+        noc0_posted_writes_num_issued, noc1_posted_writes_num_issued);
 }
 
 inline __attribute__((always_inline)) void ncrisc_noc_counters_init() {

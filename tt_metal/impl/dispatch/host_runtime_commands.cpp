@@ -20,8 +20,7 @@
 #include <math.hpp>
 #include <dev_msgs.h>
 #include <hal.hpp>
-#include "program_command_sequence.hpp"
-#include "tt_metal/command_queue.hpp"
+#include "tt_metal/impl/program/program_command_sequence.hpp"
 #include <assert.hpp>
 #include <logger.hpp>
 #include <tt_metal.hpp>
@@ -30,7 +29,7 @@
 #include <circular_buffer.hpp>
 #include "dprint_server.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
-#include <cq_commands.hpp>
+#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include <dispatch_core_manager.hpp>
 #include <event.hpp>
@@ -206,8 +205,6 @@ void EnqueueTerminateCommand::process() {
     this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id);
 }
 
-inline namespace v0 {
-
 void EnqueueWriteBuffer(
     CommandQueue& cq,
     const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
@@ -352,9 +349,9 @@ void Finish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     detail::DispatchStateCheck(true);
     cq.finish(sub_device_ids);
     TT_ASSERT(
-        !(cq.is_dprint_server_hung()), "Command Queue could not finish: device hang due to unanswered DPRINT WAIT.");
+        !(DPrintServerHangDetected()), "Command Queue could not finish: device hang due to unanswered DPRINT WAIT.");
     TT_ASSERT(
-        !(cq.is_noc_hung()),
+        !(tt::watcher_server_killed_due_to_error()),
         "Command Queue could not finish: device hang due to illegal NoC transaction. See {} for details.",
         tt::watcher_get_log_file_name());
 }
@@ -366,34 +363,6 @@ void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking) {
     TT_FATAL(cq.device()->get_trace(trace_id) != nullptr, "Trace instance {} must exist on device", trace_id);
     cq.enqueue_trace(trace_id, blocking);
 }
-
-}  // namespace v0
-
-v1::CommandQueueHandle v1::GetCommandQueue(IDevice* device, std::uint8_t cq_id) {
-    return v1::CommandQueueHandle{device, cq_id};
-}
-
-v1::CommandQueueHandle v1::GetDefaultCommandQueue(IDevice* device) { return GetCommandQueue(device, 0); }
-
-void v1::EnqueueReadBuffer(CommandQueueHandle cq, const BufferHandle& buffer, std::byte* dst, bool blocking) {
-    v0::EnqueueReadBuffer(GetDevice(cq)->command_queue(GetId(cq)), *buffer, dst, blocking);
-}
-
-void v1::EnqueueWriteBuffer(CommandQueueHandle cq, const BufferHandle& buffer, const std::byte* src, bool blocking) {
-    v0::EnqueueWriteBuffer(GetDevice(cq)->command_queue(GetId(cq)), *buffer, src, blocking);
-}
-
-void v1::EnqueueProgram(CommandQueueHandle cq, ProgramHandle& program, bool blocking) {
-    v0::EnqueueProgram(GetDevice(cq)->command_queue(GetId(cq)), program, blocking);
-}
-
-void v1::Finish(CommandQueueHandle cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    v0::Finish(GetDevice(cq)->command_queue(GetId(cq)));
-}
-
-IDevice* v1::GetDevice(CommandQueueHandle cq) { return cq.device; }
-
-std::uint8_t v1::GetId(CommandQueueHandle cq) { return cq.id; }
 
 }  // namespace tt::tt_metal
 

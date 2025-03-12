@@ -19,6 +19,7 @@ def data_gen_with_range_batch_norm(
     is_input=False,
     required_grad=False,
     testing_dtype="bfloat16",
+    memory_config=ttnn.DRAM_MEMORY_CONFIG,
 ):
     assert high > low, "Incorrect range provided"
     torch.manual_seed(213919)
@@ -35,7 +36,7 @@ def data_gen_with_range_batch_norm(
         device=device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn_dtype,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=memory_config,
     )
     return pt_tensor, tt_tensor
 
