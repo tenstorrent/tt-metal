@@ -117,18 +117,6 @@ This configuration uses bfp4 MLP FF1+FF3 for all models. **Batch_size=32 and pre
 | Qwen2.5-7B     | N300   |               |               |
 | Qwen2.5-72B    | T3K    |               |               |
 
-## Pareto_accuracy
-
-| Model          | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) | TTFT (ms) |
-|----------------|--------|-----------|-----------|---------------|-----------|
-| Llama3.2-1B    | N300   | 91        | 98        | 100.9         | 55.48     |
-
-## Pareto_performance
-
-| Model          | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) | TTFT (ms) |
-|----------------|--------|-----------|-----------|---------------|-----------|
-| Llama3.2-1B    | N300   | 90        | 98        | 104.99        | 66.91     |
-
 # Llama 3 model precision and math fidelity
 
 ## precision_cfg = {ff1_3: bfp4, ff2: bfp4, wqkv: bfp8, wo: bfp8, kv_cache: bfp8, activation: mixed}, fidelity_cfg = {li_ff1_3: lofi, li_ff2: lofi, li_qkv_decode: hifi2, li_o_decode: hifi2, sdpa_decode: hifi2na, li_qkv_prefill: hifi2, li_o_prefill: hifi2fp16, sdpa_prefill: hifi4}
