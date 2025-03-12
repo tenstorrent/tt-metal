@@ -1753,6 +1753,8 @@ std::size_t v1::GetNumProgramCacheEntries(IDevice* device) { return device->num_
 tt::WorkExecutorMode Device::get_worker_mode() { return work_executor_->get_worker_mode(); }
 bool Device::is_worker_queue_empty() const { return work_executor_->worker_queue.empty(); }
 
+std::shared_ptr<distributed::MeshDevice> Device::get_mesh_device() { return mesh_device.lock(); }
+
 }  // namespace tt_metal
 
 }  // namespace tt

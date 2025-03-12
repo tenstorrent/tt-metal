@@ -201,6 +201,8 @@ public:
 
     bool is_mmio_capable() const override;
 
+    std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
+
 private:
     static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;
 
@@ -242,6 +244,9 @@ private:
 
     std::vector<std::unique_ptr<Program>> command_queue_programs_;
     bool using_fast_dispatch_ = false;
+
+    std::weak_ptr<distributed::MeshDevice> mesh_device;
+    friend class distributed::MeshDevice;
 
     // Fabric program includes ethernet router kernel and tensix gatekeeper kernel
     std::unique_ptr<Program> fabric_program_;
