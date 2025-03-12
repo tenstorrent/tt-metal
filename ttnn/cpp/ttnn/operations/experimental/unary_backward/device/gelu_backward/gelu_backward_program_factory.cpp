@@ -74,8 +74,7 @@ GeluBackwardProgramFactory::cached_program_t GeluBackwardProgramFactory::create(
 
     tt::tt_metal::KernelHandle binary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/unary_backward/device/gelu_backward/kernels/dataflow/"
-        "reader_binary_diff_length.cpp",
+        "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -98,7 +97,7 @@ GeluBackwardProgramFactory::cached_program_t GeluBackwardProgramFactory::create(
 
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_sfpu_kernel.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/unary_backward/device/gelu_backward/kernels/compute/eltwise_bw_gelu.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{
             .fp32_dest_acc_en = fp32_dest_acc_en,
