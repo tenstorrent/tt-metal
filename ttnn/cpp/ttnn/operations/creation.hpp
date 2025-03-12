@@ -80,10 +80,11 @@ static Tensor arange_impl(
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
     constexpr DataType data_type = tt::tt_metal::convert_to_data_type<T>();
 
-    TT_ASSERT(step != 0, "Step must be nonzero");
-    if ((step > 0 && start > stop) || (step < 0 && start < stop)) {
-        TT_ASSERT(false, "Invalid range: Step direction does not match range bounds");
-    }
+    TT_FATAL(step != 0, "Step must be nonzero");
+    TT_FATAL(
+        !((step > 0 && start > stop) || (step < 0 && start < stop)),
+        "Invalid range: Step direction does not match range bounds");
+
     auto size = std::max<int64_t>(0, tt::div_up(std::abs(stop - start), std::abs(step)));
     auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(size);
 
