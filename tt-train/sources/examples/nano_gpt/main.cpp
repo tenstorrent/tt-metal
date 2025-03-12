@@ -19,6 +19,7 @@
 #include "datasets/utils.hpp"
 #include "models/distributed/gpt2.hpp"
 #include "models/gpt2.hpp"
+#include "models/llama.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/adamw.hpp"
@@ -36,6 +37,7 @@ void signal_handler(int signum) {
 }
 
 using Model = std::variant<
+    std::shared_ptr<ttml::models::llama::Llama>,
     std::shared_ptr<ttml::models::gpt2::Transformer>,
     std::shared_ptr<ttml::models::distributed::gpt2::DistributedTransformer>>;
 
@@ -425,6 +427,7 @@ int main(int argc, char **argv) {
     bool enable_wandb = true;
     bool ddp = false;
     bool enable_tp = false;
+    bool use_llama = false;
     app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
     app.add_option("-e,--eval", is_eval, "Is evaluation")->default_val(is_eval);
     app.add_option("-t,--add_time_to_name", add_time_to_name, "Add time to run name")->default_val(add_time_to_name);
@@ -432,6 +435,7 @@ int main(int argc, char **argv) {
     app.add_option("-d,--ddp", ddp, "Enable DDP")->default_val(ddp);
     app.add_option("-p,--tp", enable_tp, "Enable TP")->default_val(enable_tp);
     app.add_option("-n,--name", run_name, "Run name")->default_val(run_name);
+    app.add_option("-l,--llama", use_llama, "Use Llama model")->default_val(use_llama);
     CLI11_PARSE(app, argc, argv);
 
     if (ddp && enable_tp) {
@@ -613,8 +617,23 @@ int main(int argc, char **argv) {
     config.transformer_config.vocab_size =
         round_up_to_tile(tokenizer->get_vocab_size(), (enable_tp ? num_devices : 1U) * 32U);
 
+    auto to_llama_config = [](const ttml::models::gpt2::TransformerConfig &config) {
+        return ttml::models::llama::LlamaConfig{
+            .num_heads = 8U,
+            .num_groups = 8U,
+            .embedding_dim = 8U * 64U,
+            .dropout_prob = 0.0F,
+            .num_blocks = config.num_blocks,
+            .vocab_size = config.vocab_size,
+            .max_sequence_length = config.max_sequence_length,
+            .runner_type = ttml::models::llama::RunnerType::Default,
+            .weight_tying = ttml::models::llama::WeightTyingType::Disabled,
+        };
+    };
     Model model;
-    if (enable_tp) {
+    if (use_llama) {
+        model = ttml::models::llama::create(to_llama_config(config.transformer_config));
+    } else if (enable_tp) {
         model = ttml::models::distributed::gpt2::create(config.transformer_config);
     } else {
         model = ttml::models::gpt2::create(config.transformer_config);
