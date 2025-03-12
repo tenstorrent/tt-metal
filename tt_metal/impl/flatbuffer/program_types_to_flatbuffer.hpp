@@ -5,12 +5,12 @@
 #pragma once
 
 #include "flatbuffer/base_types_to_flatbuffer.hpp"
+#include "lightmetal/host_api_capture_helpers.hpp"
 #include "program_types_generated.h"
 #include <core_coord.hpp>
 #include <kernel_types.hpp>
 #include <sub_device_types.hpp>
 #include <buffer.hpp>
-#include <types.hpp>
 
 namespace tt::tt_metal {
 

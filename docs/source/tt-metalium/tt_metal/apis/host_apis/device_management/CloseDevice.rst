@@ -2,4 +2,4 @@
 CloseDevice
 =============
 
-.. doxygenfunction:: tt::tt_metal::v0::CloseDevice
+.. doxygenfunction:: tt::tt_metal::CloseDevice

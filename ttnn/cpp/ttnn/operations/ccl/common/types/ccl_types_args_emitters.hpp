@@ -14,9 +14,8 @@ namespace tt_metal {
 class Tensor;
 class ShardSpec;
 
-inline namespace v0 {
 class IDevice;
-}  // namespace v0
+
 }  // namespace tt_metal
 }  // namespace tt
 

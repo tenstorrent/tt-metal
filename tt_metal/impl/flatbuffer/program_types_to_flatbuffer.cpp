@@ -9,6 +9,8 @@
 
 namespace tt::tt_metal {
 
+using RuntimeArgs = std::vector<std::variant<Buffer*, uint32_t>>;
+
 flatbuffers::Offset<flatbuffer::CoreCoord> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const CoreCoord& coord) {
     return flatbuffer::CreateCoreCoord(builder, coord.x, coord.y);

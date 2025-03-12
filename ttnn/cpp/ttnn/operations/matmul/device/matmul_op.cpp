@@ -2271,7 +2271,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     program_config.fused_activation,
                     this->untilize_out);
             } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
-                std::optional<tt::tt_metal::v1::experimental::GlobalCircularBuffer> global_cb = std::nullopt;
+                std::optional<tt::tt_metal::experimental::GlobalCircularBuffer> global_cb = std::nullopt;
                 if (this->global_cb.has_value()) {
                     global_cb = get_global_circular_buffer(*this->global_cb, input_tensor_a.device()->id());
                 }

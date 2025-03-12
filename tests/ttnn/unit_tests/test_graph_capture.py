@@ -97,7 +97,7 @@ def test_graph_capture_with_all_parameters(device):
     assert node7[0] == "Shape([1, 4, 2048, 128])"
     assert node7[1] == "DataType::BFLOAT16"
     assert node7[2] == "Row Major"
-    assert node7[3] == "[ unsupported type , std::__1::reference_wrapper<tt::tt_metal::v0::IDevice*>]"
+    assert node7[3] == "[ unsupported type , std::__1::reference_wrapper<tt::tt_metal::IDevice*>]"
     assert (
         node7[4]
         == "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt)"
@@ -180,7 +180,7 @@ def test_graph_capture_without_memory_config(device):
     assert node10[0] == "Shape([1, 1, 1, 1])"
     assert node10[1] == "DataType::BFLOAT16"
     assert node10[2] == "Tile"
-    assert node10[3] == "[ unsupported type , std::__1::reference_wrapper<tt::tt_metal::v0::IDevice*>]"
+    assert node10[3] == "[ unsupported type , std::__1::reference_wrapper<tt::tt_metal::IDevice*>]"
     assert (
         node10[4]
         == "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt)"
@@ -232,7 +232,7 @@ def test_graph_capture_without_dtype(device):
     assert node7[0] == "Shape([32, 32])"
     assert node7[1] == "DataType::INT32"
     assert node7[2] == "Tile"
-    assert node7[3] == "[ unsupported type , std::__1::reference_wrapper<tt::tt_metal::v0::IDevice*>]"
+    assert node7[3] == "[ unsupported type , std::__1::reference_wrapper<tt::tt_metal::IDevice*>]"
     assert (
         node7[4]
         == "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt)"

@@ -15,12 +15,10 @@
 #include <unordered_map>
 
 namespace tt::tt_metal {
-inline namespace v0 {
 
 // Forward declarations
 class IDevice;
 
-}  // namespace v0
 }  // namespace tt::tt_metal
 
 namespace ttnn::ccl {

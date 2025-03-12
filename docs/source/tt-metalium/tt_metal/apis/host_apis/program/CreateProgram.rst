@@ -1,4 +1,4 @@
 CreateProgram
 ========================
 
-.. doxygenfunction:: tt::tt_metal::v0::CreateProgram()
+.. doxygenfunction:: tt::tt_metal::CreateProgram()

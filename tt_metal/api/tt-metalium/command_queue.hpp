@@ -16,11 +16,9 @@
 
 namespace tt::tt_metal {
 
-inline namespace v0 {
 class Event;
 class Program;
 class Kernel;
-}  // namespace v0
 
 class CommandQueue {
 public:

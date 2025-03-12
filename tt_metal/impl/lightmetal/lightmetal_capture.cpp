@@ -14,7 +14,6 @@
 #include <tt-metalium/kernel.hpp>
 
 namespace tt::tt_metal {
-inline namespace v0 {
 
 LightMetalCaptureContext::LightMetalCaptureContext() : is_tracing_(false), builder_() {}
 
@@ -230,5 +229,4 @@ TraceDescriptorByTraceIdOffset to_flatbuffer(
     return tt::tt_metal::flatbuffer::CreateTraceDescriptorByTraceId(builder, trace_id, trace_descriptor_offset);
 }
 
-}  // namespace v0
 }  // namespace tt::tt_metal

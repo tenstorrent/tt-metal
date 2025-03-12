@@ -22,7 +22,7 @@ GlobalCircularBuffer create_global_circular_buffer(
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
     BufferType buffer_type) {
-    return tt::tt_metal::v1::experimental::CreateGlobalCircularBuffer(
+    return tt::tt_metal::experimental::CreateGlobalCircularBuffer(
         device, sender_receiver_core_mapping, size, buffer_type);
 }
 

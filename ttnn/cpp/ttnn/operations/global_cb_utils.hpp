@@ -14,13 +14,13 @@ namespace tt::tt_metal {
 // TODO: remove once the multidevice/single device objects are unified
 using DeviceGlobalCircularBuffer = std::variant<
     std::monostate,
-    tt::tt_metal::v1::experimental::GlobalCircularBuffer,
+    tt::tt_metal::experimental::GlobalCircularBuffer,
     ttnn::global_circular_buffer::MultiDeviceGlobalCircularBuffer>;
 
-inline tt::tt_metal::v1::experimental::GlobalCircularBuffer get_global_circular_buffer(
+inline tt::tt_metal::experimental::GlobalCircularBuffer get_global_circular_buffer(
     DeviceGlobalCircularBuffer device_global_cb, chip_id_t device_id) {
-    if (std::holds_alternative<tt::tt_metal::v1::experimental::GlobalCircularBuffer>(device_global_cb)) {
-        return std::get<tt::tt_metal::v1::experimental::GlobalCircularBuffer>(device_global_cb);
+    if (std::holds_alternative<tt::tt_metal::experimental::GlobalCircularBuffer>(device_global_cb)) {
+        return std::get<tt::tt_metal::experimental::GlobalCircularBuffer>(device_global_cb);
     } else {
         auto& multi_device_global_cb =
             std::get<ttnn::global_circular_buffer::MultiDeviceGlobalCircularBuffer>(device_global_cb);
