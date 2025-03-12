@@ -8,7 +8,7 @@
 #include <cmath>
 
 #include "ccl_host_datastructures.hpp"
-#include "cpp/ttnn/operations/ccl/erisc_datamover_builder.hpp"
+#include <tt-metalium/erisc_datamover_builder.hpp>
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 
@@ -307,14 +307,14 @@ tt::tt_metal::KernelHandle generate_edm_kernel_impl(
 tt::tt_metal::KernelHandle generate_edm_kernel(
     Program& program,
     const IDevice* device,
-    const ccl::FabricEriscDatamoverBuilder& edm_builder,
+    const tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder,
     const CoreCoord& eth_core,
     tt::tt_metal::NOC noc_id) {
     return generate_edm_kernel_impl(
         program,
         device,
         edm_builder,
-        "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_erisc_datamover.cpp",
+        "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_datamover.cpp",
         eth_core,
         noc_id,
         tt::tt_metal::KernelBuildOptLevel::O3);

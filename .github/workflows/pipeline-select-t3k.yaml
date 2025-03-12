@@ -44,6 +44,10 @@ on:
         required: false
         type: boolean
         default: false
+      t3000-perplexity:
+        required: false
+        type: boolean
+        default: false
 
 run-name: ${{ inputs.description }}
 jobs:
@@ -95,3 +99,10 @@ jobs:
     with:
       extra-tag: ${{ inputs.extra-tag }}
     if: ${{ inputs.t3000-profiler }}
+  t3000-perplexity-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/t3000-perplexity-tests-impl.yaml
+    with:
+      extra-tag: ${{ inputs.extra-tag }}
+    if: ${{ inputs.t3000-perplexity }}

@@ -136,9 +136,10 @@ void validate_sems(
 }
 
 using MeshWorkloadTestT3000 = T3000MeshDeviceFixture;
+using MeshWorkloadTestTG = TGMeshDeviceFixture;
 using MeshWorkloadTestSuite = GenericMeshDeviceFixture;
 
-TEST_F(MeshWorkloadTestT3000, MeshWorkloadOnActiveEthAsserts) {
+TEST_F(MeshWorkloadTestSuite, MeshWorkloadOnActiveEthAsserts) {
     // A MeshWorkload cannot be run on ethernet core - Runtime should assert if the
     // user tries this. Verify this functionality here.
     std::shared_ptr<MeshWorkload> workload = std::make_shared<MeshWorkload>();
@@ -155,6 +156,7 @@ TEST_F(MeshWorkloadTestT3000, MeshWorkloadOnActiveEthAsserts) {
     EXPECT_THROW(EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false), std::exception);
 }
 
+// Test running different configurations of heterogenous MeshWorkloads on T3000.
 TEST_F(MeshWorkloadTestT3000, SimultaneousMeshWorkloads) {
     uint32_t num_programs = 100;
     uint32_t num_heterogeneous_programs = 64;
@@ -238,6 +240,101 @@ TEST_F(MeshWorkloadTestT3000, SimultaneousMeshWorkloads) {
     Finish(mesh_device_->mesh_command_queue());
 }
 
+// Test running different configurations of heterogenous MeshWorkloads on TG.
+TEST_F(MeshWorkloadTestTG, SimultaneousMeshWorkloads) {
+    uint32_t num_programs_0 = 16;
+    uint32_t num_programs_1 = 24;
+    uint32_t num_iterations = 1000;
+    auto random_seed = 0;
+    uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
+    log_info(tt::LogTest, "Using Test Seed: {}", seed);
+    srand(seed);
+
+    log_info("Create MeshWorkloads with multiple programs each");
+
+    std::vector<std::shared_ptr<MeshWorkload>> mesh_workloads = {};
+
+    log_info(tt::LogTest, "Compile and load {} MeshWorkloads", 2 * (num_programs_0 + num_programs_1));
+
+    auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+        num_programs_0, mesh_device_->compute_with_storage_grid_size(), seed);
+
+    for (int i = 0; i < num_programs_0; i += 2) {
+        std::shared_ptr<MeshWorkload> random_workload = std::make_shared<MeshWorkload>();
+        MeshCoordinateRange devices_0(MeshCoordinate{0, 0}, MeshCoordinate{1, 7});
+        MeshCoordinateRange devices_1(MeshCoordinate{2, 0}, MeshCoordinate{3, 7});
+        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i]), devices_0);
+        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i + 1]), devices_1);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, false);
+        mesh_workloads.push_back(random_workload);
+    }
+
+    programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+        num_programs_0, mesh_device_->compute_with_storage_grid_size(), seed);
+
+    for (int i = 0; i < num_programs_0; i += 2) {
+        std::shared_ptr<MeshWorkload> random_workload = std::make_shared<MeshWorkload>();
+        MeshCoordinateRange devices_0(MeshCoordinate{0, 0}, MeshCoordinate{3, 3});
+        MeshCoordinateRange devices_1(MeshCoordinate{0, 4}, MeshCoordinate{3, 7});
+        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i]), devices_0);
+        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i + 1]), devices_1);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, false);
+        mesh_workloads.push_back(random_workload);
+    }
+
+    programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+        num_programs_1, mesh_device_->compute_with_storage_grid_size(), seed);
+
+    for (int i = 0; i < num_programs_1; i += 4) {
+        std::shared_ptr<MeshWorkload> random_workload = std::make_shared<MeshWorkload>();
+        MeshCoordinateRange devices_0(MeshCoordinate{0, 0}, MeshCoordinate{0, 7});
+        MeshCoordinateRange devices_1(MeshCoordinate{1, 0}, MeshCoordinate{1, 7});
+        MeshCoordinateRange devices_2(MeshCoordinate{2, 0}, MeshCoordinate{2, 7});
+        MeshCoordinateRange devices_3(MeshCoordinate{3, 0}, MeshCoordinate{3, 7});
+
+        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i]), devices_0);
+        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i + 1]), devices_1);
+        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i + 2]), devices_2);
+        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i + 3]), devices_3);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, false);
+        mesh_workloads.push_back(random_workload);
+    }
+
+    programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+        num_programs_1, mesh_device_->compute_with_storage_grid_size(), seed);
+    for (int i = 0; i < num_programs_1; i += 8) {
+        std::shared_ptr<MeshWorkload> random_workload = std::make_shared<MeshWorkload>();
+        MeshCoordinateRange devices_0(MeshCoordinate{0, 0}, MeshCoordinate{3, 0});
+        MeshCoordinateRange devices_1(MeshCoordinate{0, 1}, MeshCoordinate{3, 1});
+        MeshCoordinateRange devices_2(MeshCoordinate{0, 2}, MeshCoordinate{3, 2});
+        MeshCoordinateRange devices_3(MeshCoordinate{0, 3}, MeshCoordinate{3, 3});
+        MeshCoordinateRange devices_4(MeshCoordinate{0, 4}, MeshCoordinate{3, 4});
+        MeshCoordinateRange devices_5(MeshCoordinate{0, 5}, MeshCoordinate{3, 5});
+        MeshCoordinateRange devices_6(MeshCoordinate{0, 6}, MeshCoordinate{3, 6});
+        MeshCoordinateRange devices_7(MeshCoordinate{0, 7}, MeshCoordinate{3, 7});
+
+        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i]), devices_0);
+        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i + 1]), devices_1);
+        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i + 2]), devices_2);
+        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i + 3]), devices_3);
+        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i + 4]), devices_4);
+        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i + 5]), devices_5);
+        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i + 6]), devices_6);
+        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i + 7]), devices_7);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, false);
+        mesh_workloads.push_back(random_workload);
+    }
+    for (int i = 0; i < num_iterations; i++) {
+        if (i % 100 == 0) {
+            log_info(tt::LogTest, "Run MeshWorkloads for iteration {}", i);
+        }
+        for (auto& workload : mesh_workloads) {
+            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+        }
+    }
+    Finish(mesh_device_->mesh_command_queue());
+}
+
 // MeshWorkload tests on N300 and T3000
 TEST_F(MeshWorkloadTestSuite, RandomizedMeshWorkload) {
     uint32_t num_programs = 60;
@@ -286,10 +383,12 @@ TEST_F(MeshWorkloadTestSuite, EltwiseBinaryMeshWorkload) {
 
     auto programs = tt::tt_metal::distributed::test::utils::create_eltwise_bin_programs(
         mesh_device_, src0_bufs, src1_bufs, output_bufs);
+    uint32_t num_rows_in_workload = mesh_device_->num_rows() / 2;
     auto mesh_workload = CreateMeshWorkload();
-    MeshCoordinateRange devices_0(MeshCoordinate{0, 0}, MeshCoordinate{0, mesh_device_->num_cols() - 1});
+    MeshCoordinateRange devices_0(
+        MeshCoordinate{0, 0}, MeshCoordinate{num_rows_in_workload - 1, mesh_device_->num_cols() - 1});
     MeshCoordinateRange devices_1(
-        MeshCoordinate{mesh_device_->num_rows() - 1, 0},
+        MeshCoordinate{num_rows_in_workload, 0},
         MeshCoordinate{mesh_device_->num_rows() - 1, mesh_device_->num_cols() - 1});
     AddProgramToMeshWorkload(mesh_workload, std::move(*programs[0]), devices_0);
     AddProgramToMeshWorkload(mesh_workload, std::move(*programs[1]), devices_1);
@@ -319,7 +418,7 @@ TEST_F(MeshWorkloadTestSuite, EltwiseBinaryMeshWorkload) {
                     dst_vec,
                     output_bufs[col_idx * worker_grid_size.y + row_idx],
                     device_coord);
-                if (device_coord[0] == 0) {
+                if (device_coord[0] <= num_rows_in_workload - 1) {
                     for (int i = 0; i < dst_vec.size(); i++) {
                         EXPECT_EQ(dst_vec[i].to_float(), 5);
                     }
@@ -519,11 +618,11 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSemaphoreDifferentPrograms) {
         CreateSemaphore(program1, full_grid, sem + 1);
         expected_semaphore_values_1.push_back(sem + 1);
     }
+    uint32_t num_rows_in_workload = mesh_device_->num_rows() / 2;
     auto mesh_workload = CreateMeshWorkload();
-    MeshCoordinateRange devices_0({0, 0}, {0, mesh_device_->num_cols() - 1});
+    MeshCoordinateRange devices_0({0, 0}, {num_rows_in_workload - 1, mesh_device_->num_cols() - 1});
     MeshCoordinateRange devices_1(
-        MeshCoordinate{mesh_device_->num_rows() - 1, 0},
-        MeshCoordinate{mesh_device_->num_rows() - 1, mesh_device_->num_cols() - 1});
+        {num_rows_in_workload, 0}, {mesh_device_->num_rows() - 1, mesh_device_->num_cols() - 1});
 
     AddProgramToMeshWorkload(mesh_workload, std::move(program0), devices_0);
     AddProgramToMeshWorkload(mesh_workload, std::move(program1), devices_1);

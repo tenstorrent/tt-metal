@@ -22,9 +22,6 @@
 #include <tt_stl/overloaded.hpp>
 
 namespace tt::tt_metal {
-
-namespace v1 {
-
 namespace experimental {
 
 namespace {
@@ -206,14 +203,12 @@ const std::vector<std::pair<CoreCoord, CoreRangeSet>>& GlobalCircularBuffer::sen
 
 }  // namespace experimental
 
-}  // namespace v1
-
 }  // namespace tt::tt_metal
 
 namespace std {
 
-std::size_t hash<tt::tt_metal::v1::experimental::GlobalCircularBuffer>::operator()(
-    const tt::tt_metal::v1::experimental::GlobalCircularBuffer& global_circular_buffer) const {
+std::size_t hash<tt::tt_metal::experimental::GlobalCircularBuffer>::operator()(
+    const tt::tt_metal::experimental::GlobalCircularBuffer& global_circular_buffer) const {
     return tt::stl::hash::hash_objects_with_default_seed(global_circular_buffer.attribute_values());
 }
 

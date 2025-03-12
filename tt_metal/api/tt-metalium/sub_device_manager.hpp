@@ -19,9 +19,7 @@ namespace tt::tt_metal {
 
 class TraceBuffer;
 
-inline namespace v0 {
 class IDevice;
-}  // namespace v0
 
 class SubDeviceManager {
 public:

@@ -5,6 +5,9 @@
 #include <tt_stl/overloaded.hpp>
 #include <circular_buffer_types.hpp>
 #include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/program_impl.hpp>
+
 #include <kernel_types.hpp>
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "command_generated.h"

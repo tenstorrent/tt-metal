@@ -84,6 +84,7 @@ enum class UnaryOpType {
     FLOOR_FLOAT32,
     CEIL,
     CEIL_FLOAT32,
+    ROUND,
     LEFT_SHIFT,
     REMAINDER,
     FMOD,

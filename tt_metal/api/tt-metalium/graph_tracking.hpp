@@ -13,11 +13,8 @@
 #include "buffer.hpp"
 
 namespace tt::tt_metal {
-inline namespace v0 {
 
 class Program;
-
-}  // namespace v0
 
 class IGraphProcessor {
 public:

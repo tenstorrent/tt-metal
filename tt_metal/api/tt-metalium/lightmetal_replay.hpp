@@ -51,7 +51,6 @@ using FlatbufferRuntimeArgVector =
 using RuntimeArgs = std::vector<std::variant<tt::tt_metal::Buffer*, uint32_t>>;
 
 namespace tt::tt_metal {
-inline namespace v0 {
 
 class LightMetalReplay {
 public:
@@ -136,5 +135,4 @@ private:
     std::unordered_map<uint32_t, tt::tt_metal::CBHandle> cb_handle_map_;
 };
 
-}  // namespace v0
 }  // namespace tt::tt_metal
