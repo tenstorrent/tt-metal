@@ -18,7 +18,7 @@ smi_pattern = re.compile(r'.*"tt_smi":\s*"([a-zA-Z0-9\-\.]+)"')
 
 
 def search_for_tt_smi_version_in_log_file_(log_file):
-    with open(log_file) as log_f:
+    with open(log_file, "r") as log_f:
         for line in log_f:
             regex_match = smi_pattern.match(line)
             if regex_match:
