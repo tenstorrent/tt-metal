@@ -20,7 +20,7 @@ jobs:
   publish-release-image:
     needs: 
       - build-artifact
-      - create-image-name
+      - create-image-tag-name
     uses: ./.github/workflows/publish-release-image.yaml
     secrets: inherit
     with:
