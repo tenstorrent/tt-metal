@@ -30,6 +30,19 @@ tt::tt_metal::Tensor matmul(
         /* output_tile */ std::nullopt);
 }
 
+// Wrapper around matmul to handle sharing of KV heads across groups of query
+// heads.
+// For e.g. Q @ V, there are two cases:
+// - G == H: (B, H, S, S) x (B, H, S, V) -> (B, H, S, V)
+// - G != H:
+//    - In this case value has shape (B,G,S,V):
+//      1. Reshape attention_weights to (B*G, H/G, S, S).
+//      2. Reshape value to (B*G, 1, S, V).
+//      3. Manually broadcast values over groupsize.
+//      4. Matmul.
+//      5. Reshape the result to (B, H, S, V).
+//   - Summary of intermediate shapes:
+//     (B*G, H/G, S, S) x (B*G, 1, S, V) -> (B*G, H/G, S, V) -> (B, H, S, V)
 ttnn::Tensor group_shared_matmul(
     const ttnn::Tensor& H_tensor, const ttnn::Tensor& G_tensor, bool transpose_a = false, bool transpose_b = false) {
     auto [B_H, H, S, E] = H_tensor.get_logical_shape().to_array_4D();
@@ -54,7 +67,7 @@ ttnn::Tensor group_shared_matmul(
     auto G_tensor_batched = ttnn::reshape(G_tensor, ttnn::Shape{B * G, 1U, T, K});
 
     // repeat G_tensor to group size for each group (manual bcast)
-    ttnn::Tensor G_tensor_repeated = ttnn::repeat(key_tensor, ttnn::Shape{1U, H / G, 1U, 1U});
+    ttnn::Tensor G_tensor_repeated = ttnn::repeat(G_tensor, ttnn::Shape{1U, H / G, 1U, 1U});
     auto bcasted_mm = matmul(H_tensor_grouped, G_tensor_repeated, transpose_a, transpose_b);
     auto reshaped_mm = ttnn::reshape(bcasted_mm, ttnn::Shape{B, H, M, N});
     return reshaped_mm;
@@ -96,12 +109,7 @@ autograd::TensorPtr scaled_dot_product_attention(
     auto q_scaled = ttnn::experimental::mul(query->get_value(), scale);
     auto key_tensor = key->get_value();
 
-    // compute QK
-    // two cases
-    // - G == H: (B, H, S, E) x (B, H, E, S) -> (B, H, S, S)
-    // - G != H:
-    //   bcast keys to query group then reshape back to query shape:
-    //   (B*G,H/G,S,E) x (B*G, 1, E, S) -> (B*G, H/G, S, S) -> (B, H, S, S)
+    // σQ @ K
     ttnn::Tensor qk_scaled = group_shared_matmul(q_scaled, key_tensor, /*transpose_a=*/false, /*transpose_b=*/true);
 
     if (mask.has_value()) {
@@ -115,25 +123,14 @@ autograd::TensorPtr scaled_dot_product_attention(
     auto attention_weights = ttnn_fixed::softmax(qk_scaled, /* axis */ 3);
     // TODO: add dropout here
 
-    // compute softmax(QK+mask) @ V
-    // two cases
-    // - G == H: (B, H, S, S) x (B, H, S, V) -> (B, H, S, V)
-    // - G != H:
-    //    in this case value has shape (B,G,S,V)
-    //    reshape attention_weights to (B*G, H/G, S, S)
-    //    reshape value to (B*G, 1, S, V)
-    //    bcast values over groupsize then reshape to (B, H, S, V)
-    //    (B*G, H/G, S, S) x (B*G, 1, S, V) -> (B*G, H/G, S, V) -> (B, H, S, V)
+    // softmax(σQ@K+mask) @ V
     ttnn::Tensor attention_qkv =
         group_shared_matmul(attention_weights, value->get_value(), /*transpose_a=*/false, /*transpose_b=*/false);
     auto out = ttml::autograd::create_tensor(attention_qkv);
 
-    ttml::autograd::GradFunction grad = [scale, query, key, value, attention_weights, out, mask, B, H, S, E, V, G]() {
+    ttml::autograd::GradFunction grad = [scale, query, key, value, attention_weights, out, mask, B, H, S, E, G]() {
         auto dL_dout = out->get_grad();  // (B, H, S, V)
-        // compute dL_d(softmax(σQK+mask)) = dL_dout @ value^T
-        // two cases:
-        // - G == H: (B, H, S, V) x (B, H, V, S) -> (B, H, S, S)
-        // - G != H: (B*G, H/G, S, V) x (B*G, 1, S, V) -> (B*G, H/G, V, S) -> (B, H, S, S)
+        // dL_d(softmax(σQK+mask)) = dL_dout @ value^T
         ttnn::Tensor dL_dattention_weights =
             group_shared_matmul(dL_dout, value->get_value(), /*transpose_a=*/false, /*transpose_b=*/true);
 
@@ -151,38 +148,38 @@ autograd::TensorPtr scaled_dot_product_attention(
         dL_dscaled_dot = ttnn::experimental::mul(dL_dscaled_dot, scale);  // [B,H,S,S]
 
         // dL_dQ = dL_dscaled_dot @ key
-        // H == G: [B,H,S,S] x [B,H,S,E] -> [B,H,S,E]
-        // H != G: [B*G,H/G,S,S] x [B*G,1,S,E] -> [B*G,H/G,S,E] -> [B,H,S,E]
         ttnn::Tensor dL_dQ =
             group_shared_matmul(dL_dscaled_dot, key->get_value(), /*transpose_a=*/false, /*transpose_b=*/false);
 
-        // dL_dK = dL_dscaled_dot^T @ query
+        // helper function to collect grads from the query groups associated
+        // with each key/value
+        auto sum_over_groups = [&](const auto& ungrouped_grads) {
+            if (G == H) {
+                // group size is 1, nothing to do
+                return ungrouped_grads;
+            }
+            // sum over groups:
+            // [B,H,S,E] -> [B*G,H/G,S,E] -> [B*G,1,S,E] -> [B,G,S,E]
+            auto grouped_grads = ttnn::reshape(ungrouped_grads, ttnn::Shape{B * G, H / G, S, E});
+            auto summed_grads = ttnn_fixed::sum_moreh(grouped_grads, /*dim=*/1, /*keep_dim=*/true);
+            return ttnn::reshape(summed_grads, ttnn::Shape{B, G, S, E});
+        };
+
+        // dL_dK = Σ_g [dL_dscaled_dot^T @ query]
         ttnn::Tensor dL_dK = matmul(
             dL_dscaled_dot,
             query->get_value(),
             /*transpose_a=*/true,
             /*transpose_b=*/false);
-        if (G != H) {
-            // sum over groups:
-            // [B*G,H/G,S,S] x [B*G,1,S,E] -> [B*G,H/G,S,E] -> [B*G,1,S,E] -> [B,G,S,E]
-            auto grouped_grads = ttnn::reshape(dL_dK, ttnn::Shape{B * G, H / G, S, E});
-            auto summed_grads = ttnn_fixed::sum_moreh(grouped_grads, /*dim=*/1, /*keep_dim=*/true);
-            dL_dK = ttnn::reshape(summed_grads, ttnn::Shape{B, G, S, E});
-        }
+        dL_dK = sum_over_groups(dL_dK);  // no-op when G=H
 
-        // dL_dV = attention_weights^T @ dL_dout
+        // dL_dV = Σ_g [attention_weights^T @ dL_dout]
         ttnn::Tensor dL_dV = matmul(
             attention_weights,
             dL_dout,
             /*transpose_a=*/true,
             /*transpose_b=*/false);
-        if (G != H) {
-            // sum over groups
-            // [B*G,H/G,S,S] x [B*G,1,S,V] -> [B*G,H/G,S,V] -> [B*G,1,S,V] -> [B,G,S,V]
-            auto grouped_grads = ttnn::reshape(dL_dV, ttnn::Shape{B * G, H / G, S, V});
-            auto summed_grads = ttnn_fixed::sum_moreh(grouped_grads, /*dim=*/1, /*keep_dim=*/true);
-            dL_dV = ttnn::reshape(summed_grads, ttnn::Shape{B, G, S, V});
-        }
+        dL_dV = sum_over_groups(dL_dV);  // no-op when G=H
 
         query->add_grad(dL_dQ);
         key->add_grad(dL_dK);
