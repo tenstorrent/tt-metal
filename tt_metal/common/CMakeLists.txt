@@ -33,7 +33,7 @@ target_link_libraries(
         fmt::fmt-header-only
         span
         small_vector
-        Metalium::Metal::STL
+        TT:STL
         umd::Firmware
         umd::device
     PRIVATE

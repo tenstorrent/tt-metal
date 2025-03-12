@@ -9,8 +9,9 @@
 #include "tt-metalium/mesh_buffer.hpp"
 #include "tt-metalium/mesh_device.hpp"
 #include "tt-metalium/mesh_command_queue.hpp"
-#include "tt-metalium/overloaded.hpp"
+#include <tt_stl/overloaded.hpp>
 #include "ttnn/distributed/distributed_tensor.hpp"
+
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"

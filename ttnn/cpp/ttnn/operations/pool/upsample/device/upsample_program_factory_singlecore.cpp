@@ -13,7 +13,7 @@
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/math.hpp>
 
-#include <tt-metalium/reflection.hpp>
+#include <tt_stl/reflection.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;

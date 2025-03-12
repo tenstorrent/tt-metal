@@ -15,7 +15,7 @@
 #include "assert.hpp"
 #include "device.hpp"
 #include "dispatch_core_common.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "umd/device/types/cluster_descriptor_types.h"
 #include "control_plane.hpp"
 
@@ -92,7 +92,7 @@ private:
     // Initialize state for activated devices
     void initialize_active_devices() const;
     void add_devices_to_pool(const std::vector<chip_id_t>& device_ids);
-    void wait_for_fabric_master_router_sync() const;
+    void wait_for_fabric_router_sync() const;
     tt_metal::IDevice* get_device(chip_id_t id) const;
 
     // Fabric setup helper functions

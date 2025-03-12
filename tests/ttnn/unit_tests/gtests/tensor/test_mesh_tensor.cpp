@@ -5,7 +5,8 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 
-#include "gmock/gmock.h"
+#include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
+
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/tensor/storage.hpp"
@@ -27,7 +28,7 @@ using ::testing::Pointwise;
 using ::testing::SizeIs;
 using ::testing::ThrowsMessage;
 
-using MeshTensorTest = T3kMultiDeviceFixture;
+using MeshTensorTest = GenericMeshDeviceFixture;
 
 TEST_F(MeshTensorTest, Lifecycle) {
     const TensorSpec tensor_spec =
@@ -60,7 +61,9 @@ TEST_F(MeshTensorTest, Lifecycle) {
     EXPECT_FALSE(input_tensor.is_allocated());
 }
 
-TEST_F(MeshTensorTest, ToHostNonMeshTensor) {
+using MeshTensorDeviceTest = GenericMeshDeviceFixture;
+
+TEST_F(MeshTensorDeviceTest, ToHostNonMeshTensor) {
     const ttnn::Shape shape{1, 1, 32, 32};
     const TensorSpec tensor_spec =
         TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));

@@ -256,6 +256,7 @@ include(tracy)
 # Build subdirectories
 ############################################################################################################################
 
+add_subdirectory(tt_stl)
 add_subdirectory(tt_metal)
 add_subdirectory(ttnn)
 

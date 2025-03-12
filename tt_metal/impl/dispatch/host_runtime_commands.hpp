@@ -25,13 +25,10 @@
 #include "trace_buffer.hpp"
 
 namespace tt::tt_metal {
-inline namespace v0 {
 
 class BufferRegion;
 class Event;
 class Trace;
-
-}  // namespace v0
 
 // Only contains the types of commands which are enqueued onto the device
 enum class EnqueueCommandType {
