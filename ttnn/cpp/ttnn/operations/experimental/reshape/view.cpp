@@ -121,7 +121,7 @@ Tensor tensor_reshape(
                                 new_logical_shape,
                                 new_padded_shape));
 
-                        return update_tensor_specs(Tensor(device_storage, new_spec), upd_spec);
+                        return update_tensor_specs(Tensor(device_storage, upd_spec), upd_spec);
                     }
                 } else {
                     return update_tensor_specs(Tensor(tensor.get_storage(), new_spec), new_spec);
