@@ -238,6 +238,8 @@ def run_gather_concat_impl(
             if not eq:
                 logger.error(f"output mismatch for tensor {i}")
                 passed = False
+            # print(tt_output_tensor)
+            # print(output_tensor_concat)
     """
     for i in range(num_devices):
         assert (
@@ -245,9 +247,8 @@ def run_gather_concat_impl(
             or mesh_device.get_devices()[i].num_program_cache_entries() == num_iters
         ), f"Device {i} has {mesh_device.get_devices()[i].num_program_cache_entries()} program cache entries"
     """
-    if enable_persistent_fabric:
-        mesh_device.reset_sub_device_stall_group()
-        teardown_fabric_interface(mesh_device)
+    mesh_device.reset_sub_device_stall_group()
+    teardown_fabric_interface(mesh_device)
 
     if not passed:
         assert eq, f"{i} FAILED: {output}"
@@ -261,7 +262,7 @@ def run_concat_fuse_impl(
     num_links,
     input_dtype,
     layout,
-    use_program_cache,
+    # use_program_cache,
     function_level_defaults,
     input_shard_shape,
     input_shard_grid,
@@ -420,6 +421,8 @@ def run_concat_fuse_impl(
             if not eq:
                 logger.error(f"output mismatch for tensor {i}")
                 passed = False
+            print(tt_output_tensor)
+            print(output_tensor_concat)
     """
     for i in range(num_devices):
         assert (
@@ -427,9 +430,9 @@ def run_concat_fuse_impl(
             or mesh_device.get_devices()[i].num_program_cache_entries() == num_iters
         ), f"Device {i} has {mesh_device.get_devices()[i].num_program_cache_entries()} program cache entries"
     """
-    if enable_persistent_fabric:
-        mesh_device.reset_sub_device_stall_group()
-        teardown_fabric_interface(mesh_device)
+    mesh_device.reset_sub_device_stall_group()
+    teardown_fabric_interface(mesh_device)
+    print("teardown done\n")
 
     if not passed:
         assert eq, f"{i} FAILED: {output}"

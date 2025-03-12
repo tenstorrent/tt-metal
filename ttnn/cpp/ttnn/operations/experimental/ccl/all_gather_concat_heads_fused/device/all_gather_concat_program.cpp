@@ -398,6 +398,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         }
         reader_rt_args[0] = reader_rt_args.size();
         uint32_t in_tile_offset_by_batch_r = 0 < face_h ? 0 : (face_h)*sub_tile_line_bytes;
+        printf(
+            "before pushing reader in tile offset by batch size and index is :%zu, %u\n",
+            reader_rt_args.size(),
+            reader_rt_args[0]);
         reader_rt_args.push_back(in_tile_offset_by_batch_r);
         reader_rt_args.push_back(temp_tensor.buffer()->address());
         for (auto nocx : noc_x_coords) {
@@ -441,7 +445,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         append_fabric_connection_rt_arguments(backward_fabric_connection, core, program, writer_rt_args);
         writer_rt_args[0] = writer_rt_args.size();
         uint32_t in_tile_offset_by_batch = 0 < face_h ? 0 : (face_h)*sub_tile_line_bytes;
-
+        printf(
+            "before pushing writer in tile offset by batch size and index is :%zu, %u\n",
+            writer_rt_args.size(),
+            writer_rt_args[0]);
         writer_rt_args.push_back(in_tile_offset_by_batch);
         writer_rt_args.push_back(temp_tensor.buffer()->address());
         for (auto nocx : noc_x_coords) {
@@ -512,11 +519,21 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
             uint32_t q_start_addr = q_base_addr;
             for (const auto& core : sender_worker_cores) {
                 auto& worker_reader_sender_runtime_args = worker_reader_sender_runtime_args_by_core[core.x][core.y];
-                worker_reader_sender_runtime_args[0] = input.buffer()->address();
+                worker_reader_sender_runtime_args[1] = input.buffer()->address();
+                uint32_t concat_args_index = worker_reader_sender_runtime_args[0];
+                printf("concat_args_index in all gather reader: %u\n", concat_args_index);
+                worker_reader_sender_runtime_args[concat_args_index] = 0;
+                worker_reader_sender_runtime_args[concat_args_index + 1] = q_start_addr;
+                worker_reader_sender_runtime_args[concat_args_index + 3 + 2 * num_cores] = semaphore.address();
+                ;
 
                 auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
-                worker_writer_sender_runtime_args[0] = q_start_addr;
-                worker_writer_sender_runtime_args[1] = semaphore.address();
+                worker_writer_sender_runtime_args[1] = q_start_addr;
+                worker_writer_sender_runtime_args[2] = semaphore.address();
+                uint32_t concat_args_index_2 = worker_writer_sender_runtime_args[0];
+                printf("concat_args_index_2 in all gather writer: %u\n", concat_args_index_2);
+                worker_writer_sender_runtime_args[concat_args_index_2] = 0;
+                worker_writer_sender_runtime_args[concat_args_index_2 + 1] = q_start_addr;
             }
 
             for (uint32_t i = 0; i < num_cores; ++i) {
@@ -536,7 +553,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
                 }
             }
         };
-
+    printf("before return in program factory here HERE\n");
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 

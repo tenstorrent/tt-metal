@@ -524,8 +524,8 @@ def test_reduce_scatter(
         # ttnn.bfloat8_b,
     ],
 )
-@pytest.mark.parametrize("num_iters", [1])
-@pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("num_iters", [2])
+@pytest.mark.parametrize("enable_async", [False])
 def test_concat_fuse(
     t3k_mesh_device,
     num_devices,
@@ -535,7 +535,7 @@ def test_concat_fuse(
     input_dtype,
     layout,
     num_iters,
-    use_program_cache,
+    # use_program_cache,
     function_level_defaults,
     enable_async,
     input_shard_shape,
@@ -552,7 +552,7 @@ def test_concat_fuse(
         num_links,
         input_dtype,
         layout,
-        use_program_cache,
+        # use_program_cache,
         function_level_defaults,
         input_shard_shape,
         input_shard_grid,

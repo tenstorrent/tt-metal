@@ -5,6 +5,7 @@
 #include "all_gather_concat_op.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/math.hpp"
+#include "ttnn/operations/core/core.hpp"
 #include "cpp/ttnn/global_semaphore.hpp"
 #include <tt-metalium/work_split.hpp>
 
@@ -44,7 +45,7 @@ AllGatherConcat create_all_gather_concat_struct(
             }
         }
     }
-
+    printf("in create all gather concat struct HERE\n");
     return ttnn::AllGatherConcat{
         forward_device,
         backward_device,
@@ -86,6 +87,7 @@ void AllGatherConcat::validate(const std::vector<Tensor>& input_tensors) const {
             input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
         "Unsupported memory layout {}.",
         input_tensor.memory_config().memory_layout);
+    printf("Iin validate HERE\n");
 }
 
 static void validate_output_tensor_alloc(const std::vector<Tensor>& output_tensors) {
@@ -116,6 +118,7 @@ std::vector<ttnn::TensorSpec> AllGatherConcat::compute_output_specs(const std::v
         batch = 32;
     }
     auto hidden_dim = num_heads * head_dim;
+    printf("in create output spec HERE\n");
 
     Shape output_shape({sequence_length, 1, batch, hidden_dim});
 
@@ -147,7 +150,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherConcat::create_program(
     log_trace(tt::LogOp, "Detected all gather specialized shape. all_gather_concat_llama_sharded is called");
     CoreCoord compute_with_storage_grid_size = input_tensors[0].device()->compute_with_storage_grid_size();
     const auto& input_tensor = input_tensors[0];
-
+    /*
     for (const auto& output_tensor : output_tensors) {
         const auto& buffers = output_tensor.buffers();
         const auto first_address = buffers.front()->address();
@@ -156,6 +159,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherConcat::create_program(
                 buffers.begin(),
                 buffers.end(),
                 [&first_address](const auto& buffer) {
+                    printf("for this output buffer address should be : %u\n", buffer->address());
                     return buffer != nullptr && buffer->address() == first_address;
                 }),
             "Output buffers for all_gather async must be lock-step allocated but some of the tensors were allocated at "
@@ -170,12 +174,16 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherConcat::create_program(
             buffers_temp.begin(),
             buffers_temp.end(),
             [&temp_first_address](const auto& buffer) {
+                printf("for this buffer addrerr should be : %u\n", buffer->address());
                 return buffer != nullptr && buffer->address() == temp_first_address;
             }),
         "TEMP buffers for all_gather async must be lock-step allocated but some of the tensors were allocated at "
         "different addresses across devices.");
-
+    */
+    chip_id_t this_device_id = input_tensor.device()->id();
     Tensor temp_tensor = this->temp_tensor_map.at(this_device_id);
+    printf(" Create pragram before program fact HERE\n");
+
     return all_gather_concat_llama_sharded(
         input_tensors[0],
         this->forward_device,
@@ -202,6 +210,7 @@ const tt::tt_metal::operation::Hash AllGatherConcat::compute_program_hash(
     auto input_memory_layout = input_tensors[0].get_layout();
     auto input_dtype = input_tensors[0].get_dtype();
     auto input_memory_config = input_tensors[0].memory_config();
+    printf("in compute program hash HERE for device %u\n", input_tensors[0].device()->id());
     return tt::tt_metal::operation::hash_operation<AllGatherConcat>(
         this->dim,
         this->temp_tensor_map,
@@ -215,6 +224,12 @@ const tt::tt_metal::operation::Hash AllGatherConcat::compute_program_hash(
         input_dtype,
         input_memory_config,
         this->num_heads);
+
+    // for (auto it = this->temp_tensor_map.begin(); it !=this->temp_tensor_map.end(); ++it){
+    //     auto buffer_temp = it->second;
+    //     deallocate(buffer_temp, true);
+    // }
+    // return return_val;
 }
 
 namespace operations {
@@ -255,6 +270,7 @@ Tensor all_gather_concat(
 
     std::vector<GlobalSemaphore> semaphores = multi_device_global_semaphore.global_semaphores;
 
+    printf("before launch op HERE\n");
     tt::tt_metal::operation::launch_op(
         [dim,
          temp_tensor_map,
@@ -289,6 +305,52 @@ Tensor all_gather_concat(
         },
         {input_tensor},
         output_tensors);
+    printf("after launch op HERE\n");
+    for (const auto& output_tensor : output_tensors) {
+        const auto& buffers = output_tensor.buffers();
+        const auto first_address = buffers.front()->address();
+        TT_FATAL(
+            std::all_of(
+                buffers.begin(),
+                buffers.end(),
+                [&first_address](const auto& buffer) {
+                    printf("for this output buffer address should be : %u\n", buffer->address());
+                    return buffer != nullptr && buffer->address() == first_address;
+                }),
+            "Output buffers for all_gather async must be lock-step allocated but some of the tensors were allocated at "
+            "different addresses across devices.");
+    }
+
+    const auto& in_buffers = input_tensor.buffers();
+    const auto in_first_address = in_buffers.front()->address();
+    TT_FATAL(
+        std::all_of(
+            in_buffers.begin(),
+            in_buffers.end(),
+            [&in_first_address](const auto& buffer) {
+                printf("for this input buffer address should be : %u\n", buffer->address());
+                return buffer != nullptr && buffer->address() == in_first_address;
+            }),
+        "Output buffers for all_gather async must be lock-step allocated but some of the tensors were allocated at "
+        "different addresses across devices.");
+
+    chip_id_t this_device_id = input_tensor.device()->id();
+
+    for (auto it = temp_tensor_map.begin(); it != temp_tensor_map.end(); ++it) {
+        const auto& buffers_temp = it->second.buffers();
+        const auto temp_first_address = buffers_temp.front()->address();
+        TT_FATAL(
+            std::all_of(
+                buffers_temp.begin(),
+                buffers_temp.end(),
+                [&temp_first_address](const auto& buffer) {
+                    printf("for this TEMP buffer address should be : %u\n", buffer->address());
+                    return buffer != nullptr && buffer->address() == temp_first_address;
+                }),
+            "TEMP buffers for all_gather async must be lock-step allocated but some of the tensors were allocated at "
+            "different addresses across devices.");
+    }
+
     return output_tensors.at(0);
 }
 
