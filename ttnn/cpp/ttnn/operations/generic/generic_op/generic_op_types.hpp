@@ -4,11 +4,11 @@
 
 #pragma once
 
-#include <tt_metal/api/tt-metalium/core_coord.hpp>
-#include <tt_metal/api/tt-metalium/kernel_types.hpp>
-#include <tt_metal/hostdevcommon/api/hostdevcommon/kernel_structs.h>
-#include "ttnn/decorators.hpp"
 #include <unordered_map>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include "hostdevcommon/kernel_structs.h"
+#include "ttnn/decorators.hpp"
 
 using tt::tt_metal::CoreCoord;
 using tt::tt_metal::CoreRangeSet;

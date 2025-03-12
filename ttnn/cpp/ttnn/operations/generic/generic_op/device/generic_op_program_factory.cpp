@@ -2,13 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "impl/buffers/buffer.hpp"
-#include "impl/buffers/circular_buffer_types.hpp"
-#include "generic_op_device_operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
-
 #include <cstdint>
 #include <iostream>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/work_split.hpp>
+
+#include "generic_op_device_operation.hpp"
+
 
 namespace ttnn::operations::generic {
 GenericOpDeviceOperation::GenericProgram::cached_program_t GenericOpDeviceOperation::GenericProgram::create(
