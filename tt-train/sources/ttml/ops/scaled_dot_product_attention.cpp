@@ -4,6 +4,8 @@
 
 #include "scaled_dot_product_attention.hpp"
 
+#include <stdexcept>
+
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
 #include "core/compute_kernel_config.hpp"
@@ -28,6 +30,36 @@ tt::tt_metal::Tensor matmul(
         /* output_tile */ std::nullopt);
 }
 
+ttnn::Tensor group_shared_matmul(
+    const ttnn::Tensor& H_tensor, const ttnn::Tensor& G_tensor, bool transpose_a = false, bool transpose_b = false) {
+    auto [B_H, H, S, E] = H_tensor.get_logical_shape().to_array_4D();
+    auto [B_G, G, T, K] = G_tensor.get_logical_shape().to_array_4D();
+    if (B_H != B_G) {
+        throw std::invalid_argument("H_tensor and G_tensor must have the same batch size");
+    }
+    uint32_t B = B_H;
+    if (H == G) {
+        // no broadcasting needed
+        return matmul(H_tensor, G_tensor, transpose_a, transpose_b);
+    }
+    // result will have shape (B, H, M, N)
+    // we determine M,N based on the transpose options
+    auto M = !transpose_a ? S : E;
+    auto N = !transpose_b ? T : K;
+
+    // - G != H:
+    //   bcast G_tensor to groups in H_tensor then reshape back to H_tensor_shape:
+    //   (B*G,H/G,M,E) x (B*G, 1, E, N) -> (B*G, H/G, M, N) -> (B, H, N, N)
+    auto H_tensor_grouped = ttnn::reshape(H_tensor, ttnn::Shape{B * G, H / G, S, E});
+    auto G_tensor_batched = ttnn::reshape(G_tensor, ttnn::Shape{B * G, 1U, T, K});
+
+    // repeat G_tensor to group size for each group (manual bcast)
+    ttnn::Tensor G_tensor_repeated = ttnn::repeat(key_tensor, ttnn::Shape{1U, H / G, 1U, 1U});
+    auto bcasted_mm = matmul(H_tensor_grouped, G_tensor_repeated, transpose_a, transpose_b);
+    auto reshaped_mm = ttnn::reshape(bcasted_mm, ttnn::Shape{B, H, M, N});
+    return reshaped_mm;
+}
+
 autograd::TensorPtr scaled_dot_product_attention(
     const autograd::TensorPtr& query,
     const autograd::TensorPtr& key,
@@ -45,7 +77,7 @@ autograd::TensorPtr scaled_dot_product_attention(
         throw std::invalid_argument("query, key, and value must have the same shape, except for the number of heads");
     }
 
-    uint32_t G = H;           // number of KV groups, H for MHA mode
+    uint32_t G = H;            // number of KV groups, H for MHA mode
     uint32_t group_size = 1U;  // number of query heads per group, 1 for MHA mode
     if (H != HK || H != HV) {
         // grouped query mode
