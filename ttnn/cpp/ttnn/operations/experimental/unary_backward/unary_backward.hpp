@@ -1,4 +1,3 @@
-// gelu_backward.hpp
 #pragma once
 
 #include "ttnn/core.hpp"

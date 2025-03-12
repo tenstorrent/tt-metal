@@ -1,4 +1,3 @@
-// gelu_device_operation.cpp
 #include "gelu_backward_device_operation.hpp"
 #include "gelu_backward_program_factory.hpp"
 
