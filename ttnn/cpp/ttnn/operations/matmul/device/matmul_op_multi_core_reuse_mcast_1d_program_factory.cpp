@@ -2183,7 +2183,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
     }
 
     auto override_runtime_arguments_callback =
-        [mm_kernel_in0_id, mm_kernel_in1_sender_writer_id, cb_src0, cb_src1, cb_output, num_cores, worker_cores_vec](
+        [mm_kernel_in0_id, mm_kernel_in1_sender_writer_id, cb_src0, cb_src1, cb_output, num_cores, all_cores_vec](
             const void* operation,
             tt::tt_metal::Program& program,
             const std::vector<tt::tt_metal::Tensor>& input_tensors,
@@ -2215,13 +2215,15 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
                 UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
             }
 
-            auto& writer_runtime_args_by_core = GetRuntimeArgs(program, mm_kernel_in1_sender_writer_id);
-            for (uint32_t i = 0; i < num_cores; ++i) {
-                const auto& core = worker_cores_vec[i];
-                auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
+            if (not src1_sharded) {
+                auto& writer_runtime_args_by_core = GetRuntimeArgs(program, mm_kernel_in1_sender_writer_id);
+                for (uint32_t i = 0; i < all_cores_vec.size(); ++i) {
+                    const auto& core = all_cores_vec[i];
+                    auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
 
-                /* in1 */
-                writer_runtime_args[1] = src_buffer_b->address();
+                    /* in1 */
+                    writer_runtime_args[1] = src_buffer_b->address();
+                }
             }
         };
 
