@@ -21,7 +21,6 @@ on:
           - Release
           - Debug
           - RelWithDebInfo
-          - CI
       tracy:
         required: false
         type: boolean

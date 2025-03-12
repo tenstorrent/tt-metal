@@ -40,7 +40,7 @@ typedef bool dprint_tslice_ptr_t;
 #define TSLICE_WR_PTR false
 typedef bool dprint_tslice_cb_t;
 #define TSLICE_INPUT_CB true
-#define TSLICE_OUTPUT_SB false
+#define TSLICE_OUTPUT_CB false
 
 typedef struct {
     uint32_t tile_dim_r;

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <benchmark/benchmark.h>
-#include <tt-metalium/env_lib.hpp>
+#include "tt_metal/common/env_lib.hpp"
 #include "tt_metal/common/thread_pool.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 

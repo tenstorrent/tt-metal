@@ -75,14 +75,18 @@ public:
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
-        if (arch_ == tt::ARCH::WORMHOLE_B0 and num_devices_ == 8 and tt::tt_metal::GetNumPCIeDevices() == 4) {
-            mesh_device_ = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape{2, 4}});
+        if (arch_ == tt::ARCH::WORMHOLE_B0 and num_devices_ >= 8 and tt::tt_metal::GetNumPCIeDevices() == 4) {
+            if (num_devices_ == 32) {
+                mesh_device_ = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape{8, 4}});
+            } else {
+                mesh_device_ = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape{2, 4}});
+            }
 
             std::vector<chip_id_t> ids(num_devices_, 0);
             std::iota(ids.begin(), ids.end(), 0);
 
         } else {
-            TT_THROW("This suite can only be run on T3000 Wormhole devices");
+            TT_THROW("This suite can only be run on T3000 or TG Wormhole devices");
         }
         device_open = true;
     }
@@ -2076,6 +2080,7 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
     size_t packet_payload_size_bytes = ttnn::ccl::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes) {
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
+    bool use_tg = num_devices == 32;
     if (num_devices < 4) {
         log_info("This test can only be run on T3000 devices");
         return;
@@ -2107,11 +2112,21 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
     auto view = test_fixture.mesh_device_->get_view();
 
     // Get the inner 4 device ring on a WH T3K device so that we can use both links for all devices
-    std::vector<IDevice*> devices_ = {
-        view.get_device(MeshCoordinate(0, 1)),
-        view.get_device(MeshCoordinate(0, 2)),
-        view.get_device(MeshCoordinate(1, 2)),
-        view.get_device(MeshCoordinate(1, 1))};
+    std::vector<IDevice*> devices_;
+    if (use_tg) {
+        devices_ = {
+            view.get_device(MeshCoordinate(0, 0)),
+            view.get_device(MeshCoordinate(1, 0)),
+            view.get_device(MeshCoordinate(2, 0)),
+            view.get_device(MeshCoordinate(3, 0))};
+    } else {
+        // Choosing pcie devices so that more links are supported. More links == more (likelihood of) congestion.
+        devices_ = {
+            view.get_device(MeshCoordinate(0, 1)),
+            view.get_device(MeshCoordinate(0, 2)),
+            view.get_device(MeshCoordinate(1, 2)),
+            view.get_device(MeshCoordinate(1, 1))};
+    }
     std::vector<IDevice*> devices;
     devices.reserve(line_size);
     for (size_t i = 0; i < line_size; i++) {
@@ -2138,7 +2153,11 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
     // Other boiler plate setup
     CoreRangeSet worker_cores = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(num_links - 1, 0)));
     auto worker_cores_vec = corerange_to_cores(worker_cores, std::nullopt, false);
-    auto dest_core_coord = CoreCoord(2, 2);
+    std::vector<CoreCoord> dest_core_coord;
+    dest_core_coord.reserve(num_links);
+    for (size_t l = 0; l < num_links; l++) {
+        dest_core_coord[l] = CoreCoord(0, l + 1);
+    }
     auto sync_core_coord = CoreCoord(0, 0);
 
     ttnn::SmallVector<std::shared_ptr<Buffer>> device_dest_buffers;
@@ -2190,8 +2209,6 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
         const size_t line_index = i;
         auto& program = programs[i];
         auto* device = devices[i];
-        const size_t dest_noc_x = device->worker_core_from_logical_core(dest_core_coord).x;
-        const size_t dest_noc_y = device->worker_core_from_logical_core(dest_core_coord).y;
         const size_t sync_core_noc_x = device->worker_core_from_logical_core(sync_core_coord).x;
         const size_t sync_core_noc_y = device->worker_core_from_logical_core(sync_core_coord).y;
 
@@ -2240,6 +2257,8 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
         worker_kernel_ids.push_back(worker_kernel_id);
         for (size_t l = 0; l < num_links; l++) {
             auto worker_core = worker_cores_vec[l];
+            const size_t dest_noc_x = device->worker_core_from_logical_core(dest_core_coord[l]).x;
+            const size_t dest_noc_y = device->worker_core_from_logical_core(dest_core_coord[l]).y;
             auto build_connection_args = [&local_device_fabric_handle, device, &program, &worker_core](
                                              bool is_connected_in_direction,
                                              ttnn::ccl::EdmLineFabricOpInterface::Direction direction,

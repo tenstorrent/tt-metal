@@ -588,7 +588,7 @@ Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking, ttnn::QueueId cq
 
         shard_data_transfers.push_back(distributed::MeshCommandQueue::ShardDataTransfer{
             .shard_coord = coord,
-            .host_data = std::visit([](auto& b) { return b.data(); }, buffers.back()),
+            .host_data = std::visit([](auto& b) { return reinterpret_cast<T*>(b.data()); }, buffers.back()),
             .region = BufferRegion(0, tensor_size_bytes)});
     }
 
@@ -1286,7 +1286,10 @@ Tensor pad(
     }
 
     auto pad_value_ = static_cast<T>(pad_value);
-    const auto input_padded_shape = tensor.get_padded_shape();
+    auto input_padded_shape = tensor.get_padded_shape();
+    if (input_padded_shape.rank() < 2) {
+        input_padded_shape = input_padded_shape.to_rank(2);
+    }
     const auto input_strides = tensor.strides();
     const auto input_data_type = tensor.get_dtype();
 
@@ -1357,7 +1360,7 @@ Tensor pad(
         tensor.get_storage());
     return Tensor(
         OwnedStorage{output_buffer},
-        tensor.get_padded_shape(),
+        tensor.get_logical_shape(),
         output_padded_shape,
         tensor.get_dtype(),
         tensor.get_layout(),
