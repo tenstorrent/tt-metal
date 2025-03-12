@@ -2,12 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/fabric_connection_manager.hpp"
+#include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 #include "dataflow_api.h"
-
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_transmission.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp"
 
 #include <cstdint>
 #include <cstddef>
@@ -24,7 +23,7 @@ FORCE_INLINE void line_sync(
     size_t sync_noc_x,
     size_t sync_noc_y,
     size_t sync_val) {
-    using namespace tt::fabric;
+    using namespace tt::tt_fabric;
 
     auto dest_noc_addr =
         safe_get_noc_addr(static_cast<uint8_t>(sync_noc_x), static_cast<uint8_t>(sync_noc_y), sync_bank_addr, 0);
@@ -50,7 +49,7 @@ FORCE_INLINE void line_sync(
 }
 
 void kernel_main() {
-    using namespace tt::fabric;
+    using namespace tt::tt_fabric;
     size_t arg_idx = 0;
 
     const size_t dest_bank_addr = get_arg_val<uint32_t>(arg_idx++);

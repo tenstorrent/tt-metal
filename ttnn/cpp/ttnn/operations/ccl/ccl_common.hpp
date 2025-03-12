@@ -13,7 +13,8 @@
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <tt-metalium/program_impl.hpp>
 #include "ttnn/tensor/types.hpp"
-#include "ttnn/operations/ccl/erisc_datamover_builder.hpp"
+#include <tt-metalium/erisc_datamover_builder.hpp>
+#include "erisc_datamover_builder_helper.hpp"
 #include "cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
 namespace ttnn {
@@ -28,7 +29,6 @@ struct SyncModeSpec {
     void add_signal(uint32_t sem_id, uint32_t wait_count);
 };
 
-class FabricEriscDatamoverBuilder;
 class EriscDatamoverBuilder;
 
 std::tuple<uint32_t, std::optional<chip_id_t>, std::optional<chip_id_t>> get_device_index_and_sender_receiver_ids(
@@ -540,7 +540,7 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
 tt::tt_metal::KernelHandle generate_edm_kernel(
    tt::tt_metal::Program& program,
     tt::tt_metal::IDevice const* device,
-    FabricEriscDatamoverBuilder const& edm_builder,
+    tt::tt_fabric::FabricEriscDatamoverBuilder const& edm_builder,
     CoreCoord const& eth_core,
     tt::tt_metal::NOC noc_id);
 

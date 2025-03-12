@@ -5,8 +5,8 @@
 #include "dataflow_api.h"
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_transmission.hpp"
-#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/edm_fabric_worker_adapters.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 
 #include "debug/dprint.h"
 #include <cstdint>
@@ -90,8 +90,8 @@ void mcast_contig_pages_to_noc_address(
     size_t payload_page_size,
     bool has_forward_fabric_connection,
     bool has_backward_fabric_connection,
-    tt::fabric::WorkerToFabricEdmSender& forward_fabric_sender,
-    tt::fabric::WorkerToFabricEdmSender& backward_fabric_sender,
+    tt::tt_fabric::WorkerToFabricEdmSender& forward_fabric_sender,
+    tt::tt_fabric::WorkerToFabricEdmSender& backward_fabric_sender,
     size_t forward_direction_num_hops,
     size_t backward_direction_num_hops) {
     const size_t payload_size_bytes = contig_pages_advanced * payload_page_size;
@@ -112,13 +112,13 @@ void mcast_contig_pages_to_noc_address(
     if (has_forward_fabric_connection) {
         static_assert(
             is_power_of_2(sizeof(PACKET_HEADER_TYPE)),
-            "sizeof(tt::fabric::PacketHeader) is not a power of two which violates the below assertion");
+            "sizeof(tt::tt_fabric::PacketHeader) is not a power of two which violates the below assertion");
 
         auto& pkt_hdr = *reinterpret_cast<PACKET_HEADER_TYPE*>(l1_read_addr);
         pkt_hdr
             .to_chip_multicast(
-                tt::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(forward_direction_num_hops)})
-            .to_noc_unicast_write(tt::fabric::NocUnicastCommandHeader{noc0_dest_addr}, packet_send_size_bytes);
+                tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(forward_direction_num_hops)})
+            .to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_addr}, packet_send_size_bytes);
         forward_fabric_sender.wait_for_empty_write_slot();
         forward_fabric_sender.send_payload_flush_blocking_from_address(l1_read_addr, packet_send_size_bytes);
     }
@@ -128,8 +128,8 @@ void mcast_contig_pages_to_noc_address(
         auto& pkt_hdr = *reinterpret_cast<PACKET_HEADER_TYPE*>(l1_read_addr);
         pkt_hdr
             .to_chip_multicast(
-                tt::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(backward_direction_num_hops)})
-            .to_noc_unicast_write(tt::fabric::NocUnicastCommandHeader{noc0_dest_addr}, packet_send_size_bytes);
+                tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(backward_direction_num_hops)})
+            .to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_addr}, packet_send_size_bytes);
         backward_fabric_sender.wait_for_empty_write_slot();
         backward_fabric_sender.send_payload_non_blocking_from_address(l1_read_addr, packet_send_size_bytes);
     }
@@ -148,8 +148,8 @@ void mcast_payload_chunk_to_output_tensor_address(
     size_t l1_scratch_page_size,
     bool has_forward_fabric_connection,
     bool has_backward_fabric_connection,
-    tt::fabric::WorkerToFabricEdmSender& forward_fabric_sender,
-    tt::fabric::WorkerToFabricEdmSender& backward_fabric_sender,
+    tt::tt_fabric::WorkerToFabricEdmSender& forward_fabric_sender,
+    tt::tt_fabric::WorkerToFabricEdmSender& backward_fabric_sender,
     size_t forward_direction_num_hops,
     size_t backward_direction_num_hops,
     const AddrGen& tensor_addrgen) {
@@ -274,26 +274,26 @@ void mcast_sync_signal_to_addr(
     size_t& sync_details_arg_idx,
     bool has_forward_fabric_connection,
     bool has_backward_fabric_connection,
-    tt::fabric::WorkerToFabricEdmSender& forward_fabric_sender,
-    tt::fabric::WorkerToFabricEdmSender& backward_fabric_sender,
+    tt::tt_fabric::WorkerToFabricEdmSender& forward_fabric_sender,
+    tt::tt_fabric::WorkerToFabricEdmSender& backward_fabric_sender,
     size_t forward_direction_num_hops,
     size_t backward_direction_num_hops,
     size_t num_sync_signals) {
     auto send_sync_signal = [](size_t pkt_addr,
-                               tt::fabric::WorkerToFabricEdmSender& fabric_connection,
+                               tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
                                size_t remote_sem_noc_x,
                                size_t remote_sem_noc_y,
                                size_t remote_sem_l1_addr,
                                size_t directional_num_hops) {
         static_assert(
             is_power_of_2(sizeof(PACKET_HEADER_TYPE)),
-            "sizeof(tt::fabric::PacketHeader) is not a power of two which violates the below assertion");
+            "sizeof(tt::tt_fabric::PacketHeader) is not a power of two which violates the below assertion");
         ASSERT((pkt_addr & (sizeof(PACKET_HEADER_TYPE) - 1)) == 0);
 
         auto& pkt_hdr = *reinterpret_cast<PACKET_HEADER_TYPE*>(pkt_addr);
         pkt_hdr
-            .to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(directional_num_hops)})
-            .to_noc_unicast_atomic_inc(tt::fabric::NocUnicastAtomicIncCommandHeader{
+            .to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(directional_num_hops)})
+            .to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
                 remote_sem_l1_addr,
                 1,
                 32,

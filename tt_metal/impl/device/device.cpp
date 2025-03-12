@@ -939,6 +939,10 @@ void Device::init_command_queue_device() {
 
 void Device::init_fabric() {
     fabric_program_ = create_and_compile_fabric_program(this);
+    if (fabric_program_ == nullptr) {
+        return;
+    }
+
     configure_fabric_cores(this);
 
     program_dispatch::finalize_program_offsets(*fabric_program_, this);

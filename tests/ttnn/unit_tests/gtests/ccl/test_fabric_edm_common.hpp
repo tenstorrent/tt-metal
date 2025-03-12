@@ -13,10 +13,11 @@
 #include "tt-metalium/kernel_types.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
+#include <tt-metalium/fabric_edm_packet_header.hpp>
+
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/erisc_datamover_builder.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/erisc_datamover_builder_helper.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include "ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
 #include "ttnn/cpp/ttnn/operations/creation.hpp"
@@ -267,12 +268,12 @@ struct mcast_send {
 
 using mode_variant_t = std::variant<mcast_send, unicast_send>;
 
-static constexpr size_t PACKET_HEADER_SIZE_BYTES = sizeof(tt::fabric::PacketHeader);
+static constexpr size_t PACKET_HEADER_SIZE_BYTES = sizeof(tt::tt_fabric::PacketHeader);
 void generate_sender_worker_kernels(
     Program& program,
     IDevice* device,
     const CoreCoord& worker_core,
-    const ttnn::ccl::SenderWorkerAdapterSpec& worker_fabric_connection,
+    const tt::tt_fabric::SenderWorkerAdapterSpec& worker_fabric_connection,
     const mode_variant_t& mode,
     std::size_t edm_buffer_size,
     uint32_t page_plus_header_size,
@@ -287,7 +288,7 @@ void generate_sender_worker_kernels(
     bool dest_is_dram,
     uint32_t worker_buffer_index_semaphore_id,
     // farthest to closest
-    const std::vector<ttnn::ccl::edm_termination_info_t>& edm_termination_infos) {
+    const std::vector<tt::tt_fabric::edm_termination_info_t>& edm_termination_infos) {
     const auto& edm_noc_core = CoreCoord(worker_fabric_connection.edm_noc_x, worker_fabric_connection.edm_noc_y);
     std::vector<uint32_t> sender_worker_reader_compile_args{
         src_is_dram,      //
@@ -394,11 +395,11 @@ bool RunLoopbackTest(
     bool src_is_dram,
     bool dest_is_dram,
     std::vector<Program>& programs,
-    ttnn::ccl::FabricEriscDatamoverBuilder& chip_0_edm_builder,
+    tt::tt_fabric::FabricEriscDatamoverBuilder& chip_0_edm_builder,
     std::optional<SubdeviceInfo>& subdevice_managers,
     bool enable_persistent_fabric) {
     auto& sender_program = programs.at(0);
-    std::size_t page_plus_header_size = page_size + sizeof(tt::fabric::PacketHeader);
+    std::size_t page_plus_header_size = page_size + sizeof(tt::tt_fabric::PacketHeader);
     std::size_t tensor_size_bytes = num_pages_total * page_size;
 
     std::vector<CoreCoord> worker_cores = {CoreCoord(0, 0)};
@@ -437,7 +438,7 @@ bool RunLoopbackTest(
     ////////////////////////////////////////////////////////////////////////////
 
     static constexpr std::size_t edm_buffer_size =
-        ttnn::ccl::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes + PACKET_HEADER_SIZE_BYTES;
+        tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes + PACKET_HEADER_SIZE_BYTES;
 
     auto chip0_worker_fabric_connection = chip_0_edm_builder.build_connection_to_worker_channel();
     ////////////////////////////////////////////////////////////////////////////
@@ -449,10 +450,10 @@ bool RunLoopbackTest(
     const auto& worker_core = worker_cores.at(0);
     log_trace(tt::LogTest, "Worker {}. On Core x={},y={}", 0, worker_core.x, worker_core.y);
 
-    const auto& edm_config = ttnn::ccl::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
-    const std::vector<ttnn::ccl::edm_termination_info_t>& edm_termination_infos =
-        enable_persistent_fabric ? std::vector<ttnn::ccl::edm_termination_info_t>{}
-                                 : std::vector<ttnn::ccl::edm_termination_info_t>{
+    const auto& edm_config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
+    const std::vector<tt::tt_fabric::edm_termination_info_t>& edm_termination_infos =
+        enable_persistent_fabric ? std::vector<tt::tt_fabric::edm_termination_info_t>{}
+                                 : std::vector<tt::tt_fabric::edm_termination_info_t>{
                                        {1,
                                         sender_device->ethernet_core_from_logical_core(eth_receiver_core).x,
                                         sender_device->ethernet_core_from_logical_core(eth_receiver_core).y,
@@ -516,8 +517,8 @@ void generate_multi_input_test_worker_reader_kernel(
     const ttnn::ccl::v2::TensorSlice& in1_command_tensor_slice,
     ttnn::ccl::cmd::CclCommandCode command_type,
     const DataMovementConfig& datamovement_kernel_config,
-    const std::optional<ttnn::ccl::SenderWorkerAdapterSpec>& chip0_worker_forward_fabric_connection,
-    const std::optional<ttnn::ccl::SenderWorkerAdapterSpec>& chip0_worker_backward_fabric_connection,
+    const std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>& chip0_worker_forward_fabric_connection,
+    const std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>& chip0_worker_backward_fabric_connection,
     const std::optional<ttnn::ccl::cmd::CclHostLowLevelCommandSequence>& optional_teardown_sequence,
     const ttnn::ccl::cmd::CclCommandDestArgs& dest_args) {
     bool fabric_enabled = std::holds_alternative<ttnn::ccl::cmd::UnicastCommandDestArgs>(dest_args) ||
@@ -637,8 +638,8 @@ void generate_multi_input_test_worker_kernels_for_local_tensor_write(
     const ttnn::ccl::v2::TensorSlice& out0_tensor_slice,
     const ttnn::ccl::v2::TensorSlice& out1_tensor_slice,
     const std::optional<ttnn::ccl::cmd::CclHostLowLevelCommandSequence>& optional_teardown_sequence,
-    std::optional<ttnn::ccl::SenderWorkerAdapterSpec>& chip0_worker_forward_fabric_connection,
-    std::optional<ttnn::ccl::SenderWorkerAdapterSpec>& chip0_worker_backward_fabric_connection,
+    std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>& chip0_worker_forward_fabric_connection,
+    std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>& chip0_worker_backward_fabric_connection,
     const ttnn::ccl::cmd::CclCommandDestArgs& dest_args) {
     // Just want a dummy DF
     tt::DataFormat df = (page_plus_header_size - PACKET_HEADER_SIZE_BYTES) == 1024   ? tt::DataFormat::Bfp8
@@ -754,7 +755,7 @@ bool RunLocalTestWithMultiInputReaders(
             std::holds_alternative<ttnn::ccl::cmd::DestTypeArgsNull>(dest_args), "Local command dest args expected");
     }
 
-    std::size_t page_plus_header_size = page_size + sizeof(tt::fabric::PacketHeader);
+    std::size_t page_plus_header_size = page_size + sizeof(tt::tt_fabric::PacketHeader);
 
     auto first_cb_index = tt::CB::c_in0;
     auto second_cb_index = tt::CB::c_in1;
@@ -789,16 +790,16 @@ bool RunLocalTestWithMultiInputReaders(
 
     const size_t num_pages_per_edm_buffer = 2;
 
-    std::optional<ttnn::ccl::SenderWorkerAdapterSpec> chip0_worker_forward_fabric_connection =
+    std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> chip0_worker_forward_fabric_connection =
         fabric_enabled ? line_fabric->uniquely_connect_worker(devices[0], ttnn::ccl::EdmLineFabricOpInterface::FORWARD)
-                       : std::optional<ttnn::ccl::SenderWorkerAdapterSpec>{std::nullopt};
+                       : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>{std::nullopt};
 
     // always at start of line for now
-    std::optional<std::vector<ttnn::ccl::edm_termination_info_t>> edm_termination_infos =
+    std::optional<std::vector<tt::tt_fabric::edm_termination_info_t>> edm_termination_infos =
         (!fabric_enabled || enable_persistent_fabric)
-            ? std::optional<std::vector<ttnn::ccl::edm_termination_info_t>>{std::nullopt}
+            ? std::optional<std::vector<tt::tt_fabric::edm_termination_info_t>>{std::nullopt}
             : line_fabric->generate_ordered_termination_info_farthest_to_nearest();
-    std::optional<ttnn::ccl::SenderWorkerAdapterSpec> chip0_worker_backward_fabric_connection = std::nullopt;
+    std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> chip0_worker_backward_fabric_connection = std::nullopt;
 
     std::optional<ttnn::ccl::SyncModeSpec> sync_details;
     std::optional<CoreCoord> teardown_worker_core;
@@ -917,11 +918,11 @@ bool RunLineFabricTest(
     std::optional<SubdeviceInfo>& subdevice_managers,
     ttnn::ccl::EdmLineFabricOpInterface& line_fabric,
     bool enable_persistent_fabric) {
-    std::size_t page_plus_header_size = page_size + sizeof(tt::fabric::PacketHeader);
+    std::size_t page_plus_header_size = page_size + sizeof(tt::tt_fabric::PacketHeader);
     std::size_t tensor_size_bytes = num_pages_total * page_size;
 
     static constexpr std::size_t edm_buffer_size =
-        ttnn::ccl::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes + PACKET_HEADER_SIZE_BYTES;
+        tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes + PACKET_HEADER_SIZE_BYTES;
     const size_t local_chip_id = 0;
     const size_t remote_chip_id = 1;
     auto program_ptrs = std::vector<Program*>(devices.size());
@@ -989,7 +990,7 @@ bool RunLineFabricTest(
     log_trace(tt::LogTest, "Worker {}. On Core x={},y={}", 0, worker_core.x, worker_core.y);
 
     const auto edm_termination_infos = enable_persistent_fabric
-                                           ? std::vector<ttnn::ccl::edm_termination_info_t>{}
+                                           ? std::vector<tt::tt_fabric::edm_termination_info_t>{}
                                            : line_fabric.generate_ordered_termination_info_farthest_to_nearest();
 
     auto chip0_worker_fabric_connection =
@@ -1053,7 +1054,7 @@ void persistent_fabric_teardown_sequence(
     const std::vector<IDevice*>& devices,
     std::optional<SubdeviceInfo>& subdevice_managers,
     ttnn::ccl::EdmLineFabricOpInterface& line_fabric,
-    tt::fabric::TerminationSignal termination_mode = tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE) {
+    tt::tt_fabric::TerminationSignal termination_mode = tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE) {
     log_info("Tearing down fabric");
 
     // Wait for workers to finish
@@ -1185,7 +1186,7 @@ int TestLineFabricEntrypoint(
         std::vector<Program> second_run_programs(1);
         success = launch_workers(second_run_programs);
         persistent_fabric_teardown_sequence(
-            devices, subdevice_managers, line_fabric.value(), tt::fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
+            devices, subdevice_managers, line_fabric.value(), tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
     }
 
     test_fixture.TearDown();
@@ -1252,11 +1253,11 @@ int TestLoopbackEntrypoint(
     IDevice* receiver_device = device_1;
 
     static constexpr std::size_t edm_buffer_size =
-        ttnn::ccl::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes + PACKET_HEADER_SIZE_BYTES;
+        tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes + PACKET_HEADER_SIZE_BYTES;
     const chip_id_t local_chip_id = 0;
     const chip_id_t remote_chip_id = 1;
-    const auto& edm_config = ttnn::ccl::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
-    auto chip_0_edm_builder = ttnn::ccl::FabricEriscDatamoverBuilder::build(
+    const auto& edm_config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
+    auto chip_0_edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
         sender_device,
         fabric_sender_program,
         eth_sender_core,
@@ -1265,7 +1266,7 @@ int TestLoopbackEntrypoint(
         edm_config,
         enable_persistent_fabric);
     chip_0_edm_builder.set_firmware_context_switch_interval(0);
-    auto chip_1_edm_builder = ttnn::ccl::FabricEriscDatamoverBuilder::build(
+    auto chip_1_edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
         receiver_device,
         fabric_receiver_program,
         eth_receiver_core,
@@ -1482,7 +1483,7 @@ bool TestMultiInputReaderKernel(
         // some get shutdown in between any packets in the pipeline. This can only be fixed by having a "drainer" op to
         // make sure it receives all writes before exiting
         persistent_fabric_teardown_sequence(
-            devices, subdevice_managers, line_fabric.value(), tt::fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
+            devices, subdevice_managers, line_fabric.value(), tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
 
         log_info(tt::LogTest, "Finished");
         for (auto d : devices) {
@@ -2058,7 +2059,7 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
 
     log_info(tt::LogTest, "Fabric teardown");
     persistent_fabric_teardown_sequence(
-        devices, subdevice_managers, fabric_handle.value(), tt::fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
+        devices, subdevice_managers, fabric_handle.value(), tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
 
     log_info(tt::LogTest, "Waiting for teardown completion");
     for (auto d : devices) {
@@ -2079,7 +2080,7 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
     size_t num_links,
     size_t num_op_invocations,
     const WriteThroughputStabilityTestWithPersistentFabricParams& params = {},
-    size_t packet_payload_size_bytes = ttnn::ccl::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes) {
+    size_t packet_payload_size_bytes = tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes) {
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     bool use_tg = num_devices == 32;
@@ -2236,8 +2237,9 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
         // reserve CB
         tt_metal::CircularBufferConfig cb_src0_config =
             tt_metal::CircularBufferConfig(
-                packet_header_cb_size_in_headers * sizeof(tt::fabric::PacketHeader), {{packet_header_cb_index, cb_df}})
-                .set_page_size(packet_header_cb_index, sizeof(tt::fabric::PacketHeader));
+                packet_header_cb_size_in_headers * sizeof(tt::tt_fabric::PacketHeader),
+                {{packet_header_cb_index, cb_df}})
+                .set_page_size(packet_header_cb_index, sizeof(tt::tt_fabric::PacketHeader));
         CBHandle sender_workers_cb = CreateCircularBuffer(program, worker_cores, cb_src0_config);
 
         tt_metal::CircularBufferConfig cb_src1_config =
@@ -2344,7 +2346,7 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
     TT_FATAL(fabric_programs->size() == devices.size(), "Expected fabric programs size to be same as devices size");
     log_info(tt::LogTest, "Fabric teardown");
     persistent_fabric_teardown_sequence(
-        devices, subdevice_managers, fabric_handle.value(), tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE);
+        devices, subdevice_managers, fabric_handle.value(), tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE);
 
     log_info(tt::LogTest, "Waiting for teardown completion");
     for (IDevice* d : devices) {

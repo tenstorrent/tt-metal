@@ -4,19 +4,27 @@
 
 #pragma once
 
-#include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <cstdint>
 
-namespace tt::fabric {
-enum BlockingMode : uint8_t {
-    //
-    BUSY_WAIT_BLOCKING,
+namespace tt::tt_fabric {
 
-    // will wait and allow context switching
-    CTX_SWITCH_BLOCKING,
+struct WorkerXY {
+    uint16_t x;
+    uint16_t y;
 
-    // function will early exist if not able to send
-    NON_BLOCKING
+    constexpr WorkerXY(uint16_t x, uint16_t y) : x(x), y(y) {}
+
+    constexpr uint32_t to_uint32() const { return (y << 16) | x; }
+    static constexpr WorkerXY from_uint32(uint32_t v) { return WorkerXY(v & 0xFFFF, (v >> 16) & 0xFFFF); }
+
+    constexpr bool operator==(const WorkerXY& rhs) const { return x == rhs.x && y == rhs.y; }
+    constexpr bool operator!=(const WorkerXY& rhs) const { return !(*this == rhs); }
+};
+
+struct coord_t {
+    coord_t(uint32_t x, uint32_t y) : x(x), y(y) {}
+    uint32_t x;
+    uint32_t y;
 };
 
 enum SendStatus : uint8_t {
@@ -57,7 +65,7 @@ struct EDMChannelWorkerLocationInfo {
     uint32_t align_pad_4;
     uint32_t align_pad_5;
 
-    ttnn::ccl::WorkerXY worker_xy;
+    WorkerXY worker_xy;
     uint32_t align_pad_6;  // Padding added for safe reading over noc
     uint32_t align_pad_7;
     uint32_t align_pad_8;
@@ -70,4 +78,4 @@ struct EDMChannelWorkerLocationInfo {
 
 static_assert(sizeof(EDMChannelWorkerLocationInfo) <= 64);
 
-}  // namespace tt::fabric
+}  // namespace tt::tt_fabric

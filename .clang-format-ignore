@@ -32,11 +32,6 @@ ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command_device.hpp
 ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_host_commands.cpp
 ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_host_commands.hpp
 ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp
-ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/edm_fabric_worker_adapters.hpp
-ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp
-ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_transmission.hpp
-ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_erisc_datamover.cpp
-ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_erisc_datamover_channels.hpp
 ttnn/cpp/ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_worker_builder.cpp
 ttnn/cpp/ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_worker_builder.hpp
 ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp

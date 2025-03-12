@@ -7,16 +7,16 @@
 #include "dataflow_api.h"
 
 #include "tt_metal/hw/inc/ethernet/dataflow_api.h"
-#include "cpp/ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp"
-#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header_validate.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_types.hpp"
-#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/edm_fabric_flow_control_helpers.hpp"
+#include "edm_fabric_utils.hpp"
+#include "fabric_edm_packet_header_validate.hpp"
+#include "fabric_edm_types.hpp"
+#include "edm_fabric_flow_control_helpers.hpp"
 #include "tt_metal/hw/inc/utils/utils.h"
 #include "debug/assert.h"
 #include "debug/dprint.h"
 #include <cstdint>
 
-namespace tt::fabric {
+namespace tt::tt_fabric {
 
 /*
  * The WorkerToFabricEdmSenderImpl acts as an adapter between the worker and the EDM, it hides details
@@ -51,19 +51,19 @@ struct WorkerToFabricEdmSenderImpl {
     template <ProgrammableCoreType my_core_type>
     static WorkerToFabricEdmSenderImpl build_from_args(std::size_t& arg_idx) {
         bool is_persistent_fabric = get_arg_val<uint32_t>(arg_idx++);
-        WorkerXY const edm_worker_xy = WorkerXY::from_uint32(get_arg_val<uint32_t>(arg_idx++));
-        auto const edm_buffer_base_addr = get_arg_val<uint32_t>(arg_idx++);
-        uint8_t const num_buffers_per_channel = get_arg_val<uint32_t>(arg_idx++);
-        size_t const edm_l1_sem_id = get_arg_val<uint32_t>(arg_idx++);
-        auto const edm_connection_handshake_l1_addr = get_arg_val<uint32_t>(arg_idx++);
-        auto const edm_worker_location_info_addr = get_arg_val<uint32_t>(arg_idx++);
-        uint16_t const buffer_size_bytes = get_arg_val<uint32_t>(arg_idx++);
-        auto const edm_buffer_index_addr = get_arg_val<uint32_t>(arg_idx++);
+        const WorkerXY edm_worker_xy = WorkerXY::from_uint32(get_arg_val<uint32_t>(arg_idx++));
+        const auto edm_buffer_base_addr = get_arg_val<uint32_t>(arg_idx++);
+        const uint8_t num_buffers_per_channel = get_arg_val<uint32_t>(arg_idx++);
+        const size_t edm_l1_sem_id = get_arg_val<uint32_t>(arg_idx++);
+        const auto edm_connection_handshake_l1_addr = get_arg_val<uint32_t>(arg_idx++);
+        const auto edm_worker_location_info_addr = get_arg_val<uint32_t>(arg_idx++);
+        const uint16_t buffer_size_bytes = get_arg_val<uint32_t>(arg_idx++);
+        const auto edm_buffer_index_addr = get_arg_val<uint32_t>(arg_idx++);
         auto writer_send_sem_addr =
             reinterpret_cast<volatile uint32_t* const>(get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++)));
         auto worker_teardown_sem_addr =
             reinterpret_cast<volatile uint32_t* const>(get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++)));
-        auto const worker_buffer_index_semaphore_addr = get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++));
+        const auto worker_buffer_index_semaphore_addr = get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++));
         ASSERT(
             (my_core_type == ProgrammableCoreType::TENSIX && worker_buffer_index_semaphore_addr < 1499136) ||
             (my_core_type == ProgrammableCoreType::ACTIVE_ETH && worker_buffer_index_semaphore_addr < 262144));
@@ -136,30 +136,28 @@ struct WorkerToFabricEdmSenderImpl {
     }
 
     FORCE_INLINE bool edm_has_space_for_packet() const {
-        using namespace tt::fabric;
         if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
             auto slots_used = distance_behind<EDM_NUM_BUFFER_SLOTS>(
-                       BufferPtr{static_cast<uint8_t>(*this->from_remote_buffer_slot_rdptr_ptr)},
-                       BufferPtr{static_cast<uint8_t>(*this->buffer_slot_wrptr_ptr)});
+                BufferPtr{static_cast<uint8_t>(*this->from_remote_buffer_slot_rdptr_ptr)},
+                BufferPtr{static_cast<uint8_t>(*this->buffer_slot_wrptr_ptr)});
             return slots_used < this->num_buffers_per_channel;
         } else {
-            auto const rdptr = *this->from_remote_buffer_slot_rdptr_ptr;
-            auto const wrptr = *this->buffer_slot_wrptr_ptr;
+            const auto rdptr = *this->from_remote_buffer_slot_rdptr_ptr;
+            const auto wrptr = *this->buffer_slot_wrptr_ptr;
             auto buffer_ptr_wrap = 2 * this->num_buffers_per_channel;
             auto slots_used = distance_behind(
-                                 BufferPtr{static_cast<uint8_t>(rdptr)},
-                                 BufferPtr{static_cast<uint8_t>(wrptr)},
-                                 buffer_ptr_wrap);
+                BufferPtr{static_cast<uint8_t>(rdptr)}, BufferPtr{static_cast<uint8_t>(wrptr)}, buffer_ptr_wrap);
             return slots_used < this->num_buffers_per_channel;
         }
     }
 
     FORCE_INLINE void wait_for_empty_write_slot() const {
-        using namespace tt::fabric;
         if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
-            while (distance_behind<EDM_NUM_BUFFER_SLOTS>(BufferPtr{static_cast<uint8_t>(*this->from_remote_buffer_slot_rdptr_ptr)}, BufferPtr{static_cast<uint8_t>(*this->buffer_slot_wrptr_ptr)}) < this->num_buffers_per_channel);
+            while (distance_behind<EDM_NUM_BUFFER_SLOTS>(
+                       BufferPtr{static_cast<uint8_t>(*this->from_remote_buffer_slot_rdptr_ptr)},
+                       BufferPtr{static_cast<uint8_t>(*this->buffer_slot_wrptr_ptr)}) < this->num_buffers_per_channel);
         } else {
-            auto const first_rdptr = *this->from_remote_buffer_slot_rdptr_ptr;
+            const auto first_rdptr = *this->from_remote_buffer_slot_rdptr_ptr;
             auto buffer_ptr_wrap = 2 * this->num_buffers_per_channel;
             bool has_space = distance_behind(
                                  BufferPtr{static_cast<uint8_t>(first_rdptr)},
@@ -172,31 +170,32 @@ struct WorkerToFabricEdmSenderImpl {
     }
 
     FORCE_INLINE void send_payload_blocking(uint32_t cb_id, uint32_t num_pages, uint32_t page_size) {
-        send_payload_impl<ttnn::ccl::EDM_IO_BLOCKING_MODE::BLOCKING>(cb_id, num_pages, page_size);
+        send_payload_impl<EDM_IO_BLOCKING_MODE::BLOCKING>(cb_id, num_pages, page_size);
     }
 
     // Does not wait for CB. Assumes caller handles CB data availability
     FORCE_INLINE void send_payload_non_blocking(uint32_t cb_id, uint32_t num_pages, uint32_t page_size) {
-        send_payload_impl<ttnn::ccl::EDM_IO_BLOCKING_MODE::NON_BLOCKING>(cb_id, num_pages, page_size);
+        send_payload_impl<EDM_IO_BLOCKING_MODE::NON_BLOCKING>(cb_id, num_pages, page_size);
     }
 
     /*
      * No CB
      */
     FORCE_INLINE void send_packet_header_and_notify_fabric_flush_blocking(uint32_t source_address) {
-        send_packet_header_and_notify_fabric<ttnn::ccl::EDM_IO_BLOCKING_MODE::FLUSH_BLOCKING>(source_address);
+        send_packet_header_and_notify_fabric<EDM_IO_BLOCKING_MODE::FLUSH_BLOCKING>(source_address);
     }
-    FORCE_INLINE void send_payload_without_header_non_blocking_from_address(uint32_t source_address, size_t size_bytes) {
-        send_payload_without_header_from_address_impl<ttnn::ccl::EDM_IO_BLOCKING_MODE::NON_BLOCKING>(source_address, size_bytes);
+    FORCE_INLINE void send_payload_without_header_non_blocking_from_address(
+        uint32_t source_address, size_t size_bytes) {
+        send_payload_without_header_from_address_impl<EDM_IO_BLOCKING_MODE::NON_BLOCKING>(source_address, size_bytes);
     }
     FORCE_INLINE void send_payload_flush_blocking_from_address(uint32_t source_address, size_t size_bytes) {
-        send_payload_from_address_impl<ttnn::ccl::EDM_IO_BLOCKING_MODE::FLUSH_BLOCKING>(source_address, size_bytes);
+        send_payload_from_address_impl<EDM_IO_BLOCKING_MODE::FLUSH_BLOCKING>(source_address, size_bytes);
     }
     FORCE_INLINE void send_payload_flush_non_blocking_from_address(uint32_t source_address, size_t size_bytes) {
-        send_payload_from_address_impl<ttnn::ccl::EDM_IO_BLOCKING_MODE::NON_BLOCKING>(source_address, size_bytes);
+        send_payload_from_address_impl<EDM_IO_BLOCKING_MODE::NON_BLOCKING>(source_address, size_bytes);
     }
     FORCE_INLINE void send_payload_blocking_from_address(uint32_t source_address, size_t size_bytes) {
-        send_payload_from_address_impl<ttnn::ccl::EDM_IO_BLOCKING_MODE::BLOCKING>(source_address, size_bytes);
+        send_payload_from_address_impl<EDM_IO_BLOCKING_MODE::BLOCKING>(source_address, size_bytes);
     }
 
     /*
@@ -204,10 +203,11 @@ struct WorkerToFabricEdmSenderImpl {
      */
     // Does not wait for CB. Assumes caller handles CB data availability
     FORCE_INLINE void send_payload_non_blocking_from_address(uint32_t source_address, size_t size_bytes) {
-        send_payload_from_address_impl<ttnn::ccl::EDM_IO_BLOCKING_MODE::NON_BLOCKING>(source_address, size_bytes);
+        send_payload_from_address_impl<EDM_IO_BLOCKING_MODE::NON_BLOCKING>(source_address, size_bytes);
     }
-    FORCE_INLINE void send_payload_non_blocking_from_address_with_trid(uint32_t source_address, size_t size_bytes, uint8_t trid) {
-        send_payload_from_address_with_trid_impl<ttnn::ccl::EDM_IO_BLOCKING_MODE::NON_BLOCKING>(source_address, size_bytes, trid);
+    FORCE_INLINE void send_payload_non_blocking_from_address_with_trid(
+        uint32_t source_address, size_t size_bytes, uint8_t trid) {
+        send_payload_from_address_with_trid_impl<EDM_IO_BLOCKING_MODE::NON_BLOCKING>(source_address, size_bytes, trid);
     }
 
     static constexpr size_t edm_sender_channel_field_stride_bytes = 16;
@@ -217,30 +217,41 @@ struct WorkerToFabricEdmSenderImpl {
 
         const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_buffer_index_addr;
         ASSERT(remote_buffer_index_addr > 0);
-        noc_async_read(remote_buffer_index_addr, reinterpret_cast<size_t>(this->buffer_slot_wrptr_ptr), sizeof(uint32_t));
+        noc_async_read(
+            remote_buffer_index_addr, reinterpret_cast<size_t>(this->buffer_slot_wrptr_ptr), sizeof(uint32_t));
 
-        tt::fabric::EDMChannelWorkerLocationInfo* worker_location_info_ptr = reinterpret_cast<tt::fabric::EDMChannelWorkerLocationInfo*>(edm_worker_location_info_addr);
-        const uint64_t edm_rdptr_addr = dest_noc_addr_coord_only | reinterpret_cast<size_t>(edm_worker_location_info_addr + offsetof(tt::fabric::EDMChannelWorkerLocationInfo, edm_rdptr));
-        noc_async_read(edm_rdptr_addr, reinterpret_cast<size_t>(this->from_remote_buffer_slot_rdptr_ptr), sizeof(uint32_t));
+        tt::tt_fabric::EDMChannelWorkerLocationInfo* worker_location_info_ptr =
+            reinterpret_cast<tt::tt_fabric::EDMChannelWorkerLocationInfo*>(edm_worker_location_info_addr);
+        const uint64_t edm_rdptr_addr =
+            dest_noc_addr_coord_only |
+            reinterpret_cast<size_t>(
+                edm_worker_location_info_addr + offsetof(tt::tt_fabric::EDMChannelWorkerLocationInfo, edm_rdptr));
+        noc_async_read(
+            edm_rdptr_addr, reinterpret_cast<size_t>(this->from_remote_buffer_slot_rdptr_ptr), sizeof(uint32_t));
         // TODO: Need to change byte enable to be word enable
-        const uint64_t dest_edm_location_info_addr            = dest_noc_addr_coord_only | edm_worker_location_info_addr;
-        const uint64_t edm_teardown_semaphore_address_address = dest_noc_addr_coord_only | reinterpret_cast<uint64_t>(&(worker_location_info_ptr->worker_teardown_semaphore_address));
-        const uint64_t connection_worker_xy_address           = dest_noc_addr_coord_only | reinterpret_cast<uint64_t>(&(worker_location_info_ptr->worker_xy));
-        noc_inline_dw_write(dest_edm_location_info_addr,            reinterpret_cast<size_t>(from_remote_buffer_slot_rdptr_ptr));
+        const uint64_t dest_edm_location_info_addr = dest_noc_addr_coord_only | edm_worker_location_info_addr;
+        const uint64_t edm_teardown_semaphore_address_address =
+            dest_noc_addr_coord_only |
+            reinterpret_cast<uint64_t>(&(worker_location_info_ptr->worker_teardown_semaphore_address));
+        const uint64_t connection_worker_xy_address =
+            dest_noc_addr_coord_only | reinterpret_cast<uint64_t>(&(worker_location_info_ptr->worker_xy));
+        noc_inline_dw_write(dest_edm_location_info_addr, reinterpret_cast<size_t>(from_remote_buffer_slot_rdptr_ptr));
         noc_inline_dw_write(edm_teardown_semaphore_address_address, reinterpret_cast<size_t>(worker_teardown_addr));
-        noc_inline_dw_write(connection_worker_xy_address,           ttnn::ccl::WorkerXY(my_x[0], my_y[0]).to_uint32());
+        noc_inline_dw_write(connection_worker_xy_address, WorkerXY(my_x[0], my_y[0]).to_uint32());
 
         const uint64_t edm_connection_handshake_noc_addr = dest_noc_addr_coord_only | edm_connection_handshake_l1_addr;
         noc_inline_dw_write(edm_connection_handshake_noc_addr, open_connection_value);
         noc_async_read_barrier();
 
-        this->edm_buffer_addr = this->edm_buffer_base_addr + (this->get_buffer_slot_index() * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
+        this->edm_buffer_addr = this->edm_buffer_base_addr + (this->get_buffer_slot_index() *
+                                                              (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
         ASSERT(*this->buffer_slot_wrptr_ptr < 20);
     }
 
     void close() {
         const auto dest_noc_addr_coord_only =
-            get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_wrptr_addr) & ~(uint64_t)NOC_COORDINATE_MASK;
+            get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_wrptr_addr) &
+            ~(uint64_t)NOC_COORDINATE_MASK;
 
         const uint64_t dest_edm_connection_state_addr = dest_noc_addr_coord_only | edm_connection_handshake_l1_addr;
         noc_inline_dw_write(dest_edm_connection_state_addr, close_connection_request_value);
@@ -289,9 +300,8 @@ struct WorkerToFabricEdmSenderImpl {
     uint8_t edm_noc_cmd_buf;
 
 private:
-
     FORCE_INLINE void update_edm_buffer_slot_wrptr() {
-        uint64_t const noc_sem_addr = get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_wrptr_addr);
+        const uint64_t noc_sem_addr = get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_wrptr_addr);
         noc_inline_dw_write(noc_sem_addr, *this->buffer_slot_wrptr_ptr);
     }
 
@@ -299,7 +309,8 @@ private:
         if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
             return normalize_ptr<EDM_NUM_BUFFER_SLOTS>(BufferPtr{static_cast<uint8_t>(*this->buffer_slot_wrptr_ptr)});
         } else {
-            return normalize_ptr(BufferPtr{static_cast<uint8_t>(*this->buffer_slot_wrptr_ptr)}, this->num_buffers_per_channel);
+            return normalize_ptr(
+                BufferPtr{static_cast<uint8_t>(*this->buffer_slot_wrptr_ptr)}, this->num_buffers_per_channel);
         }
     }
 
@@ -308,10 +319,10 @@ private:
             *this->buffer_slot_wrptr_ptr = wrap_increment<BUFFER_SLOT_PTR_WRAP>(*this->buffer_slot_wrptr_ptr);
         } else {
             uint8_t wrptr = *this->buffer_slot_wrptr_ptr;
-            *this->buffer_slot_wrptr_ptr =
-                !(wrptr == ((this->num_buffers_per_channel * 2) - 1)) ? wrptr + 1 : 0;
+            *this->buffer_slot_wrptr_ptr = !(wrptr == ((this->num_buffers_per_channel * 2) - 1)) ? wrptr + 1 : 0;
         }
-        this->edm_buffer_addr = this->edm_buffer_base_addr + (this->get_buffer_slot_index() * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
+        this->edm_buffer_addr = this->edm_buffer_base_addr + (this->get_buffer_slot_index() *
+                                                              (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
     }
 
     FORCE_INLINE uint64_t compute_dest_buffer_slot_noc_addr() const {
@@ -322,7 +333,7 @@ private:
         this->advance_buffer_slot_wrptr();
         this->update_edm_buffer_slot_wrptr();
     }
-    template <ttnn::ccl::EDM_IO_BLOCKING_MODE blocking_mode>
+    template <EDM_IO_BLOCKING_MODE blocking_mode>
     FORCE_INLINE void send_packet_header_and_notify_fabric(uint32_t source_address) {
         uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr();
 
@@ -330,33 +341,36 @@ private:
         post_send_payload_increment_pointers();
     }
 
-    template <ttnn::ccl::EDM_IO_BLOCKING_MODE blocking_mode>
+    template <EDM_IO_BLOCKING_MODE blocking_mode>
     FORCE_INLINE void send_payload_without_header_from_address_impl(uint32_t source_address, size_t size_bytes) {
         uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr();
 
         // skip past the first part of the buffer which will be occupied by the packet header
-        send_chunk_from_address<blocking_mode>(source_address, 1, size_bytes, buffer_address + sizeof(PACKET_HEADER_TYPE));
+        send_chunk_from_address<blocking_mode>(
+            source_address, 1, size_bytes, buffer_address + sizeof(PACKET_HEADER_TYPE));
     }
-    template <ttnn::ccl::EDM_IO_BLOCKING_MODE blocking_mode>
+    template <EDM_IO_BLOCKING_MODE blocking_mode>
     FORCE_INLINE void send_payload_from_address_impl(uint32_t source_address, size_t size_bytes) {
         uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr();
 
         ASSERT(size_bytes <= this->buffer_size_bytes);
-        ASSERT(tt::fabric::is_valid(*const_cast<PACKET_HEADER_TYPE*>(
-            reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
+        ASSERT(tt::tt_fabric::is_valid(
+            *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
         send_chunk_from_address<blocking_mode>(source_address, 1, size_bytes, buffer_address);
         post_send_payload_increment_pointers();
     }
-    template <ttnn::ccl::EDM_IO_BLOCKING_MODE blocking_mode>
-    FORCE_INLINE void send_payload_from_address_with_trid_impl(uint32_t source_address, size_t size_bytes, uint8_t trid) {
+    template <EDM_IO_BLOCKING_MODE blocking_mode>
+    FORCE_INLINE void send_payload_from_address_with_trid_impl(
+        uint32_t source_address, size_t size_bytes, uint8_t trid) {
         ASSERT(size_bytes <= this->buffer_size_bytes);
-        ASSERT(tt::fabric::is_valid(*const_cast<PACKET_HEADER_TYPE*>(
-            reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
-        send_chunk_from_address_with_trid<blocking_mode>(source_address, 1, size_bytes, this->edm_buffer_addr, trid, this->edm_noc_cmd_buf);
+        ASSERT(tt::tt_fabric::is_valid(
+            *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
+        send_chunk_from_address_with_trid<blocking_mode>(
+            source_address, 1, size_bytes, this->edm_buffer_addr, trid, this->edm_noc_cmd_buf);
         post_send_payload_increment_pointers();
     }
 
-    template <ttnn::ccl::EDM_IO_BLOCKING_MODE blocking_mode>
+    template <EDM_IO_BLOCKING_MODE blocking_mode>
     FORCE_INLINE void send_payload_impl(uint32_t cb_id, uint32_t num_pages, uint32_t page_size) {
         uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr();
         ASSERT(num_pages * page_size <= this->buffer_size_bytes);
@@ -370,4 +384,4 @@ using WorkerToFabricEdmSender = WorkerToFabricEdmSenderImpl<0>;
 template <uint8_t EDM_SENDER_CHANNEL_NUM_BUFFERS>
 using EdmToEdmSender = WorkerToFabricEdmSenderImpl<EDM_SENDER_CHANNEL_NUM_BUFFERS>;
 
-}  // namespace tt::fabric
+}  // namespace tt::tt_fabric

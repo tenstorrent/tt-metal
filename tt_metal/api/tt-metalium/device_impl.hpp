@@ -241,7 +241,7 @@ private:
     std::vector<std::unique_ptr<Program>> command_queue_programs_;
     bool using_fast_dispatch_ = false;
 
-    // Fabric program includes ethernet router kernel and tensix gatekeeper kernel
+    // Fabric program includes ethernet router kernel
     std::unique_ptr<Program> fabric_program_;
 
     // Work Executor for this device - can asynchronously process host side work for

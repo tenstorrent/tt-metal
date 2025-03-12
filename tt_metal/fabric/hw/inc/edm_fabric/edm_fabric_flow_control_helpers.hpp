@@ -10,7 +10,7 @@
 #include "tt_metal/hw/inc/utils/utils.h"
 #include "risc_attribs.h"
 
-namespace tt::fabric {
+namespace tt::tt_fabric {
 
 template <typename T, typename Parameter>
 class NamedType {
@@ -154,9 +154,9 @@ private:
     // different sized channels
     FORCE_INLINE bool is_caught_up_to(const BufferPtr& leading_ptr) const { return this->get_ptr() == leading_ptr; }
     FORCE_INLINE uint8_t distance_behind(const BufferPtr& leading_ptr) const {
-        return tt::fabric::distance_behind<NUM_BUFFERS>(this->ptr, leading_ptr);
+        return tt::tt_fabric::distance_behind<NUM_BUFFERS>(this->ptr, leading_ptr);
     }
     BufferPtr ptr = BufferPtr{0};
 };
 
-}  // namespace tt::fabric
+}  // namespace tt::tt_fabric

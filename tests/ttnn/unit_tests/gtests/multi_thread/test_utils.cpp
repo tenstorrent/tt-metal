@@ -103,7 +103,7 @@ void persistent_fabric_teardown_sequence(
     const std::vector<IDevice*>& devices,
     std::optional<SubdeviceInfo>& subdevice_managers,
     ttnn::ccl::EdmLineFabricOpInterface& line_fabric,
-    tt::fabric::TerminationSignal termination_mode) {
+    tt::tt_fabric::TerminationSignal termination_mode) {
     log_info("Tearing down fabric");
 
     // Wait for workers to finish

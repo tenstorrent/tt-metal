@@ -9,7 +9,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/functions.hpp"
-#include "ttnn/operations/ccl/erisc_datamover_builder.hpp"
+#include "ttnn/operations/ccl/erisc_datamover_builder_helper.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -46,7 +46,7 @@ void persistent_fabric_teardown_sequence(
     const std::vector<IDevice*>& devices,
     std::optional<SubdeviceInfo>& subdevice_managers,
     ttnn::ccl::EdmLineFabricOpInterface& line_fabric,
-    tt::fabric::TerminationSignal termination_mode = tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE);
+    tt::tt_fabric::TerminationSignal termination_mode = tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE);
 
 std::tuple<
     ttnn::global_semaphore::MultiDeviceGlobalSemaphore,

@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-namespace tt::fabric {
+namespace tt::tt_fabric {
 
 struct EdmFabricReceiverChannelCounters {
     uint32_t n_pkts_processed = 0;
@@ -76,4 +76,4 @@ struct EdmFabricSenderChannelCounters {
 };
 static constexpr uint32_t sender_channel_counters_l1_size = sizeof(EdmFabricSenderChannelCounters);
 
-}  // namespace tt::fabric
+}  // namespace tt::tt_fabric

@@ -14,7 +14,7 @@
 #include "cpp/ttnn/tensor/enum_types.hpp"
 #include "cpp/ttnn/operations/ccl/common/kernels/command_processor.hpp"
 #include "cpp/ttnn/operations/ccl/common/kernels/ccl_send_utils.hpp"
-#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_transmission.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp"
 
 #include <cstdint>
 
