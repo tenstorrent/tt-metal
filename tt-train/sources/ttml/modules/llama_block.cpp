@@ -35,11 +35,17 @@ autograd::TensorPtr LlamaMLP::operator()(const autograd::TensorPtr& input) {
     return x;
 }
 
-LlamaBlock::LlamaBlock(uint32_t embedding_size, uint32_t num_heads, float dropout_prob) {
+LlamaBlock::LlamaBlock(
+    uint32_t embedding_size,
+    uint32_t num_heads,
+    uint32_t num_groups,
+    float dropout_prob,
+    const ops::RotaryEmbeddingParams* rope_params) {
     m_mlp = std::make_shared<LlamaMLP>(embedding_size, dropout_prob);
     m_attention_norm = std::make_shared<RMSNormLayer>(embedding_size);
     m_mlp_norm = std::make_shared<RMSNormLayer>(embedding_size);
-    m_attention = std::make_shared<MultiHeadAttention>(embedding_size, num_heads, dropout_prob);
+    m_attention =
+        std::make_shared<GroupedQueryAttention>(embedding_size, num_heads, num_groups, dropout_prob, rope_params);
 
     create_name("llama_block");
     register_module(m_mlp, "mlp");

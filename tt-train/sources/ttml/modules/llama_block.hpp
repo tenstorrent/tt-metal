@@ -6,10 +6,9 @@
 
 #include "autograd/tensor.hpp"
 #include "modules/dropout_module.hpp"
+#include "modules/grouped_query_attention.hpp"
 #include "modules/linear_module.hpp"
-#include "modules/multi_head_attention.hpp"
 #include "modules/rms_norm_module.hpp"
-#include "modules/single_head_attention.hpp"
 
 namespace ttml::modules {
 
@@ -31,10 +30,15 @@ private:
     std::shared_ptr<LlamaMLP> m_mlp;
     std::shared_ptr<RMSNormLayer> m_attention_norm;
     std::shared_ptr<RMSNormLayer> m_mlp_norm;
-    std::shared_ptr<MultiHeadAttention> m_attention;
+    std::shared_ptr<GroupedQueryAttention> m_attention;
 
 public:
-    explicit LlamaBlock(uint32_t embedding_size, uint32_t num_heads, float dropout_prob = 0.0F);
+    explicit LlamaBlock(
+        uint32_t embedding_size,
+        uint32_t num_heads,
+        uint32_t num_groups,
+        float dropout_prob = 0.0F,
+        const ops::RotaryEmbeddingParams* rope_params = nullptr);
 
     autograd::TensorPtr operator()(const autograd::TensorPtr& input, const autograd::TensorPtr& mask);
 };
