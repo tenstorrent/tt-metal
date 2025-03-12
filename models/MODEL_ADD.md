@@ -16,7 +16,7 @@ because of resource constraints, the ground often moves underneath the feet
 of these large PRs. This leads to:
 
 - Delays merging into main
-- Review strain for reviewers because they're so much code in one PR
+- Review strain for reviewers because there is so much code in one PR
 - Redundant pipeline usage because one test could be validated but now you're
   just running the whole set of single card tests to validate one mistake
 
