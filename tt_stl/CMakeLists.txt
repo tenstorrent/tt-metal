@@ -6,8 +6,8 @@ target_sources(
     PUBLIC
         FILE_SET tt_stl
         TYPE HEADERS
-        BASE_DIRS
-            tt_stl
+        BASE_DIRS tt_stl
+        FILES
             aligned_allocator.hpp
             any_range.hpp
             concepts.hpp
