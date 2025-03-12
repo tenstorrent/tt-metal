@@ -13,8 +13,3 @@ tt_llk_wormhole_b0/hw_specific/inc/noc_nonblocking_api.h
 tt_llk_wormhole_b0/hw_specific/inc/noc_parameters.h
 tt_llk_wormhole_b0/hw_specific/inc/tensix.h
 tt_llk_wormhole_b0/hw_specific/inc/tensix_types.h
-
-# Do not format grayskull files
-tt_llk_grayskull/common/inc/*
-tt_llk_grayskull/common/inc/sfpu/*
-tt_llk_grayskull/llk_lib/*
