@@ -7,21 +7,13 @@ run_tg_llama3_tests() {
 
   echo "LOG_METAL: Running run_tg_llama3_tests"
 
-  # Llama3.2-1B
-  llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
-  # Llama3.2-3B
-  llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
-  # Llama3.1-8B
-  llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
-  # Llama3.2-11B
-  llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
   # Llama3.1-70B
   llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
 
   # Run all Llama3 tests for 1B, 3B, 8B, 11B and 70B weights
   # for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b" "$llama70b"; do
-  for llama_dir in "$llama1b" "$llama8b" "$llama70b"; do
-    LLAMA_DIR=$llama_dir MESH_DEVICE=TG pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 5000; fail+=$?
+  for llama_dir in "$llama70b"; do
+    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/demo/demo_decode.py --timeout 5000; fail+=$?
     echo "LOG_METAL: Llama3 tests for $llama_dir completed"
   done
 
@@ -50,6 +42,8 @@ run_tg_demo_tests() {
 
   if [[ "$1" == "falcon7b" ]]; then
     run_tg_falcon7b_tests
+  elif  [[ "$1" == "llama3" ]]; then
+    run_tg_llama3_tests
   else
     echo "LOG_METAL: Unknown model type: $1"
     return 1
