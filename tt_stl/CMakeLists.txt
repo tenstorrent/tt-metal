@@ -3,4 +3,13 @@ add_library(Metalium::Metal::STL ALIAS tt_stl)
 
 target_include_directories(tt_stl INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 
-target_link_libraries(tt_stl INTERFACE Reflect::Reflect)
+# These dependencies are currently brought in by dependencies/CMakeLists.txt
+# However, it would probably be more appropriate to bring them in here so that tt_stl can be standalone header only library
+# Fix this later
+target_link_libraries(
+    tt_stl
+    INTERFACE
+        Reflect::Reflect
+        magic_enum::magic_enum
+        nlohmann_json::nlohmann_json
+)
