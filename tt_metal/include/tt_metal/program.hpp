@@ -9,7 +9,7 @@
 
 #include <kernel_types.hpp>
 #include <circular_buffer_types.hpp>
-#include "tt_metal/tt_stl/any_range.hpp"
+#include <tt_stl/any_range.hpp>
 
 //==================================================
 //                  PROGRAM MANAGEMENT

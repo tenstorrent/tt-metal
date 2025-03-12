@@ -6,7 +6,7 @@
 
 #include <memory>
 
-#include <tt-metalium/overloaded.hpp>
+#include <tt_stl/overloaded.hpp>
 #include "tt-metalium/mesh_coord.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"

@@ -17,7 +17,7 @@
 #include <tt-metalium/host_api.hpp>
 
 #include "cpp/ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
-#include <tt-metalium/overloaded.hpp>
+#include <tt_stl/overloaded.hpp>
 
 #include <optional>
 #include <variant>

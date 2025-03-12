@@ -23,7 +23,7 @@
 #include "sub_device_types.hpp"
 #include "umd/device/tt_soc_descriptor.h"
 #include "umd/device/types/xy_pair.h"
-#include "concepts.hpp"
+#include <tt_stl/concepts.hpp>
 #include "assert.hpp"
 #include <nlohmann/json.hpp>
 
