@@ -128,31 +128,19 @@ static Tensor full_impl(
     // TODO: 15061 - Generalize the header to support generic vector / view types.
     std::fill(std::begin(owned_buffer), std::end(owned_buffer), value);
 
-    if (!optional_output_tensor.has_value()) {
-        auto output = Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
-        if (!devices.empty()) {
-            if (devices.size() == 1) {
-                if (auto mesh_device = dynamic_cast<MeshDevice*>(devices[0])) {
-                    return output.to_device(mesh_device, output_mem_config);
-                }
-            }
-            output = output.to_device(devices, output_mem_config);
-        }
-        return output;
-    } else {
-        const auto buffers = optional_output_tensor->buffers();
-        const bool using_fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
-
-        for (auto* buffer : buffers) {
-            if (using_fast_dispatch) {
-                auto& cmd_queue = buffer->device()->command_queue(*queue_id);
-                tt::tt_metal::EnqueueWriteBuffer(cmd_queue, *buffer, owned_buffer.data(), /*blocking=*/false);
-            } else {
-                tt::tt_metal::detail::WriteToBuffer(*buffer, owned_buffer.get());
-            }
-        }
-
+    Tensor host_tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
+    if (optional_output_tensor.has_value()) {
+        tt::tt_metal::write_tensor(host_tensor, *optional_output_tensor, queue_id);
         return *optional_output_tensor;
+    } else if (devices.empty()) {
+        return host_tensor;
+    } else {
+        if (devices.size() == 1) {
+            if (auto mesh_device = dynamic_cast<MeshDevice*>(devices[0])) {
+                return host_tensor.to_device(mesh_device, output_mem_config);
+            }
+        }
+        return host_tensor.to_device(devices, output_mem_config);
     }
 }
 
