@@ -216,11 +216,11 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         is_width_sharded,
         aligned_input_nstick_nbytes};
 
-    reader_ct_args[0] = 0;
+    reader_ct_args[0] = padding_config_cb_id;
     reader_ct_args[1] = local_config_cb_id;
-    reader_ct_args[2] = 0;
+    reader_ct_args[2] = remote_config_cb_id;
     reader_ct_args[3] = blocking_local_config_cb_id;
-    reader_ct_args[4] = 0;
+    reader_ct_args[4] = blocking_remote_config_cb_id;
 
     KernelHandle reader_kernel_id0 = CreateKernel(
         program,
@@ -229,18 +229,11 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_ct_args});
 
-    reader_ct_args[0] = padding_config_cb_id;
+    reader_ct_args[0] = 0;
     reader_ct_args[1] = 0;
-    reader_ct_args[2] = remote_config_cb_id;
+    reader_ct_args[2] = 0;
     reader_ct_args[3] = 0;
-    reader_ct_args[4] = blocking_remote_config_cb_id;
-
-    KernelHandle reader_kernel_id1 = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather.cpp",
-        all_cores,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_ct_args});
+    reader_ct_args[4] = 0;
 
     if (!capture_buffers) {
         padding_config_buffer = nullptr;

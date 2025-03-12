@@ -341,6 +341,7 @@ const uint16_t PAD_LOCAL_SENTINAL = 0xFFFF;
 using GatherStep = std::tuple<uint32_t, uint32_t, uint32_t>;
 using PerCoreGatherData = std::map<std::pair<uint32_t, uint32_t>, std::vector<GatherStep>>;
 using ReblockedData = std::map<std::pair<uint32_t, uint32_t>, std::map<uint32_t, std::vector<GatherStep>>>;
+using uint32_triplet_t = std::tuple<uint32_t, uint32_t, uint32_t>;
 
 // Split gather data up by a specified block size
 // This information is needed to interleave input untilization with gather
@@ -388,8 +389,10 @@ BlockingConfig generate_blocking_configs(const ReblockedData& reblocked_gather_d
         if (is_pad) {
             continue;  // We don't need blocking information for padding because it is not dependant on input
         }
-        auto& config =
-            is_local ? local_block_config[src_core_id] : remote_block_config[is_remote ? dst_core_id : src_core_id];
+        // auto& config =
+        // is_local ? local_block_config[src_core_id] : remote_block_config[is_remote ? dst_core_id : src_core_id];
+        auto& config = is_local ? local_block_config[src_core_id] : remote_block_config[src_core_id];
+
         for (const auto& [block_id, transfers] : reblocked_data) {
             const auto transfers_in_block = transfers.size();
             if (config.contains(block_id)) {
@@ -463,6 +466,56 @@ FlattenedBlockingConfig flatten_blocking_config(const BlockingConfig& blocking, 
     }
 
     return result;
+}
+
+void validate_blocking_configs(
+    const BlockingConfig& blocking_configs,
+    const std::vector<std::pair<uint32_triplet_t, std::vector<uint32_triplet_t>>>& local_config,
+    const std::vector<std::vector<std::pair<uint32_triplet_t, std::vector<uint32_triplet_t>>>>& remote_config) {
+    // local
+    for (size_t core = 0; core < local_config.size(); ++core) {
+        const auto& gather_entry = local_config[core];
+        const auto& gather_steps = gather_entry.second;
+        uint32_t num_steps = gather_steps.size();
+
+        uint32_t sum = 0;
+        if (core < blocking_configs.local.size()) {
+            for (const auto& kv : blocking_configs.local[core]) {
+                sum += kv.second;
+            }
+        }
+        // If there are any gather steps there should be at least 1 blocking transfers
+        // We can't check equiality here because we can create multiple chunks from a single transfer
+        TT_FATAL(
+            (num_steps == 0 && sum == 0) || (num_steps > 0 && sum > 0),
+            "Local blocking config mismatch for core {}: found {} gather steps but blocking sum is {}",
+            core,
+            num_steps,
+            sum);
+    }
+
+    // remote
+    for (size_t core = 0; core < remote_config.size(); ++core) {
+        uint32_t num_steps = 0;
+        for (const auto& entry : remote_config[core]) {
+            num_steps += entry.second.size();
+        }
+
+        uint32_t sum = 0;
+        if (core < blocking_configs.remote.size()) {
+            for (const auto& kv : blocking_configs.remote[core]) {
+                sum += kv.second;
+            }
+        }
+        // If there are any gather steps there should be at least 1 blocking transfers
+        // We can't check equiality here because we can create multiple chunks from a single transfer
+        TT_FATAL(
+            (num_steps == 0 && sum == 0) || (num_steps > 0 && sum > 0),
+            "Remote blocking config mismatch for core {}: found {} gather steps but blocking sum is {}",
+            core,
+            num_steps,
+            sum);
+    }
 }
 
 uint32_t generate_max_out_nsticks_per_core(const std::vector<ShardBoundary>& shard_boundaries) {
@@ -548,7 +601,6 @@ generate_halo_kernel_config_tensors(
      * dst_start0, length0, src_start1, dst_start1, length1, ...], (nocx, nocy, len) -> [src_start0, dst_start0,
      * length0, src_start1, dst_start1, length1, ...], ...}
      */
-    using uint32_triplet_t = std::tuple<uint32_t, uint32_t, uint32_t>;
     std::vector<std::vector<uint32_pair_t>> pad_config;
     std::vector<std::pair<uint32_triplet_t, std::vector<uint32_triplet_t>>> local_config;
     std::vector<std::vector<std::pair<uint32_triplet_t, std::vector<uint32_triplet_t>>>> remote_config;
@@ -583,6 +635,7 @@ generate_halo_kernel_config_tensors(
 
     tt::log_info("local config = {}", local_config);
     tt::log_info("remote config = {}", remote_config);
+    validate_blocking_configs(blocking_configs, local_config, remote_config);
 
     // flatten and uniformize the lengths of each config list
     auto flatten_pad_config = [](auto& config) -> std::vector<std::vector<uint16_t>> {
