@@ -3,7 +3,7 @@ target_link_libraries(
     lightmetal_runner
     PRIVATE
         Metalium::Metal
-        Metalium::Metal::STL
+        TT:STL
         FlatBuffers::FlatBuffers
 )
 target_include_directories(

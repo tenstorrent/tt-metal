@@ -1,5 +1,25 @@
 add_library(tt_stl INTERFACE)
-add_library(Metalium::Metal::STL ALIAS tt_stl)
+add_library(TT:STL ALIAS tt_stl)
+
+target_sources(
+    tt_stl
+    PUBLIC
+        FILE_SET tt_stl
+        TYPE HEADERS
+        BASE_DIRS
+            tt_stl
+            aligned_allocator.hpp
+            any_range.hpp
+            concepts.hpp
+            indestructible.hpp
+            overloaded.hpp
+            reflection.hpp
+            slotmap.hpp
+            span.hpp
+            strong_type.hpp
+            type_name.hpp
+            unique_any.hpp
+)
 
 target_include_directories(tt_stl INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 

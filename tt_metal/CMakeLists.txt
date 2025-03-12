@@ -203,7 +203,7 @@ target_link_libraries(
         Reflect::Reflect
     PRIVATE
         Metalium::Metal::Impl
-        Metalium::Metal::STL
+        TT:STL
         metal_common_libs
         common
         jit_build

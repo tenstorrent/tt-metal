@@ -803,7 +803,7 @@ set(TTNN_SUBLIBRARIES
 set(TTNN_PUBLIC_LINK_LIBRARIES
     metal_common_libs
     Metalium::Metal
-    Metalium::Metal::STL
+    TT:STL
     xtensor
     xtensor-blas
     xtl

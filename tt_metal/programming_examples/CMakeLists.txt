@@ -1,5 +1,5 @@
 # All programming example targets should link tt_stl
-link_libraries(Metalium::Metal::STL)
+link_libraries(TT:STL)
 
 set(PROGRAMMING_EXAMPLES_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/add_2_integers_in_compute/add_2_integers_in_compute.cpp
