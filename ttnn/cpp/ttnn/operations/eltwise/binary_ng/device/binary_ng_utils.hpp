@@ -77,6 +77,8 @@ void add_activation_defines(
     tt::stl::Span<const unary::UnaryWithParam> activations,
     std::string_view operand);
 
+void add_dataflow_defines(std::map<std::string, std::string>& defines, const DataType dtype, const bool is_sfpu_op);
+
 uint32_t pack_scalar_runtime_arg(const float scalar, const DataType dtype, const bool is_quant_op);
 
 }  // namespace ttnn::operations::binary_ng

@@ -52,10 +52,14 @@ void MAIN {
 #endif
         tile_regs_acquire();
         copy_tile_to_dst_init_short_with_dt(cb_post_rhs, cb_post_lhs);
+        // DEBUG: use this instead of the line above
+        // unary_op_init_common(cb_post_lhs, cb_out);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(cb_post_lhs, i, i * 2);
         }
         copy_tile_to_dst_init_short_with_dt(cb_post_lhs, cb_post_rhs);
+        // DEBUG: use this instead of the line above
+        // unary_op_init_common(cb_post_rhs, cb_out);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(cb_post_rhs, i, i * 2 + 1);
             BINARY_SFPU_OP(i * 2, i * 2 + 1);

@@ -20,6 +20,16 @@ struct QuantOp {
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input_tensor,
+        const Tensor& scale,
+        const int32_t zero_point,
+        const std::optional<int32_t> axis,
+        const std::optional<const DataType>& output_dtype = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt);
 };
 
 struct RequantOp {
@@ -41,6 +51,16 @@ struct DequantOp {
         QueueId queue_id,
         const Tensor& input_tensor,
         const float scale,
+        const int32_t zero_point,
+        const std::optional<int32_t> axis,
+        const std::optional<const DataType>& output_dtype = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input_tensor,
+        const Tensor& scale,
         const int32_t zero_point,
         const std::optional<int32_t> axis,
         const std::optional<const DataType>& output_dtype = std::nullopt,

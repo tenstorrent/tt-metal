@@ -331,6 +331,25 @@ void add_activation_defines(
         });
 }
 
+void add_dataflow_defines(std::map<std::string, std::string>& defines, const DataType dtype, const bool is_sfpu_op) {
+    if (is_sfpu_op && dtype == DataType::FLOAT32) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
+        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<float>";
+        defines["FILL_WITH_VALUE_FLOAT"] = "fill_with_val<1024, float>";
+    } else if (is_sfpu_op && dtype == DataType::INT32) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
+        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<int32_t>";
+        defines["FILL_WITH_VALUE"] = "fill_with_val<1024, int32_t>";
+    } else {
+        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column_bfloat16";
+        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row_bfloat16";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element_bfloat16";
+        defines["FILL_WITH_VALUE"] = "fill_with_val_bfloat16";
+    }
+}
+
 bool OpConfig::is_sfpu_op() const { return std::holds_alternative<SfpuBinaryOp>(binary_op); }
 
 uint32_t pack_scalar_runtime_arg(const float scalar, const DataType dtype, const bool is_quant_op) {
