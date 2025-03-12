@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "gtest/gtest.h"
-#include "ttnn_test_fixtures.hpp"
+
+#include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
+
 #include "ttnn/cpp/ttnn/tensor/types.hpp"
 #include "ttnn/cpp/ttnn/operations/creation.hpp"
 
@@ -23,19 +25,21 @@ Tensor create_host_multi_device_tensor(const Tensor& tensor, const ReplicateTens
     return Tensor{MultiDeviceHostStorage(strategy, owned_buffers, specs), tensor.get_tensor_spec()};
 }
 
-TEST_F(T3kMultiDeviceFixture, TestGetTensorsFromMultiDeviceStorage) {
+TEST_F(GenericMeshDeviceFixture, TestGetTensorsFromMultiDeviceStorage) {
     MeshDevice* mesh_device = this->mesh_device_.get();
     const auto input_tensor = ttnn::ones(ttnn::Shape({32, 32}), DataType::BFLOAT16);
-    const auto replicated_tensor = create_host_multi_device_tensor(input_tensor, ReplicateTensor(8));
+    const auto replicated_tensor =
+        create_host_multi_device_tensor(input_tensor, ReplicateTensor(mesh_device_->num_devices()));
     const auto device_tensors = get_tensors_from_multi_device_storage(replicated_tensor);
 
     EXPECT_EQ(device_tensors.size(), 8);
 }
 
-TEST_F(T3kMultiDeviceFixture, TestGetDistributedTensorConfigFromMultiDeviceStorage) {
+TEST_F(GenericMeshDeviceFixture, TestGetDistributedTensorConfigFromMultiDeviceStorage) {
     MeshDevice* mesh_device = this->mesh_device_.get();
     const auto input_tensor = ttnn::ones(ttnn::Shape({32, 32}), DataType::BFLOAT16);
-    const auto replicated_tensor = create_host_multi_device_tensor(input_tensor, ReplicateTensor(8));
+    const auto replicated_tensor =
+        create_host_multi_device_tensor(input_tensor, ReplicateTensor(mesh_device_->num_devices()));
     const auto distributed_tensor_config = get_distributed_tensor_config_from_tensor(replicated_tensor);
 
     EXPECT_TRUE(std::holds_alternative<ReplicateTensor>(distributed_tensor_config));
