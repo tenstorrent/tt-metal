@@ -126,6 +126,8 @@ public:
 
     CoreRangeSet(const CoreRange& core_range);
 
+    CoreRangeSet(const CoreCoord& core);
+
     CoreRangeSet() = default;
 
     friend void swap(CoreRangeSet& first, CoreRangeSet& second);

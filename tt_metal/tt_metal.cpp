@@ -1101,14 +1101,14 @@ void UpdateDynamicCircularBufferAddressAndTotalSize(
 
 uint32_t CreateSemaphore(
     Program& program,
-    const std::variant<CoreRange, CoreRangeSet>& core_spec,
+    const std::variant<CoreRange, CoreRangeSet, CoreCoord>& core_spec,
     uint32_t initial_value,
     CoreType core_type) {
     return std::visit(
         [&](auto&& c) -> uint32_t {
             using T = std::decay_t<decltype(c)>;
             CoreRangeSet crs;
-            if constexpr (std::is_same_v<T, CoreRange>) {
+            if constexpr (std::is_same_v<T, CoreRange> || std::is_same_v<T, CoreCoord>) {
                 crs = CoreRangeSet(c);
             } else {
                 // Merge ranges to reduce the number of multicasts needed to initialize semaphores.
