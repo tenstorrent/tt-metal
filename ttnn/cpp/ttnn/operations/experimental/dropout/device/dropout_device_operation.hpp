@@ -12,14 +12,9 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
-#include "ttnn/mesh_device_operation_adapter.hpp"
+#include "ttnn/mesh_execution.hpp"
 
 #include "dropout_device_operation_types.hpp"
-
-namespace tt::tt_metal::distributed {
-class MeshDevice;
-class MeshCoordinate;
-}  // namespace tt::tt_metal::distributed
 
 namespace ttnn::operations::experimental::dropout {
 
@@ -53,11 +48,9 @@ struct DropoutDeviceOperation {
         const std::optional<Tensor>& preallocated_output = std::nullopt);
 };
 
-struct DropoutMeshDeviceOperation : public ttnn::MeshDeviceOperationAdapter<DropoutDeviceOperation> {};
-
 }  // namespace ttnn::operations::experimental::dropout
 
 namespace ttnn::prim {
 constexpr auto dropout = ttnn::
-    register_operation<"ttnn::prim::dropout", ttnn::operations::experimental::dropout::DropoutMeshDeviceOperation>();
+    register_mesh_operation<"ttnn::prim::dropout", ttnn::operations::experimental::dropout::DropoutDeviceOperation>();
 }  // namespace ttnn::prim
