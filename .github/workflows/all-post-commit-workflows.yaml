@@ -214,17 +214,9 @@ jobs:
     strategy:
       matrix:
         config:
-          - version: "20.04"
-            toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
-            build-type: "Debug"
-            publish-artifact: false
-          - version: "20.04"
-            toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
-            build-type: "RelWithDebInfo"
-            publish-artifact: false
           - version: "22.04"
             toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
-            build-type: "Release"
+            build-type: "Debug"
             publish-artifact: false
           - version: "22.04"
             toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
