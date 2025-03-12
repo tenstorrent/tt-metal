@@ -6,6 +6,7 @@
 
 #include <math.h>
 
+// #include "lightmetal/lightmetal_capture.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
 #include <cstdint>
@@ -202,9 +203,12 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
             .set_globally_allocated_address(*remote_config_buffer1);
     CBHandle remote_config_cb1 = CreateCircularBuffer(program, all_cores, remote_config_cb_config1);
 
-    auto padding_config_buffer2 = nullptr;
-    auto local_config_buffer2 = nullptr;
-    auto remote_config_buffer2 = nullptr;
+    std::shared_ptr<Buffer> padding_config_buffer2 = nullptr;
+    std::shared_ptr<Buffer> local_config_buffer2 = nullptr;
+    std::shared_ptr<Buffer> remote_config_buffer2 = nullptr;
+    CBHandle padding_config_cb2 = 0;
+    CBHandle local_config_cb2 = 0;
+    CBHandle remote_config_cb2 = 0;
     if (!in_place) {
         TT_ASSERT(padding_config2.get_dtype() == DataType::UINT16);
         TT_ASSERT(local_config2.get_dtype() == DataType::UINT16);
@@ -217,7 +221,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
                 padding_config_buffer2->size() / num_cores, {{cb_indices.padding_config_cb_id2, kernel_config_df}})
                 .set_page_size(cb_indices.padding_config_cb_id2, padding_config_buffer2->page_size())
                 .set_globally_allocated_address(*padding_config_buffer2);
-        CBHandle padding_config_cb2 = CreateCircularBuffer(program, all_cores, padding_config_cb_config2);
+        padding_config_cb2 = CreateCircularBuffer(program, all_cores, padding_config_cb_config2);
 
         cb_indices.local_config_cb_id2 = cb_indices.get_next_cb_id();
         local_config_buffer2 = local_config2.device_buffer();
@@ -226,7 +230,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
                 local_config_buffer2->size() / num_cores, {{cb_indices.local_config_cb_id2, kernel_config_df}})
                 .set_page_size(cb_indices.local_config_cb_id2, local_config_buffer2->page_size())
                 .set_globally_allocated_address(*local_config_buffer2);
-        CBHandle local_config_cb2 = CreateCircularBuffer(program, all_cores, local_config_cb_config2);
+        local_config_cb2 = CreateCircularBuffer(program, all_cores, local_config_cb_config2);
 
         cb_indices.remote_config_cb_id2 = cb_indices.get_next_cb_id();
         remote_config_buffer2 = remote_config2.device_buffer();
@@ -235,7 +239,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
                 remote_config_buffer2->size() / num_cores, {{cb_indices.remote_config_cb_id2, kernel_config_df}})
                 .set_page_size(cb_indices.remote_config_cb_id2, remote_config_buffer2->page_size())
                 .set_globally_allocated_address(*remote_config_buffer2);
-        CBHandle remote_config_cb2 = CreateCircularBuffer(program, all_cores, remote_config_cb_config2);
+        remote_config_cb2 = CreateCircularBuffer(program, all_cores, remote_config_cb_config2);
     }
 
     const bool is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
