@@ -22,7 +22,6 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
 )
 from models.utility_functions import (
     profiler,
-    disable_compilation_reports,
     skip_for_grayskull,
     is_wormhole_b0,
 )
@@ -229,8 +228,6 @@ def test_Llama_perf_host(
     check_mesh_device(t3k_mesh_device, model_config)
 
     t3k_mesh_device.enable_async(True)
-
-    disable_compilation_reports()
 
     run_test_LlamaModel_end_to_end(
         t3k_mesh_device,
@@ -439,8 +436,6 @@ def test_Llama_perf_hybrid_data_tensor_parallel(
 
     check_mesh_device(mesh_device, model_config)
     mesh_device.enable_async(True)
-
-    disable_compilation_reports()
 
     run_test_LlamaModel_end_to_end_hybrid_data_tensor_parallel(
         mesh_device,

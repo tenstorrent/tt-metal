@@ -20,7 +20,6 @@
 #include <tt-metalium/global_circular_buffer_impl.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
-#include "tt_metal/include/tt_metal/program.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "tests/tt_metal/test_utils/tilization.hpp"
@@ -97,7 +96,7 @@ std::tuple<uint32_t, uint32_t> get_out_subblock_params(
     return {1, 1};
 }
 
-std::tuple<std::vector<tt_metal::Program>, ::tt_metal::v1::experimental::GlobalCircularBuffer>
+std::tuple<std::vector<tt_metal::Program>, ::tt_metal::experimental::GlobalCircularBuffer>
 create_programs(
     tt_metal::IDevice* device,
     const CoreRangeSet& dram_reader_core,
@@ -164,13 +163,13 @@ create_programs(
     uint32_t in1_receiver_cb_size = in1_block_h * in1_block_w * single_tile_size * cb_num_blocks / num_receivers;
     uint32_t padded_global_cb_size = in1_receiver_cb_size + cb_padding;
 
-    auto global_cb = tt_metal::v1::experimental::CreateGlobalCircularBuffer(
+    auto global_cb = tt_metal::experimental::CreateGlobalCircularBuffer(
         device, sender_receiver_core_mapping, padded_global_cb_size, tt_metal::BufferType::L1);
 
     uint32_t in1_writer_cb_index = 31;
     tt_metal::CircularBufferConfig in1_writer_cb_config = tt_metal::CircularBufferConfig(in1_receiver_cb_size);
     in1_writer_cb_config.remote_index(in1_writer_cb_index).set_page_size(single_tile_size).set_data_format(tile_format);
-    auto writer_cb = tt_metal::v1::experimental::CreateCircularBuffer(
+    auto writer_cb = tt_metal::experimental::CreateCircularBuffer(
         sender_program, dram_reader_core, in1_writer_cb_config, global_cb);
 
     // in0 reader CB
@@ -191,7 +190,7 @@ create_programs(
         .set_page_size(single_tile_size)
         .set_data_format(tile_format);
     in1_receiver_cb_config.index(in1_pusher_cb_index).set_page_size(single_tile_size).set_data_format(tile_format);
-    auto in1_receiver_cb = tt_metal::v1::experimental::CreateCircularBuffer(
+    auto in1_receiver_cb = tt_metal::experimental::CreateCircularBuffer(
         receiver_program, l1_receiver_cores, in1_receiver_cb_config, global_cb);
 
     // output CB

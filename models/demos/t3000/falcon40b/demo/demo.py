@@ -21,7 +21,6 @@ from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconConf
 from models.demos.t3000.falcon40b.tt.falcon_common import PytorchFalconCausalLM
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config, model_config_entries
 from models.utility_functions import (
-    disable_compilation_reports,
     enable_persistent_kernel_cache,
     profiler,
     torch2tt_tensor,
@@ -583,7 +582,6 @@ def test_demo(
     use_program_cache,
 ):
     # disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     return run_falcon_demo_kv(
         user_input=user_input,

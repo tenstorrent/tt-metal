@@ -11,11 +11,13 @@
 #include "tt-metalium/mesh_coord.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include "ttnn/distributed/distributed_tensor_config.hpp"
+
 
 using namespace tt::tt_metal;
 
@@ -113,6 +115,7 @@ Tensor aggregate_as_tensor(
         auto storage = MultiDeviceHostStorage{config, std::move(host_owned_buffers), specs};
         return Tensor(std::move(storage), reference_shard.get_tensor_spec());
     } else {
+        TT_FATAL(storage_type == StorageType::DEVICE, "Unexpected storage type {}", storage_type);
         std::vector<int> ordered_device_ids;
         std::unordered_map<int, ttnn::TensorSpec> specs;
         std::unordered_map<int, std::shared_ptr<Buffer>> device_buffers;

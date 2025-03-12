@@ -287,15 +287,15 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_w
         log_trace(tt::LogOp, "DEBUG: output tensor slice v2:");
         print_tensor_slice(output_worker_slice_v2);
 
-        std::optional<ttnn::ccl::SenderWorkerAdapterSpec> forward_fabric_connection =
+        std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> forward_fabric_connection =
             line_topology.is_first_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD)
                 ? std::nullopt
-                : std::optional<ttnn::ccl::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
+                : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
                       device, ttnn::ccl::EdmLineFabricOpInterface::FORWARD));
-        std::optional<ttnn::ccl::SenderWorkerAdapterSpec> backward_fabric_connection =
+        std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> backward_fabric_connection =
             line_topology.is_last_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD)
                 ? std::nullopt
-                : std::optional<ttnn::ccl::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
+                : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
                       device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
 
         log_trace(

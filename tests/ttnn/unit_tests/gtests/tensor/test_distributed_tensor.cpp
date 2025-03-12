@@ -16,11 +16,52 @@ namespace ttnn::distributed::test {
 
 using ::testing::ElementsAre;
 
-using TensorDistributionTest = T3kMultiDeviceFixture;
-
 TensorSpec get_tensor_spec(const ttnn::Shape& shape, DataType dtype) {
     return TensorSpec(shape, TensorLayout(dtype, Layout::ROW_MAJOR, MemoryConfig{}));
 }
+
+class AggregateTensorTest : public T3kMultiDeviceFixture,
+                            public ::testing::WithParamInterface</*use_borrowed_storage*/ bool> {};
+
+TEST_P(AggregateTensorTest, Roundtrip) {
+    const bool use_borrowed_storage = GetParam();
+    const int num_devices = mesh_device_->num_devices();
+    std::vector<std::vector<float>> test_data(num_devices);
+    for (int i = 0; i < num_devices; i++) {
+        test_data[i] = std::vector<float>{i * 1.F, i * 2.F, i * 3.F};
+    }
+
+    std::vector<Tensor> tensors;
+    tensors.reserve(num_devices);
+
+    for (int i = 0; i < num_devices; i++) {
+        if (use_borrowed_storage) {
+            tensors.push_back(Tensor::from_borrowed_data(
+                tt::stl::Span(test_data[i]),
+                ttnn::Shape{1, 1, 3, 1},
+                /*on_creation_callback=*/[]() {},
+                /*on_destruction_callback=*/[]() {}));
+        } else {
+            tensors.push_back(
+                Tensor::from_vector(test_data[i], get_tensor_spec(ttnn::Shape{1, 1, 3, 1}, DataType::FLOAT32)));
+        }
+    }
+
+    Tensor aggregated_tensor = aggregate_as_tensor(tensors, AllGatherTensor{});
+    EXPECT_TRUE(aggregated_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST);
+
+    const auto tensor_shards = get_device_tensors(aggregated_tensor);
+    ASSERT_EQ(tensor_shards.size(), test_data.size());
+
+    size_t i = 0;
+    for (const auto& tensor_shard : tensor_shards) {
+        EXPECT_EQ(tensor_shard.to_vector<float>(), test_data[i++]);
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(AggregateTensorTest, AggregateTensorTest, ::testing::Values(true, false));
+
+using TensorDistributionTest = T3kMultiDeviceFixture;
 
 TEST_F(TensorDistributionTest, DistributeToDevice) {
     Tensor input_tensor = Tensor::from_vector(

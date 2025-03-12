@@ -10,7 +10,6 @@
 #include <tt-metalium/dispatch_mem_map.hpp>
 #include <tt-metalium/program_cache.hpp>
 
-#include "tt_metal/deprecated/device.hpp"
 #include "common/core_assignment.hpp"
 #include <host_api.hpp>
 #include <trace.hpp>
@@ -35,7 +34,6 @@
 #include <sub_device_manager.hpp>
 #include <sub_device_types.hpp>
 #include <span.hpp>
-#include <types.hpp>
 
 #include "impl/dispatch/topology.hpp"
 #include "impl/dispatch/hardware_command_queue.hpp"
@@ -941,6 +939,10 @@ void Device::init_command_queue_device() {
 
 void Device::init_fabric() {
     fabric_program_ = create_and_compile_fabric_program(this);
+    if (fabric_program_ == nullptr) {
+        return;
+    }
+
     configure_fabric_cores(this);
 
     program_dispatch::finalize_program_offsets(*fabric_program_, this);
@@ -1670,85 +1672,6 @@ std::vector<std::pair<transfer_info_cores, uint32_t>> Device::extract_dst_noc_mu
     }
     return dst_noc_multicast_info;
 }
-
-
-
-size_t v1::GetNumAvailableDevices() { return tt::Cluster::instance().number_of_user_devices(); }
-
-size_t v1::GetNumPCIeDevices() { return tt::Cluster::instance().number_of_pci_devices(); }
-
-chip_id_t v1::GetPCIeDeviceID(chip_id_t device_id) {
-    return tt::Cluster::instance().get_associated_mmio_device(device_id);
-}
-
-IDevice* v1::CreateDevice(chip_id_t device_id, CreateDeviceOptions options) {
-    ZoneScoped;
-
-    tt::DevicePool::initialize(
-        {device_id},
-        options.num_hw_cqs,
-        options.l1_small_size,
-        options.trace_region_size,
-        options.dispatch_core_config,
-        options.l1_bank_remap);
-
-    return tt::DevicePool::instance().get_active_device(device_id);
-}
-
-bool v1::CloseDevice(IDevice* device) { return v0::CloseDevice(device); }
-
-void v1::DeallocateBuffers(IDevice* device) { device->allocator()->deallocate_buffers(); }
-
-void v1::DumpDeviceProfileResults(IDevice* device) {
-    detail::DumpDeviceProfileResults(device);
-}
-
-ARCH v1::GetArch(IDevice* device) { return device->arch(); }
-
-chip_id_t v1::GetId(IDevice* device) { return device->id(); }
-
-int v1::GetNumDramChannels(IDevice* device) { return device->num_dram_channels(); }
-
-std::uint32_t v1::GetL1SizePerCore(IDevice* device) { return device->l1_size_per_core(); }
-
-CoreCoord v1::GetComputeWithStorageGridSize(IDevice* device) { return device->compute_with_storage_grid_size(); }
-
-CoreCoord v1::GetDramGridSize(IDevice* device) { return device->dram_grid_size(); }
-
-void v1::EnableProgramCache(IDevice* device) { device->enable_program_cache(); }
-
-void v1::DisableAndClearProgramCache(IDevice* device) { device->disable_and_clear_program_cache(); }
-
-void v1::PushWork(IDevice* device, std::function<void()> work, bool blocking) {
-    device->push_work(std::move(work), blocking);
-}
-
-void v1::Synchronize(IDevice* device) { device->synchronize(); }
-
-std::vector<CoreCoord> v1::GetEthernetSockets(IDevice* device, chip_id_t connected_chip_id) {
-    return device->get_ethernet_sockets(connected_chip_id);
-}
-
-std::uint32_t v1::GetNumBanks(IDevice* device, BufferType buffer_type) {
-    return device->allocator()->get_num_banks(buffer_type);
-}
-
-std::int32_t v1::GetBankOffset(IDevice* device, BufferType buffer_type, std::uint32_t bank_id) {
-    return device->allocator()->get_bank_offset(buffer_type, bank_id);
-}
-
-tt::stl::Span<const std::uint32_t> v1::BankIdsFromLogicalCore(
-    IDevice* device, BufferType buffer_type, CoreCoord logical_core) {
-    return device->allocator()->get_bank_ids_from_logical_core(buffer_type, logical_core);
-}
-
-float v1::GetSfpuEps(IDevice* device) { return tt::tt_metal::experimental::hal::get_eps(); }
-
-float v1::GetSfpuNan(IDevice* device) { return tt::tt_metal::experimental::hal::get_nan(); }
-
-float v1::GetSfpuInf(IDevice* device) { return tt::tt_metal::experimental::hal::get_inf(); }
-
-std::size_t v1::GetNumProgramCacheEntries(IDevice* device) { return device->num_program_cache_entries(); }
 
 tt::WorkExecutorMode Device::get_worker_mode() { return work_executor_->get_worker_mode(); }
 bool Device::is_worker_queue_empty() const { return work_executor_->worker_queue.empty(); }
