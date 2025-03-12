@@ -9,9 +9,7 @@
 //    double buffered ScratchBuf for out of band data (e.g., from DRAM)
 //  - syncs w/ dispatcher via 2 semaphores, page_ready, page_done
 
-#include <cq_commands.hpp>
-#include "dataflow_api.h"
-#include "dataflow_api_addrgen.h"
+#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
@@ -1479,9 +1477,6 @@ void kernel_main_hd() {
 
 void kernel_main() {
     DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": start" << ENDL();
-    if constexpr (client_interface_addr) {
-        tt::tt_fabric::fabric_endpoint_init(client_interface, 0 /*Unused*/);
-    }
 
     if (is_h_variant and is_d_variant) {
         kernel_main_hd();

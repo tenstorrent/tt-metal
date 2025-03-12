@@ -12,7 +12,6 @@
 #include "modules/gpt_block.hpp"
 #include "modules/layer_norm_module.hpp"
 #include "modules/positional_embeddings.hpp"
-#include "ops/binary_ops.hpp"
 #include "ops/unary_ops.hpp"
 namespace ttml::models::gpt2 {
 

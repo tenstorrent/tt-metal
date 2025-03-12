@@ -481,7 +481,13 @@ std::string to_string(
                 return ss.str();
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
                 std::stringstream ss;
-                apply(tensor, [&](const Tensor& device_tensor) { ss << to_string<T>(device_tensor) << std::endl; });
+                auto device_tensors = ttnn::distributed::get_tensors_from_multi_device_storage(tensor);
+                for (size_t i = 0; i < device_tensors.size(); i++) {
+                    ss << to_string<T>(device_tensors[i]);
+                    if (i + 1 != device_tensors.size()) {
+                        ss << std::endl;
+                    }
+                }
                 return ss.str();
             } else {
                 raise_unsupported_storage<StorageType>();
@@ -603,7 +609,7 @@ Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking) {
 
         shard_data_transfers.push_back(distributed::MeshCommandQueue::ShardDataTransfer{
             .shard_coord = *shard_coord,
-            .host_data = std::visit([](auto& b) { return b.data(); }, buffers.back()),
+            .host_data = std::visit([](auto& b) { return reinterpret_cast<T*>(b.data()); }, buffers.back()),
             .region = BufferRegion(0, tensor_size_bytes)});
         ++shard_coord;
     }
@@ -1209,7 +1215,10 @@ Tensor pad(
     }
 
     auto pad_value_ = static_cast<T>(pad_value);
-    const auto input_padded_shape = tensor.get_padded_shape();
+    auto input_padded_shape = tensor.get_padded_shape();
+    if (input_padded_shape.rank() < 2) {
+        input_padded_shape = input_padded_shape.to_rank(2);
+    }
     const auto input_strides = tensor.strides();
     const auto input_data_type = tensor.get_dtype();
 
@@ -1281,7 +1290,7 @@ Tensor pad(
         tensor.get_storage());
     return Tensor(
         OwnedStorage{output_buffer},
-        tensor.get_padded_shape(),
+        tensor.get_logical_shape(),
         output_padded_shape,
         tensor.get_dtype(),
         tensor.get_layout(),

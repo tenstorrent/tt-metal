@@ -12,6 +12,8 @@
 #include <set>
 #include <utility>
 
+#include "env_lib.hpp"
+
 #include "dispatch_core_manager.hpp"
 #include "dispatch_settings.hpp"
 #include "dprint_server.hpp"
@@ -253,6 +255,7 @@ void DevicePool::initialize(
     _inst->init_firmware_on_active_devices();
 
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true, target_mmio_ids);
+    _inst->wait_for_fabric_master_router_sync();
     _inst->init_profiler_devices();
 }
 
@@ -283,11 +286,12 @@ void DevicePool::initialize_host(IDevice* dev) const {
 }
 
 void DevicePool::initialize_active_devices() const {
-    const auto& active_devices = this->get_all_active_devices();  // MMIO
+    const auto& active_devices = this->get_all_active_devices();
 
     // Activate fabric (must be before FD)
     // TODO: add handling of EDM
-    if (tt::Cluster::instance().get_fabric_config() == FabricConfig::FABRIC_2D) {
+    FabricConfig fabric_config = tt::Cluster::instance().get_fabric_config();
+    if (fabric_config == FabricConfig::FABRIC_2D || fabric_config == FabricConfig::FABRIC_2D_PUSH) {
         // Initialize control plane, does not configure kernels/routing tables
         // We always need a control plane for mapping of logical devices to physical devices
         // TODO: add single device support
@@ -299,7 +303,6 @@ void DevicePool::initialize_active_devices() const {
         for (const auto& dev : active_devices) {
             dev->init_fabric();
         }
-        _inst->wait_for_fabric_master_router_sync();
     }
 
     // Activate FD kernels
@@ -308,9 +311,7 @@ void DevicePool::initialize_active_devices() const {
         return;
     }
 
-    populate_cq_static_args(active_devices);
-
-    for (const auto& dev : active_devices) {
+    for (auto dev : active_devices) {
         // For Galaxy init, we only need to loop over mmio devices
         const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(dev->id());
         if (mmio_device_id != dev->id()) {
@@ -318,6 +319,7 @@ void DevicePool::initialize_active_devices() const {
         }
 
         auto tunnels_from_mmio = tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_device_id);
+        populate_cq_static_args(dev);
         dev->init_command_queue_device();
         if (not this->skip_remote_devices) {
             for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
@@ -325,6 +327,7 @@ void DevicePool::initialize_active_devices() const {
                 for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0; ts--) {
                     uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
                     auto device = get_device(mmio_controlled_device_id);
+                    populate_cq_static_args(device);
                     device->init_command_queue_device();
                 }
             }
@@ -422,8 +425,10 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
             this->activate_device(device_id);
         }
     }
+
+    FabricConfig fabric_config = tt::Cluster::instance().get_fabric_config();
     // Only can launch Fabric if all devices are active
-    if (tt::Cluster::instance().get_fabric_config() == FabricConfig::FABRIC_2D) {
+    if (fabric_config == FabricConfig::FABRIC_2D || fabric_config == FabricConfig::FABRIC_2D_PUSH) {
         for (int i = 0; i < tt::Cluster::instance().number_of_devices(); i++) {
             if (not _inst->is_device_active(i)) {
                 // Fabric currently requires all devices to be active
@@ -439,7 +444,8 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
 }
 
 void DevicePool::wait_for_fabric_master_router_sync() const {
-    if (tt::Cluster::instance().get_fabric_config() == FabricConfig::FABRIC_2D) {
+    FabricConfig fabric_config = tt::Cluster::instance().get_fabric_config();
+    if (fabric_config == FabricConfig::FABRIC_2D || fabric_config == FabricConfig::FABRIC_2D_PUSH) {
         auto fabric_router_sync_sem_addr =
             hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
@@ -671,7 +677,8 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
     }
 
     // Terminate fabric routers
-    if (tt::Cluster::instance().get_fabric_config() == FabricConfig::FABRIC_2D) {
+    FabricConfig fabric_config = tt::Cluster::instance().get_fabric_config();
+    if (fabric_config == FabricConfig::FABRIC_2D || fabric_config == FabricConfig::FABRIC_2D_PUSH) {
         std::vector<uint32_t> master_router_terminate(1, 0);
         auto fabric_router_sync_sem_addr =
             hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);

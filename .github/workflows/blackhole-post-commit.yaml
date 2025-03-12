@@ -23,7 +23,6 @@ on:
           - Release
           - Debug
           - RelWithDebInfo
-          - CI
   schedule:
     - cron: "0 */2 * * *"
   # Pause this since not enough runners to support every commit to main

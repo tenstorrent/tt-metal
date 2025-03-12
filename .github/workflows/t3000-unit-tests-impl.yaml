@@ -15,7 +15,6 @@ jobs:
       matrix:
         test-group: [
           { name: "t3k ttmetal tests", arch: wormhole_b0, cmd: run_t3000_ttmetal_tests, timeout: 30, label: pipeline-functional, owner_id: ULMEPM2MA}, #Sean Nijjar
-          { name: "t3k fabric tests", arch: wormhole_b0, cmd: run_t3000_ttfabric_tests, timeout: 30, label: pipeline-fabric, owner_id: UJ45FEC7M}, # Allan Liu
           { name: "t3k ttnn tests", arch: wormhole_b0, cmd: run_t3000_ttnn_tests, timeout: 120, label: pipeline-fabric, owner_id: UBHPP2NDP}, #Joseph Chu
           { name: "t3k falcon7b tests", arch: wormhole_b0, cmd: run_t3000_falcon7b_tests, timeout: 30, label: pipeline-functional, owner_id: UBHPP2NDP}, #Joseph Chu
           { name: "t3k falcon40b tests", arch: wormhole_b0, cmd: run_t3000_falcon40b_tests, timeout: 30, label: pipeline-functional, owner_id: U053W15B6JF}, #Djordje Ivanovic
@@ -67,7 +66,7 @@ jobs:
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: ${{ matrix.test-group.owner_id }}
-      - uses: ./.github/actions/upload-artifact-with-job-uuid
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:

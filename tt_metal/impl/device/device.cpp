@@ -7,6 +7,9 @@
 #include <string>
 #include <thread>
 #include <tt_align.hpp>
+#include <tt-metalium/dispatch_mem_map.hpp>
+#include <tt-metalium/program_cache.hpp>
+
 #include "tt_metal/deprecated/device.hpp"
 #include "common/core_assignment.hpp"
 #include <host_api.hpp>
@@ -17,7 +20,8 @@
 #include <tt_metal.hpp>
 #include "dprint_server.hpp"
 #include "impl/debug/watcher_server.hpp"
-#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
+#include "tt_metal/impl/dispatch/topology.hpp"
+#include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include <utils.hpp>
 #include "llrt.hpp"
 #include <dev_msgs.h>
@@ -894,15 +898,15 @@ void Device::update_dispatch_cores_for_multi_cq_eth_dispatch() {
 void Device::init_command_queue_host() {
     using_fast_dispatch_ = true;
     sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
+    auto worker_launch_message_buffer_state = std::make_shared<DispatchArray<LaunchMessageRingBufferState>>();
     command_queues_.reserve(num_hw_cqs());
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
-        command_queues_.push_back(
-            std::make_unique<HWCommandQueue>(this, cq_id, dispatch_downstream_noc, completion_queue_reader_core_));
+        command_queues_.push_back(std::make_unique<HWCommandQueue>(
+            this, worker_launch_message_buffer_state, cq_id, k_dispatch_downstream_noc, completion_queue_reader_core_));
     }
 }
 
 void Device::init_command_queue_device() {
-
     if (llrt::RunTimeOptions::get_instance().get_skip_loading_fw()) {
         detail::EnablePersistentKernelCache();
         this->compile_command_queue_programs();
@@ -947,13 +951,6 @@ void Device::init_fabric() {
     // Note: the l1_barrier below is needed to be sure writes to cores that
     // don't get the GO mailbox (eg, storage cores) have all landed
     tt::Cluster::instance().l1_barrier(this->id());
-    const routing_info_t routing_info_enabled = {
-        .routing_enabled = 1,
-        .src_sent_valid_cmd = 0,
-        .dst_acked_valid_cmd = 0,
-    };
-    uint32_t routing_info_addr = tt::tt_metal::hal.get_dev_addr(
-        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::APP_ROUTING_INFO);
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = fabric_program_->logical_cores();
     for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();
          programmable_core_type_index++) {
@@ -967,12 +964,6 @@ void Device::init_fabric() {
             auto physical_core = this->virtual_core_from_logical_core(logical_core, core_type);
             tt::llrt::write_launch_msg_to_core(
                 this->id(), physical_core, msg, go_msg, this->get_dev_addr(physical_core, HalL1MemAddrType::LAUNCH));
-            if (core_type == CoreType::ETH) {
-                tt_cxy_pair virtual_eth_core(this->id(), physical_core);
-                // Enable internal ethernet routing
-                tt::Cluster::instance().write_core(
-                    (void*)&routing_info_enabled, sizeof(routing_info_t), virtual_eth_core, routing_info_addr, false);
-            }
         }
     }
 }
@@ -1435,7 +1426,7 @@ void Device::replay_trace(
                 this->id_,
                 active_sub_device_manager->id());
             if constexpr (check) {
-                Trace::validate_instance(*trace_buffer);
+                trace_buffer->validate();
             }
             EnqueueTrace(this->command_queue(cq_id), tid, block_on_device);
         },

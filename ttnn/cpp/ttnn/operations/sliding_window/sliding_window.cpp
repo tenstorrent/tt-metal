@@ -346,8 +346,7 @@ uint32_t generate_max_out_nsticks_per_core(const std::vector<ShardBoundary>& sha
     return max_out_nsticks_per_core;
 }
 
-std::tuple<std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>>
-generate_halo_kernel_config_tensors(
+std::vector<std::vector<std::vector<uint16_t>>> generate_halo_kernel_config_tensors(
     const std::vector<PixelMetadata>& tensor_metadata,
     const std::vector<ShardBoundary>& shard_boundaries,
     bool is_block_sharded,
@@ -436,90 +435,130 @@ generate_halo_kernel_config_tensors(
     }
 
     // flatten and uniformize the lengths of each config list
-    auto flatten_pad_config = [](auto& config) -> std::vector<std::vector<uint16_t>> {
-        // find max length
+    auto flatten_pad_config = [](auto& config) -> std::vector<std::vector<std::vector<uint16_t>>> {
+        // Find max length for vector which is going to be processed on each core
         size_t max_len = 0;
-        for (auto& data : config) {
-            max_len = std::max(max_len, 2 * data.size());  // each data is 2 * data.size()
+        for (const auto& data : config) {
+            max_len = std::max(
+                max_len,
+                data.size() +
+                    4);  // For split reader, each vector size is ((2 * data.size()) / 2 + 2) and 2 for null plug.
         }
-        std::vector<std::vector<uint16_t>> flattened_config;
-        for (auto& data : config) {
-            std::vector<uint16_t> flat_data(max_len, 0);
-            uint32_t idx = 0;
-            for (auto data_elem : data) {
-                auto [dst_start, length] = data_elem;
-                flat_data[idx++] = dst_start;
-                flat_data[idx++] = length;
-            }
-            // null plug
-            flat_data.emplace_back(0);
-            flat_data.emplace_back(0);
-            flattened_config.emplace_back(flat_data);
-        }
-        return flattened_config;
-    };
 
-    auto flatten_local_config = [](auto& config) -> std::vector<std::vector<uint16_t>> {
-        // find max length
-        size_t max_len = 0;
-        for (auto& [_, data] : config) {
-            max_len = std::max(max_len, 3 * data.size());  // each key is 3, data is 3 * data.size()
-        }
-        max_len += 3;  // key tuple
-        std::vector<std::vector<uint16_t>> flattened_config;
-        for (auto& [key, data] : config) {
-            auto [nocx, nocy, len] = key;
-            std::vector<uint16_t> flat_data(max_len, 0);
-            flat_data[0] = nocx;
-            flat_data[1] = nocy;
-            flat_data[2] = len;
-            uint32_t idx = 3;
+        std::vector<std::vector<std::vector<uint16_t>>> flattened_config(2);
+        for (const auto& data : config) {
+            std::vector<std::vector<uint16_t>> flat_data(2, std::vector<uint16_t>(max_len, 0));
+            uint32_t idx1 = 0, idx2 = 0;
             for (size_t i = 0; i < data.size(); ++i) {
-                auto [src_start, dst_start, length] = data[i];
-                flat_data[idx++] = src_start;
-                flat_data[idx++] = dst_start;
-                flat_data[idx++] = length;
-            }
-            // null plug
-            flat_data.emplace_back(0);
-            flat_data.emplace_back(0);
-            flat_data.emplace_back(0);
-            flattened_config.emplace_back(flat_data);
-        }
-        return flattened_config;
-    };
-
-    auto flatten_remote_config = [](auto& config) -> std::vector<std::vector<uint16_t>> {
-        // find max length
-        size_t max_len = 0;
-        for (auto& core_config : config) {
-            size_t curr_len = 0;
-            for (auto& [key, subdata] : core_config) {
-                curr_len += 3 + 3 * subdata.size();  // each key is len 3
-            }
-            max_len = std::max(max_len, curr_len);  // each key is 3, data is 3 * data.size()
-        }
-        std::vector<std::vector<uint16_t>> flattened_config;
-        for (auto& core_config : config) {
-            std::vector<uint16_t> flat_data(max_len, 0);
-            uint32_t idx = 0;
-            for (auto& key_data : core_config) {
-                auto [nocx, nocy, len] = key_data.first;
-                flat_data[idx++] = nocx;
-                flat_data[idx++] = nocy;
-                flat_data[idx++] = len;
-                for (size_t i = 0; i < key_data.second.size(); ++i) {
-                    auto [src_start, dst_start, length] = key_data.second[i];
-                    flat_data[idx++] = src_start;
-                    flat_data[idx++] = dst_start;
-                    flat_data[idx++] = length;
+                auto [dst_start, length] = data[i];
+                if (i % 2 == 0) {
+                    flat_data[0][idx1++] = dst_start;
+                    flat_data[0][idx1++] = length;
+                } else {
+                    flat_data[1][idx2++] = dst_start;
+                    flat_data[1][idx2++] = length;
                 }
             }
-            // null plug
-            flat_data.emplace_back(0);
-            flat_data.emplace_back(0);
-            flat_data.emplace_back(0);
-            flattened_config.emplace_back(flat_data);
+
+            flattened_config[0].emplace_back(std::move(flat_data[0]));
+            flattened_config[1].emplace_back(std::move(flat_data[1]));
+        }
+        return flattened_config;
+    };
+
+    auto flatten_local_config = [](auto& config) -> std::vector<std::vector<std::vector<uint16_t>>> {
+        // Find max length
+        size_t max_len = 0;
+        for (const auto& [_, data] : config) {
+            max_len = std::max(max_len, 3 * (data.size() / 2 + 1));  // For split reader, each vector is ( 3 *
+                                                                     // data.size() / 2 + 1).
+        }
+        max_len += 6;  // account for the key tuple and null plug
+
+        std::vector<std::vector<std::vector<uint16_t>>> flattened_config(2);
+        for (const auto& [key, data] : config) {
+            auto [nocx, nocy, len] = key;
+            std::vector<std::vector<uint16_t>> flat_data(2, std::vector<uint16_t>(max_len, 0));
+            flat_data[0][0] = nocx;
+            flat_data[0][1] = nocy;
+            flat_data[1][0] = nocx;
+            flat_data[1][1] = nocy;
+
+            uint32_t idx1 = 3, idx2 = 3;
+            for (size_t i = 0; i < data.size(); ++i) {
+                auto [src_start, dst_start, length] = data[i];
+                if (i % 2 != 0) {
+                    flat_data[0][idx1++] = src_start;
+                    flat_data[0][idx1++] = dst_start;
+                    flat_data[0][idx1++] = length;
+                    flat_data[0][2] += 3;
+                } else {
+                    flat_data[1][idx2++] = src_start;
+                    flat_data[1][idx2++] = dst_start;
+                    flat_data[1][idx2++] = length;
+                    flat_data[1][2] += 3;
+                }
+            }
+
+            flattened_config[0].emplace_back(std::move(flat_data[0]));
+            flattened_config[1].emplace_back(std::move(flat_data[1]));
+        }
+        return flattened_config;
+    };
+
+    auto flatten_remote_config = [](auto& config) -> std::vector<std::vector<std::vector<uint16_t>>> {
+        // Find max length
+        size_t max_len = 0;
+        for (const auto& core_config : config) {
+            size_t curr_len = 0;
+            for (const auto& [key, subdata] : core_config) {
+                curr_len += 3 + (3 * (subdata.size() / 2 + 1));  // For split reader,  3 for source[nocx, nocy, length]
+                                                                 // and each vector is ( 3 * data.size() / 2 + 1).
+            }
+            max_len = std::max(max_len, curr_len);
+        }
+        max_len += 3;  // account for null plug
+
+        std::vector<std::vector<std::vector<uint16_t>>> flattened_config(2);
+        for (const auto& core_config : config) {
+            std::vector<std::vector<uint16_t>> flat_data(2, std::vector<uint16_t>(max_len, 0));
+            uint32_t idx1 = 0, idx2 = 0;
+            uint32_t len_idx1 = 0, len_idx2 = 0;
+            uint32_t vector_id = 0;
+
+            for (const auto& [key, subdata] : core_config) {
+                auto [nocx, nocy, len] = key;
+                flat_data[0][idx1++] = nocx;
+                flat_data[0][idx1++] = nocy;
+                len_idx1 = idx1;
+                flat_data[0][idx1++] = 0;
+
+                flat_data[1][idx2++] = nocx;
+                flat_data[1][idx2++] = nocy;
+                len_idx2 = idx2;
+                flat_data[1][idx2++] = 0;
+
+                for (size_t i = 0; i < subdata.size(); ++i) {
+                    auto [src_start, dst_start, length] = subdata[i];
+                    if (vector_id) {
+                        flat_data[0][idx1++] = src_start;
+                        flat_data[0][idx1++] = dst_start;
+                        flat_data[0][idx1++] = length;
+                        flat_data[0][len_idx1] += 3;
+                    } else {
+                        flat_data[1][idx2++] = src_start;
+                        flat_data[1][idx2++] = dst_start;
+                        flat_data[1][idx2++] = length;
+                        flat_data[1][len_idx2] += 3;
+                    }
+                    vector_id = (vector_id + 1) % 2;
+                }
+                idx1 = flat_data[0][len_idx1] ? idx1 : idx1 - 3;
+                idx2 = flat_data[1][len_idx2] ? idx2 : idx2 - 3;
+            }
+
+            flattened_config[0].emplace_back(std::move(flat_data[0]));
+            flattened_config[1].emplace_back(std::move(flat_data[1]));
         }
         return flattened_config;
     };
@@ -547,11 +586,20 @@ generate_halo_kernel_config_tensors(
         }
     };
 
-    align_config(flattened_pad_config, 2);
-    align_config(flattened_local_config, 2);
-    align_config(flattened_remote_config, 2);
+    align_config(flattened_pad_config[0], 2);
+    align_config(flattened_pad_config[1], 2);
+    align_config(flattened_local_config[0], 2);
+    align_config(flattened_local_config[1], 2);
+    align_config(flattened_remote_config[0], 2);
+    align_config(flattened_remote_config[1], 2);
 
-    return std::make_tuple(flattened_pad_config, flattened_local_config, flattened_remote_config);
+    return {
+        flattened_pad_config[0],
+        flattened_pad_config[1],
+        flattened_local_config[0],
+        flattened_local_config[1],
+        flattened_remote_config[0],
+        flattened_remote_config[1]};
 }
 
 std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(

@@ -12,7 +12,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 45
+        default: 120
   workflow_dispatch:
     inputs:
       arch:
@@ -31,7 +31,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 45
+        default: 120
   schedule:
     - cron: "0 22 * * *"
 
@@ -48,8 +48,15 @@ jobs:
       matrix:
         os: ["ubuntu-20.04"]
         test-group:
-          - name: ttnn nightly tests
-            cmd: pytest tests/ttnn/nightly/unit_tests -xv -m "not disable_fast_runtime_mode"
+          - name: ttnn nightly conv tests
+            cmd: pytest tests/ttnn/nightly/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode"
+            owner: U052J2QDDKQ # Pavle Josipovic
+          - name: ttnn nightly matmul tests
+            cmd: pytest tests/ttnn/nightly/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode"
+            owner: U06Q7ESTFEV # Borys Bradel
+          - name: ttnn nightly pool tests
+            cmd: pytest tests/ttnn/nightly/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode"
+            owner: U052J2QDDKQ # Pavle Josipovic
     name: ${{ matrix.test-group.name }}
     env:
       LOGURU_LEVEL: INFO
@@ -63,7 +70,7 @@ jobs:
         with:
           name: eager-dist-${{ matrix.os }}-any
       - name: ${{ matrix.test-group.name }} tests
-        timeout-minutes: ${{ inputs.timeout || '45' }}
+        timeout-minutes: ${{ fromJSON(inputs.timeout) || 120 }}
         uses: ./.github/actions/docker-run
         with:
           docker_username: ${{ github.actor }}
@@ -75,7 +82,7 @@ jobs:
             WHEEL_FILENAME=$(ls -1 *.whl)
             pip3 install --user $WHEEL_FILENAME
             ${{ matrix.test-group.cmd }}
-      - uses: ./.github/actions/upload-artifact-with-job-uuid
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
@@ -83,7 +90,8 @@ jobs:
             generated/test_reports/
           prefix: "test_reports_"
       - uses: ./.github/actions/slack-report
-        if: ${{ failure() }}
+        # Only notify during failed scheduled runs
+        if: ${{ failure() && github.event_name == 'schedule' }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          owner: U06Q7ESTFEV # Borys Bradel
+          owner: ${{ matrix.test-group.owner }}

@@ -271,9 +271,9 @@ void DispatchKernel::GenerateDependentConfigs() {
         auto dispatch_s_kernel = dynamic_cast<DispatchSKernel*>(downstream_kernels_[0]);
         auto mux_kernel = dynamic_cast<MuxKernel*>(downstream_kernels_[0]);
 
-        bool found_dispatch_s;
-        bool found_mux;
-        bool found_dispatch_h;
+        bool found_dispatch_s = false;
+        bool found_mux = false;
+        bool found_dispatch_h = false;
         for (auto ds_kernel : downstream_kernels_) {
             if (auto dispatch_s_kernel = dynamic_cast<DispatchSKernel*>(ds_kernel)) {
                 dependent_config_.downstream_s_logical_core = dispatch_s_kernel->GetLogicalCore();
@@ -360,7 +360,7 @@ void DispatchKernel::CreateKernel() {
         dependent_config_.downstream_chip_id.value_or(0),
         dependent_config_.upstream_mesh_id.value_or(0),
         dependent_config_.upstream_chip_id.value_or(0),
-        dependent_config_.fabric_router_noc_xy.value_or(0),
+        dependent_config_.fabric_router_noc_xy.value_or(0xdeadbeef),
         static_config_.client_interface_addr.value_or(0),
 
         static_config_.is_d_variant.value(),

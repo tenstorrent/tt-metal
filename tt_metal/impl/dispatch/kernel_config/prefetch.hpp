@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+
 #pragma once
+
 #include "fd_kernel.hpp"
 #include "mesh_graph.hpp"
 #include "umd/device/types/cluster_descriptor_types.h"
@@ -80,9 +82,7 @@ public:
         static_config_.is_h_variant = h_variant;
         static_config_.is_d_variant = d_variant;
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
-        TT_FATAL(
-            noc_selection.downstream_noc == tt::tt_metal::dispatch_downstream_noc,
-            "Invalid downstream NOC specified for Prefetcher kernel");
+
         if (h_variant && d_variant) {
             this->logical_core_ = core_manager.prefetcher_core(device_id, channel, cq_id);
         } else if (h_variant) {

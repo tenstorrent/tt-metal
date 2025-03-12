@@ -5,6 +5,7 @@
 #include <host_api.hpp>
 #include <command_queue.hpp>
 
+#include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 #include "tt_metal/distributed/mesh_workload_utils.hpp"

@@ -13,8 +13,6 @@ def test_global_var_toggle_and_device_eps():
     # Check that APIs modifying global vars work
     ttnn.device.EnablePersistentKernelCache()
     ttnn.device.DisablePersistentKernelCache()
-    ttnn.device.EnableCompilationReports()
-    ttnn.device.DisableCompilationReports()
 
 
 @pytest.mark.eager_host_side

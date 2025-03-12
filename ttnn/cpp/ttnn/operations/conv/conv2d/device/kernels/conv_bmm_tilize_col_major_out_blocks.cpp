@@ -20,11 +20,6 @@
 #define DEBUG_PRINT 0
 // #include "debug_macros.h"
 
-// SliceRange srt = SliceRange{.h0 = 0, .h1 = 4, .hs = 1, .w0 = 0, .w1 = 8, .ws = 1};
-// SliceRange srr = SliceRange{.h0 = 0, .h1 = 1, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1};
-// SliceRange srr1 = SliceRange{.h0 = 1, .h1 = 2, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1};
-// SliceRange src = SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 1, .ws = 1};
-
 inline void tilize_in(
     uint32_t in_cb_id, uint32_t in_subblock_h, uint32_t in_block_w, uint32_t in_num_subblocks, uint32_t out_cb_id) {
     tilize_init_short(in_cb_id, in_block_w, out_cb_id);
@@ -93,29 +88,28 @@ void MAIN {
     constexpr uint32_t out_subblock_num_tiles = get_compile_time_arg_val(13);  // out_subblock_h * out_subblock_w;
     constexpr bool tilize_in0 = get_compile_time_arg_val(14);
     constexpr bool untilize_out = get_compile_time_arg_val(15);
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(17);
+    constexpr uint32_t in0_cb_id = get_compile_time_arg_val(18);
+    constexpr uint32_t in1_cb_id = get_compile_time_arg_val(19);
+    constexpr uint32_t in0_pretilize_cb_id = get_compile_time_arg_val(20);
+    constexpr uint32_t in0_cb_second_reader_id = get_compile_time_arg_val(21);
+    constexpr uint32_t matmul_partials_cb = get_compile_time_arg_val(22);
+    constexpr uint32_t tilized_in0_cb_id = get_compile_time_arg_val(23);
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(24);
+    constexpr bool partials_cb_uses_output = get_compile_time_arg_val(26);
 
 #ifdef WIDTH_SHARDED
-    constexpr uint32_t in0_nblocks_w_tilize = get_compile_time_arg_val(18);
+    constexpr uint32_t in0_nblocks_w_tilize = get_compile_time_arg_val(27);
 #endif
 
     constexpr uint32_t out_block_num_tiles = in0_num_subblocks * in1_num_subblocks * out_subblock_num_tiles;
     constexpr uint32_t out_block_w = in1_block_w;
     constexpr bool spill = in0_num_blocks_w > 1;
 
-    // CB indices
-    constexpr uint32_t in0_cb_id = tt::CBIndex::c_0;
-    constexpr uint32_t in1_cb_id = tt::CBIndex::c_1;
-    constexpr uint32_t in0_pretilize_cb_id = tt::CBIndex::c_6;
-    constexpr uint32_t in0_cb_second_reader_id = tt::CBIndex::c_7;
-    constexpr uint32_t matmul_partials_cb = tt::CBIndex::c_24;
-    constexpr uint32_t tilized_in0_cb_id = tt::CBIndex::c_25;
-
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? matmul_partials_cb : out_cb_id;
 
 #ifdef FUSE_BIAS
     constexpr uint32_t bias_ntiles_w = get_compile_time_arg_val(16);
-    constexpr uint32_t bias_cb_id = tt::CBIndex::c_2;
+    constexpr uint32_t bias_cb_id = get_compile_time_arg_val(17);
     uint32_t bias_block_offset = 0;
     constexpr uint32_t mm_out_cb_id = matmul_partials_cb;
 #else
@@ -135,6 +129,8 @@ void MAIN {
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
 #endif
+    UNPACK(uint32_t partials_cb_read_ptr = get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr;)
+    PACK(uint32_t partials_cb_write_ptr = get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr;)
     // in1 num blocks w is the outer loop. Output blocks are computed in col major order.
     for (uint32_t in1_block_w_i = 0; in1_block_w_i < in1_num_blocks_w; ++in1_block_w_i) {
         for (uint32_t in0_block_h_i = 0; in0_block_h_i < in0_num_blocks_h; ++in0_block_h_i) {
@@ -153,9 +149,10 @@ void MAIN {
             // for each output block we start we relu disabled so that intermediate results are not relu'd
             PACK((llk_pack_relu_config(ReluType::NO_RELU)));
 #endif
-
-            UNPACK(const uint32_t partials_cb_read_ptr = get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr);
-            PACK(const uint32_t partials_cb_write_ptr = get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr);
+            if constexpr (partials_cb_uses_output) {
+                UNPACK(partials_cb_read_ptr = get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr;)
+                PACK(partials_cb_write_ptr = get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr;)
+            }
             uint32_t curr_matmul_out_cb = matmul_partials_cb;
             for (uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
 #ifdef WIDTH_SHARDED
@@ -313,7 +310,12 @@ void MAIN {
                     }  // for in1_num_subblocks
                     in0_index_subblock_offset += in0_subblock_num_tiles;
                 }
-
+                if (curr_matmul_out_cb == matmul_partials_cb) {
+                    if constexpr (!partials_cb_uses_output) {
+                        UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr;)
+                        PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr;)
+                    }
+                }
 #ifdef PACKER_L1_ACC
 #ifdef FUSE_BIAS
                 if (in0_block_w_i < in0_num_blocks_w - 1) {
@@ -365,7 +367,7 @@ void MAIN {
                 cb_pop_front(mm_in0_cb_id, in0_block_num_tiles);
                 cb_pop_front(in1_cb_id, in1_block_num_tiles);
             }  // for in0_num_blocks_w
-            if constexpr (matmul_partials_cb == mm_out_cb_id) {
+            if constexpr (matmul_partials_cb == mm_out_cb_id && partials_cb_uses_output) {
                 UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr);
             }
 #ifdef FUSE_BIAS
@@ -416,6 +418,10 @@ void MAIN {
                     in1_index_subblock_offset += out_subblock_w;
                 }  // for in1_num_subblocks
             }  // in0_num_subblocks
+            if constexpr (untilize_out) {
+                UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr);
+                PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr);
+            }
 #endif
             if constexpr (untilize_out) {
 #if defined PACKER_L1_ACC and not defined FUSE_BIAS

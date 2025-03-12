@@ -5,17 +5,19 @@
 #include <build.hpp>
 
 #include <filesystem>
+#include <fstream>
 #include <span>
 #include <string>
 
 #include "common/executor.hpp"
 #include "jit_build/genfiles.hpp"
 #include "jit_build/kernel_args.hpp"
-#include <common.hpp>
-#include <profiler_state.hpp>
+#include "profiler_paths.hpp"
+#include "profiler_state.hpp"
 #include <command_queue_interface.hpp>
 #include <kernel.hpp>
 #include "tt_metal/llrt/tt_elffile.hpp"
+#include "env_lib.hpp"
 
 namespace fs = std::filesystem;
 
@@ -43,20 +45,43 @@ static std::string get_string_aliased_arch_lowercase(tt::ARCH arch) {
     }
 }
 
-JitBuildEnv::JitBuildEnv() {}
+static void build_failure(const string& target_name, const string& op, const string& cmd, const string& log_file) {
+    log_error(tt::LogBuildKernels, "{} {} failure -- cmd: {}", target_name, op, cmd);
+    std::ifstream file{log_file};
+    if (file.is_open()) {
+        std::string log_contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        log_error(tt::LogBuildKernels, "{}", log_contents);
+        TT_THROW("{} build failed", target_name);
+    } else {
+        TT_THROW("Failed to open {} failure log file {}", op, log_file);
+    }
+}
 
-void check_built_dir(const std::filesystem::path& dir_path, const std::filesystem::path& git_hash_path)
-{
+static void check_built_dir(const std::filesystem::path& dir_path, const std::filesystem::path& git_hash_path) {
     if (dir_path.compare(git_hash_path) != 0) {
         std::filesystem::remove_all(dir_path);
     }
 }
 
+std::string get_default_root_path() {
+    const std::string emptyString("");
+    const std::string home_path = parse_env<std::string>("HOME", emptyString);
+    if (!home_path.empty() && std::filesystem::exists(home_path)) {
+        return home_path + "/.cache/tt-metal-cache/";
+    } else {
+        return "/tmp/tt-metal-cache/";
+    }
+}
+JitBuildEnv::JitBuildEnv() {}
+
 void JitBuildEnv::init(
     uint32_t build_key, tt::ARCH arch, const std::map<std::string, std::string>& device_kernel_defines) {
     // Paths
     this->root_ = llrt::RunTimeOptions::get_instance().get_root_dir();
-    this->out_root_ = this->root_ + "built/";
+    this->out_root_ = llrt::RunTimeOptions::get_instance().is_cache_dir_specified()
+                          ? llrt::RunTimeOptions::get_instance().get_cache_dir()
+                          : get_default_root_path();
+
     this->arch_ = arch;
     this->arch_name_ = get_string_lowercase(arch);
     this->aliased_arch_name_ = get_string_aliased_arch_lowercase(arch);
@@ -83,8 +108,15 @@ void JitBuildEnv::init(
     this->out_firmware_root_ = this->out_root_ + to_string(build_key) + "/firmware/";
     this->out_kernel_root_ = this->out_root_ + to_string(build_key) + "/kernels/";
 
+    const static bool use_ccache = std::getenv("TT_METAL_CCACHE_KERNEL_SUPPORT") != nullptr;
+    if (use_ccache) {
+        this->gpp_ = "ccache ";
+    } else {
+        this->gpp_ = "";
+    }
+
     // Tools
-    this->gpp_ = this->root_ + "runtime/sfpi/compiler/bin/riscv32-unknown-elf-g++ ";
+    this->gpp_ += this->root_ + "runtime/sfpi/compiler/bin/riscv32-unknown-elf-g++ ";
 
     // Flags
     string common_flags;
@@ -166,30 +198,33 @@ void JitBuildEnv::init(
 
     // Includes
     // TODO(pgk) this list is insane
-    // clang-format off
-    this->includes_ = string("") +
-        "-I. " +
-        "-I.. " +
-        "-I" + this->root_ + " " +
-        "-I" + this->root_ + "ttnn " +
-        "-I" + this->root_ + "tt_metal " +
-        "-I" + this->root_ + "tt_metal/include " +
-        "-I" + this->root_ + "tt_metal/hw/inc " +
-        "-I" + this->root_ + "tt_metal/fabric/hw/inc " +
-        "-I" + this->root_ + "tt_metal/hostdevcommon/api " +
-        "-I" + this->root_ + "tt_metal/hw/inc/debug " +
-        "-I" + this->root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ + " " +
-        "-I" + this->root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/" + this->arch_name_ + "_defines " +
-        "-I" + this->root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/noc " +
-        "-I" + this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/metal/common " +
-        "-I" + this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/metal/llk_io " +
-        "-I" + this->root_ + "tt_metal/third_party/tt_llk/tt_llk_" + this->arch_name_ + "/common/inc " +  // TODO(fixme) datamovement fw shouldn't read this
-        "-I" + this->root_ + "tt_metal/api/" + this->aliased_arch_name_ + " " +
-        "-I" + this->root_ + "tt_metal/api/" + this->aliased_arch_name_ + "/tt-metalium " +
-        "-I" + this->root_ + "tt_metal/api/tt-metalium/ " +
-        "-I" + this->root_ + "tt_metal/api/ " +
-        "-I" + this->root_ + "tt_metal/third_party/tt_llk/tt_llk_" + this->arch_name_ + "/llk_lib ";
-    // clang-format on
+    std::vector<std::string> includeDirs = {
+        ".",
+        "..",
+        root_,
+        root_ + "ttnn",
+        root_ + "tt_metal",
+        root_ + "tt_metal/include",
+        root_ + "tt_metal/hw/inc",
+        root_ + "tt_metal/hostdevcommon/api",
+        root_ + "tt_metal/hw/inc/debug",
+        root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_,
+        root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/" + this->arch_name_ + "_defines",
+        root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/noc",
+        root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/metal/common",
+        root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/metal/llk_io",
+        // TODO: datamovement fw shouldn't read this
+        root_ + "tt_metal/third_party/tt_llk/tt_llk_" + this->arch_name_ + "/common/inc",
+        root_ + "tt_metal/api/",
+        root_ + "tt_metal/api/tt-metalium/",
+        root_ + "tt_metal/third_party/tt_llk/tt_llk_" + this->arch_name_ + "/llk_lib"
+    };
+
+    std::ostringstream oss;
+    for (size_t i = 0; i < includeDirs.size(); ++i) {
+        oss << "-I" << includeDirs[i] << " ";
+    }
+    this->includes_ = oss.str();
 
     this->lflags_ = common_flags;
     this->lflags_ += "-fno-exceptions -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
@@ -627,18 +662,6 @@ JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuil
     this->process_defines_at_compile = true;
 
     finish_init();
-}
-
-static void build_failure(const string& target_name, const string& op, const string& cmd, const string& log_file) {
-    log_info(tt::LogBuildKernels, "{} {} failure -- cmd: {}", target_name, op, cmd);
-    string cat = "cat " + log_file;
-    if (fs::exists(log_file)) {
-        // XXXX PGK(TODO) not portable
-        if (system(cat.c_str())) {
-            TT_THROW("Failed system comand {}", cat);
-        }
-    }
-    TT_THROW("{} build failed", target_name);
 }
 
 void JitBuildState::compile_one(
