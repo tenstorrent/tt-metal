@@ -21,11 +21,6 @@ VERSION=`grep '^VERSION_ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
 MAJOR=${VERSION%.*}
 ARCH=`uname -m`
 
-if [ $FLAVOR != "ubuntu" ]; then
-    echo "Error: Only Ubuntu is supported"
-    exit 1
-fi
-
 UBUNTU_CODENAME=$(grep '^VERSION_CODENAME=' /etc/os-release | awk -F= '{print $2}' | tr -d '"')
 export UBUNTU_CODENAME
 
@@ -109,10 +104,46 @@ ub_baremetal_packages() {
     UB_BAREMETAL_LIST=("${UB_RUNTIME_LIST[@]}" "${UB_BUILDTIME_LIST[@]}")
 }
 
+# Debian package lists
+deb_runtime_packages()
+{
+    DEB_RUNTIME_LIST=(\
+     python3-pip \
+     libhwloc-dev \
+     libnuma-dev \
+     libc++-17-dev \
+     libc++abi-17-dev \
+    )
+}
+
+deb_buildtime_packages()
+{
+    DEB_BUILDTIME_LIST=(\
+     git \
+     python3-dev \
+     pkg-config \
+     cargo \
+     cmake \
+     ninja-build \
+     libboost-dev \
+     libhwloc-dev \
+     libc++-17-dev \
+     libc++abi-17-dev \
+     build-essential \
+     xz-utils \
+    )
+}
+
+deb_baremetal_packages() {
+    deb_runtime_packages
+    deb_buildtime_packages
+    DEB_BAREMETAL_LIST=("${DEB_RUNTIME_LIST[@]}" "${DEB_BUILDTIME_LIST[@]}")
+}
+
 update_package_list()
 {
     if [ $FLAVOR == "ubuntu" ]; then
-	case "$mode" in
+        case "$mode" in
             runtime)
                 ub_runtime_packages
                 PKG_LIST=("${UB_RUNTIME_LIST[@]}")
@@ -130,12 +161,34 @@ update_package_list()
                 usage
                 ;;
         esac
+    elif [ $FLAVOR == "debian" ]; then
+        case "$mode" in
+            runtime)
+                deb_runtime_packages
+                PKG_LIST=("${DEB_RUNTIME_LIST[@]}")
+                ;;
+            build)
+                deb_buildtime_packages
+                PKG_LIST=("${DEB_BUILDTIME_LIST[@]}")
+                ;;
+            baremetal)
+                deb_baremetal_packages
+                PKG_LIST=("${DEB_BAREMETAL_LIST[@]}")
+                ;;
+            *)
+                echo "Invalid mode: $mode"
+                usage
+                ;;
+        esac
+    else
+        echo "Unsupported distribution: $FLAVOR"
+        exit 1
     fi
 }
 
 validate_packages()
 {
-    if [ $FLAVOR == "ubuntu" ]; then
+    if [ $FLAVOR == "ubuntu" ] || [ $FLAVOR == "debian" ]; then
         dpkg -l "${PKG_LIST[@]}"
     fi
 }
@@ -160,6 +213,15 @@ prep_ubuntu_build()
     # The below is to bring cmake from kitware
     wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
     echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ $UBUNTU_CODENAME main" | tee /etc/apt/sources.list.d/kitware.list >/dev/null
+    apt-get update
+}
+
+prep_debian_build()
+{
+    echo "Preparing debian ..."
+    # Update the list of available packages
+    apt-get update
+    apt-get install -y --no-install-recommends ca-certificates gpg lsb-release wget software-properties-common gnupg
     apt-get update
 }
 
@@ -208,32 +270,57 @@ configure_hugepages() {
 
 install() {
     if [ $FLAVOR == "ubuntu" ]; then
-        echo "Installing packages..."
+        echo "Installing packages for Ubuntu..."
 
-	case "$mode" in
+        case "$mode" in
             runtime)
                 prep_ubuntu_runtime
                 ;;
             build)
                 prep_ubuntu_build
                 install_llvm
-		install_gcc12
+                install_gcc12
                 ;;
             baremetal)
                 prep_ubuntu_build
                 install_llvm
-		install_gcc12
+                install_gcc12
                 configure_hugepages
                 ;;
         esac
 
-	DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends "${PKG_LIST[@]}"
+        DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends "${PKG_LIST[@]}"
 
+    elif [ $FLAVOR == "debian" ]; then
+        echo "Installing packages for Debian..."
+
+        case "$mode" in
+            runtime)
+                echo "Debian runtime preparation not yet implemented."
+                ;;
+            build)
+                prep_debian_build
+                install_llvm
+                install_gcc12
+                ;;
+            baremetal)
+                prep_debian_build
+                install_llvm
+                install_gcc12
+                configure_hugepages
+                ;;
+        esac
+
+        DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends "${PKG_LIST[@]}"
+
+    else
+        echo "Unsupported distribution: $FLAVOR"
+        exit 1
     fi
 }
 
 cleanup() {
-    if [ $FLAVOR == "ubuntu" ]; then
+    if [ $FLAVOR == "ubuntu" ] || [ $FLAVOR == "debian" ]; then
         rm -rf /var/lib/apt/lists/*
     fi
 }
