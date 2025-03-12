@@ -158,6 +158,7 @@ MeshDevice::MeshDevice(
     view_(std::move(mesh_device_view)),
     mesh_id_(generate_unique_mesh_id()),
     parent_mesh_(std::move(parent_mesh)),
+    program_cache_(std::make_unique<program_cache::detail::ProgramCache>()),
     dispatch_thread_pool_(create_default_thread_pool(scoped_devices_->root_devices())),
     reader_thread_pool_(create_default_thread_pool(scoped_devices_->root_devices(), view_->shape().mesh_size())) {}
 
@@ -464,25 +465,11 @@ void MeshDevice::enable_async(bool enable) {
     */
 }
 
-void MeshDevice::enable_program_cache() {
-    for (auto device : this->get_devices()) {
-        device->enable_program_cache();
-    }
-}
+void MeshDevice::enable_program_cache() { program_cache_->enable(); }
 
-void MeshDevice::disable_and_clear_program_cache() {
-    for (auto device : this->get_devices()) {
-        device->disable_and_clear_program_cache();
-    }
-}
+void MeshDevice::disable_and_clear_program_cache() { program_cache_->clear(); }
 
-size_t MeshDevice::num_program_cache_entries() {
-    size_t total_entries = 0;
-    for (auto device : this->get_devices()) {
-        total_entries += device->num_program_cache_entries();
-    }
-    return total_entries;
-}
+size_t MeshDevice::num_program_cache_entries() { return program_cache_->num_entries(); }
 
 SubDeviceManagerId MeshDevice::create_sub_device_manager(
     tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
@@ -794,7 +781,7 @@ void MeshDevice::push_work(std::function<void()> work, bool blocking) {
     std::lock_guard lock(push_work_mutex_);
     work();
 }
-program_cache::detail::ProgramCache& MeshDevice::get_program_cache() { return reference_device()->get_program_cache(); }
+program_cache::detail::ProgramCache& MeshDevice::get_program_cache() { return *program_cache_; }
 HalProgrammableCoreType MeshDevice::get_programmable_core_type(CoreCoord virtual_core) const { return reference_device()->get_programmable_core_type(virtual_core); }
 std::vector<std::pair<transfer_info_cores, uint32_t>> MeshDevice::extract_dst_noc_multicast_info(
     const std::vector<CoreRange>& ranges, const CoreType core_type) {

@@ -588,8 +588,6 @@ void launch_op_func(
     // Send host side op compile and run to the worker queue
     // Assert to ensure that worker threads are specified.
     ZoneScopedN("LaunchOp");
-    auto& workers = detail::get_workers(output_tensors);
-    std::size_t workers_size = workers.size();
     output_tensors = op_func(input_tensors, optional_input_tensors, optional_output_tensors);
     return;
 }
