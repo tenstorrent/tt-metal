@@ -141,6 +141,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
 
     // KERNEL CREATION
     // Reader
+    const auto& allocator = device->allocator();
+    uint32_t num_banks = allocator->get_num_banks(input_tensor_buffer_type);
     auto reader_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
     reader_kernel_config.compile_args = {
         ring_index,                                       // my_chip_id
@@ -148,6 +150,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         src0_cb_index,                                    // cb0_id
         num_pages_per_packet,                             // packet_size_in_pages
         op_config.get_page_size(),                        // tensor0_page_size
+        dim,
+        num_banks,
     };
     log_trace(tt::LogOp, "Reader Compile Args:");
     for (const auto& arg : reader_kernel_config.compile_args) {
@@ -176,7 +180,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         num_targets_forward,                               // num_targets_forward_direction
         num_targets_backward,                              // num_targets_backward_direction
         last_dim,                                          // dim
-        tile_cols_for_chip                                 // tile_cols_for_chip
+        tile_cols_for_chip,                                // tile_cols_for_chip
+        num_banks,
     };
     log_trace(tt::LogOp, "Writer Compile Args:");
     for (const auto& arg : writer_kernel_config.compile_args) {
@@ -214,10 +219,18 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         uint32_t remainder = input_tensor_num_pages % num_links;
         uint32_t input_tile_id_start = link * base_pages_per_worker + std::min(link, remainder);
         uint32_t input_tile_id_end = (link + 1) * base_pages_per_worker + std::min(link + 1, remainder);
+        uint32_t num_tiles_per_chip = input_tensor_shape[2] * input_tensor_shape[3] / 1024;
+        fprintf(
+            stderr,
+            ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> input_tile_id_start: %u, num_tiles_per_chip: %u ring_size: %u\n",
+            input_tile_id_start,
+            num_tiles_per_chip,
+            ring_size);
         std::vector<uint32_t> reader_rt_args = {
             input_tensor.buffer()->address(),  // tensor_address0
             input_tile_id_start,               // tile_id_start
             input_tile_id_end,                 // tile_id_end
+            num_tiles_per_chip,
         };
         log_trace(tt::LogOp, "Reader Runtime Args:");
         for (const auto& arg : reader_rt_args) {
@@ -231,6 +244,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         uint32_t out_ready_sem_wait_value = ring_size * num_links;
         uint32_t output_tile_id_start = ring_index * input_tensor_num_pages + input_tile_id_start;
         uint32_t output_tile_id_end = ring_index * input_tensor_num_pages + input_tile_id_end;
+        num_tiles_per_chip = input_tensor_shape[2] * input_tensor_shape[3] / 1024;
+        fprintf(
+            stderr,
+            ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> num_tiles_per_chip: %u ring_size: %u\n",
+            num_tiles_per_chip,
+            ring_size);
         if (last_dim) {
             output_tile_id_start = tile_cols_for_chip * ring_index;  // multi width tile for each chip
             output_tile_id_end = tile_rows * tile_cols_for_chip;
@@ -246,6 +265,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
             drain_sync_core.y,                  // out_ready_sem_noc0_y
             out_ready_sem_wait_value,           // out_ready_sem_wait_value
             ring_size,                          // ring_size
+            num_tiles_per_chip,
         };
         log_trace(tt::LogOp, "Writer Runtime Args:");
         for (const auto& arg : writer_rt_args) {

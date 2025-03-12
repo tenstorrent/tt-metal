@@ -136,7 +136,8 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
     log_trace(tt::LogOp, "[select_version] output_shard_num_cores: {}", output_shard_num_cores);
 
     // Check for minimal interleaved case
-    if (((input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] % 32 == 0) ||
+    if (std::getenv("TT_METAL_HANDCRAFT_INTERLEAVE") &&
+        ((input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] % 32 == 0) ||
          (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[3] % 32 == 0) ||
          (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 8 &&
           (input_tensor_shape[2] % 32 == 0 && input_tensor_shape[3] % 32 == 0))) &&
@@ -197,6 +198,7 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
         }
     }
     log_trace(tt::LogOp, "Using generic implementation");
+    fprintf(stderr, "DEBUG: AllGatherAsyncVersion::GENERIC;\n");
     return AllGatherAsyncVersion::GENERIC;
 }
 

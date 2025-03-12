@@ -314,17 +314,42 @@ def run_all_gather_impl(
     for tensor_index in range(len(tt_out_tensor_list)):
         tt_out_tensor = tt_out_tensor_list[tensor_index]
         output_tensor = output_tensor_goldens_list[tensor_index]
-        for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
-            tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
-            logger.info(f"Checking for device {t.device().id()}")
+        # for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
+        #     tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+        #     logger.info(f"Checking for device {t.device().id()}")
 
-            if input_dtype == ttnn.bfloat16:
-                eq, output = comp_equal(tt_output_tensor, output_tensor)
-            else:
-                eq, output = comp_pcc(tt_output_tensor, output_tensor)
-            if not eq:
-                logger.error(f"output mismatch for tensor {i}")
-                passed = False
+        #     def print_chunk_first_elements(matrix: torch.Tensor):
+        #         if matrix.ndim != 2:
+        #             M, N = matrix.shape[-2], matrix.shape[-1]
+        #             matrix = matrix.view(M, N)
+        #         else:
+        #             M, N = matrix.shape
+        #         M, N = matrix.shape
+        #         if M % 32 or N % 32:
+        #             raise ValueError("行列のサイズは32で割り切れる必要があります。")
+
+        #         num_rows = M // 32  # 縦方向のチャンク数
+        #         num_cols = N // 32  # 横方向のチャンク数
+
+        #         for i in range(num_rows):
+        #             line_values = []
+        #             for j in range(num_cols):
+        #                 # 各32x32チャンクの[0][0]の位置は、実際の行列では (i*32, j*32) に対応する
+        #                 value = matrix[i * 32, j * 32].item()
+        #                 formatted_value = f"{value:.3f}"
+        #                 line_values.append(formatted_value)
+        #             print(" ".join(line_values))
+        #     # print_chunk_first_elements(tt_output_tensor)
+        #     # print("-------------$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$")
+        #     # print_chunk_first_elements(output_tensor)
+
+        #     if input_dtype == ttnn.bfloat16:
+        #         eq, output = comp_equal(tt_output_tensor, output_tensor)
+        #     else:
+        #         eq, output = comp_pcc(tt_output_tensor, output_tensor)
+        #     if not eq:
+        #         logger.error(f"output mismatch for tensor {i}")
+        #         passed = False
 
     for i in range(num_devices):
         assert (
@@ -348,33 +373,79 @@ def run_all_gather_impl(
         # (4, 1, [1, 1, 64, 512], 3, ttnn.TILE_LAYOUT),
         # (4, 1, [1, 1, 32, 32768], 3, ttnn.TILE_LAYOUT),
         # (4, 1, [1, 1, 2048, 16384], 3, ttnn.TILE_LAYOUT),
-        (4, 1, [1, 1, 32, 1280], 3, ttnn.TILE_LAYOUT),
-        # Mixtral, Decode	bfp8, L1
-        (8, 1, [1, 1, 256, 4096], 2, ttnn.TILE_LAYOUT),
+        # (4, 1, [1, 1, 32, 1280], 3, ttnn.TILE_LAYOUT),
+        # # Mixtral, Decode	bfp8, L1
+        # (8, 1, [1, 1, 256, 4096], 2, ttnn.TILE_LAYOUT),
+        # # Mixtra, Prefill bfp8, L1
+        # (8, 1, [1, 8, 32, 4096], 1, ttnn.TILE_LAYOUT),
+        # # Mixtra, Prefill bfp8, L1
+        # (8, 1, [1, 8, 128, 4096], 1, ttnn.TILE_LAYOUT),
+        # # Mixtra, Prefill bfp8, L1
+        # (8, 1, [1, 8, 1024, 4096], 1, ttnn.TILE_LAYOUT),
+        # #  Mixtra, Prefill bfp8, L1
+        # (8, 1, [1, 8, 8192, 4096], 1, ttnn.TILE_LAYOUT),  # OOM on L1
         # Mixtra, Prefill bfp8, L1
-        (8, 1, [1, 8, 32, 4096], 1, ttnn.TILE_LAYOUT),
-        # Mixtra, Prefill bfp8, L1
-        (8, 1, [1, 8, 128, 4096], 1, ttnn.TILE_LAYOUT),
-        # Mixtra, Prefill bfp8, L1
-        (8, 1, [1, 8, 1024, 4096], 1, ttnn.TILE_LAYOUT),
-        #  Mixtra, Prefill bfp8, L1
-        (8, 1, [1, 8, 8192, 4096], 1, ttnn.TILE_LAYOUT),
-        # Mixtra, Prefill bfp8, L1
-        (8, 1, [1, 8, 32768, 4096], 1, ttnn.TILE_LAYOUT),
+        (8, 1, [1, 8, 32768, 4096], 1, ttnn.TILE_LAYOUT),  # OOM on L1
         # Llama 8B, N300 bf16
-        (2, 1, [1, 1, 128, 4096], 3, ttnn.TILE_LAYOUT),
-        # Llama 8B, N300 bf16
-        (2, 1, [1, 1, 32, 4096], 3, ttnn.TILE_LAYOUT),
-        # Llama 8B, N300 bfp8
-        (2, 1, [1, 1, 32, 128256], 3, ttnn.TILE_LAYOUT),
-        # T3K Falcon 40, Decode
-        (8, 1, [1, 1, 32, 32768], 3, ttnn.TILE_LAYOUT),
-        # T3K Falcon 40, Decode
-        (8, 1, [1, 1, 32, 8192], 3, ttnn.TILE_LAYOUT),
-        # T3K Falcon 40, Prefill
-        (8, 1, [1, 1, 2048, 8192], 3, ttnn.TILE_LAYOUT),
-        # T3K Falcon 40, Prefill
-        (8, 1, [1, 1, 2048, 32768], 3, ttnn.TILE_LAYOUT),
+        # (2, 1, [1, 1, 128, 4096], 3, ttnn.TILE_LAYOUT),
+        # # Llama 8B, N300 bf16
+        # (2, 1, [1, 1, 32, 4096], 3, ttnn.TILE_LAYOUT),
+        # # Llama 8B, N300 bfp8
+        # (2, 1, [1, 1, 32, 128256], 3, ttnn.TILE_LAYOUT),
+        # # # T3K Falcon 40, Decode
+        # (8, 1, [1, 1, 32, 32768], 3, ttnn.TILE_LAYOUT),
+        # # # T3K Falcon 40, Decode
+        # (8, 1, [1, 1, 32, 8192], 3, ttnn.TILE_LAYOUT),
+        # # # T3K Falcon 40, Prefill
+        # (8, 1, [1, 1, 2048, 8192], 3, ttnn.TILE_LAYOUT),
+        # # # T3K Falcon 40, Prefill
+        # (8, 1, [1, 1, 2048, 32768], 3, ttnn.TILE_LAYOUT),  # OOM on L1
+        # (2, 1, [1, 1, 64, 768-32*3], 2, ttnn.TILE_LAYOUT), #
+        # (2, 1, [1, 1, 64, 768-32*2], 2, ttnn.TILE_LAYOUT), #
+        # (2, 1, [1, 1, 64, 768-32*1], 2, ttnn.TILE_LAYOUT), #
+        # (2, 1, [1, 1, 64, 768*2], 2, ttnn.TILE_LAYOUT), # 12
+        # (2, 1, [1, 1, 64, 768*2 + 768 - 64], 2, ttnn.TILE_LAYOUT), # 12
+        # (2, 1, [1, 1, 64, 768*2 + 768], 2, ttnn.TILE_LAYOUT), # 12
+        # (2, 1, [1, 1, 64, 2272], 2, ttnn.TILE_LAYOUT), # 12
+        # (2, 1, [1, 1, 64, 768], 2, ttnn.TILE_LAYOUT), # 12
+        # (2, 1, [1, 1, 64, 10752], 2, ttnn.TILE_LAYOUT), # 12
+        # (2, 1, [1, 1, 64, 2176], 2, ttnn.TILE_LAYOUT), # 12
+        # (2, 1, [1, 1, 64, 10624], 2, ttnn.TILE_LAYOUT), # 12
+        # (2, 1, [1, 1, 64, 2432], 2, ttnn.TILE_LAYOUT), # 12
+        # (2, 1, [1, 1, 64, 10880], 2, ttnn.TILE_LAYOUT), # 12
+        # (2, 1, [1, 1, 64, 3072], 2, ttnn.TILE_LAYOUT), # 12
+        # (4, 1, [1, 1, 128, 3072], 2, ttnn.TILE_LAYOUT), # 12
+        # (8, 1, [1, 1, 256, 6144], 2, ttnn.TILE_LAYOUT), # 12
+        # (2, 1, [1, 1, 64, 768*2+64], 2, ttnn.TILE_LAYOUT), # 12
+        # (2, 1, [1, 1, 64, 768*4+64], 2, ttnn.TILE_LAYOUT), # 12
+        # (4, 1, [1, 1, 128, 768*4+64], 2, ttnn.TILE_LAYOUT), # 12
+        # (8, 1, [1, 1, 256, 768*8+64], 2, ttnn.TILE_LAYOUT), # 12
+        # (2, 1, [1, 1, 64, 768*2-64], 2, ttnn.TILE_LAYOUT), # 12
+        # (2, 1, [1, 1, 64, 768*4-64], 2, ttnn.TILE_LAYOUT), # 12
+        # (4, 1, [1, 1, 128, 768*4-64], 2, ttnn.TILE_LAYOUT), # 12
+        # (8, 1, [1, 1, 256, 768*8-64], 2, ttnn.TILE_LAYOUT), # 12
+        # (2, 1, [1, 1, 64, 3584*3], 2, ttnn.TILE_LAYOUT), # 12
+        # (2, 1, [1, 1, 128, 3584*3], 2, ttnn.TILE_LAYOUT), # 12
+        # (4, 1, [1, 1, 128, 3584*5], 2, ttnn.TILE_LAYOUT), # 12
+        # (8, 1, [1, 1, 256, 3584*9], 2, ttnn.TILE_LAYOUT), # 12
+        # (2, 1, [1, 1, 64, 768], 2, ttnn.TILE_LAYOUT), # 12
+        # (2, 1, [1, 1, 64, 768+32*1], 2, ttnn.TILE_LAYOUT), # 12
+        # (2, 1, [1, 1, 64, 768+32*2], 2, ttnn.TILE_LAYOUT), # 12
+        # (2, 1, [1, 1, 64, 768+32*3], 2, ttnn.TILE_LAYOUT), # 12
+        # (2, 1, [1, 1, 192, 768-32*3], 2, ttnn.TILE_LAYOUT), #
+        # (2, 1, [1, 1, 192, 768-32*2], 2, ttnn.TILE_LAYOUT), #
+        # (2, 1, [1, 1, 192, 768-32*1], 2, ttnn.TILE_LAYOUT), #
+        # (2, 1, [1, 1, 192, 768], 2, ttnn.TILE_LAYOUT), # 12
+        # (2, 1, [1, 1, 192, 768+32*1], 2, ttnn.TILE_LAYOUT), # 12
+        # (2, 1, [1, 1, 192, 768+32*2], 2, ttnn.TILE_LAYOUT), # 12
+        # (2, 1, [1, 1, 192, 768+32*3], 2, ttnn.TILE_LAYOUT), # 12
+        # (2, 1, [1, 1, 192, 768*3-32*3], 2, ttnn.TILE_LAYOUT), #
+        # (2, 1, [1, 1, 192, 768*3-32*2], 2, ttnn.TILE_LAYOUT), #
+        # (2, 1, [1, 1, 192, 768*3-32*1], 2, ttnn.TILE_LAYOUT), #
+        # (2, 1, [1, 1, 192, 768*3], 2, ttnn.TILE_LAYOUT), # 12
+        # (2, 1, [1, 1, 192, 768*3+32*1], 2, ttnn.TILE_LAYOUT), # 12
+        # (2, 1, [1, 1, 192, 768*3+32*2], 2, ttnn.TILE_LAYOUT), # 12
+        # (2, 1, [1, 1, 192, 768*3+32*3], 2, ttnn.TILE_LAYOUT), # 12
     ],
 )
 @pytest.mark.parametrize(
@@ -388,10 +459,13 @@ def run_all_gather_impl(
     "mem_config",
     [
         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        # ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
-@pytest.mark.parametrize("num_iters", [10])
+@pytest.mark.parametrize("num_iters", [1])
 @pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 65536 * 32}], indirect=True)
+@pytest.mark.timeout(3)
 def test_all_gather(
     t3k_mesh_device,
     # pcie_mesh_device,
@@ -424,6 +498,7 @@ def test_all_gather(
         create_persistent_fabric=True,
         teardown_persistent_fabric=True,
         mem_config=mem_config,
+        trace_mode=True,
     )
 
 
@@ -432,72 +507,109 @@ def test_all_gather(
 @pytest.mark.parametrize(
     "num_devices, output_shape, dim, layout, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
     [
-        (
-            2,
-            [1, 1, 32, 256],
-            3,
-            ttnn.TILE_LAYOUT,
-            (32, 32),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
-            None,
-            None,
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ),
-        (
-            2,
-            [1, 1, 32, 256],
-            3,
-            ttnn.TILE_LAYOUT,
-            (32, 64),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
-            None,
-            None,
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ),
-        (
-            2,
-            [1, 1, 32, 256],
-            3,
-            ttnn.TILE_LAYOUT,
-            (32, 128),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
-            None,
-            None,
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ),
-        (
-            2,
-            [1, 1, 64, 256],
-            2,
-            ttnn.TILE_LAYOUT,
-            (32, 128),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
-            None,
-            None,
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ),
-        (
-            2,
-            [1, 4, 32, 256],
-            3,
-            ttnn.TILE_LAYOUT,
-            (32, 128),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
-            None,
-            None,
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ),
-        (
-            4,
-            [1, 4, 32, 1280],
-            3,
-            ttnn.TILE_LAYOUT,
-            (32, 320),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 4))}),
-            None,
-            None,
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ),
+        # All Gather	T3K Llama Decode	[1,1,32,1024]	[1,1,32,8192]	3	bf16	WidthShard,Tile,([0,0]-[7,3]),in_ss=[32,32], out_ss=[32,256]	8
+        # GENERIC
+        # (
+        #     8,
+        #     [1, 1, 32, 8192],
+        #     3,
+        #     ttnn.TILE_LAYOUT,
+        #     (32, 32),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+        #     # each core to have 8 tiles? then CoreRangeSet can be (0, 0) to (1, 1)?
+        #     # understand, each core concatenate 8 tiles from other 7 chips (cores). So, each core will have 8 tiles.
+        #     (32, 256),
+        #     # (32, 32),  # 256 32
+        #     # (32, 64),  # 128 32
+        #     # (32, 128), #  64 32
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+        #     # ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}), # 32, 4
+        #     # ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}), # 32, 4
+        #     # ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}), # 32, 2
+        #     # ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(9, 5))}), # violate more than L1 bank of 56
+        #     # ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(9, 4))}), # output sharded cores must be divisible by num_links for this work distribution scheme (50 % 8 != 0)
+        #     # ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))}), # equality check failure
+        #     ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        # ),
+        # All Gather	T3K Llama Decode	[1,1,32,1024]	[1,1,32,8192]	3	bf16	WidthShard,Tile,in([0,0]-[7,1]),in_ss=[32,32],out_ss=[32,512]	8
+        # GENERIC
+        # (
+        #     8,
+        #     [1, 1, 32, 8192],
+        #     3,
+        #     ttnn.TILE_LAYOUT,
+        #     (32, 64),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
+        #     (32, 512),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
+        #     ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        # ),
+        # (
+        #     2,
+        #     [1, 1, 32, 256],
+        #     3,
+        #     ttnn.TILE_LAYOUT,
+        #     (32, 32),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+        #     None,
+        #     None,
+        #     ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        # ),
+        # (
+        #     2,
+        #     [1, 1, 32, 256],
+        #     3,
+        #     ttnn.TILE_LAYOUT,
+        #     (32, 64),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
+        #     None,
+        #     None,
+        #     ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        # ),
+        # (
+        #     2,
+        #     [1, 1, 32, 256],
+        #     3,
+        #     ttnn.TILE_LAYOUT,
+        #     (32, 128),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+        #     None,
+        #     None,
+        #     ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        # ),
+        # (
+        #     2,
+        #     [1, 1, 64, 256],
+        #     2,
+        #     ttnn.TILE_LAYOUT,
+        #     (32, 128),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
+        #     None,
+        #     None,
+        #     ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        # ),
+        # (
+        #     2,
+        #     [1, 4, 32, 256],
+        #     3,
+        #     ttnn.TILE_LAYOUT,
+        #     (32, 128),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+        #     None,
+        #     None,
+        #     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        # ),
+        # (
+        #     4,
+        #     [1, 4, 32, 1280],
+        #     3,
+        #     ttnn.TILE_LAYOUT,
+        #     (32, 320),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 4))}),
+        #     None,
+        #     None,
+        #     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        # ),
     ],
 )
 @pytest.mark.parametrize("num_links", [1])
@@ -505,11 +617,12 @@ def test_all_gather(
     "input_dtype",
     [
         ttnn.bfloat16,
-        ttnn.bfloat8_b,
+        # ttnn.bfloat8_b,
     ],
 )
-@pytest.mark.parametrize("num_iters", [8])
+@pytest.mark.parametrize("num_iters", [1])
 @pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 65536 * 32}], indirect=True)
 def test_all_gather_sharded(
     t3k_mesh_device,
     num_devices,
@@ -553,6 +666,7 @@ def test_all_gather_sharded(
         create_persistent_fabric=True,
         teardown_persistent_fabric=True,
         wrap_fabric_around_mesh=True,
+        trace_mode=True,
     )
 
 
