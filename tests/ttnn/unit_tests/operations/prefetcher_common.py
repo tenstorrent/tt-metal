@@ -8,7 +8,12 @@ import ttnn
 import math
 from loguru import logger
 
-from ttnn import replicate_tensor_to_mesh_mapper, ShardTensor2dMesh, ConcatMeshToTensor, ConcatMesh2dToTensor
+from ttnn import (
+    replicate_tensor_to_mesh_mapper,
+    shard_tensor_to_2d_mesh_mapper,
+    ConcatMeshToTensor,
+    ConcatMesh2dToTensor,
+)
 from models.common.lightweightmodule import LightweightModule
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (

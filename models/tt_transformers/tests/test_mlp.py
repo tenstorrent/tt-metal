@@ -73,7 +73,7 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache, rese
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
+        mesh_mapper=ttnn.shard_tensor_to_2d_mesh_mapper(
             mesh_device, dims=(None, 3) if model_args.is_galaxy else (None, None), mesh_shape=model_args.cluster_shape
         ),  # When both dims are None, the mapper used is `ttnn.replicate_tensor_to_mesh_mapper`
         dtype=ttnn.bfloat8_b,

@@ -711,7 +711,7 @@ def test_line_all_gather_after_reshape(mesh_device):
         torch_input_tensor,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=list(mesh_device.shape), dims=(2, 3)),
+        mesh_mapper=ttnn.shard_tensor_to_2d_mesh_mapper(mesh_device, mesh_shape=list(mesh_device.shape), dims=(2, 3)),
     )
     output_tensor = ttnn.all_gather(
         mesh_tensor,

@@ -939,7 +939,7 @@ class ModelArgs:
         x: (batch, seq, dim)
         """
         dims = (None, None) if force_replicated else (None, -1)
-        mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=self.cluster_shape)
+        mesh_mapper = ttnn.shard_tensor_to_2d_mesh_mapper(self.mesh_device, dims=dims, mesh_shape=self.cluster_shape)
 
         if len(x.shape) == 3:
             batch = x.shape[0]
@@ -992,7 +992,7 @@ class ModelArgs:
         x_1BSH = x_bsh.unsqueeze(0)
         dims = (None, None) if force_replicated else (None, -1)
 
-        mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=self.cluster_shape)
+        mesh_mapper = ttnn.shard_tensor_to_2d_mesh_mapper(self.mesh_device, dims=dims, mesh_shape=self.cluster_shape)
 
         # input goes to DRAM
         xs_1BSH = ttnn.from_torch(

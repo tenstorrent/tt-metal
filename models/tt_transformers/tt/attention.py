@@ -195,7 +195,7 @@ class Attention(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if self.TG else wqkv_mem_config,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_mapper=ttnn.shard_tensor_to_2d_mesh_mapper(
                 self.mesh_device, dims=(3, 2) if self.TG else (2, 3), mesh_shape=configuration.cluster_shape
             ),
             cache_file_name=cache_name("wqkv_sharded_2d"),
@@ -215,7 +215,7 @@ class Attention(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if (self.use_fused_all_gather_matmul or self.TG) else wo_mem_config,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_mapper=ttnn.shard_tensor_to_2d_mesh_mapper(
                 self.mesh_device,
                 dims=(2, 3) if (self.use_fused_all_gather_matmul or self.TG) else (3, 2),
                 mesh_shape=configuration.cluster_shape,

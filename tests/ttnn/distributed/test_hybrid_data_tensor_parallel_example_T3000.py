@@ -67,7 +67,7 @@ def test_tensor_parallel_falcon_mlp():
     hidden_states, parameters = None, None
     mesh_shape = tuple(mesh_device.shape)
 
-    with ttnn.distribute(ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(0, None))):
+    with ttnn.distribute(ttnn.shard_tensor_to_2d_mesh_mapper(mesh_device, mesh_shape=mesh_shape, dims=(0, None))):
         hidden_states = ttnn.from_torch(
             torch_hidden_states,
             dtype=ttnn.bfloat16,
@@ -78,7 +78,7 @@ def test_tensor_parallel_falcon_mlp():
     # TP = 4; ctx manager replicate model weights along rows of the mesh and shards replicas on columns of the mesh
     # [W0, W1, W2, W3]
     # [W0, W1, W2, W3]
-    with ttnn.distribute(ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(None, -1))):
+    with ttnn.distribute(ttnn.shard_tensor_to_2d_mesh_mapper(mesh_device, mesh_shape=mesh_shape, dims=(None, -1))):
         parameters = ttnn.model_preprocessing.preprocess_model_parameters(
             initialize_model=lambda: model,
             device=mesh_device,

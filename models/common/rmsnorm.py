@@ -91,7 +91,7 @@ class RMSNorm(LightweightModule):
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=weight_memory_config,
                 cache_file_name=cache_name,
-                mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(None, 2), mesh_shape=list(device.shape))
+                mesh_mapper=ttnn.shard_tensor_to_2d_mesh_mapper(device, dims=(None, 2), mesh_shape=list(device.shape))
                 if is_mesh_device
                 else None,
             )

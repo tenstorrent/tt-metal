@@ -41,7 +41,7 @@ class MLP(LightweightModule):
             ),  # Grab only the wX part of the name
             dtype=type,
             device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=args.cluster_shape),
+            mesh_mapper=ttnn.shard_tensor_to_2d_mesh_mapper(self.mesh_device, dims=dims, mesh_shape=args.cluster_shape),
             layout=ttnn.TILE_LAYOUT,
             memory_config=(
                 ttnn.DRAM_MEMORY_CONFIG if args.is_galaxy else w2_mem_config if "w2" in name else w1_w3_mem_config

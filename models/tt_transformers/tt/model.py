@@ -184,7 +184,7 @@ class Transformer(LightweightModule):
             current_pos,
             device=None,
             dtype=ttnn.int32,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_mapper=ttnn.shard_tensor_to_2d_mesh_mapper(
                 self.mesh_device,
                 dims=(None, 0) if (self.args.is_galaxy and B > 1) else (None, None),
                 mesh_shape=self.args.cluster_shape,
@@ -196,7 +196,7 @@ class Transformer(LightweightModule):
                 page_table,
                 device=None,
                 dtype=ttnn.int32,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_mapper=ttnn.shard_tensor_to_2d_mesh_mapper(
                     self.mesh_device,
                     dims=(None, -2) if (self.args.is_galaxy and B > 1) else (None, None),
                     mesh_shape=self.args.cluster_shape,

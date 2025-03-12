@@ -160,7 +160,7 @@ def run_all_reduce_impl(
             layout=ttnn.TILE_LAYOUT,
             dtype=input_dtype,
             memory_config=input_mem_config,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+            mesh_mapper=ttnn.shard_tensor_to_2d_mesh_mapper(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
         )
         check_mesh_tensor_alloc(tt_input_tensor)
 
@@ -173,7 +173,7 @@ def run_all_reduce_impl(
                 layout=ttnn.TILE_LAYOUT,
                 dtype=input_dtype,
                 memory_config=intermediate_mem_config,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+                mesh_mapper=ttnn.shard_tensor_to_2d_mesh_mapper(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
             )
 
             # Validate that the tensor is allocated in same location across devices

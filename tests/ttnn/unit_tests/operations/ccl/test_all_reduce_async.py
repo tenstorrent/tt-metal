@@ -384,7 +384,7 @@ def run_all_reduce_with_mesh_tensor_along_row(
             device=mesh_device,
             layout=layout,
             memory_config=mem_config,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dims),
+            mesh_mapper=ttnn.shard_tensor_to_2d_mesh_mapper(mesh_device, mesh_shape=mesh_shape, dims=shard_dims),
         )
         input_tensor_mesh = ttnn.to_device(ttnn_tensor, mesh_device)
 

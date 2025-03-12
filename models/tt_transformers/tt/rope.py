@@ -4,7 +4,7 @@
 
 import torch
 import ttnn
-from ttnn import replicate_tensor_to_mesh_mapper, ShardTensor2dMesh
+from ttnn import replicate_tensor_to_mesh_mapper, shard_tensor_to_2d_mesh_mapper
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.common import precompute_freqs, get_rot_transformation_mat, gather_cos_sin
 from models.utility_functions import nearest_32
@@ -89,7 +89,7 @@ class RotarySetup(LightweightModule):
             dtype=datatype,
             memory_config=trans_mat_mem_config,
             mesh_mapper=(
-                ShardTensor2dMesh(
+                shard_tensor_to_2d_mesh_mapper(
                     device,
                     dims=(None, 2) if (self.num_devices == 32 and batch_size > 1) else (None, None),
                     mesh_shape=list(device.shape),

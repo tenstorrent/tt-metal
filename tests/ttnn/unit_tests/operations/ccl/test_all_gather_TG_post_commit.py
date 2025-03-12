@@ -8,7 +8,7 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull
-from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
+from ttnn import shard_tensor_to_2d_mesh_mapper, ConcatMesh2dToTensor
 from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
     create_and_load_sub_device_manager_with_fabric_interface,
     teardown_fabric_interface,
@@ -253,7 +253,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         device=mesh_device,
         layout=layout,
         memory_config=input_mem_config,
-        mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dims),
+        mesh_mapper=shard_tensor_to_2d_mesh_mapper(mesh_device, mesh_shape=mesh_shape, dims=shard_dims),
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
     ttnn_tensor = ttnn.to_memory_config(ttnn_tensor, input_mem_config)

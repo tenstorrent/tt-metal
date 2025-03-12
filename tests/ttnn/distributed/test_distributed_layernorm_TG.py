@@ -98,7 +98,9 @@ def test_layernorm_perf(mesh_device, num_devices_fractured, input_dim, input_cor
         input_tensor_torch,
         dtype=ttnn.bfloat16,
         device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device=mesh_device, dims=(None, 3), mesh_shape=list(mesh_device.shape)),
+        mesh_mapper=ttnn.shard_tensor_to_2d_mesh_mapper(
+            mesh_device=mesh_device, dims=(None, 3), mesh_shape=list(mesh_device.shape)
+        ),
         layout=ttnn.TILE_LAYOUT,
         memory_config=input_memory_config,
     )
@@ -108,7 +110,9 @@ def test_layernorm_perf(mesh_device, num_devices_fractured, input_dim, input_cor
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 2), mesh_shape=list(mesh_device.shape)),
+        mesh_mapper=ttnn.shard_tensor_to_2d_mesh_mapper(
+            mesh_device, dims=(None, 2), mesh_shape=list(mesh_device.shape)
+        ),
     )
     ln_prg_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=(input_core_grid.x, input_core_grid.y),

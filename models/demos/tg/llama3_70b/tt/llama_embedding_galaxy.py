@@ -28,7 +28,7 @@ class TtLlamaEmbedding_galaxy:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=shard_tensor_to_2d_mesh_mapper(self.mesh_device, mesh_shape=self.cluster_shape, dims=(None, 3)),
+            mesh_mapper=shard_tensor_to_2d_mesh_mapper(self.mesh_device, mesh_shape=self.cluster_shape, dims=(3, None)),
             cache_file_name=cache_path / embedding_cache_name,
         )
 
