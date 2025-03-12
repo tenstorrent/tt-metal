@@ -203,10 +203,24 @@ class Attention(LightweightModule):
 
         # For ring topology we can use all gather matmul for wo
         self.use_fused_all_gather_matmul = self.model_config["USE_FUSED_ALL_GATHER_MATMUL"]
-        pt_wo = self.state_dict[f"{wo_str}.weight"].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
+
+        # FIXME: workaround until nlp_concat_heads correctly supports sub-tile head dims
+        # We are going to pad the input dim of the output weights with zeros in the places
+        # that nlp_concat_heads inserts garbage values
+        if self.head_dim % self.tile_size != 0:
+            tile_padded_head_dim = math.ceil(self.head_dim / self.tile_size) * self.tile_size
+            # note that torch weights are already transposed to have input in last dim
+            pt_wo_t = self.state_dict[f"{wo_str}.weight"]
+            heads = pt_wo_t.reshape(-1, self.n_local_heads, self.head_dim)
+            heads = torch.nn.functional.pad(
+                heads, (0, tile_padded_head_dim - self.head_dim)
+            )  # tail-pad last dim with 0
+            pt_wo = heads.reshape(1, 1, -1, self.n_local_heads * tile_padded_head_dim).transpose(-1, -2)
+        else:
+            pt_wo = self.state_dict[f"{wo_str}.weight"].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
 
         wo_mem_config = configuration.create_dram_sharded_mem_config(
-            (configuration.n_heads * configuration.head_dim) // configuration.num_devices, configuration.dim
+            pt_wo.shape[-2] // configuration.num_devices, pt_wo.shape[-1]
         )
 
         self.wo = ttnn.as_tensor(
@@ -221,7 +235,8 @@ class Attention(LightweightModule):
                 mesh_shape=configuration.cluster_shape,
             ),
             cache_file_name=(
-                cache_name("wo_width_sharded_2d") if (self.use_fused_all_gather_matmul or self.TG) else cache_name("wo")
+                None  # NOCOMMIT
+                # cache_name("wo_width_sharded_2d") if (self.use_fused_all_gather_matmul or self.TG) else cache_name("wo")
             ),
         )
         if not use_paged_kv_cache:
@@ -539,7 +554,7 @@ class Attention(LightweightModule):
         kv_cache=None,
     ):
         seq_len = x_11SH.shape[-2]
-        assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
+        # assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
         ###
         # QKV matmuls
         ###
@@ -578,6 +593,7 @@ class Attention(LightweightModule):
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
 
         ttnn.deallocate(x_11SH)
+        print(f"{xqkv_fused.shape=}")
 
         # split qkv into heads
         (
@@ -601,6 +617,19 @@ class Attention(LightweightModule):
         if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
             q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
 
+        # FIXME: workaround until rotary embeddings correctly supports sub-tile head dims
+        tile_padded_head_dim = math.ceil(self.head_dim / self.tile_size) * self.tile_size
+        pad_head_dim = lambda x: ttnn.pad(
+            x, (x.shape[0], x.shape[1], x.shape[2], tile_padded_head_dim), (0, 0, 0, 0), 0.0
+        )
+        rot_mats = [pad_head_dim(r) for r in rot_mats]
+
+        print(f"{q_heads_1QSD_pre_rot.shape=}")
+        print(f"{k_heads_1KSD_pre_rot.shape=}")
+        print(f"{v_heads_1VSD.shape=}")
+        print(f"{rot_mats[0].shape=}")
+        print(f"{rot_mats[1].shape=}")
+        print(f'{self.transformation_mats["prefill"].shape=}')
         q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
             q_heads_1QSD_pre_rot,
             rot_mats[0],
@@ -689,6 +718,7 @@ class Attention(LightweightModule):
                 values_BKSD,
                 page_table,
                 chunk_start_idx,
+                scale=self.scale,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
             )
@@ -708,15 +738,51 @@ class Attention(LightweightModule):
         ttnn.deallocate(k_heads_1KSD_8b)
         ttnn.deallocate(v_heads_1VSD_8b)
 
+        # FIXME: workaround until nlp_create_qkv_heads correctly supports sub-tile head dims
+        fix_head_dim_padding = (
+            lambda x: ttnn.reshape(
+                x,
+                (x.shape[0], x.shape[1], x.shape[2], self.head_dim),
+                (x.shape[0], x.shape[1], x.shape[2], x.shape[3]),
+            )
+            if x.shape[-1] % self.head_dim != 0
+            else x
+        )
+        attn_output_84SD = fix_head_dim_padding(attn_output_84SD)
         attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.head_dim])
 
         ###
         # Output matmul
         ###
+        print(f"{attn_output_1QSD.shape=}")
+        id_tensor = list(range(attn_output_1QSD.shape[-1]))
+        id_tensor = torch.Tensor(id_tensor).repeat(
+            attn_output_1QSD.shape[0], attn_output_1QSD.shape[1], attn_output_1QSD.shape[2], 1
+        )
+        id_tensor = ttnn.as_tensor(
+            id_tensor,
+            device=self.mesh_device,
+            memory_config=attn_output_1QSD.memory_config(),
+            dtype=attn_output_1QSD.dtype,
+            layout=attn_output_1QSD.layout,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        id_tensor = fix_head_dim_padding(id_tensor)
+        print(f"{id_tensor.shape=}")
+        print(f"{attn_output_1QSD.shape=}", flush=True)
+        # attn_output_1QSD = attn_output_1QSD * 0.0 + id_tensor
         attn_output_11SH = ttnn.experimental.nlp_concat_heads(
             attn_output_1QSD,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        print(f"{attn_output_11SH.shape=}")
+        print(
+            torch.Tensor(
+                ttnn.to_torch(attn_output_11SH, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
+            )[0, 0, 0].tolist(),
+            flush=True,
+        )
+
         ttnn.deallocate(attn_output_1QSD)
         # reshaping long sequence to matmul fit on device
         if seq_len > 1024:

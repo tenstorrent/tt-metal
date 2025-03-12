@@ -325,6 +325,85 @@ def qwen2_5_vl_vision_block(
     return hidden_states
 
 
+def qwen2_5_vision_transformer_preprocess(
+    seq_len: int,
+    grid_thw: torch.Tensor,
+    head_dim: int,
+    spatial_merge_size: int,
+    window_size: int,
+    patch_size: int,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+    """Preprocesses input for Qwen2.5 Vision Transformer.
+
+    Returns:
+        Tuple containing:
+        - processed hidden states
+        - cu_seqlens
+        - cu_window_seqlens
+        - position_embeddings tuple (cos, sin)
+    """
+    spatial_merge_unit = spatial_merge_size * spatial_merge_size
+
+    rotary_pos_emb = qwen2_5_vl_rot_pos_emb(grid_thw, spatial_merge_size, head_dim)
+    window_index, cu_window_seqlens = qwen2_5_vl_get_window_index(grid_thw, window_size, spatial_merge_size, patch_size)
+    cu_window_seqlens = torch.tensor(
+        cu_window_seqlens,
+        device=grid_thw.device,
+        dtype=grid_thw.dtype if torch.jit.is_tracing() else torch.int32,
+    )
+    cu_window_seqlens = torch.unique_consecutive(cu_window_seqlens)
+
+    rotary_pos_emb = rotary_pos_emb.reshape(seq_len // spatial_merge_unit, spatial_merge_unit, -1)
+    rotary_pos_emb = rotary_pos_emb[window_index, :, :]
+    rotary_pos_emb = rotary_pos_emb.reshape(seq_len, -1)
+    emb = torch.cat((rotary_pos_emb, rotary_pos_emb), dim=-1)
+    position_embeddings = (emb.cos(), emb.sin())
+
+    cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2], grid_thw[:, 0]).cumsum(
+        dim=0,
+        # Select dtype based on the following factors:
+        #  - FA2 requires that cu_seqlens_q must have dtype int32
+        #  - torch.onnx.export requires that cu_seqlens_q must have same dtype as grid_thw
+        # See https://github.com/huggingface/transformers/pull/34852 for more information
+        dtype=grid_thw.dtype if torch.jit.is_tracing() else torch.int32,
+    )
+    cu_seqlens = F.pad(cu_seqlens, (1, 0), value=0)
+
+    return cu_seqlens, cu_window_seqlens, position_embeddings, window_index
+
+
+def qwen2_5_vision_transformer_process(
+    hidden_states: torch.Tensor,
+    state_dict: Dict,
+    cu_seqlens: torch.Tensor,
+    cu_window_seqlens: torch.Tensor,
+    position_embeddings: Tuple[torch.Tensor, torch.Tensor],
+    window_index: torch.Tensor,
+    num_heads: int,
+    fullatt_block_indexes: List[int],
+) -> torch.Tensor:
+    """Processes the preprocessed input through transformer layers.
+
+    Returns:
+        Processed hidden states
+    """
+    for layer_num in sorted(state_dict["blocks"].keys()):
+        state_blk = state_dict["blocks"][layer_num]
+        if layer_num in fullatt_block_indexes:
+            cu_seqlens_now = cu_seqlens
+        else:
+            cu_seqlens_now = cu_window_seqlens
+        hidden_states = qwen2_5_vl_vision_block(
+            hidden_states, cu_seqlens_now, state_blk, num_heads, None, position_embeddings
+        )
+
+    hidden_states = qwen2_5_vl_patch_merger(hidden_states, state_dict["merger"])
+    reverse_indices = torch.argsort(window_index)
+    hidden_states = hidden_states[reverse_indices, :]
+
+    return hidden_states
+
+
 def qwen2_5_vision_transformer(
     hidden_states: torch.Tensor,
     state_dict: Dict,
@@ -353,54 +432,41 @@ def qwen2_5_vision_transformer(
     Returns:
         Transformed hidden states
     """
-    spatial_merge_unit = spatial_merge_size * spatial_merge_size
-    # Step 1: Apply patch embedding
+
+    # Apply patch embedding
+    print(f"hidden_states: {hidden_states.shape}")
     hidden_states = qwen2_5_vision_patch_embed(
         hidden_states, state_dict["patch_embed"], patch_size, temporal_patch_size
     )
-
-    rotary_pos_emb = qwen2_5_vl_rot_pos_emb(grid_thw, spatial_merge_size, head_dim)
-    window_index, cu_window_seqlens = qwen2_5_vl_get_window_index(grid_thw, window_size, spatial_merge_size, patch_size)
-    cu_window_seqlens = torch.tensor(
-        cu_window_seqlens,
-        device=hidden_states.device,
-        dtype=grid_thw.dtype if torch.jit.is_tracing() else torch.int32,
-    )
-    cu_window_seqlens = torch.unique_consecutive(cu_window_seqlens)
-
+    print(f"hidden_states after patch embed: {hidden_states.shape}")
     seq_len, _ = hidden_states.size()
+
+    # Preprocess the input
+    cu_seqlens, cu_window_seqlens, position_embeddings, window_index = qwen2_5_vision_transformer_preprocess(
+        seq_len=seq_len,
+        grid_thw=grid_thw,
+        head_dim=head_dim,
+        spatial_merge_size=spatial_merge_size,
+        window_size=window_size,
+        patch_size=patch_size,
+    )
+
+    spatial_merge_unit = spatial_merge_size * spatial_merge_size
     hidden_states = hidden_states.reshape(seq_len // spatial_merge_unit, spatial_merge_unit, -1)
     hidden_states = hidden_states[window_index, :, :]
     hidden_states = hidden_states.reshape(seq_len, -1)
-    rotary_pos_emb = rotary_pos_emb.reshape(seq_len // spatial_merge_unit, spatial_merge_unit, -1)
-    rotary_pos_emb = rotary_pos_emb[window_index, :, :]
-    rotary_pos_emb = rotary_pos_emb.reshape(seq_len, -1)
-    emb = torch.cat((rotary_pos_emb, rotary_pos_emb), dim=-1)
-    position_embeddings = (emb.cos(), emb.sin())
 
-    cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2], grid_thw[:, 0]).cumsum(
-        dim=0,
-        # Select dtype based on the following factors:
-        #  - FA2 requires that cu_seqlens_q must have dtype int32
-        #  - torch.onnx.export requires that cu_seqlens_q must have same dtype as grid_thw
-        # See https://github.com/huggingface/transformers/pull/34852 for more information
-        dtype=grid_thw.dtype if torch.jit.is_tracing() else torch.int32,
+    # Process through transformer layers
+    hidden_states = qwen2_5_vision_transformer_process(
+        hidden_states=hidden_states,
+        state_dict=state_dict,
+        cu_seqlens=cu_seqlens,
+        cu_window_seqlens=cu_window_seqlens,
+        position_embeddings=position_embeddings,
+        window_index=window_index,
+        num_heads=num_heads,
+        fullatt_block_indexes=fullatt_block_indexes,
     )
-    cu_seqlens = F.pad(cu_seqlens, (1, 0), value=0)
-
-    for layer_num in sorted(state_dict["blocks"].keys()):
-        state_blk = state_dict["blocks"][layer_num]
-        if layer_num in fullatt_block_indexes:
-            cu_seqlens_now = cu_seqlens
-        else:
-            cu_seqlens_now = cu_window_seqlens
-        hidden_states = qwen2_5_vl_vision_block(
-            hidden_states, cu_seqlens_now, state_blk, num_heads, None, position_embeddings
-        )
-
-    hidden_states = qwen2_5_vl_patch_merger(hidden_states, state_dict["merger"])
-    reverse_indices = torch.argsort(window_index)
-    hidden_states = hidden_states[reverse_indices, :]
 
     return hidden_states
 

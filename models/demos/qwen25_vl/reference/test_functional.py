@@ -319,6 +319,7 @@ def test_qwen2_5_vision_transformer(vision_weights, implementation):
     # Extract inputs
     hidden_states = inputs["args"][0]
     grid_thw = inputs["kwargs"]["grid_thw"]
+    print(f"grid_thw: {grid_thw}")
 
     # Calculate head_dim from the hidden size and num_heads
     num_heads = model_settings["num_heads"]

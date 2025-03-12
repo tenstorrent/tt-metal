@@ -46,13 +46,11 @@ def test_mlp_inference(rows, batch_size, mesh_device, use_program_cache, reset_s
     dtype = ttnn.bfloat8_b
     mode = "prefill"  # Vision processing is prefill only (generating token embeddings)
 
-    mesh_device.enable_async(False)
+    mesh_device.enable_async(True)
 
     base_model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=rows)
     vision_model_args = VisionModelArgs(base_model_args)
     reference_model = Qwen2_5_VLMLP(base_model_args.hf_config.vision_config, bias=True)
-    for k, v in reference_model.state_dict().items():
-        print(f"{k}: {v.shape}")
     state_dict = convert_hf_to_meta(reference_model.state_dict(), base_model_args.head_dim)
     state_dict_prefix = vision_model_args.get_state_dict_prefix("MLP", 0)
     state_dict = {f"{state_dict_prefix}.{k}": v for k, v in state_dict.items()}

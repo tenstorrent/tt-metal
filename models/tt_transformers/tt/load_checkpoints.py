@@ -200,19 +200,19 @@ def load_sharded_checkpoints(checkpoints, n_layers):
 def split_hf_keys(loaded_weights):
     converted_weights = {}
     for key, tensor in loaded_weights.items():
-        if "self_attn.qkv_proj" in key:
+        if "qkv_proj" in key:
             # split Q, K and V
-            q_key = key.replace("self_attn.qkv_proj", "self_attn.q_proj")
-            k_key = key.replace("self_attn.qkv_proj", "self_attn.k_proj")
-            v_key = key.replace("self_attn.qkv_proj", "self_attn.v_proj")
+            q_key = key.replace("qkv_proj", "q_proj")
+            k_key = key.replace("qkv_proj", "k_proj")
+            v_key = key.replace("qkv_proj", "v_proj")
             q_tensor, k_tensor, v_tensor = torch.split(tensor, tensor.shape[0] // 3, dim=0)
             converted_weights[q_key] = q_tensor
             converted_weights[k_key] = k_tensor
             converted_weights[v_key] = v_tensor
-        elif "mlp.gate_up_proj" in key:
+        elif "gate_up_proj" in key:
             # Split Gate and Up
-            gate_key = key.replace("mlp.gate_up_proj", "mlp.gate_proj")
-            up_key = key.replace("mlp.gate_up_proj", "mlp.up_proj")
+            gate_key = key.replace("gate_up_proj", "gate_proj")
+            up_key = key.replace("gate_up_proj", "up_proj")
             gate_tensor, up_tensor = torch.split(tensor, tensor.shape[0] // 2, dim=0)
             converted_weights[gate_key] = gate_tensor
             converted_weights[up_key] = up_tensor

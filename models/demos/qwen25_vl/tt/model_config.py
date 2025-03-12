@@ -1,4 +1,7 @@
+import math
+import re
 from loguru import logger
+import ttnn
 from models.tt_transformers.tt.common import nearest_multiple
 
 
@@ -16,10 +19,83 @@ class VisionModelArgs:
         )
         if self.hidden_dim != self.unpadded_hidden_dim:
             logger.info(f"padding hidden dim from {self.unpadded_hidden_dim} to {self.hidden_dim}")
+        self.head_dim = self.hf_config.vision_config.hidden_size // self.hf_config.vision_config.num_heads
+        self.n_heads = self.hf_config.vision_config.num_heads
+        self.n_kv_heads = self.hf_config.vision_config.num_heads
+        self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
+        self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (
+            self.n_kv_heads // self.model_args.cluster_shape[1]
+        )
+        self.MAX_QKV_MM_SEQ_LEN = self.model_args.MAX_QKV_MM_SEQ_LEN
+
+        self.model_config = model_args.model_config
+        self.model_config["XQKV_PREFILL_PROGCFG"] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=max(
+                1, 8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else seq_len // self.tile_size // 8  # 8 rows
+            ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+            per_core_N=math.ceil(self.qkv_size / self.cluster_shape[1] / 32 / 8),  # N / TILE_WIDTH / grid width
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=seq_len <= self.MAX_QKV_MM_SEQ_LEN,
+        )
+
+        assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
+        self.model_config["KV_PREFILL_MEM_CFG"] = lambda seq_len: ttnn.create_sharded_memory_config(
+            (((self.n_kv_heads // self.cluster_shape[1]) * seq_len // (8 * 8)), self.head_dim),
+            ttnn.CoreGrid(y=8, x=8),
+            ttnn.ShardStrategy.HEIGHT,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+    def map_keys_to_hf_format(self, vision_state_dict):
+        # Whole name is start or end of the string or prefixed/suffixed by a dot
+        replace_whole_name = lambda pattern, repl: lambda s: re.sub(rf"(^|\.)({pattern})($|\.)", rf"\1{repl}\3", s)
+        output = {}
+        for k, v in vision_state_dict.items():
+            k = replace_whole_name("qkv", "qkv_proj")(k)
+            k = replace_whole_name("proj", "o_proj")(k)
+            output[k] = v
+        return output
 
     # Device and optimization settings - forwarded from model_args
     def is_distributed_norm(self, mode):
         return False
+
+    def get_model_config(self):
+        return self.model_config
+
+    @property
+    def tile_padded_batch_rows(self):
+        return self.model_args.tile_padded_batch_rows
+
+    @property
+    def compute_kernel_config_hifi2(self):
+        return self.model_args.compute_kernel_config_hifi2
+
+    @property
+    def compute_kernel_config_hifi4(self):
+        return self.model_args.compute_kernel_config_hifi4
+
+    @property
+    def max_grid_size(self):
+        return self.model_args.max_grid_size
+
+    @property
+    def tile_size(self):
+        return self.model_args.tile_size
+
+    @property
+    def max_batch_size(self):
+        return self.model_args.max_batch_size
+
+    @property
+    def max_seq_len(self):
+        return self.model_args.max_seq_len
 
     @property
     def is_multichip(self):
