@@ -31,6 +31,7 @@
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
+#include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/event.hpp>
@@ -50,7 +51,7 @@ using tt::tt_metal::distributed::MeshDeviceConfig;
 using tt::tt_metal::distributed::MeshDeviceView;
 using tt::tt_metal::distributed::MeshShape;
 
-TEST_F(T3kMultiDeviceMultiQueueFixture, AsyncExecutionWorksCQ0) {
+TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0) {
     const size_t dim = 0;
     const size_t num_links = 1;
     constexpr auto layout = Layout::TILE;
@@ -201,7 +202,7 @@ TEST_F(T3kMultiDeviceMultiQueueFixture, AsyncExecutionWorksCQ0) {
     log_info(tt::LogTest, "Finished");
 }
 
-TEST_F(T3kMultiDeviceMultiQueueFixture, AsyncExecutionWorksCQ0CQ1) {
+TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
     const size_t dim = 0;
     const size_t num_links = 1;
     constexpr auto layout = Layout::TILE;
