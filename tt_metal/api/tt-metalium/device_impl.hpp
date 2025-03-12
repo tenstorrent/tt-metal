@@ -19,7 +19,7 @@
 #include "sub_device_manager_tracker.hpp"
 #include "sub_device_types.hpp"
 #include "trace_buffer.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "program_cache.hpp"
 
 namespace tt::tt_metal {

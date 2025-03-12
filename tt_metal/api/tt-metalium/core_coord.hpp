@@ -13,8 +13,8 @@
 
 #include <nlohmann/json.hpp>
 #include "umd/device/tt_xy_pair.h"
-#include "reflection.hpp"
-#include "span.hpp"
+#include <tt_stl/reflection.hpp>
+#include <tt_stl/span.hpp>
 
 using CoreCoord = tt_xy_pair;
 

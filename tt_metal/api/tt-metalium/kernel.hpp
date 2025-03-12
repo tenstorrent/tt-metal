@@ -15,7 +15,7 @@
 #include "base_types.hpp"
 #include "kernel_types.hpp"
 #include "tt_memory.h"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "runtime_args_data.hpp"
 
 namespace tt {

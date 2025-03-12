@@ -9,7 +9,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 
 #include <tt-metalium/tile.hpp>
-#include <tt-metalium/span.hpp>
+#include <tt_stl/span.hpp>
 
 uint8_t get_max_exp(const std::vector<uint32_t>& vec, bool is_exp_a);
 

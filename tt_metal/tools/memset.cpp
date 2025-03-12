@@ -4,7 +4,7 @@
 
 #include "llrt.hpp"
 #include <tt_cluster.hpp>
-#include <span.hpp>
+#include <tt_stl/span.hpp>
 
 #include <unistd.h>
 
