@@ -44,10 +44,6 @@ class CommandQueue;
 class TraceBuffer;
 struct TraceDescriptor;
 
-namespace detail {
-struct TraceDescriptor;
-}
-
 class IDevice {
 public:
     IDevice() = default;
