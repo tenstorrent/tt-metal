@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <utility>
 #include "conv2d_op.hpp"
 #include <tt-metalium/math.hpp>
@@ -14,6 +15,7 @@
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
@@ -60,7 +62,7 @@ Tensor optimized_conv_new(
     uint32_t output_channels,
     uint32_t groups,
     bool untilize_out,
-    bool fuse_relu,
+    const string& activation,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
     const MemoryConfig& memory_config,
@@ -79,7 +81,7 @@ Tensor optimized_conv_new(
          output_channels,
          groups,
          untilize_out,
-         fuse_relu,
+         activation,
          parallelization_config,
          block_config,
          memory_config,
@@ -125,7 +127,7 @@ Tensor optimized_conv_new(
                 groups,
                 untilize_out,
                 bias.has_value(),
-                fuse_relu,
+                activation,
                 parallelization_config,
                 block_config,
                 memory_config,
@@ -273,6 +275,11 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
 
     const auto weights_shape = input_tensor_b.get_padded_shape();
 
+    std::optional<unary::UnaryWithParam> fused_activation = std::nullopt;
+
+    if (!activation.empty()) {
+        fused_activation = unary::utils::string_to_unary_with_param(activation);
+    }
     auto program_with_cbs = multi_core_optimized_conv_sharded_v2_new(
         input_tensor_a,
         input_tensor_b,
@@ -281,7 +288,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
         output_channels,
         groups,
         untilize_out,
-        fuse_relu,
+        fused_activation,
         parallelization_config,
         block_config,
         dtype,
