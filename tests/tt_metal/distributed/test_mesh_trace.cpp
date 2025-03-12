@@ -57,13 +57,13 @@ protected:
 class MeshTraceTestT3000 : public MeshDeviceFixtureBase {
 protected:
     MeshTraceTestT3000() :
-        MeshDeviceFixtureBase(Config{.mesh_device_type = MeshDeviceType::T3000, .trace_region_size = (64 << 20)}) {}
+        MeshDeviceFixtureBase(Config{.mesh_device_types = {MeshDeviceType::T3000}, .trace_region_size = (64 << 20)}) {}
 };
 
 class MeshTraceTestTG : public MeshDeviceFixtureBase {
 protected:
     MeshTraceTestTG() :
-        MeshDeviceFixtureBase(Config{.mesh_device_type = MeshDeviceType::TG, .trace_region_size = (64 << 20)}) {}
+        MeshDeviceFixtureBase(Config{.mesh_device_types = {MeshDeviceType::TG}, .trace_region_size = (64 << 20)}) {}
 };
 
 TEST_F(MeshTraceTestSuite, Sanity) {

@@ -26,21 +26,20 @@ namespace ttnn::operations::binary::test {
 // Test data
 // ============================================================================
 
-class TTNNFixtureWithTraceEnabledDevice : public TTNNFixture {
+class TTNNFixtureWithTraceEnabledDevice : public ::testing::Test {
 protected:
-    ttnn::IDevice* device_ = nullptr;
+    tt::tt_metal::IDevice* device_ = nullptr;
+    tt::ARCH arch_ = tt::ARCH::Invalid;
+    size_t num_devices_ = 0;
 
     void SetUp() override {
-        TTNNFixture::SetUp();
+        std::srand(0);
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         device_ = &ttnn::open_device(0, DEFAULT_L1_SMALL_SIZE, /* trace region size= */ 200000);
     }
 
-    void TearDown() override {
-        ttnn::close_device(*device_);
-        TTNNFixture::TearDown();
-    }
-
-    ttnn::IDevice& getDevice() { return *device_; }
+    void TearDown() override { ttnn::close_device(*device_); }
 
 public:
     static const ttnn::TensorSpec m_interleaved_1_3_1024_1024_tiled;
@@ -64,7 +63,7 @@ TEST_P(BinaryOpTraceRuntime, Add) {
     const auto& [input_spec_a, input_spec_b] = GetParam();
 
     {
-        tt::tt_metal::IDevice* device = &getDevice();
+        tt::tt_metal::IDevice* device = device_;
         auto query = ttnn::graph::query_op_runtime(ttnn::add, device, input_spec_a, input_spec_b);
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
@@ -77,7 +76,7 @@ TEST_P(BinaryOpTraceRuntime, AddChain) {
 
     {
         auto add_chain = [](const auto& i0, const auto& i1) { return ttnn::add(i0, ttnn::add(i0, i1)); };
-        tt::tt_metal::IDevice* device = &getDevice();
+        tt::tt_metal::IDevice* device = device_;
         auto query = ttnn::graph::query_op_runtime(add_chain, device, input_spec_a, input_spec_b);
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);

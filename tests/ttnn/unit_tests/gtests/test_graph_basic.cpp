@@ -29,7 +29,7 @@ TEST_P(BufferTestFixture, BufferTest) {
     auto params = std::get<0>(param_combination);
     auto run_mode = std::get<1>(param_combination);
 
-    tt::tt_metal::IDevice* device = &(this->getDevice());
+    tt::tt_metal::IDevice* device = device_;
     {
         ttnn::graph::GraphProcessor::begin_graph_capture(run_mode);
         {
@@ -126,7 +126,7 @@ INSTANTIATE_TEST_SUITE_P(
 
 class TestScopedGraphCapture : public ttnn::TTNNFixtureWithDevice {};
 TEST_F(TestScopedGraphCapture, ScopedGraphCapture) {
-    tt::tt_metal::IDevice* device = &(this->getDevice());
+    tt::tt_metal::IDevice* device = device_;
 
     auto operation = [&device](tt::tt_metal::DataType datatype) {
         const auto input_a = ttnn::TensorSpec(

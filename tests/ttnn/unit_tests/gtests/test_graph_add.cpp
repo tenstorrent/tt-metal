@@ -52,9 +52,9 @@ TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
 
     {
         const auto input_tensor_a =
-            ttnn::zeros(params.a_Shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, this->getDevice(), params.memory_config);
+            ttnn::zeros(params.a_Shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_, params.memory_config);
         const auto input_tensor_b =
-            ttnn::zeros(params.b_Shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, this->getDevice(), params.memory_config);
+            ttnn::zeros(params.b_Shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_, params.memory_config);
 
         auto call = [&] {
             const auto output_tensor = ttnn::add(input_tensor_a, input_tensor_b);
@@ -82,7 +82,7 @@ TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
             auto cb_peak_size_per_core = graph::extract_circular_buffers_peak_size_per_core(json_trace);
             EXPECT_EQ(cb_peak_size_per_core, params.expected_cb_peak_per_core);
 
-            auto compute_with_storage_grid_size = this->getDevice().compute_with_storage_grid_size();
+            auto compute_with_storage_grid_size = device_->compute_with_storage_grid_size();
             size_t interleaved_storage_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
 
             auto l1_output_per_core =

@@ -12,6 +12,7 @@ target_link_libraries(
         fmt::fmt-header-only
         span
         small_vector
+        Boost::algorithm
 )
 
 if(TT_METAL_BUILD_TESTS)

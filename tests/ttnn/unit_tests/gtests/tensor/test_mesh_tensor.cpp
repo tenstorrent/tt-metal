@@ -5,6 +5,8 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 
+#include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
+
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -20,7 +22,7 @@ namespace {
 using ::testing::FloatEq;
 using ::testing::Pointwise;
 
-using MeshTensorTest = T3kMultiDeviceFixture;
+using MeshTensorTest = GenericMeshDeviceFixture;
 
 TEST_F(MeshTensorTest, Lifecycle) {
     const TensorSpec tensor_spec =
@@ -50,7 +52,7 @@ TEST_F(MeshTensorTest, Lifecycle) {
     EXPECT_FALSE(input_tensor.is_allocated());
 }
 
-using MeshTensorDeviceTest = T3kMultiDeviceFixture;
+using MeshTensorDeviceTest = T3000MeshDeviceFixture;
 
 TEST_F(MeshTensorDeviceTest, ToHostNonMeshTensor) {
     const ttnn::Shape shape{1, 1, 32, 32};

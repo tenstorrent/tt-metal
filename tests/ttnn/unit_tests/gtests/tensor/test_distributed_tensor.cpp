@@ -5,6 +5,8 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 
+#include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
+
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -20,7 +22,7 @@ TensorSpec get_tensor_spec(const ttnn::Shape& shape, DataType dtype) {
     return TensorSpec(shape, TensorLayout(dtype, Layout::ROW_MAJOR, MemoryConfig{}));
 }
 
-class AggregateTensorTest : public T3kMultiDeviceFixture,
+class AggregateTensorTest : public GenericMeshDeviceFixture,
                             public ::testing::WithParamInterface</*use_borrowed_storage*/ bool> {};
 
 TEST_P(AggregateTensorTest, Roundtrip) {
@@ -61,7 +63,7 @@ TEST_P(AggregateTensorTest, Roundtrip) {
 
 INSTANTIATE_TEST_SUITE_P(AggregateTensorTest, AggregateTensorTest, ::testing::Values(true, false));
 
-using TensorDistributionTest = T3kMultiDeviceFixture;
+using TensorDistributionTest = GenericMeshDeviceFixture;
 
 TEST_F(TensorDistributionTest, DistributeToDevice) {
     Tensor input_tensor = Tensor::from_vector(
@@ -88,7 +90,9 @@ TEST_F(TensorDistributionTest, Replication) {
     }
 }
 
-TEST_F(TensorDistributionTest, Shard1DInvalidDim) {
+using TensorDistributionT3000Test = T3000MeshDeviceFixture;
+
+TEST_F(TensorDistributionT3000Test, Shard1DInvalidDim) {
     const int num_devices = mesh_device_->num_devices();
     Tensor input_tensor = Tensor::from_vector(
         std::vector<float>(num_devices, 0), get_tensor_spec(ttnn::Shape{1, 1, 1, num_devices}, DataType::FLOAT32));
@@ -104,7 +108,7 @@ TEST_F(TensorDistributionTest, Shard1DInvalidDim) {
     });
 }
 
-TEST_F(TensorDistributionTest, Shard1DTooFewShards) {
+TEST_F(TensorDistributionT3000Test, Shard1DTooFewShards) {
     const int num_devices = mesh_device_->num_devices();
     ASSERT_LT(3, num_devices);
     Tensor input_tensor = Tensor::from_vector(
@@ -116,7 +120,7 @@ TEST_F(TensorDistributionTest, Shard1DTooFewShards) {
     });
 }
 
-TEST_F(TensorDistributionTest, Shard1D) {
+TEST_F(TensorDistributionT3000Test, Shard1D) {
     const int num_devices = mesh_device_->num_devices();
     std::vector<float> test_data;
     for (int i = 0; i < num_devices; i++) {
@@ -142,7 +146,7 @@ TEST_F(TensorDistributionTest, Shard1D) {
     EXPECT_TRUE(ttnn::allclose<float>(concatenated_tensor, expected_tensor));
 }
 
-TEST_F(TensorDistributionTest, Shard2DInvalidMeshShape) {
+TEST_F(TensorDistributionT3000Test, Shard2DInvalidMeshShape) {
     ASSERT_EQ(mesh_device_->shape(), MeshShape(2, 4));
 
     EXPECT_ANY_THROW(
@@ -155,15 +159,15 @@ TEST_F(TensorDistributionTest, Shard2DInvalidMeshShape) {
         shard_tensor_to_2d_mesh_mapper(*mesh_device_, MeshShape{1, 1, 2}, Shard2dConfig{.row_dim = 1, .col_dim = 2}));
 }
 
-TEST_F(TensorDistributionTest, Shard2DInvalidShardConfig) {
+TEST_F(TensorDistributionT3000Test, Shard2DInvalidShardConfig) {
     EXPECT_ANY_THROW(shard_tensor_to_2d_mesh_mapper(*mesh_device_, MeshShape{2, 4}, Shard2dConfig{}));
 }
 
-TEST_F(TensorDistributionTest, Concat2DInvalidConfig) {
+TEST_F(TensorDistributionT3000Test, Concat2DInvalidConfig) {
     EXPECT_ANY_THROW(concat_2d_mesh_to_tensor_composer(*mesh_device_, Concat2dConfig{.row_dim = 2, .col_dim = 2}));
 }
 
-TEST_F(TensorDistributionTest, Shard2DReplicateDim) {
+TEST_F(TensorDistributionT3000Test, Shard2DReplicateDim) {
     constexpr size_t kNumRows = 2;
     constexpr size_t kNumCols = 4;
     ASSERT_EQ(mesh_device_->shape(), MeshShape(kNumRows, kNumCols));
@@ -194,7 +198,7 @@ TEST_F(TensorDistributionTest, Shard2DReplicateDim) {
     }
 }
 
-TEST_F(TensorDistributionTest, Shard2D) {
+TEST_F(TensorDistributionT3000Test, Shard2D) {
     constexpr size_t kNumRows = 2;
     constexpr size_t kNumCols = 4;
     ASSERT_EQ(mesh_device_->shape(), MeshShape(kNumRows, kNumCols));
