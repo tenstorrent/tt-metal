@@ -38,9 +38,9 @@ struct CachedProgram {
 
 template <typename shared_variables_t>
 struct CachedProgramRef {
-    tt::tt_metal::Program& program;
+    std::reference_wrapper<tt::tt_metal::Program> program;
     // Cached program needs to share shared_variables between create and override_runtime_arguments functions
-    shared_variables_t& shared_variables;
+    std::reference_wrapper<shared_variables_t> shared_variables;
 
     CachedProgramRef(tt::tt_metal::Program& program, shared_variables_t& shared_variables) :
         program{program}, shared_variables{shared_variables} {}
@@ -73,8 +73,7 @@ private:
         // careful, this is an unordered map so the "first" element is arbitrary
         auto& map = cached_mesh_workload.coordinate_range_to_shared_variables;
         TT_FATAL(!map.empty(), "Shared variables map is empty");
-        auto& first_shared_variables_pair = *map.begin();
-        return first_shared_variables_pair.second;
+        return map.begin()->second;
     }
 
 public:
