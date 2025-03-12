@@ -13,6 +13,7 @@
 #include <host_api.hpp>
 #include "env_lib.hpp"
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/trace_buffer.hpp>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device_impl.hpp>
 #include "flatbuffer/base_types_from_flatbuffer.hpp"
@@ -21,13 +22,11 @@
 
 namespace tt::tt_metal {
 
-namespace detail {
-
 //////////////////////////////////////
 // Helper Functions                 //
 //////////////////////////////////////
 
-TraceDescriptor from_flatbuffer(const tt::tt_metal::flatbuffer::TraceDescriptor* fb_desc) {
+TraceDescriptor from_flatbuffer(const flatbuffer::TraceDescriptor* fb_desc) {
     if (!fb_desc) {
         std::cerr << "TraceDescriptor is null." << std::endl;
         return {};
@@ -66,6 +65,8 @@ TraceDescriptor from_flatbuffer(const tt::tt_metal::flatbuffer::TraceDescriptor*
 
     return trace_desc;
 }
+
+namespace detail {
 
 //////////////////////////////////////
 // LightMetalReplay Class           //
