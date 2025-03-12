@@ -7,21 +7,9 @@
 
 namespace ttnn::operations::generic {
 
-struct GenericOp {
-    static Tensor invoke(
-        QueueId queue_id,
-        const std::vector<Tensor>& input_tensors,
-        const program_attributes_t& program_attributes,
-        const std::vector<Tensor>& io_tensors = {}) {
-        return ttnn::prim::generic(queue_id, input_tensor, program_attributes, io_tensors);
-    }
+Tensor GenericOp::invoke(const std::vector<Tensor>& input_tensors, const program_attributes_t& program_attributes, const std::vector<Tensor>& io_tensors) {
+    return input_tensors[0];
+}
 
-    static Tensor invoke(
-        const std::vector<Tensor>& input_tensors,
-        const program_attributes_t& program_attributes,
-        const std::vector<Tensor>& io_tensors = {}) {
-        return invoke(0, input_tensor, program_attributes, io_tensors);
-    }
-};  // struct GenericOp
 
 }  // namespace ttnn::operations::generic

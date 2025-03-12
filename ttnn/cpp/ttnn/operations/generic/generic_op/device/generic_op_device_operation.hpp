@@ -26,6 +26,7 @@ struct GenericOpDeviceOperation {
     using tensor_return_value_t = Tensor;
 
     using spec_return_value_t = TensorSpec;
+
     struct tensor_args_t {
         const Tensor& input_tensor;
         // std::vector<std::reference_wrapper<Tensor>> io_tensors;
@@ -42,8 +43,8 @@ struct GenericOpDeviceOperation {
     struct GenericProgram {
         // to refactor this when we implement caching
         struct shared_variables_t {
-            KernelHandle unary_reader_kernel_id;
-            KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::KernelHandle unary_reader_kernel_id;
+            tt::tt_metal::KernelHandle unary_writer_kernel_id;
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
@@ -64,9 +65,9 @@ struct GenericOpDeviceOperation {
 
     // Mandatory methods
 
-    std::vector<ttnn::TensorSpec> compute_output_specs(const operation_attributes_t&, const tensor_args_t&) const;
+    spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&) const;
 
-    std::vector<Tensor> create_output_tensors(const operation_attributes_t&, const tensor_args_t&) const;
+    tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&) const;
 
     // Select the program factory based on the operation attributes and tensor args
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
