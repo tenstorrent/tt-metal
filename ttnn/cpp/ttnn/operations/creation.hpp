@@ -79,17 +79,17 @@ static Tensor arange_impl(
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
     constexpr DataType data_type = tt::tt_metal::convert_to_data_type<T>();
-    // Current implementation restrictions
-    TT_ASSERT(step > 0, "Step must be greater than 0");
-    TT_ASSERT(start < stop, "Start must be less than step");
-    auto size = tt::div_up((stop - start), step);
-    if (size % 2 != 0) {
-        size++;
-    }
+
+    TT_FATAL(step != 0, "Step must be nonzero");
+    TT_FATAL(
+        !((step > 0 && start > stop) || (step < 0 && start < stop)),
+        "Invalid range: Step direction does not match range bounds");
+
+    auto size = std::max<int64_t>(0, tt::div_up(std::abs(stop - start), std::abs(step)));
     auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(size);
 
     auto index = 0;
-    for (auto value = start; value < stop; value += step) {
+    for (auto value = start; (step > 0) ? (value < stop) : (value > stop); value += step) {
         if constexpr (std::is_same_v<T, ::bfloat16>) {
             owned_buffer[index++] = T(static_cast<float>(value));
         } else {
@@ -97,8 +97,7 @@ static Tensor arange_impl(
         }
     }
     auto output =
-        Tensor(
-            OwnedStorage{owned_buffer}, ttnn::Shape{1, 1, 1, static_cast<uint32_t>(size)}, data_type, Layout::ROW_MAJOR)
+        Tensor(OwnedStorage{owned_buffer}, ttnn::Shape{static_cast<uint32_t>(size)}, data_type, Layout::ROW_MAJOR)
             .to_layout(layout);
     if (device.has_value()) {
         output = output.to_device(device->get_devices(), output_mem_config);
