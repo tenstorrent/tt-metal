@@ -14,5 +14,5 @@ jobs:
     secrets: inherit
     with:
       base-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
-      version: dev-${{ GITHUB_REF_NAME//\//- }}
+      version: dev-dimitri-container-smoke-tests
       is_major_version: false
