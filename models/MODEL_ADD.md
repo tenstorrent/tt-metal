@@ -22,7 +22,7 @@ of these large PRs. This leads to:
 
 This is why these larger model PRs can take a long time to merge.
 
-The solution? Break your PRs up. The recommended flow is the following: D
+The solution? Break your PRs up. The recommended flow is the following:
 
 - (1 PR) The core model code, documentation, and integration test
   - Only need to run post-commit and ttnn integration tests.
