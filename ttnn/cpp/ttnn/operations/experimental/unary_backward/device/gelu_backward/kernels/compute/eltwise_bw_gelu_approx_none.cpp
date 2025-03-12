@@ -17,7 +17,6 @@
 #include "compute_kernel_api/eltwise_unary/exp.h"
 #include "eltwise_bw_gelu_common.hpp"
 
-// ...existing includes...
 namespace NAMESPACE {
 
 void MAIN {
