@@ -5,10 +5,11 @@
 
 # A recommended dev flow on GitHub for adding new models
 
-One common development flow that we see at Tenstorrent is to have giant features
-changes in branch, and try to run a whole gamut of pipelines that cover all
-conceivable kinds of tests - end-to-end performance tests, on-device
-performance tests, integration tests, demo tests etc.
+One common development flow that we see at Tenstorrent when adding a completely
+new model is to have giant features changes in one PR, and try to run a whole
+gamut of pipelines that cover all conceivable kinds of tests - end-to-end
+performance tests, on-device performance tests, integration tests, demo tests
+etc.
 
 Because these kinds of pipelines are not run via merge queue or push to main
 because of resource constraints, the ground often moves underneath the feet
@@ -30,6 +31,11 @@ The solution? Break your PRs up. The recommended flow is the following: D
     select](https://github.com/tenstorrent/tt-metal/actions/workflows/pipeline-select.yaml)
 - (1 PR) The demo test.
   - Only need to run demo tests.
+
+Note that the [Tests for new
+models](https://github.com/tenstorrent/tt-metal/actions/workflows/full-new-models-suite.yaml)
+will run all pipelines above, except for post-commit. There should be little
+need to run this pipeline if you follow the workflow above.
 
 So the total number of pipelines you run is the same, but you only need to run
 the specific pipeline(s) at each PR step.
