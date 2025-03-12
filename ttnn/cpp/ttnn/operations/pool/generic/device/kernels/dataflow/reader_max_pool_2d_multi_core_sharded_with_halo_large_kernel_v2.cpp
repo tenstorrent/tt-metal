@@ -65,11 +65,11 @@ void kernel_main() {
     constexpr uint32_t MAX_ELE_PER_REDUCTION = 512;  // TILE_WIDTH * 8 * numbytes
     constexpr uint32_t ROW_HW = 64;
 
-    constexpr uint32_t in_cb_id = (reader_id == 1) ? tt::CBIndex::c_1 : tt::CBIndex::c_0;
-    constexpr uint32_t in_shard_cb_id = tt::CBIndex::c_2;  // local input shard
-    constexpr uint32_t in_reader_indices_cb_id = tt::CBIndex::c_3;
-    constexpr uint32_t in_scalar_cb_id = tt::CBIndex::c_4;
-    constexpr uint32_t interm_reduction_cb_id = tt::CBIndex::c_25;
+    constexpr uint32_t in_cb_id = (reader_id == 1) ? get_compile_time_arg_val(17) : get_compile_time_arg_val(16);
+    constexpr uint32_t in_shard_cb_id = get_compile_time_arg_val(18);
+    constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(19);
+    constexpr uint32_t in_scalar_cb_id = get_compile_time_arg_val(20);
+    constexpr uint32_t interm_reduction_cb_id = get_compile_time_arg_val(21);
 
     // minus infinity for bfp16
     uint16_t minus_inf = 63487;

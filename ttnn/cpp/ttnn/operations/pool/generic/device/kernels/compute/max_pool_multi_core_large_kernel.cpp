@@ -23,7 +23,8 @@ template <
     uint32_t split_reader,
     uint32_t unpA_face_r_dim>
 inline void reduce_h_fused_interm(
-    const uint32_t in_cb_id,
+    const uint32_t in_cb_id_0,
+    const uint32_t in_cb_id_1,
     const uint32_t in_scalar_cb_id,
     const uint32_t in_stick_index,
     const uint32_t interm_index,
@@ -32,7 +33,7 @@ inline void reduce_h_fused_interm(
     constexpr uint32_t num_faces_in_output_tile = is_partial_tile ? 1 : 2;
     constexpr uint32_t num_out_rows = 1;
 
-    const uint32_t curr_in_cb_id = split_reader ? (in_cb_id + (in_stick_index & 0x1)) : in_cb_id;
+    const uint32_t curr_in_cb_id = (split_reader && (in_stick_index & 0x1)) ? in_cb_id_1 : in_cb_id_0;
     cb_wait_front(curr_in_cb_id, 1);
     tile_regs_acquire();
     unpack_tilizeA_B_block(
@@ -103,10 +104,11 @@ void MAIN {
     constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(15);
     constexpr uint32_t max_rows_for_reduction = get_compile_time_arg_val(16);
 
-    constexpr uint32_t in_cb_id = tt::CBIndex::c_0;  // and tt::CBIndex::c_1 for split reader
-    constexpr uint32_t in_scalar_cb_id = tt::CBIndex::c_4;
-    constexpr uint32_t out_cb_id = tt::CBIndex::c_16;
-    constexpr uint32_t interm_cb_id = tt::CBIndex::c_25;
+    constexpr uint32_t in_cb_id_0 = get_compile_time_arg_val(17);
+    constexpr uint32_t in_cb_id_1 = get_compile_time_arg_val(18);  // for split reader
+    constexpr uint32_t in_scalar_cb_id = get_compile_time_arg_val(19);
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(20);
+    constexpr uint32_t interm_cb_id = get_compile_time_arg_val(21);
 
     constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
 
@@ -121,7 +123,7 @@ void MAIN {
     constexpr uint32_t partial_iter_output_tiles =
         in_ntiles_c % MAX_TILES_PER_REDUCTION == 0 ? max_tiles_per_iter : in_ntiles_c % MAX_TILES_PER_REDUCTION;
     tilizeA_B_reduce_init<true>(
-        in_cb_id, in_scalar_cb_id, max_tiles_per_iter, interm_cb_id, num_faces_in_input_tile, max_rows_for_reduction);
+        in_cb_id_0, in_scalar_cb_id, max_tiles_per_iter, interm_cb_id, num_faces_in_input_tile, max_rows_for_reduction);
 
     uint32_t interm_reduction_chunks = window_size_hw / max_rows_for_reduction;
     cb_wait_front(in_scalar_cb_id, 1);
@@ -137,7 +139,7 @@ void MAIN {
                     is_partial_tile,
                     max_rows_for_reduction,
                     split_reader,
-                    max_rows_for_reduction>(in_cb_id, in_scalar_cb_id, i, h, interm_cb_id);
+                    max_rows_for_reduction>(in_cb_id_0, in_cb_id_1, in_scalar_cb_id, i, h, interm_cb_id);
             }
             cb_push_back(interm_cb_id, 1);
 
@@ -158,7 +160,7 @@ void MAIN {
                 is_partial_tile,
                 max_rows_for_reduction,
                 split_reader,
-                max_rows_for_reduction>(in_cb_id, in_scalar_cb_id, i, h, interm_cb_id);
+                max_rows_for_reduction>(in_cb_id_0, in_cb_id_1, in_scalar_cb_id, i, h, interm_cb_id);
         }
         cb_push_back(interm_cb_id, 1);
 
