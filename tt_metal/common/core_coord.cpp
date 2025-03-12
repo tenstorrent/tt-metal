@@ -276,7 +276,6 @@ CoreRangeSet CoreRangeSet::merge(const T& other) const {
 
 template CoreRangeSet CoreRangeSet::merge<std::vector<CoreRange>>(const std::vector<CoreRange>& other) const;
 template CoreRangeSet CoreRangeSet::merge<std::set<CoreRange>>(const std::set<CoreRange>& other) const;
-template CoreRangeSet CoreRangeSet::merge<std::set<CoreRange>>(const std::set<CoreRange>& other) const;
 
 template <>
 CoreRangeSet CoreRangeSet::merge<CoreRangeSet>(const CoreRangeSet& other) const {
@@ -284,8 +283,8 @@ CoreRangeSet CoreRangeSet::merge<CoreRangeSet>(const CoreRangeSet& other) const 
 }
 
 template <>
-CoreRangeSet CoreRangeSet::merge<CoreRangeSet>(const CoreRangeSet& other) const {
-    return this->merge(other.ranges());
+CoreRangeSet CoreRangeSet::merge<CoreCoord>(const CoreCoord& other) const {
+    return this->merge(CoreRange(other));
 }
 
 bool CoreRangeSet::intersects(const CoreCoord& other) const {

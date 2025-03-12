@@ -196,12 +196,6 @@ void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_
         nw_chip_eth_coord = {0, 0, 0, 0, 0};
         mesh_ns_size = routing_table_generator_->get_mesh_ns_size(/*mesh_id=*/0);
         mesh_ew_size = routing_table_generator_->get_mesh_ew_size(/*mesh_id=*/0);
-    } else if (mesh_graph_desc_file.find("n150_mesh_graph_descriptor.yaml") != std::string::npos) {
-        cluster_desc_file_path = std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
-                                 "tests/tt_metal/tt_fabric/common/n150_cluster_desc.yaml";
-        nw_chip_eth_coord = {0, 0, 0, 0, 0};
-        mesh_ns_size = routing_table_generator_->get_mesh_ns_size(/*mesh_id=*/0);
-        mesh_ew_size = routing_table_generator_->get_mesh_ew_size(/*mesh_id=*/0);
     } else {
         TT_THROW("Unsupported mesh graph descriptor file {}", mesh_graph_desc_file);
     }
@@ -611,7 +605,7 @@ std::vector<std::pair<routing_plane_id_t, CoreCoord>> ControlPlane::get_routers_
         router_port_directions_to_physical_eth_chan_map_[src_mesh_id][src_chip_id];
     for (const auto& [direction, eth_chans] : router_direction_eth_channels) {
         for (const auto& src_chan_id : eth_chans) {
-            chan_id_t next_chan_id = std::numeric_limits<chan_id_t>::max();
+            chan_id_t next_chan_id = 0;
             if (src_mesh_id != dst_mesh_id) {
                 // Inter-mesh routing
                 next_chan_id = this->inter_mesh_routing_tables_[src_mesh_id][src_chip_id][src_chan_id][dst_mesh_id];
