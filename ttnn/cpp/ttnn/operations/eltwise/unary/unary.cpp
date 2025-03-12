@@ -11,6 +11,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
+#include "ttnn/operations/eltwise/ternary/where.hpp"
 
 namespace ttnn::operations::unary {
 
@@ -204,6 +205,28 @@ Tensor Softplus::invoke(
         {UnaryWithParam{UnaryOpType::SOFTPLUS, {beta, threshold}}},
         memory_config,
         optional_output_tensor);
+}
+
+Tensor Tanh::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    bool accuracy) {
+    UnaryOpType op_type = UnaryOpType::TANH;
+    if (!accuracy) {
+        return detail::unary_impl(
+            queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+    } else {
+        Tensor tanh_res = detail::unary_impl(
+            queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+        Tensor x2 = ttnn::square(input_tensor);
+        Tensor num = ttnn::multiply(input_tensor, ttnn::add(x2, 27.0f));
+        Tensor interim = ttnn::add(ttnn::square(x2), ttnn::multiply(x2, 9.0f));
+        x2.deallocate();
+        Tensor abs_val = ttnn::abs(input_tensor);
+        return ttnn::where(ttnn::gt(abs_val, 1.0f), tanh_res, ttnn::divide(num, (ttnn::add(interim, 27.0f))));
+    }
 }
 
 Tensor Prelu::invoke(
