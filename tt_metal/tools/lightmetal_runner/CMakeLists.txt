@@ -2,7 +2,8 @@ add_executable(lightmetal_runner ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal_runner.c
 target_link_libraries(
     lightmetal_runner
     PRIVATE
-        tt_metal
+        Metalium::Metal
+        TT:STL
         FlatBuffers::FlatBuffers
 )
 target_include_directories(

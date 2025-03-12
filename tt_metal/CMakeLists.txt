@@ -203,7 +203,7 @@ target_link_libraries(
         Reflect::Reflect
     PRIVATE
         Metalium::Metal::Impl
-        Metalium::Metal::STL
+        TT:STL
         metal_common_libs
         common
         jit_build
@@ -267,7 +267,6 @@ add_subdirectory(tools)
 add_subdirectory(impl)
 add_subdirectory(detail)
 add_subdirectory(distributed)
-add_subdirectory(tt_stl)
 add_subdirectory(fabric)
 if(TT_METAL_BUILD_TESTS)
     add_subdirectory(test)

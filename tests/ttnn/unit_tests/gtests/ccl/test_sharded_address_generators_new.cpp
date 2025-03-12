@@ -128,7 +128,7 @@ TEST(CclnewWidthShardedTensorSliceIndexer_Wormhole, width_sharded_test) {
         pages_per_shard_width,
         rows_per_shard_height>;
     auto info_var = ct_shard_info{};
-    experimental::ShardedAddrGen<ct_shard_info> addrgen = {
+    ::experimental::ShardedAddrGen<ct_shard_info> addrgen = {
         .bank_base_address = tensor_address, .shard_array = sharding_testing_parameters::map};
     run_full_width_test(addrgen, info_var, tensor_address);
 }
@@ -153,7 +153,7 @@ TEST(CclnewHeightShardedTensorSliceIndexer_Wormhole, height_sharded_test) {
         rows_per_shard_height>
         ct_shard_info;
     auto info_var = ct_shard_info{};
-    experimental::ShardedAddrGen<ct_shard_info> addrgen = {
+    ::experimental::ShardedAddrGen<ct_shard_info> addrgen = {
         .bank_base_address = tensor_address, .shard_array = sharding_testing_parameters::map};
     run_full_height_test(addrgen, info_var, tensor_address);
 }
@@ -178,7 +178,7 @@ TEST(CclnewBlockShardedTensorSliceIndexer_Wormhole, block_sharded_test) {
         rows_per_shard_height>
         ct_shard_info;
     auto info_var = ct_shard_info{};
-    experimental::ShardedAddrGen<ct_shard_info> addrgen = {
+    ::experimental::ShardedAddrGen<ct_shard_info> addrgen = {
         .bank_base_address = tensor_address, .shard_array = sharding_testing_parameters::map};
     run_full_block_test(addrgen, info_var, tensor_address);
 }

@@ -22,11 +22,10 @@
 #include <vector>
 #include <filesystem>
 
-#include "concepts.hpp"
+#include <tt_stl/concepts.hpp>
 #include <nlohmann/json.hpp>
 #include <magic_enum/magic_enum.hpp>
-#include "type_name.hpp"
-#include "logger.hpp"
+#include <tt_stl/type_name.hpp>
 
 namespace tt {
 namespace stl {
@@ -524,7 +523,7 @@ struct visit_object_of_type_t<T> {
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
     void operator()(auto&& callback, T&& value) const {
-        TT_THROW("Unsupported visit of object of type: {}", get_type_name<T>());
+        throw std::runtime_error("Unsupported visit of object of type: " + get_type_name<T>());
     }
 
     template <typename object_t>
@@ -536,7 +535,7 @@ struct visit_object_of_type_t<T> {
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
     void operator()(auto&& callback, const T& value) const {
-        TT_THROW("Unsupported visit of object of type: {}", get_type_name<T>());
+        throw std::runtime_error("Unsupported visit of object of type: " + get_type_name<T>());
     }
 };
 
@@ -813,7 +812,7 @@ struct get_first_object_of_type_t<T> {
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
     const auto operator()(const T& value) const {
-        TT_THROW("Unsupported get first object of type: {}", get_type_name<T>());
+        throw std::runtime_error("Unsupported get first object of type: " + get_type_name<T>());
     }
 };
 

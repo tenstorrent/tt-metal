@@ -6,7 +6,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/global_semaphore.hpp>
-#include <tt-metalium/span.hpp>
+#include <tt_stl/span.hpp>
 
 namespace ttnn::global_semaphore {
 

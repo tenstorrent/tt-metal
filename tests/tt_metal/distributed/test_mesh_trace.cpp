@@ -11,7 +11,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 
-#include "indestructible.hpp"
+#include <tt_stl/indestructible.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tests/tt_metal/tt_metal/dispatch/sub_device_test_utils.hpp"
 #include "tests/tt_metal/distributed/utils.hpp"

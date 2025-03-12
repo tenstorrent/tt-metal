@@ -5,7 +5,7 @@
 #include "flatbuffer/base_types_to_flatbuffer.hpp"
 #include "flatbuffer/program_types_to_flatbuffer.hpp"
 #include "lightmetal/lightmetal_capture.hpp"  // For LightMetalCaptureContext
-#include <overloaded.hpp>
+#include <tt_stl/overloaded.hpp>
 
 namespace tt::tt_metal {
 

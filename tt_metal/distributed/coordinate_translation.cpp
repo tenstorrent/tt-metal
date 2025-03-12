@@ -4,7 +4,7 @@
 
 #include "tt_metal/distributed/coordinate_translation.hpp"
 
-#include "indestructible.hpp"
+#include <tt_stl/indestructible.hpp>
 #include "tt_cluster.hpp"
 
 #include <nlohmann/json.hpp>

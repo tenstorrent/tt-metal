@@ -11,7 +11,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include <tt-metalium/device_impl.hpp>
-#include <tt-metalium/type_name.hpp>
+#include <tt_stl/type_name.hpp>
 
 namespace tt::tt_metal {
 

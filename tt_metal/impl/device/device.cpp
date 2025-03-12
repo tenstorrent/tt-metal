@@ -33,7 +33,7 @@
 #include <sub_device_manager_tracker.hpp>
 #include <sub_device_manager.hpp>
 #include <sub_device_types.hpp>
-#include <span.hpp>
+#include <tt_stl/span.hpp>
 
 #include "impl/dispatch/topology.hpp"
 #include "impl/dispatch/hardware_command_queue.hpp"

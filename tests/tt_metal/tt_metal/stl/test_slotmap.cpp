@@ -4,7 +4,7 @@
 
 #include <gtest/gtest.h>
 
-#include <tt-metalium/slotmap.hpp>
+#include <tt_stl/slotmap.hpp>
 
 MAKE_SLOTMAP_KEY(IntKey, uint16_t, 10);
 using IntSlotMap = tt::stl::SlotMap<IntKey, int>;

@@ -10,7 +10,7 @@
 #include <memory>
 #include <vector>
 
-#include "tt_metal/tt_stl/any_range.hpp"
+#include <tt_stl/any_range.hpp>
 
 // convenience alias that guarantees at least vector and deque will fit within the capacity
 MAKE_ANY_RANGE(IntRange, tt::stl::AnySizedRandomAccessRangeFor<int&, std::vector<int>, std::deque<int>>);

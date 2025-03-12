@@ -9,7 +9,7 @@
 
 #include "mesh_config.hpp"
 #include "mesh_coord.hpp"
-#include "indestructible.hpp"
+#include <tt_stl/indestructible.hpp>
 namespace tt::tt_metal::distributed {
 
 // SystemMesh creates a virtualization over the physical devices in the system.

@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/strong_type.hpp>
+#include <tt_stl/strong_type.hpp>
 
 namespace tt::tt_metal::distributed {
 

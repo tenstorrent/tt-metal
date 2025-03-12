@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/reflection.hpp>
+#include <tt_stl/reflection.hpp>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 

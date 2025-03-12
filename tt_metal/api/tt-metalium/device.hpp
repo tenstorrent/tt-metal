@@ -18,7 +18,7 @@
 #include "command_queue_interface.hpp"
 #include "sub_device_manager.hpp"
 #include "sub_device_types.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 
 namespace tt {
 

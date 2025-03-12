@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <emmintrin.h>
 #include "assert.hpp"
-#include "aligned_allocator.hpp"
+#include <tt_stl/aligned_allocator.hpp>
 #include "umd/device/device_api_metal.h"
 
 namespace tt::tt_metal {

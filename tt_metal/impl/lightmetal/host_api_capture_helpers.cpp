@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <overloaded.hpp>
+#include <tt_stl/overloaded.hpp>
 #include <circular_buffer_types.hpp>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device.hpp>
