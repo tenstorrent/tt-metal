@@ -19,8 +19,8 @@ import numpy as np
 
 from models.tt_transformers.tt.model_config import parse_optimizations
 
-# NOTE: the following settings are used to override the default settings for Pareto analysis
 # default setting: precision_cfg = {ff1_3: bfp8, ff2: bfp8, wqkv: bfp8, wo: bfp8, kv_cache: bfp8, activation: mixed}, fidelity_cfg = {li_ff1_3: hifi2, li_ff2: hifi2, li_qkv_decode: hifi2, sdpa_decode: hifi2na, li_o_decode: hifi2, li_qkv_prefill: hifi2, sdpa_prefill: hifi4, li_o_prefill: hifi2_fp16}
+# NOTE: the following settings are used to override the default settings for Pareto analysis
 dtype_mf_settings = [
     "precision_cfg = {ff1_3: bfp4, ff2: bfp4}, fidelity_cfg = {li_ff1_3: lofi, li_ff2: lofi}",
     "precision_cfg = {ff1_3: bfp4, ff2: bfp8}, fidelity_cfg = {li_ff1_3: lofi, li_ff2: hifi2}",

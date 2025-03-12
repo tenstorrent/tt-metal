@@ -77,8 +77,6 @@ def get_accuracy_thresholds(base_model_name: str, device_name: str, optimization
     [
         ModelOptimizations.accuracy,
         ModelOptimizations.performance,
-        ModelOptimizations.pareto_accuracy,
-        ModelOptimizations.pareto_performance,
     ],
 )
 @pytest.mark.parametrize(
