@@ -31,6 +31,8 @@ tt::tt_metal::Tensor matmul(
         /* output_tile */ std::nullopt);
 }
 
+namespace {
+
 // Wrapper around matmul to handle sharing of KV heads across groups of query
 // heads.
 // For e.g. Q @ V, there are two cases:
@@ -97,6 +99,8 @@ ttnn::Tensor sum_over_groups(const ttnn::Tensor& ungrouped_grads, uint32_t num_g
     auto summed_grads = ttnn_fixed::sum_moreh(grouped_grads, /*dim=*/1, /*keep_dim=*/true);
     return ttnn::reshape(summed_grads, ttnn::Shape{batch_size, num_groups, seq_len, head_dim});
 }
+
+}  // namespace
 
 autograd::TensorPtr scaled_dot_product_attention(
     const autograd::TensorPtr& query,
