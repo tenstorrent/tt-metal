@@ -17,11 +17,36 @@ from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
 )
 
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_in0 import (
+    PREFETCHER_NOC1_GRID,
     num_cores_to_rectangle_grid,
     round_up,
 )
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
+
+
+SUB_DEVICE_CRS = ttnn.CoreRangeSet(
+    [
+        ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+        ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+    ]
+)
+
+QKV_CRS = ttnn.num_cores_to_corerangeset_in_subcoregrids(ttnn.CoreCoord(1, 0), 40, SUB_DEVICE_CRS, row_wise=True)
+
+RING_CRS = ttnn.CoreRangeSet(
+    [
+        ttnn.CoreRange(
+            ttnn.CoreCoord(x, y),
+            ttnn.CoreCoord(x, y),
+        )
+        for x, y in PREFETCHER_NOC1_GRID
+    ]
+)
+
+NORM_CRS = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 7))])
+
+LM_HEAD_CRS = ttnn.num_cores_to_corerangeset_in_subcoregrids(ttnn.CoreCoord(1, 0), 32, SUB_DEVICE_CRS, row_wise=True)
 
 
 def check_mesh_tensor_alloc(tensor):
@@ -43,7 +68,9 @@ def run_all_reduce_impl(
     input_dtype,
     num_links,
     input_num_cores,
+    input_core_range_set,
     output_num_cores,
+    output_core_range_set,
     loopback_size=1,
     num_iters=1,
     warmup_iters=0,
@@ -68,15 +95,9 @@ def run_all_reduce_impl(
     ##################################
     ##### Set up fabric stuff
     ##################################
-    compute_grid_size = mesh_device.compute_with_storage_grid_size()
-    ccl_sub_device_crs = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-    )
-    worker_sub_device = ttnn.SubDevice(
-        [
-            ccl_sub_device_crs,
-        ]
-    )
+
+    worker_sub_device = ttnn.SubDevice([SUB_DEVICE_CRS])
+
     worker_sub_device_id = ttnn.SubDeviceId(0)
     sub_device_stall_group = [worker_sub_device_id]
     if create_persistent_fabric:
@@ -88,7 +109,7 @@ def run_all_reduce_impl(
     # create global semaphore handles
     num_buffers = 8
     ccl_semaphore_handles = [
-        create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_buffers)
+        create_global_semaphore_with_same_address(mesh_device, SUB_DEVICE_CRS, 0) for _ in range(num_buffers)
     ]
 
     logger.info(f"Output shape: {output_shape}")
@@ -105,33 +126,14 @@ def run_all_reduce_impl(
         input_shape = [*cluster_shape, M, N]
         intermediate_shape = [*input_shape[:-1], N * cluster_shape[cluster_axis]]
 
-        CORE_RANGE = [(x, y) for y in range(compute_grid_size.y) for x in range(compute_grid_size.x)]
-        core_range_set = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(x, y),
-                    ttnn.CoreCoord(x, y),
-                )
-                for x, y in CORE_RANGE[:input_num_cores]
-            ]
-        )
         input_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
-                core_range_set,
+                input_core_range_set,
                 [M, N_per_shard],
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
-        )
-        output_core_range_set = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(x, y),
-                    ttnn.CoreCoord(x, y),
-                )
-                for x, y in CORE_RANGE[:output_num_cores]
-            ]
         )
         output_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -322,23 +324,19 @@ def run_all_reduce_impl(
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
-@pytest.mark.timeout(900)
+@pytest.mark.timeout(1500)
 @pytest.mark.parametrize(
-    "output_shape, cluster_axis, num_links, input_num_cores, output_num_cores",
+    "output_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set",
     [
-        ([1, 1, 32, 2048], 0, 4, 24, 16),  # FF2/DO all reduce
-        ([1, 1, 32, 1280], 1, 3, 24, 40),  # QKV all reduce
-        ([1, 1, 32, 3584], 1, 3, 24, 24),  # FF1 all reduce
-        ([1, 1, 32, 2048], 0, 3, 24, 16),  # FF2/DO all reduce
-        ([1, 1, 32, 16 * 1024], 1, 3, 32, 32),  # LM Head all reduce
-        ([1, 1, 32, 1280], 1, 2, 24, 40),  # QKV all reduce
-        ([1, 1, 32, 3584], 1, 2, 24, 24),  # FF1 all reduce
-        ([1, 1, 32, 2048], 0, 2, 24, 16),  # FF2/DO all reduce
-        ([1, 1, 32, 16 * 1024], 1, 2, 32, 32),  # LM Head all reduce
-        ([1, 1, 32, 1280], 1, 1, 24, 40),  # QKV all reduce
-        ([1, 1, 32, 3584], 1, 1, 24, 24),  # FF1 all reduce
-        ([1, 1, 32, 2048], 0, 1, 24, 16),  # FF2/DO all reduce
-        ([1, 1, 32, 16 * 1024], 1, 1, 32, 32),  # LM Head all reduce
+        ([1, 1, 32, 2048], 0, 4, 24, RING_CRS, 16, NORM_CRS),  # FF2/DO all reduce
+        ([1, 1, 32, 1280], 1, 3, 24, RING_CRS, 40, QKV_CRS),  # QKV all reduce
+        ([1, 1, 32, 3584], 1, 3, 24, RING_CRS, 24, RING_CRS),  # FF1 all reduce
+        ([1, 1, 32, 2048], 0, 3, 24, RING_CRS, 16, NORM_CRS),  # FF2/DO all reduce
+        ([1, 1, 32, 16 * 1024], 1, 3, 32, LM_HEAD_CRS, 32, LM_HEAD_CRS),  # LM Head all reduce
+        ([1, 1, 32, 1280], 1, 1, 24, RING_CRS, 40, QKV_CRS),  # QKV all reduce
+        ([1, 1, 32, 3584], 1, 1, 24, RING_CRS, 24, RING_CRS),  # FF1 all reduce
+        ([1, 1, 32, 2048], 0, 1, 24, RING_CRS, 16, NORM_CRS),  # FF2/DO all reduce
+        ([1, 1, 32, 16 * 1024], 1, 1, 32, LM_HEAD_CRS, 32, LM_HEAD_CRS),  # LM Head all reduce
     ],
 )
 @pytest.mark.parametrize(
@@ -358,7 +356,7 @@ def run_all_reduce_impl(
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize(
     "device_params",
-    [{"trace_region_size": 23887872}],
+    [{"trace_region_size": 23887872, "dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -375,7 +373,9 @@ def test_all_reduce(
     input_dtype,
     num_links,
     input_num_cores,
+    input_core_range_set,
     output_num_cores,
+    output_core_range_set,
     num_iters,
     warmup_iters,
     enable_async,
@@ -395,7 +395,9 @@ def test_all_reduce(
         input_dtype,
         num_links,
         input_num_cores,
+        input_core_range_set,
         output_num_cores,
+        output_core_range_set,
         num_iters=num_iters,
         warmup_iters=warmup_iters,
         enable_async=enable_async,
@@ -416,11 +418,11 @@ def test_all_reduce(
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize(
-    "output_shape, cluster_axis, num_links, input_num_cores, output_num_cores",
+    "output_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set",
     [
-        ([1, 1, 32, 1280], 1, 1, 24, 40),  # QKV all reduce
-        ([1, 1, 32, 3584], 1, 1, 24, 24),  # FF1 all reduce
-        ([1, 1, 32, 2048], 0, 1, 24, 16),  # FF2/DO all reduce
+        ([1, 1, 32, 1280], 1, 1, 24, RING_CRS, 40, QKV_CRS),  # QKV all reduce
+        ([1, 1, 32, 3584], 1, 1, 24, RING_CRS, 24, RING_CRS),  # FF1 all reduce
+        ([1, 1, 32, 2048], 0, 1, 24, RING_CRS, 16, NORM_CRS),  # FF2/DO all reduce
     ],
 )
 @pytest.mark.parametrize(
@@ -439,7 +441,7 @@ def test_all_reduce(
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize(
     "device_params",
-    [{"trace_region_size": 23887872}],
+    [{"trace_region_size": 23887872, "dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -456,7 +458,9 @@ def test_all_reduce_loopback(
     input_dtype,
     num_links,
     input_num_cores,
+    input_core_range_set,
     output_num_cores,
+    output_core_range_set,
     num_iters,
     warmup_iters,
     enable_async,
@@ -474,7 +478,9 @@ def test_all_reduce_loopback(
         input_dtype,
         num_links,
         input_num_cores,
+        input_core_range_set,
         output_num_cores,
+        output_core_range_set,
         loopback_size=4,
         num_iters=num_iters,
         warmup_iters=warmup_iters,
