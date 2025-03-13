@@ -8,7 +8,7 @@
 #include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 
 template <bool DRAM, uint32_t tile_hw = 1024>
-void read_row_from_cb(
+void read_row_to_cb(
     const uint32_t cb_id,
     const InterleavedAddrGenFast<DRAM, tile_hw>& addr,
     const uint32_t tile_bytes,
@@ -81,10 +81,10 @@ void kernel_main() {
     uint32_t offs = 0;
     auto read_in0_and_in1 = [&]() {
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            read_row_from_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
+            read_row_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
 #ifdef FUSE_PRE_ADD
             // TODO(AP): refactor the ifdefs
-            read_row_from_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
+            read_row_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
 #endif
         }  // wt loop
     };
@@ -96,13 +96,13 @@ void kernel_main() {
             for (uint32_t wt = 0; wt < Wt; wt += blk) {
 #ifdef FUSE_GAMMA
                 {
-                    read_row_from_cb(cb_id_gamma, addrg, gamma_tile_bytes, wt, blk);
+                    read_row_to_cb(cb_id_gamma, addrg, gamma_tile_bytes, wt, blk);
                 }
 #endif
 
 #ifdef FUSE_BETA
                 {
-                    read_row_from_cb(cb_id_beta, addrb, beta_tile_bytes, wt, blk);
+                    read_row_to_cb(cb_id_beta, addrb, beta_tile_bytes, wt, blk);
                 }
 #endif
             }  // wt loop
