@@ -21,7 +21,7 @@ TEST_F(Fabric1DFixture, TestUnicast) {
     std::pair<mesh_id_t, chip_id_t> dst_mesh_chip_id;
     chip_id_t dst_physical_device_id;
 
-    auto control_plane = tt::DevicePool::instance().get_control_plane();
+    auto control_plane = tt::Cluster::instance().get_control_plane();
 
     // Find a device with a neighbour in the East direction
     bool connection_found = false;
