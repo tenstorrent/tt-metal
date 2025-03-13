@@ -2,6 +2,16 @@ name: "[internal] Perf models impl"
 
 on:
   workflow_call:
+    inputs:
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      docker-image:
+        required: true
+        type: string
 
 jobs:
   models-perf:
@@ -15,30 +25,54 @@ jobs:
         ]
         model-type: [llm_javelin, cnn_javelin, other]
     name: "${{ matrix.model-type }} ${{ matrix.test-info.name }}"
-    env:
-      ARCH_NAME: ${{ matrix.test-info.arch }}
-      LOGURU_LEVEL: INFO
-      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+    container:
+      image: ${{ inputs.docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ matrix.test-info.arch }}
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
     runs-on: ${{ matrix.test-info.runs-on }}
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
+      - name: ⬇️ Download Build
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.build-artifact-name }}
+          path: docker-job
+      - name: Extract files
+        run: tar -xvf ttm_any.tar
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.wheel-artifact-name }}
+          path: docker-job
+      - name: Install Wheel
+        run: |
+          WHEEL_FILENAME=$(ls -1 *.whl)
+          pip3 install $WHEEL_FILENAME
       - name: Enable Performance mode
         run: |
           sudo cpupower frequency-set -g performance
       - uses: ./.github/actions/ensure-active-weka-mount
-      - name: Set up dynamic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-          echo "PYTHONPATH=$(pwd)" >> $GITHUB_ENV
-      - uses: actions/download-artifact@v4
-        timeout-minutes: 10
-        with:
-          name: TTMetal_build_any
-      - name: Extract files
-        run: tar -xvf ttm_any.tar
-      - uses: ./.github/actions/install-python-deps
       - name: Run performance regressions
-        id: performance_tests
         timeout-minutes: 70
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
@@ -72,5 +106,14 @@ jobs:
           prefix: "test_reports_"
       - name: Disable Performance mode
         if: always()
+        run: sudo cpupower frequency-set -g ondemand
+      - name: Cleanup
+        if: always()
         run: |
-          sudo cpupower frequency-set -g ondemand
+          # We are forced to checkout the repo into a subdir of the host's workdir; this pollutes the host
+          # with root-owned files.  Be sure to clean up after ourselves in case we're on a non-ephemeral runner.
+          echo "pre rm"
+          ls -al /__w/tt-metal/tt-metal
+          rm -rf /__w/tt-metal/tt-metal/docker-job
+          echo "post rm"
+          ls -al /__w/tt-metal/tt-metal
