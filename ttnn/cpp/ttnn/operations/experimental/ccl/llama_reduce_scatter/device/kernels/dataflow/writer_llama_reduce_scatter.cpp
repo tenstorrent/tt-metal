@@ -183,8 +183,8 @@ void kernel_main() {
         uint32_t curr_output_core = 0;
         DPRINT << "semaphore noc addr: " << get_noc_addr(receiver_semaphore_address) << ENDL();
         while (*(uint32_t*)receiver_semaphore_address < 1) {
-            // Wait for the semaphore to be set
-            DPRINT << "Waiting for semaphore to be set" << ENDL();
+            DPRINT << "Waiting for receiver semaphore to be set, current value: "
+                   << *(uint32_t*)(receiver_semaphore_address) << ENDL();
         }
         print_tiles(fabric_receiver_cb_id, 0, input_shard_cores_per_device * tiles_per_core_width, true);
 
