@@ -18,6 +18,7 @@
 #include <tt-metalium/event.hpp>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/allocator.hpp>
 
 #include "tt_cluster.hpp"
 

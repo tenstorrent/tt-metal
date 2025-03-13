@@ -14,31 +14,33 @@
 #include <host_api.hpp>
 #include <trace.hpp>
 #include <core_descriptor.hpp>
-#include "lightmetal/lightmetal_capture.hpp"
-#include "tracy/Tracy.hpp"
 #include <tt_metal.hpp>
-#include "dprint_server.hpp"
-#include "impl/debug/watcher_server.hpp"
-#include "tt_metal/impl/dispatch/topology.hpp"
-#include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include <utils.hpp>
-#include "llrt.hpp"
 #include <dev_msgs.h>
 #include <device_pool.hpp>
 #include <persistent_kernel_cache.hpp>
-#include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
+
 #include <hal.hpp>
 #include <hal_exp.hpp>
 #include <sub_device.hpp>
 #include <sub_device_manager_tracker.hpp>
-#include <sub_device_manager.hpp>
 #include <sub_device_types.hpp>
 #include <tt_stl/span.hpp>
 
-#include "impl/dispatch/topology.hpp"
-#include "impl/dispatch/hardware_command_queue.hpp"
+#include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
+
+#include "tt_metal/impl/debug/watcher_server.hpp"
+#include "tt_metal/impl/dispatch/topology.hpp"
+#include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
+#include "tt_metal/impl/sub_device/sub_device_manager.hpp"
+#include "tt_metal/impl/dispatch/topology.hpp"
+#include "tt_metal/impl/dispatch/hardware_command_queue.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 
+#include "lightmetal/lightmetal_capture.hpp"
+#include "tracy/Tracy.hpp"
+#include "dprint_server.hpp"
+#include "llrt.hpp"
 #include "work_executor.hpp"
 
 namespace tt {

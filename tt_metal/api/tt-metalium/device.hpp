@@ -15,8 +15,9 @@
 #include "build.hpp"
 #include "hal.hpp"
 #include "command_queue_interface.hpp"
-#include "sub_device_manager.hpp"
 #include "sub_device_types.hpp"
+#include <tt-metalium/allocator_types.hpp>
+
 #include <tt_stl/span.hpp>
 
 namespace tt {
