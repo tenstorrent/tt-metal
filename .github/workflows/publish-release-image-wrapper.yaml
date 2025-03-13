@@ -18,7 +18,7 @@ jobs:
         run: |
           echo "image-tag-name=${GITHUB_REF_NAME//\//-}" >> $GITHUB_OUTPUT
   publish-release-image:
-    needs: 
+    needs:
       - build-artifact
       - create-image-tag-name
     uses: ./.github/workflows/publish-release-image.yaml

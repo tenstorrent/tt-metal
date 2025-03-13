@@ -64,21 +64,22 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-20.04]
-        arch: [wormhole_b0]
         test_group:
           [
               {
                 runs-on: ["cloud-virtual-machine", "N150", "in-service"],
                 cmd: pytest tests/end_to_end_tests,
+                arch: wormhole_b0,
               },
               {
                 runs-on: ["cloud-virtual-machine", "N300", "in-service"],
                 cmd: pytest tests/end_to_end_tests,
+                arch: wormhole_b0,
               },
           ]
     runs-on: ${{ matrix.test_group.runs-on }}
     container:
-      image: ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-amd64-release:${{ inputs.version }}
+      image: ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.test_group.arch }}-amd64-release:${{ inputs.version }}
       env:
         LOGURU_LEVEL: INFO
         ARCH_NAME: ${{ matrix.arch }}
