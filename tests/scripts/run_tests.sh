@@ -159,7 +159,6 @@ run_microbenchmarks_pipeline_tests() {
 
     export TT_METAL_DEVICE_PROFILER=1
 
-    source python_env/bin/activate
     ./tests/scripts/run_moreh_microbenchmark.sh
     pytest -svv tests/tt_metal/microbenchmarks
 }
@@ -167,7 +166,6 @@ run_microbenchmarks_pipeline_tests() {
 run_ccl_microbenchmarks_pipeline_tests() {
     export TT_METAL_DEVICE_PROFILER=1
 
-    source python_env/bin/activate
     # Record the start time
     fail=0
     start_time=$(date +%s)
@@ -210,7 +208,6 @@ run_T3K_microbenchmarks_pipeline_tests() {
 
     export TT_METAL_DEVICE_PROFILER=1
 
-    source python_env/bin/activate
     pytest -svv tests/tt_metal/microbenchmarks/ethernet/test_fabric_edm_bandwidth.py
 }
 
