@@ -31,35 +31,35 @@
 2024-09-25T14:32:57.5026992Z ##[endgroup]
 2024-09-25T14:32:57.5270323Z Current date / time is Wed Sep 25 14:32:57 UTC 2024
 2024-09-25T14:33:10.6211734Z tt-smi reset was successful
-2024-09-25T14:33:11.0232337Z 
+2024-09-25T14:33:11.0232337Z
 2024-09-25T14:33:11.0236165Z [95m Detected Chips: [93m1[0m
 2024-09-25T14:33:11.0246323Z [1A[J
 2024-09-25T14:33:11.0247580Z [95m Detected Chips: [93m1[0m
-2024-09-25T14:33:11.0248087Z 
+2024-09-25T14:33:11.0248087Z
 2024-09-25T14:33:11.0248914Z [94m Detecting ARC: [93m|[0m
-2024-09-25T14:33:11.0249253Z 
+2024-09-25T14:33:11.0249253Z
 2024-09-25T14:33:11.0249447Z [94m Detecting DRAM: [93m|[0m
-2024-09-25T14:33:11.0249715Z 
+2024-09-25T14:33:11.0249715Z
 2024-09-25T14:33:11.0249917Z  [95m[][94m [16/16] ETH: [93m|[0m
 2024-09-25T14:33:11.0253549Z [4A[J
 2024-09-25T14:33:11.0254302Z [95m Detected Chips: [93m2[0m
 2024-09-25T14:33:11.0356876Z [1A[J
 2024-09-25T14:33:11.0357526Z [95m Detected Chips: [93m2[0m
-2024-09-25T14:33:11.0358174Z 
+2024-09-25T14:33:11.0358174Z
 2024-09-25T14:33:11.0359634Z [94m Detecting ARC: [93m/[0m
-2024-09-25T14:33:11.0360075Z 
+2024-09-25T14:33:11.0360075Z
 2024-09-25T14:33:11.0360279Z [94m Detecting DRAM: [93m/[0m
-2024-09-25T14:33:11.0360543Z 
+2024-09-25T14:33:11.0360543Z
 2024-09-25T14:33:11.0360730Z  [95m[][94m [16/16] ETH: [93m/[0m
 2024-09-25T14:33:11.0406174Z [4A[J
 2024-09-25T14:33:11.0406538Z [95m Detected Chips: [93m3[0m
 2024-09-25T14:33:11.0491645Z [1A[J
 2024-09-25T14:33:11.0492267Z [95m Detected Chips: [93m3[0m
-2024-09-25T14:33:11.0492705Z 
+2024-09-25T14:33:11.0492705Z
 2024-09-25T14:33:11.0493011Z [94m Detecting ARC: [93m-[0m
-2024-09-25T14:33:11.0493312Z 
+2024-09-25T14:33:11.0493312Z
 2024-09-25T14:33:11.0493552Z [94m Detecting DRAM: [93m-[0m
-2024-09-25T14:33:11.0493826Z 
+2024-09-25T14:33:11.0493826Z
 2024-09-25T14:33:11.0494032Z  [95m[][94m [16/16] ETH: [93m-[0m
 2024-09-25T14:33:11.0518946Z [4A[J
 2024-09-25T14:33:11.0519396Z [95m Detected Chips: [93m2[0m
@@ -76,6 +76,10 @@
 2024-09-25T14:33:11.1067559Z         "Python": "3.8.10",
 2024-09-25T14:33:11.1068934Z         "Memory": "47.14 GB",
 2024-09-25T14:33:11.1069627Z         "Driver": "TTKMD 1.27.1"
+2024-09-25T14:33:11.1070147Z     },
+2024-09-25T14:33:11.1070147Z     "host_sw_vers": {
+2024-09-25T14:33:11.1070147Z        "tt_smi": "3.0.4",
+2024-09-25T14:33:11.1070147Z        "pyluwen": "0.6.1"
 2024-09-25T14:33:11.1070147Z     },
 2024-09-25T14:33:11.1070752Z     "device_info": [
 2024-09-25T14:33:11.1071254Z         {
@@ -657,31 +661,31 @@
 2024-09-25T14:34:02.0492430Z ##[group]Build container for action use: '/home/ubuntu/actions-runner/_work/_actions/addnab/docker-run-action/v3/Dockerfile'.
 2024-09-25T14:34:02.0534921Z ##[command]/usr/bin/docker build -t a85e88:18a8b88117cf44eca8b51cf412284f49 -f "/home/ubuntu/actions-runner/_work/_actions/addnab/docker-run-action/v3/Dockerfile" "/home/ubuntu/actions-runner/_work/_actions/addnab/docker-run-action/v3"
 2024-09-25T14:34:02.3618410Z #0 building with "default" instance using docker driver
-2024-09-25T14:34:02.3618906Z 
+2024-09-25T14:34:02.3618906Z
 2024-09-25T14:34:02.3619134Z #1 [internal] load build definition from Dockerfile
 2024-09-25T14:34:02.3619960Z #1 transferring dockerfile: 139B done
 2024-09-25T14:34:02.3620464Z #1 DONE 0.0s
-2024-09-25T14:34:02.3620664Z 
+2024-09-25T14:34:02.3620664Z
 2024-09-25T14:34:02.3620976Z #2 [internal] load metadata for docker.io/library/docker:20.10
 2024-09-25T14:34:02.5342607Z #2 DONE 0.3s
-2024-09-25T14:34:02.5702497Z 
+2024-09-25T14:34:02.5702497Z
 2024-09-25T14:34:02.5703169Z #3 [internal] load .dockerignore
 2024-09-25T14:34:02.5704375Z #3 transferring context: 2B done
 2024-09-25T14:34:02.5704810Z #3 DONE 0.0s
-2024-09-25T14:34:02.5705009Z 
+2024-09-25T14:34:02.5705009Z
 2024-09-25T14:34:02.5705603Z #4 [1/3] FROM docker.io/library/docker:20.10@sha256:2967f0819c84dd589ed0a023b9d25dcfe7a3c123d5bf784ffbb77edf55335f0c
 2024-09-25T14:34:02.5706500Z #4 DONE 0.0s
-2024-09-25T14:34:02.5706683Z 
+2024-09-25T14:34:02.5706683Z
 2024-09-25T14:34:02.5706829Z #5 [internal] load build context
 2024-09-25T14:34:02.5707284Z #5 transferring context: 35B done
 2024-09-25T14:34:02.5707712Z #5 DONE 0.0s
-2024-09-25T14:34:02.5707899Z 
+2024-09-25T14:34:02.5707899Z
 2024-09-25T14:34:02.5708064Z #6 [2/3] RUN apk add bash
 2024-09-25T14:34:02.5708412Z #6 CACHED
-2024-09-25T14:34:02.5708609Z 
+2024-09-25T14:34:02.5708609Z
 2024-09-25T14:34:02.5708781Z #7 [3/3] COPY entrypoint.sh /entrypoint.sh
 2024-09-25T14:34:02.5709497Z #7 CACHED
-2024-09-25T14:34:02.5709673Z 
+2024-09-25T14:34:02.5709673Z
 2024-09-25T14:34:02.5709839Z #8 exporting to image
 2024-09-25T14:34:02.5710199Z #8 exporting layers done
 2024-09-25T14:34:02.5710914Z #8 writing image sha256:1e9fc188bbcadf71c044d665bb0f632cb5647a790cea12e60686db892dbed659 done
@@ -809,7 +813,7 @@ pytest tests/tt_eager/python_api_testing/trace_testing/ -xvvv
 2024-09-25T14:34:04.8975078Z WARNING! Your password will be stored unencrypted in /github/home/.docker/config.json.
 2024-09-25T14:34:04.8976016Z Configure a credential helper to remove this warning. See
 2024-09-25T14:34:04.8977269Z https://docs.docker.com/engine/reference/commandline/login/#credentials-store
-2024-09-25T14:34:04.8977781Z 
+2024-09-25T14:34:04.8977781Z
 2024-09-25T14:34:04.8979542Z Login Succeeded
 2024-09-25T14:34:05.8518248Z Processing ./metal_libs-0.52.0rc33.dev9+wormhole.b0-cp38-cp38-linux_x86_64.whl
 2024-09-25T14:34:10.3713022Z Collecting Pillow==10.3.0
@@ -1044,9 +1048,9 @@ pytest tests/tt_eager/python_api_testing/trace_testing/ -xvvv
 2024-09-25T14:34:47.1589180Z timeout method: signal
 2024-09-25T14:34:47.1589496Z timeout func_only: False
 2024-09-25T14:34:47.1737532Z collecting ... collected 36 items
-2024-09-25T14:34:47.1738148Z 
+2024-09-25T14:34:47.1738148Z
 2024-09-25T14:34:47.1768207Z tests/tt_eager/python_api_testing/trace_testing/misc/test_average_pool.py::test_run_average_pool[device_params0-True-BFLOAT16-resnet50_unpadded] [38;2;000;128;000m                 Device[0m | [1m[38;2;100;149;237mINFO    [0m | Opening user mode device driver
-2024-09-25T14:34:47.2185126Z 
+2024-09-25T14:34:47.2185126Z
 2024-09-25T14:34:47.2500478Z [32m2024-09-25 14:34:47.249[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Detected 1 PCI device : [0]
 2024-09-25T14:34:47.2620332Z [32m2024-09-25 14:34:47.261[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - init_detect_tt_device_numanodes(): Could not determine NumaNodeSet for TT device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
 2024-09-25T14:34:47.2622610Z [32m2024-09-25 14:34:47.261[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - Could not find NumaNodeSet for TT Device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
@@ -1076,7 +1080,7 @@ pytest tests/tt_eager/python_api_testing/trace_testing/ -xvvv
 2024-09-25T14:34:50.0902062Z PASSED[38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Disabling and clearing program cache on device 0
 2024-09-25T14:34:50.0904666Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Closing device 0
 2024-09-25T14:34:50.0915316Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Disabling and clearing program cache on device 0
-2024-09-25T14:34:50.0936890Z 
+2024-09-25T14:34:50.0936890Z
 2024-09-25T14:34:50.0949618Z tests/tt_eager/python_api_testing/trace_testing/misc/test_average_pool.py::test_run_average_pool[device_params0-True-BFLOAT16-tile_divisible] [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Initializing device 0. Program cache is NOT enabled
 2024-09-25T14:34:50.0951552Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | AI CLK for device 0 is:   1000 MHz
 2024-09-25T14:34:50.1001553Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | MMIO Device 0 : Tunnel 0 : Device 0
@@ -1097,7 +1101,7 @@ pytest tests/tt_eager/python_api_testing/trace_testing/ -xvvv
 2024-09-25T14:34:50.9954270Z PASSED[38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Disabling and clearing program cache on device 0
 2024-09-25T14:34:50.9958040Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Closing device 0
 2024-09-25T14:34:50.9963813Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Disabling and clearing program cache on device 0
-2024-09-25T14:34:50.9972318Z 
+2024-09-25T14:34:50.9972318Z
 2024-09-25T14:34:50.9980883Z tests/tt_eager/python_api_testing/trace_testing/misc/test_average_pool.py::test_run_average_pool[device_params0-False-BFLOAT16-resnet50_unpadded] [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Initializing device 0. Program cache is NOT enabled
 2024-09-25T14:34:50.9982957Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | AI CLK for device 0 is:   1000 MHz
 2024-09-25T14:34:51.0023106Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | MMIO Device 0 : Tunnel 0 : Device 0
@@ -1118,7 +1122,7 @@ pytest tests/tt_eager/python_api_testing/trace_testing/ -xvvv
 2024-09-25T14:34:51.1043653Z PASSED[38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Disabling and clearing program cache on device 0
 2024-09-25T14:34:51.1046319Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Closing device 0
 2024-09-25T14:34:51.1051623Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Disabling and clearing program cache on device 0
-2024-09-25T14:34:51.1064432Z 
+2024-09-25T14:34:51.1064432Z
 2024-09-25T14:34:51.1071819Z tests/tt_eager/python_api_testing/trace_testing/misc/test_average_pool.py::test_run_average_pool[device_params0-False-BFLOAT16-tile_divisible] [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Initializing device 0. Program cache is NOT enabled
 2024-09-25T14:34:51.1078296Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | AI CLK for device 0 is:   1000 MHz
 2024-09-25T14:34:51.1127098Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | MMIO Device 0 : Tunnel 0 : Device 0
@@ -1139,7 +1143,7 @@ pytest tests/tt_eager/python_api_testing/trace_testing/ -xvvv
 2024-09-25T14:34:51.1316760Z PASSED[38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Disabling and clearing program cache on device 0
 2024-09-25T14:34:51.1318242Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Closing device 0
 2024-09-25T14:34:51.1323438Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Disabling and clearing program cache on device 0
-2024-09-25T14:34:51.1329527Z 
+2024-09-25T14:34:51.1329527Z
 2024-09-25T14:34:51.1338971Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-True-False-True-True-4608-1024-3072-None-LoFi] SKIPPED (Unsupported parallelizations for WH B0 and BH)
 2024-09-25T14:34:51.1345125Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-True-False-True-True-4608-1024-3072-None-HiFi2] SKIPPED (Unsupported parallelizations for WH B0 and BH)
 2024-09-25T14:34:51.1351383Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-True-False-True-False-4608-1024-3072-None-LoFi] SKIPPED (Unsupported parallelizations for WH B0 and BH)
@@ -1172,7 +1176,7 @@ pytest tests/tt_eager/python_api_testing/trace_testing/ -xvvv
 2024-09-25T14:34:51.1512129Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-False-False-False-True-4608-1024-3072-None-HiFi2] SKIPPED (Unsupported parallelizations for WH B0 and BH)
 2024-09-25T14:34:51.1518632Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-False-False-False-False-4608-1024-3072-None-LoFi] SKIPPED (Unsupported parallelizations for WH B0 and BH)
 2024-09-25T14:34:51.1543859Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-False-False-False-False-4608-1024-3072-None-HiFi2] SKIPPED (Unsupported parallelizations for WH B0 and BH)
-2024-09-25T14:34:51.1545700Z 
+2024-09-25T14:34:51.1545700Z
 2024-09-25T14:34:51.1546293Z =============================== warnings summary ===============================
 2024-09-25T14:34:51.1548074Z tests/tt_eager/python_api_testing/trace_testing/misc/test_average_pool.py::test_run_average_pool[device_params0-True-BFLOAT16-resnet50_unpadded]
 2024-09-25T14:34:51.1549840Z tests/tt_eager/python_api_testing/trace_testing/misc/test_average_pool.py::test_run_average_pool[device_params0-True-BFLOAT16-tile_divisible]
@@ -1180,7 +1184,7 @@ pytest tests/tt_eager/python_api_testing/trace_testing/ -xvvv
 2024-09-25T14:34:51.1555626Z tests/tt_eager/python_api_testing/trace_testing/misc/test_average_pool.py::test_run_average_pool[device_params0-False-BFLOAT16-tile_divisible]
 2024-09-25T14:34:51.1561129Z   tests/tt_eager/python_api_testing/trace_testing/misc/test_average_pool.py:23: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
 2024-09-25T14:34:51.1562467Z     @pytest.mark.parametrize(
-2024-09-25T14:34:51.1562728Z 
+2024-09-25T14:34:51.1562728Z
 2024-09-25T14:34:51.1563150Z -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
 2024-09-25T14:34:51.1563811Z ==================================== PASSES ====================================
 2024-09-25T14:34:51.1564951Z - generated xml file: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal/generated/test_reports/most_recent_tests.xml -

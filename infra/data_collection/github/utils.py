@@ -65,6 +65,8 @@ def get_pipeline_row_from_github_info(github_runner_environment, github_pipeline
 
     github_pipeline_link = github_pipeline_json["html_url"]
 
+    pipeline_status = github_pipeline_json["conclusion"]
+
     return {
         "github_pipeline_id": github_pipeline_id,
         "repository_url": repository_url,
@@ -80,6 +82,7 @@ def get_pipeline_row_from_github_info(github_runner_environment, github_pipeline
         "git_author": git_author,
         "orchestrator": orchestrator,
         "github_pipeline_link": github_pipeline_link,
+        "pipeline_status": pipeline_status,
     }
 
 
@@ -284,6 +287,7 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations):
         "github_job_link": github_job_link,
         "failure_signature": failure_signature,
         "failure_description": failure_description,
+        "job_label": ",".join(labels),
     }
 
 

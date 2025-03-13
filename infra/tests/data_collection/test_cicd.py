@@ -150,6 +150,8 @@ def test_create_pipeline_json_for_run_github_timed_out_job(workflow_run_gh_envir
         if job.github_job_id == 30868260202:
             assert len(job.tests) > 0
             assert job.job_status == JobStatus.failure
+        if job.github_job_id == 30650754720:
+            assert job.tt_smi_version is not None
 
 
 def test_create_pipeline_json_for_timeout_bad_testcase(workflow_run_gh_environment):
