@@ -11,6 +11,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/allocator.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
