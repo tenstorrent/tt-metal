@@ -8,12 +8,22 @@ jobs:
     secrets: inherit
     with:
       build-wheel: true
-      version: "20.04"
+  create-image-tag-name:
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag-name: ${{ steps.set-tag-name.outputs.image-tag-name }}
+    steps:
+      - name: Set the tag name of the docker image
+        id: set-tag-name
+        run: |
+          echo "image-tag-name=${GITHUB_REF_NAME//\//-}" >> $GITHUB_OUTPUT
   publish-release-image:
-    needs: build-artifact
+    needs:
+      - build-artifact
+      - create-image-tag-name
     uses: ./.github/workflows/publish-release-image.yaml
     secrets: inherit
     with:
       base-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
-      version: dev-${GITHUB_REF_NAME//\//-}
+      version: dev-${{ needs.create-image-tag-name.outputs.image-tag-name }}
       is_major_version: false
