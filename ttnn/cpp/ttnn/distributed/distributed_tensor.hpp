@@ -15,6 +15,9 @@
 
 namespace ttnn::distributed {
 
+// Mapper interface that distributes a host tensor onto a multi-device configuration.
+// The __attribute__((weak)) instructs pybind imports not to look for a symbol for these functions, as the linker won't
+// create one.
 class TensorToMesh {
 public:
     virtual ~TensorToMesh() = default;
