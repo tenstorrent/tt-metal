@@ -270,8 +270,6 @@ operation::ProgramWithCallbacks RMSAllGather::create_program(
                     return frmsnorm_pre_multi_core_sharded(
                         a,
                         b,
-                        gamma,
-                        beta,
                         output_tensor,
                         this->eps,
                         program_config.compute_with_storage_grid_size,
@@ -300,7 +298,7 @@ operation::ProgramWithCallbacks RMSAllGather::create_program(
                 CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
 
                 return frmsnorm_pre_multi_core_sharded(
-                    a, b, gamma, beta, output_tensor, this->eps, grid_size, 1, 1, this->compute_kernel_config);
+                    a, b, output_tensor, this->eps, grid_size, 1, 1, this->compute_kernel_config);
             }
         },
         this->program_config);
