@@ -146,7 +146,8 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     // TODO(AP): can also add support for block_size=7 -> 63, 28
     uint32_t WtB = tt::div_up(Wt, block_size) * block_size;  // Wt padded to be divisible by block size
     bool large_tensor_needed = false;
-    if (gamma.has_value() and beta.has_value() and WtB > with_weights_max_size) {
+    if ((gamma.has_value() or beta.has_value() or in_data_format == tt::DataFormat::Float32) and
+        WtB > with_weights_max_size) {
         // In the case that the required space is larger than what can be handeled by the single pass
         large_tensor_needed = true;
         WtB = with_weights_max_size;

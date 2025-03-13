@@ -40,21 +40,21 @@ void MAIN {
     constexpr auto cb_gamma = tt::CBIndex::c_5;
     constexpr auto cb_beta = tt::CBIndex::c_6;
 #if defined RMSNORM and not defined FUSE_PRE_ADD
-    constexpr uint32_t cb_xmm = cb_in;  // x minus mean
+    uint32_t cb_xmm = cb_in;  // x minus mean
 #else
     uint32_t cb_xmm = tt::CBIndex::c_24;  // x minus mean
 #endif
-    constexpr auto cb_ex = tt::CBIndex::c_25;      // E[x]
-    constexpr auto cb_ex2 = tt::CBIndex::c_26;     // E[(x-E[x])^2]
-    constexpr auto cb_xmm2 = tt::CBIndex::c_27;    // xmm^2
-    constexpr auto cb_ex2pe = tt::CBIndex::c_28;   // E[(x-E[x])^2]+eps
-    constexpr auto cb_fusion = tt::CBIndex::c_29;  // stream gamma/beta
+    constexpr auto cb_ex = tt::CBIndex::c_18;      // E[x]
+    constexpr auto cb_ex2 = tt::CBIndex::c_19;     // E[(x-E[x])^2]
+    constexpr auto cb_xmm2 = tt::CBIndex::c_20;    // xmm^2
+    constexpr auto cb_ex2pe = tt::CBIndex::c_21;   // E[(x-E[x])^2]+eps
+    constexpr auto cb_fusion = tt::CBIndex::c_22;  // stream gamma/beta
     constexpr auto scaler0 = 0;
 #ifdef FUSE_PRE_ADD
 #ifdef RMSNORM
     constexpr uint32_t cb_x = cb_xmm;
 #else
-    constexpr uint32_t cb_x = tt::CBIndex::c_30;
+    constexpr uint32_t cb_x = tt::CBIndex::c_23;
 #endif
 #else
     constexpr uint32_t cb_x = cb_in;
@@ -65,7 +65,6 @@ void MAIN {
 #else
     binary_op_init_common(cb_in, cb_in, cb_xmm2);
 #endif
-
     cb_wait_front(cb_scaler, 1);  // comes from the reader
     cb_wait_front(cb_eps, 1);     // comes from the reader
 
@@ -121,7 +120,7 @@ void MAIN {
         //              n
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             reconfig_data_format(cb_in, cb_ex);
-            pack_reconfig_data_format(cb_ex2);
+            pack_reconfig_data_format(cb_xmm);
             tile_regs_acquire();
             tile_regs_wait();
 
@@ -155,6 +154,8 @@ void MAIN {
 
             tile_regs_acquire();
             tile_regs_wait();
+            reconfig_data_format(cb_xmm, cb_scaler);
+            pack_reconfig_data_format(cb_ex2);
             if (wt > 0) {
                 cb_wait_front(cb_ex2, onetile);
                 copy_tile_init(cb_ex2);
@@ -230,14 +231,14 @@ void MAIN {
         //               √(Var(X) + ε)
 
         cb_wait_front(cb_ex2pe, 1);
-        reconfig_data_format(cb_in, cb_ex);
-        pack_reconfig_data_format(cb_in, cb_out);
         // Start of
         // Final Val Calc
         //    x-E[X]
         //(---------------*𝛄)+ß
         //  √(Var(X)+ε)
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
+            reconfig_data_format(cb_in, cb_ex);
+            pack_reconfig_data_format(cb_xmm);
             tile_regs_acquire();
             tile_regs_wait();
             cb_reserve_back(cb_out, blk);
@@ -248,20 +249,23 @@ void MAIN {
                 sub_tiles_bcast_cols(cb_in, cb_ex, j, 0, j);  // tile *= 1/(sum(exp(x)))
             }
             cb_pop_front(cb_in, blk);
+            reconfig_data_format_srca(cb_in, cb_ex2pe);
 #ifdef FUSE_PRE_ADD
             cb_wait_front(cb_inb, blk);
+            reconfig_data_format_srca(cb_ex2pe, cb_inb);
             binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb);
             for (uint32_t j = 0; j < blk; j++) {
                 binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb, j, j);
             }
             cb_pop_front(cb_inb, blk);
+            reconfig_data_format_srca(cb_inb, cb_ex2pe);
 #endif
             binary_dest_reuse_tiles_init<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex2pe);
             for (uint32_t j = 0; j < blk; j++) {
                 binary_dest_reuse_tiles<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex2pe, 0, j);
             }
             tile_regs_commit();
-            if constexpr (!(do_gamma or do_beta)) {
+            if constexpr (!(do_gamma == 1 or do_beta == 1)) {
                 cb_xmm = cb_out;
             }
             for (uint32_t j = 0; j < blk; j++) {
@@ -269,9 +273,10 @@ void MAIN {
             }
             cb_push_back(cb_xmm, blk);
             tile_regs_release();
-            if constexpr (do_gamma) {
+            if constexpr (do_gamma == 1) {
                 tile_regs_acquire();
                 tile_regs_wait();
+                reconfig_data_format(cb_xmm, cb_gamma);
                 cb_wait_front(cb_gamma, blk);
                 cb_wait_front(cb_xmm, blk);
                 mul_bcast_rows_init_short(cb_xmm, cb_gamma);
@@ -280,21 +285,26 @@ void MAIN {
                 }
                 cb_pop_front(cb_gamma, blk);
                 tile_regs_commit();
+                cb_pop_front(cb_xmm, blk);
                 if (!do_beta) {
-                    cb_xmm = cb_out;
+                    for (uint32_t j = 0; j < blk; j++) {
+                        pack_tile(j, cb_out);
+                    }
+                    cb_push_back(cb_out, blk);
                 } else {
-                    cb_pop_front(cb_xmm, blk);
+                    for (uint32_t j = 0; j < blk; j++) {
+                        pack_tile(j, cb_xmm);
+                    }
+                    cb_push_back(cb_xmm, blk);
                 }
 
-                for (uint32_t j = 0; j < blk; j++) {
-                    pack_tile(j, cb_xmm);
-                }
-                cb_push_back(cb_xmm, blk);
                 tile_regs_release();
             }
-            if constexpr (do_beta) {
+            if constexpr (do_beta == 1) {
                 tile_regs_acquire();
                 tile_regs_wait();
+                reconfig_data_format(cb_xmm, cb_beta);
+                pack_reconfig_data_format(cb_out);
                 cb_wait_front(cb_beta, blk);
                 cb_wait_front(cb_xmm, blk);
                 add_bcast_rows_init_short(cb_xmm, cb_beta);
