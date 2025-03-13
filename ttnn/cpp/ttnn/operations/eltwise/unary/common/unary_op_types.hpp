@@ -91,7 +91,8 @@ enum class UnaryOpType {
     DROPOUT,
     FILL,
     PRELU_SFPU,
-    ZERO_POINT
+    ZERO_POINT,
+    MISH,
 };
 
 struct UnaryWithParam {

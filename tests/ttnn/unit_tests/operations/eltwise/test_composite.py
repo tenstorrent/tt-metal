@@ -387,7 +387,8 @@ def test_unary_composite_log1p_ttnn(input_shapes, device):
     ),
 )
 def test_unary_composite_mish_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -20, 100, device)
+    in_data1 = torch.Tensor(size=input_shapes).uniform_(-20, 100).to(torch.bfloat16)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.mish(input_tensor1)
     golden_function = ttnn.get_golden_function(ttnn.mish)
     golden_tensor = golden_function(in_data1)
