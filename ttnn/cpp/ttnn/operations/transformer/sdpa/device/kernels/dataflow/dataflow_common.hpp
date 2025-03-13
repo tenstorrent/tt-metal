@@ -148,37 +148,69 @@ void copy_tile(uint64_t noc_read_addr_base, uint32_t q_write_ptr_base, uint32_t 
 }
 
 template <uint32_t tile_bytes>
-void fill_tile(uint32_t cb_id, uint32_t tile_id, uint32_t val) {
-    if (val == 0) {
-        constexpr uint32_t num_zeros_reads = 2048 / MEM_ZEROS_SIZE;
-        uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-        uint32_t write_addr = get_write_ptr(cb_id) + tile_id * tile_bytes;
-        volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
+void fill_tile_zeros(uint32_t cb_id, uint32_t tile_id) {
+    static_assert(tile_bytes % 4 == 0, "tile_bytes must be a multiple of 4");
 
-        // Fill tile with zeros
-        for (uint32_t i = 0; i < num_zeros_reads; ++i) {
-            noc_async_read(zeros_noc_addr, write_addr, MEM_ZEROS_SIZE);
-            write_addr += MEM_ZEROS_SIZE;
+    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
+    uint32_t write_addr = get_write_ptr(cb_id) + tile_id * tile_bytes;
+    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
+
+    // Fill tile with zeros
+    uint32_t bytes_left = tile_bytes;
+    for (;;) {
+        uint32_t read_size = bytes_left > MEM_ZEROS_SIZE ? MEM_ZEROS_SIZE : bytes_left;
+        noc_async_read(zeros_noc_addr, write_addr, read_size);
+        write_addr += read_size;
+        bytes_left -= read_size;
+        if (bytes_left == 0) {
+            break;
         }
-        noc_async_read_barrier();
-    } else {
-        // Fill 2 uint16 datums in each writes to optimize for performance
-        volatile tt_l1_ptr uint32_t* ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
-        constexpr int num_uint32_datums_tile = (tt::constants::TILE_HW) / 2;
-        for (int k = 0; k < num_uint32_datums_tile; k++) {
-            ptr[k] = val;
-        }
+    }
+    noc_async_read_barrier();
+}
+
+template <uint32_t tile_bytes>
+void fill_neginf_tile_bfp4(uint32_t cb_id, uint32_t tile_id) {
+    constexpr uint32_t num_exponents = tt::constants::FACE_HEIGHT * (tt::constants::TILE_HW / tt::constants::FACE_HW);
+    constexpr uint32_t num_mantissas = tt::constants::TILE_HW / 2;
+    static_assert(
+        tile_bytes == num_exponents + num_mantissas, "tile_bytes must be equal to bfp4 num_exponents + num_mantissas");
+
+    uint32_t write_addr = get_write_ptr(cb_id) + tile_id * tile_bytes;
+    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
+
+    // Fill the first 64 bytes (16 uint32_t values) with 0xFFFFFFFF for exponents
+    constexpr uint32_t NEG_INF_EXP = 0xFFFFFFFF;
+    constexpr uint32_t exp_words = num_exponents / sizeof(uint32_t);  // 16 words
+
+    for (uint32_t i = 0; i < exp_words; i++) {
+        ptr[i] = NEG_INF_EXP;
+    }
+
+    // Fill the next 512 bytes (128 uint32_t values) with 0xCCCCCCCC for mantissas
+    constexpr uint32_t NEG_INF_MANT = 0xCCCCCCCC;
+    constexpr uint32_t mant_words = num_mantissas / sizeof(uint32_t);  // 128 words
+
+    for (uint32_t i = exp_words; i < exp_words + mant_words; i++) {
+        ptr[i] = NEG_INF_MANT;
     }
 }
 
 template <uint32_t tile_bytes>
 inline void fill_diagonal_tile_bfp4(uint32_t cb_id, uint32_t tile_id) {
     // Clear the tile first
-    fill_tile<tile_bytes>(cb_id, tile_id, 0);
+    fill_tile_zeros<tile_bytes>(cb_id, tile_id);
+
+    /**
+     * In bfp4_b, -inf is represented as 0xF exp and 0xC mantissa.
+     * bfp4_b tile is laid out in memory as:
+     * [face0 exp][face1 exp][face2 exp][face3 exp]
+     * [face0 mant][face1 mant][face2 mant][face3 mant]
+     * where each face's exp is 16 bytes and each face's mant is 16x16x.5B = 128B.
+     */
 
     constexpr uint32_t NEG_INF_EXP = 0xFFFFFFFF;
-    constexpr uint32_t NEG_INF_MANT = 0xFFFFFFFF;  // All mantissas set to 0xF
+    constexpr uint32_t NEG_INF_MANT = 0xCCCCCCCC;  // All mantissas set to 0xC
     constexpr uint32_t bf4_mant_per_uint32 = 8;    // 8 mantissas per uint32
     constexpr uint32_t bf4_exp_per_uint32 = 4;     // 4 exponents per uint32
 
@@ -211,14 +243,14 @@ inline void fill_diagonal_tile_bfp4(uint32_t cb_id, uint32_t tile_id) {
             uint32_t row_offset = row * uint32_datums_per_face_row;
 
             // Process the uint32 containing the diagonal element
-            // Create mask where positions after diagonal are 0xF (upper triangle)
+            // Create mask where positions after diagonal are -inf mantissa (upper triangle)
             uint32_t diag_mask = 0;
             for (uint32_t i = pos_in_group + 1; i < bf4_mant_per_uint32; i++) {
-                diag_mask |= 0xF << (i * 4);
+                diag_mask |= 0xC << (i * 4);
             }
             uint32_ptr[face_offset + row_offset + diag_group_idx] = diag_mask;
 
-            // Fill all uint32s to the right of diagonal with -inf (0xFFFFFFFF)
+            // Fill all uint32s to the right of diagonal with -inf mantissa
             for (uint32_t col_group = diag_group_idx + 1; col_group < uint32_datums_per_face_row; col_group++) {
                 uint32_ptr[face_offset + row_offset + col_group] = NEG_INF_MANT;
             }
@@ -241,10 +273,10 @@ void fill_vertical_tile_bfp4(uint32_t cb_id, uint32_t tile_id, uint32_t unpad_co
     */
 
     // Prefill with zeros (fast)
-    fill_tile<tile_bytes>(cb_id, tile_id, 0);
+    fill_tile_zeros<tile_bytes>(cb_id, tile_id);
 
     constexpr uint32_t NEG_INF_EXP = 0xFFFFFFFF;
-    constexpr uint32_t NEG_INF_MANT = 0xFFFFFFFF;  // All mantissas set to 0xF
+    constexpr uint32_t NEG_INF_MANT = 0xCCCCCCCC;  // All mantissas set to 0xC
     constexpr uint32_t bf4_mant_per_uint32 = 8;    // 8 mantissas per uint32
     constexpr uint32_t bf4_exp_per_uint32 = 4;     // 4 exponents per uint32
 
@@ -283,7 +315,7 @@ void fill_vertical_tile_bfp4(uint32_t cb_id, uint32_t tile_id, uint32_t unpad_co
                 if (unpad_col_pos > 0) {
                     uint32_t mask = 0;
                     for (uint32_t i = unpad_col_pos; i < bf4_mant_per_uint32; i++) {
-                        mask |= 0xF << (i * 4);
+                        mask |= 0xC << (i * 4);
                     }
                     uint32_ptr[face_offset + row_offset + unpad_col_group] = mask;
                 }
@@ -312,7 +344,7 @@ void fill_vertical_tile_bfp4(uint32_t cb_id, uint32_t tile_id, uint32_t unpad_co
             if (unpad_col_in_right_pos > 0) {
                 uint32_t mask = 0;
                 for (uint32_t i = unpad_col_in_right_pos; i < bf4_mant_per_uint32; i++) {
-                    mask |= 0xF << (i * 4);
+                    mask |= 0xC << (i * 4);
                 }
                 uint32_ptr[face_offset + row_offset + unpad_col_in_right_group] = mask;
             }
@@ -330,7 +362,6 @@ void fill_vertical_tile_bfp4(uint32_t cb_id, uint32_t tile_id, uint32_t unpad_co
 template <uint32_t cb_mask_in>
 void generate_causal_mask(uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, uint32_t q_chunk, uint32_t k_chunk) {
     uint32_t mask_size_tiles = Sq_chunk_t * Sk_chunk_t;
-    constexpr uint32_t NEG_INF_BLOCK = 0xFFFFFFFF;  // block-float with exp and mantissa filled with ones should be -inf
     cb_reserve_back(cb_mask_in, mask_size_tiles);
 
     uint32_t write_ptr_base = get_write_ptr(cb_mask_in);
@@ -349,7 +380,7 @@ void generate_causal_mask(uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, uint32_t q_c
 
             if (global_k_tile < global_q_tile) {
                 if (zero_tile_idx == -1) {
-                    fill_tile<tile_bytes>(cb_mask_in, in_mask_tile_id, 0);
+                    fill_tile_zeros<tile_bytes>(cb_mask_in, in_mask_tile_id);
                     zero_tile_idx = in_mask_tile_id;
                 } else {
                     copy_tile<tile_bytes>(noc_write_addr_base, write_ptr_base, zero_tile_idx, in_mask_tile_id);
@@ -363,7 +394,7 @@ void generate_causal_mask(uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, uint32_t q_c
                 }
             } else {
                 if (inf_tile_idx == -1) {
-                    fill_tile<tile_bytes>(cb_mask_in, in_mask_tile_id, NEG_INF_BLOCK);
+                    fill_neginf_tile_bfp4<tile_bytes>(cb_mask_in, in_mask_tile_id);
                     inf_tile_idx = in_mask_tile_id;
                 } else {
                     copy_tile<tile_bytes>(noc_write_addr_base, write_ptr_base, inf_tile_idx, in_mask_tile_id);
@@ -378,7 +409,6 @@ void generate_causal_mask(uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, uint32_t q_c
 template <uint32_t cb_mask_in>
 void generate_noncausal_padded_mask(uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, uint32_t unpadded_Sk) {
     uint32_t mask_size_tiles = Sq_chunk_t * Sk_chunk_t;
-    constexpr uint32_t NEG_INF_BLOCK = 0xFFFFFFFF;  // block-float with exp and mantissa filled with ones should be -inf
     cb_reserve_back(cb_mask_in, mask_size_tiles);
 
     uint32_t write_ptr_base = get_write_ptr(cb_mask_in);
@@ -402,14 +432,14 @@ void generate_noncausal_padded_mask(uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, ui
 
             if (do_zero) {
                 if (zero_tile_idx == -1) {
-                    fill_tile<tile_bytes>(cb_mask_in, in_mask_tile_id, 0);
+                    fill_tile_zeros<tile_bytes>(cb_mask_in, in_mask_tile_id);
                     zero_tile_idx = in_mask_tile_id;
                 } else {
                     copy_tile<tile_bytes>(noc_write_addr_base, write_ptr_base, zero_tile_idx, in_mask_tile_id);
                 }
             } else if (do_inf) {
                 if (inf_tile_idx == -1) {
-                    fill_tile<tile_bytes>(cb_mask_in, in_mask_tile_id, NEG_INF_BLOCK);
+                    fill_neginf_tile_bfp4<tile_bytes>(cb_mask_in, in_mask_tile_id);
                     inf_tile_idx = in_mask_tile_id;
                 } else {
                     copy_tile<tile_bytes>(noc_write_addr_base, write_ptr_base, inf_tile_idx, in_mask_tile_id);
