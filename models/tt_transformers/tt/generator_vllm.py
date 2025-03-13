@@ -6,6 +6,7 @@ import os
 from typing import List, Union
 import torch
 import PIL
+from tqdm import tqdm
 from llama_models.llama3.api.chat_format import create_vision_mask
 import ttnn
 
@@ -22,7 +23,7 @@ from vllm.model_executor.models.mllama import MLLAMA_IMAGE_TOKEN_ID, MLLAMA_IMAG
 
 def generate_submeshes(mesh_device, data_parallel):
     if not isinstance(mesh_device, ttnn.MeshDevice) or data_parallel == 1:
-        return 1, [mesh_device]
+        return [mesh_device]
 
     num_devices = mesh_device.get_num_devices()
     assert num_devices % data_parallel == 0, f"Unsupported device split: {num_devices} devices, {data_parallel} groups"
@@ -30,24 +31,25 @@ def generate_submeshes(mesh_device, data_parallel):
     return mesh_device.create_submeshes(ttnn.MeshShape(1, num_devices // data_parallel))
 
 
-def allocate_kv_cache(kv_cache_shape, dtype, num_layers, mesh_device, tt_data_parallel=1):
+def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, mesh_device, tt_cache_path, tt_data_parallel=1):
     submesh_devices = generate_submeshes(mesh_device, tt_data_parallel)
 
     kv_cache = []
-    for submesh in submesh_devices:
+    for mesh_idx, submesh in enumerate(submesh_devices):
         cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
         kv_tt = []
-        for _ in range(num_layers):
+        for _ in tqdm(range(num_layers), desc=f"Allocating TT kv caches for each layer (submesh {mesh_idx+1})"):
             kv_tt_i = [
                 ttnn.as_tensor(
                     lp,
                     device=submesh,
-                    # TODO: this could be ShardTensorToMesh, removing need for init to know about TP=8. Could affect other calculations which use self.num_kv_heads, though.
+                    # TODO: this could be ShardTensorToMesh, removing the need for vLLM to know about TP for num_kv_heads.
+                    # Could affect other calculations which use TTCacheEngine.num_kv_heads, though.
                     mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    dtype=ttnn.bfloat8_b
-                    # TODO: Add caching to speed this up
+                    dtype=ttnn.bfloat8_b,
+                    cache_file_name=tt_cache_path / f"empty_cache_paged_attention{kv_cache_shape}",
                 )
                 for lp in (cache_kv, cache_kv)
             ]
@@ -239,7 +241,7 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
         )
 
     def allocate_kv_cache(self, *args, **kwargs):
-        return allocate_kv_cache(*args, **kwargs)
+        return allocate_vllm_kv_cache(*args, **kwargs, tt_cache_path=self.cache_path)
 
 
 @INPUT_REGISTRY.register_input_processor(input_processor_for_llama_text)
@@ -272,7 +274,7 @@ class LlamaForCausalLM(Generator):
         return super().decode_forward_text(*args, **kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
-        return allocate_kv_cache(*args, **kwargs)
+        return allocate_vllm_kv_cache(*args, **kwargs, tt_cache_path=self.cache_path)
 
 
 class Qwen2ForCausalLM(Generator):
@@ -304,4 +306,4 @@ class Qwen2ForCausalLM(Generator):
         return super().decode_forward_text(*args, **kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
-        return allocate_kv_cache(*args, **kwargs)
+        return allocate_vllm_kv_cache(*args, **kwargs, tt_cache_path=self.cache_path)
