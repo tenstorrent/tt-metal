@@ -40,7 +40,7 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        os: ["ubuntu-20.04"]
+        os: ["ubuntu-22.04"]
         test-group: [
           {name: model},
         ]
@@ -92,7 +92,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ["ubuntu-20.04"]
+        os: ["ubuntu-22.04"]
         test-group: [
           {name: model},
         ]
