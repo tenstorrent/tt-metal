@@ -111,8 +111,8 @@ void kernel_main() {
         }
         DPRINT << "Finished pushing back all tiles to fabric sender cb" << ENDL();
     } else if (worker_core) {
-        DPRINT << "accumulator addr" << get_noc_addr(get_read_ptr(accumulator_cb_id))
-               << "local semaphore noc addr: " << get_noc_addr(local_semaphore_address) << ENDL();
+        DPRINT << "accumulator addr " << get_noc_addr(get_read_ptr(accumulator_cb_id))
+               << " local semaphore noc addr: " << get_noc_addr(local_semaphore_address) << ENDL();
         noc_semaphore_wait((uint32_t*)local_semaphore_address, num_devices - 1);
         // while (*(uint32_t*)local_semaphore_address != num_devices - 1) {
         //     // Wait for the semaphore to be set
