@@ -33,8 +33,12 @@ MeshCommandQueue::MeshCommandQueue(
     MeshDevice* mesh_device,
     uint32_t id,
     std::shared_ptr<ThreadPool>& dispatch_thread_pool,
-    std::shared_ptr<ThreadPool>& reader_thread_pool) :
-    dispatch_thread_pool_(dispatch_thread_pool), reader_thread_pool_(reader_thread_pool) {
+    std::shared_ptr<ThreadPool>& reader_thread_pool,
+    std::shared_ptr<DispatchArray<LaunchMessageRingBufferState>>& worker_launch_message_buffer_state) :
+    dispatch_thread_pool_(dispatch_thread_pool),
+    reader_thread_pool_(reader_thread_pool),
+    worker_launch_message_buffer_state_(worker_launch_message_buffer_state)  //
+{
     mesh_device_ = mesh_device;
     id_ = id;
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
@@ -90,10 +94,10 @@ void MeshCommandQueue::populate_dispatch_core_type() {
     for (auto device : this->mesh_device_->get_devices()) {
         if (device_idx) {
             TT_FATAL(
-                this->dispatch_core_type_ == dispatch_core_manager::instance().get_dispatch_core_type(device->id()),
+                this->dispatch_core_type_ == dispatch_core_manager::instance().get_dispatch_core_type(),
                 "Expected the Dispatch Core Type to match across device in a Mesh");
         } else {
-            this->dispatch_core_type_ = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+            this->dispatch_core_type_ = dispatch_core_manager::instance().get_dispatch_core_type();
         }
         device_idx++;
     }
@@ -109,7 +113,7 @@ void MeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool b
     SubDeviceId sub_device_id = *(sub_device_ids.begin());
     auto mesh_device_id = this->mesh_device_->id();
     auto& sysmem_manager = this->reference_sysmem_manager();
-    auto dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
+    auto dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
 
     TT_FATAL(
@@ -152,8 +156,8 @@ void MeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool b
         program_dispatch::update_program_dispatch_commands(
             program,
             program_cmd_seq,
-            sysmem_manager.get_worker_launch_message_buffer_state()[*sub_device_id].get_mcast_wptr(),
-            sysmem_manager.get_worker_launch_message_buffer_state()[*sub_device_id].get_unicast_wptr(),
+            (*worker_launch_message_buffer_state_)[*sub_device_id].get_mcast_wptr(),
+            (*worker_launch_message_buffer_state_)[*sub_device_id].get_unicast_wptr(),
             expected_num_workers_completed,
             this->virtual_program_dispatch_core(),
             dispatch_core_type,
@@ -196,10 +200,10 @@ void MeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool b
     }
     // Increment Launch Message Buffer Write Pointers
     if (mcast_go_signals) {
-        sysmem_manager.get_worker_launch_message_buffer_state()[*sub_device_id].inc_mcast_wptr(1);
+        (*worker_launch_message_buffer_state_)[*sub_device_id].inc_mcast_wptr(1);
     }
     if (unicast_go_signals) {
-        sysmem_manager.get_worker_launch_message_buffer_state()[*sub_device_id].inc_unicast_wptr(1);
+        (*worker_launch_message_buffer_state_)[*sub_device_id].inc_unicast_wptr(1);
     }
 
     if (sysmem_manager.get_bypass_mode()) {
@@ -268,11 +272,17 @@ void MeshCommandQueue::read_shard_from_device(
             }
         }
     } else {
-        auto dispatch_params = buffer_dispatch::initialize_interleaved_buf_read_dispatch_params(
-            *shard_view, id_, expected_num_workers_completed_, region);
+        buffer_dispatch::BufferReadDispatchParamsVariant dispatch_params_variant =
+            buffer_dispatch::initialize_interleaved_buf_read_dispatch_params(
+                *shard_view, id_, expected_num_workers_completed_, region);
+
+        buffer_dispatch::BufferReadDispatchParams* dispatch_params = std::visit(
+            [](auto& val) { return static_cast<buffer_dispatch::BufferReadDispatchParams*>(&val); },
+            dispatch_params_variant);
+
         buffer_dispatch::copy_interleaved_buffer_to_completion_queue(
-            dispatch_params, *shard_view, sub_device_ids, this->dispatch_core_type());
-        if (dispatch_params.pages_per_txn > 0) {
+            *dispatch_params, *shard_view, sub_device_ids, this->dispatch_core_type());
+        if (dispatch_params->pages_per_txn > 0) {
             num_txns_per_device[device]++;
             auto& read_descriptor_queue = this->get_read_descriptor_queue(device);
             read_descriptor_queue.push(
@@ -679,8 +689,10 @@ void MeshCommandQueue::reset_worker_state(
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
         config_buffer_mgr_, expected_num_workers_completed_, mesh_device_->num_sub_devices());
     if (reset_launch_msg_state) {
-        auto& sysmem_manager = this->reference_sysmem_manager();
-        sysmem_manager.reset_worker_launch_message_buffer_state(num_sub_devices);
+        std::for_each(
+            this->worker_launch_message_buffer_state_->begin(),
+            this->worker_launch_message_buffer_state_->begin() + num_sub_devices,
+            std::mem_fn(&LaunchMessageRingBufferState::reset));
     }
 }
 
@@ -690,7 +702,7 @@ void MeshCommandQueue::write_program_cmds_to_subgrid(
     bool stall_first,
     bool stall_before_program,
     std::unordered_set<uint32_t>& chip_ids_in_workload) {
-    auto dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
+    auto dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
 
     for (const auto& coord : sub_grid) {
@@ -735,7 +747,7 @@ void MeshCommandQueue::capture_program_trace_on_subgrid(
     auto& sysmem_manager_for_trace = mesh_device_->get_device(sub_grid.start_coord())->sysmem_manager();
     uint32_t sysmem_manager_offset = sysmem_manager_for_trace.get_issue_queue_write_ptr(id_);
 
-    auto dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
+    auto dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
 
     program_dispatch::write_program_command_sequence(
@@ -800,7 +812,7 @@ void MeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blocking)
     }
     trace_dispatch::update_worker_state_post_trace_execution(
         trace_inst->desc->descriptors,
-        this->reference_sysmem_manager(),
+        *worker_launch_message_buffer_state_,
         config_buffer_mgr_,
         expected_num_workers_completed_);
 
@@ -812,7 +824,7 @@ void MeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blocking)
 void MeshCommandQueue::record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) {
     trace_dispatch::reset_host_dispatch_state_for_trace(
         mesh_device_->num_sub_devices(),
-        this->reference_sysmem_manager(),
+        *worker_launch_message_buffer_state_,
         expected_num_workers_completed_,
         config_buffer_mgr_,
         worker_launch_message_buffer_state_reset_,
@@ -833,7 +845,7 @@ void MeshCommandQueue::record_end() {
 
     trace_dispatch::load_host_dispatch_state(
         mesh_device_->num_sub_devices(),
-        this->reference_sysmem_manager(),
+        *worker_launch_message_buffer_state_,
         expected_num_workers_completed_,
         config_buffer_mgr_,
         worker_launch_message_buffer_state_reset_,

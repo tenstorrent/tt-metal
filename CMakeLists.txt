@@ -61,7 +61,6 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         Release
         RelWithDebInfo
         Debug
-        CI
     )
     if(NOT CMAKE_BUILD_TYPE AND NOT isMultiConfig)
         message(STATUS "Setting build type to 'Release' as none was specified.")
@@ -257,6 +256,7 @@ include(tracy)
 # Build subdirectories
 ############################################################################################################################
 
+add_subdirectory(tt_stl)
 add_subdirectory(tt_metal)
 add_subdirectory(ttnn)
 

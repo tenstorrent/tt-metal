@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <l1_banking_allocator.hpp>
+#include "l1_banking_allocator.hpp"
 
 #include <algorithm>
 #include <cstddef>

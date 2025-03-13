@@ -7,6 +7,7 @@
 #include "ttnn/operations/conv/conv2d/conv2d_op_program_factory_common.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
@@ -33,7 +34,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     uint32_t groups,
     bool untilize_out,
     bool has_bias,
-    bool fuse_relu,
+    const std::optional<unary::UnaryWithParam>& fused_activation,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
     bool use_shallow_conv_variant,
@@ -45,7 +46,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     bool enable_subblock_padding);
 
 // TODO: Add namespace for utilities?
-std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle> create_CBs_for_sharded_input_v2(
+std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle, tt::tt_metal::CBHandle> create_CBs_for_sharded_input_v2(
     tt_metal::Program& program,
     const Tensor& input,
     CoreRange core,
@@ -84,6 +85,8 @@ std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle> create_CBs_for_sharde
     uint32_t interm0_single_tile_size = tt_metal::detail::TileSize(interm0_df);
 
     CBHandle cb_sharded_act = 0;
+    CBHandle cb_output = 0;
+    CBHandle cb_matmul_partials = 0;
     if (input.memory_config().is_sharded()) {
         uint32_t num_bytes_for_df = datum_size(act_df);
         auto shard_shape = input.shard_spec().value().shape;
@@ -178,7 +181,6 @@ std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle> create_CBs_for_sharde
         num_cb0_tilized_tiles,
         tilized_act_tile_size);
 
-    CBHandle cb_output = 0;
     if (untilize_out) {
         cb_indices.matmul_partials_cb = cb_indices.get_next_cb_index();
         auto output_shard_shape = output.shard_spec().value().shape;
@@ -186,7 +188,7 @@ std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle> create_CBs_for_sharde
             CircularBufferConfig(
                 num_output_tiles * interm0_single_tile_size, {{cb_indices.matmul_partials_cb, interm0_df}})
                 .set_page_size(cb_indices.matmul_partials_cb, interm0_single_tile_size);
-        auto cb_matmul_partials = tt_metal::CreateCircularBuffer(program, core, cb_matmul_partials_config);
+        cb_matmul_partials = tt_metal::CreateCircularBuffer(program, core, cb_matmul_partials_config);
         log_debug(
             LogOp,
             "Matmul Partials CB: {}, npages: {}, pagesize: {}",
@@ -230,6 +232,7 @@ std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle> create_CBs_for_sharde
                     out_tile_size);
             }
             cb_output = tt_metal::CreateCircularBuffer(program, cores, cb_matmul_partials_config);
+            cb_matmul_partials = cb_output;
         } else {
             // Separate buffer if not same data format
             cb_indices.matmul_partials_cb = cb_indices.get_next_cb_index();
@@ -237,7 +240,7 @@ std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle> create_CBs_for_sharde
                 CircularBufferConfig(
                     num_output_tiles * interm0_single_tile_size, {{cb_indices.matmul_partials_cb, interm0_df}})
                     .set_page_size(cb_indices.matmul_partials_cb, interm0_single_tile_size);
-            auto cb_matmul_partials = tt_metal::CreateCircularBuffer(program, core, cb_matmul_partials_config);
+            cb_matmul_partials = tt_metal::CreateCircularBuffer(program, core, cb_matmul_partials_config);
             log_debug(
                 LogOp,
                 "Matmul Partials CB: {}, npages: {}, pagesize: {}",
@@ -269,11 +272,11 @@ std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle> create_CBs_for_sharde
         log_debug(LogOp, "Bias CB: {}, npages: {}, pagesize: {}", cb_indices.bias_cb, bias_ntiles, bias_pagesize);
     }
 
-    return {cb_sharded_act, cb_output};
+    return {cb_sharded_act, cb_output, cb_matmul_partials};
 }
 
 // TODO: Add namespace for utilities?
-std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle> create_CBs_for_depthwise_sharded_input(
+std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle, tt::tt_metal::CBHandle> create_CBs_for_depthwise_sharded_input(
     tt_metal::Program& program,
     const Tensor& input,
     CoreRange core,
@@ -392,7 +395,7 @@ std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle> create_CBs_for_depthw
     }
     cb_output = tt_metal::CreateCircularBuffer(program, cores, cb_output_config);
 
-    return {cb_sharded_act, cb_output};
+    return {cb_sharded_act, cb_output, cb_matmul_partials};
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
@@ -407,7 +410,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     uint32_t groups,
     bool untilize_out,
     bool has_bias,
-    bool fuse_relu,
+    const std::optional<unary::UnaryWithParam>& fused_activation,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
     bool use_shallow_conv_variant,
@@ -1180,7 +1183,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     // For bias, last iteration of l1 acc remains in intermediate buffer, does not spill and reload
     bool packer_l1_acc_en = determine_packer_l1_acc(packer_l1_acc, has_bias, in0_num_blocks_w);
 
-    std::tuple<CBHandle, CBHandle> input_output_cbs = {0, 0};
+    std::tuple<CBHandle, CBHandle, CBHandle> input_output_cbs = {0, 0, 0};
     if (is_conv_1d_depthwise_conv) {
         input_output_cbs = create_CBs_for_depthwise_sharded_input(
             program,
@@ -1238,6 +1241,15 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     }
     CBHandle cb_sharded_act = std::get<0>(input_output_cbs);
     CBHandle cb_output = std::get<1>(input_output_cbs);
+    CBHandle cb_matmul_partials = std::get<2>(input_output_cbs);
+    CircularBufferConfig cb_config_output = GetCircularBufferConfig(program, cb_output);
+    CircularBufferConfig cb_config_matmul_partials = GetCircularBufferConfig(program, cb_matmul_partials);
+    bool partials_cb_uses_output = false;
+    if (cb_config_matmul_partials.globally_allocated_address().has_value() &&
+        cb_config_output.globally_allocated_address().has_value()) {
+        partials_cb_uses_output = cb_config_matmul_partials.globally_allocated_address().value() ==
+                                  cb_config_output.globally_allocated_address().value();
+    }
 
     string reader_kernel;
     string compute_kernel;
@@ -1402,9 +1414,13 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         writer_mcast_sender_defines["FUSE_BIAS"] = "1";
         compute_defines["FUSE_BIAS"] = "1";
     }
-
-    if (fuse_relu) {
-        compute_defines["PACK_RELU"] = "1";
+    if (fused_activation.has_value()) {
+        if (fused_activation.value().op_type == unary::UnaryOpType::RELU) {
+            compute_defines["PACK_RELU"] = "1";
+        } else {
+            compute_defines.merge(ttnn::operations::unary::utils::get_defines(
+                fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i"));
+        }
     }
 
     if (!tilize_in0) {
@@ -1418,6 +1434,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     if (packer_l1_acc_en) {
         compute_defines["PACKER_L1_ACC"] = "1";
+    }
+    for (auto elem : compute_defines) {
+        log_debug(LogOp, "compute_defines: {} = {}", elem.first, elem.second);
     }
 
     writer_compile_time_args = {
@@ -1512,7 +1531,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         cb_indices.tilize_mode_tilized_act_cb,
 
         cb_indices.out0_cb,
-        cb_indices.temp_sum_cb};
+        cb_indices.temp_sum_cb,
+        partials_cb_uses_output};
 
     auto writer_mcast_noc = tt::tt_metal::NOC::NOC_0;
     auto reader_noc =
@@ -1892,7 +1912,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     uint32_t output_channels,
     uint32_t groups,
     bool untilize_out,
-    bool fuse_relu,
+    const std::optional<unary::UnaryWithParam>& fused_activation,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
     DataType output_dtype,
@@ -1942,7 +1962,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             groups,
             untilize_out,
             bias.has_value(),
-            fuse_relu,
+            fused_activation,
             parallelization_config,
             block_config,
             use_shallow_conv_variant,
@@ -1965,7 +1985,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         groups,
         untilize_out,
         bias.has_value(),
-        fuse_relu,
+        fused_activation,
         parallelization_config,
         block_config,
         use_shallow_conv_variant,

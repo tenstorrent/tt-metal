@@ -988,7 +988,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
 
         // MATMUL PARTIALs CB
         uint32_t matmul_partials_cb_size = partials_block_num_bytes;
-        if (interm_dtype == conv_config.dtype) {
+        if (untilize_out == false && interm_dtype == conv_config.dtype) {
             matmul_partials_cb_size = 0;
         } else {
             tt::log_debug(tt::LogOp, "Matmul partial CB Size: {}", matmul_partials_cb_size);

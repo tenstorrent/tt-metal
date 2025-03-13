@@ -7,7 +7,7 @@
 #include <device.hpp>
 #include "dprint_server.hpp"
 #include <event.hpp>
-#include <overloaded.hpp>
+#include <tt_stl/overloaded.hpp>
 #include <trace_buffer.hpp>
 #include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
@@ -38,12 +38,18 @@ Buffer& get_buffer_object(const std::variant<std::reference_wrapper<Buffer>, std
 
 }  // namespace
 
-HWCommandQueue::HWCommandQueue(IDevice* device, uint32_t id, NOC noc_index, uint32_t completion_queue_reader_core) :
+HWCommandQueue::HWCommandQueue(
+    IDevice* device,
+    std::shared_ptr<DispatchArray<LaunchMessageRingBufferState>>& worker_launch_message_buffer_state,
+    uint32_t id,
+    NOC noc_index,
+    uint32_t completion_queue_reader_core) :
     manager(device->sysmem_manager()),
     completion_queue_thread{},
     completion_queue_reader_core(completion_queue_reader_core) {
     ZoneScopedN("CommandQueue_constructor");
     this->device_ = device;
+    this->worker_launch_message_buffer_state = worker_launch_message_buffer_state;
     this->id_ = id;
     this->noc_index_ = noc_index;
     this->num_entries_in_completion_q = 0;
@@ -58,7 +64,7 @@ HWCommandQueue::HWCommandQueue(IDevice* device, uint32_t id, NOC noc_index, uint
     }
 
     CoreCoord enqueue_program_dispatch_core;
-    CoreType core_type = dispatch_core_manager::instance().get_dispatch_core_type(device_->id());
+    CoreType core_type = dispatch_core_manager::instance().get_dispatch_core_type();
     if (this->device_->num_hw_cqs() == 1 or core_type == CoreType::WORKER) {
         // dispatch_s exists with this configuration. Workers write to dispatch_s
         enqueue_program_dispatch_core = dispatch_core_manager::instance().dispatcher_s_core(device_->id(), channel, id);
@@ -114,7 +120,10 @@ void HWCommandQueue::reset_worker_state(
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
         this->config_buffer_mgr, this->expected_num_workers_completed, device_->num_sub_devices());
     if (reset_launch_msg_state) {
-        this->manager.reset_worker_launch_message_buffer_state(num_sub_devices);
+        std::for_each(
+            this->worker_launch_message_buffer_state->begin(),
+            this->worker_launch_message_buffer_state->begin() + num_sub_devices,
+            std::mem_fn(&LaunchMessageRingBufferState::reset));
     }
 }
 
@@ -197,7 +206,7 @@ void HWCommandQueue::enqueue_read_buffer(
                 dispatch_params,
                 sub_device_ids,
                 cores[core_id],
-                dispatch_core_manager::instance().get_dispatch_core_type(device_->id()));
+                dispatch_core_manager::instance().get_dispatch_core_type());
             if (dispatch_params.pages_per_txn > 0) {
                 this->issued_completion_q_reads.push(
                     buffer_dispatch::generate_sharded_buffer_read_descriptor(dst, dispatch_params, buffer_obj));
@@ -207,14 +216,17 @@ void HWCommandQueue::enqueue_read_buffer(
     } else {
         // Forward data from device to the completion queue.
         // Then have the completion queue reader thread copy this data to user space.
-        auto dispatch_params = buffer_dispatch::initialize_interleaved_buf_read_dispatch_params(
-            buffer_obj, this->id_, this->expected_num_workers_completed, region);
+        buffer_dispatch::BufferReadDispatchParamsVariant dispatch_params_variant =
+            buffer_dispatch::initialize_interleaved_buf_read_dispatch_params(
+                buffer_obj, this->id_, this->expected_num_workers_completed, region);
+
+        buffer_dispatch::BufferReadDispatchParams* dispatch_params = std::visit(
+            [](auto& val) { return static_cast<buffer_dispatch::BufferReadDispatchParams*>(&val); },
+            dispatch_params_variant);
+
         buffer_dispatch::copy_interleaved_buffer_to_completion_queue(
-            dispatch_params,
-            buffer_obj,
-            sub_device_ids,
-            dispatch_core_manager::instance().get_dispatch_core_type(device_->id()));
-        if (dispatch_params.pages_per_txn > 0) {
+            *dispatch_params, buffer_obj, sub_device_ids, dispatch_core_manager::instance().get_dispatch_core_type());
+        if (dispatch_params->pages_per_txn > 0) {
             this->issued_completion_q_reads.push(
                 buffer_dispatch::generate_interleaved_buffer_read_descriptor(dst, dispatch_params, buffer_obj));
             this->increment_num_entries_in_completion_q();
@@ -243,7 +255,7 @@ void HWCommandQueue::enqueue_write_buffer(
     Buffer& buffer_obj = get_buffer_object(buffer);
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
-    auto dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device_->id());
+    auto dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type();
 
     buffer_dispatch::write_to_device_buffer(
         data, buffer_obj, region, this->id_, this->expected_num_workers_completed, dispatch_core_type, sub_device_ids);
@@ -253,9 +265,7 @@ void HWCommandQueue::enqueue_write_buffer(
     }
 }
 
-CoreType HWCommandQueue::get_dispatch_core_type() {
-    return dispatch_core_manager::instance().get_dispatch_core_type(device_->id());
-}
+CoreType HWCommandQueue::get_dispatch_core_type() { return dispatch_core_manager::instance().get_dispatch_core_type(); }
 
 void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     ZoneScopedN("HWCommandQueue_enqueue_program");
@@ -325,7 +335,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         }
     }
 
-    auto& worker_launch_message_buffer_state = this->manager.get_worker_launch_message_buffer_state()[*sub_device_id];
+    auto& worker_launch_message_buffer_state = (*this->worker_launch_message_buffer_state)[*sub_device_id];
     auto command = EnqueueProgramCommand(
         this->id_,
         this->device_,
@@ -430,7 +440,10 @@ void HWCommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
         virtual_enqueue_program_dispatch_core_);
 
     trace_dispatch::update_worker_state_post_trace_execution(
-        trace_inst->desc->descriptors, this->manager, this->config_buffer_mgr, this->expected_num_workers_completed);
+        trace_inst->desc->descriptors,
+        *this->worker_launch_message_buffer_state,
+        this->config_buffer_mgr,
+        this->expected_num_workers_completed);
 
     if (blocking) {
         this->finish(trace_inst->desc->sub_device_ids);
@@ -527,7 +540,7 @@ void HWCommandQueue::record_begin(const uint32_t tid, const std::shared_ptr<Trac
     // worker_config_buffer, etc.
     trace_dispatch::reset_host_dispatch_state_for_trace(
         device_->num_sub_devices(),
-        this->manager,
+        *this->worker_launch_message_buffer_state,
         this->expected_num_workers_completed,
         this->config_buffer_mgr,
         this->worker_launch_message_buffer_state_reset,
@@ -564,7 +577,7 @@ void HWCommandQueue::record_end() {
     // host, even though device doesn't run any programs.
     trace_dispatch::load_host_dispatch_state(
         device_->num_sub_devices(),
-        this->manager,
+        *this->worker_launch_message_buffer_state,
         this->expected_num_workers_completed,
         this->config_buffer_mgr,
         this->worker_launch_message_buffer_state_reset,

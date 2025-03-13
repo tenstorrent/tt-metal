@@ -39,8 +39,8 @@ struct Buffer {
     const std::shared_ptr<std::vector<T>> get_ptr() const noexcept { return this->shared_vector_; }
     void reset() { this->shared_vector_.reset(); }
 
-    void* data() noexcept { return static_cast<void*>(this->pointer_for_faster_access_); }
-    const void* data() const noexcept { return static_cast<void*>(this->pointer_for_faster_access_); }
+    T* data() noexcept { return this->pointer_for_faster_access_; }
+    const T* data() const noexcept { return this->pointer_for_faster_access_; }
     uint32_t use_count() const noexcept { return this->shared_vector_.use_count(); }
 
 private:

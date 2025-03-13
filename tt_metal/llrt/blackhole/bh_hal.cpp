@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <numeric>
 
 #include "core_config.h"  // ProgrammableCoreType
 #include "dev_mem_map.h"
@@ -55,6 +56,13 @@ void Hal::initialize_bh() {
     this->mem_alignments_[static_cast<std::size_t>(HalMemType::L1)] = L1_ALIGNMENT;
     this->mem_alignments_[static_cast<std::size_t>(HalMemType::DRAM)] = DRAM_ALIGNMENT;
     this->mem_alignments_[static_cast<std::size_t>(HalMemType::HOST)] = PCIE_ALIGNMENT;
+
+    this->mem_alignments_with_pcie_.resize(static_cast<std::size_t>(HalMemType::COUNT));
+    this->mem_alignments_with_pcie_[static_cast<std::size_t>(HalMemType::L1)] = std::lcm(L1_ALIGNMENT, PCIE_ALIGNMENT);
+    this->mem_alignments_with_pcie_[static_cast<std::size_t>(HalMemType::DRAM)] =
+        std::lcm(DRAM_ALIGNMENT, PCIE_ALIGNMENT);
+    this->mem_alignments_with_pcie_[static_cast<std::size_t>(HalMemType::HOST)] =
+        std::lcm(PCIE_ALIGNMENT, PCIE_ALIGNMENT);
 
     this->relocate_func_ = [](uint64_t addr, uint64_t local_init_addr) {
         if ((addr & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {

@@ -14,6 +14,8 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/event.hpp>
 #include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/allocator.hpp>
+
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "command_queue_fixture.hpp"
 

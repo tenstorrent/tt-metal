@@ -10,13 +10,11 @@
 
 #include "sub_device.hpp"
 #include "sub_device_types.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 
 namespace tt::tt_metal {
 
-inline namespace v0 {
 class IDevice;
-}  // namespace v0
 
 class Allocator;
 class SubDeviceManager;
