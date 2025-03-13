@@ -17,7 +17,6 @@
 #include "profiler_paths.hpp"
 #include "tracy/TracyTTDevice.hpp"
 #include "common/TracyTTDeviceData.hpp"
-#include "mesh_buffer.hpp"
 
 using std::chrono::duration;
 using std::chrono::duration_cast;
@@ -89,7 +88,7 @@ public:
     ~DeviceProfiler();
 
     // DRAM buffer for device side results
-    distributed::AnyBuffer output_dram_buffer;
+    std::shared_ptr<tt::tt_metal::Buffer> output_dram_buffer = nullptr;
     std::shared_ptr<tt::tt_metal::Program> sync_program = nullptr;
 
     // Device-core Syncdata

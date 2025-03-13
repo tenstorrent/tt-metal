@@ -5,8 +5,6 @@
 #pragma once
 #include <optional>
 
-#include <tt-metalium/global_circular_buffer.hpp>
-
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"

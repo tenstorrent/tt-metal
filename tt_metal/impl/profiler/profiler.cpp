@@ -17,7 +17,6 @@
 #include <dev_msgs.h>
 #include "tracy/Tracy.hpp"
 #include <device.hpp>
-#include <distributed.hpp>
 
 #include "llrt.hpp"
 
@@ -402,27 +401,19 @@ void DeviceProfiler::dumpResults(IDevice* device, const std::vector<CoreCoord>& 
 
     generateZoneSourceLocationsHashes();
 
-    auto output_dram_buffer_ptr = output_dram_buffer.get_buffer();
-    if (output_dram_buffer_ptr != nullptr) {
+    if (output_dram_buffer != nullptr) {
         const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
         if (USE_FAST_DISPATCH) {
             if (state == ProfilerDumpState::LAST_CLOSE_DEVICE) {
                 if (tt::llrt::RunTimeOptions::get_instance().get_profiler_do_dispatch_cores()) {
-                    tt_metal::detail::ReadFromBuffer(*output_dram_buffer_ptr, profile_buffer);
+                    tt_metal::detail::ReadFromBuffer(output_dram_buffer, profile_buffer);
                 }
             } else {
-                if (auto mesh_buffer = output_dram_buffer.get_mesh_buffer()) {
-                    auto mesh_device = mesh_buffer->device();
-                    auto device_coord = mesh_device->get_view().find_device(device->id());
-                    distributed::ReadShard(
-                        mesh_device->mesh_command_queue(), profile_buffer, mesh_buffer, device_coord);
-                } else {
-                    EnqueueReadBuffer(device->command_queue(), *output_dram_buffer_ptr, profile_buffer, true);
-                }
+                EnqueueReadBuffer(device->command_queue(), output_dram_buffer, profile_buffer, true);
             }
         } else {
             if (state != ProfilerDumpState::LAST_CLOSE_DEVICE) {
-                tt_metal::detail::ReadFromBuffer(*output_dram_buffer_ptr, profile_buffer);
+                tt_metal::detail::ReadFromBuffer(output_dram_buffer, profile_buffer);
             }
         }
 

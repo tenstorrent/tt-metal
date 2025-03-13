@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include <variant>
-
 #include "buffer.hpp"
 #include "buffer_constants.hpp"
 #include "mesh_coord.hpp"

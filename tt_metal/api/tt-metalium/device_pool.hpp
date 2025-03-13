@@ -20,14 +20,11 @@
 #include "control_plane.hpp"
 
 namespace tt {
-namespace tt_metal {
-namespace detail {
+namespace tt_metal::detail {
+
 void CloseDevices(const std::map<chip_id_t, tt_metal::IDevice*>& devices);
-}
-namespace distributed {
-class MeshDevice;
-}
-}  // namespace tt_metal
+
+}  // namespace tt_metal::detail
 
 class DevicePool {
     friend void tt_metal::detail::CloseDevices(const std::map<chip_id_t, tt_metal::IDevice*>& devices);
@@ -49,8 +46,7 @@ public:
         size_t l1_small_size,
         size_t trace_region_size,
         const tt_metal::DispatchCoreConfig& dispatch_core_config,
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
-        bool init_profiler = true) noexcept;
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {}) noexcept;
 
     tt_metal::IDevice* get_active_device(chip_id_t device_id) const;
     std::vector<tt_metal::IDevice*> get_all_active_devices() const;
@@ -60,10 +56,6 @@ public:
     void register_worker_thread_for_device(tt_metal::IDevice* device, std::thread::id worker_thread_id);
     void unregister_worker_thread_for_device(tt_metal::IDevice* device);
     const std::unordered_set<std::thread::id>& get_worker_thread_ids() const;
-    void init_profiler() const;
-
-    void set_mesh_device(tt_metal::IDevice* device, std::weak_ptr<tt_metal::distributed::MeshDevice> mesh);
-    std::shared_ptr<tt_metal::distributed::MeshDevice> get_mesh_device(tt_metal::IDevice* device) const;
 
     tt::tt_fabric::ControlPlane* get_control_plane() const;
 
@@ -78,7 +70,6 @@ private:
     std::mutex lock;
     // TODO replace std::vector<std::unique_ptr<IDevice>> with stl::SlotMap<v1::DeviceKey, Device> when removing v0
     std::vector<std::unique_ptr<tt_metal::IDevice>> devices;
-    std::unordered_map<chip_id_t, std::weak_ptr<tt_metal::distributed::MeshDevice>> device_to_mesh;
     // Used to track worker thread handles (1 worker thread created per device)
     // when we need to check if a call is made from an application thread or a
     // worker thread
@@ -94,6 +85,7 @@ private:
     std::unordered_map<uint32_t, uint32_t> worker_thread_to_cpu_core_map;
     std::unordered_map<uint32_t, uint32_t> completion_queue_reader_to_cpu_core_map;
     void init_firmware_on_active_devices() const;
+    void init_profiler_devices() const;
     void activate_device(chip_id_t id);
     // Initialize state on the host for this device
     void initialize_host(tt_metal::IDevice* dev) const;
