@@ -62,7 +62,17 @@ def test_transformer_block(
     parameters = TtTransformerBlockParameters.from_torch(
         torch_model.state_dict(), num_heads=torch_model.num_heads, device=mesh_device, dtype=ttnn_dtype
     )
-    tt_model = TtTransformerBlock(parameters, num_heads=torch_model.num_heads, device=mesh_device)
+
+    ## heads padding for T3K TP
+    pad_40_heads = 0
+    if os.environ["FAKE_DEVICE"] == "T3K" and embedding_dim == 2432:
+        pad_40_heads = 1
+        embedding_dim_padding = 128
+        num_heads = 40
+    else:
+        num_heads = torch_model.num_heads
+
+    tt_model = TtTransformerBlock(parameters, num_heads=num_heads, device=mesh_device)
 
     torch.manual_seed(0)
     spatial = torch.randn((batch_size, spatial_sequence_length, embedding_dim))
@@ -70,6 +80,7 @@ def test_transformer_block(
     time = torch.randn((batch_size, embedding_dim))
 
     TILE_SIZE = 32
+    ##
     spatial_extra = spatial_sequence_length % TILE_SIZE
     if spatial_extra > 0:
         spatial_padding = TILE_SIZE - spatial_extra
@@ -78,7 +89,13 @@ def test_transformer_block(
     spatial_padded_4D = torch.nn.functional.pad(
         spatial.unsqueeze(0), pad=(0, 0, 0, spatial_padding), mode="constant", value=0
     )
+    if pad_40_heads:
+        spatial_padded_4D = torch.nn.functional.pad(
+            spatial_padded_4D, pad=(0, embedding_dim_padding), mode="constant", value=0
+        )
     tt_spatial = from_torch(spatial_padded_4D, dtype=ttnn_dtype, mesh_device=mesh_device, layout=ttnn.TILE_LAYOUT)
+
+    ##
     prompt_extra = prompt_sequence_length % TILE_SIZE
     if prompt_extra > 0:
         prompt_padding = TILE_SIZE - prompt_extra
@@ -87,9 +104,20 @@ def test_transformer_block(
     prompt_padded_4D = torch.nn.functional.pad(
         prompt.unsqueeze(0), pad=(0, 0, 0, prompt_padding), mode="constant", value=0
     )
+    if pad_40_heads:
+        prompt_padded_4D = torch.nn.functional.pad(
+            prompt_padded_4D, pad=(0, embedding_dim_padding), mode="constant", value=0
+        )
     tt_prompt = from_torch(prompt_padded_4D, dtype=ttnn_dtype, mesh_device=mesh_device, layout=ttnn.TILE_LAYOUT)
 
-    tt_time = from_torch(time.unsqueeze(1), dtype=ttnn_dtype, mesh_device=mesh_device, layout=ttnn.TILE_LAYOUT)
+    ##
+    if pad_40_heads:
+        time_padded_2D = torch.nn.functional.pad(time, pad=(0, embedding_dim_padding), mode="constant", value=0)
+        tt_time = from_torch(
+            time_padded_2D.unsqueeze(1), dtype=ttnn_dtype, mesh_device=mesh_device, layout=ttnn.TILE_LAYOUT
+        )
+    else:
+        tt_time = from_torch(time.unsqueeze(1), dtype=ttnn_dtype, mesh_device=mesh_device, layout=ttnn.TILE_LAYOUT)
 
     with torch.no_grad():
         spatial_output, prompt_output = torch_model(spatial=spatial, prompt=prompt, time_embed=time)
@@ -105,11 +133,10 @@ def test_transformer_block(
     tt_spatial_output_padded, tt_prompt_output_padded = tt_model(
         spatial=tt_spatial, prompt=tt_prompt, time_embed=tt_time
     )
-    tt_spatial_output = tt_spatial_output_padded[:, :, 0:spatial_sequence_length, :]
-    tt_prompt_output = tt_prompt_output_padded[:, :, 0:prompt_sequence_length, :]
+    tt_spatial_output = tt_spatial_output_padded[:, :, 0:spatial_sequence_length, :embedding_dim]
+    tt_prompt_output = tt_prompt_output_padded[:, :, 0:prompt_sequence_length, :embedding_dim]
 
     assert (prompt_output is None) == (tt_prompt_output is None)
-
     assert_quality(spatial_output, tt_spatial_output, pcc=0.995, shard_dim=0, num_devices=mesh_device.get_num_devices())
 
     if prompt_output is not None and tt_prompt_output is not None:
