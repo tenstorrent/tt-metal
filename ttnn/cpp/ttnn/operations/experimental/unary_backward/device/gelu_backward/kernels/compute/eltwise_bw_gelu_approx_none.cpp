@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -23,9 +23,9 @@ void MAIN {
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
     uint32_t per_core_block_size = get_arg_val<uint32_t>(1);
 
-    constexpr auto cb_in0 = tt::CBIndex::c_0;   // grad
-    constexpr auto cb_in1 = tt::CBIndex::c_1;   // x
-    constexpr auto cb_out0 = tt::CBIndex::c_2;  // out
+    constexpr auto cb_grad_out = tt::CBIndex::c_0;
+    constexpr auto cb_input = tt::CBIndex::c_1;
+    constexpr auto cb_grad_in = tt::CBIndex::c_2;
 
     constexpr uint32_t bits_1p0 = 0x3f800000;          // 1.0f
     constexpr uint32_t bits_0p5 = 0x3f000000;          // 0.5f
@@ -33,7 +33,7 @@ void MAIN {
     constexpr uint32_t bits_inv_sqrt2pi = 0x3ecc422a;  // ≈ 0.3989423  (1 / sqrt(2π))
     constexpr uint32_t bits_neg_0p5 = 0xbf000000;      // -0.5f
 
-    unary_op_init_common(cb_in0, cb_out0);
+    unary_op_init_common(cb_grad_out, cb_grad_in);
     erf_tile_init();
     exp_tile_init();
     add_binary_tile_init();
@@ -41,16 +41,16 @@ void MAIN {
     square_tile_init();
 
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
-        cb_wait_front(cb_in0, per_core_block_size);
-        cb_wait_front(cb_in1, per_core_block_size);
-        cb_reserve_back(cb_out0, per_core_block_size);
-
-        tile_regs_acquire();
-        tile_regs_wait();
+        cb_wait_front(cb_grad_out, per_core_block_size);
+        cb_wait_front(cb_input, per_core_block_size);
+        cb_reserve_back(cb_grad_in, per_core_block_size);
 
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            copy_tile(cb_in0, i, 0);  // grad => tile 0
-            copy_tile(cb_in1, i, 1);  // x => tile 1
+            tile_regs_acquire();
+            tile_regs_wait();
+
+            copy_tile(cb_grad_out, i, 0);  // grad => tile 0
+            copy_tile(cb_input, i, 1);     // x => tile 1
 
             // Save x into another register for later
             //   tile[2] = x
@@ -95,15 +95,15 @@ void MAIN {
             mul_binary_tile(0, 1);
 
             // store to output
-            pack_tile(0, cb_out0);
+            pack_tile(0, cb_grad_in);
+
+            tile_regs_commit();
+            tile_regs_release();
         }
 
-        tile_regs_commit();
-        tile_regs_release();
-
-        cb_pop_front(cb_in0, per_core_block_size);
-        cb_pop_front(cb_in1, per_core_block_size);
-        cb_push_back(cb_out0, per_core_block_size);
+        cb_pop_front(cb_grad_out, per_core_block_size);
+        cb_pop_front(cb_input, per_core_block_size);
+        cb_push_back(cb_grad_in, per_core_block_size);
     }
 }
 }  // namespace NAMESPACE

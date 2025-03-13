@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "gelu_backward_program_factory.hpp"
 #include "gelu_backward_device_operation_types.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -11,9 +15,6 @@ using namespace tt::constants;
 
 GeluBackwardProgramFactory::cached_program_t GeluBackwardProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
-    using namespace tt;
-    using namespace tt::tt_metal;
-
     const auto& input = tensor_args.input;              // src0
     const auto& grad_output = tensor_args.grad_output;  // src1
 
