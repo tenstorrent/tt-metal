@@ -3,21 +3,24 @@
 
 import torch
 from .format_arg_mapping import format_dict
+from .format_config import DataFormat
 
 
 def flatten_list(sublists):
     return [item for sublist in sublists for item in sublist]
 
 
-def generate_random_face(stimuli_format="Float16_b", const_value=1, const_face=False):
+def generate_random_face(
+    stimuli_format=DataFormat.Float16_b, const_value=1, const_face=False
+):
 
-    if stimuli_format in ["Float16_b", "Float16", "Float32"]:
+    if stimuli_format in [DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32]:
         if const_face:
             srcA_face = torch.ones(256, dtype=format_dict[stimuli_format]) * const_value
         else:  # random for both faces
             srcA_face = torch.rand(256, dtype=format_dict[stimuli_format]) + 0.1
 
-    elif stimuli_format == "Bfp8_b":
+    elif stimuli_format == DataFormat.Bfp8_b:
         size = 256
         integer_part = torch.randint(0, 3, (size,))
         fraction = torch.randint(0, 16, (size,)).to(dtype=torch.bfloat16) / 16.0
@@ -26,7 +29,7 @@ def generate_random_face(stimuli_format="Float16_b", const_value=1, const_face=F
         else:
             srcA_face = integer_part.to(dtype=torch.bfloat16) + fraction
 
-    elif stimuli_format == "Int32":
+    elif stimuli_format == DataFormat.Int32:
         srcA_face = torch.arange(256)
 
     return srcA_face
@@ -41,7 +44,7 @@ def generate_random_face_ab(
 
 
 def generate_stimuli(
-    stimuli_format="Float16_b",
+    stimuli_format=DataFormat.Float16_b,
     tile_cnt=1,
     sfpu=False,
     const_face=False,
@@ -62,7 +65,7 @@ def generate_stimuli(
     if not sfpu:
         dtype = (
             format_dict[stimuli_format]
-            if stimuli_format != "Bfp8_b"
+            if stimuli_format != DataFormat.Bfp8_b
             else torch.bfloat16
         )
         return torch.tensor(srcA, dtype=dtype), torch.tensor(srcB, dtype=dtype)

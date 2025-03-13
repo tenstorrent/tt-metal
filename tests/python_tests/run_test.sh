@@ -86,7 +86,7 @@ for i in $(seq 1 "$repeat_count"); do
     fi
 
     result=$?
-    
+
     if [ [$result -eq 0] ]; then
         ((pass_count++))
     else

@@ -8,7 +8,7 @@ from helpers import *
 
 def generate_golden(operand1, operand2, data_format, math_fidelity):
 
-    if data_format == "Float16_b":
+    if data_format == DataFormat.Float16_b:
         if math_fidelity in [0, 2]:  # LoFi or HiFi2
             for element in operand2:
                 element = element.to(torch.int32)
@@ -23,53 +23,37 @@ def generate_golden(operand1, operand2, data_format, math_fidelity):
     ).view(-1)
 
 
-param_combinations = [
-    (format, dest_acc, testname, math_fidelity)
-    for format in ["Float16_b"]  # ,"Float16"]
-    for dest_acc in ["", "DEST_ACC"]
-    for testname in ["matmul_test"]
-    for math_fidelity in [3, 4]
-]
-
-param_ids = [
-    f" format={comb[0]} | dest_acc={comb[1]} | math_fidelity={comb[3]}"
-    for comb in param_combinations
-]
+all_format_combos = generate_format_combinations(
+    [DataFormat.Float16_b], all_same=True
+)  # Generate format combinations with all formats being the same (flag set to True), refer to `param_config.py` for more details.
+all_params = generate_params(
+    ["matmul_test"], all_format_combos, dest_acc=["", "DEST_ACC"], math_fidelity=[3, 4]
+)
+param_ids = generate_param_ids(all_params)
 
 
 @pytest.mark.parametrize(
-    "format, dest_acc, testname, math_fidelity", param_combinations, ids=param_ids
+    "testname, formats, dest_acc, math_fidelity",
+    clean_params(all_params),
+    ids=param_ids,
 )
-def test_matmul(format, testname, dest_acc, math_fidelity):
-
-    # src_A, src_B = generate_stimuli(format,tile_cnt=1,sfpu=False,const_face=True,const_value_A=3,const_value_B=2)
-    # src_A, src_B = generate_stimuli(format)
+def test_matmul(testname, formats, dest_acc, math_fidelity):
 
     src_A = torch.tensor(
-        [torch.rand(1, dtype=format_dict[format]).item()] * 256
-        + [torch.rand(1, dtype=format_dict[format]).item()] * 256
-        + [torch.rand(1, dtype=format_dict[format]).item()] * 256
-        + [torch.rand(1, dtype=format_dict[format]).item()] * 256,
+        [torch.rand(1, dtype=format_dict[formats.unpack_src]).item()] * 1024,
         dtype=torch.bfloat16,
     )
     src_B = torch.tensor(
-        [torch.rand(1, dtype=format_dict[format]).item()] * 256
-        + [torch.rand(1, dtype=format_dict[format]).item()] * 256
-        + [torch.rand(1, dtype=format_dict[format]).item()] * 256
-        + [torch.rand(1, dtype=format_dict[format]).item()] * 256,
+        [torch.rand(1, dtype=format_dict[formats.unpack_src]).item()] * 1024,
         dtype=torch.bfloat16,
     )
 
-    print(src_A)
-    print(src_B)
+    golden_tensor = generate_golden(src_A, src_B, formats.pack_dst, math_fidelity)
 
-    golden_tensor = generate_golden(src_A, src_B, format, math_fidelity)
-
-    write_stimuli_to_l1(tilize(src_A), tilize(src_B), format)
+    write_stimuli_to_l1(tilize(src_A), tilize(src_B), formats.unpack_src)
 
     test_config = {
-        "input_format": format,
-        "output_format": format,
+        "formats": formats,
         "testname": testname,
         "dest_acc": dest_acc,
         "math_fidelity": math_fidelity,
@@ -80,7 +64,9 @@ def test_matmul(format, testname, dest_acc, math_fidelity):
 
     run_elf_files(testname)
 
-    res_from_L1 = collect_results(format)
+    res_from_L1 = collect_results(
+        formats
+    )  # Bug patchup in (unpack.py): passing formats struct to check unpack_src with pack_dst and distinguish when input and output formats have different exponent widths then reading from L1 changes
     run_shell_command("cd .. && make clean")
 
     assert len(res_from_L1) == len(golden_tensor)
@@ -89,16 +75,16 @@ def test_matmul(format, testname, dest_acc, math_fidelity):
     res_tensor = torch.tensor(
         res_from_L1,
         dtype=(
-            format_dict[format]
-            if format in ["Float16", "Float16_b"]
+            format_dict[formats.pack_dst]
+            if formats.pack_dst in [DataFormat.Float16, DataFormat.Float16_b]
             else torch.bfloat16
         ),
     )
 
-    if format == "Float16_b" or format == "Float16":
+    if formats.pack_dst in [DataFormat.Float16_b, DataFormat.Float16]:
         atol = 0.1
         rtol = 0.05
-    elif format == "Bfp8_b":
+    elif formats.pack_dst == DataFormat.Bfp8_b:
         atol = 0.1
         rtol = 0.2
 

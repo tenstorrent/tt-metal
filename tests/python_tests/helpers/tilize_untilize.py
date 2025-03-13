@@ -3,9 +3,10 @@
 
 import torch
 from .format_arg_mapping import format_dict
+from .format_config import DataFormat
 
 
-def tilize(original_tensor, stimuli_format="Float16_b"):
+def tilize(original_tensor, stimuli_format=DataFormat.Float16_b):
 
     if original_tensor.size(0) != 1024:
         raise ValueError("Input tensor must have 1024 elements.")
@@ -22,13 +23,13 @@ def tilize(original_tensor, stimuli_format="Float16_b"):
     return result.to(
         dtype=(
             format_dict[stimuli_format]
-            if stimuli_format in ["Float16_b", "Float16"]
+            if stimuli_format in [DataFormat.Float16_b, DataFormat.Float16]
             else torch.float32
         )
     )
 
 
-def untilize(tilized_tensor, stimuli_format="Float16_b"):
+def untilize(tilized_tensor, stimuli_format=DataFormat.Float16_b):
 
     tilized_tensor = tilized_tensor.view(-1)
 
@@ -45,7 +46,7 @@ def untilize(tilized_tensor, stimuli_format="Float16_b"):
     return original_tensor.to(
         dtype=(
             format_dict[stimuli_format]
-            if stimuli_format in ["Float16_b", "Float16"]
+            if stimuli_format in [DataFormat.Float16_b, DataFormat.Float16]
             else torch.float32
         )
     )

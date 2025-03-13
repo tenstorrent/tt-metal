@@ -38,12 +38,12 @@ OPTIONS_LINK=-fexceptions -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -no
 INCLUDES = -I../$(ARCH_LLK_ROOT)/llk_lib -I../$(ARCH_LLK_ROOT)/common/inc -I../$(ARCH_LLK_ROOT)/common/inc/sfpu -I../$(ARCH_LLK_ROOT)/hw_specific/inc
 INCLUDES += -Ifirmware/riscv/common -Ifirmware/riscv/$(CHIP_ARCH)/ -Isfpi/include -Ihelpers/include
 
-FORMAT_ARG:= -D$(format) 
+FORMAT_ARG:=-D$(unpack_src) -D$(unpack_dst) -D$(fpu) -D$(pack_src) -D$(pack_dst)
 
 ifeq ($(mathop),)
     MATHOP_ARG =
 else
-	MATHOP_ARG:= -D$(mathop) -DAPPROX_MODE=$(approx_mode)  -DPOOL_TYPE=$(pool_type) -DREDUCE_DIM=$(reduce_dim) 
+	MATHOP_ARG:= -D$(mathop) -DAPPROX_MODE=$(approx_mode)  -DPOOL_TYPE=$(pool_type) -DREDUCE_DIM=$(reduce_dim)
 endif
 
 OPTIONS_COMPILE+= -DMATH_FIDELITY=$(math_fidelity)
@@ -52,17 +52,17 @@ OPTIONS_COMPILE+= -DMATH_FIDELITY=$(math_fidelity)
 # files to be linked to it
 ifeq ($(testname), multiple_tiles_eltwise_test)
 	MULTIPLE_OPS:=-DMULTIPLE_OPS
-	OPTIONS_UNPACK:=-DKERN_CNT=$(kern_cnt) 
-	OPTIONS_MATH:=-DKERN_CNT=$(kern_cnt) 
-	OPTIONS_PACK:=-DKERN_CNT=$(kern_cnt) 
-	OPTIONS_PACK+=-DPACK_ADDR_CNT=$(pack_addr_cnt) 
-	OPTIONS_PACK+=-DPACK_ADDRS=$(pack_addrs) 
+	OPTIONS_UNPACK:=-DKERN_CNT=$(kern_cnt)
+	OPTIONS_MATH:=-DKERN_CNT=$(kern_cnt)
+	OPTIONS_PACK:=-DKERN_CNT=$(kern_cnt)
+	OPTIONS_PACK+=-DPACK_ADDR_CNT=$(pack_addr_cnt)
+	OPTIONS_PACK+=-DPACK_ADDRS=$(pack_addrs)
 endif
 
 OPTIONS_COMPILE+=$(FORMAT_ARG) $(MATHOP_ARG) -DTILE_SIZE_CNT=0x1000
 OPTIONS_COMPILE+=$(INCLUDES)
 
-ifeq ($(dest_acc), DEST_ACC) 
+ifeq ($(dest_acc), DEST_ACC)
 	OPTIONS_COMPILE+=-DDEST_ACC
 endif
 
@@ -89,11 +89,11 @@ $(OUTPUT_ELFS): $(BUILD_DIR)
 	mkdir -p $@
 
 # Buiding .elf files for every TRISC core
-$(OUTPUT_ELFS)/$(testname)_trisc0.elf :$(BUILD_DIR)/tmu-crt0.o $(BUILD_DIR)/main_unpack.o $(BUILD_DIR)/$(testname)_unpack.o 
+$(OUTPUT_ELFS)/$(testname)_trisc0.elf :$(BUILD_DIR)/tmu-crt0.o $(BUILD_DIR)/main_unpack.o $(BUILD_DIR)/$(testname)_unpack.o
 	$(GXX) $(OPTIONS_ALL) $(OPTIONS_LINK) $^ -T$(LINKER_SCRIPTS)/memory.$(CHIP_ARCH).ld -T$(LINKER_SCRIPTS)/trisc0.ld -T$(LINKER_SCRIPTS)/sections.ld -o $@
-$(OUTPUT_ELFS)/$(testname)_trisc1.elf: $(BUILD_DIR)/tmu-crt0.o $(BUILD_DIR)/main_math.o $(BUILD_DIR)/$(testname)_math.o 
+$(OUTPUT_ELFS)/$(testname)_trisc1.elf: $(BUILD_DIR)/tmu-crt0.o $(BUILD_DIR)/main_math.o $(BUILD_DIR)/$(testname)_math.o
 	$(GXX) $(OPTIONS_ALL) $(OPTIONS_LINK) $^ -T$(LINKER_SCRIPTS)/memory.$(CHIP_ARCH).ld -T$(LINKER_SCRIPTS)/trisc1.ld -T$(LINKER_SCRIPTS)/sections.ld -o $@
-$(OUTPUT_ELFS)/$(testname)_trisc2.elf: $(BUILD_DIR)/tmu-crt0.o $(BUILD_DIR)/main_pack.o $(BUILD_DIR)/$(testname)_pack.o 
+$(OUTPUT_ELFS)/$(testname)_trisc2.elf: $(BUILD_DIR)/tmu-crt0.o $(BUILD_DIR)/main_pack.o $(BUILD_DIR)/$(testname)_pack.o
 	$(GXX) $(OPTIONS_ALL) $(OPTIONS_LINK) $^ -T$(LINKER_SCRIPTS)/memory.$(CHIP_ARCH).ld -T$(LINKER_SCRIPTS)/trisc2.ld -T$(LINKER_SCRIPTS)/sections.ld -o $@
 
 # Building brisc.elf for BRISC core
@@ -114,7 +114,7 @@ $(BUILD_DIR)/main_unpack.o : $(RISCV_SOURCES)/trisc.cpp
 $(BUILD_DIR)/main_math.o : $(RISCV_SOURCES)/trisc.cpp
 	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) $(OPTIONS_MATH) $(MULTIPLE_OPS) -DLLK_TRISC_MATH -c -o $@ $<
 $(BUILD_DIR)/main_pack.o : $(RISCV_SOURCES)/trisc.cpp
-	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) $(OPTIONS_PACK) $(MULTIPLE_OPS) -DLLK_TRISC_PACK -c -o $@ $<	
+	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) $(OPTIONS_PACK) $(MULTIPLE_OPS) -DLLK_TRISC_PACK -c -o $@ $<
 
 $(BUILD_DIR)/tmu-crt0.o: $(HELPERS)/tmu-crt0.S | $(BUILD_DIR)
 	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) -c -o $@ $<
