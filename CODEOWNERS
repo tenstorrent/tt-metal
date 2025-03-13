@@ -168,6 +168,7 @@ models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu
 models/demos/wormhole @uaydonat
 models/demos/t3000 @uaydonat
 models/tt_transformers @cglagovichTT @yieldthought @mtairum @uaydonat
+models/tt_transformers/tt/generator*.py @cglagovichTT @yieldthought @mtairum @skhorasganiTT @uaydonat
 models/demos/qwen @sraizada-tt @mtairum @uaydonat @yieldthought
 models/demos/falcon7b_common @skhorasganiTT @djordje-tt @uaydonat
 models/demos/wormhole/mamba @esmalTT @uaydonat @kpaigwar
@@ -192,6 +193,7 @@ models/demos/segformer @mbahnasTT @uaydonat @tenstorrent/metalium-developers-con
 models/perf/ @uaydonat
 models/perf/perf_report.py @yieldthought @uaydonat
 models/perf/benchmarking_utils.py @skhorasganiTT
+models/demos/utils/llm_demo_utils.py @skhorasganiTT @mtairum @uaydonat
 
 # docs
 docs/Makefile @tenstorrent/metalium-developers-infra
