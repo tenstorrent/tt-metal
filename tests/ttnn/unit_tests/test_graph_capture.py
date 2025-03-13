@@ -54,8 +54,6 @@ def test_graph_capture_with_all_parameters(device):
     ttnn.transpose(tt_input, 1, 2)
     captured_graph = ttnn.graph.end_graph_capture()
 
-    json_serialized_data = GraphTracerUtils.serialize_graph(captured_graph)
-
     node1 = captured_graph[1]["arguments"]
     # ttnn:transpose
     assert node1[0] == "\x00"
