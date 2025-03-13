@@ -4,21 +4,27 @@
 
 #pragma once
 
-#include <unordered_map>
-
-#include "umd/device/types/cluster_descriptor_types.h"
 #include <mesh_coord.hpp>
-#include <mesh_device_view.hpp>
 
 namespace tt::tt_metal::distributed {
 
-// TODO: Consider conversion to StrongType instead of alias
-using PhysicalCoordinate = eth_coord_t;
-using CoordinateTranslationMap = std::unordered_map<MeshCoordinate, PhysicalCoordinate>;
+// PhysicalMeshCoordinate is a 2D-coordinate in the physical mesh as defined by the Fabric layer.
+// MeshCoordinate[0] is the mesh_id and MeshCoordinate[1] is the physical_device_id.
+class PhysicalMeshCoordinate {
+public:
+    using chip_id_t = uint32_t;
+    using mesh_id_t = uint32_t;
+    PhysicalMeshCoordinate() = delete;
+    PhysicalMeshCoordinate(chip_id_t mesh_id, chip_id_t chip_id) : mesh_id_(mesh_id), chip_id_(chip_id) {}
+    mesh_id_t mesh_id() const { return mesh_id_; }
+    chip_id_t chip_id() const { return chip_id_; }
 
-// Returns a translation map between logical coordinates in logical ND space
-// to the physical coordinates as defined by the UMD layer.
-// TODO: #17477 - Return MeshContainer<PhysicalCoordinate> that contains everything we need.
-const std::pair<CoordinateTranslationMap, MeshShape>& get_system_mesh_coordinate_translation_map();
+private:
+    mesh_id_t mesh_id_{0};
+    chip_id_t chip_id_{0};
+};
+
+// Returns a map of all physical mesh coordinates in the system.
+const MeshContainer<PhysicalMeshCoordinate>& get_system_mesh_coordinate_translation_map();
 
 }  // namespace tt::tt_metal::distributed
