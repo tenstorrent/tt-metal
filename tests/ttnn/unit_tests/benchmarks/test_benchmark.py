@@ -84,16 +84,18 @@ def get_device_freq():
     return freq
 
 
-matmul_shapes_bfloat16 = [
-    (512, 1024, 1024, False, False, 1, 1, 1),
+matmul_shapes_bfloat8_b = [
+    #    (512, 1024, 1024, False, False, 1, 1, 1),
+    (512, 4096, 1024, False, False, 4, 1, 1),
 ]
 matmul_configs = [
-    (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, False),
+    (ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, False),
 ]
 
 
 # @pytest.mark.skip(reason="WH didt hang, need to skip CI and run locally only")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 3855488}], indirect=True)
+# @pytest.mark.parametrize("grid_size", [(4, 2)])
 @pytest.mark.parametrize("grid_size", [(1, 1)])
 @pytest.mark.parametrize("tile_h", [32])
 @pytest.mark.parametrize("tile_w", [32])
@@ -116,8 +118,8 @@ def test_matmul_2d_host_perf(
     HiFi4_cycle = LoFi_cycle * 4
 
     for dtype, math_fidelity, use_trace in matmul_configs:
-        if dtype == ttnn.bfloat16:
-            matmul_shapes = matmul_shapes_bfloat16
+        if dtype == ttnn.bfloat8_b:
+            matmul_shapes = matmul_shapes_bfloat8_b
         for m, k, n, in0_sharded, out_sharded, in0_block_w_div, num_out_blocks_h, num_out_blocks_w in matmul_shapes:
             # scale input size to match BH grid size
             m = (m // 8) * grid_size[1]
@@ -214,10 +216,10 @@ def test_matmul_2d_host_perf(
 
             ttnn.device.EnablePersistentKernelCache()
 
-            max_nops_unpack = 50
-            max_nops_math = 50
-            max_nops_pack = 50
-            max_reps = 10
+            max_nops_unpack = 1
+            max_nops_math = 1
+            max_nops_pack = 1
+            max_reps = 1
             COUNTER = 0
             with open(ERR_FILE_PATH, "r") as f:
                 lines = f.read().splitlines()

@@ -29,6 +29,7 @@
 #     do
 	rm -rf built
         timeout $TIME_LIMIT tt-smi -r 0 || exit 1
+#        TT_METAL_DPRINT_CORES=worker TT_METAL_SLOW_DISPATCH_MODE=1 pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf
         TT_METAL_SLOW_DISPATCH_MODE=1 pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf
 #     done
 

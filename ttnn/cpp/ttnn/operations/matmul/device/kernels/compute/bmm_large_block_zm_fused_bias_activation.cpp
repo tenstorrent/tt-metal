@@ -148,9 +148,9 @@ void MAIN {
     mm_block_init(
         in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
 
-    // DPRINT << in0_num_subblocks << " " << in1_num_subblocks << " " <<  num_blocks_h_dim << " " << num_blocks_w_dim <<
-    // " " << num_blocks_inner_dim << ENDL();
-    DPRINT << "Unpack nops " << UNPACK_NOPS << " Math nops " << MATH_NOPS << " Pack nops " << PACK_NOPS << ENDL();
+    // DPRINT << num_blocks_h_dim << " " << num_blocks_w_dim <<" " << num_blocks_inner_dim <<" " << in0_num_subblocks <<
+    // " " << in1_num_subblocks << " " << out_subblock_h <<" " << out_subblock_w << " " << in0_block_w << ENDL(); DPRINT
+    // << "Unpack nops " << UNPACK_NOPS << " Math nops " << MATH_NOPS << " Pack nops " << PACK_NOPS << ENDL();
     for (uint32_t b = 0; b < batch; b++) {
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
