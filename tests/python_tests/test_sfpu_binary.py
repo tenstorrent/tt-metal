@@ -10,12 +10,12 @@ def generate_golden(operation, operand1, operand2, data_format):
     tensor1_float = (
         operand1.clone()
         .detach()
-        .to(format_dict.get(data_format, format_dict["Float16_b"]))
+        .to(format_dict.get(data_format, format_dict[DataFormat.Float16_b]))
     )
     tensor2_float = (
         operand2.clone()
         .detach()
-        .to(format_dict.get(data_format, format_dict["Float16_b"]))
+        .to(format_dict.get(data_format, format_dict[DataFormat.Float16_b]))
     )
 
     operations = {
@@ -30,49 +30,58 @@ def generate_golden(operation, operand1, operand2, data_format):
     return operations[operation].tolist()
 
 
-param_combinations = [
-    (mathop, format, dest_acc, testname)
-    for mathop in ["elwadd", "elwsub", "elwmul"]
-    for format in ["Float32"]
-    for dest_acc in ["DEST_ACC"]
-    for testname in ["sfpu_binary_test"]
-]
-
-param_ids = [
-    f"mathop={comb[0]} | format={comb[1]} | dest_acc={comb[2]} "
-    for comb in param_combinations
-]
+full_sweep = False
+all_format_combos = generate_format_combinations(
+    [DataFormat.Float32], all_same=True
+)  # Generate format combinations with all formats being the same (flag set to True), refer to `param_config.py` for more details.
+all_params = generate_params(
+    ["sfpu_binary_test"],
+    all_format_combos,
+    dest_acc=["DEST_ACC"],
+    mathop=["elwadd", "elwsub", "elwmul"],
+)
+param_ids = generate_param_ids(all_params)
 
 
 @pytest.mark.parametrize(
-    "mathop, format, dest_acc, testname", param_combinations, ids=param_ids
+    "testname, formats, dest_acc, mathop", clean_params(all_params), ids=param_ids
 )
 @pytest.mark.skip(reason="Not fully implemented")
-def test_all(format, mathop, testname, dest_acc):
+def test_all(testname, formats, dest_acc, mathop):
+    if (
+        formats.unpack_src in [DataFormat.Float32, DataFormat.Int32]
+        and dest_acc != "DEST_ACC"
+    ):
+        pytest.skip(
+            "Skipping test for 32 bit wide data without 32 bit accumulation in Dest"
+        )
 
-    src_A, src_B = generate_stimuli(format)
-    golden = generate_golden(mathop, src_A, src_B, format)
-    write_stimuli_to_l1(src_A, src_B, format)
+    #  When running hundreds of tests, failing tests may cause incorrect behavior in subsequent passing tests.
+    #  To ensure accurate results, for now we reset board after each test.
+    #  Fix this: so we only reset after failing tests
+    if full_sweep:
+        run_shell_command(f"cd .. && make clean")
+        run_shell_command(f"tt-smi -r 0")
+
+    src_A, src_B = generate_stimuli(formats.unpack_src)
+    golden = generate_golden(mathop, src_A, src_B, formats.pack_dst)
+    write_stimuli_to_l1(src_A, src_B, formats.unpack_src)
 
     test_config = {
-        "input_format": format,
-        "output_format": format,
+        "formats": formats,
         "testname": testname,
         "dest_acc": dest_acc,
         "mathop": mathop,
     }
-
-    if format in ["Float32", "Int32"] and dest_acc != "DEST_ACC":
-        pytest.skip(
-            "SKipping test for 32 bit wide data without 32 bit accumulation in Dest"
-        )
 
     make_cmd = generate_make_command(test_config)
     run_shell_command(f"cd .. && {make_cmd}")
 
     run_elf_files(testname)
 
-    res_from_L1 = collect_results(format)
+    res_from_L1 = collect_results(
+        formats
+    )  # Bug patchup in (unpack.py): passing formats struct to check its unpack_src with pack_dst and distinguish when input and output formats have different exponent widths then reading from L1 changes
 
     assert len(res_from_L1) == len(golden)
 
@@ -80,26 +89,32 @@ def test_all(format, mathop, testname, dest_acc):
 
     assert_tensix_operations_finished()
 
-    if format in ["Float16_b", "Float16", "Float32"]:
+    if formats.pack_dst in [
+        DataFormat.Float16_b,
+        DataFormat.Float16,
+        DataFormat.Float32,
+    ]:
         atol = 0.05
         rtol = 0.1
-    elif format == "Bfp8_b":
+    elif formats.pack_dst == DataFormat.Bfp8_b:
         atol = 0.1
         rtol = 0.2
 
     golden_tensor = torch.tensor(
         golden,
         dtype=(
-            format_dict[format]
-            if format in ["Float16", "Float16_b", "Float32"]
+            format_dict[formats.pack_dst]
+            if formats.pack_dst
+            in [DataFormat.Float16, DataFormat.Float16_b, DataFormat.Float32]
             else torch.bfloat16
         ),
     )
     res_tensor = torch.tensor(
         res_from_L1,
         dtype=(
-            format_dict[format]
-            if format in ["Float16", "Float16_b", "Float32"]
+            format_dict[formats.pack_dst]
+            if formats.pack_dst
+            in [DataFormat.Float16, DataFormat.Float16_b, DataFormat.Float32]
             else torch.bfloat16
         ),
     )

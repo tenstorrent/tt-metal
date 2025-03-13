@@ -10,15 +10,15 @@ def generate_golden(op, operand1, operand2, data_format, math_fidelity):
     tensor1_float = (
         operand1.clone()
         .detach()
-        .to(format_dict.get(data_format, format_dict["Float16_b"]))
+        .to(format_dict.get(data_format, format_dict[DataFormat.Float16_b]))
     )
     tensor2_float = (
         operand2.clone()
         .detach()
-        .to(format_dict.get(data_format, format_dict["Float16_b"]))
+        .to(format_dict.get(data_format, format_dict[DataFormat.Float16_b]))
     )
 
-    if data_format == "Float16_b":
+    if data_format == DataFormat.Float16_b:
         if math_fidelity in [0, 2]:  # LoFi or HiFi2
             for element in operand2:
                 element = element.to(torch.int32)
@@ -47,41 +47,47 @@ def generate_golden(op, operand1, operand2, data_format, math_fidelity):
     return res
 
 
-param_combinations = [
-    (mathop, tile_cnt, format, dest_acc, testname, math_fidelity)
-    for mathop in ["elwadd", "elwsub", "elwmul"]
-    for tile_cnt in range(1, 2)
-    for format in ["Float16_b", "Float16"]
-    for dest_acc in [""]  # , "DEST_ACC"]
-    for testname in ["tilize_calculate_untilize_L1"]
-    for math_fidelity in [4]  # [0,2,3,4]
-]
-
-param_ids = [
-    f"mathop={comb[0]} | tile_cnt={comb[1]} | format={comb[2]} | dest_acc={comb[3]} | math_fidelity={comb[5]}"
-    for comb in param_combinations
-]
+full_sweep = False
+all_format_combos = generate_format_combinations(
+    [DataFormat.Float16_b, DataFormat.Float16], all_same=True
+)  # Generate format combinations with all formats being the same (flag set to True), refer to `param_config.py` for more details.
+all_params = generate_params(
+    ["tilize_calculate_untilize_L1"],
+    all_format_combos,
+    dest_acc=[""],
+    mathop=["elwadd", "elwsub", "elwmul"],
+    math_fidelity=[4],
+    tile_cnt=range(1, 2),
+)
+param_ids = generate_param_ids(all_params)
 
 
 @pytest.mark.parametrize(
-    "mathop, tile_cnt, format, dest_acc, testname, math_fidelity",
-    param_combinations,
+    "testname, formats, dest_acc, mathop, math_fidelity, tile_cnt",
+    clean_params(all_params),
     ids=param_ids,
 )
 def test_tilize_calculate_untilize_L1(
-    format, testname, tile_cnt, mathop, dest_acc, math_fidelity
+    testname, formats, dest_acc, mathop, math_fidelity, tile_cnt
 ):
+    #  When running hundreds of tests, failing tests may cause incorrect behavior in subsequent passing tests.
+    #  To ensure accurate results, for now we reset board after each test.
+    #  Fix this: so we only reset after failing tests
+    if full_sweep:
+        run_shell_command(f"cd .. && make clean")
+        run_shell_command(f"tt-smi -r 0")
 
-    src_A, src_B = generate_stimuli(format, tile_cnt)
+    src_A, src_B = generate_stimuli(formats.unpack_src, tile_cnt)
 
-    golden_tensor = generate_golden(mathop, src_A, src_B, format, math_fidelity)
+    golden_tensor = generate_golden(
+        mathop, src_A, src_B, formats.pack_dst, math_fidelity
+    )
     print(golden_tensor.view(32, 32))
 
-    write_stimuli_to_l1(src_A, src_B, format, "0,0", tile_cnt)
+    write_stimuli_to_l1(src_A, src_B, formats.unpack_src, "0,0", tile_cnt)
 
     test_config = {
-        "input_format": format,
-        "output_format": format,
+        "formats": formats,
         "testname": testname,
         "dest_acc": dest_acc,
         "math_fidelity": math_fidelity,
@@ -93,8 +99,9 @@ def test_tilize_calculate_untilize_L1(
 
     run_elf_files(testname)
 
-    res_from_L1 = collect_results(format, 0x1E000)
-    run_shell_command("cd .. && make clean")
+    res_from_L1 = collect_results(
+        formats, 0x1E000
+    )  # Bug patchup in (unpack.py): passing formats struct to check unpack_src with pack_dst and distinguish when input and output formats have different exponent widths then reading from L1 changes
 
     assert len(res_from_L1) == len(golden_tensor)
     assert_tensix_operations_finished()
@@ -102,17 +109,17 @@ def test_tilize_calculate_untilize_L1(
     res_tensor = torch.tensor(
         res_from_L1,
         dtype=(
-            format_dict[format]
-            if format in ["Float16", "Float16_b"]
+            format_dict[formats.pack_dst]
+            if formats.pack_dst in [DataFormat.Float16, DataFormat.Float16_b]
             else torch.bfloat16
         ),
     )
     print(res_tensor.view(32, 32))
 
-    if format == "Float16_b" or format == "Float16":
+    if formats.pack_dst in [DataFormat.Float16_b, DataFormat.Float16]:
         atol = 0.1
         rtol = 0.05
-    elif format == "Bfp8_b":
+    elif formats.pack_dst == DataFormat.Bfp8_b:
         atol = 0.1
         rtol = 0.2
 

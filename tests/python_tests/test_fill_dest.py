@@ -10,12 +10,12 @@ def generate_golden(operations, operand1, operand2, data_format):
     tensor1_float = (
         operand1.clone()
         .detach()
-        .to(format_dict.get(data_format, format_dict["Float16_b"]))
+        .to(format_dict.get(data_format, format_dict[DataFormat.Float16_b]))
     )
     tensor2_float = (
         operand2.clone()
         .detach()
-        .to(format_dict.get(data_format, format_dict["Float16_b"]))
+        .to(format_dict.get(data_format, format_dict[DataFormat.Float16_b]))
     )
 
     res = []
@@ -39,34 +39,40 @@ def generate_golden(operations, operand1, operand2, data_format):
     return flatten_list(res)
 
 
-param_combinations = [
-    (format, dest_acc, testname)
-    for format in ["Float16_b", "Float16", "Bfp8_b"]
-    for dest_acc in ["", "DEST_ACC"]
-    for testname in ["fill_dest_test"]
-]
-
-param_ids = [f" format={comb[0]} | dest_acc={comb[1]}" for comb in param_combinations]
+full_sweep = False
+all_format_combos = generate_format_combinations(
+    [DataFormat.Float16_b, DataFormat.Float16, DataFormat.Bfp8_b], all_same=True
+)  # Generate format combinations with all formats being the same (flag set to True), refer to `param_config.py` for more details.
+all_params = generate_params(
+    ["fill_dest_test"], all_format_combos, dest_acc=["", "DEST_ACC"]
+)
+param_ids = generate_param_ids(all_params)
 
 
 @pytest.mark.parametrize(
-    "format, dest_acc, testname", param_combinations, ids=param_ids
+    "testname, formats, dest_acc", clean_params(all_params), ids=param_ids
 )
-def test_fill_dest(format, testname, dest_acc):
+def test_fill_dest(testname, formats, dest_acc):
 
-    if format == "Float16" and dest_acc == "DEST_ACC":
+    if formats.unpack_src == DataFormat.Float16 and dest_acc == "DEST_ACC":
         pytest.skip(reason="This combination is not fully implemented in testing")
+
+    #  When running hundreds of tests, failing tests may cause incorrect behavior in subsequent passing tests.
+    #  To ensure accurate results, for now we reset board after each test.
+    #  Fix this: so we only reset after failing tests
+    if full_sweep:
+        run_shell_command(f"cd .. && make clean")
+        run_shell_command(f"tt-smi -r 0")
 
     pack_start_address = 0x1C000
     pack_addresses = [pack_start_address + 0x1000 * i for i in range(16)]
 
-    src_A, src_B = generate_stimuli(format)
-    golden = generate_golden([2] * 16, src_A, src_B, format)
-    write_stimuli_to_l1(src_A, src_B, format)
+    src_A, src_B = generate_stimuli(formats.unpack_src)
+    golden = generate_golden([2] * 16, src_A, src_B, formats.pack_dst)
+    write_stimuli_to_l1(src_A, src_B, formats.unpack_src)
 
     test_config = {
-        "input_format": format,
-        "output_format": format,
+        "formats": formats,
         "testname": testname,
         "dest_acc": dest_acc,
     }
@@ -81,8 +87,9 @@ def test_fill_dest(format, testname, dest_acc):
     res_from_L1 = []
 
     for address in pack_addresses:
-        res_from_L1.append(collect_results(format, address))
-
+        res_from_L1.append(
+            collect_results(formats, address)
+        )  # Bug patchup in (unpack.py): passing formats struct to check unpack_src with pack_dst and distinguish when input and output formats have different exponent widths then reading from L1 changes
     res_from_L1 = flatten_list(res_from_L1)
 
     assert len(res_from_L1) == len(golden)
@@ -91,24 +98,27 @@ def test_fill_dest(format, testname, dest_acc):
     golden_tensor = torch.tensor(
         golden,
         dtype=(
-            format_dict[format]
-            if format in ["Float16", "Float16_b"]
+            format_dict[formats.pack_dst]
+            if formats.pack_dst in [DataFormat.Float16, DataFormat.Float16_b]
             else torch.bfloat16
         ),
     )
     res_tensor = torch.tensor(
         res_from_L1,
         dtype=(
-            format_dict[format]
-            if format in ["Float16", "Float16_b"]
+            format_dict[formats.pack_dst]
+            if formats.pack_dst in [DataFormat.Float16, DataFormat.Float16_b]
             else torch.bfloat16
         ),
     )
 
-    if format == "Float16_b" or format == "Float16":
+    if (
+        formats.pack_dst == DataFormat.Float16_b
+        or formats.pack_dst == DataFormat.Float16
+    ):
         atol = 0.05
         rtol = 0.1
-    elif format == "Bfp8_b":
+    elif formats.pack_dst == DataFormat.Bfp8_b:
         atol = 0.1
         rtol = 0.2
 

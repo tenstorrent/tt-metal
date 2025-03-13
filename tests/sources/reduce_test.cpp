@@ -38,7 +38,7 @@ void run_kernel()
     volatile uint32_t* const buffer_B = reinterpret_cast<volatile uint32_t*>(0x1b000);
 
     _llk_unpack_AB_hw_configure_<is_fp32_dest_acc_en, StochRndType::None>(
-        DATA_FORMAT, DATA_FORMAT, DATA_FORMAT, DATA_FORMAT, FACE_R_DIM, within_face_16x16_transpose);
+        UNPACK_IN, UNPACK_IN, UNPACK_OUT, UNPACK_OUT, FACE_R_DIM, within_face_16x16_transpose);
     _llk_unpack_AB_init_<>(FACE_C_DIM, 4, false, within_face_16x16_transpose, 0);
     _llk_unpack_AB_<>(L1_ADDRESS(buffer_A), L1_ADDRESS(buffer_B), within_face_16x16_transpose);
 }
@@ -59,7 +59,7 @@ void run_kernel()
     const bool is_int_fpu_en     = false;
 
     _llk_math_pack_sync_init_<DstSync::SyncFull, is_fp32_dest_acc_en>();
-    _llk_math_hw_configure_<false, row_pool>(DATA_FORMAT, DATA_FORMAT);
+    _llk_math_hw_configure_<false, row_pool>(MATH_FORMAT, MATH_FORMAT);
     _llk_math_wait_for_dest_available_<DstSync::SyncFull>();
     _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, math_fid>(within_face_16x16_transpose);
     _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, math_fid, is_fp32_dest_acc_en, is_int_fpu_en>(0);
@@ -81,12 +81,12 @@ void run_kernel()
     std::fill(buffer_Dest, buffer_Dest + 16 * 16 * 4, 0xdeadbeef);
 
 #ifdef ARCH_BLACKHOLE
-    _llk_pack_hw_configure_<false, is_fp32_dest_acc_en, false>(DATA_FORMAT, DATA_FORMAT, 16 * 16 * 4);
+    _llk_pack_hw_configure_<false, is_fp32_dest_acc_en, false>(PACK_IN, PACK_OUT, 16 * 16 * 4);
 #else
-    _llk_pack_hw_configure_<false, is_fp32_dest_acc_en>(DATA_FORMAT, DATA_FORMAT, 16 * 16 * 4);
+    _llk_pack_hw_configure_<false, is_fp32_dest_acc_en>(PACK_IN, PACK_OUT, 16 * 16 * 4);
 #endif
 
-    _llk_pack_init_<false, false, DstTileFaceLayout::RowMajor, false>(DATA_FORMAT);
+    _llk_pack_init_<false, false, DstTileFaceLayout::RowMajor, false>(PACK_OUT);
     _llk_pack_reduce_mask_config_<false, REDUCE_DIM>();
 
 #ifdef ARCH_BLACKHOLE

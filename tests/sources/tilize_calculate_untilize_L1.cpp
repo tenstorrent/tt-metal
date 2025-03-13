@@ -36,15 +36,15 @@ volatile uint32_t* const buffer_B_tilized = reinterpret_cast<volatile uint32_t*>
 
 void run_kernel()
 {
-    _llk_unpack_tilize_hw_configure_<is_fp32_dest_acc_en, StochRndType::None>(DATA_FORMAT, DATA_FORMAT, FACE_R_DIM, 0, 4);
+    _llk_unpack_tilize_hw_configure_<is_fp32_dest_acc_en, StochRndType::None>(UNPACK_IN, UNPACK_OUT, FACE_R_DIM, 0, 4);
 
-    _llk_unpack_tilize_init_(DATA_FORMAT, DATA_FORMAT, 1, FACE_R_DIM, false);
-    _llk_unpack_tilize_(L1_ADDRESS(buffer_A), 0, DATA_FORMAT, 1, FACE_R_DIM, 4, false);
+    _llk_unpack_tilize_init_(UNPACK_IN, UNPACK_OUT, 1, FACE_R_DIM, false);
+    _llk_unpack_tilize_(L1_ADDRESS(buffer_A), 0, UNPACK_IN, 1, FACE_R_DIM, 4, false);
 
-    _llk_unpack_tilize_init_(DATA_FORMAT, DATA_FORMAT, 1, FACE_R_DIM, false);
-    _llk_unpack_tilize_(L1_ADDRESS(buffer_B), 0, DATA_FORMAT, 1, FACE_R_DIM, 4, false);
+    _llk_unpack_tilize_init_(UNPACK_IN, UNPACK_OUT, 1, FACE_R_DIM, false);
+    _llk_unpack_tilize_(L1_ADDRESS(buffer_B), 0, UNPACK_IN, 1, FACE_R_DIM, 4, false);
 
-    _llk_unpack_AB_hw_configure_<is_fp32_dest_acc_en, StochRndType::None>(DATA_FORMAT, DATA_FORMAT, DATA_FORMAT, DATA_FORMAT, FACE_R_DIM, 0, 4);
+    _llk_unpack_AB_hw_configure_<is_fp32_dest_acc_en, StochRndType::None>(UNPACK_IN, UNPACK_IN, UNPACK_OUT, UNPACK_OUT, FACE_R_DIM, 0, 4);
     _llk_unpack_AB_init_<>();
     _llk_unpack_AB_<>(L1_ADDRESS(buffer_A_tilized), L1_ADDRESS(buffer_B_tilized));
 }
@@ -70,23 +70,23 @@ void run_kernel()
 
 // copy srca to dest
 #ifdef ARCH_BLACKHOLE
-    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, BroadcastType::NONE, TILIZE, is_fp32_dest_acc_en, is_int_fpu_en>(0, 0, 4, DATA_FORMAT);
+    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, BroadcastType::NONE, TILIZE, is_fp32_dest_acc_en, is_int_fpu_en>(0, 0, 4, MATH_FORMAT);
 #else
-    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, BroadcastType::NONE, is_fp32_dest_acc_en, is_int_fpu_en>(0, 0, 4, DATA_FORMAT);
+    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, BroadcastType::NONE, is_fp32_dest_acc_en, is_int_fpu_en>(0, 0, 4, MATH_FORMAT);
 #endif
 
     _llk_math_pack_sync_init_<DstSync::SyncFull, is_fp32_dest_acc_en>();
-    _llk_math_hw_configure_<false, false>(DATA_FORMAT, DATA_FORMAT);
+    _llk_math_hw_configure_<false, false>(MATH_FORMAT, MATH_FORMAT);
 
     // copy tilized inputs to dest indexes 0 and 1
     _llk_math_wait_for_dest_available_<DstSync::SyncFull>();
     _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncFull, BroadcastType::NONE, is_fp32_dest_acc_en, false>(
-        operand_A_dst_index, DATA_FORMAT, DATA_FORMAT);
+        operand_A_dst_index, MATH_FORMAT, MATH_FORMAT);
     _llk_math_dest_section_done_<DstSync::SyncFull, is_fp32_dest_acc_en>();
 
     _llk_math_wait_for_dest_available_<DstSync::SyncFull>();
     _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncFull, BroadcastType::NONE, is_fp32_dest_acc_en, false>(
-        operand_B_dst_index, DATA_FORMAT, DATA_FORMAT);
+        operand_B_dst_index, MATH_FORMAT, MATH_FORMAT);
     _llk_math_dest_section_done_<DstSync::SyncFull, is_fp32_dest_acc_en>();
 
     _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BroadcastType::NONE, MATH_FIDELITY>(4, 0, 0);
@@ -117,12 +117,12 @@ void run_kernel()
     std::fill(buffer_Dest, buffer_Dest + 16 * 16 * 4, 0xdeadbeef);
 
 #ifdef ARCH_BLACKHOLE
-    _llk_pack_hw_configure_<UNTILIZE, is_fp32_dest_acc_en, TILIZE>(DATA_FORMAT, DATA_FORMAT, 16 * 16 * 4);
-    _llk_pack_init_<UNTILIZE, false, DstTileFaceLayout::RowMajor, false, TILIZE>(DATA_FORMAT);
+    _llk_pack_hw_configure_<UNTILIZE, is_fp32_dest_acc_en, TILIZE>(PACK_IN, PACK_OUT, 16 * 16 * 4);
+    _llk_pack_init_<UNTILIZE, false, DstTileFaceLayout::RowMajor, false, TILIZE>(PACK_OUT);
     _llk_pack_dest_init_<DstSync::SyncFull, DstTileFaceLayout::RowMajor, is_fp32_dest_acc_en>();
 #else
-    _llk_pack_hw_configure_<UNTILIZE, is_fp32_dest_acc_en>(DATA_FORMAT, DATA_FORMAT, 16 * 16 * 4);
-    _llk_pack_init_<UNTILIZE, false, DstTileFaceLayout::RowMajor, false>(DATA_FORMAT);
+    _llk_pack_hw_configure_<UNTILIZE, is_fp32_dest_acc_en>(PACK_IN, PACK_OUT, 16 * 16 * 4);
+    _llk_pack_init_<UNTILIZE, false, DstTileFaceLayout::RowMajor, false>(PACK_OUT);
     _llk_pack_dest_init_<DstSync::SyncFull, DstTileFaceLayout::RowMajor, UNTILIZE, is_fp32_dest_acc_en>();
 #endif
 
@@ -137,8 +137,8 @@ void run_kernel()
     // Needed to reconfigure pack for regular not tilized pack for BH
 
 #ifdef ARCH_BLACKHOLE
-    _llk_pack_hw_configure_<UNTILIZE, is_fp32_dest_acc_en, !TILIZE>(DATA_FORMAT, DATA_FORMAT, 16 * 16 * 4);
-    _llk_pack_init_<UNTILIZE, false, DstTileFaceLayout::RowMajor, false, !TILIZE>(DATA_FORMAT);
+    _llk_pack_hw_configure_<UNTILIZE, is_fp32_dest_acc_en, !TILIZE>(PACK_IN, PACK_OUT, 16 * 16 * 4);
+    _llk_pack_init_<UNTILIZE, false, DstTileFaceLayout::RowMajor, false, !TILIZE>(PACK_OUT);
 #endif
 
     _llk_packer_wait_for_math_done_();

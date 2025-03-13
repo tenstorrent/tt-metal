@@ -14,28 +14,33 @@ def generate_golden(operand1, data_format):
     return A_untilized.flatten()
 
 
-param_combinations = [
-    (format, testname)
-    for format in ["Float16_b", "Float16"]
-    for testname in ["unpack_untilize_test"]
-]
+full_sweep = False
+all_format_combos = generate_format_combinations(
+    [DataFormat.Float16_b, DataFormat.Float16], all_same=True
+)  # Generate format combinations with all formats being the same (flag set to True), refer to `param_config.py` for more details.
+all_params = generate_params(["unpack_untilize_test"], all_format_combos)
+param_ids = generate_param_ids(all_params)
 
-param_ids = [f" format={comb[0]} " for comb in param_combinations]
 
+@pytest.mark.parametrize("testname, formats", clean_params(all_params), ids=param_ids)
+def test_unpack_untilze(testname, formats):
 
-@pytest.mark.parametrize("format,testname", param_combinations, ids=param_ids)
-def test_unpack_untilze(format, testname):
+    #  When running hundreds of tests, failing tests may cause incorrect behavior in subsequent passing tests.
+    #  To ensure accurate results, for now we reset board after each test.
+    #  Fix this: so we only reset after failing tests
+    if full_sweep:
+        run_shell_command(f"cd .. && make clean")
+        run_shell_command(f"tt-smi -r 0")
 
-    src_A, src_B = generate_stimuli(format)
+    src_A, src_B = generate_stimuli(formats.unpack_src)
     src_B = torch.full((1024,), 0)
 
-    golden_tensor = generate_golden(src_A, format)
+    golden_tensor = generate_golden(src_A, formats.pack_dst)
 
-    write_stimuli_to_l1(src_A, src_B, format)
+    write_stimuli_to_l1(src_A, src_B, formats.unpack_src)
 
     test_config = {
-        "input_format": format,
-        "output_format": format,
+        "formats": formats,
         "testname": testname,
     }
 
@@ -44,7 +49,9 @@ def test_unpack_untilze(format, testname):
 
     run_elf_files(testname)
 
-    res_from_L1 = collect_results(format)
+    res_from_L1 = collect_results(
+        formats
+    )  # Bug patchup in (unpack.py): passing formats struct to check unpack_src with pack_dst and distinguish when input and output formats have different exponent widths then reading from L1 changes
 
     run_shell_command("cd .. && make clean")
 
@@ -54,16 +61,16 @@ def test_unpack_untilze(format, testname):
     res_tensor = torch.tensor(
         res_from_L1,
         dtype=(
-            format_dict[format]
-            if format in ["Float16", "Float16_b"]
+            format_dict[formats.pack_dst]
+            if formats.pack_dst in [DataFormat.Float16, DataFormat.Float16_b]
             else torch.bfloat16
         ),
     )
 
-    if format == "Float16_b" or format == "Float16":
+    if formats.pack_dst in [DataFormat.Float16_b, DataFormat.Float16]:
         atol = 0.1
         rtol = 0.05
-    elif format == "Bfp8_b":
+    elif formats.pack_dst == DataFormat.Bfp8_b:
         atol = 0.1
         rtol = 0.2
 

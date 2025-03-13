@@ -5,7 +5,8 @@ import os
 import torch
 import numpy as np
 import subprocess
-from .format_arg_mapping import format_dict, format_sizes
+from .format_arg_mapping import format_sizes
+from .format_config import DataFormat
 
 torch.set_printoptions(linewidth=500, sci_mode=False, precision=2, threshold=10000)
 
@@ -51,7 +52,7 @@ def calculate_read_words_count(format, sfpu=False):
         raise ValueError(f"Unsupported format: {format}")
 
     if sfpu:  # for now just for 16 bit formats
-        return 256 if format in ["Float32", "Int32"] else 128
+        return 256 if format in [DataFormat.Float32, DataFormat.Int32] else 128
 
     return format_sizes[format]
 
