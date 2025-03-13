@@ -97,7 +97,6 @@ class Transformer(LightweightModule):
             state_dict=state_dict,
             state_dict_prefix=state_dict_prefix,
             weight_cache_path=weight_cache_path,
-            max_columns_per_device=self.args.max_columns_per_device_lm_head,
         )
 
     def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
