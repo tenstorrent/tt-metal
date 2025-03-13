@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstring>
+#include <cstdint>
 #include <vector>
 #include <optional>
 #include <functional>

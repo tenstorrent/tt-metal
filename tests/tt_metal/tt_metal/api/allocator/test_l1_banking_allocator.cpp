@@ -7,6 +7,7 @@
 #include "device_fixture.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/allocator.hpp>
 
 // FIXME: ARCH_NAME specific
 #include "dev_mem_map.h"

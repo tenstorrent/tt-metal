@@ -10,6 +10,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <algorithm>
 
 using namespace tt::constants;

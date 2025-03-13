@@ -24,6 +24,7 @@
 #include <random>
 
 #include "command_queue_fixture.hpp"
+#include <tt-metalium/allocator.hpp>
 
 namespace tt::tt_metal {
 struct CBConfig {
