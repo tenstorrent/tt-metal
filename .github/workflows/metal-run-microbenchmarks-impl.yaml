@@ -1,0 +1,104 @@
+name: "[internal] metal - Run microbenchmarks impl"
+
+on:
+  workflow_call:
+    inputs:
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      docker-image:
+        required: true
+        type: string
+
+jobs:
+  run-microbenchmarks:
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      matrix:
+        runner-info: [
+          # Do not run N150 on microbenchmarks for now as we do not have the machines for it
+          # {arch: wormhole_b0, runs-on: ["pipeline-perf", "N150", "bare-metal", "in-service"]},
+          # N300
+          {arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"]},
+          {arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"], ccl: true},
+          # T3000
+          {
+              name: "T3000 uBenchmark tests",
+              arch: wormhole_b0,
+              runs-on: ["arch-wormhole_b0", "config-t3000", "pipeline-perf", "in-service"],
+              is-t3k: true
+          },
+        ]
+    container:
+      image: ${{ inputs.docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ matrix.runner-info.arch }}
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    runs-on: ${{ matrix.runner-info.runs-on }}
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
+      - name: ⬇️ Download Build
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.build-artifact-name }}
+          path: docker-job
+      - name: Extract files
+        run: tar -xvf ttm_any.tar
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.wheel-artifact-name }}
+          path: docker-job
+      - name: Install Wheel
+        run: |
+          WHEEL_FILENAME=$(ls -1 *.whl)
+          pip3 install $WHEEL_FILENAME
+      - name: Run microbenchmark tests
+        timeout-minutes: 90
+        run: |
+          PIPELINE_TYPE="microbenchmarks"
+          if [ "${{ matrix.runner-info.ccl }}" == "true" ]; then
+            PIPELINE_TYPE="ccl_microbenchmarks"
+          elif [ "${{ matrix.runner-info.is-t3k }}" == "true" ]; then
+            PIPELINE_TYPE="T3K_microbenchmark"
+          else
+            TT_METAL_SLOW_DISPATCH_MODE=1 ./tests/scripts/run_tunneler_tests.sh --machine-type ${{ matrix.runner-info.runs-on[0] }}
+          fi
+          ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.runner-info.arch }} --pipeline-type "$PIPELINE_TYPE"
+      - name: Upload microbenchmark report csvs
+        uses: actions/upload-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: microbenchmark-report-csv-${{ matrix.runner-info.arch }}
+          path: generated/profiler/.logs
+      - name: Cleanup
+        if: always()
+        run: |
+          # We are forced to checkout the repo into a subdir of the host's workdir; this pollutes the host
+          # with root-owned files.  Be sure to clean up after ourselves in case we're on a non-ephemeral runner.
+          echo "pre rm"
+          ls -al /__w/tt-metal/tt-metal
+          rm -rf /__w/tt-metal/tt-metal/docker-job
+          echo "post rm"
+          ls -al /__w/tt-metal/tt-metal
