@@ -528,6 +528,116 @@ uint32_t generate_max_out_nsticks_per_core(const std::vector<ShardBoundary>& sha
     return max_out_nsticks_per_core;
 }
 
+struct GatherHeader {
+    uint16_t noc_x;
+    uint16_t noc_y;
+    uint16_t num_transfers;
+};
+
+struct GatherTransfer {
+    uint16_t src_id;
+    uint16_t dst_id;
+    uint16_t size;
+};
+
+struct GatherRoute {
+    GatherHeader header;
+    std::vector<GatherTransfer> transfers;
+};
+
+struct GatherConfig {
+    std::vector<GatherRoute> routes;
+};
+
+void serialize_gather_header(const GatherHeader& header, std::vector<uint16_t>& output) {
+    output.push_back(header.noc_x);
+    output.push_back(header.noc_y);
+    output.push_back(header.num_transfers);
+}
+
+void serialize_gather_transfer(const GatherTransfer& transfer, std::vector<uint16_t>& output) {
+    output.push_back(transfer.src_id);
+    output.push_back(transfer.dst_id);
+    output.push_back(transfer.size);
+}
+
+void serialize_gather_route(const GatherRoute& route, std::vector<uint16_t>& output) {
+    serialize_gather_header(route.header, output);
+    for (const auto& transfer : route.transfers) {
+        serialize_gather_transfer(transfer, output);
+    }
+}
+
+// [num_routes] [route0] [route1] ...
+std::vector<uint16_t> serialize_gather_config(const GatherConfig& config) {
+    std::vector<uint16_t> output;
+    output.push_back(config.routes.size());
+    for (const auto& route : config.routes) {
+        serialize_gather_route(route, output);
+        tt::log_info("added route {}", output);
+    }
+    return output;
+}
+
+std::vector<std::vector<uint16_t>> serialize_gather_configs(const std::vector<GatherConfig>& configs) {
+    std::vector<std::vector<uint16_t>> serialized_configs;
+    for (const auto& config : configs) {
+        const auto c = serialize_gather_config(config);
+        serialized_configs.push_back(c);
+    }
+
+    // Pad each core's config to the same length so we can shard it
+    size_t max_size = 0;
+    for (const auto& config : serialized_configs) {
+        max_size = std::max(max_size, config.size());
+    }
+    max_size = round((max_size + 1) / 2) * 2;  // Align to 32 bytes by adding a value - do we need to do this?
+    for (std::vector<uint16_t>& config : serialized_configs) {
+        config.resize(max_size, 0);
+    }
+
+    return serialized_configs;
+}
+
+void run(std::vector<uint16_t> config) {
+    const uint16_t total_number_of_segments = config[0];
+
+    uint16_t number_of_segments_remaining = total_number_of_segments;
+    uint16_t index = 1;
+
+    uint16_t current_noc_x = 0;
+    uint16_t current_noc_y = 0;
+    uint16_t transfers_remaining = 0;
+
+    uint16_t src_offset = 0;
+    uint16_t dst_offset = 0;
+    uint16_t transfer_size = 0;
+
+    while (number_of_segments_remaining) {
+        // read header
+        current_noc_x = config[index++];
+        current_noc_y = config[index++];
+        transfers_remaining = config[index++];
+
+        while (transfers_remaining > 0) {
+            src_offset = config[index++];
+            dst_offset = config[index++];
+            transfer_size = config[index++];
+            // do copy
+            tt::log_info(
+                "copy x={} y={} src={} dst={} size={}",
+                current_noc_x,
+                current_noc_y,
+                src_offset,
+                dst_offset,
+                transfer_size);
+
+            transfers_remaining--;
+        }
+        number_of_segments_remaining--;
+    }
+}
+
 std::tuple<
     std::vector<std::vector<uint16_t>>,
     std::vector<std::vector<uint16_t>>,
@@ -549,8 +659,8 @@ generate_halo_kernel_config_tensors(
     };
 
     PerCoreGatherData
-        per_core_gather_data;  // This maps all routes (src_core->dst_core) onto a sequence of operations on the input
-                               // sticks that can be padding, local copy/transfer, or remote copy/transfer
+        per_core_gather_data;  // This maps all routes (src_core->dst_core) onto a sequence of operations on the
+                               // input sticks that can be padding, local copy/transfer, or remote copy/transfer
 
     uint32_t num_cores_nhw = shard_boundaries.size();
 
@@ -582,6 +692,7 @@ generate_halo_kernel_config_tensors(
 
     const int block_size = 32;
     const auto blocked_gather_data = reblock_per_core_gather_data(per_core_gather_data, block_size);
+
     const auto blocking_configs = generate_blocking_configs(blocked_gather_data, num_cores_nhw);
     const auto flattened_blocking_configs = flatten_blocking_config(blocking_configs, num_cores_nhw);
 
@@ -601,13 +712,6 @@ generate_halo_kernel_config_tensors(
      * dst_start0, length0, src_start1, dst_start1, length1, ...], (nocx, nocy, len) -> [src_start0, dst_start0,
      * length0, src_start1, dst_start1, length1, ...], ...}
      */
-
-    /*
-    header = {x: u16, y: u16, len: u16}
-    copy = {src: u16, dst: u16, num_sticks: u16}
-    config = {hdr: header, transfers: copy[]} -> [num_items] [config] [config] [config]
-    block_config = { block_sizes: u16[]} -> [num_blocks] [block_size] [block_size] ...
-    */
 
     std::vector<std::vector<uint32_pair_t>> pad_config;
     std::vector<std::pair<uint32_triplet_t, std::vector<uint32_triplet_t>>> local_config;
@@ -644,6 +748,29 @@ generate_halo_kernel_config_tensors(
     tt::log_info("local config = {}", local_config);
     tt::log_info("remote config = {}", remote_config);
     validate_blocking_configs(blocking_configs, local_config, remote_config);
+
+    std::vector<GatherConfig> gather_configs(num_cores_nhw);
+    for (int core_id = 0; core_id < local_config.size(); core_id++) {
+        const auto& config = local_config[core_id];
+        const auto& [src_core_id, dst_core_id, num_copies] = config.first;
+        std::vector<GatherTransfer> transfers;
+        for (const auto& transfer : config.second) {
+            const uint16_t src_offset_id = std::get<0>(transfer);
+            const uint16_t dst_offset_id = std::get<1>(transfer);
+            const uint16_t size = std::get<2>(transfer);
+            transfers.emplace_back(src_offset_id, dst_offset_id, size);
+        }
+        GatherHeader header{src_core_id, dst_core_id, transfers.size()};
+        gather_configs[core_id].routes.push_back(GatherRoute{header, transfers});
+    }
+
+    const auto serialized_gather_configs = serialize_gather_configs(gather_configs);
+    tt::log_info("gather config = {}", gather_configs);
+    tt::log_info("serialized gather config = {}", serialized_gather_configs);
+    run(serialized_gather_configs[0]);
+    run(serialized_gather_configs[1]);
+    run(serialized_gather_configs[2]);
+    run(serialized_gather_configs[3]);
 
     // flatten and uniformize the lengths of each config list
     auto flatten_pad_config = [](auto& config) -> std::vector<std::vector<uint16_t>> {
@@ -757,13 +884,15 @@ generate_halo_kernel_config_tensors(
         }
     };
 
+    tt::log_info("flattened local config = {} ", flattened_local_config);
+
     align_config(flattened_pad_config, 2);
     align_config(flattened_local_config, 2);
     align_config(flattened_remote_config, 2);
 
     return std::make_tuple(
         flattened_pad_config,
-        flattened_local_config,
+        serialized_gather_configs,
         flattened_remote_config,
         flattened_blocking_configs.local,
         flattened_blocking_configs.remote);
