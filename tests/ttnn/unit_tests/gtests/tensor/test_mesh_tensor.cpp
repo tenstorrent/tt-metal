@@ -29,6 +29,7 @@ using ::testing::SizeIs;
 using ::testing::ThrowsMessage;
 
 using MeshTensorTest = GenericMeshDeviceFixture;
+using MeshTensorTestT3K = T3000MeshDeviceFixture;
 
 TEST_F(MeshTensorTest, Lifecycle) {
     const TensorSpec tensor_spec =
@@ -61,9 +62,7 @@ TEST_F(MeshTensorTest, Lifecycle) {
     EXPECT_FALSE(input_tensor.is_allocated());
 }
 
-using MeshTensorDeviceTest = GenericMeshDeviceFixture;
-
-TEST_F(MeshTensorDeviceTest, ToHostNonMeshTensor) {
+TEST_F(MeshTensorTest, ToHostNonMeshTensor) {
     const ttnn::Shape shape{1, 1, 32, 32};
     const TensorSpec tensor_spec =
         TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
@@ -95,7 +94,7 @@ TEST_F(MeshTensorTest, ReplicateOwnedTensor) {
     auto* device_storage = std::get_if<tt::tt_metal::DeviceStorage>(&device_tensor.get_storage());
     ASSERT_NE(device_storage, nullptr);
     EXPECT_NE(device_storage->mesh_buffer, nullptr);
-    EXPECT_THAT(device_storage->specs, SizeIs(8));
+    EXPECT_THAT(device_storage->specs, SizeIs(mesh_device_->num_devices()));
     for (const auto& [coord, spec] : device_storage->specs) {
         EXPECT_THAT(spec.logical_shape(), Eq(ttnn::Shape{1, 1, 32, 32}));
     }
@@ -127,12 +126,12 @@ TEST_F(MeshTensorTest, GetDeviceTensors) {
     auto* device_storage = std::get_if<tt::tt_metal::DeviceStorage>(&device_tensor.get_storage());
     ASSERT_NE(device_storage, nullptr);
     EXPECT_NE(device_storage->mesh_buffer, nullptr);
-    EXPECT_THAT(device_storage->specs, SizeIs(8));
+    EXPECT_THAT(device_storage->specs, SizeIs(mesh_device_->num_devices()));
 
     // Validate each tensor shard.
     std::vector<Tensor> device_tensors = get_device_tensors(device_tensor);
     std::vector<distributed::MeshCoordinate> device_shard_coords;
-    EXPECT_THAT(device_tensors, SizeIs(8));
+    EXPECT_THAT(device_tensors, SizeIs(mesh_device_->num_devices()));
     for (const auto& tensor_shard : device_tensors) {
         auto* shard_storage = std::get_if<tt::tt_metal::DeviceStorage>(&tensor_shard.get_storage());
         ASSERT_NE(shard_storage, nullptr);
@@ -150,7 +149,7 @@ TEST_F(MeshTensorTest, GetDeviceTensors) {
     EXPECT_THAT(device_shard_coords, ElementsAreArray(coord_matchers));
 }
 
-TEST_F(MeshTensorTest, AggregateAsTensor) {
+TEST_F(MeshTensorTestT3K, AggregateAsTensor) {
     const ttnn::Shape shape{1, 1, 32, 32};
     const TensorSpec tensor_spec =
         TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
@@ -170,8 +169,8 @@ TEST_F(MeshTensorTest, AggregateAsTensor) {
     auto device_tensors1 = get_device_tensors(device_tensor1);
     auto device_tensors2 = get_device_tensors(device_tensor2);
 
-    EXPECT_THAT(device_tensors1, SizeIs(8));
-    EXPECT_THAT(device_tensors2, SizeIs(8));
+    EXPECT_THAT(device_tensors1, SizeIs(mesh_device_->num_devices()));
+    EXPECT_THAT(device_tensors2, SizeIs(mesh_device_->num_devices()));
 
     // Try to aggregate shards from different mesh buffers.
     EXPECT_THAT(
@@ -214,7 +213,7 @@ struct MeshTensorWriteTestParams {
     std::function<std::unique_ptr<ttnn::distributed::TensorToMesh>(MeshDevice*)> get_mapper;
 };
 
-class MeshTensorWriteTest : public T3000MultiCQMeshDeviceFixture,
+class MeshTensorWriteTest : public MeshTensorTestT3K,
                             public ::testing::WithParamInterface<MeshTensorWriteTestParams> {};
 
 TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
