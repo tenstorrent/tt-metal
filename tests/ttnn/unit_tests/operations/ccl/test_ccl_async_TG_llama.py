@@ -17,7 +17,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 
-NUM_ITERATIONS = 55
+NUM_ITERATIONS = 75
 
 PREFETCHER_NOC1_RING = [
     (6, 6),

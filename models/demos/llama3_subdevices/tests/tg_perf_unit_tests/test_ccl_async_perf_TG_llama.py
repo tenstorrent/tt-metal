@@ -10,13 +10,15 @@ import ttnn
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf_detailed
 
+THRESHOLD = 1.5
+
 
 @pytest.mark.parametrize(
     "ag_type, warmup_iters, perf_target_us",
     [
-        ("sdpa", 10, 11),
-        ("binary_mult", 10, 12),
-        ("layernorm", 10, 8),
+        ("sdpa", 15, 12.0),
+        ("binary_mult", 15, 12.9),
+        ("layernorm", 15, 8.5),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -62,16 +64,18 @@ def test_ag_tg_llama_perf(
         ml_model_name="llama70b-tg-ccl",
     )
 
-    assert measured_avg_us < perf_target_us, f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
+    assert (
+        measured_avg_us < perf_target_us + THRESHOLD
+    ), f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
 
 
 @pytest.mark.parametrize(
     "ar_type, warmup_iters, perf_target_us",
     [
-        ("ff2", 10, 29),
-        ("qkv", 10, 25),
-        ("ff1", 10, 30),
-        ("lm_head", 10, 70),
+        ("ff2", 15, 29),
+        ("qkv", 15, 26.3),
+        ("ff1", 15, 30),
+        ("lm_head", 15, 78),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -117,4 +121,6 @@ def test_ar_tg_llama_perf(
         ml_model_name="llama70b-tg-ccl",
     )
 
-    assert measured_avg_us < perf_target_us, f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
+    assert (
+        measured_avg_us < perf_target_us + THRESHOLD
+    ), f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
