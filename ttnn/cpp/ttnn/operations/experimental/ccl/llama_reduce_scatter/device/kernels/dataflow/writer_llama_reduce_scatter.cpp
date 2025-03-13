@@ -98,7 +98,7 @@ void kernel_main() {
     DPRINT << "Is receiver_core: " << (uint32_t)receiver_core << " Is sender_core: " << (uint32_t)sender_core << ENDL();
 
     if (sender_core) {
-        auto packet_header_buffer_addr = get_write_ptr(packet_header_cb_id);
+        auto packet_header_buffer_addr = get_read_ptr(packet_header_cb_id);
         auto* unicast_packet_header = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
         auto* sem_inc_packet_header =
             reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_addr + sizeof(PACKET_HEADER_TYPE));
@@ -131,7 +131,7 @@ void kernel_main() {
                 DPRINT << "curr_packet_num_pages: " << curr_packet_num_pages << ENDL();
                 cb_wait_front(fabric_sender_cb_id, curr_packet_num_pages);
                 DPRINT << "cb_wait_front done" << ENDL();
-                auto sender_l1_addr = get_write_ptr(fabric_sender_cb_id);
+                auto sender_l1_addr = get_read_ptr(fabric_sender_cb_id);
                 print_tiles(fabric_sender_cb_id, 0, curr_packet_num_pages, true);
 
                 DPRINT << "packet_offset: " << packet_offset << ENDL();
