@@ -214,7 +214,7 @@ struct MeshTensorWriteTestParams {
     std::function<std::unique_ptr<ttnn::distributed::TensorToMesh>(MeshDevice*)> get_mapper;
 };
 
-class MeshTensorWriteTest : public T3kMultiDeviceFixture,
+class MeshTensorWriteTest : public T3000MultiCQMeshDeviceFixture,
                             public ::testing::WithParamInterface<MeshTensorWriteTestParams> {};
 
 TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {

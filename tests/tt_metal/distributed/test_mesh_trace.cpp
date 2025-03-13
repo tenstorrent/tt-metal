@@ -66,12 +66,6 @@ protected:
         MeshDeviceFixtureBase(Config{.mesh_device_types = {MeshDeviceType::TG}, .trace_region_size = (64 << 20)}) {}
 };
 
-class MeshTraceTestTG : public MeshDeviceFixtureBase {
-protected:
-    MeshTraceTestTG() :
-        MeshDeviceFixtureBase(Config{.mesh_device_type = MeshDeviceType::TG, .trace_region_size = (64 << 20)}) {}
-};
-
 TEST_F(MeshTraceTestSuite, Sanity) {
     auto random_seed = 10;
     uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);

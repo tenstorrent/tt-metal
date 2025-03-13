@@ -4,7 +4,7 @@
 
 #include "ttnn/tensor/tensor_utils.hpp"
 
-#include <tt-metalium/overloaded.hpp>
+#include <tt_stl/overloaded.hpp>
 
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"

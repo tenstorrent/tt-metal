@@ -229,11 +229,6 @@ protected:
     TGMeshDeviceFixture() : MeshDeviceFixtureBase(Config{.mesh_device_types = {MeshDeviceType::TG}}) {}
 };
 
-class TGMeshDeviceFixture : public MeshDeviceFixtureBase {
-protected:
-    TGMeshDeviceFixture() : MeshDeviceFixtureBase(Config{.mesh_device_type = MeshDeviceType::TG}) {}
-};
-
 class N300MultiCQMeshDeviceFixture : public MeshDeviceFixtureBase {
 protected:
     N300MultiCQMeshDeviceFixture() :
@@ -250,12 +245,6 @@ class TGMultiCQMeshDeviceFixture : public MeshDeviceFixtureBase {
 protected:
     TGMultiCQMeshDeviceFixture() :
         MeshDeviceFixtureBase(Config{.mesh_device_types = {MeshDeviceType::TG}, .num_cqs = 2}) {}
-};
-
-class TGMultiCQMeshDeviceFixture : public MeshDeviceFixtureBase {
-protected:
-    TGMultiCQMeshDeviceFixture() :
-        MeshDeviceFixtureBase(Config{.mesh_device_type = MeshDeviceType::TG, .num_cqs = 2}) {}
 };
 
 }  // namespace tt::tt_metal
