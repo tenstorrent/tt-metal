@@ -26,7 +26,6 @@
 #include <sub_device_types.hpp>
 #include <global_circular_buffer.hpp>
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
-#include "tt_metal/include/tt_metal/program.hpp"
 #include "tracy/Tracy.hpp"
 
 #include <graph_tracking.hpp>
@@ -894,8 +893,6 @@ void SynchronizeWorkerThreads(const std::vector<IDevice*>& workers) {
 
 }  // namespace detail
 
-inline namespace v0 {
-
 size_t GetNumAvailableDevices() { return tt::Cluster::instance().number_of_user_devices(); }
 
 bool IsGalaxyCluster() { return tt::Cluster::instance().is_galaxy_cluster(); }
@@ -1368,10 +1365,6 @@ void Synchronize(IDevice* device, const std::optional<uint8_t> cq_id, tt::stl::S
     }
 }
 
-}  // namespace v0
-
-namespace v1 {
-
 namespace experimental {
 
 GlobalCircularBuffer CreateGlobalCircularBuffer(
@@ -1399,8 +1392,6 @@ void UpdateDynamicCircularBufferAddress(
 }
 
 }  // namespace experimental
-
-}  // namespace v1
 
 }  // namespace tt_metal
 

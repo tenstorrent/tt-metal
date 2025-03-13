@@ -16,7 +16,7 @@
 #include <sub_device_types.hpp>
 #include <trace.hpp>
 #include <trace_buffer.hpp>
-#include <span.hpp>
+#include <tt_stl/span.hpp>
 #include <tt_align.hpp>
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 

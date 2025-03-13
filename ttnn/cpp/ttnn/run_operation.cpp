@@ -11,7 +11,7 @@
 #include "ttnn/operation.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <tracy/Tracy.hpp>
-#include <tt-metalium/reflection.hpp>
+#include <tt_stl/reflection.hpp>
 #include "tools/profiler/op_profiler.hpp"
 #include "ttnn/config.hpp"
 #include "ttnn/device_operation.hpp"

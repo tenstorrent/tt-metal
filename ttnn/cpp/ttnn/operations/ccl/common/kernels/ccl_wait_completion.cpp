@@ -7,7 +7,7 @@
 
 #include <cstdint>
 #include <array>
-#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/edm_fabric_worker_adapters.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 
 #include "debug/dprint.h"
 

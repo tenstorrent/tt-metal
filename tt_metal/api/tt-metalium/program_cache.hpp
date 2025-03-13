@@ -7,9 +7,10 @@
 #include <unordered_map>
 
 #include "program_impl.hpp"
-#include "unique_any.hpp"
+#include <tt_stl/unique_any.hpp>
 #include "mesh_workload.hpp"
-#include <tt-metalium/overloaded.hpp>
+#include <tt_stl/overloaded.hpp>
+
 namespace tt::tt_metal::program_cache::detail {
 template <typename shared_variables_t>
 struct CachedMeshWorkload {

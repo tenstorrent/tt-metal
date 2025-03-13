@@ -12,7 +12,7 @@
 #include "command_queue_interface.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "memcpy.hpp"
-#include "aligned_allocator.hpp"
+#include <tt_stl/aligned_allocator.hpp>
 #include "hal.hpp"
 #include "tt_align.hpp"
 

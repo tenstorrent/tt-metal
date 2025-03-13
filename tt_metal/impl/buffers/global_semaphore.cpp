@@ -65,15 +65,15 @@ void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value) const {
     auto* device = device_;
     device->push_work([device, reset_value, num_cores = cores_.num_cores(), buffer = buffer_] {
         std::vector<uint32_t> host_buffer(num_cores, reset_value);
-        if (auto mesh_buffer = buffer.get_mesh_buffer()) {
-            distributed::EnqueueWriteMeshBuffer(mesh_buffer->device()->mesh_command_queue(), mesh_buffer, host_buffer);
+        if (device->using_slow_dispatch()) {
+            detail::WriteToBuffer(*buffer.get_buffer(), host_buffer);
+            tt::Cluster::instance().l1_barrier(device->id());
         } else {
-            auto buffer_ptr = buffer.get_buffer();
-            if (device->using_slow_dispatch()) {
-                detail::WriteToBuffer(*buffer_ptr, host_buffer);
-                tt::Cluster::instance().l1_barrier(device->id());
+            if (auto mesh_buffer = buffer.get_mesh_buffer()) {
+                distributed::EnqueueWriteMeshBuffer(
+                    mesh_buffer->device()->mesh_command_queue(), mesh_buffer, host_buffer);
             } else {
-                EnqueueWriteBuffer(device->command_queue(), *buffer_ptr, host_buffer, false);
+                EnqueueWriteBuffer(device->command_queue(), *buffer.get_buffer(), host_buffer, false);
             }
         }
     });

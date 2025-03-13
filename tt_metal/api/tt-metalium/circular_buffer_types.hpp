@@ -19,7 +19,6 @@
 #include "circular_buffer_constants.h"
 
 namespace tt::tt_metal {
-inline namespace v0 {
 
 using CBHandle = uintptr_t;
 
@@ -129,5 +128,4 @@ private:
 bool operator==(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs);
 bool operator!=(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs);
 
-}  // namespace v0
 }  // namespace tt::tt_metal

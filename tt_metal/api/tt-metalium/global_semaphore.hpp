@@ -10,11 +10,9 @@
 #include "core_coord.hpp"
 #include "buffer_constants.hpp"
 #include "hal.hpp"
-#include "tt-metalium/mesh_buffer.hpp"
+#include "mesh_buffer.hpp"
 
 namespace tt::tt_metal {
-
-inline namespace v0 {
 
 class GlobalSemaphore {
 public:
@@ -48,8 +46,6 @@ private:
     IDevice* device_;
     CoreRangeSet cores_;
 };
-
-}  // namespace v0
 
 }  // namespace tt::tt_metal
 

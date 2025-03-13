@@ -18,7 +18,7 @@
 #include "mesh_trace_id.hpp"
 #include "small_vector.hpp"
 #include "sub_device_types.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 
 namespace tt::tt_metal {
 

@@ -11,7 +11,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 
-#include "indestructible.hpp"
+#include <tt_stl/indestructible.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tests/tt_metal/tt_metal/dispatch/sub_device_test_utils.hpp"
 #include "tests/tt_metal/distributed/utils.hpp"
@@ -57,13 +57,13 @@ protected:
 class MeshTraceTestT3000 : public MeshDeviceFixtureBase {
 protected:
     MeshTraceTestT3000() :
-        MeshDeviceFixtureBase(Config{.mesh_device_type = MeshDeviceType::T3000, .trace_region_size = (64 << 20)}) {}
+        MeshDeviceFixtureBase(Config{.mesh_device_types = {MeshDeviceType::T3000}, .trace_region_size = (64 << 20)}) {}
 };
 
 class MeshTraceTestTG : public MeshDeviceFixtureBase {
 protected:
     MeshTraceTestTG() :
-        MeshDeviceFixtureBase(Config{.mesh_device_type = MeshDeviceType::TG, .trace_region_size = (64 << 20)}) {}
+        MeshDeviceFixtureBase(Config{.mesh_device_types = {MeshDeviceType::TG}, .trace_region_size = (64 << 20)}) {}
 };
 
 TEST_F(MeshTraceTestSuite, Sanity) {

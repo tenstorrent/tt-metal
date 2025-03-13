@@ -3,13 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/tensor/tensor_impl.hpp"
+#include <fmt/format.h>
 #include <optional>
 
 #include "tt-metalium/mesh_buffer.hpp"
 #include "tt-metalium/mesh_device.hpp"
 #include "tt-metalium/mesh_command_queue.hpp"
-#include "tt-metalium/overloaded.hpp"
+#include <tt_stl/overloaded.hpp>
 #include "ttnn/distributed/distributed_tensor.hpp"
+
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
@@ -432,7 +434,7 @@ std::string to_string(
     const auto dtype = original_dtype.value_or(tensor.get_dtype());
     const auto layout = original_layout.value_or(tensor.get_layout());
 
-    if (not tensor.is_allocated()) {
+    if (!tensor.is_allocated()) {
         return fmt::format(
             "{}(<buffer is not allocated>, shape={}, dtype={}, layout={})",
             detail::TENSOR_TYPE_STRING,
@@ -441,14 +443,9 @@ std::string to_string(
             layout);
     }
 
-    if (is_tensor_on_device(tensor)) {
-        return to_string<T>(tensor.cpu(), dtype, layout);
-    }
-
     return std::visit(
-        [&](auto&& storage) -> std::string {
-            using StorageType = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<StorageType, OwnedStorage> || std::is_same_v<StorageType, BorrowedStorage>) {
+        tt::stl::overloaded{
+            [&]<OwnedOrBorrowedStorage StorageType>(const StorageType& storage) -> std::string {
                 if (tensor.get_layout() != Layout::ROW_MAJOR) {
                     if (tensor.get_dtype() == DataType::BFLOAT8_B || tensor.get_dtype() == DataType::BFLOAT4_B) {
                         return to_string<float>(ttnn::to_dtype(tensor, DataType::FLOAT32), dtype, layout);
@@ -461,18 +458,29 @@ std::string to_string(
                 }
 
                 const auto strides = tensor.get_tensor_spec().compute_strides();
-                if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
-                    const auto buffer = owned_buffer::get_as<T>(storage.buffer);
-                    return detail::to_string(buffer, shape, strides, dtype, layout);
-                } else {
-                    const auto buffer = borrowed_buffer::get_as<T>(storage.buffer);
-                    return detail::to_string(buffer, shape, strides, dtype, layout);
+                const auto buffer = host_buffer::get_as<T>(storage.buffer);
+                return detail::to_string(buffer, shape, strides, dtype, layout);
+            },
+            [&](const DeviceStorage& storage) -> std::string {
+                if (storage.mesh_buffer == nullptr) {
+                    // Use owned buffer path above.
+                    return to_string<T>(tensor.cpu());
                 }
-            } else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
-                TT_THROW("Cannot print a device tensor!");
-            } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
+
+                auto* mesh_device = storage.mesh_buffer->device();
+                const auto& specs = storage.specs;
+                auto specs_it = specs.begin();
                 std::stringstream ss;
-                auto device_tensors = ttnn::distributed::get_tensors_from_multi_device_storage(tensor);
+                apply(tensor.cpu(), [&](const Tensor& device_shard) {
+                    const distributed::MeshCoordinate coord = (specs_it++)->first;
+                    ss << "device_id: " << mesh_device->get_device(coord)->id() << ", " << coord << std::endl;
+                    ss << to_string<T>(device_shard) << std::endl;
+                });
+                return ss.str();
+            },
+            [&](const MultiDeviceHostStorage& storage) -> std::string {
+                std::stringstream ss;
+                auto device_tensors = ttnn::distributed::get_device_tensors(tensor);
                 for (size_t i = 0; i < device_tensors.size(); i++) {
                     ss << to_string<T>(device_tensors[i]);
                     if (i + 1 != device_tensors.size()) {
@@ -480,10 +488,7 @@ std::string to_string(
                     }
                 }
                 return ss.str();
-            } else {
-                // raise_unsupported_storage<StorageType>();
-            }
-        },
+            }},
         tensor.get_storage());
 }
 
@@ -1219,11 +1224,6 @@ Tensor to_layout(const Tensor& tensor, Layout target_layout) {
 
     return std::visit(
         [&tensor, &target_layout](auto&& storage) -> Tensor {
-            using StorageType = std::decay_t<decltype(storage)>;
-            if constexpr (
-                !std::is_same_v<StorageType, OwnedStorage> && !std::is_same_v<StorageType, MultiDeviceHostStorage>) {
-                // raise_unsupported_storage<StorageType>();
-            }
             return Tensor(
                 storage,
                 TensorSpec(
@@ -1279,7 +1279,7 @@ Tensor pad(
     const ttnn::Shape& output_padded_shape,
     const ttnn::Shape& input_tensor_start,
     float pad_value) {
-    if (ttnn::distributed::is_host_mesh_tensor(tensor)) {
+    if (ttnn::distributed::is_multi_device_tensor(tensor)) {
         return transform(tensor, [&](const Tensor& device_tensor) {
             return pad<T>(device_tensor, output_padded_shape, input_tensor_start, pad_value);
         });

@@ -6,7 +6,6 @@
 
 #include <cstdint>
 #include <memory>
-#include <variant>
 
 #include "core_coord.hpp"
 #include "buffer_constants.hpp"
@@ -15,14 +14,8 @@
 
 namespace tt::tt_metal {
 
-inline namespace v0 {
-
 class Buffer;
 class IDevice;
-
-}  // namespace v0
-
-namespace v1 {
 
 namespace experimental {
 
@@ -71,15 +64,13 @@ private:
 
 }  // namespace experimental
 
-}  // namespace v1
-
 }  // namespace tt::tt_metal
 
 namespace std {
 
 template <>
-struct hash<tt::tt_metal::v1::experimental::GlobalCircularBuffer> {
-    std::size_t operator()(const tt::tt_metal::v1::experimental::GlobalCircularBuffer& global_circular_buffer) const;
+struct hash<tt::tt_metal::experimental::GlobalCircularBuffer> {
+    std::size_t operator()(const tt::tt_metal::experimental::GlobalCircularBuffer& global_circular_buffer) const;
 };
 
 }  // namespace std
