@@ -27,6 +27,14 @@ def search_for_tt_smi_version_in_log_file_(log_file):
 
 
 def get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, workflow_run_id: int):
+    """
+    Read the job output log for the tt-smi version. The tt-smi version is printed in the
+    Set up runner step, where we call tt-smi-metal -s to dump the smi output.
+    The tt-smi version stored in the "host_sw_vers" dict is only available in
+    higher versions of tt-smi (3.0.4+). For older versions we will not be able to extract
+    the smi version directly from the smi output log dump.
+    See: https://github.com/tenstorrent/tt-metal/issues/19095
+    """
     logs_dir = workflow_outputs_dir / str(workflow_run_id) / "logs"
 
     log_files = logs_dir.glob("*.log")
