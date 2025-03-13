@@ -22,11 +22,11 @@ do
         timeout $TIME_LIMIT tt-smi -r 0 || exit 1
         RESET_BOARD=0
 
-        if [[ "FORCE_AICLK" -eq 1]]; then
+        if [[ "FORCE_AICLK" -eq 1 ]]; then
             ./bh_force_aiclk 1350
         fi
 
-        if [[ "GO_BUSY" -eq 1]]; then
+        if [[ "GO_BUSY" -eq 1 ]]; then
             ./go_busy --message go_busy
         fi
     fi
