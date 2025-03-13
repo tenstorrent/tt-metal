@@ -85,6 +85,11 @@ void run_single_core_tilize_matmul(tt_metal::IDevice* device) {
             .set_page_size(imm_cb_index, single_tile_size);
     auto l1_imm_cb = tt_metal::CreateCircularBuffer(program, core, l1_imm_cb_config);
 
+    tt_metal::CircularBufferConfig l1_scr_cb_config =
+        tt_metal::CircularBufferConfig(dram_buffer_size, {{3, tt::DataFormat::Float16_b}})
+            .set_page_size(3, single_tile_size);
+    auto l1_scr_cb = tt_metal::CreateCircularBuffer(program, core, l1_scr_cb_config);
+
     tt_metal::CircularBufferConfig l1_dst_cb_config =
         tt_metal::CircularBufferConfig(dram_buffer_size, {{out_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(out_cb_index, single_tile_size);
