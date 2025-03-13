@@ -41,10 +41,10 @@ jobs:
         test-group: [
           { name: "TG unit tests", arch: wormhole_b0, model: unit, timeout: 30, owner_id: XXXXX},  # Add owner
           { name: "TG Fabric tests", arch: wormhole_b0, model: fabric, timeout: 30, owner_id: UJ45FEC7M},  # Allan Liu
-          { name: "TG Llama3-small unit tests", arch: wormhole_b0, model: llama3-small, timeout: 45, owner_id: U06F3ER8X9A}, # Stuti Raizada
-          { name: "TG Llama3-70b unit tests", arch: wormhole_b0, model: llama3-70b, timeout: 45, owner_id: U06F3ER8X9A}, # Stuti Raizada
+          { name: "TG Llama3-70b unit tests", arch: wormhole_b0, model: llama3-70b, timeout: 45, owner_id: U044T8U8DEF}, # Johanna Rock
           { name: "TG DRAM Prefetcher unit tests", arch: wormhole_b0, model: prefetcher, timeout: 30, owner_id: U071CKL4AFK}, # Ammar Vora, Yu Gao
           { name: "TG distributed ops tests", arch: wormhole_b0, model: distributed-ops, timeout: 15, owner_id: U044T8U8DEF},  # Johanna Rock
+          { name: "TG distributed runtime tests", arch: wormhole_b0, model: distributed-runtime, timeout: 45, owner_id: U03NG0A5ND7},  # Aditya Saigal
         ]
     name: ${{ matrix.test-group.name }}
     env:

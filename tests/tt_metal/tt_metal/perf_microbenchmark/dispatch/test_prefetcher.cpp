@@ -66,6 +66,10 @@ constexpr CoreType DISPATCH_CORE_TYPE = CoreType::WORKER;
 //////////////////////////////////////////////////////////////////////////////////////////
 using std::vector;
 using namespace tt;
+using tt::packet_queue::dispatch_packet_header_t;
+using tt::packet_queue::DispatchRemoteNetworkType;
+using tt::packet_queue::packet_switch_4B_pack;
+using tt::packet_queue::packet_switch_dest_pack;
 
 uint32_t iterations_g = DEFAULT_ITERATIONS;
 
@@ -1839,11 +1843,11 @@ void configure_for_single_chip(
     const uint32_t dispatch_h_cb_sem = dispatch_h_core_sem_0_id;
 
     std::vector<uint32_t> prefetch_compile_args = {
-        dispatch_buffer_base,                              // overridden below for prefetch_h
+        dispatch_buffer_base,                             // overridden below for prefetch_h
         DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE,  // overridden below for prefetch_h
-        dispatch_buffer_pages,                             // overridden below for prefetch_h
-        prefetch_downstream_cb_sem,                        // overridden below for prefetch_d
-        dispatch_cb_sem,                                   // overridden below for prefetch_h
+        dispatch_buffer_pages,                            // overridden below for prefetch_h
+        prefetch_downstream_cb_sem,                       // overridden below for prefetch_d
+        dispatch_cb_sem,                                  // overridden below for prefetch_h
         dev_hugepage_base_g,
         hugepage_issue_buffer_size_g,
         prefetch_q_base,
@@ -1860,11 +1864,17 @@ void configure_for_single_chip(
         prefetch_downstream_cb_sem,  // prefetch_d only
         DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
         DispatchSettings::PREFETCH_D_BUFFER_BLOCKS,  // prefetch_d only
-        0,                                            // unused: for prefetch_hd <--> dispatch_hd
-        0,                                            // unused: for prefetch_hd <--> dispatch_hd
-        0,                                            // unused: for prefetch_hd <--> dispatch_hd
-        0,                                            // unused: for prefetch_hd <--> dispatch_hd
-        0,                                            // unused: for prefetch_hd <--> dispatch_hd
+        0,                                           // unused: for prefetch_hd <--> dispatch_hd
+        0,                                           // unused: for prefetch_hd <--> dispatch_hd
+        0,                                           // unused: for prefetch_hd <--> dispatch_hd
+        0,                                           // unused: for prefetch_hd <--> dispatch_hd
+        0,                                           // unused: for prefetch_hd <--> dispatch_hd
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
     };
 
     constexpr NOC my_noc_index = NOC::NOC_0;
@@ -2146,7 +2156,14 @@ void configure_for_single_chip(
         0,
         host_completion_queue_wr_ptr,
         dev_completion_queue_wr_ptr,
-        dev_completion_queue_rd_ptr};
+        dev_completion_queue_rd_ptr,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+    };
 
     CoreCoord phys_upstream_from_dispatch_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core_g;
     if (split_dispatcher_g) {
@@ -3505,6 +3522,10 @@ int main(int argc, char** argv) {
         }
 
         if (packetized_path_en_g) {
+            using tt::packet_queue::PACKET_QUEUE_TEST_PASS;
+            using tt::packet_queue::packet_queue_test_status_to_string;
+            using tt::packet_queue::PQ_TEST_STATUS_INDEX;
+
             vector<uint32_t> prefetch_relay_mux_results = tt::llrt::read_hex_vec_from_core(
                 device_r->id(),
                 phys_prefetch_relay_mux_core,

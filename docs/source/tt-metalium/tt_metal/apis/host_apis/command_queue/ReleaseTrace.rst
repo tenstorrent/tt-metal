@@ -1,4 +1,4 @@
 ReleaseTrace
 ============
 
-.. doxygenfunction:: tt::tt_metal::v0::ReleaseTrace
+.. doxygenfunction:: tt::tt_metal::ReleaseTrace

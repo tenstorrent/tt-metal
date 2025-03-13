@@ -11,7 +11,7 @@
 #include "ttnn/operation.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <tracy/Tracy.hpp>
-#include <tt-metalium/reflection.hpp>
+#include <tt_stl/reflection.hpp>
 #include "tools/profiler/op_profiler.hpp"
 #include "ttnn/config.hpp"
 #include "ttnn/device_operation.hpp"
@@ -372,7 +372,6 @@ Tensors run_with_autoformat(
     const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& optional_output_tensors,
     const float pad_value,
-    const bool pad_c,
     QueueId cq_id) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
     ZoneScoped;
@@ -381,7 +380,7 @@ Tensors run_with_autoformat(
     Tensors formatted_input_tensors;
     formatted_input_tensors.reserve(input_tensors.size());
     for (auto& input_tensor : input_tensors) {
-        auto padded_input_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_padded_shape(), pad_c);
+        auto padded_input_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_padded_shape());
         auto pad_input = not AutoFormat::check_input_tensor_format(input_tensor, padded_input_shape);
         if (pad_input) {
             formatted_input_tensors.push_back(
@@ -396,7 +395,7 @@ Tensors run_with_autoformat(
     for (auto& optional_input_tensor : optional_input_tensors) {
         if (optional_input_tensor.has_value()) {
             auto& input_tensor = optional_input_tensor.value();
-            auto padded_input_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_padded_shape(), pad_c);
+            auto padded_input_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_padded_shape());
             auto pad_input = not AutoFormat::check_input_tensor_format(input_tensor, padded_input_shape);
             if (pad_input) {
                 formatted_optional_input_tensors.push_back(

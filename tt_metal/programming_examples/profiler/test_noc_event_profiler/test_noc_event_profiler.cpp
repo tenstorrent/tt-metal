@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,13 @@
 
 using namespace tt::tt_metal;
 
+/*
+ * This test serves as a simple, stable tt_metal executable that issues both
+ * reads and writes from Tensix to the NoC. It is used to do sanity checking of
+ * the Device Profiler's NoC event capture feature during CI in
+ * test_device_profiler.py.
+ */
+
 int main(int argc, char** argv) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
         TT_THROW("Test not supported w/ slow dispatch, exiting");
@@ -16,26 +23,21 @@ int main(int argc, char** argv) {
     bool pass = true;
 
     try {
-        /*
-         * Silicon accelerator setup
-         */
         constexpr int device_id = 0;
         IDevice* device = CreateDevice(device_id);
-
-        /*
-         * Setup program and command queue to execute along with its buffers and kernels to use
-         */
         CommandQueue& cq = device->command_queue();
         Program program = CreateProgram();
 
         constexpr CoreCoord core = {0, 0};
 
+        // See kernel cpp code for details on which noc calls are captured
         KernelHandle dram_copy_kernel_id = CreateKernel(
             program,
             "tt_metal/programming_examples/profiler/test_noc_event_profiler/kernels/loopback_dram_copy.cpp",
             core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
+        // boilerplate setup for reading and writing multiple tiles from DRAM
         constexpr uint32_t single_tile_size = 2 * (32 * 32);
         constexpr uint32_t num_tiles = 5;
         constexpr uint32_t dram_buffer_size = single_tile_size * num_tiles;
@@ -63,13 +65,6 @@ int main(int argc, char** argv) {
         const uint32_t input_bank_id = 0;
         const uint32_t output_bank_id = 0;
 
-        /*
-         * Create input data and runtime arguments, then execute
-         */
-        std::vector<uint32_t> input_vec = create_random_vector_of_bfloat16(
-            dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-        EnqueueWriteBuffer(cq, input_dram_buffer, input_vec, false);
-
         const std::vector<uint32_t> runtime_args = {
             l1_buffer->address(),
             input_dram_buffer->address(),
@@ -77,13 +72,16 @@ int main(int argc, char** argv) {
             output_dram_buffer->address(),
             output_bank_id,
             l1_buffer->size()};
-
         SetRuntimeArgs(program, dram_copy_kernel_id, core, runtime_args);
 
         EnqueueProgram(cq, program, false);
         Finish(cq);
 
+        // It is necessary to explictly dump profile results at the end of the
+        // program to get noc traces for standalone tt_metal programs.  For
+        // ttnn, this is called _automatically_
         DumpDeviceProfileResults(device, program);
+
         pass &= CloseDevice(device);
 
     } catch (const std::exception& e) {

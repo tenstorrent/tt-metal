@@ -4,6 +4,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <random>
+
 #include "command_queue_fixture.hpp"
 #include "multi_command_queue_fixture.hpp"
 #include "random_program_fixture.hpp"
@@ -16,6 +18,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/kernel.hpp>
+#include <tt-metalium/allocator.hpp>
 #include "umd/device/tt_soc_descriptor.h"
 
 namespace tt::tt_metal {

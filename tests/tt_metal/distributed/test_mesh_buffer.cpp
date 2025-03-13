@@ -4,8 +4,9 @@
 
 #include <gtest/gtest.h>
 #include <memory>
+#include <random>
 
-#include <tt-metalium/env_lib.hpp>
+#include "env_lib.hpp"
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -52,6 +53,12 @@ struct DeviceLocalShardedBufferTestConfig {
             this->tensor2d_shape_in_pages());
     }
 };
+
+void skip_for_tg() {
+    if (tt::Cluster::instance().is_galaxy_cluster()) {
+        GTEST_SKIP();
+    }
+}
 
 // MeshBuffer tests on T3000
 TEST_F(MeshBufferTestT3000, ShardedBufferInitialization) {
@@ -128,6 +135,8 @@ TEST_F(MeshBufferTestT3000, Deallocation) {
 }
 
 TEST(MeshBufferTest, DeallocationWithoutMeshDevice) {
+    // Repeated device init takes very long on TG. Skip.
+    skip_for_tg();
     for (int i = 0; i < 100; i++) {
         auto config =
             MeshDeviceConfig{.mesh_shape = MeshShape(1, 1), .offset = std::nullopt, .physical_device_ids = {}};
@@ -147,6 +156,8 @@ TEST(MeshBufferTest, DeallocationWithoutMeshDevice) {
 }
 
 TEST(MeshBufferTest, DeallocationWithMeshDeviceClosed) {
+    // Repeated device init takes very long on TG. Skip.
+    skip_for_tg();
     for (int i = 0; i < 100; i++) {
         auto config =
             MeshDeviceConfig{.mesh_shape = MeshShape(1, 1), .offset = std::nullopt, .physical_device_ids = {}};
@@ -310,8 +321,8 @@ TEST_F(MeshBufferTestSuite, ConfigValidation) {
     auto buffer = MeshBuffer::create(
         ShardedBufferConfig{
             .global_size = 16 << 10,
-            .global_buffer_shape = {64, 128},
-            .shard_shape = {64 / mesh_device_->num_rows(), 128 / mesh_device_->num_cols()}},
+            .global_buffer_shape = {128, 256},
+            .shard_shape = {128 / mesh_device_->num_rows(), 256 / mesh_device_->num_cols()}},
         device_local_config,
         mesh_device_.get());
 }

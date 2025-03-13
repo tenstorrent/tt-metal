@@ -23,18 +23,15 @@
 #include "sub_device_types.hpp"
 #include "umd/device/tt_soc_descriptor.h"
 #include "umd/device/types/xy_pair.h"
-#include "concepts.hpp"
+#include <tt_stl/concepts.hpp>
 #include "assert.hpp"
 #include <nlohmann/json.hpp>
 
 #include "hal.hpp"
 
 namespace tt::tt_metal {
-inline namespace v0 {
 
 class IDevice;
-
-}  // namespace v0
 
 class Allocator;
 
@@ -130,8 +127,6 @@ struct ShardSpecBuffer {
     DeviceAddr num_pages() const;
 };
 
-inline namespace v0 {
-
 struct BufferConfig {
     IDevice* device;
     DeviceAddr size;       // Size in bytes
@@ -153,8 +148,6 @@ struct ShardedBufferConfig {
     ShardSpecBuffer shard_parameters;
 };
 
-}  // namespace v0
-
 bool is_sharded(const TensorMemoryLayout& layout);
 
 struct BufferPageMapping {
@@ -170,8 +163,6 @@ struct BufferPageMapping {
     std::vector<uint32_t> host_page_to_local_shard_page_mapping_;
     std::vector<std::array<uint32_t, 2>> core_shard_shape_;
 };
-
-inline namespace v0 {
 
 struct BufferRegion {
     DeviceAddr offset = 0;
@@ -230,6 +221,7 @@ public:
     uint32_t num_dev_pages() const;
 
     BufferType buffer_type() const { return buffer_type_; }
+    HalMemType memory_type() const;
     CoreType core_type() const;
 
     bool is_l1() const;
@@ -328,11 +320,7 @@ private:
     static std::atomic<size_t> next_unique_id;
 };
 
-}  // namespace v0
-
 BufferPageMapping generate_buffer_page_mapping(const Buffer& buffer);
-
-inline namespace v0 {
 
 using HostDataType = std::variant<
     const std::shared_ptr<std::vector<uint8_t>>,
@@ -343,7 +331,6 @@ using HostDataType = std::variant<
     const std::shared_ptr<std::vector<bfloat16>>,
     const void*>;
 
-}  // namespace v0
 }  // namespace tt::tt_metal
 
 namespace tt::stl::json {

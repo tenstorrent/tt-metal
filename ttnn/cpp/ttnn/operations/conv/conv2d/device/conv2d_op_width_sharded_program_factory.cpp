@@ -6,6 +6,7 @@
 #include "tt-metalium/circular_buffer.hpp"
 #include "tt-metalium/circular_buffer_types.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_op_program_factory_common.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -34,7 +35,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     uint32_t groups,
     bool untilize_out,
     bool has_bias,
-    bool fuse_relu,
+    const std::optional<unary::UnaryWithParam>& fused_activation,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
     bool use_shallow_conv_variant,
@@ -585,8 +586,13 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         compute_defines["FUSE_BIAS"] = "1";
     }
 
-    if (fuse_relu) {
-        compute_defines["PACK_RELU"] = "1";
+    if (fused_activation.has_value()) {
+        if (fused_activation.value().op_type == unary::UnaryOpType::RELU) {
+            compute_defines["PACK_RELU"] = "1";
+        } else {
+            compute_defines.merge(ttnn::operations::unary::utils::get_defines(
+                fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i"));
+        }
     }
 
     if (split_reader) {
@@ -597,6 +603,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     if (packer_l1_acc) {
         compute_defines["PACKER_L1_ACC"] = "1";
     }
+
+    for (auto elem : compute_defines) {
+        log_debug(LogOp, "compute_defines: {} = {}", elem.first, elem.second);
+    }
+
     uint32_t num_output_tiles = per_core_out_matrix_height_ntiles * p_config.per_core_out_matrix_width_ntile;
     uint32_t act_tile_size = tt_metal::detail::TileSize(act_df);
     uint32_t tilized_act_tile_size = tt_metal::detail::TileSize(tilized_act_df);
@@ -700,7 +711,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     cb_indices.matmul_partials_cb = cb_indices.get_next_cb_index();
     // Share buffer if same data format
     CBHandle cb_output = 0;
-    if (interm0_df == out_df) {
+    CBHandle cb_matmul_partials = 0;
+    if (untilize_out == false && interm0_df == out_df) {
         cb_indices.out0_cb = cb_indices.get_next_cb_index();
         // CoreRangeSet cores(std::set<CoreRange>({core}));
         std::map<uint8_t, tt::DataFormat> cb_output_data_format_spec = {
@@ -720,13 +732,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
                 out_tile_size);
         }
         cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_matmul_partials_config);
+        cb_matmul_partials = cb_output;
     } else {
         // Separate buffer if not same data format
         CircularBufferConfig cb_matmul_partials_config =
             CircularBufferConfig(
                 num_output_tiles * interm0_single_tile_size, {{cb_indices.matmul_partials_cb, interm0_df}})
                 .set_page_size(cb_indices.matmul_partials_cb, interm0_single_tile_size);
-        auto cb_matmul_partials = tt_metal::CreateCircularBuffer(program, all_cores, cb_matmul_partials_config);
+        cb_matmul_partials = tt_metal::CreateCircularBuffer(program, all_cores, cb_matmul_partials_config);
         log_debug(
             LogOp,
             "Matmul Partials CB: {}, npages: {}, pagesize: {}",
@@ -741,6 +754,16 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
             cb_output_config = cb_output_config.set_globally_allocated_address(*output.buffer());
         }
         cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+    }
+
+    CircularBufferConfig cb_config_output = GetCircularBufferConfig(program, cb_output);
+    CircularBufferConfig cb_config_matmul_partials = GetCircularBufferConfig(program, cb_matmul_partials);
+
+    bool partials_cb_uses_output = false;
+    if (cb_config_matmul_partials.globally_allocated_address().has_value() &&
+        cb_config_output.globally_allocated_address().has_value()) {
+        partials_cb_uses_output = cb_config_matmul_partials.globally_allocated_address().value() ==
+                                  cb_config_output.globally_allocated_address().value();
     }
 
     compute_kernel_args = {
@@ -776,6 +799,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         cb_indices.tilize_mode_tilized_act_cb,
         cb_indices.out0_cb,
         0,
+        partials_cb_uses_output,
         input_num_cores,  // in0_nblocks_w_tilize. Repeat tilize after all cores have done one round of MCAST.
 
     };

@@ -25,10 +25,10 @@ void MuxKernel::GenerateStaticConfigs() {
                                          4;
     static_config_.mux_fan_in = upstream_kernels_.size();
     for (int idx = 0; idx < upstream_kernels_.size(); idx++) {
-        static_config_.remote_rx_network_type[idx] = DispatchRemoteNetworkType::NOC0;
+        static_config_.remote_rx_network_type[idx] = tt::packet_queue::DispatchRemoteNetworkType::NOC0;
     }
 
-    static_config_.tx_network_type = (uint32_t)DispatchRemoteNetworkType::NOC0;
+    static_config_.tx_network_type = (uint32_t)tt::packet_queue::DispatchRemoteNetworkType::NOC0;
     static_config_.test_results_buf_addr_arg = 0;
     static_config_.test_results_buf_size_bytes = 0;
     static_config_.timeout_cycles = 0;
@@ -43,7 +43,7 @@ void MuxKernel::GenerateStaticConfigs() {
 
 void MuxKernel::GenerateDependentConfigs() {
     // Upstream, expect DISPATCH_D or TUNNELER
-    TT_ASSERT(upstream_kernels_.size() <= MAX_SWITCH_FAN_IN && upstream_kernels_.size() > 0);
+    TT_ASSERT(upstream_kernels_.size() <= tt::packet_queue::MAX_SWITCH_FAN_IN && upstream_kernels_.size() > 0);
     uint32_t num_upstream_dispatchers = 0;
     for (int idx = 0; idx < upstream_kernels_.size(); idx++) {
         FDKernel* k = upstream_kernels_[idx];
@@ -68,9 +68,10 @@ void MuxKernel::GenerateDependentConfigs() {
     }
     uint32_t src_id = 0xC1 + (FDKernel::GetTunnelStop(device_id_) - 1) * num_upstream_dispatchers;
     uint32_t dest_id = 0xD1 + (FDKernel::GetTunnelStop(device_id_) - 1) * num_upstream_dispatchers;
-    static_config_.input_packetize_src_endpoint = packet_switch_4B_pack(src_id, src_id + 1, src_id + 2, src_id + 3);
+    static_config_.input_packetize_src_endpoint =
+        tt::packet_queue::packet_switch_4B_pack(src_id, src_id + 1, src_id + 2, src_id + 3);
     static_config_.input_packetize_dest_endpoint =
-        packet_switch_4B_pack(dest_id, dest_id + 1, dest_id + 2, dest_id + 3);
+        tt::packet_queue::packet_switch_4B_pack(dest_id, dest_id + 1, dest_id + 2, dest_id + 3);
 
     // Downstream, expect TUNNELER
     TT_ASSERT(downstream_kernels_.size() == 1);
@@ -114,7 +115,7 @@ void MuxKernel::CreateKernel() {
         0,  // Populate input_packetize_config after
         static_config_.input_packetize_src_endpoint.value(),
         static_config_.input_packetize_dest_endpoint.value()};
-    for (int idx = 0; idx < MAX_SWITCH_FAN_IN; idx++) {
+    for (int idx = 0; idx < tt::packet_queue::MAX_SWITCH_FAN_IN; idx++) {
         if (dependent_config_.remote_rx_x[idx]) {
             compile_args[4 + idx] |= (dependent_config_.remote_rx_x[idx].value() & 0xFF);
             compile_args[4 + idx] |= (dependent_config_.remote_rx_y[idx].value() & 0xFF) << 8;

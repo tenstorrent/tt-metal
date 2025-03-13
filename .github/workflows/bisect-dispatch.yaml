@@ -7,7 +7,6 @@ on:
         required: true
         type: choice
         options:
-          - grayskull
           - wormhole_b0
           - blackhole
       tracy:

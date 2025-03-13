@@ -12,7 +12,6 @@ import tt_lib
 import torch.nn as nn
 
 from models.utility_functions import (
-    disable_compilation_reports,
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
     profiler,
@@ -42,7 +41,6 @@ def run_vgg_imagenet_inference_vgg(
     model_config=vgg_model_config,
 ):
     disable_persistent_kernel_cache()
-    disable_compilation_reports()
     profiler.clear()
 
     # Setup model

@@ -7,7 +7,7 @@
 #include <vector>
 #include <cstdint>
 #include <limits>
-#include <tt-metalium/test_tiles.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/bfloat16.hpp>
 
 using std::uint16_t;

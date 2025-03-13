@@ -171,6 +171,8 @@ struct CQDispatchWriteHostCmd {
     uint32_t length;
 } __attribute__((packed));
 
+constexpr uint16_t CQ_DISPATCH_CMD_PAGED_WRITE_MAX_PAGE_INDEX = 0xFFFF;
+
 struct CQDispatchWritePagedCmd {
     uint8_t is_dram;  // one flag, false=l1
     uint16_t start_page;

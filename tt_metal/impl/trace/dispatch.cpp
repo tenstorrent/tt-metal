@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt-metalium/dev_msgs.h>
+
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
@@ -10,13 +12,12 @@ namespace tt::tt_metal::trace_dispatch {
 
 void reset_host_dispatch_state_for_trace(
     uint32_t num_sub_devices,
-    SystemMemoryManager& sysmem_manager,
-    std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed,
-    std::array<WorkerConfigBufferMgr, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>& config_buffer_mgr,
-    std::array<LaunchMessageRingBufferState, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>&
-        worker_launch_message_buffer_state_reset,
-    std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed_reset,
-    std::array<WorkerConfigBufferMgr, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>& config_buffer_mgr_reset) {
+    DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state,
+    DispatchArray<uint32_t>& expected_num_workers_completed,
+    DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgr,
+    DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state_reset,
+    DispatchArray<uint32_t>& expected_num_workers_completed_reset,
+    DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgr_reset) {
     // Record the original value of expected_num_workers_completed, and reset it to 0.
     std::copy(
         expected_num_workers_completed.begin(),
@@ -25,7 +26,6 @@ void reset_host_dispatch_state_for_trace(
     std::fill(expected_num_workers_completed.begin(), expected_num_workers_completed.begin() + num_sub_devices, 0);
 
     // Record original value of launch msg buffer
-    auto& worker_launch_message_buffer_state = sysmem_manager.get_worker_launch_message_buffer_state();
     std::copy(
         worker_launch_message_buffer_state.begin(),
         worker_launch_message_buffer_state.begin() + num_sub_devices,
@@ -45,13 +45,12 @@ void reset_host_dispatch_state_for_trace(
 
 void load_host_dispatch_state(
     uint32_t num_sub_devices,
-    SystemMemoryManager& sysmem_manager,
-    std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed,
-    std::array<WorkerConfigBufferMgr, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>& config_buffer_mgr,
-    std::array<LaunchMessageRingBufferState, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>&
-        worker_launch_message_buffer_state_reset,
-    std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed_reset,
-    std::array<WorkerConfigBufferMgr, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>& config_buffer_mgr_reset) {
+    DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state,
+    DispatchArray<uint32_t>& expected_num_workers_completed,
+    DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgr,
+    DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state_reset,
+    DispatchArray<uint32_t>& expected_num_workers_completed_reset,
+    DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgr_reset) {
     std::copy(
         expected_num_workers_completed_reset.begin(),
         expected_num_workers_completed_reset.begin() + num_sub_devices,
@@ -59,7 +58,7 @@ void load_host_dispatch_state(
     std::copy(
         worker_launch_message_buffer_state_reset.begin(),
         worker_launch_message_buffer_state_reset.begin() + num_sub_devices,
-        sysmem_manager.get_worker_launch_message_buffer_state().begin());
+        worker_launch_message_buffer_state.begin());
     std::copy(
         config_buffer_mgr_reset.begin(), config_buffer_mgr_reset.begin() + num_sub_devices, config_buffer_mgr.begin());
 }
@@ -69,7 +68,7 @@ void issue_trace_commands(
     SystemMemoryManager& sysmem_manager,
     const TraceDispatchMetadata& dispatch_md,
     uint8_t cq_id,
-    const std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed,
+    const DispatchArray<uint32_t>& expected_num_workers_completed,
     CoreCoord dispatch_core) {
     void* cmd_region = sysmem_manager.issue_queue_reserve(dispatch_md.cmd_sequence_sizeB, cq_id);
 
@@ -84,7 +83,7 @@ void issue_trace_commands(
         command_sequence.add_notify_dispatch_s_go_signal_cmd(false, index_bitmask);
         dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SLAVE;
     }
-    auto dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
+    auto dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
     auto dispatch_core_type = dispatch_core_config.get_core_type();
 
     uint32_t dispatch_message_base_addr =
@@ -187,9 +186,9 @@ uint32_t compute_trace_cmd_size(uint32_t num_sub_devices) {
 
 void update_worker_state_post_trace_execution(
     const std::unordered_map<SubDeviceId, TraceWorkerDescriptor>& trace_worker_descriptors,
-    SystemMemoryManager& manager,
-    std::array<WorkerConfigBufferMgr, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>& config_buffer_mgr,
-    std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed) {
+    DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state,
+    DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgr,
+    DispatchArray<uint32_t>& expected_num_workers_completed) {
     for (const auto& [id, desc] : trace_worker_descriptors) {
         auto index = *id;
         // Update the expected worker cores counter due to trace programs completion
@@ -198,12 +197,13 @@ void update_worker_state_post_trace_execution(
         // Update the wptr on host to match state. If the trace doesn't execute on a
         // class of worker (unicast or multicast), it doesn't reset or modify the
         // state for those workers.
-        auto& worker_launch_message_buffer_state = manager.get_worker_launch_message_buffer_state()[index];
         if (desc.num_traced_programs_needing_go_signal_multicast) {
-            worker_launch_message_buffer_state.set_mcast_wptr(desc.num_traced_programs_needing_go_signal_multicast);
+            worker_launch_message_buffer_state[index].set_mcast_wptr(
+                desc.num_traced_programs_needing_go_signal_multicast);
         }
         if (desc.num_traced_programs_needing_go_signal_unicast) {
-            worker_launch_message_buffer_state.set_unicast_wptr(desc.num_traced_programs_needing_go_signal_unicast);
+            worker_launch_message_buffer_state[index].set_unicast_wptr(
+                desc.num_traced_programs_needing_go_signal_unicast);
         }
         // The config buffer manager is unaware of what memory is used inside the trace, so mark all memory as used so
         // that it will force a stall and avoid stomping on in-use state.

@@ -8,7 +8,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
-#include <tt-metalium/test_tiles.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 #include "tests/tt_metal/test_utils/tilization.hpp"
 #include "tests/tt_metal/test_utils/print_helpers.hpp"
 #include "matmul_test_utils.hpp"
@@ -196,14 +196,14 @@ bool matmul_single_core(
     tt::deprecated::Tensor<bfloat16> tensor = tt::deprecated::initialize_tensor<bfloat16>(
         shape, tt::deprecated::Initialize::RANDOM, 0, 100, std::chrono::system_clock::now().time_since_epoch().count());
     auto activations_tilized = test_utils::tilize(tensor.get_values(), M * 32, K * 32);
-    auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
+    auto activations_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(activations_tilized));
     auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
     auto activations_tile_transposed = tt_metal::transpose_tiles(activations, M, K, in0_block_w);
     fixture->WriteBuffer(device, src0_dram_buffer, activations_tile_transposed);
 
     auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32);  // bflaot16 32x32 identity
     auto identity_tilized = test_utils::tilize(identity, K * 32, N * 32);
-    auto weights_tile_layout = convert_to_tile_layout(identity_tilized);
+    auto weights_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(identity_tilized));
     auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
     fixture->WriteBuffer(device, src1_dram_buffer, weights);
 
@@ -219,7 +219,7 @@ bool matmul_single_core(
     fixture->ReadBuffer(device, dst_dram_buffer, result_vec);
 
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
-    auto result_flat_layout = convert_to_flat_layout(result_bfp16);
+    auto result_flat_layout = convert_to_flat_layout(tt::stl::MakeConstSpan(result_bfp16));
     auto result_untilized = test_utils::untilize(result_flat_layout, M * 32, N * 32);
     auto golden = tt_metal::select_columns(tensor.get_values(), M, K, std::min(K, N));
     pass &= test_utils::is_close_vectors<bfloat16>(golden, result_untilized, [&](const bfloat16& a, const bfloat16& b) {

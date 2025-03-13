@@ -6,7 +6,10 @@
 
 #include <set>
 
+#include <tt-metalium/dev_msgs.h>
+#include <tt-metalium/core_descriptor.hpp>
 #include "hostdevcommon/dprint_common.h"
+#include "impl/dispatch/dispatch_core_manager.hpp"
 #include <device.hpp>
 
 // Helper function for comparing CoreDescriptors for using in sets.
@@ -46,8 +49,7 @@ static CoreDescriptorSet GetAllCores(tt::tt_metal::IDevice* device) {
 static CoreDescriptorSet GetDispatchCores(tt::tt_metal::IDevice* device) {
     CoreDescriptorSet dispatch_cores;
     unsigned num_cqs = device->num_hw_cqs();
-    const auto& dispatch_core_config =
-        tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_config(device->id());
+    const auto& dispatch_core_config = tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
     tt::log_warning("Dispatch Core Type = {}", dispatch_core_type);
     for (auto logical_core : tt::get_logical_dispatch_cores(device->id(), num_cqs, dispatch_core_config)) {

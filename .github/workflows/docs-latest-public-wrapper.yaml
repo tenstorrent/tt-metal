@@ -6,18 +6,20 @@ on:
 permissions:
   id-token: write
   pages: write
+  contents: write
 
 jobs:
-  build-docker-artifact:
-    uses: ./.github/workflows/build-docker-artifact.yaml
-    secrets: inherit
   build-artifact:
-    needs: build-docker-artifact
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
+    with:
+      build-wheel: true
   build-docs:
     needs: build-artifact
     uses: ./.github/workflows/docs-latest-public.yaml
     secrets: inherit
     with:
       version: latest
+      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}

@@ -284,7 +284,8 @@ void py_bind_conv2d(py::module& module) {
            const CoreCoord& compute_grid_size,
            tt::tt_metal::ShardOrientation block_shard_orientation,
            bool enable_channels_padding,
-           bool is_out_tiled) -> ttnn::operations::sliding_window::ParallelConfig {
+           bool is_shard_height_tile_multiple,
+           bool is_shard_width_tile_multiple) -> ttnn::operations::sliding_window::ParallelConfig {
             return determine_parallel_config(
                 shard_layout,
                 batch_size,
@@ -295,7 +296,8 @@ void py_bind_conv2d(py::module& module) {
                 compute_grid_size,
                 block_shard_orientation,
                 enable_channels_padding,
-                is_out_tiled);
+                is_shard_height_tile_multiple,
+                is_shard_width_tile_multiple);
         },
         py::arg("shard_layout"),
         py::arg("batch_size"),
@@ -306,7 +308,8 @@ void py_bind_conv2d(py::module& module) {
         py::arg("compute_grid_size"),
         py::arg("block_shard_orientation"),
         py::arg("enable_channels_padding"),
-        py::arg("is_out_tiled") = true);
+        py::arg("is_shard_height_tile_multiple") = true,
+        py::arg("is_shard_width_tile_multiple") = true);
 
     module.def(
         "create_sharded_memory_config_from_parallel_config",
@@ -335,6 +338,8 @@ void py_bind_conv2d(py::module& module) {
             bool,
             bool,
             bool,
+            bool,
+            bool,
             bool>(),
         py::kw_only(),
         py::arg("dtype") = DataType::BFLOAT16,
@@ -351,6 +356,8 @@ void py_bind_conv2d(py::module& module) {
         py::arg("core_grid") = std::nullopt,
         py::arg("transpose_shards") = true,
         py::arg("output_layout") = Layout::TILE,
+        py::arg("preprocess_weights_on_device") = false,
+        py::arg("always_preprocess_weights") = false,
         py::arg("enable_act_double_buffer") = false,
         py::arg("enable_weights_double_buffer") = false,
         py::arg("enable_split_reader") = false,
@@ -369,6 +376,8 @@ void py_bind_conv2d(py::module& module) {
     py_conv_config.def_readwrite("core_grid", &Conv2dConfig::core_grid);
     py_conv_config.def_readwrite("transpose_shards", &Conv2dConfig::transpose_shards);
     py_conv_config.def_readwrite("output_layout", &Conv2dConfig::output_layout);
+    py_conv_config.def_readwrite("preprocess_weights_on_device", &Conv2dConfig::preprocess_weights_on_device);
+    py_conv_config.def_readwrite("always_preprocess_weights", &Conv2dConfig::always_preprocess_weights);
     py_conv_config.def_readwrite("enable_act_double_buffer", &Conv2dConfig::enable_act_double_buffer);
     py_conv_config.def_readwrite("enable_weights_double_buffer", &Conv2dConfig::enable_weights_double_buffer);
     py_conv_config.def_readwrite("enable_split_reader", &Conv2dConfig::enable_split_reader);

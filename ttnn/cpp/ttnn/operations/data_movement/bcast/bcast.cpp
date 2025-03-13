@@ -74,8 +74,7 @@ Tensor BcastOperation::invoke(
                 {input_tensor_a, input_tensor_b},
                 {},
                 {output_tensor},
-                0,     /* pad_value*/
-                false, /*pad_c*/
+                0, /* pad_value*/
                 queue_id);
         },
         {input_tensor_a, input_tensor_b},

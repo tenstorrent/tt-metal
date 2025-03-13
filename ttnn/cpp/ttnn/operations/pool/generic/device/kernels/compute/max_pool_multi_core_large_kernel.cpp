@@ -105,7 +105,6 @@ void MAIN {
 
     constexpr uint32_t in_cb_id = tt::CBIndex::c_0;  // and tt::CBIndex::c_1 for split reader
     constexpr uint32_t in_scalar_cb_id = tt::CBIndex::c_4;
-    constexpr uint32_t in_tiled_cb_id = tt::CBIndex::c_24;
     constexpr uint32_t out_cb_id = tt::CBIndex::c_16;
     constexpr uint32_t interm_cb_id = tt::CBIndex::c_25;
 

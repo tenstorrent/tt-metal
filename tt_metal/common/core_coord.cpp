@@ -16,8 +16,8 @@
 #include "umd/device/tt_xy_pair.h"
 #include <assert.hpp>
 #include "tracy/Tracy.hpp"
-#include <reflection.hpp>
-#include <span.hpp>
+#include <tt_stl/reflection.hpp>
+#include <tt_stl/span.hpp>
 
 auto fmt::formatter<CoreCoord>::format(const CoreCoord& core_coord, format_context& ctx) const
     -> format_context::iterator {

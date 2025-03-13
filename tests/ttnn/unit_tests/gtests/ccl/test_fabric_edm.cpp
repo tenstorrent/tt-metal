@@ -13,16 +13,18 @@ int main(int argc, char** argv) {
     bool line_sync = std::stoi(argv[arg_idx++]);
     std::size_t line_size = std::stoi(argv[arg_idx++]);
     std::size_t packet_payload_size_bytes = std::stoi(argv[arg_idx++]);
+    bool ring_topology = std::stoi(argv[arg_idx++]);
 
-    uint32_t test_expected_num_devices = 8;
-    if (tt::tt_metal::GetNumAvailableDevices() < test_expected_num_devices) {
-        tt::log_warning("This test can only be run on T3000 devices");
+    uint32_t min_test_num_devices = 8;
+    if (tt::tt_metal::GetNumAvailableDevices() < min_test_num_devices) {
+        tt::log_warning("This test can only be run on T3000 or TG devices");
         return 1;
     }
 
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_sync = line_sync;
     params.line_size = line_size;
+    params.topology = ring_topology ? ttnn::ccl::Topology::Ring : ttnn::ccl::Topology::Linear;
     RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params, packet_payload_size_bytes);
 }

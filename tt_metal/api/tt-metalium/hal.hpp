@@ -150,6 +150,7 @@ private:
     std::vector<DeviceAddr> dram_bases_;
     std::vector<uint32_t> dram_sizes_;
     std::vector<uint32_t> mem_alignments_;
+    std::vector<uint32_t> mem_alignments_with_pcie_;
     uint32_t num_nocs_;
     uint32_t noc_addr_node_id_bits_;
     uint32_t noc_coord_reg_offset_;
@@ -166,7 +167,6 @@ private:
     float nan_ = 0.0f;
     float inf_ = 0.0f;
 
-    void initialize_gs();
     void initialize_wh();
     void initialize_bh();
 
@@ -251,6 +251,8 @@ public:
     uint32_t get_dev_size(HalDramMemAddrType addr_type) const;
 
     uint32_t get_alignment(HalMemType memory_type) const;
+    // Returns an alignment that is aligned with PCIE and the given memory type
+    uint32_t get_common_alignment_with_pcie(HalMemType memory_type) const;
 
     bool get_supports_cbs(uint32_t programmable_core_type_index) const;
 
@@ -348,6 +350,12 @@ inline uint32_t Hal::get_alignment(HalMemType memory_type) const {
     uint32_t index = utils::underlying_type<HalMemType>(memory_type);
     TT_ASSERT(index < this->mem_alignments_.size());
     return this->mem_alignments_[index];
+}
+
+inline uint32_t Hal::get_common_alignment_with_pcie(HalMemType memory_type) const {
+    uint32_t index = utils::underlying_type<HalMemType>(memory_type);
+    TT_ASSERT(index < this->mem_alignments_with_pcie_.size());
+    return this->mem_alignments_with_pcie_[index];
 }
 
 inline bool Hal::get_supports_cbs(uint32_t programmable_core_type_index) const {
