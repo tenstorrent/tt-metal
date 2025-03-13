@@ -28,6 +28,7 @@ void MAIN {
     constexpr uint32_t bits_1p0 = 0x3f800000;             // 1.0f
     constexpr uint32_t bits_0p5 = 0x3F000000;             // 0.5f
     constexpr uint32_t bits_sqrt_2_over_pi = 0x3f4c422a;  // sqrt(2/pi)
+    constexpr uint32_t bits_0p5_sqrt_2_over_pi = 0x3ecc422a;  // ~0.3989423f (0.5 * sqrt(2/π))
     constexpr uint32_t bits_0p044715 = 0x3d372713;        // 0.044715
     constexpr uint32_t bits_0p134145 = 0x3e095d4f;        // 0.134145
 
@@ -93,9 +94,7 @@ void MAIN {
 
             // PDF term: tile[5] = 0.5 * sqrt(2/π) * (1 + 0.134145 * x^2) * (1 - tanh^2)
             mul_binary_tile(5, 7);
-            load_immediate_value<bits_sqrt_2_over_pi>(6);
-            mul_binary_tile(5, 6);
-            load_immediate_value<bits_0p5>(6);
+            load_immediate_value<bits_0p5_sqrt_2_over_pi>(6);
             mul_binary_tile(5, 6);
 
             // tile[5] = x * pdf tern
