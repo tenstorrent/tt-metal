@@ -9,6 +9,7 @@
 #include "modules/grouped_query_attention.hpp"
 #include "modules/linear_module.hpp"
 #include "modules/rms_norm_module.hpp"
+#include "ops/rope_op.hpp"
 
 namespace ttml::modules {
 
