@@ -36,3 +36,10 @@
   ```python
   models/demos/segformer/demo/validation_data_ade20k/annotations/annotation.png
   ```
+
+## Segformer Image Classification Demo
+
+- Use the following command to run the demo script(Classification) which returns **Accuracy** score for both Reference,ttnn models and between them when validated with Imagenet Dataset samples:
+  ```python
+  pytest --disable-warnings models/demos/segformer/demo/demo_for_image_classification.py
+  ```
