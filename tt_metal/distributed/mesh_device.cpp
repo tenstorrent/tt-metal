@@ -15,10 +15,11 @@
 #include <tt_metal.hpp>
 #include <system_mesh.hpp>
 #include <mesh_device_view.hpp>
-#include <mesh_command_queue.hpp>
 #include <device_impl.hpp>
 #include <sub_device.hpp>
 #include <sub_device_manager_tracker.hpp>
+
+#include "hardware_mesh_command_queue.hpp"
 
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "tt_metal/common/thread_pool.hpp"
@@ -714,7 +715,7 @@ bool MeshDevice::initialize(
     mesh_command_queues_.reserve(this->num_hw_cqs());
     if (this->using_fast_dispatch()) {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
-            mesh_command_queues_.push_back(std::make_unique<MeshCommandQueue>(
+            mesh_command_queues_.push_back(std::make_unique<HardwareMeshCommandQueue>(
                 this,
                 cq_id,
                 dispatch_thread_pool_,
