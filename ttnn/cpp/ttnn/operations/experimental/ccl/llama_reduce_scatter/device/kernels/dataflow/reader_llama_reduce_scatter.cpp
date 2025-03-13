@@ -72,6 +72,8 @@ void kernel_main() {
     uint32_t local_semaphore_address = get_semaphore(get_arg_val<uint32_t>(rt_arg_idx++));
     bool sender_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
     bool worker_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
+    // Our output only requires 1 local page
+    uint32_t linear_input_page_idx = get_arg_val<uint32_t>(rt_arg_idx++);
 
     DPRINT << "receiver_semaphore_address " << receiver_semaphore_address << " local_semaphore_address "
            << local_semaphore_address << ENDL();
@@ -111,8 +113,22 @@ void kernel_main() {
         }
         DPRINT << "Finished pushing back all tiles to fabric sender cb" << ENDL();
     } else if (worker_core) {
+        uint32_t linear_input_core_idx = linear_input_page_idx / tiles_per_core_width;
+        uint32_t linear_input_tile_offset = linear_input_page_idx % tiles_per_core_width;
+
+        uint32_t core_x = input_core_xy[linear_input_core_idx][x_index];
+        uint32_t core_y = input_core_xy[linear_input_core_idx][y_index];
+        uint32_t tile_offset = linear_input_tile_offset * page_size_bytes;
+        uint64_t tile_addr = get_noc_addr(core_x, core_y, get_read_ptr(input_tensor_cb_id) + tile_offset);
+        DPRINT << "Reading tile at addr " << tile_addr << ENDL();
+        DPRINT << "Linear core idx: " << linear_input_core_idx << " Linear tile idx: " << linear_input_tile_offset
+               << ENDL();
+        DPRINT << "core_x: " << core_x << " core_y: " << core_y << " tile_offset: " << tile_offset << ENDL();
+        noc_async_read(tile_addr, get_write_ptr(accumulator_cb_id) + chip_id * page_size_bytes, page_size_bytes);
+        noc_async_read_barrier();
         DPRINT << "accumulator addr " << get_noc_addr(get_write_ptr(accumulator_cb_id))
                << " local semaphore noc addr: " << get_noc_addr(local_semaphore_address) << ENDL();
+        DPRINT << "Linear input page idx: " << linear_input_page_idx << ENDL();
         noc_semaphore_wait((uint32_t*)local_semaphore_address, num_devices - 1);
         // while (*(uint32_t*)local_semaphore_address != num_devices - 1) {
         //     // Wait for the semaphore to be set
@@ -121,9 +137,6 @@ void kernel_main() {
         //            << ENDL();
         // }
         for (uint32_t target_device_id = 0; target_device_id < num_devices; ++target_device_id) {
-            if (target_device_id == chip_id) {
-                continue;
-            }
             print_full_tile(accumulator_cb_id, target_device_id * tiles_per_core_width_output, true);
         }
         DPRINT << "Pushing back " << tiles_per_core_width_output * num_devices << " tiles to accumulator cb" << ENDL();
