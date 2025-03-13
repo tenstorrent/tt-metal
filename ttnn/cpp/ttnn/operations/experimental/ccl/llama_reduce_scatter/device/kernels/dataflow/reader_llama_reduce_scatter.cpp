@@ -113,11 +113,13 @@ void kernel_main() {
     } else if (worker_core) {
         DPRINT << "accumulator addr" << get_noc_addr(get_read_ptr(accumulator_cb_id))
                << "local semaphore noc addr: " << get_noc_addr(local_semaphore_address) << ENDL();
-        while (*(uint32_t*)local_semaphore_address != num_devices - 1) {
-            // Wait for the semaphore to be set
-            DPRINT << "Waiting for local semaphore to be set, current value: " << *(uint32_t*)(local_semaphore_address)
-                   << ENDL();
-        }
+        noc_semaphore_wait((uint32_t*)local_semaphore_address, num_devices - 1);
+        // while (*(uint32_t*)local_semaphore_address != num_devices - 1) {
+        //     // Wait for the semaphore to be set
+        //     DPRINT << "Waiting for local semaphore to be set, current value: " <<
+        //     *(uint32_t*)(local_semaphore_address)
+        //            << ENDL();
+        // }
         for (uint32_t target_device_id = 0; target_device_id < num_devices; ++target_device_id) {
             if (target_device_id == chip_id) {
                 continue;
