@@ -79,10 +79,10 @@ jobs:
           ]
     runs-on: ${{ matrix.test_group.runs-on }}
     container:
-      image: ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.test_group.arch }}-amd64-release:${{ inputs.version }}
+      image: ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-amd64-release:${{ inputs.version }}
       env:
         LOGURU_LEVEL: INFO
-        ARCH_NAME: ${{ matrix.arch }}
+        ARCH_NAME: ${{ matrix.test_group.arch }}
         GITHUB_ACTIONS: true
         PYTHONPATH: /work
       volumes:
