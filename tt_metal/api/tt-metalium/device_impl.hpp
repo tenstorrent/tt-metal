@@ -210,8 +210,6 @@ private:
 
     void initialize_default_sub_device_state(size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap);
 
-    void update_dispatch_cores_for_multi_cq_eth_dispatch();
-
     void compile_command_queue_programs();
     void configure_command_queue_programs();
     void clear_l1_state();

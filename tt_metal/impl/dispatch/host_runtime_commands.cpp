@@ -31,7 +31,7 @@
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
-#include <dispatch_core_manager.hpp>
+#include "dispatch_core_manager.hpp"
 #include <event.hpp>
 #include <kernel.hpp>
 #include "tt_metal/impl/program/dispatch.hpp"
@@ -114,7 +114,7 @@ EnqueueProgramCommand::EnqueueProgramCommand(
     unicast_cores_launch_message_wptr(unicast_cores_launch_message_wptr),
     sub_device_id(sub_device_id) {
     this->device = device;
-    this->dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+    this->dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type();
     this->packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(this->device);
     this->dispatch_message_addr =
         DispatchMemMap::get(this->dispatch_core_type)
