@@ -24,7 +24,7 @@ constexpr float asFloat() {
 template <bool APPROXIMATE, uint32_t IMM_BITS, int ITERATIONS = 8>
 inline void _load_imm_() {
     float imm = asFloat<IMM_BITS>();
-    vFloat const_v = s2vFloat16a(imm);
+    vFloat const_v = s2vFloat16b(imm);
     for (int d = 0; d < ITERATIONS; d++) {
         dst_reg[0] = const_v;
         dst_reg++;
