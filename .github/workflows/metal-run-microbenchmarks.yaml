@@ -14,7 +14,7 @@ jobs:
     secrets: inherit
   run-microbenchmarks:
     needs: build-artifact
-    uses: ./.github/workflows/metal-run-microbenchmarks.yaml
+    uses: ./.github/workflows/metal-run-microbenchmarks-impl.yaml
     secrets: inherit
     with:
       docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
