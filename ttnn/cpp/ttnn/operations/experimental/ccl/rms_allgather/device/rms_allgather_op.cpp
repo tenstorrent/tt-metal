@@ -25,6 +25,12 @@ void RMSAllGather::validate(
     const auto& b = optional_input_tensors.at(0);
     const auto& gamma = optional_input_tensors.at(1);
     const auto& beta = optional_input_tensors.at(2);
+    TT_FATAL(
+        this->output_mem_config.shard_spec.value().orientation == ShardOrientation::ROW_MAJOR,
+        "Minimal version requires row major sharding orientation");
+    TT_FATAL(
+        a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
+        "Minimal version requires row major sharding orientation");
     TT_FATAL(a.get_layout() == Layout::TILE, "Error");
     TT_FATAL(
         a.get_dtype() == DataType::FLOAT32 or a.get_dtype() == DataType::BFLOAT16 or

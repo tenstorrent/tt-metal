@@ -126,7 +126,6 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     uint32_t num_blocks = 0;
     ShardSpec shard_spec = a.shard_spec().value();
 
-    bool row_wise = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
     auto bbox = shard_spec.grid.bounding_box();
     CoreCoord grid_size = {bbox.end_coord.x - bbox.start_coord.x + 1, bbox.end_coord.y - bbox.start_coord.y + 1};
     std::optional<CoreCoord> grid_offset = std::nullopt;
@@ -138,26 +137,21 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     // two-stage reduce
     bool use_two_stage_reduce = false;
     // only do this for row/col dim are full length
-    if (row_wise && grid_size.x > 1 && grid_size.x <= device->compute_with_storage_grid_size().x &&
+    if (grid_size.x > 1 && grid_size.x <= device->compute_with_storage_grid_size().x &&
         grid_size.y > 1) {  // row major and multiple rows
-        use_two_stage_reduce = true;
-    } else if (
-        !row_wise && grid_size.x > 1 &&
-        grid_size.y == device->compute_with_storage_grid_size().y) {  // col major and multiple cols
         use_two_stage_reduce = true;
     }
     uint32_t num_subblocks_w = block_wt / subblock_wt;
 
     // Get all storage cores
     ShardSpec output_shard_spec = output.shard_spec().value();
-    bool output_row_wise = output_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
 
     CoreRangeSet all_storage_cores = output_shard_spec.grid;
     CoreRangeSet all_worker_and_storage_cores = all_storage_cores.merge(a.shard_spec().value().grid);
     std::vector<uint32_t> storage_core_noc_x;
     std::vector<uint32_t> storage_core_noc_y;
     std::vector<CoreCoord> storage_core_coords =
-        corerange_to_cores(all_storage_cores, all_storage_cores.num_cores(), row_wise = output_row_wise);
+        corerange_to_cores(all_storage_cores, all_storage_cores.num_cores(), true);
     for (auto core : storage_core_coords) {
         storage_core_noc_x.push_back((std::uint32_t)device->worker_core_from_logical_core(core).x);
         storage_core_noc_y.push_back((std::uint32_t)device->worker_core_from_logical_core(core).y);
@@ -189,16 +183,8 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     // block size for in0 (tensor a)
-    uint32_t num_rows_per_all_to_all_worker = tt::div_up(1, num_blocks);
-    if (use_two_stage_reduce) {
-        if (row_wise) {
-            num_rows_per_all_to_all_worker = tt::div_up(1, grid_size.x);
-        } else {
-            num_rows_per_all_to_all_worker = tt::div_up(1, grid_size.y);
-        }
-    }
-    uint32_t num_rows_per_all_to_all_worker_last =
-        1 - (1 / num_rows_per_all_to_all_worker) * num_rows_per_all_to_all_worker;
+    uint32_t num_rows_per_all_to_all_worker = 1;
+    uint32_t num_rows_per_all_to_all_worker_last = 1;
     uint32_t in0_block_tiles = block_wt;
     // pre_all_gather_stats_block_tiles
     uint32_t pre_all_gather_stats_block_tiles = 1;
@@ -223,7 +209,7 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     uint32_t ex_global_CB_size = ex_partial_CB_size;
     uint32_t ex_external_CB_size = tt::div_up(Kt, block_wt) * single_tile_size;
     uint32_t xmm2_CB_size = in0_block_tiles * single_tile_size;
-    uint32_t ex2pe_CB_size = num_rows_per_all_to_all_worker * single_tile_size;
+    uint32_t ex2pe_CB_size = single_tile_size;
     uint32_t stats_cb_size = 0;
     uint32_t stats_reduced_cb_size = 0;
     // output buffer size
@@ -241,22 +227,14 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     uint32_t num_cores_x = grid_size.x;
     uint32_t num_cores_y = grid_size.y;
     uint32_t num_cores = num_cores_x * num_cores_y;
-    uint32_t num_cores_all_to_all = tt::div_up(1, num_rows_per_all_to_all_worker);
-    uint32_t num_cores_all_to_all_first_stage = num_cores_all_to_all;
+    uint32_t num_cores_all_to_all = 1;
     uint32_t num_cores_all_to_all_second_stage = 0;
     uint32_t num_blocks_first_stage = num_blocks;
     uint32_t num_blocks_second_stage = 0;
     if (use_two_stage_reduce) {
-        if (row_wise) {
-            num_blocks_first_stage = num_cores_x;
-            num_cores_all_to_all_second_stage = num_cores_y;
-            num_cores_all_to_all *= num_cores_y;
-        } else {
-            num_blocks_first_stage = num_cores_y;
-            num_cores_all_to_all_second_stage = num_cores_x;
-            num_cores_all_to_all *= num_cores_x;
-        }
-        num_blocks_second_stage = num_cores_all_to_all_second_stage;
+        num_blocks_first_stage = num_cores_x;
+        num_cores_all_to_all = num_cores_y;
+        num_blocks_second_stage = num_cores_y;
     }
     // change tt::CBIndex external size
     if (use_two_stage_reduce) {
@@ -264,9 +242,6 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     }
     ex_external_CB_size = ex_external_CB_size * pre_all_gather_stats_block_tiles;
     uint32_t num_none_all_to_all_workers = num_blocks - num_cores_all_to_all;
-    if (num_rows_per_all_to_all_worker_last == 0) {
-        num_rows_per_all_to_all_worker_last = num_rows_per_all_to_all_worker;
-    }
 
     CoreCoord start_core = {0, 0};  // Place all gather in start core
     CoreRangeSet all_cores = shard_spec.grid;
@@ -279,93 +254,48 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     CoreCoord all_core_grid_size;
     CoreCoord none_core_grid_size;
     if (use_two_stage_reduce) {
-        if (row_wise) {
-            all_core_grid_size = {num_cores_all_to_all_first_stage, num_cores_y};
-            none_core_grid_size = {num_cores_x - num_cores_all_to_all_first_stage, num_cores_y};
-        } else {
-            all_core_grid_size = {num_cores_x, num_cores_all_to_all_first_stage};
-            none_core_grid_size = {num_cores_x, num_cores_y - num_cores_all_to_all_first_stage};
-        }
+        all_core_grid_size = {1, num_cores_y};
+        none_core_grid_size = {num_cores_x - 1, num_cores_y};
     } else {
         all_core_grid_size = grid_size;
         none_core_grid_size = grid_size;
     }
-    all_to_all_cores = num_cores_to_corerangeset(start_core, num_cores_all_to_all, all_core_grid_size, row_wise);
-    if (row_wise) {
-        if (use_mcast) {
-            CoreCoord all_start_core;
-            CoreCoord end_core = sender_cores.end_coord;
-            if (use_two_stage_reduce) {
-                if (end_core.x == all_core_grid_size.x - 1) {
-                    all_start_core = {0, end_core.y + 1};
-                } else {
-                    all_start_core = {end_core.x + 1, end_core.y};
-                }
+    all_to_all_cores = num_cores_to_corerangeset(start_core, num_cores_all_to_all, all_core_grid_size, true);
+    if (use_mcast) {
+        CoreCoord all_start_core;
+        CoreCoord end_core = sender_cores.end_coord;
+        if (use_two_stage_reduce) {
+            if (end_core.x == all_core_grid_size.x - 1) {
+                all_start_core = {0, end_core.y + 1};
             } else {
-                if (end_core.x == bbox.end_coord.x) {
-                    all_start_core = {0, end_core.y + 1};
-                } else {
-                    all_start_core = {end_core.x + 1, end_core.y};
-                }
+                all_start_core = {end_core.x + 1, end_core.y};
             }
-            all_to_all_workers_except_sender =
-                num_cores_to_corerangeset(all_start_core, num_cores_all_to_all - 1, all_core_grid_size, row_wise);
-        }
-        if (num_none_all_to_all_workers > 0) {
-            if (use_two_stage_reduce) {
-                CoreCoord none_start_core = {all_core_grid_size.x, sender_cores.end_coord.y};
-                CoreCoord none_end_core = {num_cores_x - 1, num_cores_y - 1};
-                CoreRange none_core_range = CoreRange(none_start_core, none_end_core);
-                not_all_to_all_workers = CoreRangeSet(none_core_range);
+        } else {
+            if (end_core.x == bbox.end_coord.x) {
+                all_start_core = {0, end_core.y + 1};
             } else {
-                CoreCoord none_start_core;
-                CoreCoord end_core = (*all_to_all_cores.ranges().rbegin()).end_coord;
-                if (end_core.x == bbox.end_coord.x) {
-                    none_start_core = {0, end_core.y + 1};
-                } else {
-                    none_start_core = {end_core.x + 1, end_core.y};
-                }
-                not_all_to_all_workers = num_cores_to_corerangeset(
-                    none_start_core, num_none_all_to_all_workers, none_core_grid_size, row_wise);
+                all_start_core = {end_core.x + 1, end_core.y};
             }
         }
-    } else {
-        if (use_mcast) {
-            CoreCoord all_start_core;
-            CoreCoord end_core = sender_cores.end_coord;
-            if (use_two_stage_reduce) {
-                if (end_core.y == all_core_grid_size.y - 1) {
-                    all_start_core = {end_core.x + 1, 0};
-                } else {
-                    all_start_core = {end_core.x, end_core.y + 1};
-                }
+        all_to_all_workers_except_sender =
+            num_cores_to_corerangeset(all_start_core, num_cores_all_to_all - 1, all_core_grid_size, true);
+    }
+    if (num_none_all_to_all_workers > 0) {
+        if (use_two_stage_reduce) {
+            CoreCoord none_start_core = {all_core_grid_size.x, sender_cores.end_coord.y};
+            CoreCoord none_end_core = {num_cores_x - 1, num_cores_y - 1};
+            CoreRange none_core_range = CoreRange(none_start_core, none_end_core);
+            not_all_to_all_workers = CoreRangeSet(none_core_range);
+        } else {
+            CoreCoord none_start_core;
+            CoreCoord end_core = (*all_to_all_cores.ranges().rbegin()).end_coord;
+            if (end_core.x == bbox.end_coord.x) {
+                none_start_core = {0, end_core.y + 1};
             } else {
-                if (end_core.y == bbox.end_coord.y) {
-                    all_start_core = {end_core.x + 1, 0};
-                } else {
-                    all_start_core = {end_core.x, end_core.y + 1};
-                }
+                none_start_core = {end_core.x + 1, end_core.y};
             }
-            all_to_all_workers_except_sender = num_cores_to_corerangeset(
-                CoreCoord{start_core.x, start_core.y + 1}, num_cores_all_to_all - 1, all_core_grid_size, row_wise);
-        }
-        if (num_none_all_to_all_workers > 0) {
-            if (use_two_stage_reduce) {
-                CoreCoord none_start_core = {sender_cores.end_coord.x, all_core_grid_size.y};
-                CoreCoord none_end_core = {num_cores_x - 1, num_cores_y - 1};
-                CoreRange none_core_range = CoreRange(none_start_core, none_end_core);
-                not_all_to_all_workers = CoreRangeSet(none_core_range);
-            } else {
-                CoreCoord none_start_core;
-                CoreCoord end_core = (*all_to_all_cores.ranges().rbegin()).end_coord;
-                if (end_core.y == bbox.end_coord.y) {
-                    none_start_core = {end_core.x + 1, 0};
-                } else {
-                    none_start_core = {end_core.x, end_core.y + 1};
-                }
-                not_all_to_all_workers = num_cores_to_corerangeset(
-                    none_start_core, num_none_all_to_all_workers, none_core_grid_size, row_wise);
-            }
+            not_all_to_all_workers =
+                num_cores_to_corerangeset(none_start_core, num_none_all_to_all_workers, none_core_grid_size, true);
         }
     }
     num_cores_x_mcast = num_cores_x;
@@ -411,14 +341,6 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
         (std::uint32_t)reduce_receiver_semaphore_id,
         (std::uint32_t)reduce_sender_semaphore_id,
         (std::uint32_t)num_blocks,
-        (std::uint32_t)1,
-        (std::uint32_t)single_tile_size,
-        (std::uint32_t)num_cores_all_to_all_first_stage,
-        (std::uint32_t)num_rows_per_all_to_all_worker,
-        (std::uint32_t)num_rows_per_all_to_all_worker * single_tile_size,
-        (std::uint32_t)num_rows_per_all_to_all_worker_last,
-        (std::uint32_t)num_rows_per_all_to_all_worker_last * single_tile_size,
-        (std::uint32_t)row_wise,
         (std::uint32_t)num_cores_x_mcast,
         (std::uint32_t)num_cores_y_mcast,
         (std::uint32_t)use_two_stage_reduce,
@@ -431,10 +353,10 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
         (std::uint32_t)num_blocks,
         (std::uint32_t)1,
         (std::uint32_t)1,
-        (std::uint32_t)num_cores_all_to_all_first_stage,
-        (std::uint32_t)num_rows_per_all_to_all_worker,
-        (std::uint32_t)num_rows_per_all_to_all_worker_last,
-        (std::uint32_t)row_wise,
+        (std::uint32_t)1,
+        (std::uint32_t)1,
+        (std::uint32_t)1,
+        (std::uint32_t)true,
         (std::uint32_t)num_cores_x_mcast,
         (std::uint32_t)num_cores_y_mcast,
         (std::uint32_t)use_two_stage_reduce,
@@ -447,10 +369,10 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
         (std::uint32_t)num_blocks,
         (std::uint32_t)1,
         (std::uint32_t)0,
-        (std::uint32_t)num_cores_all_to_all_first_stage,
-        (std::uint32_t)num_rows_per_all_to_all_worker,
-        (std::uint32_t)num_rows_per_all_to_all_worker_last,
-        (std::uint32_t)row_wise,
+        (std::uint32_t)1,
+        (std::uint32_t)1,
+        (std::uint32_t)1,
+        (std::uint32_t)true,
         (std::uint32_t)1,
         (std::uint32_t)1,
         (std::uint32_t)0,
@@ -689,7 +611,7 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
             .set_page_size(output_reshard_cb_index, out_single_tile_size);
     CBHandle cb_output_reshard = 0;
 
-    const auto& cores = corerange_to_cores(all_cores, all_cores.num_cores(), row_wise = row_wise);
+    const auto& cores = corerange_to_cores(all_cores, all_cores.num_cores(), true);
 
     // Runtime Args
     std::vector<KernelHandle> writer_kernel_ids;
@@ -741,11 +663,9 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
 
         uint32_t all_to_all_worker_tile_offset_size_bytes;
         if (use_two_stage_reduce) {
-            all_to_all_worker_tile_offset_size_bytes =
-                (width_index_two_stage * num_rows_per_all_to_all_worker) * single_tile_size;
+            all_to_all_worker_tile_offset_size_bytes = (width_index_two_stage)*single_tile_size;
         } else {
-            all_to_all_worker_tile_offset_size_bytes =
-                (width_index * num_rows_per_all_to_all_worker) * single_tile_size;
+            all_to_all_worker_tile_offset_size_bytes = (width_index)*single_tile_size;
         }
 
         uint32_t num_reduce_tiles_per_block_h = block_wt;
@@ -756,21 +676,13 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
 
         std::vector<uint32_t> compute_args{num_reduce_tiles_per_block_h};
         if ((not use_two_stage_reduce and width_index < num_cores_all_to_all) or
-            (use_two_stage_reduce and width_index_two_stage < num_cores_all_to_all_first_stage)) {
-            uint32_t num_rows;
-            if (use_two_stage_reduce) {
-                num_rows = width_index_two_stage == num_cores_all_to_all_first_stage - 1
-                               ? num_rows_per_all_to_all_worker_last
-                               : num_rows_per_all_to_all_worker;
-            } else {
-                num_rows = width_index == num_cores_all_to_all - 1 ? num_rows_per_all_to_all_worker_last
-                                                                   : num_rows_per_all_to_all_worker;
-            }
+            (use_two_stage_reduce and width_index_two_stage < 1)) {
+            uint32_t num_rows = 1;
             compute_args.push_back(num_rows);
             compute_args.push_back((uint32_t)use_two_stage_reduce);
             bool is_second_stage_reader;
             if (use_two_stage_reduce) {
-                is_second_stage_reader = width_index < num_cores_all_to_all_first_stage;
+                is_second_stage_reader = width_index < 1;
             } else {
                 is_second_stage_reader = false;
             }
@@ -804,19 +716,18 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
             tt::tt_metal::SetRuntimeArgs(program, reader_mcast_sender_kernels_id, core, mcast_sender_args);
         } else if (
             (not use_two_stage_reduce and width_index < num_cores_all_to_all) or
-            (use_two_stage_reduce and width_index_two_stage < num_cores_all_to_all_first_stage)) {
+            (use_two_stage_reduce and width_index_two_stage < 1)) {
             std::vector<uint32_t> mcast_receiver_args;
             bool is_last_all_to_all_worker;
             if (use_two_stage_reduce) {
-                is_last_all_to_all_worker =
-                    width_index_two_stage == num_cores_all_to_all_first_stage - 1 ? true : false;
+                is_last_all_to_all_worker = width_index_two_stage == 0 ? true : false;
             } else {
                 is_last_all_to_all_worker = width_index == num_cores_all_to_all - 1 ? true : false;
             }
             mcast_receiver_args.push_back(is_last_all_to_all_worker);
             mcast_receiver_args.push_back(all_to_all_worker_tile_offset_size_bytes);
             bool is_second_stage_reader;
-            if (use_two_stage_reduce and width_index < num_cores_all_to_all_first_stage) {
+            if (use_two_stage_reduce and width_index < 1) {
                 is_second_stage_reader = true;
                 mcast_receiver_args.push_back((uint32_t)is_second_stage_reader);
             } else {
@@ -844,9 +755,9 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
 
         // Set writer runtime args
         if ((not use_two_stage_reduce and width_index < num_cores_all_to_all) or
-            (use_two_stage_reduce and width_index_two_stage < num_cores_all_to_all_first_stage)) {
+            (use_two_stage_reduce and width_index_two_stage < 1)) {
             std::vector<uint32_t> writer_mcast_sender_args;
-            if (use_two_stage_reduce && (!(width_index < num_cores_all_to_all_first_stage))) {
+            if (use_two_stage_reduce && (!(width_index < 1))) {
                 writer_mcast_sender_args.push_back(packed_cinv_value_one);
                 writer_mcast_sender_args.push_back(packed_winv_value);
             } else {
