@@ -27,7 +27,6 @@
 #include <sub_device_types.hpp>
 #include <tt_stl/span.hpp>
 
-#include "tt_metal/deprecated/device.hpp"
 #include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
 
 #include "tt_metal/impl/debug/watcher_server.hpp"

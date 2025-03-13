@@ -20,6 +20,7 @@
 #include <tt-metalium/global_circular_buffer_impl.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
+#include <tt-metalium/sub_device.hpp>
 
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
