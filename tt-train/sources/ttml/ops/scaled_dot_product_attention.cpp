@@ -49,11 +49,10 @@ ttnn::Tensor group_shared_matmul(
     auto [B_H, H, S, E] = H_tensor.get_logical_shape().to_array_4D();
     auto [B_G, G, T, K] = G_tensor.get_logical_shape().to_array_4D();
     if (B_H != B_G) {
-        std::stringstream ss;
-        ss << "H_tensor and G_tensor must have the same batch size, got shapes ";
-        ss << H_tensor.get_logical_shape() << " and ";
-        ss << G_tensor.get_logical_shape() << " respectively";
-        throw std::invalid_argument(ss.str());
+        throw std::invalid_argument(fmt::format(
+            "H_tensor and G_tensor must have the same batch size, got shapes {} and {} respectively",
+            H_tensor.get_logical_shape(),
+            G_tensor.get_logical_shape()));
     }
     uint32_t B = B_H;
     if (H == G) {
@@ -82,9 +81,8 @@ ttnn::Tensor group_shared_matmul(
 // with each key/value
 ttnn::Tensor sum_over_groups(const ttnn::Tensor& ungrouped_grads, uint32_t num_groups) {
     if (ungrouped_grads.get_logical_shape().rank() != 4) {
-        std::stringstream ss;
-        ss << "ungrouped_grads must have rank 4, but got rank " << ungrouped_grads.get_logical_shape().rank();
-        throw std::invalid_argument(ss.str());
+        throw std::invalid_argument(fmt::format(
+            "ungrouped_grads must have rank 4, but got rank {}", ungrouped_grads.get_logical_shape().rank()));
     }
     // [B,H,S,E]
     auto [batch_size, num_heads, seq_len, head_dim] = ungrouped_grads.get_logical_shape().to_array_4D();
@@ -106,12 +104,11 @@ autograd::TensorPtr scaled_dot_product_attention(
     const autograd::TensorPtr& value,
     const std::optional<autograd::TensorPtr>& mask) {
     if (!std::ranges::all_of(std::array{query, key, value}, [](const auto& t) { return t->get_rank() == 4U; })) {
-        std::stringstream ss;
-        ss << "query, key, and value must have rank 4, but got ranks: ";
-        ss << "query=" << query->get_rank() << ", ";
-        ss << "key=" << key->get_rank() << ", ";
-        ss << "value=" << value->get_rank();
-        throw std::invalid_argument(ss.str());
+        throw std::invalid_argument(fmt::format(
+            "query, key, and value must have rank 4, but got ranks: query={}, key={}, value={}",
+            query->get_rank(),
+            key->get_rank(),
+            value->get_rank()));
     }
 
     auto [B, H, S, E] = query->get_value().get_logical_shape().to_array_4D();
@@ -119,12 +116,12 @@ autograd::TensorPtr scaled_dot_product_attention(
     auto [BV, HV, SV, EV] = value->get_value().get_logical_shape().to_array_4D();
 
     if (B != BK || B != BV || S != SK || S != SV || E != EK || E != EV) {
-        std::stringstream ss;
-        ss << "query, key, and value must have the same shape, except for the number of heads. Got shapes: ";
-        ss << "query=(" << B << ", " << H << ", " << S << ", " << E << "), ";
-        ss << "key=(" << BK << ", " << HK << ", " << SK << ", " << EK << "), ";
-        ss << "value=(" << BV << ", " << HV << ", " << SV << ", " << EV << ")";
-        throw std::invalid_argument(ss.str());
+        throw std::invalid_argument(fmt::format(
+            "query, key, and value must have the same shape, except for the number of heads. Got shapes: "
+            "query={}, key={}, value={}",
+            query->get_value().get_logical_shape(),
+            key->get_value().get_logical_shape(),
+            value->get_value().get_logical_shape()));
     }
 
     uint32_t G = H;            // number of KV groups, H for MHA mode
@@ -132,19 +129,21 @@ autograd::TensorPtr scaled_dot_product_attention(
     if (H != HK || H != HV) {
         // grouped query mode
         if (HV != HK) {
-            std::stringstream ss;
-            ss << "query, key, and value must have the same number of groups in grouped query mode. Got: ";
-            ss << "query heads=" << H << ", key heads=" << HK << ", value heads=" << HV;
-            throw std::invalid_argument(ss.str());
+            throw std::invalid_argument(fmt::format(
+                "query, key, and value must have the same number of groups in grouped query mode. Got: query heads={}, "
+                "key heads={}, value heads={}",
+                H,
+                HK,
+                HV));
         }
         G = HV;
         group_size = H / G;
         if (H % G != 0) {
-            std::stringstream ss;
-            ss << "In grouped query mode, the number of query heads must be divisible by the number of key/value "
-                  "groups. Got: ";
-            ss << "heads=" << H << ", groups=" << G;
-            throw std::invalid_argument(ss.str());
+            throw std::invalid_argument(fmt::format(
+                "In grouped query mode, the number of query heads must be divisible by the number of key/value groups. "
+                "Got: heads={}, groups={}",
+                H,
+                G));
         }
     }
 
