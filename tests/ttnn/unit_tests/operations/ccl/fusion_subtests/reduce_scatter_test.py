@@ -252,23 +252,21 @@ def test_fabric_reduce_scatter(n300_mesh_device):
     shard_height = 32
     shard_width = 160
     num_devices = n300_mesh_device.get_num_devices()
-    num_cores = 2
+    num_cores = 4
     input = torch.range(0, (shard_height * shard_width * num_cores * num_devices) - 1, dtype=torch.bfloat16).reshape(
         (1, 1, shard_height, shard_width * num_devices * num_cores)
     )
     torch.set_printoptions(precision=10)
     n300_mesh_device.enable_async(True)
+    compute_grid_size = n300_mesh_device.compute_with_storage_grid_size()
     sharded_mem_config = ttnn.create_sharded_memory_config(
         (32, 160),
-        core_grid=ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)),
-            }
-        ),
+        core_grid=ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True),
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
+    print(sharded_mem_config)
     tt_input = ttnn.from_torch(
         input,
         mesh_mapper=ttnn.ShardTensorToMesh(n300_mesh_device, dim),
@@ -279,7 +277,6 @@ def test_fabric_reduce_scatter(n300_mesh_device):
     )
     print(tt_input)
     enable_persistent_fabric = True
-    compute_grid_size = n300_mesh_device.compute_with_storage_grid_size()
     ccl_sub_device_crs = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
     )
