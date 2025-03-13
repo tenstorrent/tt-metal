@@ -292,7 +292,7 @@ def run_llama3_demo(
     # Compile
     logger.info(f"Compiling model trace...")
     if layers == 1:
-        num_compile_iters = 24
+        num_compile_iters = 10
     else:
         num_compile_iters = 1
     for i in range(num_compile_iters):
@@ -595,6 +595,9 @@ def test_llama_demo(
     if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
 
+    # TODO: When support for ring buffer size setup is added, remove the flag
+    # set ringbuffer to 120KB instead of 69KB
+    os.environ["TT_METAL_WORKER_RINGBUFFER_SIZE"] = "122880"
     mesh_device.enable_async(True)
 
     if paged_attention:
