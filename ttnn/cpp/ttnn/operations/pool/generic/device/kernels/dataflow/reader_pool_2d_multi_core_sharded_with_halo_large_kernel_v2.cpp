@@ -57,9 +57,9 @@ void kernel_main() {
     constexpr uint32_t bf16_one_u32 = get_compile_time_arg_val(12);  // This scalar is bf16_one_u32 for maxpool.
     constexpr uint32_t bf16_init_value = get_compile_time_arg_val(13);
 
-    DPRINT << "Large reader kernel - bf16_scalar : " << bf16_scalar << ENDL();
-    DPRINT << "Large reader kernel - bf16_scalar >> 16 : " << (bf16_scalar >> 16) << ENDL();
-    DPRINT << "Large reader kernel - bf16_init_value : " << bf16_init_value << ENDL();
+    // DPRINT << "Large reader kernel - bf16_scalar : " << bf16_scalar << ENDL();
+    // DPRINT << "Large reader kernel - bf16_scalar >> 16 : " << (bf16_scalar >> 16) << ENDL();
+    // DPRINT << "Large reader kernel - bf16_init_value : " << bf16_init_value << ENDL();
 
     constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(14);
     constexpr uint32_t in_cb_sz = get_compile_time_arg_val(15);

@@ -52,8 +52,8 @@ void kernel_main() {
     // BF16 value packed in UINT32. For maxpool, value is 1.
     constexpr uint32_t bf16_scalar = get_compile_time_arg_val(11);  // This scalar is bf16_one_u32 for maxpool.
 
-    DPRINT << "Normal reader kernel - bf16_scalar : " << bf16_scalar << ENDL();
-    DPRINT << "Normal reader kernel - bf16_scalar >> 16 : " << (bf16_scalar >> 16) << ENDL();
+    // DPRINT << "Normal reader kernel - bf16_scalar : " << bf16_scalar << ENDL();
+    // DPRINT << "Normal reader kernel - bf16_scalar >> 16 : " << (bf16_scalar >> 16) << ENDL();
 
     constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(14);
 
