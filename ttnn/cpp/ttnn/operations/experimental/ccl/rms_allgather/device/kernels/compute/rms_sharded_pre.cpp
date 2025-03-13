@@ -17,17 +17,18 @@
 // SPLIT REDUCE across Cores
 namespace NAMESPACE {
 void MAIN {
-    constexpr uint32_t num_blocks_first_stage = get_compile_time_arg_val(3);
-    constexpr uint32_t block_w = get_compile_time_arg_val(5);
-    constexpr uint32_t block_h_const = get_compile_time_arg_val(4);
-    volatile uint32_t block_h_volatile = get_compile_time_arg_val(4);
-    constexpr uint32_t subblock_w_const = get_compile_time_arg_val(6);
-    volatile uint32_t subblock_w_volatile = get_compile_time_arg_val(6);
-    constexpr uint32_t num_subblocks_w = get_compile_time_arg_val(7);
-    const bool is_allgather_worker = get_compile_time_arg_val(8) == 1;
-    constexpr uint32_t num_tiles_per_block = get_compile_time_arg_val(9);
-    constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(10) == 1;
-    constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(11);
+    constexpr uint32_t num_blocks_first_stage = get_compile_time_arg_val(0);
+    constexpr uint32_t block_h_const = get_compile_time_arg_val(1);
+    constexpr uint32_t block_w = get_compile_time_arg_val(2);
+    constexpr uint32_t subblock_w_const = get_compile_time_arg_val(3);
+    constexpr uint32_t num_subblocks_w = get_compile_time_arg_val(4);
+    const bool is_allgather_worker = get_compile_time_arg_val(5) == 1;
+    constexpr uint32_t num_tiles_per_block = get_compile_time_arg_val(6);
+    constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(7) == 1;
+    constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(8);
+
+    volatile uint32_t block_h_volatile = block_h_const;
+    volatile uint32_t subblock_w_volatile = subblock_w_const;
 
     const uint32_t num_reduce_tiles_per_block_h =
         get_arg_val<uint32_t>(0);  // This value is the same for all cores, except ones that have padding tiles in it.

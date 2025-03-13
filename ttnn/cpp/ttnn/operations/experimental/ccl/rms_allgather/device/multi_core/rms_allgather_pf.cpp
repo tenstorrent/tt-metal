@@ -103,9 +103,7 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
 
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    tt::DataFormat gamma_cb_data_format =
-        gamma.has_value() ? tt::tt_metal::datatype_to_dataformat_converter(gamma.value().get_dtype())
-                          : tt::DataFormat::Float16_b;
+    tt::DataFormat gamma_cb_data_format = tt::DataFormat::Float16_b;
     tt::DataFormat beta_cb_data_format = beta.has_value()
                                              ? tt::tt_metal::datatype_to_dataformat_converter(beta.value().get_dtype())
                                              : tt::DataFormat::Float16_b;
@@ -607,8 +605,6 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     writer_mcast_receiver_compile_time_args.push_back(1);  // height in tiles
 
     // writer kernel
-    bool use_row_major_kernel = (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) or
-                                (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR);
     std::string writer_kernel =
         "ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/kernels/dataflow/"
         "writer_unary_sharded_rms.cpp";
@@ -640,9 +636,6 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     }
     // compute kernel compile time args
     std::vector<uint32_t> all_to_all_except_top_compute_compile_time_args = {
-        0,
-        gamma.has_value(),
-        beta.has_value(),
         num_blocks_first_stage,
         1,
         block_wt,
@@ -653,9 +646,6 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
         fp32_dest_acc_en,
         num_blocks_second_stage};
     std::vector<uint32_t> not_all_to_all_compute_compile_time_args = {
-        0,
-        gamma.has_value(),
-        beta.has_value(),
         num_blocks_first_stage,
         1,
         block_wt,
@@ -669,7 +659,7 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     std::string compute_kernel_file;
     compute_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/kernels/compute/"
-        "rms_sharded.cpp";
+        "rms_sharded_pre.cpp";
     KernelHandle compute_kernels_id = -1;
     auto compute_kernels_id_all_to_all = CreateKernel(
         program,
@@ -736,22 +726,6 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
         tt::tt_metal::CircularBufferConfig(in3_CB_size, {{in3_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(in3_cb_index, bfloat16_tile_size);
     auto cb_in3 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in3_cb_config);
-    // gamma
-    if (gamma.has_value()) {
-        uint32_t in5_cb_index = tt::CBIndex::c_5;
-        tt::tt_metal::CircularBufferConfig in5_cb_config =
-            tt::tt_metal::CircularBufferConfig(in5_CB_size, {{in5_cb_index, gamma_cb_data_format}})
-                .set_page_size(in5_cb_index, gamma_single_tile_size);
-        auto cb_in5 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in5_cb_config);
-    }
-    // beta
-    if (beta.has_value()) {
-        uint32_t in6_cb_index = tt::CBIndex::c_6;
-        tt::tt_metal::CircularBufferConfig in6_cb_config =
-            tt::tt_metal::CircularBufferConfig(in6_CB_size, {{in6_cb_index, beta_cb_data_format}})
-                .set_page_size(in6_cb_index, beta_single_tile_size);
-        auto cb_in6 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in6_cb_config);
-    }
     // x
     uint32_t x_cb_index;
     x_cb_index = tt::CBIndex::c_24;
@@ -873,8 +847,6 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
             all_to_all_worker_tile_offset_size_bytes =
                 (width_index * num_rows_per_all_to_all_worker) * single_tile_size;
         }
-        uint32_t gamma_tile_start_id = width_index * block_wt;
-        uint32_t beta_tile_start_id = width_index * block_wt;
 
         uint32_t num_reduce_tiles_per_block_h = block_wt;
         // account for padding
@@ -970,35 +942,17 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
             tt::tt_metal::SetRuntimeArgs(program, reader_mcast_receiver_kernels_id, core, mcast_receiver_args);
         }
 
-        // Compute write back rt args
-
-        std::vector<uint32_t> write_back_writer_args;
-
         // Set writer runtime args
         if ((not use_two_stage_reduce and width_index < num_cores_all_to_all) or
             (use_two_stage_reduce and width_index_two_stage < num_cores_all_to_all_first_stage)) {
             std::vector<uint32_t> writer_mcast_sender_args;
-            if (use_two_stage_reduce) {
-                if (width_index < num_cores_all_to_all_first_stage) {
-                    writer_mcast_sender_args.push_back(packed_cinv_value);
-                    writer_mcast_sender_args.push_back(packed_winv_value);
-                } else {
-                    writer_mcast_sender_args.push_back(packed_cinv_value_one);
-                    writer_mcast_sender_args.push_back(packed_winv_value);
-                }
+            if (use_two_stage_reduce && (!(width_index < num_cores_all_to_all_first_stage))) {
+                writer_mcast_sender_args.push_back(packed_cinv_value_one);
+                writer_mcast_sender_args.push_back(packed_winv_value);
             } else {
                 writer_mcast_sender_args.push_back(packed_cinv_value);
                 writer_mcast_sender_args.push_back(packed_winv_value);
             }
-            writer_mcast_sender_args.push_back(e.u);
-            writer_mcast_sender_args.push_back(gamma_dram_addr);
-            writer_mcast_sender_args.push_back(beta_dram_addr);
-            writer_mcast_sender_args.push_back(gamma_tile_start_id);
-            writer_mcast_sender_args.push_back(beta_tile_start_id);
-
-            // Add args for write back (reshard)
-            writer_mcast_sender_args.insert(
-                writer_mcast_sender_args.end(), write_back_writer_args.begin(), write_back_writer_args.end());
 
             tt::tt_metal::SetRuntimeArgs(program, writer_mcast_sender_kernels_id, core, writer_mcast_sender_args);
             writer_kernel_ids.push_back(writer_mcast_sender_kernels_id);
@@ -1006,15 +960,6 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
             std::vector<uint32_t> writer_mcast_receiver_args;
             writer_mcast_receiver_args.push_back(packed_cinv_value);
             writer_mcast_receiver_args.push_back(packed_winv_value);
-            writer_mcast_receiver_args.push_back(e.u);
-            writer_mcast_receiver_args.push_back(gamma_dram_addr);
-            writer_mcast_receiver_args.push_back(beta_dram_addr);
-            writer_mcast_receiver_args.push_back(gamma_tile_start_id);
-            writer_mcast_receiver_args.push_back(beta_tile_start_id);
-
-            // Add args for write back (reshard)
-            writer_mcast_receiver_args.insert(
-                writer_mcast_receiver_args.end(), write_back_writer_args.begin(), write_back_writer_args.end());
 
             tt::tt_metal::SetRuntimeArgs(program, writer_mcast_receiver_kernels_id, core, writer_mcast_receiver_args);
             writer_kernel_ids.push_back(writer_mcast_receiver_kernels_id);
@@ -1039,8 +984,6 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
             const std::vector<Tensor>& output_tensors) {
             const auto src_buffer_a = input_tensors.at(0).buffer();
             const auto b_tensor = optional_input_tensors.at(0);
-            const auto gamma_tensor = optional_input_tensors.at(1);
-            const auto beta_tensor = optional_input_tensors.at(2);
             const auto dst_buffer = output_tensors.at(0).buffer();
 
             UpdateDynamicCircularBufferAddress(program, cb_in0, *src_buffer_a);
@@ -1052,30 +995,6 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
 
             UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
 
-            auto& writer_sender_args_by_core = GetRuntimeArgs(program, writer_mcast_sender_kernels_id);
-            auto& writer_receiver_args_by_core = num_none_all_to_all_workers > 0
-                                                     ? GetRuntimeArgs(program, writer_mcast_receiver_kernels_id)
-                                                     : writer_sender_args_by_core;
-
-            const auto gamma_address = gamma_tensor.has_value() ? gamma_tensor.value().buffer()->address() : 0;
-            const auto beta_address = beta_tensor.has_value() ? beta_tensor.value().buffer()->address() : 0;
-
-            for (uint32_t i = 0; i < cores.size(); ++i) {
-                const CoreCoord& core = cores[i];
-
-                const auto writer_kernel_id = writer_kernel_ids.at(i);
-
-                if (writer_kernel_id == writer_mcast_sender_kernels_id) {
-                    auto& runtime_args = writer_sender_args_by_core[core.x][core.y];
-                    runtime_args[3] = gamma_address;
-                    runtime_args[4] = beta_address;
-
-                } else if (writer_kernel_id == writer_mcast_receiver_kernels_id) {
-                    auto& runtime_args = writer_receiver_args_by_core[core.x][core.y];
-                    runtime_args[3] = gamma_address;
-                    runtime_args[4] = beta_address;
-                }
-            }
         };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
