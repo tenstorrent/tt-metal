@@ -16,7 +16,19 @@
 
 namespace ttnn::operations::fused::normalization {
 
-tt::tt_metal::operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
+tt::tt_metal::operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
+    const Tensor& a,
+    const std::optional<const Tensor>& b,      // residual
+    const std::optional<const Tensor>& gamma,  // weight
+    const std::optional<const Tensor>& beta,   // bias
+    Tensor& output,
+    float eps,
+    CoreCoord compute_grid_size,
+    uint32_t subblock_wt,
+    uint32_t block_wt,
+    DeviceComputeKernelConfig compute_kernel_config);
+
+tt::tt_metal::operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
     const Tensor& a,
     const std::optional<const Tensor>& b,      // residual
     const std::optional<const Tensor>& gamma,  // weight
@@ -35,6 +47,7 @@ struct RMSAllGather {
     const DeviceComputeKernelConfig compute_kernel_config;
     std::optional<DataType> dtype;
     const ttnn::ccl::Topology topology;
+    const bool is_pre;
     void validate(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;

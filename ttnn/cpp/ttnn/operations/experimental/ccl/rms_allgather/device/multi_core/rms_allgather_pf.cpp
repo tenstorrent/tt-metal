@@ -49,7 +49,7 @@ inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_
 // computes layernorm(a+*b)*gamma + beta
 // if b is nullptr it's treated as zero (no addition)
 
-operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
+operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     const Tensor& a,                           // input
     const std::optional<const Tensor>& b,      // residual
     const std::optional<const Tensor>& gamma,  // weight
@@ -1079,6 +1079,21 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
         };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+}
+
+operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
+    const Tensor& a,                           // input
+    const std::optional<const Tensor>& b,      // residual
+    const std::optional<const Tensor>& gamma,  // weight
+    const std::optional<const Tensor>& beta,   // bias
+    Tensor& output,
+    float eps,
+    CoreCoord compute_grid_size,
+    uint32_t subblock_wt,
+    uint32_t block_wt,
+    DeviceComputeKernelConfig compute_kernel_config) {
+    return frmsnorm_pre_multi_core_sharded(
+        a, b, gamma, beta, output, eps, compute_grid_size, subblock_wt, block_wt, compute_kernel_config);
 }
 
 }  // namespace ttnn::operations::fused::normalization

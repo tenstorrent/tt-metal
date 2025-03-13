@@ -188,17 +188,17 @@ std::vector<TensorSpec> RMSAllGather::compute_output_specs(const std::vector<Ten
             if constexpr (std::is_same_v<
                               ProgramConfigType,
                               ttnn::operations::normalization::LayerNormShardedMultiCoreProgramConfig>) {
-                // if (this->distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER) {
-                auto shard_spec = input_tensor.shard_spec().value();
-                shard_spec.shape[1] = output_shape[3];
-                CoreCoord grid_start_core = shard_spec.grid.bounding_box().start_coord;
-                CoreRangeSet output_grid({CoreRange(grid_start_core, grid_start_core)});
-                shard_spec.grid = output_grid;
-                auto mem_config = this->output_mem_config;
-                mem_config.shard_spec = shard_spec;
-                return {
-                    TensorSpec(output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_config))};
-                /*} else if (this->distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
+                if (this->is_pre) {
+                    auto shard_spec = input_tensor.shard_spec().value();
+                    shard_spec.shape[1] = output_shape[3];
+                    CoreCoord grid_start_core = shard_spec.grid.bounding_box().start_coord;
+                    CoreRangeSet output_grid({CoreRange(grid_start_core, grid_start_core)});
+                    shard_spec.grid = output_grid;
+                    auto mem_config = this->output_mem_config;
+                    mem_config.shard_spec = shard_spec;
+                    return {TensorSpec(
+                        output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_config))};
+                } else {
                     auto output_shard_spec = this->output_mem_config.shard_spec.value();
                     auto input_shard_spec = input_tensor.shard_spec().value();
                     if (output_shard_spec != input_shard_spec) {
@@ -222,7 +222,6 @@ std::vector<TensorSpec> RMSAllGather::compute_output_specs(const std::vector<Ten
                         mem_config,
                         output_shape,
                         output_padded_shape))};
-                */
             }
             TT_FATAL(false, "Tensor Spec does not match");
             return {TensorSpec(
@@ -235,10 +234,13 @@ std::vector<Tensor> RMSAllGather::create_output_tensors(const std::vector<Tensor
     return std::visit(
         [&](const auto& program_config) -> std::vector<Tensor> {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
-            /*if (this->distributed_norm_stage != DistributedLayerNormStage::PRE_ALL_GATHER &&
-                program_config.inplace) {
-                return {input_tensors.at(0)};
-            }*/
+            if constexpr (std::is_same_v<
+                              ProgramConfigType,
+                              ttnn::operations::normalization::LayerNormShardedMultiCoreProgramConfig>) {
+                if ((!this->is_pre) && program_config.inplace) {
+                    return {input_tensors.at(0)};
+                }
+            }
             auto output_spec = compute_output_specs(input_tensors)[0];
             return {create_device_tensor(output_spec, input_tensors.at(0).device())};
         },
@@ -264,17 +266,31 @@ operation::ProgramWithCallbacks RMSAllGather::create_program(
                 uint32_t num_cores_y = program_config.compute_with_storage_grid_size.y;
                 CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
 
-                return frmsnorm_multi_core_sharded(
-                    a,
-                    b,
-                    gamma,
-                    beta,
-                    output_tensor,
-                    this->eps,
-                    program_config.compute_with_storage_grid_size,
-                    program_config.subblock_w,
-                    program_config.block_w,
-                    this->compute_kernel_config);
+                if (this->is_pre) {
+                    return frmsnorm_pre_multi_core_sharded(
+                        a,
+                        b,
+                        gamma,
+                        beta,
+                        output_tensor,
+                        this->eps,
+                        program_config.compute_with_storage_grid_size,
+                        program_config.subblock_w,
+                        program_config.block_w,
+                        this->compute_kernel_config);
+                } else {
+                    return frmsnorm_post_multi_core_sharded(
+                        a,
+                        b,
+                        gamma,
+                        beta,
+                        output_tensor,
+                        this->eps,
+                        program_config.compute_with_storage_grid_size,
+                        program_config.subblock_w,
+                        program_config.block_w,
+                        this->compute_kernel_config);
+                }
             } else {
                 TT_FATAL(false, "Program Config does not match");
 
@@ -283,7 +299,7 @@ operation::ProgramWithCallbacks RMSAllGather::create_program(
                 uint32_t num_cores_y = 1;
                 CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
 
-                return frmsnorm_multi_core_sharded(
+                return frmsnorm_pre_multi_core_sharded(
                     a, b, gamma, beta, output_tensor, this->eps, grid_size, 1, 1, this->compute_kernel_config);
             }
         },
