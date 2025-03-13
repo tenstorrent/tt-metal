@@ -57,8 +57,6 @@ public:
     void unregister_worker_thread_for_device(tt_metal::IDevice* device);
     const std::unordered_set<std::thread::id>& get_worker_thread_ids() const;
 
-    tt::tt_fabric::ControlPlane* get_control_plane() const;
-
 private:
     ~DevicePool();
     DevicePool();
@@ -79,8 +77,6 @@ private:
     bool skip_remote_devices;
     std::unordered_set<uint32_t> firmware_built_keys;
 
-    std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane;
-
     // Determine which CPU cores the worker threads need to be placed on for each device
     std::unordered_map<uint32_t, uint32_t> worker_thread_to_cpu_core_map;
     std::unordered_map<uint32_t, uint32_t> completion_queue_reader_to_cpu_core_map;
@@ -94,9 +90,6 @@ private:
     void add_devices_to_pool(const std::vector<chip_id_t>& device_ids);
     void wait_for_fabric_router_sync() const;
     tt_metal::IDevice* get_device(chip_id_t id) const;
-
-    // Fabric setup helper functions
-    void initialize_control_plane();
 
     static DevicePool* _inst;
 };

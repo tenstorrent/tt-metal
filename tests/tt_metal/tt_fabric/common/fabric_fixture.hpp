@@ -24,6 +24,7 @@ class ControlPlaneFixture : public ::testing::Test {
                    "Control plane test suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
                GTEST_SKIP();
            }
+           tt::tt_metal::detail::InitializeFabricConfig(tt::FabricConfig::FABRIC_2D);
        }
 
        void TearDown() override {}
