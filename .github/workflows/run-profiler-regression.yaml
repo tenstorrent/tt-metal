@@ -13,10 +13,6 @@ on:
         required: false
         type: number
         default: 35
-      os:
-        required: false
-        type: string
-        default: "ubuntu-20.04"
       build-artifact-name:
         required: true
         type: string
@@ -45,10 +41,6 @@ on:
         required: false
         type: number
         default: 35
-      os:
-        required: false
-        type: string
-        default: "ubuntu-20.04"
       build-artifact-name:
         required: true
         type: string
