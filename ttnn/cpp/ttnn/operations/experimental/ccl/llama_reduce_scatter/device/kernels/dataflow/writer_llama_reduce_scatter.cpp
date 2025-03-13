@@ -117,12 +117,13 @@ void kernel_main() {
             auto& fabric_conn = target_device_id > chip_id ? fabric_connection.get_forward_connection()
                                                            : fabric_connection.get_backward_connection();
 
-            uint32_t receiver_core_x = receiver_core_for_device[target_device_id][0];
-            uint32_t receiver_core_y = receiver_core_for_device[target_device_id][1];
+            uint32_t receiver_core_x = receiver_core_for_device[chip_id][0];
+            uint32_t receiver_core_y = receiver_core_for_device[chip_id][1];
+            DPRINT << "receiver_core_x: " << receiver_core_x << " receiver_core_y: " << receiver_core_y << ENDL();
 
             // for LLaMa - 6 cores * 5 tiles per core = 30 tiles to each other device
             // 30/4 = 8 packets, with the last packet having 2 pages
-            uint32_t packet_offset = target_device_id * input_shard_cores_per_device * tiles_per_core_width;
+            uint32_t packet_offset = 0;
             uint32_t base_receiver_l1_addr = get_read_ptr(fabric_receiver_cb_id);
             for (uint32_t packet = 0; packet < num_packets_total_per_device; packet++) {
                 uint32_t curr_packet_num_pages =
@@ -133,6 +134,7 @@ void kernel_main() {
                 auto sender_l1_addr = get_write_ptr(fabric_sender_cb_id);
                 print_tiles(fabric_sender_cb_id, 0, curr_packet_num_pages, true);
 
+                DPRINT << "packet_offset: " << packet_offset << ENDL();
                 uint64_t noc0_dest_noc_addr =
                     get_noc_addr(receiver_core_x, receiver_core_y, base_receiver_l1_addr + packet_offset);
 
@@ -148,13 +150,13 @@ void kernel_main() {
                 noc_async_writes_flushed();  // flushed because cross chip?
 
                 cb_pop_front(fabric_sender_cb_id, curr_packet_num_pages);
-                packet_offset += curr_packet_num_pages;
+                packet_offset += curr_packet_num_pages * page_size_bytes;
             }
             DPRINT << "Finished sending packets" << ENDL();
 
             // 2. mcast to current core 6,6 for now
-            uint64_t sem_noc_addr = safe_get_noc_addr(receiver_core_x, receiver_core_y, receiver_semaphore_address, 0);
-
+            uint64_t sem_noc_addr = get_noc_addr(receiver_core_x, receiver_core_y, receiver_semaphore_address);
+            DPRINT << "sem_noc_addr: " << sem_noc_addr << ENDL();
             sem_inc_packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
                 sem_noc_addr,
                 static_cast<uint16_t>(1),  // increment 1
@@ -179,6 +181,7 @@ void kernel_main() {
         uint32_t base_receiver_l1_addr = get_read_ptr(fabric_receiver_cb_id);
 
         uint32_t curr_output_core = 0;
+        DPRINT << "semaphore noc addr: " << get_noc_addr(receiver_semaphore_address) << ENDL();
         while (*(uint32_t*)receiver_semaphore_address < 1) {
             // Wait for the semaphore to be set
             DPRINT << "Waiting for semaphore to be set" << ENDL();
@@ -193,13 +196,18 @@ void kernel_main() {
             uint32_t output_core = tile;
             uint32_t output_core_x = output_core_xy[output_core][0];
             uint32_t output_core_y = output_core_xy[output_core][1];
-            uint32_t noc_accumulator_addr =
+            DPRINT << "output_core_x: " << output_core_x << " output_core_y: " << output_core_y << ENDL();
+            uint64_t noc_accumulator_addr =
                 get_noc_addr(output_core_x, output_core_y, accumulator_l1_addr + output_tile_offset);
             uint64_t local_receiver_semaphore_noc_addr =
                 get_noc_addr(output_core_x, output_core_y, local_semaphore_address);
+            DPRINT << "noc_accumulator_addr: " << noc_accumulator_addr
+                   << " local_receiver_semaphore_noc_addr: " << local_receiver_semaphore_noc_addr << ENDL();
             noc_async_write(base_receiver_l1_addr + tile * page_size_bytes, noc_accumulator_addr, page_size_bytes);
             noc_async_write_barrier();
+            DPRINT << "Completed writing to accumulator" << ENDL();
             noc_semaphore_inc(local_receiver_semaphore_noc_addr, 1);  // mcast inc is needed, this will tank latency
+            DPRINT << "Completed unicast inc" << ENDL();
         }
         *(uint32_t*)receiver_semaphore_address = 0;
     } else {
