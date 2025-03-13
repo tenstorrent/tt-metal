@@ -12,7 +12,7 @@ from models.demos.ttnn_resnet.tests.resnet50_performant import (
     run_resnet50_inference,
 )
 
-from models.demos.ttnn_resnet.demo.demo import run_resnet_imagenet_inference, run_resnet_inference
+from models.demos.ttnn_resnet.demo.demo import run_resnet_imagenet_inference
 
 
 @run_for_wormhole_b0()

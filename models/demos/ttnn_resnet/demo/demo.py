@@ -58,7 +58,7 @@ def run_resnet_imagenet_inference(
         final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
         model_location_generator=model_location_generator,
     )
-    ttnn.synchronize_devices(device)
+    ttnn.synchronize_device(device)
 
     # load ImageNet batch by batch
     # and run inference

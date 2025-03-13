@@ -620,7 +620,7 @@ class resnet50:
         conv_input_face_shape_hw = [224, 224]
         self.device = device
         self.conv_input_face_shape_hw = conv_input_face_shape_hw
-        self.batch_size = batch_size
+        self.batch_size = batch_size // (1 if isinstance(device, ttnn.Device) else device.get_num_devices())
         self.model_config = model_config
         self.conv_op_cache = {}
         self.inplanes = 64
