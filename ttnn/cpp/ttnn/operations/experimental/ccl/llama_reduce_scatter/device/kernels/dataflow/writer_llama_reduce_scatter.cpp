@@ -172,12 +172,8 @@ void kernel_main() {
             }
             DPRINT << "Closing fabric connection" << ENDL();
         }
-    } else if (receiver_core) {
+    } else if (receiver_core && receiver_for_device_id != chip_id) {
         DPRINT << "Receiver for device id: " << receiver_for_device_id << " chip_id: " << chip_id << ENDL();
-        if (receiver_for_device_id == chip_id) {
-            // If I'm the receiver for the current device, I don't need to do anything as all the data is already here
-            return;
-        }
         uint32_t base_receiver_l1_addr = get_read_ptr(fabric_receiver_cb_id);
 
         uint32_t curr_output_core = 0;
@@ -214,4 +210,5 @@ void kernel_main() {
         // Do nothing
         // win
     }
+    DPRINT << "Kernel finished" << ENDL();
 }

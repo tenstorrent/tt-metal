@@ -146,4 +146,5 @@ void kernel_main() {
         // Do nothing
         // win
     }
+    DPRINT << "Kernel finished" << ENDL();
 }

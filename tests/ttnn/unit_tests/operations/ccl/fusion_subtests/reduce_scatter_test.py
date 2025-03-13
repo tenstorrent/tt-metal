@@ -7,6 +7,8 @@ import pytest
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc
+
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
     create_and_load_sub_device_manager_with_fabric_interface,
@@ -253,9 +255,19 @@ def test_fabric_reduce_scatter(n300_mesh_device):
     shard_width = 160
     num_devices = n300_mesh_device.get_num_devices()
     num_cores = 4
-    input = torch.range(0, (shard_height * shard_width * num_cores * num_devices) - 1, dtype=torch.bfloat16).reshape(
-        (1, 1, shard_height, shard_width * num_devices * num_cores)
-    )
+    torch_input_tensors = [torch.ones(1, 1, shard_height, shard_width * num_cores) + 1]
+    for i in range(1, num_devices):
+        torch_input_tensors.append(torch_input_tensors[0] * (i + 1))
+
+    input = torch.cat(torch_input_tensors, dim=3)
+    print(input)
+
+    output = torch_input_tensors[0]
+    for i in range(1, num_devices):
+        output += torch_input_tensors[i]
+
+    print(output)
+
     torch.set_printoptions(precision=10)
     n300_mesh_device.enable_async(True)
     compute_grid_size = n300_mesh_device.compute_with_storage_grid_size()
@@ -314,11 +326,16 @@ def test_fabric_reduce_scatter(n300_mesh_device):
             cluster_axis=1,
         )
         ttnn.synchronize_device(n300_mesh_device, sub_device_ids=sub_device_stall_group)
+        print(tt_out_tensor)
+        print("Convert to torch")
+        tt_torch_tensor = ttnn.to_torch(tt_out_tensor, mesh_composer=ttnn.ConcatMeshToTensor(n300_mesh_device, dim))
+        print("Torch conversion done")
+        print(tt_torch_tensor)
+        print("Torch tensor done")
         n300_mesh_device.reset_sub_device_stall_group()
         teardown_fabric_interface(n300_mesh_device)
+        assert_with_pcc(tt_torch_tensor, output, 0.999)
     except Exception as e:
         ttnn.synchronize_device(n300_mesh_device, sub_device_ids=sub_device_stall_group)
         n300_mesh_device.reset_sub_device_stall_group()
         teardown_fabric_interface(n300_mesh_device)
-
-    print(tt_out_tensor)
