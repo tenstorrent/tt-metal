@@ -129,12 +129,13 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     // Gather data
     if (!skip_untilize) {
         // compute kernel
-        std::vector<uint32_t> compute_ct_args = {input_nblocks_per_core, ntiles_per_block};
+        std::vector<uint32_t> compute_ct_args = {
+            input_nblocks_per_core, ntiles_per_block, src_cb_id, input_to_writer_cb_id};
+        tt::log_info("ct args for compute={}", compute_ct_args);
         std::string compute_kernel(
             "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
         if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH) {
-            log_debug(
-                tt::LogOp,
+            tt::log_info(
                 "Falling back to slow untilize since ntiles_per_block {} > MAX_PACK_UNTILIZE_WIDTH {}",
                 ntiles_per_block,
                 MAX_PACK_UNTILIZE_WIDTH);

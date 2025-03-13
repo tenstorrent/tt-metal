@@ -601,6 +601,14 @@ generate_halo_kernel_config_tensors(
      * dst_start0, length0, src_start1, dst_start1, length1, ...], (nocx, nocy, len) -> [src_start0, dst_start0,
      * length0, src_start1, dst_start1, length1, ...], ...}
      */
+
+    /*
+    header = {x: u16, y: u16, len: u16}
+    copy = {src: u16, dst: u16, num_sticks: u16}
+    config = {hdr: header, transfers: copy[]} -> [num_items] [config] [config] [config]
+    block_config = { block_sizes: u16[]} -> [num_blocks] [block_size] [block_size] ...
+    */
+
     std::vector<std::vector<uint32_pair_t>> pad_config;
     std::vector<std::pair<uint32_triplet_t, std::vector<uint32_triplet_t>>> local_config;
     std::vector<std::vector<std::pair<uint32_triplet_t, std::vector<uint32_triplet_t>>>> remote_config;
