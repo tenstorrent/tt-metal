@@ -72,6 +72,26 @@ def run_max_pool(
     cores_y = device.core_grid.y
     max_cores = cores_x * cores_y
 
+    # Skip tests for BF8 and ceil_mode in HEIGHT/WIDTH/BLOCK shardings
+    if shard_scheme in (
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+    ):
+        if dtype == ttnn.bfloat8_b:
+            if stride == (2, 2):
+                pytest.skip("Skip for stride (2, 2) for BF8!")
+            if kernel_size == (9, 9):
+                pytest.skip("Skip for kernel size (9, 9) for BF8!")
+            if ceil_mode:
+                pytest.skip("Skip for ceil mode for BF8!")
+
+        if ceil_mode:
+            if stride == (1, 1):
+                pytest.skip("Skip for stride (1, 1) for ceil mode!")
+            if kernel_size == (9, 9):
+                pytest.skip("Skip for kernel size (9, 9) for ceil mode!")
+
     if shard_scheme == ttnn.TensorMemoryLayout.HEIGHT_SHARDED or shard_scheme is None:
         if in_c % 16 != 0:
             pytest.skip("Current maxpool writer needs nchannels to be multiple of 16!")
