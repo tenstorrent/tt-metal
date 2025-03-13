@@ -776,12 +776,6 @@ class Attention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         print(f"{attn_output_11SH.shape=}")
-        print(
-            torch.Tensor(
-                ttnn.to_torch(attn_output_11SH, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
-            )[0, 0, 0].tolist(),
-            flush=True,
-        )
 
         ttnn.deallocate(attn_output_1QSD)
         # reshaping long sequence to matmul fit on device

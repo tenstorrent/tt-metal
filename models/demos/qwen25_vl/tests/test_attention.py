@@ -86,7 +86,7 @@ def test_attention_inference(
     state_dict = {f"{state_dict_prefix}.{k}": v for k, v in state_dict.items()}
 
     # Example inputs and preprocessing
-    pt_attention_input = torch.randn(1, ref_seq_len, vision_model_args.dim)
+    pt_attention_input = torch.randn(1, 1, ref_seq_len, vision_model_args.dim)
     cu_seqlens, cu_window_seqlens, position_embeddings, window_index = qwen2_5_vision_transformer_preprocess(
         seq_len=ref_seq_len,
         grid_thw=image_grid_thw,
@@ -181,13 +181,19 @@ def test_attention_inference(
         tt_out,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=base_model_args.cluster_shape),
     )
+    print(f"{tt_out.shape=}")
     tt_output_torch = tt_out[:, 0:1, :, : vision_model_args.dim].view(
         batch_size, seq_len, -1
     )  # [ batch, seq, hidden_dim]
+    print(f"{tt_output_torch.shape=}")
+
+    # Remove sequence padding
+    tt_output_torch = tt_output_torch[0, :ref_seq_len, :]
+
     print(f"{position_embeddings[0].shape=}")
 
     reference_output = reference_model(
-        pt_attention_input,
+        pt_attention_input.squeeze(0).squeeze(0),
         cu_seqlens=cu_seqlens,
         rotary_pos_emb=None,
         position_embeddings=position_embeddings,
@@ -201,72 +207,4 @@ def test_attention_inference(
         logger.info(f"Attention Passed!")
     else:
         logger.warning(f"Attention Failed!")
-        all_tests_pass = False
-
-    check_kv_cache = True  # May want to disable: Issue #10648
-    if check_kv_cache:
-        # PyTorch output --------------------------------------------------------------------
-        pytorch_layer_present = [
-            reference_model.cache_k.clone().permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
-            reference_model.cache_v.clone().permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
-        ]
-        # TT hardware execution -------------------------------------------------------------
-        if paged_attention:
-            tt_layer_present = [
-                (
-                    ttnn.to_torch(
-                        cache,
-                        mesh_composer=ttnn.ConcatMesh2dToTensor(
-                            mesh_device,
-                            dims=(1, 3) if model_args.is_galaxy else (0, 1),
-                            mesh_shape=model_args.cluster_shape,
-                        ),
-                    )[reverse_permutation][:, : model_args.n_kv_heads, :, : model_args.head_dim]
-                    .reshape(
-                        model_args.max_batch_size,
-                        paged_attention_config.max_num_blocks // model_args.max_batch_size,
-                        model_args.n_kv_heads,
-                        paged_attention_config.block_size,
-                        model_args.head_dim,
-                    )
-                    .transpose(1, 2)
-                    .reshape(model_args.max_batch_size, model_args.n_kv_heads, -1, model_args.head_dim)[
-                        :batch_size, ...
-                    ]
-                )
-                for cache in tt_model.layer_past
-            ]
-        else:
-            tt_layer_present = [
-                ttnn.to_torch(
-                    cache,
-                    mesh_composer=ttnn.ConcatMesh2dToTensor(
-                        mesh_device,
-                        dims=(1, 0) if model_args.is_galaxy else (0, 1),
-                        mesh_shape=model_args.cluster_shape,
-                    ),
-                )[:batch_size, :, :, :]
-                for cache in tt_model.layer_past
-            ]
-
-        for i, (cache_pt, cache_tt) in enumerate(zip(pytorch_layer_present, tt_layer_present)):
-            cache_length_to_check = min(model_args.max_seq_len, generation_start_pos + generation_length + 1)
-            cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
-            cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
-            does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, pcc)
-            if i == 0:
-                logger.info(f"K cache output: {output_pcc}")
-            else:
-                logger.info(f"V cache output: {output_pcc}")
-
-            if does_pass:
-                logger.info(f"KV Cache Passed!")
-            else:
-                logger.warning(f"KV Cache Failed! PCC value is lower than {pcc}")
-                all_tests_pass = False
-
-    if all_tests_pass:
-        logger.info("Attention output Passed!")
-    else:
-        logger.warning("Attention output Failed!")
-        assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
+    assert passing, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
