@@ -9,9 +9,14 @@ jobs:
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
     with:
+      build-wheel: true
       tracy: true
     secrets: inherit
   tg-model-perf-tests:
     needs: build-artifact-profiler
     secrets: inherit
     uses: ./.github/workflows/tg-model-perf-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
