@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "device/gelu_backward/gelu_backward_device_operation.hpp"
 #include "unary_backward.hpp"
 

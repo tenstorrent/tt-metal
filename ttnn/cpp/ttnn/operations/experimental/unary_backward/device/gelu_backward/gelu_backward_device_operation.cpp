@@ -1,10 +1,13 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "gelu_backward_device_operation.hpp"
 #include "gelu_backward_program_factory.hpp"
 
 #include <magic_enum/magic_enum.hpp>
 #include <tt-metalium/constants.hpp>
 #include "tt-metalium/host_api.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
 
 using namespace tt::tt_metal;
 
@@ -22,8 +25,6 @@ void GeluBackwardDeviceOperation::validate_on_program_cache_hit(
 
 void GeluBackwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    // TODO: implement this
-
     const auto& preallocated_input_grad = tensor_args.preallocated_input_grad;
     const auto& input_tensor = tensor_args.input;
     auto out_memory_config = args.output_memory_config;
@@ -44,12 +45,6 @@ void GeluBackwardDeviceOperation::validate_on_program_cache_miss(
         static_cast<int>(input_tensor.get_dtype()),
         static_cast<int>(output_datatype));
 
-    auto arch = input_tensor.device()->arch();
-    TT_FATAL(
-        arch == tt::ARCH::WORMHOLE_B0,
-        "GELU_BW operation is only supported on Wormhole. Device arch: {}",
-        magic_enum::enum_name(arch));
-
     TT_FATAL(
         input_tensor.storage_type() == StorageType::DEVICE,
         "GELU_BW operation requires input to be on Device. Input storage type: {}",
@@ -65,19 +60,17 @@ void GeluBackwardDeviceOperation::validate_on_program_cache_miss(
         static_cast<int>(input_tensor.memory_config().memory_layout),
         static_cast<int>(out_memory_config.memory_layout));
 
-    if (!input_tensor.is_sharded()) {
-        TT_FATAL(
-            input_tensor.get_layout() == Layout::TILE,
-            "GELU_BW operation requires tensor to be in Tile layout when working with non-sharded input tensor. Input "
-            "tensor layout: {}",
-            static_cast<int>(input_tensor.get_layout()));
+    TT_FATAL(
+        input_tensor.get_layout() == Layout::TILE,
+        "GELU_BW operation requires tensor to be in Tile layout when working with non-sharded input tensor. Input "
+        "tensor layout: {}",
+        static_cast<int>(input_tensor.get_layout()));
 
-        TT_FATAL(
-            input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
-            "GELU_BW operation requires Interleaved memory layout when working with non-sharded input tensor. Input "
-            "memory layout: `{}`",
-            static_cast<int>(input_tensor.memory_config().memory_layout));
-    }
+    TT_FATAL(
+        input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        "GELU_BW operation requires Interleaved memory layout when working with non-sharded input tensor. Input "
+        "memory layout: `{}`",
+        static_cast<int>(input_tensor.memory_config().memory_layout));
 
     if (preallocated_input_grad.has_value()) {
         const auto computed_output_shape = compute_output_specs(args, tensor_args).logical_shape();
