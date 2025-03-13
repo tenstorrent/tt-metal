@@ -1,4 +1,4 @@
 LoadTrace
 =========
 
-.. doxygenfunction:: tt::tt_metal::v0::LoadTrace
+.. doxygenfunction:: tt::tt_metal::LoadTrace

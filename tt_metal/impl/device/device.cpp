@@ -10,37 +10,37 @@
 #include <tt-metalium/dispatch_mem_map.hpp>
 #include <tt-metalium/program_cache.hpp>
 
-#include "tt_metal/deprecated/device.hpp"
 #include "common/core_assignment.hpp"
 #include <host_api.hpp>
 #include <trace.hpp>
 #include <core_descriptor.hpp>
-#include "lightmetal/lightmetal_capture.hpp"
-#include "tracy/Tracy.hpp"
 #include <tt_metal.hpp>
-#include "dprint_server.hpp"
-#include "impl/debug/watcher_server.hpp"
-#include "tt_metal/impl/dispatch/topology.hpp"
-#include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include <utils.hpp>
-#include "llrt.hpp"
 #include <dev_msgs.h>
 #include <device_pool.hpp>
 #include <persistent_kernel_cache.hpp>
-#include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
+
 #include <hal.hpp>
 #include <hal_exp.hpp>
 #include <sub_device.hpp>
 #include <sub_device_manager_tracker.hpp>
-#include <sub_device_manager.hpp>
 #include <sub_device_types.hpp>
-#include <span.hpp>
-#include <types.hpp>
+#include <tt_stl/span.hpp>
 
-#include "impl/dispatch/topology.hpp"
-#include "impl/dispatch/hardware_command_queue.hpp"
+#include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
+
+#include "tt_metal/impl/debug/watcher_server.hpp"
+#include "tt_metal/impl/dispatch/topology.hpp"
+#include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
+#include "tt_metal/impl/sub_device/sub_device_manager.hpp"
+#include "tt_metal/impl/dispatch/topology.hpp"
+#include "tt_metal/impl/dispatch/hardware_command_queue.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 
+#include "lightmetal/lightmetal_capture.hpp"
+#include "tracy/Tracy.hpp"
+#include "dprint_server.hpp"
+#include "llrt.hpp"
 #include "work_executor.hpp"
 
 namespace tt {
@@ -64,7 +64,6 @@ Device::Device(
     completion_queue_reader_core_(completion_queue_reader_core),
     work_executor_(std::make_unique<WorkExecutor>(worker_thread_core, device_id)) {
     ZoneScoped;
-    update_dispatch_cores_for_multi_cq_eth_dispatch();
     this->initialize(num_hw_cqs, l1_small_size, trace_region_size, l1_bank_remap, minimal);
 }
 
@@ -118,7 +117,7 @@ void Device::get_associated_dispatch_virtual_cores(
         for (const chip_id_t &device_id : tt::Cluster::instance().get_devices_controlled_by_mmio_device(this->id_)) {
             uint8_t num_hw_cqs = this->num_hw_cqs();
             uint16_t curr_channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
-            CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device_id);
+            CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type();
             for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
                 if (device_id == this->id_) {
                     //mmio device.
@@ -180,7 +179,7 @@ void Device::get_associated_dispatch_virtual_cores(
         uint8_t num_hw_cqs = this->num_hw_cqs();
         auto device_id = this->id_;
         uint16_t curr_channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
-        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device_id);
+        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type();
         for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
             if (dispatch_core_manager::instance().is_dispatcher_core_allocated(device_id, curr_channel, cq_id)) {
                 tt_cxy_pair dispatch_location = dispatch_core_manager::instance().dispatcher_core(device_id, curr_channel, cq_id);
@@ -271,7 +270,7 @@ void Device::initialize_default_sub_device_state(size_t l1_small_size, size_t tr
 std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap) {
     ZoneScoped;
     const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
-    const auto &dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(this->id_);
+    const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
     // Construct allocator config from soc_desc
     // Take max alignment to satisfy NoC rd/wr constraints
@@ -406,7 +405,7 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
                 launch_msg->kernel_config.mode = DISPATCH_MODE_HOST;
             } else {
                 std::vector<CoreCoord> physical_dispatch_cores = {};
-                if (dispatch_core_manager::instance().get_dispatch_core_type(this->id()) == CoreType::WORKER) {
+                if (dispatch_core_manager::instance().get_dispatch_core_type() == CoreType::WORKER) {
                     physical_dispatch_cores = this->worker_cores_from_logical_cores(dispatch_core_manager::instance().get_all_logical_dispatch_cores(this->id()));
                 }
                 if (std::find(physical_dispatch_cores.begin(), physical_dispatch_cores.end(), virtual_core) != physical_dispatch_cores.end()) {
@@ -846,7 +845,7 @@ void Device::configure_command_queue_programs() {
     if (this->is_mmio_capable()) {
         for (chip_id_t serviced_device_id : tt::Cluster::instance().get_devices_controlled_by_mmio_device(device_id)) {
             uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(serviced_device_id);
-            CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(mmio_device_id);
+            CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type();
             uint32_t host_issue_q_rd_ptr = DispatchMemMap::get(dispatch_core_type)
                                                .get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_RD);
             uint32_t host_issue_q_wr_ptr = DispatchMemMap::get(dispatch_core_type)
@@ -881,18 +880,6 @@ void Device::configure_command_queue_programs() {
     program_dispatch::finalize_program_offsets(command_queue_program, this);
     detail::ConfigureDeviceWithProgram(this, command_queue_program, true);
     tt::Cluster::instance().l1_barrier(this->id());
-}
-
-void Device::update_dispatch_cores_for_multi_cq_eth_dispatch() {
-    // When running Multiple CQs using Ethernet Dispatch, we may need more dispatch cores than those allocated in the
-    // core descriptor (ex: 2 CQs on N300 need 10 dispatch cores and the core descriptor only allocates 6).
-    // Infer the remaining dispatch cores from the idle eth core list (this is device dependent).
-    if (dispatch_core_manager::instance().get_dispatch_core_type(this->id()) == CoreType::ETH) {
-        auto& dispatch_core_manager = dispatch_core_manager::instance();
-        for (const auto& idle_eth_core : this->get_inactive_ethernet_cores()) {
-            dispatch_core_manager.add_dispatch_core_to_device(this->id(), idle_eth_core);
-        }
-    }
 }
 
 void Device::init_command_queue_host() {
@@ -941,6 +928,10 @@ void Device::init_command_queue_device() {
 
 void Device::init_fabric() {
     fabric_program_ = create_and_compile_fabric_program(this);
+    if (fabric_program_ == nullptr) {
+        return;
+    }
+
     configure_fabric_cores(this);
 
     program_dispatch::finalize_program_offsets(*fabric_program_, this);
@@ -976,11 +967,6 @@ bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t t
     this->using_fast_dispatch_ = false;
     // Trying to preserve logic that was in device_pool.cpp
     // However, I honestly don't understand it
-    if (!initialized_ && (num_hw_cqs_ != num_hw_cqs)) {
-        // The dispatch core manager was reset, since the number of CQs was toggled.
-        // Account for chip specific idle eth dispatch cores.
-        update_dispatch_cores_for_multi_cq_eth_dispatch();
-    }
     this->num_hw_cqs_ = num_hw_cqs;
     BuildEnvManager::get_instance().add_build_env(this->id(), this->num_hw_cqs());
     this->initialize_cluster();
@@ -1124,7 +1110,7 @@ CoreCoord Device::dram_grid_size() const {
 }
 
 CoreCoord Device::compute_with_storage_grid_size() const {
-    const auto &dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(id_);
+    const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
     return tt::get_compute_grid_size(id_, num_hw_cqs_, dispatch_core_config);
 }
 
@@ -1670,85 +1656,6 @@ std::vector<std::pair<transfer_info_cores, uint32_t>> Device::extract_dst_noc_mu
     }
     return dst_noc_multicast_info;
 }
-
-
-
-size_t v1::GetNumAvailableDevices() { return tt::Cluster::instance().number_of_user_devices(); }
-
-size_t v1::GetNumPCIeDevices() { return tt::Cluster::instance().number_of_pci_devices(); }
-
-chip_id_t v1::GetPCIeDeviceID(chip_id_t device_id) {
-    return tt::Cluster::instance().get_associated_mmio_device(device_id);
-}
-
-IDevice* v1::CreateDevice(chip_id_t device_id, CreateDeviceOptions options) {
-    ZoneScoped;
-
-    tt::DevicePool::initialize(
-        {device_id},
-        options.num_hw_cqs,
-        options.l1_small_size,
-        options.trace_region_size,
-        options.dispatch_core_config,
-        options.l1_bank_remap);
-
-    return tt::DevicePool::instance().get_active_device(device_id);
-}
-
-bool v1::CloseDevice(IDevice* device) { return v0::CloseDevice(device); }
-
-void v1::DeallocateBuffers(IDevice* device) { device->allocator()->deallocate_buffers(); }
-
-void v1::DumpDeviceProfileResults(IDevice* device) {
-    detail::DumpDeviceProfileResults(device);
-}
-
-ARCH v1::GetArch(IDevice* device) { return device->arch(); }
-
-chip_id_t v1::GetId(IDevice* device) { return device->id(); }
-
-int v1::GetNumDramChannels(IDevice* device) { return device->num_dram_channels(); }
-
-std::uint32_t v1::GetL1SizePerCore(IDevice* device) { return device->l1_size_per_core(); }
-
-CoreCoord v1::GetComputeWithStorageGridSize(IDevice* device) { return device->compute_with_storage_grid_size(); }
-
-CoreCoord v1::GetDramGridSize(IDevice* device) { return device->dram_grid_size(); }
-
-void v1::EnableProgramCache(IDevice* device) { device->enable_program_cache(); }
-
-void v1::DisableAndClearProgramCache(IDevice* device) { device->disable_and_clear_program_cache(); }
-
-void v1::PushWork(IDevice* device, std::function<void()> work, bool blocking) {
-    device->push_work(std::move(work), blocking);
-}
-
-void v1::Synchronize(IDevice* device) { device->synchronize(); }
-
-std::vector<CoreCoord> v1::GetEthernetSockets(IDevice* device, chip_id_t connected_chip_id) {
-    return device->get_ethernet_sockets(connected_chip_id);
-}
-
-std::uint32_t v1::GetNumBanks(IDevice* device, BufferType buffer_type) {
-    return device->allocator()->get_num_banks(buffer_type);
-}
-
-std::int32_t v1::GetBankOffset(IDevice* device, BufferType buffer_type, std::uint32_t bank_id) {
-    return device->allocator()->get_bank_offset(buffer_type, bank_id);
-}
-
-tt::stl::Span<const std::uint32_t> v1::BankIdsFromLogicalCore(
-    IDevice* device, BufferType buffer_type, CoreCoord logical_core) {
-    return device->allocator()->get_bank_ids_from_logical_core(buffer_type, logical_core);
-}
-
-float v1::GetSfpuEps(IDevice* device) { return tt::tt_metal::experimental::hal::get_eps(); }
-
-float v1::GetSfpuNan(IDevice* device) { return tt::tt_metal::experimental::hal::get_nan(); }
-
-float v1::GetSfpuInf(IDevice* device) { return tt::tt_metal::experimental::hal::get_inf(); }
-
-std::size_t v1::GetNumProgramCacheEntries(IDevice* device) { return device->num_program_cache_entries(); }
 
 tt::WorkExecutorMode Device::get_worker_mode() { return work_executor_->get_worker_mode(); }
 bool Device::is_worker_queue_empty() const { return work_executor_->worker_queue.empty(); }

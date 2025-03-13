@@ -6,7 +6,6 @@
 
 #include <cstdint>
 #include <memory>
-#include <variant>
 
 #include "core_coord.hpp"
 #include "buffer_constants.hpp"
@@ -15,14 +14,8 @@
 
 namespace tt::tt_metal {
 
-inline namespace v0 {
-
 class Buffer;
 class IDevice;
-
-}  // namespace v0
-
-namespace v1 {
 
 namespace experimental {
 
@@ -59,8 +52,8 @@ private:
 
     // GlobalCircularBuffer is implemented as a wrapper around a sharded buffer
     // This can be updated in the future to be its own container with optimized dispatch functions
-    std::variant<std::shared_ptr<Buffer>, std::shared_ptr<distributed::MeshBuffer>> cb_buffer_;
-    std::variant<std::shared_ptr<Buffer>, std::shared_ptr<distributed::MeshBuffer>> cb_config_buffer_;
+    distributed::AnyBuffer cb_buffer_;
+    distributed::AnyBuffer cb_config_buffer_;
     IDevice* device_;
     std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping_;
     CoreRangeSet sender_cores_;
@@ -71,15 +64,13 @@ private:
 
 }  // namespace experimental
 
-}  // namespace v1
-
 }  // namespace tt::tt_metal
 
 namespace std {
 
 template <>
-struct hash<tt::tt_metal::v1::experimental::GlobalCircularBuffer> {
-    std::size_t operator()(const tt::tt_metal::v1::experimental::GlobalCircularBuffer& global_circular_buffer) const;
+struct hash<tt::tt_metal::experimental::GlobalCircularBuffer> {
+    std::size_t operator()(const tt::tt_metal::experimental::GlobalCircularBuffer& global_circular_buffer) const;
 };
 
 }  // namespace std

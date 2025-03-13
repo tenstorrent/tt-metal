@@ -5,7 +5,7 @@
 #pragma once
 
 #include <vector>
-#include <tt-metalium/reflection.hpp>
+#include <tt_stl/reflection.hpp>
 
 namespace ttnn::operations::unary {
 
