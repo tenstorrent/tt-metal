@@ -576,13 +576,13 @@ Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking, ttnn::QueueId cq
     const auto& mesh_buffer = storage.mesh_buffer;
     ttnn::MeshDevice* device = mesh_buffer->device();
     distributed::MeshCommandQueue& mesh_cq = device->mesh_command_queue(*cq_id);
-    const auto num_buffers = device->num_devices();
+    const auto num_buffers = storage.specs.size();
 
     std::vector<distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfers;
     std::vector<TensorSpec> specs;
     std::vector<OwnedBuffer> buffers;
-    specs.reserve(num_buffers);
     buffers.reserve(num_buffers);
+    specs.reserve(num_buffers);
     shard_data_transfers.reserve(num_buffers);
     for (const auto& [coord, shard_tensor_spec] : storage.specs) {
         std::vector<T> host_buffer;
