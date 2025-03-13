@@ -12,6 +12,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/core_coord.hpp>
 
+#include "assert.hpp"
 #include "context.hpp"
 #include "host_utils.hpp"
 #include "device_utils.hpp"
@@ -142,7 +143,8 @@ TestResult mem_bench_copy_multithread(benchmark::State& state) {
     return results;
 }
 
-// Benchmark memcpy_to_device while the device is reading the hugepage.
+// Benchmark memcpy_to_device while the device is reading or writing the hugepage.
+// Can be read or write not both. For both, use mem_bench_copy_with_read_and_write_kernel.
 // Reports host bw and device bw.
 TestResult mem_bench_copy_with_active_kernel(benchmark::State& state) {
     TestResult results;
@@ -154,10 +156,15 @@ TestResult mem_bench_copy_with_active_kernel(benchmark::State& state) {
         state.range(1),  // Page size
         0,               // Threads
         state.range(2),  // Readers
-        0,               // Writers
-        state.range(3),  // Enable host copy
+        state.range(3),  // Writers
+        state.range(4),  // Enable host copy
         0,               // Iterations is managed by the benchmark framework
     };
+    if (ctx.number_reader_kernels && ctx.number_writer_kernels) {
+        TT_THROW(
+            "Cannot have both reader and writes in this test method. Use mem_bench_copy_with_read_and_write_kernel "
+            "instead.");
+    }
 
     auto src_data = generate_random_src_data(ctx.total_size);
     auto hugepage = get_hugepage(device->id(), 0);
@@ -165,7 +172,12 @@ TestResult mem_bench_copy_with_active_kernel(benchmark::State& state) {
 
     for (auto _ : state) {
         auto pgm = CreateProgram();
-        auto configured_cores = configure_kernels(device, pgm, ctx, 0, ctx.number_reader_kernels, false, hugepage_size);
+        std::optional<CoreRange> configured_cores;
+        if (ctx.number_reader_kernels) {
+            configured_cores = configure_kernels(device, pgm, ctx, 0, ctx.number_reader_kernels, false, hugepage_size);
+        } else {
+            configured_cores = configure_kernels(device, pgm, ctx, 0, ctx.number_writer_kernels, true, hugepage_size);
+        }
         double host_copy_time = 1;  // Set to 1 so it doesn't divide by 0 if host copy is disabled
 
         double wait_for_kernel_time = execute_work_synced_start(
@@ -369,7 +381,7 @@ TestResult mem_bench_copy_with_read_and_write_kernel(benchmark::State& state) {
         0,               // Threads
         state.range(2),  // Readers
         state.range(3),  // Writers
-        true,            // Enable host copy
+        state.range(4),  // Enable host copy
         0,               // Iterations is managed by the benchmark framework
     };
 
@@ -425,13 +437,7 @@ TestResult mem_bench_copy_with_read_and_write_kernel(benchmark::State& state) {
 void global_bench_args(benchmark::internal::Benchmark* b) { b->UseManualTime()->Iterations(5); }
 
 void register_basic_benchmark_suite() {
-    ::benchmark::RegisterBenchmark("Host Copy Page Sizing", mem_bench_page_sizing)
-        ->Apply(global_bench_args)
-        ->ArgsProduct({
-            {1_GB},
-            {16, 8_KB, 16_KB, 32_KB},
-            {false},
-        });
+    // Host copying to hugepage (no device activity)
     ::benchmark::RegisterBenchmark("Host Copy (Cached)", mem_bench_page_sizing)
         ->Apply(global_bench_args)
         ->ArgsProduct({
@@ -439,31 +445,42 @@ void register_basic_benchmark_suite() {
             {16, 8_KB, 16_KB, 32_KB},
             {true},
         });
-    ::benchmark::RegisterBenchmark("Host Copy Saturation", mem_bench_copy_multithread)
-        ->Apply(global_bench_args)
-        ->ArgsProduct({
-            {1_GB},
-            {32_KB},
-            {1, 2, 3, 4, 5, 6, 7, 8},
-        });
+    // N cores reading the hugepage on the host
     ::benchmark::RegisterBenchmark("Device Reading Host", mem_bench_copy_with_active_kernel)
         ->Apply(global_bench_args)
         ->ArgsProduct({
             {1_GB},
             {32_KB},
             {1, 2, 3, 4},
+            {0},
+            {false},
+        });
+    // N cores writing the hugepage on the host
+    ::benchmark::RegisterBenchmark("Device Writing Host", mem_bench_copy_with_active_kernel)
+        ->Apply(global_bench_args)
+        ->ArgsProduct({
+            {1_GB},
+            {32_KB},
+            {0},
+            {1, 2, 3, 4},
             {false},
         });
 }
 
 void register_full_benchmark_suite() {
-    ::benchmark::RegisterBenchmark("Host Copy with Active Kernel", mem_bench_copy_with_active_kernel)
+    ::benchmark::RegisterBenchmark("Host Copy Page Sizing", mem_bench_page_sizing)
+        ->Apply(global_bench_args)
+        ->ArgsProduct({
+            {1_GB},
+            {16, 8_KB, 16_KB, 32_KB},
+            {false},
+        });
+    ::benchmark::RegisterBenchmark("Host Copy Saturation", mem_bench_copy_multithread)
         ->Apply(global_bench_args)
         ->ArgsProduct({
             {1_GB},
             {32_KB},
-            {1, 2, 3, 4},
-            {false},
+            {1, 2, 3, 4, 5, 6, 7, 8},
         });
     ::benchmark::RegisterBenchmark(
         "Host Copy with Active Kernel on Different Hugepages", mem_bench_copy_active_kernel_different_page)
@@ -506,7 +523,8 @@ void print_help() {
     std::cout << "          [--full] Run all tests\n";
     std::cout << "\nCounters\n";
     std::cout << "          bytes_per_second: Aggregate Host copy to hugepage bandwidth. 0 if not measured.\n";
-    std::cout << "          dev_bw: Average device core PCIe pull bandwidth. 0 if not measured.\n";
+    std::cout << "          dev_bw: Average single device core PCIe r/w bandwidth. 0 if not measured.\n";
+    std::cout << "          kernel_0: Single core PCIe r/w bandwidth. 0 if not measured.\n";
 }
 
 bool has_flag(const std::vector<std::string>& input_args, const std::string& flag) {

@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/dispatch_mem_map.hpp>
-#include <tt-metalium/helpers.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/fabric_host_interface.h>
 #include "rtoptions.hpp"
