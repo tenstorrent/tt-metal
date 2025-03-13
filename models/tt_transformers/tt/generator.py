@@ -291,7 +291,7 @@ class Generator:
             device_inputs_i = copy_host_to_device(host_inputs, mesh_device=self.model_args[i].mesh_device)
             device_inputs.append(device_inputs_i)
 
-        trace_id = ttnn.begin_trace_capture(self.model_args[i].mesh_device, cq_id=0)
+        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         for i in range(self.data_parallel):
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
             transformed_inputs = self.model[i].transform_decode_inputs_device(*(device_inputs[i]))
