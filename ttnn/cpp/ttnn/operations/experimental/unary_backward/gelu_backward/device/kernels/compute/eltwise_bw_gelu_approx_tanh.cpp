@@ -25,12 +25,12 @@ void MAIN {
     constexpr auto cb_input = tt::CBIndex::c_1;
     constexpr auto cb_grad_in = tt::CBIndex::c_2;
 
-    constexpr uint32_t bits_1p0 = 0x3f800000;             // 1.0f
-    constexpr uint32_t bits_0p5 = 0x3F000000;             // 0.5f
-    constexpr uint32_t bits_sqrt_2_over_pi = 0x3f4c422a;  // sqrt(2/pi)
+    constexpr uint32_t bits_1p0 = 0x3f800000;                 // 1.0f
+    constexpr uint32_t bits_0p5 = 0x3F000000;                 // 0.5f
+    constexpr uint32_t bits_sqrt_2_over_pi = 0x3f4c422a;      // sqrt(2/pi)
     constexpr uint32_t bits_0p5_sqrt_2_over_pi = 0x3ecc422a;  // ~0.3989423f (0.5 * sqrt(2/π))
-    constexpr uint32_t bits_0p044715 = 0x3d372713;        // 0.044715
-    constexpr uint32_t bits_0p134145 = 0x3e095d4f;        // 0.134145
+    constexpr uint32_t bits_0p044715 = 0x3d372713;            // 0.044715
+    constexpr uint32_t bits_0p134145 = 0x3e095d4f;            // 0.134145
 
     unary_op_init_common(cb_grad_out, cb_grad_in);
     add_binary_tile_init();
