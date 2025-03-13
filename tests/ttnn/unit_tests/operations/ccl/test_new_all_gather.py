@@ -373,7 +373,7 @@ def run_all_gather_impl(
         # (4, 1, [1, 1, 64, 512], 3, ttnn.TILE_LAYOUT),
         # (4, 1, [1, 1, 32, 32768], 3, ttnn.TILE_LAYOUT),
         # (4, 1, [1, 1, 2048, 16384], 3, ttnn.TILE_LAYOUT),
-        (4, 1, [1, 1, 32, 1280], 3, ttnn.TILE_LAYOUT),
+        # (4, 1, [1, 1, 32, 1280], 3, ttnn.TILE_LAYOUT),
         # (8, 1, [1, 1, 2048, 32768], 3, ttnn.TILE_LAYOUT),  # OOM on L1
         # (2, 1, [1, 1, 64, 768-32*3], 2, ttnn.TILE_LAYOUT), #
         # (2, 1, [1, 1, 64, 768-32*2], 2, ttnn.TILE_LAYOUT), #
@@ -402,7 +402,7 @@ def run_all_gather_impl(
         # (2, 1, [1, 1, 64, 3584*3], 2, ttnn.TILE_LAYOUT), # 12
         # (2, 1, [1, 1, 128, 3584*3], 2, ttnn.TILE_LAYOUT), # 12
         # (4, 1, [1, 1, 128, 3584*5], 2, ttnn.TILE_LAYOUT), # 12
-        # (8, 1, [1, 1, 256, 3584*9], 2, ttnn.TILE_LAYOUT), # 12
+        # # (8, 1, [1, 1, 256, 3584*9], 2, ttnn.TILE_LAYOUT), # 12
         # (2, 1, [1, 1, 64, 768], 2, ttnn.TILE_LAYOUT), # 12
         # (2, 1, [1, 1, 64, 768+32*1], 2, ttnn.TILE_LAYOUT), # 12
         # (2, 1, [1, 1, 64, 768+32*2], 2, ttnn.TILE_LAYOUT), # 12
@@ -421,12 +421,19 @@ def run_all_gather_impl(
         # (2, 1, [1, 1, 192, 768*3+32*1], 2, ttnn.TILE_LAYOUT), # 12
         # (2, 1, [1, 1, 192, 768*3+32*2], 2, ttnn.TILE_LAYOUT), # 12
         # (2, 1, [1, 1, 192, 768*3+32*3], 2, ttnn.TILE_LAYOUT), # 12
+        (2, 1, [1, 1, 64, 64], 3, ttnn.TILE_LAYOUT),  # 12
+        (2, 1, [1, 1, 64, 128], 3, ttnn.TILE_LAYOUT),  # 12
+        # (2, 1, [1, 1, 192, 768*4], 3, ttnn.TILE_LAYOUT), # 12
+        # (2, 1, [1, 1, 192, 768*4 + 64], 3, ttnn.TILE_LAYOUT), # 12
+        # (2, 1, [1, 1, 192, 768*4 + 128], 3, ttnn.TILE_LAYOUT), # 12
+        # (4, 1, [1, 1, 192, 768*4 + 128], 3, ttnn.TILE_LAYOUT), # 12
+        # (8, 1, [1, 1, 192, 768*4 + 256], 3, ttnn.TILE_LAYOUT), # 12
     ],
 )
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        # ttnn.bfloat16,
+        ttnn.bfloat16,
         ttnn.bfloat8_b,
     ],
 )
@@ -434,6 +441,7 @@ def run_all_gather_impl(
     "mem_config",
     [
         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
 @pytest.mark.parametrize("num_iters", [10])
