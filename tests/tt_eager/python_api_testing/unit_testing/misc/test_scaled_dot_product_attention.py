@@ -149,6 +149,26 @@ def test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
+@pytest.mark.parametrize("q_chunk_size", [32], ids=["q32"])
+@pytest.mark.parametrize("k_chunk_size", [32], ids=["k32"])
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d",
+    ([1, 16, 1, 32, 64],),  # Falcon-40B
+    ids=["f40b"],
+)
+def test_sdpa_tt_small_chunks(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
+    if (s % q_chunk_size != 0) or (s % k_chunk_size != 0):
+        pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
+    if nh == 8 and q_chunk_size == 128 and k_chunk_size == 128:
+        pytest.skip("Can cause OOM if profiling is enabled.")
+    ttnn.device.DisablePersistentKernelCache()
+    run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype)
+
+
+@skip_for_blackhole("Mismatching on BH, see #12349")
+@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
+@skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
 @pytest.mark.parametrize("q_chunk_size", [256], ids=["q128"])
 @pytest.mark.parametrize("k_chunk_size", [128], ids=["k128"])
 @pytest.mark.parametrize(
