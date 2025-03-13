@@ -5,12 +5,13 @@
 #pragma once
 
 #include <cstring>
+#include <cstdint>
 #include <vector>
 #include <optional>
 #include <functional>
 
 #include <tt-metalium/tile.hpp>
-#include <tt-metalium/span.hpp>
+#include <tt_stl/span.hpp>
 
 class bfloat16 {
 private:

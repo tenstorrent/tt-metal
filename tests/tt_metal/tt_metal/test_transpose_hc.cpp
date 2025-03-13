@@ -11,7 +11,7 @@
 #include "test_gold_impls.hpp"
 #include <tt-metalium/tt_metal.hpp>
 
-#include <tt-metalium/test_tiles.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 
 using std::vector;
 using namespace tt;

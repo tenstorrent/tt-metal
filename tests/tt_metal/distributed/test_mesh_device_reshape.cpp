@@ -8,7 +8,7 @@
 #include <array>
 
 #include "host_api.hpp"
-#include "indestructible.hpp"
+#include <tt_stl/indestructible.hpp>
 #include "mesh_config.hpp"
 #include "mesh_device.hpp"
 #include "mesh_coord.hpp"
@@ -29,7 +29,7 @@ std::vector<chip_id_t> get_physical_device_ids(const MeshDevice& mesh) {
     return device_ids;
 }
 
-class T3KTestFixture : public ::testing::Test {
+class T3KReshapeTestFixture : public ::testing::Test {
 public:
     void SetUp() override {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
@@ -38,7 +38,7 @@ public:
         if (slow_dispatch) {
             GTEST_SKIP() << "Skipping Multi-Device test suite, since it can only be run in Fast Dispatch Mode.";
         }
-        if (num_devices < 8 or arch != tt::ARCH::WORMHOLE_B0) {
+        if (num_devices != 8 or arch != tt::ARCH::WORMHOLE_B0) {
             GTEST_SKIP() << "Skipping T3K Multi-Device test suite on non T3K machine.";
         }
     }
@@ -53,7 +53,7 @@ const std::vector<MeshShape> get_mesh_shapes() {
     return kMeshShapes.get();
 }
 
-class MeshConfigurationTest : public T3KTestFixture, public ::testing::WithParamInterface<MeshShape> {};
+class MeshConfigurationTest : public T3KReshapeTestFixture, public ::testing::WithParamInterface<MeshShape> {};
 
 TEST_P(MeshConfigurationTest, MeshConfigurations) {
     const auto& shape = GetParam();
@@ -79,7 +79,7 @@ TEST_P(MeshConfigurationTest, GetPhysicalDeviceIds) {
 // Test all possible mesh configurations on T3000
 INSTANTIATE_TEST_SUITE_P(AllMeshShapes, MeshConfigurationTest, ::testing::ValuesIn(get_mesh_shapes()));
 
-class MeshDeviceReshapeRoundtripTest : public T3KTestFixture,
+class MeshDeviceReshapeRoundtripTest : public T3KReshapeTestFixture,
                                        public ::testing::WithParamInterface<std::tuple<MeshShape, MeshShape>> {};
 
 TEST_P(MeshDeviceReshapeRoundtripTest, ReshapeBetweenConfigurations) {
@@ -121,7 +121,7 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Combine(::testing::ValuesIn(get_mesh_shapes()), ::testing::ValuesIn(get_mesh_shapes())));
 
 // Base class for non-parameterized tests
-using MeshDeviceReshapeTest = T3KTestFixture;
+using MeshDeviceReshapeTest = T3KReshapeTestFixture;
 
 TEST_F(MeshDeviceReshapeTest, InvalidRequestedShape) {
     auto& system_mesh = tt::tt_metal::distributed::SystemMesh::instance();

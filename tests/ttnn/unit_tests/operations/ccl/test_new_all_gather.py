@@ -18,11 +18,6 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_gather_TG_post_commit import 
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows,
 )
 
-from tests.ttnn.unit_tests.operations.ccl.test_ccl_async_TG_llama import (
-    PREFETCHER_NOC1_RING,
-    get_core_range_set,
-)
-
 
 def is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout):
     if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:

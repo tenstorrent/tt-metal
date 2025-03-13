@@ -9,6 +9,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 namespace ttnn {
 
@@ -154,7 +155,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     uint32_t output_channels,
     uint32_t groups,
     bool untilize_out,
-    bool fuse_relu,
+    const std::optional<unary::UnaryWithParam>& fused_activation,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
     tt::tt_metal::DataType dtype,
@@ -174,7 +175,8 @@ struct OptimizedConvNew {
     const sliding_window::SlidingWindowConfig& sliding_window_config;
     const uint32_t output_channels;
     const uint32_t groups;
-    bool untilize_out, has_bias, fuse_relu;
+    bool untilize_out, has_bias;
+    string activation = "";
     tt::tt_metal::MemoryConfig memory_config;
     const tt::tt_metal::DataType dtype;
     std::array<std::uint32_t, 4> input_tensor_shape;  // For sharded input, input tensor shape is nonsense
@@ -191,7 +193,7 @@ struct OptimizedConvNew {
         uint32_t groups,
         bool untile_out,
         bool has_bias,
-        bool fuse_relu,
+        string activation,
         const OptimizedConvParallelizationConfig& p_config,
         const OptimizedConvBlockConfig& b_config,
         tt::tt_metal::MemoryConfig memory_config,
@@ -208,7 +210,7 @@ struct OptimizedConvNew {
         sliding_window_config(sliding_window_config),
         untilize_out(untile_out),
         has_bias(has_bias),
-        fuse_relu(fuse_relu),
+        activation(activation),
         parallelization_config(p_config),
         block_config(b_config),
         memory_config(memory_config),
@@ -244,7 +246,7 @@ struct OptimizedConvNew {
         "output_channels",
         "untilize_out",
         "has_bias",
-        "fuse_relu",
+        "activation",
         "dtype",
         "input_tensor_shape",
         "use_shallow_conv_variant",
@@ -262,7 +264,7 @@ struct OptimizedConvNew {
             std::cref(this->output_channels),
             std::cref(this->untilize_out),
             std::cref(this->has_bias),
-            std::cref(this->fuse_relu),
+            std::cref(this->activation),
             std::cref(this->dtype),
             std::cref(this->input_tensor_shape),
             std::cref(this->use_shallow_conv_variant),
@@ -281,7 +283,7 @@ Tensor optimized_conv_new(
     uint32_t output_channels,
     uint32_t groups,
     bool untilize_out,
-    bool fuse_relu,
+    const string& activation,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
     const tt::tt_metal::MemoryConfig& memory_config,

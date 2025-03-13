@@ -19,13 +19,15 @@
 #include <device_impl.hpp>
 #include <sub_device.hpp>
 #include <sub_device_manager_tracker.hpp>
-#include <sub_device_manager.hpp>
-#include <sub_device_types.hpp>
+
+#include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "tt_metal/common/thread_pool.hpp"
 
 #include <hal.hpp>
 #include <mesh_coord.hpp>
 #include <small_vector.hpp>
+
+#include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 
 namespace tt::tt_metal::distributed {
 
