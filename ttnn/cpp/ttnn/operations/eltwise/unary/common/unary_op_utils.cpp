@@ -339,6 +339,7 @@ std::pair<string, string> get_op_init_and_func_default(UnaryOpType op_type, std:
         case UnaryOpType::NEG:
             op_init_and_name = {"negative_tile_init();", fmt::format("negative_tile({});", idst)};
             break;
+        case UnaryOpType::MISH: op_init_and_name = {}; break;
         default: TT_THROW("Undefined non-parametrized op type {}", op_type);
     }
     return op_init_and_name;
