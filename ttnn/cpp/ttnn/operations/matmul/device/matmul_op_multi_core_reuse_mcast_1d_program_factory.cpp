@@ -1749,12 +1749,20 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
     const bool in1_is_dram_interleaved = in1_buffer->is_dram() && !b.is_sharded();
 
     /* Core setup */
-    auto all_cores = device->worker_cores(
-        tt::tt_metal::HalProgrammableCoreType::TENSIX,
-        sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
-    // tt::log_info("all_cores: {}", all_cores);
     constexpr bool row_major = true;
     CoreRangeSet all_worker_cores = a.shard_spec().value().grid;
+    CoreRangeSet non_idle_cores = all_worker_cores.merge(hop_cores);
+    auto subdevice_cores = device->worker_cores(
+        tt::tt_metal::HalProgrammableCoreType::TENSIX,
+        sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
+    std::vector<CoreRange> non_idle_cores_vec;
+    for (auto& cr : subdevice_cores.ranges()) {
+        auto intersection = non_idle_cores.intersection(cr);
+        if (intersection.size() > 0) {
+            non_idle_cores_vec.push_back(intersection.bounding_box());
+        }
+    }
+    CoreRangeSet all_cores = CoreRangeSet(non_idle_cores_vec);
     std::vector<CoreRange> ring_list = all_worker_cores.ranges();
     std::vector<CoreRange> hop_list = hop_cores.ranges();
     ring_list.insert(ring_list.end(), hop_list.begin(), hop_list.end());
@@ -1912,7 +1920,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
     tt_metal::NOC in0_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
     tt_metal::NOC in1_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
 
-    bool use_dedicated_noc = use_hop_cores || in1_is_dram_interleaved;
+    bool use_dedicated_noc = true;
     tt_metal::NOC_MODE noc_mode =
         use_dedicated_noc ? tt_metal::NOC_MODE::DM_DEDICATED_NOC : tt_metal::NOC_MODE::DM_DYNAMIC_NOC;
 
