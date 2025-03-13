@@ -8,6 +8,7 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_event.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_trace.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_workload.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/mesh_workload_impl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_workload_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/system_mesh.cpp
 )

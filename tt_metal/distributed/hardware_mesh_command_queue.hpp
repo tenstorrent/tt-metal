@@ -34,29 +34,22 @@ using MeshCompletionReaderVariant = std::variant<MeshBufferReadDescriptor, MeshR
 
 class HardwareMeshCommandQueue : public MeshCommandQueue {
 public:
-    MeshCommandQueue(
+    HardwareMeshCommandQueue(
         MeshDevice* mesh_device,
         uint32_t id,
         std::shared_ptr<ThreadPool>& dispatch_thread_pool,
         std::shared_ptr<ThreadPool>& reader_thread_pool,
         std::shared_ptr<DispatchArray<LaunchMessageRingBufferState>>& worker_launch_message_buffer_state);
 
-    MeshCommandQueue(const MeshCommandQueue& other) = delete;
-    MeshCommandQueue& operator=(const MeshCommandQueue& other) = delete;
+    HardwareMeshCommandQueue(const HardwareMeshCommandQueue& other) = delete;
+    HardwareMeshCommandQueue& operator=(const HardwareMeshCommandQueue& other) = delete;
 
-    ~MeshCommandQueue() override;
+    ~HardwareMeshCommandQueue() override;
 
     MeshDevice* device() const override { return mesh_device_; }
     uint32_t id() const override { return id_; }
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) override { return config_buffer_mgr_[index]; };
     void enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) override;
-
-    // Specifies host data to be written to or read from a MeshBuffer shard.
-    struct ShardDataTransfer {
-        MeshCoordinate shard_coord;
-        void* host_data = nullptr;
-        std::optional<BufferRegion> region;
-    };
 
     // MeshBuffer Write APIs
     void enqueue_write_shard_to_sub_grid(
@@ -65,8 +58,10 @@ public:
         const MeshCoordinateRange& device_range,
         bool blocking,
         std::optional<BufferRegion> region = std::nullopt) override;
+
     void enqueue_write_mesh_buffer(
         const std::shared_ptr<MeshBuffer>& buffer, const void* host_data, bool blocking) override;
+
     void enqueue_write_shards(
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         const std::vector<ShardDataTransfer>& shard_data_transfers,
