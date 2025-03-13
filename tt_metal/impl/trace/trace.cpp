@@ -12,6 +12,7 @@
 #include <device.hpp>
 #include <command_queue.hpp>
 #include <trace.hpp>
+#include <tt-metalium/allocator.hpp>
 #include "tt_metal/impl/trace/dispatch.hpp"
 
 namespace tt::tt_metal {

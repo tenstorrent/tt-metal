@@ -4,12 +4,14 @@
 
 #include <random>
 
-#include "env_lib.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/allocator.hpp>
+
+#include "env_lib.hpp"
 
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tests/tt_metal/distributed/utils.hpp"

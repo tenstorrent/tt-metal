@@ -7,6 +7,7 @@
 #include <command_queue.hpp>
 #include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <mesh_command_queue.hpp>
 #include <mesh_workload.hpp>
 #include <tt_align.hpp>

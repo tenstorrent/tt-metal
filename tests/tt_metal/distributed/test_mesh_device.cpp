@@ -7,6 +7,7 @@
 
 #include "mesh_device.hpp"
 #include "system_mesh.hpp"
+#include <tt-metalium/allocator.hpp>
 
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 

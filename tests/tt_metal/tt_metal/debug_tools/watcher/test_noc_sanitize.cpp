@@ -5,9 +5,11 @@
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
 #include "llrt.hpp"
+
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/allocator.hpp>
 
 // Do we really want to expose Hal like this?
 // This looks like an API level test

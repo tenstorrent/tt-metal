@@ -13,6 +13,8 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/allocator.hpp>
+
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 
 #include "tt_metal/test_utils/comparison.hpp"

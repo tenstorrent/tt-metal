@@ -12,6 +12,7 @@
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include <tt-metalium/dispatch_settings.hpp>
 #include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/allocator.hpp>
 
 #include "tt_cluster.hpp"
 

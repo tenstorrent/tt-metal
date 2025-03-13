@@ -13,6 +13,7 @@
 #include <tt-metalium/semaphore.hpp>
 #include <tt-metalium/kernel.hpp>
 #include <tt-metalium/circular_buffer.hpp>
+#include <tt-metalium/allocator.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does

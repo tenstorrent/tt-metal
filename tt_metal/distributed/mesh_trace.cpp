@@ -7,6 +7,8 @@
 #include <mesh_coord.hpp>
 #include <mesh_trace.hpp>
 
+#include <tt-metalium/allocator.hpp>
+
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
