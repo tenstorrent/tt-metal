@@ -7,7 +7,7 @@
 #include <device.hpp>
 #include "dprint_server.hpp"
 #include <event.hpp>
-#include <overloaded.hpp>
+#include <tt_stl/overloaded.hpp>
 #include <trace_buffer.hpp>
 #include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
@@ -64,7 +64,7 @@ HWCommandQueue::HWCommandQueue(
     }
 
     CoreCoord enqueue_program_dispatch_core;
-    CoreType core_type = dispatch_core_manager::instance().get_dispatch_core_type(device_->id());
+    CoreType core_type = dispatch_core_manager::instance().get_dispatch_core_type();
     if (this->device_->num_hw_cqs() == 1 or core_type == CoreType::WORKER) {
         // dispatch_s exists with this configuration. Workers write to dispatch_s
         enqueue_program_dispatch_core = dispatch_core_manager::instance().dispatcher_s_core(device_->id(), channel, id);
@@ -206,7 +206,7 @@ void HWCommandQueue::enqueue_read_buffer(
                 dispatch_params,
                 sub_device_ids,
                 cores[core_id],
-                dispatch_core_manager::instance().get_dispatch_core_type(device_->id()));
+                dispatch_core_manager::instance().get_dispatch_core_type());
             if (dispatch_params.pages_per_txn > 0) {
                 this->issued_completion_q_reads.push(
                     buffer_dispatch::generate_sharded_buffer_read_descriptor(dst, dispatch_params, buffer_obj));
@@ -225,10 +225,7 @@ void HWCommandQueue::enqueue_read_buffer(
             dispatch_params_variant);
 
         buffer_dispatch::copy_interleaved_buffer_to_completion_queue(
-            *dispatch_params,
-            buffer_obj,
-            sub_device_ids,
-            dispatch_core_manager::instance().get_dispatch_core_type(device_->id()));
+            *dispatch_params, buffer_obj, sub_device_ids, dispatch_core_manager::instance().get_dispatch_core_type());
         if (dispatch_params->pages_per_txn > 0) {
             this->issued_completion_q_reads.push(
                 buffer_dispatch::generate_interleaved_buffer_read_descriptor(dst, dispatch_params, buffer_obj));
@@ -258,7 +255,7 @@ void HWCommandQueue::enqueue_write_buffer(
     Buffer& buffer_obj = get_buffer_object(buffer);
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
-    auto dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device_->id());
+    auto dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type();
 
     buffer_dispatch::write_to_device_buffer(
         data, buffer_obj, region, this->id_, this->expected_num_workers_completed, dispatch_core_type, sub_device_ids);
@@ -268,9 +265,7 @@ void HWCommandQueue::enqueue_write_buffer(
     }
 }
 
-CoreType HWCommandQueue::get_dispatch_core_type() {
-    return dispatch_core_manager::instance().get_dispatch_core_type(device_->id());
-}
+CoreType HWCommandQueue::get_dispatch_core_type() { return dispatch_core_manager::instance().get_dispatch_core_type(); }
 
 void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     ZoneScopedN("HWCommandQueue_enqueue_program");

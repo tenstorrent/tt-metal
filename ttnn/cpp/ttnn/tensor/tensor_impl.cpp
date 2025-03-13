@@ -8,7 +8,7 @@
 #include "tt-metalium/mesh_buffer.hpp"
 #include "tt-metalium/mesh_device.hpp"
 #include "tt-metalium/mesh_command_queue.hpp"
-#include "tt-metalium/overloaded.hpp"
+#include <tt_stl/overloaded.hpp>
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
@@ -609,7 +609,7 @@ Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking) {
 
         shard_data_transfers.push_back(distributed::MeshCommandQueue::ShardDataTransfer{
             .shard_coord = *shard_coord,
-            .host_data = std::visit([](auto& b) { return b.data(); }, buffers.back()),
+            .host_data = std::visit([](auto& b) { return reinterpret_cast<T*>(b.data()); }, buffers.back()),
             .region = BufferRegion(0, tensor_size_bytes)});
         ++shard_coord;
     }

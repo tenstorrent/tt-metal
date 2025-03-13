@@ -19,44 +19,10 @@
 #include <tt_align.hpp>
 
 #include "tt_cluster.hpp"
-#include "overloaded.hpp"
+#include <tt_stl/overloaded.hpp>
 
 namespace tt::tt_metal {
-
-namespace v1 {
-
 namespace experimental {
-
-namespace {
-Buffer* extract_buffer(
-    const std::variant<std::shared_ptr<Buffer>, std::shared_ptr<distributed::MeshBuffer>>& buffer_variant) {
-    return std::visit(
-        tt::stl::overloaded{
-            [](const std::shared_ptr<Buffer>& buffer) { return buffer.get(); },
-            [](const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer) {
-                auto shape = mesh_buffer->device()->shape();
-                return mesh_buffer->get_device_buffer(*distributed::MeshCoordinateRange(shape).begin()).get();
-            }},
-        buffer_variant);
-}
-std::variant<std::shared_ptr<Buffer>, std::shared_ptr<distributed::MeshBuffer>> create_cb_buffer(
-    const ShardedBufferConfig& config) {
-    auto mesh_device = dynamic_cast<distributed::MeshDevice*>(config.device);
-    if (!mesh_device) {
-        return CreateBuffer(config);
-    }
-    distributed::MeshBufferConfig mesh_config = distributed::ReplicatedBufferConfig{
-        .size = config.size,
-    };
-    distributed::DeviceLocalBufferConfig local_config{
-        .page_size = config.page_size,
-        .buffer_type = config.buffer_type,
-        .buffer_layout = config.buffer_layout,
-        .shard_parameters = config.shard_parameters,
-    };
-    return distributed::MeshBuffer::create(mesh_config, local_config, mesh_device);
-}
-}  // namespace
 
 GlobalCircularBuffer::GlobalCircularBuffer(
     IDevice* device,
@@ -101,7 +67,7 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
         .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
         .shard_parameters = shard_parameters,
     };
-    cb_buffer_ = create_cb_buffer(cb_buffer_shard_config);
+    cb_buffer_ = distributed::AnyBuffer::create(cb_buffer_shard_config);
 
     auto l1_alignment = hal.get_alignment(HalMemType::L1);
     // is_sender, receiver_val, fifo_start_addr, fifo_size, fifo_ptr, noc_xy coords, and pages_sent
@@ -118,7 +84,7 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
         .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
         .shard_parameters = std::move(shard_parameters),
     };
-    cb_config_buffer_ = create_cb_buffer(cb_config_buffer_shard_config);
+    cb_config_buffer_ = distributed::AnyBuffer::create(cb_config_buffer_shard_config);
 
     // Write the config buffer to the device
     // Only block for the slow dispatch case
@@ -132,8 +98,8 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
                        cb_config_buffer = cb_config_buffer_,
                        size = size_,
                        sender_receiver_core_mapping = sender_receiver_core_mapping_] {
-        auto config_buffer_address = extract_buffer(cb_config_buffer)->address();
-        const auto& core_to_core_id = extract_buffer(cb_config_buffer)->get_buffer_page_mapping()->core_to_core_id_;
+        auto config_buffer_address = cb_config_buffer.get_buffer()->address();
+        const auto& core_to_core_id = cb_config_buffer.get_buffer()->get_buffer_page_mapping()->core_to_core_id_;
         std::vector<uint32_t> cb_config_host_buffer(cb_config_size / sizeof(uint32_t), 0);
         uint32_t noc_xy_address = config_buffer_address + num_config_elements * sizeof(uint32_t);
         uint32_t pages_sent_address = tt::align(noc_xy_address + num_noc_xy_words * sizeof(uint32_t), l1_alignment);
@@ -170,23 +136,22 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
                 cb_config_host_buffer[receiver_idx++] = sender_physical_coord.y;
             }
         }
-        if (std::holds_alternative<std::shared_ptr<distributed::MeshBuffer>>(cb_config_buffer)) {
-            auto mesh_buffer = std::get<std::shared_ptr<distributed::MeshBuffer>>(cb_config_buffer);
+        if (auto mesh_buffer = cb_config_buffer.get_mesh_buffer()) {
             distributed::EnqueueWriteMeshBuffer(
                 mesh_buffer->device()->mesh_command_queue(), mesh_buffer, cb_config_host_buffer, false);
         } else {
             if (device->using_slow_dispatch()) {
-                detail::WriteToBuffer(*extract_buffer(cb_config_buffer), cb_config_host_buffer);
+                detail::WriteToBuffer(*cb_config_buffer.get_buffer(), cb_config_host_buffer);
                 tt::Cluster::instance().l1_barrier(device->id());
             } else {
                 EnqueueWriteBuffer(
-                    device->command_queue(), *extract_buffer(cb_config_buffer), cb_config_host_buffer.data(), false);
+                    device->command_queue(), *cb_config_buffer.get_buffer(), cb_config_host_buffer.data(), false);
             }
         }
     });
 }
 
-const Buffer& GlobalCircularBuffer::cb_buffer() const { return *extract_buffer(cb_buffer_); }
+const Buffer& GlobalCircularBuffer::cb_buffer() const { return *cb_buffer_.get_buffer(); }
 
 const CoreRangeSet& GlobalCircularBuffer::sender_cores() const { return sender_cores_; }
 
@@ -196,7 +161,7 @@ const CoreRangeSet& GlobalCircularBuffer::all_cores() const { return all_cores_;
 
 DeviceAddr GlobalCircularBuffer::buffer_address() const { return cb_buffer().address(); }
 
-DeviceAddr GlobalCircularBuffer::config_address() const { return extract_buffer(cb_config_buffer_)->address(); }
+DeviceAddr GlobalCircularBuffer::config_address() const { return cb_config_buffer_.get_buffer()->address(); }
 
 uint32_t GlobalCircularBuffer::size() const { return size_; }
 
@@ -206,14 +171,12 @@ const std::vector<std::pair<CoreCoord, CoreRangeSet>>& GlobalCircularBuffer::sen
 
 }  // namespace experimental
 
-}  // namespace v1
-
 }  // namespace tt::tt_metal
 
 namespace std {
 
-std::size_t hash<tt::tt_metal::v1::experimental::GlobalCircularBuffer>::operator()(
-    const tt::tt_metal::v1::experimental::GlobalCircularBuffer& global_circular_buffer) const {
+std::size_t hash<tt::tt_metal::experimental::GlobalCircularBuffer>::operator()(
+    const tt::tt_metal::experimental::GlobalCircularBuffer& global_circular_buffer) const {
     return tt::stl::hash::hash_objects_with_default_seed(global_circular_buffer.attribute_values());
 }
 

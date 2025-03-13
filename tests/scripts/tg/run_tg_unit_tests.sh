@@ -1,44 +1,6 @@
 #!/bin/bash
 set -eo pipefail
 
-run_tg_llama3-small_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_tg_llama3-small_tests"
-
-  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
-  # Llama3.2-1B
-  llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
-  # Llama3.2-3B
-  llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
-  # Llama3.1-8B
-  llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
-  # Llama3.2-11B
-  llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
-
-  # Run all Llama3 tests for 1B, 3B and 8B weights
-  for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
-    LLAMA_DIR=$llama_dir MESH_DEVICE=TG pytest -n auto models/tt_transformers/tests/test_attention.py ; fail+=$?
-    LLAMA_DIR=$llama_dir MESH_DEVICE=TG pytest -n auto models/tt_transformers/tests/test_attention_prefill.py ; fail+=$?
-    LLAMA_DIR=$llama_dir MESH_DEVICE=TG pytest -n auto models/tt_transformers/tests/test_embedding.py ; fail+=$?
-    LLAMA_DIR=$llama_dir MESH_DEVICE=TG pytest -n auto models/tt_transformers/tests/test_mlp.py ; fail+=$?
-    LLAMA_DIR=$llama_dir MESH_DEVICE=TG pytest -n auto models/tt_transformers/tests/test_rms_norm.py ; fail+=$?
-    LLAMA_DIR=$llama_dir MESH_DEVICE=TG pytest -n auto models/tt_transformers/tests/test_decoder.py ; fail+=$?
-    LLAMA_DIR=$llama_dir MESH_DEVICE=TG pytest -n auto models/tt_transformers/tests/test_decoder_prefill.py ; fail+=$?
-    echo "LOG_METAL: Llama3 small-tests for $llama_dir completed"
-  done
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_tg_llama3-small_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
 run_tg_llama3.1-70b_tests() {
   # Record the start time
   fail=0
@@ -49,13 +11,7 @@ run_tg_llama3.1-70b_tests() {
   # Llama3.1-70B weights
   llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
 
-  LLAMA_DIR=$llama70b MESH_DEVICE=TG pytest -n auto models/tt_transformers/tests/test_attention.py ; fail+=$?
-  LLAMA_DIR=$llama70b MESH_DEVICE=TG pytest -n auto models/tt_transformers/tests/test_attention_prefill.py ; fail+=$?
-  LLAMA_DIR=$llama70b MESH_DEVICE=TG pytest -n auto models/tt_transformers/tests/test_embedding.py ; fail+=$?
-  LLAMA_DIR=$llama70b MESH_DEVICE=TG pytest -n auto models/tt_transformers/tests/test_mlp.py ; fail+=$?
-  LLAMA_DIR=$llama70b MESH_DEVICE=TG pytest -n auto models/tt_transformers/tests/test_rms_norm.py ; fail+=$?
-  LLAMA_DIR=$llama70b MESH_DEVICE=TG pytest -n auto models/tt_transformers/tests/test_decoder.py ; fail+=$?
-  LLAMA_DIR=$llama70b MESH_DEVICE=TG pytest -n auto models/tt_transformers/tests/test_decoder_prefill.py ; fail+=$?
+  LLAMA_DIR=$llama70b FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/tests/unit_tests ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -114,8 +70,8 @@ run_tg_tests() {
   elif [[ "$1" == "fabric" ]]; then
     echo "LOG_FABRIC: running run_tg_fabric_tests"
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.*TG*
-    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricFixture.*"
-    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricFixture.*"
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2DFixture.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2DFixture.*"
     # Unicast tests
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric_sanity_wormhole_b0 --fabric_command 1 --board_type glx32 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric_sanity_wormhole_b0 --fabric_command 64 --board_type glx32 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16
@@ -135,14 +91,14 @@ run_tg_tests() {
   elif [[ "$1" == "llama3-70b" ]]; then
     run_tg_llama3.1-70b_tests
 
-  elif [[ "$1" == "llama3-small" ]]; then
-    run_tg_llama3-small_tests
-
   elif [[ "$1" == "prefetcher" ]]; then
     run_tg_prefetcher_tests
 
   elif [[ "$1" == "distributed-ops" ]]; then
     run_tg_distributed_op_tests
+
+  elif [[ "$1" == "distributed-runtime" ]]; then
+    ./build/test/tt_metal/distributed/distributed_unit_tests_wormhole_b0
 
   else
     echo "LOG_METAL: Unknown model type: $1"

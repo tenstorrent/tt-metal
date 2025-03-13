@@ -6,9 +6,12 @@
 #include <optional>
 #include <variant>
 
-#include <tt-metalium/buffer_constants.hpp>
 #include "gtest/gtest.h"
 #include "gmock/gmock.h"
+
+#include <tt-metalium/buffer_constants.hpp>
+#include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
+
 #include "ttnn/cpp/ttnn/operations/creation.hpp"
 #include "ttnn/cpp/ttnn/tensor/types.hpp"
 #include "ttnn/distributed/api.hpp"
@@ -25,7 +28,7 @@ using ::tt::tt_metal::MemoryConfig;
 using ::tt::tt_metal::StorageType;
 using ::tt::tt_metal::TensorMemoryLayout;
 
-class MultiDeviceTensorCreationTest : public T3kMultiDeviceFixture, public ::testing::WithParamInterface<bool> {};
+class MultiDeviceTensorCreationTest : public GenericMeshDeviceFixture, public ::testing::WithParamInterface<bool> {};
 
 TEST_P(MultiDeviceTensorCreationTest, Empty) {
     MeshDevice* mesh_device = this->mesh_device_.get();
@@ -187,7 +190,7 @@ TEST_P(MultiDeviceTensorCreationTest, Arange) {
 
     EXPECT_EQ(tensor.storage_type(), StorageType::MULTI_DEVICE);
     EXPECT_EQ(tensor.get_workers().size(), mesh_device->num_devices());
-    EXPECT_EQ(tensor.logical_shape(), ttnn::Shape({1, 1, 1, 1024}));
+    EXPECT_EQ(tensor.logical_shape(), ttnn::Shape({1024}));
 
     const auto distributed_tensor_config = get_distributed_tensor_config_from_tensor(tensor);
     EXPECT_TRUE(std::holds_alternative<ReplicateTensor>(distributed_tensor_config));

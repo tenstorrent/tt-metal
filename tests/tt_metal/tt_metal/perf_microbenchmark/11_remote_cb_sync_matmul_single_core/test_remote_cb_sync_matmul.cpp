@@ -20,12 +20,13 @@
 #include <tt-metalium/global_circular_buffer_impl.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
-#include "tt_metal/include/tt_metal/program.hpp"
+#include <tt-metalium/sub_device.hpp>
+
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-#include <tt-metalium/work_split.hpp>
-#include "tests/tt_metal/test_utils/tilization.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tt_metal/tt_metal/common/matmul_test_utils.hpp"
+
+#include "tests/tt_metal/test_utils/tilization.hpp"
 
 #include "test_common.hpp"
 
@@ -97,7 +98,7 @@ std::tuple<uint32_t, uint32_t> get_out_subblock_params(
     return {1, 1};
 }
 
-std::tuple<std::vector<tt_metal::Program>, ::tt_metal::v1::experimental::GlobalCircularBuffer>
+std::tuple<std::vector<tt_metal::Program>, ::tt_metal::experimental::GlobalCircularBuffer>
 create_programs(
     tt_metal::IDevice* device,
     const CoreRangeSet& dram_reader_core,
@@ -164,13 +165,13 @@ create_programs(
     uint32_t in1_receiver_cb_size = in1_block_h * in1_block_w * single_tile_size * cb_num_blocks / num_receivers;
     uint32_t padded_global_cb_size = in1_receiver_cb_size + cb_padding;
 
-    auto global_cb = tt_metal::v1::experimental::CreateGlobalCircularBuffer(
+    auto global_cb = tt_metal::experimental::CreateGlobalCircularBuffer(
         device, sender_receiver_core_mapping, padded_global_cb_size, tt_metal::BufferType::L1);
 
     uint32_t in1_writer_cb_index = 31;
     tt_metal::CircularBufferConfig in1_writer_cb_config = tt_metal::CircularBufferConfig(in1_receiver_cb_size);
     in1_writer_cb_config.remote_index(in1_writer_cb_index).set_page_size(single_tile_size).set_data_format(tile_format);
-    auto writer_cb = tt_metal::v1::experimental::CreateCircularBuffer(
+    auto writer_cb = tt_metal::experimental::CreateCircularBuffer(
         sender_program, dram_reader_core, in1_writer_cb_config, global_cb);
 
     // in0 reader CB
@@ -191,7 +192,7 @@ create_programs(
         .set_page_size(single_tile_size)
         .set_data_format(tile_format);
     in1_receiver_cb_config.index(in1_pusher_cb_index).set_page_size(single_tile_size).set_data_format(tile_format);
-    auto in1_receiver_cb = tt_metal::v1::experimental::CreateCircularBuffer(
+    auto in1_receiver_cb = tt_metal::experimental::CreateCircularBuffer(
         receiver_program, l1_receiver_cores, in1_receiver_cb_config, global_cb);
 
     // output CB
@@ -498,7 +499,7 @@ bool validation_fp16(
     std::vector<uint32_t> result;
     tt::tt_metal::detail::ReadFromBuffer(out_buffer, result);
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result);
-    auto result_flat_layout = convert_to_flat_layout(result_bfp16);
+    auto result_flat_layout = convert_to_flat_layout(tt::stl::MakeConstSpan(result_bfp16));
     auto result_untilized = tt::test_utils::untilize(result_flat_layout, mt * 32, nt * 32);
 
     const auto& in0_values = in0_tensor.get_values();
@@ -790,7 +791,7 @@ int main(int argc, char** argv) {
             // in1
             for (uint32_t i = 0; i < num_layers; ++i) {
                 auto input_vec_tilized = tt::test_utils::tilize(in1_tensor_fp16.get_values(), k, n);
-                auto input_vec_tile_layout = convert_to_tile_layout(input_vec_tilized);
+                auto input_vec_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(input_vec_tilized));
                 vector<uint32_t> packed_input_vec_tile_layout =
                     pack_bfloat16_vec_into_uint32_vec(input_vec_tile_layout);
                 in1_buffers[i] = create_and_transfer_data_sharded_cb(
@@ -806,7 +807,7 @@ int main(int argc, char** argv) {
 
             // in0
             auto activations_tilized = tt::test_utils::tilize(in0_tensor_fp16.get_values(), m, k * num_receivers);
-            auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
+            auto activations_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(activations_tilized));
             vector<uint32_t> activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
             in0_buffer = create_and_transfer_data_sharded_cb(
                 device,

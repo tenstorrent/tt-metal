@@ -15,12 +15,10 @@
 #include <unordered_map>
 
 namespace tt::tt_metal {
-inline namespace v0 {
 
 // Forward declarations
 class IDevice;
 
-}  // namespace v0
 }  // namespace tt::tt_metal
 
 namespace ttnn::ccl {
@@ -66,7 +64,7 @@ void generate_ccl_command_stream_to_kernel_args(
  * @return the runtime args
  */
 std::vector<uint32_t> generate_edm_connection_rt_args(
-    const ttnn::ccl::SenderWorkerAdapterSpec& connection_info, tt::tt_metal::Program& program, CoreRangeSet worker_cores);
+    const tt::tt_fabric::SenderWorkerAdapterSpec& connection_info, tt::tt_metal::Program& program, CoreRangeSet worker_cores);
 
 // TODO: eventually take a fabric handle
 void generate_multi_input_command_stream_kernel_rt_args(
@@ -79,8 +77,8 @@ void generate_multi_input_command_stream_kernel_rt_args(
     CoreRangeSet const& worker_core_range,
     std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand> const& ccl_command_stream0,
     std::optional<std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand>> const& ccl_command_stream1,
-    std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& forward_fabric_connections,
-    std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& backward_fabric_connections,
+    std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> const& forward_fabric_connections,
+    std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> const& backward_fabric_connections,
     std::optional<std::unordered_map<const Tensor*, IDevice*>> const& tensor_device_override = std::nullopt,
     std::optional<std::vector<size_t>> const& tensor_indices = std::nullopt,
     ttnn::ccl::tensor_address_runtime_args_overrider *rt_args_overrider = nullptr);
@@ -98,9 +96,9 @@ void generate_multi_command_stream_kernel_rt_args(
     uint32_t num_pages_per_edm_buffer,  // TODO: get from fabric
     std::vector<std::vector<ttnn::ccl::v2::TensorSlice>> const& command_tensor_slices,
     ttnn::ccl::cmd::CclCommandCode command_type,  // TODAY REQURED TO BE SAME - FUTURE - wrapped with above
-    std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& forward_fabric_connections,
-    std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& backward_fabric_connections,
-    std::optional<std::vector<ttnn::ccl::edm_termination_info_t>> const& edm_termination_infos,
+    std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> const& forward_fabric_connections,
+    std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> const& backward_fabric_connections,
+    std::optional<std::vector<tt::tt_fabric::edm_termination_info_t>> const& edm_termination_infos,
     std::vector<ttnn::ccl::cmd::CclCommandDestArgs> const& dest_args);
 tt::tt_metal::KernelHandle generate_multi_command_stream_kernel_ct_args(
     tt::tt_metal::Program& program,
@@ -134,7 +132,7 @@ ttnn::ccl::cmd::CclHostLowLevelCommandSequence build_ccl_cmd_proc_teardown_comma
     IDevice* forward_device,
     size_t line_size,
     size_t line_index,
-    std::vector<ttnn::ccl::edm_termination_info_t> const& edm_termination_infos,
+    std::vector<tt::tt_fabric::edm_termination_info_t> const& edm_termination_infos,
     ccl::SyncModeSpec const& sync_details,
     ccl::EdmLineFabricOpInterface& fabric_interface);
 
@@ -153,11 +151,11 @@ struct CCLWorkerArgBuilder {
         uint32_t worker_slice_index) const;
 
     std::vector<uint32_t> generate_sender_writer_kernel_rt_args(
-        std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& forward_fabric_connection,
+        std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> const& forward_fabric_connection,
         const size_t sender_worker_forward_flow_control_semaphore_id,
         const size_t sender_worker_forward_teardown_semaphore_id,
         const size_t sender_worker_forward_buffer_index_semaphore_id,
-        std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& backward_fabric_connection,
+        std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> const& backward_fabric_connection,
         const size_t sender_worker_backward_flow_control_semaphore_id,
         const size_t sender_worker_backward_teardown_semaphore_id,
         const size_t sender_worker_backward_buffer_index_semaphore_id,
