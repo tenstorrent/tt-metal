@@ -6,6 +6,7 @@
 #include "dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
 // clang-format on
 
 using namespace tt::tt_fabric;
@@ -40,47 +41,7 @@ volatile tt_l1_ptr chan_req_buf* fvc_consumer_req_buf =
 volatile tt_l1_ptr fabric_router_l1_config_t* routing_table =
     reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
 
-volatile uint32_t* sync_sem_addr = (volatile uint32_t*)FABRIC_ROUTER_SYNC_SEM;
-
 #define SWITCH_THRESHOLD 0x3FFF
-
-inline void wait_for_sem(uint32_t value) {
-    while (*sync_sem_addr != value) {
-        // context switch while waiting to allow slow dispatch traffic to go through
-        internal_::risc_context_switch();
-    }
-}
-
-inline void notify_master_router() {
-    // send semaphore increment to master router on this device.
-    // semaphore notifies all other routers that this router has completed
-    // startup handshake with its ethernet peer.
-    uint64_t dest_addr = get_noc_addr_helper(eth_chan_to_noc_xy[noc_index][master_router_chan], FABRIC_ROUTER_SYNC_SEM);
-    noc_fast_atomic_increment<DM_DEDICATED_NOC, true>(
-        noc_index,
-        NCRISC_AT_CMD_BUF,
-        dest_addr,
-        NOC_UNICAST_WRITE_VC,
-        1,
-        31,
-        false,
-        false,
-        MEM_NOC_ATOMIC_RET_VAL_ADDR);
-}
-
-inline void notify_slave_routers(uint32_t notification) {
-    uint32_t remaining_cores = router_mask;
-    for (uint32_t i = 0; i < 16; i++) {
-        if (remaining_cores == 0) {
-            break;
-        }
-        if ((remaining_cores & (0x1 << i)) && (master_router_chan != i)) {
-            uint64_t dest_addr = get_noc_addr_helper(eth_chan_to_noc_xy[noc_index][i], FABRIC_ROUTER_SYNC_SEM);
-            noc_inline_dw_write(dest_addr, notification);
-            remaining_cores &= ~(0x1 << i);
-        }
-    }
-}
 
 void kernel_main() {
     tt_fabric_init();
@@ -152,14 +113,14 @@ void kernel_main() {
     if constexpr (is_master) {
         // wait for all device routers to have incremented the sync semaphore.
         // sync_val is equal to number of tt-fabric routers running on a device.
-        wait_for_sem(sync_val - 1);
-        notify_slave_routers(sync_val);
+        wait_for_notification(FABRIC_ROUTER_SYNC_SEM, sync_val - 1);
+        notify_slave_routers(router_mask, master_router_chan, FABRIC_ROUTER_SYNC_SEM, sync_val);
         // increment the sync sem to signal host that handshake is complete
-        *sync_sem_addr += 1;
+        *((volatile uint32_t*)FABRIC_ROUTER_SYNC_SEM) += 1;
     } else {
-        notify_master_router();
+        notify_master_router(master_router_chan, FABRIC_ROUTER_SYNC_SEM);
         // wait for the signal from the master router
-        wait_for_sem(sync_val);
+        wait_for_notification(FABRIC_ROUTER_SYNC_SEM, sync_val);
     }
 
 #ifndef FVC_MODE_PULL
@@ -249,7 +210,7 @@ void kernel_main() {
                 // terminate signal from host sw.
                 if constexpr (is_master) {
                     if (!terminated_slave_routers) {
-                        notify_slave_routers(0);
+                        notify_slave_routers(router_mask, master_router_chan, FABRIC_ROUTER_SYNC_SEM, 0);
                         terminated_slave_routers = true;
                     }
                 }
