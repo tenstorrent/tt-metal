@@ -383,9 +383,10 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     auto local_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     std::cout << "Program factory local_semaphore: " << local_semaphore << std::endl;
 
-    std::vector<uint32_t> reader_runtime_args = {cross_device_semaphore->address(), local_semaphore, false, false};
-    uint32_t is_reader_sender_core_idx = reader_runtime_args.size() - 2;
-    uint32_t is_worker_core_idx = reader_runtime_args.size() - 1;
+    std::vector<uint32_t> reader_runtime_args = {cross_device_semaphore->address(), local_semaphore, false, false, 0};
+    uint32_t is_reader_sender_core_idx = reader_runtime_args.size() - 3;
+    uint32_t is_worker_core_idx = reader_runtime_args.size() - 2;
+    uint32_t local_input_page_idx = reader_runtime_args.size() - 1;
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -400,9 +401,11 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
     }
 
+    uint32_t local_input_page = chip_id * input_shard_cores_per_device * tiles_per_core_width;
     for (auto core : output_cores) {
         reader_runtime_args[is_reader_sender_core_idx] = false;
         reader_runtime_args[is_worker_core_idx] = true;
+        reader_runtime_args[local_input_page_idx] = local_input_page++;
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
     }
 
