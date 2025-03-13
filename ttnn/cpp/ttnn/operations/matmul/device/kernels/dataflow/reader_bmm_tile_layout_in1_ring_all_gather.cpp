@@ -50,11 +50,6 @@ void kernel_main() {
     if (core_type == (uint32_t)CORE_TYPE::IDLE_CORE || core_type == (uint32_t)CORE_TYPE::HOP_CORE) {
         return;
     }
-    // DPRINT << "core_type " << (uint)core_type <<ENDL();
-    // if (core_type == 0) {
-    //     return;
-    // }
-    // DPRINT << "core_type " << (uint)core_type <<ENDL();
     const uint32_t in1_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t ring_idx = get_arg_val<uint32_t>(rt_args_idx++);
 

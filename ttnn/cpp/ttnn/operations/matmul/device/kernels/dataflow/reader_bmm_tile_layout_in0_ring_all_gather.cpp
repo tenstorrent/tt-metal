@@ -26,13 +26,8 @@ void kernel_main() {
     if (core_type == (uint32_t)CORE_TYPE::IDLE_CORE) {
         return;
     }
-    // if (core_type == 0) {
-    //     return;
-    // }
     bool is_hop_core = core_type == (uint32_t)CORE_TYPE::HOP_CORE;
 
-    // DPRINT << "is_hop_core " << (uint)is_hop_core <<ENDL();
-    // bool is_hop_core = false;
     uint32_t ring_idx = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t next_core_noc_x = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t next_core_noc_y = get_arg_val<uint32_t>(rt_args_idx++);

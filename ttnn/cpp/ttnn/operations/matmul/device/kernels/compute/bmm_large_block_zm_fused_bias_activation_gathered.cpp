@@ -161,10 +161,6 @@ void MAIN {
     if (core_type == (uint32_t)CORE_TYPE::IDLE_CORE || core_type == (uint32_t)CORE_TYPE::HOP_CORE) {
         return;
     }
-    // if (core_type == 0) {
-    //     return;
-    // }
-    // DPRINT << "core_type " << (uint)core_type <<ENDL();
     uint32_t ring_idx = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t* unpadded_in0_shard_widths_in_tiles = (uint32_t*)get_arg_addr(rt_args_idx);
     rt_args_idx += ring_size;
