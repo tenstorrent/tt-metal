@@ -83,9 +83,10 @@ def gather_single_test_perf(device, test_passed):
 
 def run(test_module, input_queue, output_queue, suite_name=""):
     device_generator = get_devices(test_module)
-    log_file = f"/home/ubuntu/tt-metal/output_log_{suite_name}.csv"
+    log_file = f"unary_WH/output_log_{suite_name}.csv"
 
     # Open the file in write mode to clear its contents
+    os.makedirs(os.path.dirname(log_file), exist_ok=True)
     with open(log_file, "w") as f:
         pass  # This will empty the file
     try:
@@ -126,7 +127,7 @@ def run(test_module, input_queue, output_queue, suite_name=""):
                 "mem_config": test_vector["input_memory_config"],
                 "input_dtype": test_vector["input_dtype"],
                 "status": status,
-                "message": message,
+                # "message": message,
             }
 
             # Write to CSV
