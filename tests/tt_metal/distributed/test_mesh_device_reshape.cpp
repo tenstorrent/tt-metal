@@ -8,7 +8,7 @@
 #include <array>
 
 #include "host_api.hpp"
-#include "indestructible.hpp"
+#include <tt_stl/indestructible.hpp>
 #include "mesh_config.hpp"
 #include "mesh_device.hpp"
 #include "mesh_coord.hpp"

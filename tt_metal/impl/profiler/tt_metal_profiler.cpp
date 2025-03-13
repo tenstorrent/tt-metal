@@ -7,6 +7,8 @@
 
 #include <hal.hpp>
 #include <host_api.hpp>
+#include <dispatch_core_common.hpp>
+#include <core_descriptor.hpp>
 
 #include <profiler.hpp>
 #include "hostdevcommon/profiler_common.h"
@@ -25,7 +27,6 @@
 namespace tt {
 
 namespace tt_metal {
-inline namespace v0 {
 
 void DumpDeviceProfileResults(IDevice* device, const Program& program) {
 #if defined(TRACY_ENABLE)
@@ -50,8 +51,6 @@ void DumpDeviceProfileResults(IDevice* device, const Program& program) {
     detail::DumpDeviceProfileResults(device, cores_in_program);
 #endif
 }
-
-}  // namespace v0
 
 namespace detail {
 
@@ -631,7 +630,7 @@ void DumpDeviceProfileResults(IDevice* device, ProfilerDumpState state) {
     std::vector<CoreCoord> workerCores;
     auto device_id = device->id();
     auto device_num_hw_cqs = device->num_hw_cqs();
-    const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(device_id);
+    const auto& dispatch_core_config = get_dispatch_core_config();
     for (const CoreCoord& core : tt::get_logical_compute_cores(device_id, device_num_hw_cqs, dispatch_core_config)) {
         const CoreCoord curr_core = device->worker_core_from_logical_core(core);
         workerCores.push_back(curr_core);
@@ -660,7 +659,7 @@ void DumpDeviceProfileResults(IDevice* device, std::vector<CoreCoord>& worker_co
     std::string name = fmt::format("Device Dump {}", device->id());
     ZoneName(name.c_str(), name.size());
     std::scoped_lock<std::mutex> lock(device_mutex);
-    const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(device->id());
+    const auto& dispatch_core_config = get_dispatch_core_config();
     auto dispatch_core_type = dispatch_core_config.get_core_type();
     if (tt::llrt::RunTimeOptions::get_instance().get_profiler_do_dispatch_cores()) {
         auto device_id = device->id();

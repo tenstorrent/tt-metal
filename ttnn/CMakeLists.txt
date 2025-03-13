@@ -229,7 +229,7 @@ set(TENSOR_SRC
 
 set(CCL_SRC
     # Common
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/erisc_datamover_builder.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/erisc_datamover_builder_helper.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/ccl_op_fusion.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/ccl_common.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/ccl_host_datastructures.cpp
@@ -803,7 +803,7 @@ set(TTNN_SUBLIBRARIES
 set(TTNN_PUBLIC_LINK_LIBRARIES
     metal_common_libs
     Metalium::Metal
-    Metalium::Metal::STL
+    TT:STL
     xtensor
     xtensor-blas
     xtl
@@ -811,7 +811,7 @@ set(TTNN_PUBLIC_LINK_LIBRARIES
 )
 
 set(TTNN_PRECOMPILED_HEADERS
-    ${PROJECT_SOURCE_DIR}/tt_metal/api/tt-metalium/reflection.hpp
+    ${PROJECT_SOURCE_DIR}/tt_stl/tt_stl/reflection.hpp
     cpp/ttnn/operation.hpp
     cpp/ttnn/any_device.hpp
     ${PROJECT_SOURCE_DIR}/tt_metal/third_party/tracy/public/tracy/Tracy.hpp

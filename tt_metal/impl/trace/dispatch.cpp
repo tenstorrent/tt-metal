@@ -83,7 +83,7 @@ void issue_trace_commands(
         command_sequence.add_notify_dispatch_s_go_signal_cmd(false, index_bitmask);
         dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SLAVE;
     }
-    auto dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
+    auto dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
     auto dispatch_core_type = dispatch_core_config.get_core_type();
 
     uint32_t dispatch_message_base_addr =

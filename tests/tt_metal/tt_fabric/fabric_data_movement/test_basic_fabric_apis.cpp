@@ -12,7 +12,7 @@
 
 namespace tt::tt_fabric {
 
-TEST_F(FabricFixture, TestAsyncWrite) {
+TEST_F(Fabric2DFixture, TestAsyncWrite) {
     using tt::tt_metal::ShardedBufferConfig;
     using tt::tt_metal::ShardOrientation;
     using tt::tt_metal::ShardSpecBuffer;
@@ -172,7 +172,7 @@ TEST_F(FabricFixture, TestAsyncWrite) {
     EXPECT_EQ(receiver_buffer_data, received_buffer_data);
 }
 
-TEST_F(FabricFixture, TestAtomicInc) {
+TEST_F(Fabric2DFixture, TestAtomicInc) {
     using tt::tt_metal::ShardedBufferConfig;
     using tt::tt_metal::ShardOrientation;
     using tt::tt_metal::ShardSpecBuffer;
@@ -331,7 +331,7 @@ TEST_F(FabricFixture, TestAtomicInc) {
     EXPECT_EQ(receiver_buffer_data, received_buffer_data);
 }
 
-TEST_F(FabricFixture, TestAsyncWriteAtomicInc) {
+TEST_F(Fabric2DFixture, TestAsyncWriteAtomicInc) {
     using tt::tt_metal::ShardedBufferConfig;
     using tt::tt_metal::ShardOrientation;
     using tt::tt_metal::ShardSpecBuffer;
@@ -510,7 +510,7 @@ TEST_F(FabricFixture, TestAsyncWriteAtomicInc) {
     EXPECT_EQ(atomic_inc, received_buffer_data[0]);
 }
 
-TEST_F(FabricFixture, TestAsyncWriteMulticast) {
+TEST_F(Fabric2DFixture, TestAsyncWriteMulticast) {
     using tt::tt_metal::ShardedBufferConfig;
     using tt::tt_metal::ShardOrientation;
     using tt::tt_metal::ShardSpecBuffer;
@@ -731,7 +731,7 @@ TEST_F(FabricFixture, TestAsyncWriteMulticast) {
     }
 }
 
-TEST_F(FabricFixture, TestAsyncWriteMulticastMultidirectional) {
+TEST_F(Fabric2DFixture, TestAsyncWriteMulticastMultidirectional) {
     using tt::tt_metal::ShardedBufferConfig;
     using tt::tt_metal::ShardOrientation;
     using tt::tt_metal::ShardSpecBuffer;

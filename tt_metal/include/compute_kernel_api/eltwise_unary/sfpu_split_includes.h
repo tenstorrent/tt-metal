@@ -96,6 +96,10 @@
 #include "compute_kernel_api/eltwise_unary/floor.h"
 #endif
 
+#if SFPU_OP_ROUND_INCLUDE
+#include "compute_kernel_api/eltwise_unary/round.h"
+#endif
+
 #if SFPU_OP_LEFT_SHIFT_INCLUDE
 #include "compute_kernel_api/eltwise_unary/left_shift.h"
 #endif

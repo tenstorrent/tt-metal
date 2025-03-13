@@ -13,12 +13,17 @@
 #include <string>
 
 namespace ttnn::graph::arguments::test {
+namespace {
 
-class TestGraphCaptureArgumentsMorehDot : public TTNNFixtureWithTensor {};
+using TestGraphCaptureArgumentsMorehDot = TTNNFixtureWithDevice;
 
-TEST_P(TestGraphCaptureArgumentsMorehDot, MorehDot) {
-    auto tt_input1 = CreateTensor();
-    auto tt_input2 = CreateTensor();
+TEST_F(TestGraphCaptureArgumentsMorehDot, MorehDot) {
+    TensorSpec tensor_spec(
+        ttnn::Shape({1, 1, 1, 32}),
+        TensorLayout(tt::tt_metal::DataType::BFLOAT16, PageConfig(tt::tt_metal::Layout::TILE), L1_MEMORY_CONFIG));
+    auto tt_input1 = create_device_tensor(tensor_spec, device_);
+    auto tt_input2 = create_device_tensor(tensor_spec, device_);
+
     ttnn::graph::GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NORMAL);
     ttnn::moreh_dot(tt_input1, tt_input2, std::nullopt, DataType::BFLOAT16, std::nullopt, std::nullopt);
     auto trace = ttnn::graph::GraphProcessor::end_graph_capture();
@@ -99,19 +104,12 @@ TEST_P(TestGraphCaptureArgumentsMorehDot, MorehDot) {
     EXPECT_EQ(operation3.arguments[0], "Shape([1, 1, 1, 1])");
     EXPECT_EQ(operation3.arguments[1], "DataType::BFLOAT16");
     EXPECT_EQ(operation3.arguments[2], "Tile");
-    EXPECT_EQ(operation3.arguments[3], "[ unsupported type , std::__1::reference_wrapper<tt::tt_metal::v0::IDevice*>]");
+    EXPECT_EQ(operation3.arguments[3], "[ unsupported type , std::__1::reference_wrapper<tt::tt_metal::IDevice*>]");
     EXPECT_EQ(
         operation3.arguments[4],
         "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::"
         "nullopt)");
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    TestGraphCaptureArgumentsMorehDot_MorehDot,
-    TestGraphCaptureArgumentsMorehDot,
-    ::testing::Values(CreateTensorParameters{
-        .input_shape = ttnn::Shape({1, 1, 1, 32}),
-        .dtype = DataType::BFLOAT16,
-        .layout = TILE_LAYOUT,
-        .mem_cfg = L1_MEMORY_CONFIG}));
+}  // namespace
 }  // namespace ttnn::graph::arguments::test

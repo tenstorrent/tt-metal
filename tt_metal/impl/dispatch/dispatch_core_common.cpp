@@ -13,4 +13,8 @@ DispatchCoreAxis DispatchCoreConfig::get_default_axis() {
                                                                               : DispatchCoreAxis::ROW;
 }
 
+DispatchCoreConfig get_dispatch_core_config() { return dispatch_core_manager::instance().get_dispatch_core_config(); }
+
+CoreType get_dispatch_core_type() { return dispatch_core_manager::instance().get_dispatch_core_type(); };
+
 }  // namespace tt::tt_metal

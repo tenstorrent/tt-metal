@@ -10,17 +10,15 @@
 #include "umd/device/tt_soc_descriptor.h"
 #include "hostdevcommon/common_values.hpp"
 #include "core_coord.hpp"
-#include "dispatch_core_manager.hpp"
+#include "dispatch_core_common.hpp"
 #include "buffer.hpp"
 #include "profiler_types.hpp"
 #include "llrt/tt_cluster.hpp"
 
 namespace tt::tt_metal {
-inline namespace v0 {
 class Program;
 class Buffer;
 class IDevice;
-}  // namespace v0
 
 namespace detail {
 

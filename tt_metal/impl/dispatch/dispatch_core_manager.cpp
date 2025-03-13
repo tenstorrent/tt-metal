@@ -20,7 +20,7 @@ void dispatch_core_manager::initialize(const DispatchCoreConfig& dispatch_core_c
     if (_inst == nullptr) {
         static dispatch_core_manager dispatch_core_manager(dispatch_core_config, num_hw_cqs);
         _inst = &dispatch_core_manager;
-    } else if (_inst->dispatch_core_config_by_device[0] != dispatch_core_config or num_hw_cqs != _inst->num_hw_cqs) {
+    } else if (_inst->dispatch_core_config_ != dispatch_core_config or num_hw_cqs != _inst->num_hw_cqs) {
         _inst->reset_dispatch_core_manager(dispatch_core_config, num_hw_cqs);
     }
 }
@@ -247,7 +247,7 @@ const tt_cxy_pair& dispatch_core_manager::dispatcher_s_core(chip_id_t device_id,
         return assignment.dispatcher_s.value();
     }
     CoreCoord dispatcher_s_coord;
-    if (this->get_dispatch_core_type(device_id) == CoreType::WORKER) {
+    if (this->get_dispatch_core_type() == CoreType::WORKER) {
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
         if (mmio_device_id == device_id) {
             // dispatch_s is on the same tensix core as dispatch_hd
@@ -264,13 +264,9 @@ const tt_cxy_pair& dispatch_core_manager::dispatcher_s_core(chip_id_t device_id,
     return assignment.dispatcher_s.value();
 }
 
-CoreType dispatch_core_manager::get_dispatch_core_type(chip_id_t device_id) {
-    return this->dispatch_core_config_by_device[device_id].get_core_type();
-}
+CoreType dispatch_core_manager::get_dispatch_core_type() { return this->dispatch_core_config_.get_core_type(); }
 
-DispatchCoreConfig dispatch_core_manager::get_dispatch_core_config(chip_id_t device_id) {
-    return this->dispatch_core_config_by_device[device_id];
-}
+DispatchCoreConfig dispatch_core_manager::get_dispatch_core_config() { return this->dispatch_core_config_; }
 
 void dispatch_core_manager::add_dispatch_core_to_device(chip_id_t device_id, const CoreCoord& core) {
     // TODO: remove this API, we should read the core descriptor once, should not have backdoors like this to add cores
@@ -281,7 +277,7 @@ void dispatch_core_manager::add_dispatch_core_to_device(chip_id_t device_id, con
 }
 
 std::vector<CoreCoord> dispatch_core_manager::get_all_logical_dispatch_cores(chip_id_t device_id) {
-    return tt::get_logical_dispatch_cores(device_id, MAX_NUM_HW_CQS, this->dispatch_core_config_by_device[device_id]);
+    return tt::get_logical_dispatch_cores(device_id, MAX_NUM_HW_CQS, this->dispatch_core_config_);
 }
 
 // private methods
@@ -294,7 +290,7 @@ void dispatch_core_manager::reset_dispatch_core_manager(
     const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs) {
     this->dispatch_core_assignments.clear();
     this->available_dispatch_cores_by_device.clear();
-    this->dispatch_core_config_by_device.clear();
+    this->dispatch_core_config_ = dispatch_core_config;
     for (chip_id_t device_id = 0; device_id < tt::Cluster::instance().number_of_devices(); device_id++) {
         std::list<CoreCoord>& logical_dispatch_cores = this->available_dispatch_cores_by_device[device_id];
         for (const CoreCoord& logical_dispatch_core :
@@ -302,8 +298,16 @@ void dispatch_core_manager::reset_dispatch_core_manager(
             logical_dispatch_cores.push_back(logical_dispatch_core);
         }
 
-        this->dispatch_core_config_by_device[device_id] = dispatch_core_config;
         this->num_hw_cqs = num_hw_cqs;
+
+        // When running Multiple CQs using Ethernet Dispatch, we may need more dispatch cores than those allocated in
+        // the core descriptor (ex: 2 CQs on N300 need 10 dispatch cores and the core descriptor only allocates 6).
+        // Infer the remaining dispatch cores from the idle eth core list (this is device dependent).
+        if (dispatch_core_config.get_core_type() == CoreType::ETH) {
+            for (const auto& idle_eth_core : tt::Cluster::instance().get_inactive_ethernet_cores(device_id)) {
+                add_dispatch_core_to_device(device_id, idle_eth_core);
+            }
+        }
     }
 }
 
@@ -331,7 +335,7 @@ void dispatch_core_manager::log_dispatch_assignment(
         cxy.str(),
         tt::Cluster::instance()
             .get_virtual_coordinate_from_logical_coordinates(
-                cxy, force_ethernet ? CoreType::ETH : get_dispatch_core_type(cxy.chip))
+                cxy, force_ethernet ? CoreType::ETH : get_dispatch_core_type())
             .str(),
         device_id,
         channel,

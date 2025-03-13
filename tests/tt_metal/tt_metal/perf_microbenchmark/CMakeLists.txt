@@ -43,7 +43,6 @@ set(PERF_MICROBENCH_TESTS_SRCS
 )
 
 set(ARCHITECTURES
-    "grayskull"
     "wormhole"
     "blackhole"
 )

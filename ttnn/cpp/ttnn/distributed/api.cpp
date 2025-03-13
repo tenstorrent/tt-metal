@@ -6,7 +6,7 @@
 
 #include <memory>
 
-#include <tt-metalium/overloaded.hpp>
+#include <tt_stl/overloaded.hpp>
 #include "tt-metalium/assert.hpp"
 #include "tt-metalium/mesh_coord.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -16,7 +16,6 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include "ttnn/distributed/distributed_tensor_config.hpp"
-
 
 using namespace tt::tt_metal;
 
