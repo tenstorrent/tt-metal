@@ -30,6 +30,7 @@ LlamaReduceScatterDeviceOperation::spec_return_value_t LlamaReduceScatterDeviceO
 
     // sharding APIs are terrible
     auto input_tensor = tensor_args.input_tensor;
+    auto tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
     auto input_spec = input_tensor.get_tensor_spec();
     auto input_shape = input_spec.logical_shape();
     auto input_shard_spec = input_tensor.shard_spec().value();
@@ -45,7 +46,8 @@ LlamaReduceScatterDeviceOperation::spec_return_value_t LlamaReduceScatterDeviceO
 
     auto core_range = num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size, row_wise);
 
-    ShardSpec shard_spec{core_range, {input_shape[-2], final_width}};
+    // this op only supports one tile per output core for now
+    ShardSpec shard_spec{core_range, {input_shape[-2], tile_shape[1]}};
     tt::tt_metal::MemoryConfig out_memory_config = input_tensor.memory_config();
     out_memory_config.shard_spec = shard_spec;
 
