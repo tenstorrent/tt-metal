@@ -28,7 +28,7 @@ void bind_experimental_gelu_backward_operation(py::module& module) {
             queue_id (int, optional): Command queue ID. Defaults to 0.
 
         Returns:
-            List of ttnn.Tensor: The output tensor.
+            ttnn.Tensor: The output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -69,7 +69,7 @@ void bind_experimental_gelu_backward_operation(py::module& module) {
                const string& approximate,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<Tensor>& input_grad_tensor,
-               QueueId queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
+               QueueId queue_id) -> ttnn::Tensor {
                 return self(queue_id, grad_output_tensor, input_tensor, approximate, memory_config, input_grad_tensor);
             },
             py::arg("grad_output_tensor"),

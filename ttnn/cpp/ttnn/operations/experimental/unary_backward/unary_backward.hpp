@@ -10,15 +10,7 @@
 namespace ttnn::operations::experimental {
 
 struct GeluBackwardOperation {
-    static OptionalTensors invoke(
-        QueueId queue_id,
-        const Tensor& grad_output_tensor,
-        const Tensor& input_tensor,
-        const string& approximate,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> input_grad_tensor = std::nullopt);
-
-    static OptionalTensors create_async_optional_output_tensors(
+    static Tensor invoke(
         QueueId queue_id,
         const Tensor& grad_output_tensor,
         const Tensor& input_tensor,
