@@ -10,7 +10,7 @@
 
 #include "sub_device.hpp"
 #include "sub_device_types.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 
 namespace tt::tt_metal {
 

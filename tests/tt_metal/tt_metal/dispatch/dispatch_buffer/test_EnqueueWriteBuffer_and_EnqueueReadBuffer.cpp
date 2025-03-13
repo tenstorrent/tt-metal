@@ -18,6 +18,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
+#include <tt-metalium/allocator.hpp>
 
 namespace tt::tt_metal {
 

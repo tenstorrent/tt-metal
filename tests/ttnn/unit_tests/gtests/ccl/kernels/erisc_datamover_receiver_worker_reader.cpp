@@ -6,7 +6,6 @@
 #include <array>
 
 #include "dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
 
 void kernel_main() {

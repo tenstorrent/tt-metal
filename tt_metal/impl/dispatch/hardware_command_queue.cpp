@@ -7,7 +7,7 @@
 #include <device.hpp>
 #include "dprint_server.hpp"
 #include <event.hpp>
-#include <overloaded.hpp>
+#include <tt_stl/overloaded.hpp>
 #include <trace_buffer.hpp>
 #include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/dispatch_settings.hpp>

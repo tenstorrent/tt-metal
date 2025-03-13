@@ -19,7 +19,7 @@
 #include "sub_device_manager_tracker.hpp"
 #include "sub_device_types.hpp"
 #include "trace_buffer.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "program_cache.hpp"
 
 namespace tt::tt_metal {
@@ -239,7 +239,7 @@ private:
     std::vector<std::unique_ptr<Program>> command_queue_programs_;
     bool using_fast_dispatch_ = false;
 
-    // Fabric program includes ethernet router kernel and tensix gatekeeper kernel
+    // Fabric program includes ethernet router kernel
     std::unique_ptr<Program> fabric_program_;
 
     // Work Executor for this device - can asynchronously process host side work for

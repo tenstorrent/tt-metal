@@ -15,7 +15,7 @@
 #include "settings.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "tracy/Tracy.hpp"
-#include "aligned_allocator.hpp"
+#include <tt_stl/aligned_allocator.hpp>
 #include "rtoptions.hpp"
 
 namespace tt::tt_metal {

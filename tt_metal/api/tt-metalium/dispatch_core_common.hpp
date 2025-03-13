@@ -7,7 +7,7 @@
 #include "assert.hpp"
 #include "core_coord.hpp"
 #include "data_types.hpp"
-#include "reflection.hpp"
+#include <tt_stl/reflection.hpp>
 
 #include <umd/device/tt_core_coordinates.h>  // CoreType
 
