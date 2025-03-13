@@ -15,6 +15,7 @@
 
 #include <tt_metal.hpp>
 
+#include "tracy/Tracy.hpp"
 #include "tracy/TracyTTDevice.hpp"
 #include <device.hpp>
 #include <device_pool.hpp>
