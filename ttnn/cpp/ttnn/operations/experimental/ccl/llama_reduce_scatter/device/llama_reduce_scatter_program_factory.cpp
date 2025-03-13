@@ -244,6 +244,8 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     uint32_t ncores_input = shard_spec.num_cores();
     uint32_t input_shard_cores_per_device = ncores_input / num_devices;
     uint32_t ncores_output = output_grid.num_cores();
+    std::cout << "ncores_input: " << ncores_input << " input_shard_cores_per_device: " << input_shard_cores_per_device
+              << " ncores_output: " << ncores_output << std::endl;
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
 
@@ -392,7 +394,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/device/kernels/dataflow/"
         "reader_llama_reduce_scatter.cpp",
-        all_cores,
+        sender_worker_core_range.merge(output_grid),
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
     for (auto core : sender_cores) {
@@ -433,7 +435,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/device/kernels/dataflow/"
         "writer_llama_reduce_scatter.cpp",
-        all_cores,
+        sender_worker_core_range.merge(receiver_grid),
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
 
     std::vector<uint32_t> writer_runtime_args = {
@@ -470,6 +472,8 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
 
     uint32_t receiver_for_device_id = 0;
     for (auto core : receiver_cores) {
+        std::cout << "Setting receiver core: " << core.x << ", " << core.y << " for device: " << receiver_for_device_id
+                  << std::endl;
         writer_runtime_args[is_writer_sender_core_idx] = false;
         writer_runtime_args[is_receiver_core_idx] = true;
         TT_FATAL(
@@ -481,11 +485,24 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
     }
 
+    const std::vector<uint32_t> compute_compile_time_args = {
+        accumulator_cb_index, output_tensor_cb_id, num_devices, tiles_per_core_width_output};
+
+    bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32;
+    const auto compute_kernel_file =
+        "ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/device/kernels/compute/reduction.cpp";
+    const auto compute_kernel_id = tt_metal::CreateKernel(
+        program,
+        compute_kernel_file,
+        output_grid,
+        tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_compile_time_args});
+
     std::cout << "Made it to return " << chip_id << std::endl;
     return {
         std::move(program),
         {.unary_reader_kernel_id = unary_reader_kernel_id,
          .unary_writer_kernel_id = unary_writer_kernel_id,
+         .compute_kernel_id = compute_kernel_id,
          .cb_ids = {input_tensor_cb_id, output_tensor_cb_id},
          .core_range = all_cores,
          .sender_core_range = sender_worker_core_range}};
