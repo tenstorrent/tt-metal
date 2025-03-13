@@ -60,15 +60,6 @@ void py_module_types(py::module& module) {
     py::class_<MeshToTensor, ConcreteMeshToTensor, std::unique_ptr<MeshToTensor>>(module, "CppMeshToTensor");
     py::class_<TensorToMesh, ConcreteTensorToMesh, std::unique_ptr<TensorToMesh>>(module, "CppTensorToMesh");
 
-    py::class_<ReplicateTensorToMesh, TensorToMesh, std::unique_ptr<ReplicateTensorToMesh>>(
-        module, "CppReplicateTensorToMesh");
-    py::class_<ShardTensorToMesh, TensorToMesh, std::unique_ptr<ShardTensorToMesh>>(module, "CppShardTensorToMesh");
-    py::class_<ShardTensorTo2dMesh, TensorToMesh, std::unique_ptr<ShardTensorTo2dMesh>>(
-        module, "CppShardTensorTo2dMesh");
-    py::class_<ConcatMeshToTensor, MeshToTensor, std::unique_ptr<ConcatMeshToTensor>>(module, "CppConcatMeshToTensor");
-    py::class_<Concat2dMeshToTensor, MeshToTensor, std::unique_ptr<Concat2dMeshToTensor>>(
-        module, "CppConcat2dMeshToTensor");
-
     py::class_<ReplicateTensor>(module, "ReplicateTensor");
     py::class_<ShardTensor>(module, "ShardTensor");
     py::class_<ShardTensor2D>(module, "ShardTensor2d");
@@ -433,91 +424,12 @@ void py_module(py::module& module) {
         .def(py::init([]() -> std::unique_ptr<TensorToMesh> { return std::make_unique<ConcreteTensorToMesh>(); }))
         .def("map", &TensorToMesh::map)
         .def("config", &TensorToMesh::config);
-    auto py_replicate_tensor_to_mesh =
-        static_cast<py::class_<TensorToMesh, std::unique_ptr<TensorToMesh>>>(module.attr("CppReplicateTensorToMesh"));
-    py_replicate_tensor_to_mesh
-        .def(
-            py::init([](MeshDevice& mesh_device) -> std::unique_ptr<TensorToMesh> {
-                return replicate_tensor_to_mesh_mapper(mesh_device);
-            }),
-            py::arg("mesh_device"))
-        .def(
-            "map", [](const TensorToMesh& self, const Tensor& tensor) { return self.map(tensor); }, py::arg("tensor"))
-        .def("config", &TensorToMesh::config);
-    auto py_shard_tensor_to_mesh =
-        static_cast<py::class_<TensorToMesh, std::unique_ptr<TensorToMesh>>>(module.attr("CppShardTensorToMesh"));
-    py_shard_tensor_to_mesh
-        .def(
-            py::init([](MeshDevice& mesh_device, int dim) -> std::unique_ptr<TensorToMesh> {
-                return shard_tensor_to_mesh_mapper(mesh_device, dim);
-            }),
-            py::arg("mesh_device"),
-            py::arg("dim"))
-        .def(
-            "map", [](const TensorToMesh& self, const Tensor& tensor) { return self.map(tensor); }, py::arg("tensor"))
-        .def("config", &TensorToMesh::config);
-    auto py_shard_tensor_to_2d_mesh =
-        static_cast<py::class_<TensorToMesh, std::unique_ptr<TensorToMesh>>>(module.attr("CppShardTensorTo2dMesh"));
-    py_shard_tensor_to_2d_mesh
-        .def(
-            py::init(
-                [](MeshDevice& mesh_device,
-                   const std::tuple<int, int> mesh_shape,
-                   const std::tuple<int, int> dims) -> std::unique_ptr<TensorToMesh> {
-                    int mesh_rows = std::get<0>(mesh_shape);
-                    int mesh_cols = std::get<1>(mesh_shape);
 
-                    int config_rows = std::get<0>(dims);
-                    int config_cols = std::get<1>(dims);
-                    return shard_tensor_to_2d_mesh_mapper(
-                        mesh_device,
-                        MeshShape(mesh_rows, mesh_cols),
-                        Shard2dConfig{.row_dim = std::get<0>(dims), .col_dim = std::get<1>(dims)});
-                }),
-            py::arg("mesh_device"),
-            py::arg("mesh_shape"),
-            py::arg("dims"))
-        .def(
-            "map", [](const TensorToMesh& self, const Tensor& tensor) { return self.map(tensor); }, py::arg("tensor"))
-        .def("config", &TensorToMesh::config);
     auto py_mesh_to_tensor = static_cast<py::class_<MeshToTensor, ConcreteMeshToTensor, std::unique_ptr<MeshToTensor>>>(
         module.attr("CppMeshToTensor"));
     py_mesh_to_tensor
         .def(py::init([]() -> std::unique_ptr<MeshToTensor> { return std::make_unique<ConcreteMeshToTensor>(); }))
         .def("compose", &MeshToTensor::compose);
-    auto py_concat_mesh_to_tensor =
-        static_cast<py::class_<MeshToTensor, std::unique_ptr<MeshToTensor>>>(module.attr("CppConcatMeshToTensor"));
-    py_concat_mesh_to_tensor
-        .def(
-            py::init([](int dim) -> std::unique_ptr<MeshToTensor> { return concat_mesh_to_tensor_composer(dim); }),
-            py::arg("dim"))
-        .def(
-            "compose",
-            [](const MeshToTensor& self, const std::vector<Tensor>& tensors) { return self.compose(tensors); },
-            py::arg("tensors"));
-
-    auto py_concat_2d_mesh_to_tensor =
-        static_cast<py::class_<MeshToTensor, std::unique_ptr<MeshToTensor>>>(module.attr("CppConcat2dMeshToTensor"));
-    py_concat_2d_mesh_to_tensor
-        .def(
-            py::init([](MeshDevice& mesh_device, const std::tuple<int, int> dims) -> std::unique_ptr<MeshToTensor> {
-                int row_dim = std::get<0>(dims);
-                int col_dim = std::get<1>(dims);
-                return concat_2d_mesh_to_tensor_composer(
-                    mesh_device,
-                    Concat2dConfig{
-                        .row_dim = row_dim,
-                        .col_dim = col_dim,
-                    });
-            }),
-            py::arg("mesh_device"),
-            py::arg("dims"))
-        .def(
-            "compose",
-            [](const MeshToTensor& self, const std::vector<Tensor>& tensors) -> Tensor {
-                return self.compose(tensors);
-            },
-            py::arg("tensors"));
 
     module.def(
         "open_mesh_device",
