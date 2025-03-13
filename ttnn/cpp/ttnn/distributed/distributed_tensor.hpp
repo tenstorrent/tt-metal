@@ -15,19 +15,18 @@
 
 namespace ttnn::distributed {
 
-// Mapper interface that distributes a host tensor onto a multi-device configuration.
 class TensorToMesh {
 public:
     virtual ~TensorToMesh() = default;
-    virtual std::vector<Tensor> map(const Tensor& tensor) const = 0;
-    virtual tt::tt_metal::DistributedTensorConfig config() const = 0;
+    virtual __attribute__((weak)) std::vector<Tensor> map(const Tensor& tensor) const = 0;
+    virtual __attribute__((weak)) tt::tt_metal::DistributedTensorConfig config() const = 0;
 };
 
 // Composer interface that aggregates a multi-device tensor into a host tensor.
 class MeshToTensor {
 public:
     virtual ~MeshToTensor() = default;
-    virtual Tensor compose(const std::vector<Tensor>& tensors) const = 0;
+    virtual __attribute__((weak)) Tensor compose(const std::vector<Tensor>& tensors) const = 0;
 };
 
 // Creates a mapper that replicates a tensor across all devices.
