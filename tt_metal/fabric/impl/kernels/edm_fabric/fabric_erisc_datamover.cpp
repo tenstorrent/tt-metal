@@ -15,6 +15,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
 
 #include "noc_overlay_parameters.h"
 #include "tt_metal/hw/inc/utils/utils.h"
@@ -1260,32 +1261,43 @@ void kernel_main() {
     // TODO: CONVERT TO SEMAPHORE
     volatile auto termination_signal_ptr =
         reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(get_compile_time_arg_val(23));
+#ifdef WAIT_FOR_HOST_SIGNAL
+    volatile auto edm_local_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_compile_time_arg_val(24));
+#endif
     volatile auto edm_status_ptr =
-        reinterpret_cast<volatile tt_l1_ptr tt::tt_fabric::EDMStatus*>(get_compile_time_arg_val(24));
+        reinterpret_cast<volatile tt_l1_ptr tt::tt_fabric::EDMStatus*>(get_compile_time_arg_val(25));
+
     // In persistent mode, we must rely on static addresses for our local semaphores that are locally
     // initialized, rather than metal device APIs. This way different subdevice programs can reliably
     // resolve the semaphore addresses on the EDM core
-    static constexpr bool persistent_mode = get_compile_time_arg_val(25) != 0;
+    static constexpr bool persistent_mode = get_compile_time_arg_val(26) != 0;
 
     // Per-channel counters
-    static constexpr bool enable_fabric_counters = get_compile_time_arg_val(26) != 0;
-    static constexpr size_t receiver_channel_0_counters_address = get_compile_time_arg_val(27);
-    static constexpr size_t receiver_channel_1_counters_address = get_compile_time_arg_val(28);
-    static constexpr size_t sender_channel_0_counters_address = get_compile_time_arg_val(29);
-    static constexpr size_t sender_channel_1_counters_address = get_compile_time_arg_val(30);
-    static constexpr size_t sender_channel_2_counters_address = get_compile_time_arg_val(31);
+    static constexpr bool enable_fabric_counters = get_compile_time_arg_val(27) != 0;
+    static constexpr size_t receiver_channel_0_counters_address = get_compile_time_arg_val(28);
+    static constexpr size_t receiver_channel_1_counters_address = get_compile_time_arg_val(29);
+    static constexpr size_t sender_channel_0_counters_address = get_compile_time_arg_val(30);
+    static constexpr size_t sender_channel_1_counters_address = get_compile_time_arg_val(31);
+    static constexpr size_t sender_channel_2_counters_address = get_compile_time_arg_val(32);
 
-    static constexpr bool enable_packet_header_recording = get_compile_time_arg_val(32) != 0;
-    static constexpr size_t receiver_0_completed_packet_header_cb_address = get_compile_time_arg_val(33);
-    static constexpr size_t receiver_0_completed_packet_header_cb_size_headers = get_compile_time_arg_val(34);
-    static constexpr size_t receiver_1_completed_packet_header_cb_address = get_compile_time_arg_val(35);
-    static constexpr size_t receiver_1_completed_packet_header_cb_size_headers = get_compile_time_arg_val(36);
-    static constexpr size_t sender_0_completed_packet_header_cb_address = get_compile_time_arg_val(37);
-    static constexpr size_t sender_0_completed_packet_header_cb_size_headers = get_compile_time_arg_val(38);
-    static constexpr size_t sender_1_completed_packet_header_cb_address = get_compile_time_arg_val(39);
-    static constexpr size_t sender_1_completed_packet_header_cb_size_headers = get_compile_time_arg_val(40);
-    static constexpr size_t sender_2_completed_packet_header_cb_address = get_compile_time_arg_val(41);
-    static constexpr size_t sender_2_completed_packet_header_cb_size_headers = get_compile_time_arg_val(42);
+    static constexpr bool enable_packet_header_recording = get_compile_time_arg_val(33) != 0;
+    static constexpr size_t receiver_0_completed_packet_header_cb_address = get_compile_time_arg_val(34);
+    static constexpr size_t receiver_0_completed_packet_header_cb_size_headers = get_compile_time_arg_val(35);
+    static constexpr size_t receiver_1_completed_packet_header_cb_address = get_compile_time_arg_val(36);
+    static constexpr size_t receiver_1_completed_packet_header_cb_size_headers = get_compile_time_arg_val(37);
+    static constexpr size_t sender_0_completed_packet_header_cb_address = get_compile_time_arg_val(38);
+    static constexpr size_t sender_0_completed_packet_header_cb_size_headers = get_compile_time_arg_val(39);
+    static constexpr size_t sender_1_completed_packet_header_cb_address = get_compile_time_arg_val(40);
+    static constexpr size_t sender_1_completed_packet_header_cb_size_headers = get_compile_time_arg_val(41);
+    static constexpr size_t sender_2_completed_packet_header_cb_address = get_compile_time_arg_val(42);
+    static constexpr size_t sender_2_completed_packet_header_cb_size_headers = get_compile_time_arg_val(43);
+
+#ifdef WAIT_FOR_HOST_SIGNAL
+    static constexpr bool is_local_handshake_master = get_compile_time_arg_val(44);
+    static constexpr uint32_t local_handshake_master_eth_chan = get_compile_time_arg_val(45);
+    static constexpr uint32_t num_local_edms = get_compile_time_arg_val(46);
+    static constexpr uint32_t edm_channels_mask = get_compile_time_arg_val(47);
+#endif
 
     std::array<PacketHeaderRecorder, NUM_SENDER_CHANNELS> sender_channel_packet_recorders{
         PacketHeaderRecorder(
@@ -1539,12 +1551,19 @@ void kernel_main() {
         erisc::datamover::handshake::receiver_side_finish(handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
     }
 
-    *edm_status_ptr = tt::tt_fabric::EDMStatus::HANDSHAKE_COMPLETE;
+    *edm_status_ptr = tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE;
 
 #ifdef WAIT_FOR_HOST_SIGNAL
-    while (*edm_status_ptr != tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC) {
-        run_routing_without_noc_sync();
+    if constexpr (is_local_handshake_master) {
+        wait_for_notification((uint32_t)edm_local_sync_ptr, num_local_edms - 1);
+        notify_slave_routers(
+            edm_channels_mask, local_handshake_master_eth_chan, (uint32_t)edm_local_sync_ptr, num_local_edms);
+    } else {
+        notify_master_router(local_handshake_master_eth_chan, (uint32_t)edm_local_sync_ptr);
+        wait_for_notification((uint32_t)edm_local_sync_ptr, num_local_edms);
     }
+
+    *edm_status_ptr = tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE;
 #endif
 
     //////////////////////////////
@@ -1572,6 +1591,16 @@ void kernel_main() {
         sender_channel_packet_recorders,
         receiver_channel_0_trid_tracker,
         receiver_channel_1_trid_tracker);
+
+#ifdef WAIT_FOR_HOST_SIGNAL
+    if constexpr (is_local_handshake_master) {
+        notify_slave_routers(
+            edm_channels_mask,
+            local_handshake_master_eth_chan,
+            (uint32_t)termination_signal_ptr,
+            *termination_signal_ptr);
+    }
+#endif
 
     if constexpr (persistent_mode) {
         // we force these values to a non-zero value so that if we run the fabric back to back,
