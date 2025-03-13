@@ -28,10 +28,10 @@ void kernel_main() {
     tt_l1_ptr uint32_t* in0_remote_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(6));
     tt_l1_ptr uint32_t* in0_remote_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(6 + num_x));
 
-    constexpr uint32_t cb_ex_partial2 = tt::CBIndex::c_11;
-    constexpr uint32_t cb_ex2 = tt::CBIndex::c_12;
-    constexpr uint32_t cb_ex_external2 = tt::CBIndex::c_13;
-    constexpr uint32_t cb_ex2_global = tt::CBIndex::c_14;  // E[x2] global reduce
+    constexpr uint32_t cb_ex_partial2 = tt::CBIndex::c_2;
+    constexpr uint32_t cb_ex2 = tt::CBIndex::c_3;
+    constexpr uint32_t cb_ex_external2 = tt::CBIndex::c_5;
+    constexpr uint32_t cb_ex2_global = tt::CBIndex::c_4;  // E[x2] global reduce
 
     const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial2);
     const DataFormat data_format = get_dataformat(cb_ex_partial2);

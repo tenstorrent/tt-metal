@@ -37,24 +37,23 @@ void MAIN {
     constexpr uint32_t dst1 = 1;
     constexpr uint32_t scaler0 = 0;
 
-    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t cb_in1 = tt::CBIndex::c_1;
+    constexpr uint32_t cb_in0 = tt::CBIndex::c_9;
 #ifdef FUSE_PRE_ADD
-    constexpr uint32_t cb_in = tt::CBIndex::c_14;
+    constexpr uint32_t cb_in1 = tt::CBIndex::c_8;
+    constexpr uint32_t cb_in = tt::CBIndex::c_4;
 #else
     constexpr uint32_t cb_in = cb_in0;
 #endif
-    constexpr uint32_t cb_scaler = tt::CBIndex::c_2;
-    constexpr uint32_t cb_scaler_global = tt::CBIndex::c_4;
-    constexpr uint32_t cb_x = tt::CBIndex::c_24;  // x minus mean
-    constexpr uint32_t cb_ex = tt::CBIndex::c_9;  // E[x] global reduce
+    constexpr uint32_t cb_scaler = tt::CBIndex::c_0;
+    constexpr uint32_t cb_scaler_global = tt::CBIndex::c_1;
+    constexpr uint32_t cb_x = tt::CBIndex::c_7;  // x minus mean
 
-    constexpr uint32_t cb_ex2 = tt::CBIndex::c_12;  // E[(x-E[x])^2] global reduce
+    constexpr uint32_t cb_ex2 = tt::CBIndex::c_3;   // E[(x-E[x])^2] global reduce
     constexpr uint32_t cb_x2 = cb_x;                // x^2
-    constexpr uint32_t cb_out = tt::CBIndex::c_16;
+    constexpr uint32_t cb_out = tt::CBIndex::c_6;
 
-    constexpr uint32_t cb_ex_partial2 = tt::CBIndex::c_11;   // E[x^2] partial reduce
-    constexpr uint32_t cb_ex_external2 = tt::CBIndex::c_13;  // E[x^2] partials recieved from other cores
+    constexpr uint32_t cb_ex_partial2 = tt::CBIndex::c_2;   // E[x^2] partial reduce
+    constexpr uint32_t cb_ex_external2 = tt::CBIndex::c_5;  // E[x^2] partials recieved from other cores
 
     const uint32_t subblock_w = (block_w <= 2) ? subblock_w_volatile : subblock_w_const;
 

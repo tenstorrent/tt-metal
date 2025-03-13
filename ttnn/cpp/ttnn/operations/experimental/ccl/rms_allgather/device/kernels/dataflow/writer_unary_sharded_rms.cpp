@@ -9,12 +9,12 @@
 
 void kernel_main() {
     constexpr bool is_all_to_all_worker = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
+    constexpr uint32_t cb_in_2 = tt::CBIndex::c_0;
     const uint32_t scalar_w = get_arg_val<uint32_t>(1);
     generate_reduce_scaler(cb_in_2, scalar_w);
 
     if constexpr (is_all_to_all_worker) {
-        constexpr uint32_t cb_in_4 = tt::CBIndex::c_4;
+        constexpr uint32_t cb_in_4 = tt::CBIndex::c_1;
         const uint32_t scalar_c = get_arg_val<uint32_t>(0);
         generate_reduce_scaler(cb_in_4, scalar_c);
     }

@@ -27,9 +27,9 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* in0_remote_noc_x = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(4));
     volatile tt_l1_ptr uint32_t* in0_remote_noc_y = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(4 + num_x));
 
-    constexpr uint32_t cb_ex_partial2 = tt::CBIndex::c_11;  // E[(x-E[x])^2] partial reduce
-    constexpr uint32_t cb_ex2 = tt::CBIndex::c_12;          // E[(x-E[x])^2] global reduce
-    constexpr uint32_t cb_ex_external2 = tt::CBIndex::c_13;
+    constexpr uint32_t cb_ex_partial2 = tt::CBIndex::c_2;  // E[(x-E[x])^2] partial reduce
+    constexpr uint32_t cb_ex2 = tt::CBIndex::c_3;          // E[(x-E[x])^2] global reduce
+    constexpr uint32_t cb_ex_external2 = tt::CBIndex::c_5;
 
     const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial2);  // tile size
     const DataFormat data_format = get_dataformat(cb_ex_partial2);          // data format
