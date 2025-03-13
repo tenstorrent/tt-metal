@@ -271,6 +271,16 @@ Tensor Ceil::invoke(
     return detail::unary_impl(queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
 }
 
+Tensor Mish::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = UnaryOpType::MISH;
+
+    return detail::unary_impl(queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+}
+
 template <UnaryOpType unary_op_type, typename T>
 Tensor ExecuteUnaryWithIntegerParameter<unary_op_type, T>::invoke(
     QueueId queue_id,

@@ -23,6 +23,7 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
     using namespace tt::tt_metal;
 
     const auto& input = tensor_args.input;
+    const auto& ops_chain = args.op_chain;
 
     tt::tt_metal::Program program = CreateProgram();
     tt::tt_metal::IDevice* device = input.device();
@@ -120,9 +121,13 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
     bool math_approx_mode = std::all_of(
         args.op_chain.begin(), args.op_chain.end(), [](const auto& u) { return utils::get_op_approx_mode(u.op_type); });
     std::map<string, string> unary_defines = utils::get_block_defines(args.op_chain);
+    auto path = get_kernel_path("eltwise_sfpu.cpp");
+    if (ops_chain[0].op_type == UnaryOpType::MISH) {
+        path = get_kernel_path("mish_kernel.cpp");
+    }
     auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp",
+        path,
         all_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
