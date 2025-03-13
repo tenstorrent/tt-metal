@@ -400,7 +400,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
     }
 
-    for (auto core : input_cores) {
+    for (auto core : output_cores) {
         reader_runtime_args[is_reader_sender_core_idx] = false;
         reader_runtime_args[is_worker_core_idx] = true;
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
