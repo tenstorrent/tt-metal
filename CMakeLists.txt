@@ -71,7 +71,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         GLOBAL
         PROPERTY
             GLOBAL_DEPENDS_NO_CYCLES
-                FALSE #FIXME(14541): We've got work to do :(
+                TRUE
     )
 
     if(ENABLE_CCACHE)
