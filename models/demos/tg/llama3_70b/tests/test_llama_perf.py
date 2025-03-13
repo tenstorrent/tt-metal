@@ -19,7 +19,6 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
 
 from models.utility_functions import (
     profiler,
-    disable_compilation_reports,
     skip_for_grayskull,
     profiler,
     enable_persistent_kernel_cache,
@@ -197,7 +196,6 @@ def test_Llama_perf_host(
     check_mesh_device(mesh_device, model_config)
     mesh_device.enable_async(True)
     mesh_device.enable_program_cache()
-    disable_compilation_reports()
 
     run_test_LlamaModel_end_to_end(
         mesh_device,

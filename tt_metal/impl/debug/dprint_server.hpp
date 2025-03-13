@@ -11,9 +11,7 @@
 namespace tt {
 
 namespace tt_metal {
-inline namespace v0 {
 class IDevice;
-}  // namespace v0
 }  // namespace tt_metal
 
 /*

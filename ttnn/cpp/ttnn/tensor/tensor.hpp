@@ -25,7 +25,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/reflection.hpp>
+#include <tt_stl/reflection.hpp>
 #include "types.hpp"
 
 namespace tt {
