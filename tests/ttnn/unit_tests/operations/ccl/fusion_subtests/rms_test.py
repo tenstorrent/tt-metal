@@ -162,7 +162,7 @@ def run_rms_fuse_impl(
     )
 
     tt_out_torch = ttnn.to_torch(
-        tt_out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 3), mesh_shape=(8, 4))
+        tt_out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 3), mesh_shape=(1, num_devices))
     )[0].unsqueeze(0)
 
     ref_lnorm = rms_norm(input_tensor_torch, [3], gamma_torch, torch.zeros_like(gamma_torch), epsilon)
