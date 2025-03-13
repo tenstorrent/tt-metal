@@ -55,7 +55,8 @@ tt_metal/api @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheem
 # metal - base
 tt_metal/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @cfjchu @omilyutin-tt
 tt_metal/host_api.hpp @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @davorchap @cfjchu @omilyutin-tt
-tt_metal/impl/device/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @davorchap @cfjchu @omilyutin-tt
+tt_metal/impl/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @davorchap @cfjchu @omilyutin-tt @nhuang-tt
+tt_metal/impl/device/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @davorchap @cfjchu @omilyutin-tt @nhuang-tt
 tt_metal/**/requirements*.txt @tenstorrent/metalium-developers-infra
 
 # fabric
