@@ -78,6 +78,7 @@ void kernel_main() {
     DPRINT << "receiver_semaphore_address value: " << *(uint32_t*)receiver_semaphore_address
            << " local_semaphore_address value: " << *(uint32_t*)local_semaphore_address << ENDL();
     DPRINT << "sender_core: " << (uint32_t)sender_core << " worker_core: " << (uint32_t)worker_core << ENDL();
+    DPRINT << "tiles_per_core_width_output: " << tiles_per_core_width_output << ENDL();
 
     bool receiver_core = true;
     uint32_t receiver_for_device_id = 0;
@@ -111,9 +112,12 @@ void kernel_main() {
         }
         DPRINT << "Finished pushing back all tiles to fabric sender cb" << ENDL();
     } else if (worker_core) {
+        DPRINT << "accumulator addr" << get_noc_addr(get_read_ptr(accumulator_cb_id))
+               << "local semaphore noc addr: " << get_noc_addr(local_semaphore_address) << ENDL();
         while (*(uint32_t*)local_semaphore_address != num_devices - 1) {
             // Wait for the semaphore to be set
-            DPRINT << "Waiting for semaphore to be set" << ENDL();
+            DPRINT << "Waiting for semaphore to be set, current value: " << *(uint32_t*)(local_semaphore_address)
+                   << ENDL();
         }
         for (uint32_t target_device_id = 0; target_device_id < num_devices; ++target_device_id) {
             if (target_device_id == chip_id) {

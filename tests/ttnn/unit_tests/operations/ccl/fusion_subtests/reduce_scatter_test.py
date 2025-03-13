@@ -256,7 +256,7 @@ def test_fabric_reduce_scatter(n300_mesh_device):
         (32, 160),
         core_grid=ttnn.CoreRangeSet(
             {
-                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1)),
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)),
             }
         ),
         strategy=ttnn.ShardStrategy.WIDTH,
@@ -310,11 +310,11 @@ def test_fabric_reduce_scatter(n300_mesh_device):
             worker_sub_device_id,
             cluster_axis=1,
         )
-        ttnn.synchronize_devices(n300_mesh_device, sub_device_ids=sub_device_stall_group)
+        ttnn.synchronize_device(n300_mesh_device, sub_device_ids=sub_device_stall_group)
         n300_mesh_device.reset_sub_device_stall_group()
         teardown_fabric_interface(n300_mesh_device)
     except Exception as e:
-        ttnn.synchronize_devices(n300_mesh_device, sub_device_ids=sub_device_stall_group)
+        ttnn.synchronize_device(n300_mesh_device, sub_device_ids=sub_device_stall_group)
         n300_mesh_device.reset_sub_device_stall_group()
         teardown_fabric_interface(n300_mesh_device)
 
