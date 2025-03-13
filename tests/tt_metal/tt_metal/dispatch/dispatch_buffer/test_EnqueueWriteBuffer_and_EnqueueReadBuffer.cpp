@@ -201,7 +201,7 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(IDevice* device, CommandQueue
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
     uint32_t cq_size = device->sysmem_manager().get_cq_size();
-    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+    CoreType dispatch_core_type = get_dispatch_core_type();
     uint32_t cq_start =
         DispatchMemMap::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
 
@@ -522,7 +522,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestPageLargerThanAndUnalignedToTran
 
 TEST_F(CommandQueueSingleCardBufferFixture, TestSinglePageLargerThanMaxPrefetchCommandSize) {
     for (IDevice* device : devices_) {
-        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+        CoreType dispatch_core_type = get_dispatch_core_type();
         const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
         TestBufferConfig config = {
             .num_pages = 1, .page_size = max_prefetch_command_size + 2048, .buftype = BufferType::DRAM};
@@ -532,7 +532,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestSinglePageLargerThanMaxPrefetchC
 
 TEST_F(CommandQueueSingleCardBufferFixture, TestMultiplePagesLargerThanMaxPrefetchCommandSize) {
     for (IDevice* device : devices_) {
-        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+        CoreType dispatch_core_type = get_dispatch_core_type();
         const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
         TestBufferConfig config = {
             .num_pages = 1024, .page_size = max_prefetch_command_size + 2048, .buftype = BufferType::DRAM};
@@ -543,7 +543,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestMultiplePagesLargerThanMaxPrefet
 TEST_F(CommandQueueSingleCardBufferFixture, TestMultiplePagesLargerThanMaxPrefetchCommandSizeSubBuffer) {
     for (IDevice* device : devices_) {
         tt::log_info("Running On Device {}", device->id());
-        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+        CoreType dispatch_core_type = get_dispatch_core_type();
 
         const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
         const uint32_t page_size = max_prefetch_command_size + 2048;
@@ -563,7 +563,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestMultiplePagesLargerThanMaxPrefet
 
 TEST_F(CommandQueueSingleCardBufferFixture, TestSingleUnalignedPageLargerThanMaxPrefetchCommandSize) {
     for (IDevice* device : devices_) {
-        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+        CoreType dispatch_core_type = get_dispatch_core_type();
         const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
         uint32_t unaligned_page_size = max_prefetch_command_size + 4;
         TestBufferConfig config = {.num_pages = 1, .page_size = unaligned_page_size, .buftype = BufferType::DRAM};
@@ -573,7 +573,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestSingleUnalignedPageLargerThanMax
 
 TEST_F(CommandQueueSingleCardBufferFixture, TestMultipleUnalignedPagesLargerThanMaxPrefetchCommandSize) {
     for (IDevice* device : devices_) {
-        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+        CoreType dispatch_core_type = get_dispatch_core_type();
         const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
         TestBufferConfig config = {
             .num_pages = 1024, .page_size = max_prefetch_command_size + 4, .buftype = BufferType::DRAM};
@@ -584,7 +584,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestMultipleUnalignedPagesLargerThan
 TEST_F(CommandQueueSingleCardBufferFixture, TestMultipleUnalignedPagesLargerThanMaxPrefetchCommandSizeSubBuffer) {
     for (IDevice* device : devices_) {
         tt::log_info("Running On Device {}", device->id());
-        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+        CoreType dispatch_core_type = get_dispatch_core_type();
 
         const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
         const uint32_t page_size = max_prefetch_command_size + 4;
@@ -625,7 +625,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestWrapHostHugepageOnEnqueueReadBuf
         tt::log_info("Running On Device {}", device->id());
         uint32_t page_size = 2048;
         uint32_t command_issue_region_size = device->sysmem_manager().get_issue_queue_size(0);
-        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+        CoreType dispatch_core_type = get_dispatch_core_type();
         uint32_t cq_start =
             DispatchMemMap::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
 
@@ -1051,7 +1051,7 @@ TEST_F(MultiCommandQueueSingleDeviceBufferFixture, TestIssueMultipleReadWriteCom
 TEST_F(CommandQueueMultiDeviceBufferFixture, TestMultipleUnalignedPagesLargerThanMaxPrefetchCommandSize) {
     for (IDevice* device : devices_) {
         tt::log_info("Running On Device {}", device->id());
-        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+        CoreType dispatch_core_type = get_dispatch_core_type();
         const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
         TestBufferConfig config = {
             .num_pages = 50, .page_size = max_prefetch_command_size + 4, .buftype = BufferType::DRAM};
@@ -1167,7 +1167,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestMultipleNonOverlappingWritesShar
 
 TEST_F(CommandQueueSingleCardBufferFixture, TestMultiplePagesLargerThanMaxPrefetchCommandSizeForL1) {
     for (IDevice* device : devices_) {
-        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+        CoreType dispatch_core_type = get_dispatch_core_type();
         const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
         TestBufferConfig config = {
             .num_pages = 30, .page_size = max_prefetch_command_size + 2048, .buftype = BufferType::L1};
@@ -1177,7 +1177,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestMultiplePagesLargerThanMaxPrefet
 
 TEST_F(CommandQueueSingleCardBufferFixture, TestSingleUnalignedPageLargerThanMaxPrefetchCommandSizeForL1) {
     for (IDevice* device : devices_) {
-        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+        CoreType dispatch_core_type = get_dispatch_core_type();
         const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
         TestBufferConfig config = {
             .num_pages = 1, .page_size = max_prefetch_command_size + 4, .buftype = BufferType::L1};
@@ -1187,7 +1187,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestSingleUnalignedPageLargerThanMax
 
 TEST_F(CommandQueueSingleCardBufferFixture, TestMultipleUnalignedPagesLargerThanMaxPrefetchCommandSizeForL1) {
     for (IDevice* device : devices_) {
-        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+        CoreType dispatch_core_type = get_dispatch_core_type();
         const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
         TestBufferConfig config = {
             .num_pages = 30, .page_size = max_prefetch_command_size + 4, .buftype = BufferType::L1};

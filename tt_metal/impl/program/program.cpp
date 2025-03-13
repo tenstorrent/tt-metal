@@ -1379,7 +1379,7 @@ void detail::Program_::compile(IDevice* device, bool fd_bootloader_mode) {
         //      - eth kernels cannot be on idle eth cores
         bool slow_dispatch = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
 
-        const auto& dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
+        const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
         CoreType dispatch_core_type = dispatch_core_config.get_core_type();
         const std::vector<CoreCoord>& storage_cores =
             DispatchQueryManager::instance().get_logical_storage_cores_on_user_chips();

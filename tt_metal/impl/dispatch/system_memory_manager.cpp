@@ -4,7 +4,6 @@
 
 #include <tt-metalium/system_memory_manager.hpp>
 #include <tt-metalium/dispatch_mem_map.hpp>
-#include <tt-metalium/dispatch_core_manager.hpp>
 #include <tt-metalium/command_queue_common.hpp>
 #include <tt-metalium/memcpy.hpp>
 
@@ -12,6 +11,7 @@
 #include <tt-metalium/tt_align.hpp>
 
 #include <llrt/tt_cluster.hpp>
+#include "dispatch_core_manager.hpp"
 
 namespace tt::tt_metal {
 
@@ -50,7 +50,7 @@ SystemMemoryManager::SystemMemoryManager(chip_id_t device_id, uint8_t num_hw_cqs
     this->channel_offset = DispatchSettings::MAX_HUGEPAGE_SIZE * get_umd_channel(channel) +
                            (channel >> 2) * DispatchSettings::MAX_DEV_CHANNEL_SIZE;
 
-    CoreType core_type = tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_type(device_id);
+    CoreType core_type = tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_type();
     uint32_t completion_q_rd_ptr =
         DispatchMemMap::get(core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
     uint32_t prefetch_q_base =
@@ -267,7 +267,7 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
     uint32_t push_size_16B = align(push_size_B, tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::HOST)) >> 4;
 
     SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
-    CoreType core_type = tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_type(this->device_id);
+    CoreType core_type = tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_type();
     uint32_t issue_q_wr_ptr =
         DispatchMemMap::get(core_type).get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
 
@@ -298,7 +298,7 @@ void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) co
     // Also store this data in hugepages in case we hang and can't get it from the device.
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->device_id);
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device_id);
-    CoreType core_type = tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_type(this->device_id);
+    CoreType core_type = tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_type();
     uint32_t completion_q_rd_ptr =
         DispatchMemMap::get(core_type).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_RD);
     tt::Cluster::instance().write_sysmem(
@@ -314,7 +314,7 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
         return;
     }
 
-    CoreType core_type = tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_type(device_id);
+    CoreType core_type = tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_type();
     const uint32_t prefetch_q_rd_ptr =
         DispatchMemMap::get(core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD);
 
@@ -388,8 +388,7 @@ void SystemMemoryManager::completion_queue_pop_front(uint32_t num_pages_read, co
 }
 
 void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8_t cq_id, bool stall_prefetcher) {
-    CoreType dispatch_core_type =
-        tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_type(this->device_id);
+    CoreType dispatch_core_type = tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_type();
     uint32_t max_command_size_B = DispatchMemMap::get(dispatch_core_type, num_hw_cqs).max_prefetch_command_size();
     TT_ASSERT(
         command_size_B <= max_command_size_B,

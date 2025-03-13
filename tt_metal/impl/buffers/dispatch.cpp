@@ -227,7 +227,7 @@ uint32_t calculate_max_data_size(const CoreType& dispatch_core_type) {
 }
 
 bool are_pages_larger_than_max_prefetch_cmd_size(const Buffer& buffer) {
-    const CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(buffer.device()->id());
+    const CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type();
     const uint32_t max_data_size = calculate_max_data_size(dispatch_core_type);
     return buffer.aligned_page_size() > max_data_size;
 }
@@ -282,7 +282,7 @@ ShardedBufferWriteDispatchParams initialize_sharded_buf_dispatch_params(
 
 uint32_t calculate_partial_page_size(const Buffer& buffer) {
     uint32_t partial_page_size = 0;
-    const CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(buffer.device()->id());
+    const CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type();
     if (dispatch_core_type == CoreType::WORKER) {
         partial_page_size = DispatchSettings::BASE_PARTIAL_PAGE_SIZE_TENSIX_DISPATCH;
     } else {

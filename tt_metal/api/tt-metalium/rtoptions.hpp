@@ -16,7 +16,7 @@
 #include <vector>
 
 #include "core_coord.hpp"
-#include "dispatch_core_manager.hpp"       // For DispatchCoreConfig
+#include "dispatch_core_common.hpp"        // For DispatchCoreConfig
 #include "umd/device/tt_soc_descriptor.h"  // For CoreType
 
 namespace tt {
