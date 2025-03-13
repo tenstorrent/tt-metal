@@ -292,7 +292,7 @@ def run_llama3_demo(
     # Compile
     logger.info(f"Compiling model trace...")
     if layers == 1:
-        num_compile_iters = 24
+        num_compile_iters = 10
     else:
         num_compile_iters = 1
     for i in range(num_compile_iters):
