@@ -352,10 +352,6 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
         (std::uint32_t)reduce_sender_semaphore_id,
         (std::uint32_t)num_blocks,
         (std::uint32_t)1,
-        (std::uint32_t)1,
-        (std::uint32_t)1,
-        (std::uint32_t)1,
-        (std::uint32_t)1,
         (std::uint32_t)true,
         (std::uint32_t)num_cores_x_mcast,
         (std::uint32_t)num_cores_y_mcast,
@@ -367,12 +363,7 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
         (std::uint32_t)reduce_receiver_semaphore_id,
         (std::uint32_t)reduce_sender_semaphore_id,
         (std::uint32_t)num_blocks,
-        (std::uint32_t)1,
         (std::uint32_t)0,
-        (std::uint32_t)1,
-        (std::uint32_t)1,
-        (std::uint32_t)1,
-        (std::uint32_t)true,
         (std::uint32_t)1,
         (std::uint32_t)1,
         (std::uint32_t)0,
@@ -718,13 +709,6 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
             (not use_two_stage_reduce and width_index < num_cores_all_to_all) or
             (use_two_stage_reduce and width_index_two_stage < 1)) {
             std::vector<uint32_t> mcast_receiver_args;
-            bool is_last_all_to_all_worker;
-            if (use_two_stage_reduce) {
-                is_last_all_to_all_worker = width_index_two_stage == 0 ? true : false;
-            } else {
-                is_last_all_to_all_worker = width_index == num_cores_all_to_all - 1 ? true : false;
-            }
-            mcast_receiver_args.push_back(is_last_all_to_all_worker);
             mcast_receiver_args.push_back(all_to_all_worker_tile_offset_size_bytes);
             bool is_second_stage_reader;
             if (use_two_stage_reduce and width_index < 1) {
@@ -742,8 +726,6 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
                 program, reader_mcast_receiver_kernels_id_all_to_all, core, mcast_receiver_args);
         } else {
             std::vector<uint32_t> mcast_receiver_args;
-            bool is_last_all_to_all_worker = false;
-            mcast_receiver_args.push_back(is_last_all_to_all_worker);
             mcast_receiver_args.push_back(all_to_all_worker_tile_offset_size_bytes);
             mcast_receiver_args.push_back(0);
             mcast_receiver_args.push_back(0);
