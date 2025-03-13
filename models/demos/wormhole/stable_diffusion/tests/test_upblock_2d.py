@@ -38,8 +38,6 @@ from models.demos.wormhole.stable_diffusion.tests.parameterizations import DOWN_
 def test_upblock_512x512(
     reset_seeds, device, res_hidden_states_tuple, hidden_states, shard_layout, shard_end_core, shard_shape, temb
 ):
-    os.environ["SLOW_MATMULS"] = "1"
-
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
     unet = pipe.unet
     unet.eval()
