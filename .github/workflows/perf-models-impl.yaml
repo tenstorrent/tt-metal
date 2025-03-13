@@ -71,7 +71,6 @@ jobs:
       - name: Enable Performance mode
         run: |
           sudo cpupower frequency-set -g performance
-      - uses: ./.github/actions/ensure-active-weka-mount
       - name: Run performance regressions
         timeout-minutes: 70
         run: |
