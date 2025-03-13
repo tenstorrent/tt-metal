@@ -277,7 +277,6 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     auto use_row_major_kernel = (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) or
                                 (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR);
 
-    TT_FATAL(!use_row_major_kernel or !large_tensor_needed, "ROW_MAJOR layout not supported for tensors this large");
     auto reader_kernel_path = use_row_major_kernel
                                   ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
                                     "reader_unary_interleaved_ln_rm_gb.cpp"
