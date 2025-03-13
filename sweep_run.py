@@ -2,7 +2,65 @@ import os
 import re
 
 # List of operations
-ops = ["unary_ne", "unary_gt", "unary_lt", "prelu", "identity_uint32"]
+ops = [
+    "unary_ne",
+    "unary_gt",
+    "unary_lt",
+    "prelu",
+    "identity_uint32",
+    "abs",
+    "acos",
+    "asin",
+    "atan",
+    "cos",
+    "erfinv",
+    "exp2",
+    "expm1",
+    "eqz",
+    "gez",
+    "gtz",
+    "exp",
+    "recip",
+    "gelu",
+    "relu",
+    "sqrt",
+    "sigmoid",
+    "log",
+    "tanh",
+    "log2",
+    "leaky_relu",
+    "elu",
+    "heaviside",
+    "rsqrt",
+    "relu6",
+    "erfc",
+    "isinf",
+    "isposinf",
+    "isneginf",
+    "isnan",
+    "sin",
+    "abs_int32",
+    "erf",
+    "i0",
+    "i1",
+    "tan",
+    "rsub",
+    "rdiv",
+    "silu",
+    "softplus",
+    "fill",
+    "floor",
+    "ceil",
+    "remainder",
+    "fmod",
+    "typecast",
+    "bitwise_xor",
+    "bitwise_not",
+    "bitwise_and",
+    "bitwise_or",
+    "bitwise_right_shift",
+    "bitwise_left_shift",
+]
 
 
 # Function to modify the file
@@ -33,8 +91,8 @@ for op in ops:
     file_path = f"tests/sweep_framework/sweeps/eltwise/unary/{op}/{op}_survey.py"  # Assuming file structure
 
     # Modify the file if it exists
-    #if os.path.exists(file_path):
-        #modify_file(file_path)
+    # if os.path.exists(file_path):
+    # modify_file(file_path)
 
     # Run the commands
     command1 = f"python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name {module_name} --elastic cloud --clean"
