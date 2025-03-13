@@ -82,7 +82,7 @@ void kernel_main() {
     bool receiver_core = true;
     uint32_t receiver_for_device_id = 0;
 
-    uint32_t bank_base_address = get_read_ptr(input_tensor_cb_id);
+    uint32_t bank_base_address = get_write_ptr(input_tensor_cb_id);
     uint32_t x_index = 0;
     uint32_t y_index = 1;
     if (sender_core) {
@@ -100,7 +100,7 @@ void kernel_main() {
                 DPRINT << "Reserving back " << tiles_per_core_width << " tiles for fabric sender cb" << ENDL();
                 cb_reserve_back(fabric_sender_cb_id, tiles_per_core_width);
                 DPRINT << "Reserving back done" << ENDL();
-                uint32_t sender_read_addr = get_read_ptr(fabric_sender_cb_id);
+                uint32_t sender_read_addr = get_write_ptr(fabric_sender_cb_id);
                 noc_async_read(shard_noc_addr, sender_read_addr, tiles_per_core_width * page_size_bytes);
                 noc_async_read_barrier();
                 print_tiles(fabric_sender_cb_id, 0, tiles_per_core_width, true);
@@ -111,7 +111,7 @@ void kernel_main() {
         }
         DPRINT << "Finished pushing back all tiles to fabric sender cb" << ENDL();
     } else if (worker_core) {
-        DPRINT << "accumulator addr " << get_noc_addr(get_read_ptr(accumulator_cb_id))
+        DPRINT << "accumulator addr " << get_noc_addr(get_write_ptr(accumulator_cb_id))
                << " local semaphore noc addr: " << get_noc_addr(local_semaphore_address) << ENDL();
         noc_semaphore_wait((uint32_t*)local_semaphore_address, num_devices - 1);
         // while (*(uint32_t*)local_semaphore_address != num_devices - 1) {
