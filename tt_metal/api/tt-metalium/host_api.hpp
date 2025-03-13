@@ -9,6 +9,7 @@
 
 #include "runtime_args_data.hpp"
 #include "program_impl.hpp"
+#include "allocator.hpp"
 #include "device.hpp"
 #include "sub_device_types.hpp"
 #include <tt_stl/span.hpp>
