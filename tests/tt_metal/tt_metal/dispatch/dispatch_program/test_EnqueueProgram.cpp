@@ -729,15 +729,14 @@ IncrementKernelsSet create_increment_kernels(
     const auto [unique_args_addr, common_args_addr] = get_args_addr(device, riscv, idle_eth);
     std::vector<uint32_t> compile_args{num_unique_rt_args, num_common_rt_args, unique_args_addr, common_args_addr};
 
+    const std::string increment_kernel_path =
+        riscv == tt::RISCV::COMPUTE ? "tests/tt_metal/tt_metal/test_kernels/compute/increment_runtime_arg.cpp"
+                                    : "tests/tt_metal/tt_metal/test_kernels/misc/increment_runtime_arg.cpp";
+
     // CreateKernel on each core range set
     for (const auto& program_config : program_configs) {
         const auto& cr_set = program_config.cr_set;
-        KernelHandle kernel_id = create_kernel(
-            riscv,
-            program,
-            cr_set,
-            compile_args,
-            "tests/tt_metal/tt_metal/test_kernels/misc/increment_runtime_arg.cpp");
+        KernelHandle kernel_id = create_kernel(riscv, program, cr_set, compile_args, increment_kernel_path);
 
         kernels.push_back(kernel_id);
     }
