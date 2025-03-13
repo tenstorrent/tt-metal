@@ -85,7 +85,7 @@ def get_device_freq():
 
 
 matmul_shapes_bfloat16 = [
-    (512, 512, 512, False, False, 1, 1, 1),
+    (512, 1024, 1024, False, False, 1, 1, 1),
 ]
 matmul_configs = [
     (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, False),
