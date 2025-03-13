@@ -32,6 +32,52 @@
 
 // clang-format off
 /**
+ * Returns the absolute logical X coordinate value that this kernel is running on. The absolute coordinate
+ * is the one relative to the origin of the physical grid.
+ *
+ * Return value: X coordinate value.
+ */
+// clang-format on
+FORCE_INLINE
+uint32_t get_absolute_logical_x() { return 0; }
+
+// clang-format off
+/**
+ * Returns the absolute logical Y coordinate value that this kernel is running on. The absolute coordinate
+ * is the one relative to the origin of the physical grid.
+ *
+ * Return value: Y coordinate value.
+ */
+// clang-format on
+FORCE_INLINE
+uint32_t get_absolute_logical_y() { return 0; }
+
+// clang-format off
+/**
+ * Returns the relative logical X coordinate value that this kernel is running on. The relative coordinate
+ * is the one relative to the origin of the sub device. If there is no sub device then this is equivalent
+ * to the absolute logical coordinate.
+ *
+ * Return value: X coordinate value.
+ */
+// clang-format on
+FORCE_INLINE
+uint32_t get_relative_logical_x() { return 0; }
+
+// clang-format off
+/**
+ * Returns the relative logical Y coordinate value that this kernel is running on. The relative coordinate
+ * is the one relative to the origin of the sub device. If there is no sub device then this is equivalent
+ * to the absolute logical coordinate.
+ *
+ * Return value: Y coordinate value.
+ */
+// clang-format on
+FORCE_INLINE
+uint32_t get_relative_logical_y() { return 0; }
+
+// clang-format off
+/**
  * Returns the address in L1 for a given runtime argument index for unique (per core) runtime arguments set via
  * SetRuntimeArgs() API.
  *
@@ -43,6 +89,7 @@
  */
 // clang-format on
 static FORCE_INLINE uint32_t get_arg_addr(int arg_idx) { return (uint32_t)&rta_l1_base[arg_idx]; }
+
 // clang-format off
 /**
  * Returns the address in L1 for a given runtime argument index for common (all cores) runtime arguments set via

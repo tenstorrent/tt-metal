@@ -96,7 +96,9 @@ public:
 
     virtual CoreCoord compute_with_storage_grid_size() const = 0;
 
+    // Returns a logical CoreRangeSet of the worker cores in the specified sub device that was previously loaded.
     virtual CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const = 0;
+    // Returns the number of worker cores in the specified sub device that was previously loaded.
     virtual uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const = 0;
 
     virtual const std::unique_ptr<Allocator>& allocator() const = 0;

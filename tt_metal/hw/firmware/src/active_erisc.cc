@@ -39,8 +39,23 @@ uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
 
+// Register
 uint8_t my_x[NUM_NOCS] __attribute__((used));
+
+// Register
 uint8_t my_y[NUM_NOCS] __attribute__((used));
+
+// Set during FW initialization. Available before main begins.
+uint8_t my_logical_x __attribute__((used));
+
+// Set during FW initialization. Available before main begins.
+uint8_t my_logical_y __attribute__((used));
+
+// Updated by the launch message for the kernel.
+uint8_t my_sub_device_x __attribute__((used));
+
+// Updated by the launch message for the kernel.
+uint8_t my_sub_device_y __attribute__((used));
 
 // These arrays are stored in local memory of FW, but primarily used by the kernel which shares
 // FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
@@ -71,6 +86,8 @@ int main() {
 
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
     noc_index = 0;
+    my_logical_x = mailboxes->core_info.absolute_logical_x;
+    my_logical_y = mailboxes->core_info.absolute_logical_y;
 
     risc_init();
 
@@ -114,6 +131,8 @@ int main() {
             DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
 
             noc_index = launch_msg_address->kernel_config.brisc_noc_id;
+            my_sub_device_x = my_logical_x - launch_msg_address->kernel_config.sub_device_origin_x;
+            my_sub_device_y = my_logical_y - launch_msg_address->kernel_config.sub_device_origin_y;
 
             flush_erisc_icache();
 

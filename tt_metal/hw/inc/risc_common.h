@@ -34,8 +34,25 @@ const uint32_t STREAM_RESTART_CHECK_MASK = (0x1 << 3) - 1;
 
 const uint32_t MAX_TILES_PER_PHASE = 2048;
 
+// These values are defined in each core type's FW .cc file
+
+// Virtual X coordinate
 extern uint8_t my_x[NUM_NOCS];
+
+// Virtual Y coordinate
 extern uint8_t my_y[NUM_NOCS];
+
+// Logical X coordinate relative to the physical origin.
+extern uint8_t my_logical_x;
+
+// Logical Y coordinate relative to the physical origin.
+extern uint8_t my_logical_y;
+
+// Logical X coordinate relative to the sub device origin.
+extern uint8_t my_sub_device_x;
+
+// Logical Y coordinate relative to the sub device origin.
+extern uint8_t my_sub_device_y;
 
 inline void WRITE_REG(uint32_t addr, uint32_t val) {
     volatile tt_reg_ptr uint32_t* ptr = (volatile tt_reg_ptr uint32_t*)addr;

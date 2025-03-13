@@ -14,12 +14,23 @@
 #include <sub_device_types.hpp>
 #include <vector>
 
+#include "core_coord.hpp"
+#include "hal.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
+
+namespace {
+CoreCoord get_sub_device_worker_origin(
+    const tt::tt_metal::IDevice* device,
+    tt::tt_metal::SubDeviceId sub_device_id,
+    tt::tt_metal::HalProgrammableCoreType core_type) {
+    return device->worker_cores(core_type, sub_device_id).bounding_box().start_coord;
+}
+};  // namespace
 
 namespace tt::tt_metal {
 namespace program_dispatch {
@@ -1146,6 +1157,12 @@ void assemble_device_commands(
     uint32_t go_signal_size_words = aligned_go_signal_sizeB / sizeof(uint32_t);
 
     // TODO: eventually the code below could be structured to loop over programmable_indices
+    /* *****************
+     *
+     *   TENSIX
+     *
+     *******************
+     */
     // and check for mcast/unicast
     uint32_t programmable_core_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
     for (auto& kernel_group : program.get_kernel_groups(programmable_core_index)) {
@@ -1155,6 +1172,11 @@ void assemble_device_commands(
             kernel_group->launch_msg.kernel_config.kernel_config_base[i] = 0;
         }
         kernel_group->launch_msg.kernel_config.host_assigned_id = program.get_runtime_id();
+
+        const auto& origin = get_sub_device_worker_origin(device, sub_device_id, HalProgrammableCoreType::TENSIX);
+        kernel_group->launch_msg.kernel_config.sub_device_origin_x = origin.x;
+        kernel_group->launch_msg.kernel_config.sub_device_origin_y = origin.y;
+
         const void* launch_message_data = (const void*)(&(kernel_group->launch_msg));
         for (const CoreRange& core_range : kernel_group->core_ranges.ranges()) {
             CoreCoord virtual_start =
@@ -1177,6 +1199,12 @@ void assemble_device_commands(
             multicast_go_signals_payload);
     }
 
+    /* *****************
+     *
+     *   ETH
+     *
+     *******************
+     */
     programmable_core_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
     // TODO: ugly, can be fixed by looping over indices w/ some work
     if (programmable_core_index != -1) {
@@ -1189,6 +1217,11 @@ void assemble_device_commands(
                 kernel_group->launch_msg.kernel_config.kernel_config_base[i] = 0;
             }
             kernel_group->launch_msg.kernel_config.host_assigned_id = program.get_runtime_id();
+            const auto& origin =
+                get_sub_device_worker_origin(device, sub_device_id, HalProgrammableCoreType::ACTIVE_ETH);
+            kernel_group->launch_msg.kernel_config.sub_device_origin_x = origin.x;
+            kernel_group->launch_msg.kernel_config.sub_device_origin_y = origin.y;
+
             const void* launch_message_data = (const launch_msg_t*)(&(kernel_group->launch_msg));
             for (const CoreRange& core_range : kernel_group->core_ranges.ranges()) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {

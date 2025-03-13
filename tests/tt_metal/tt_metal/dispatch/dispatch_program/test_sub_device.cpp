@@ -145,4 +145,11 @@ TEST_F(CommandQueueSingleCardFixture, TensixActiveEthTestSubDeviceBasicEthProgra
     detail::DumpDeviceProfileResults(device);
 }
 
+// Ensure each core in the sub device aware of their own logical coordinate. Same binary used in multiple sub devices.
+TEST_F(CommandQueueSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordinates) {}
+
+// Ensure each core in the sub device aware of their own sub device logical coordinate. Same binary used in multiple sub
+// devices.
+TEST_F(CommandQueueSingleCardProgramFixture, TensixTestSubDeviceMySubDeviceLogicalCoordinates) {}
+
 }  // namespace tt::tt_metal

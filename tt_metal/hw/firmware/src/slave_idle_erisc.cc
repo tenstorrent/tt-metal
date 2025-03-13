@@ -23,8 +23,24 @@ tt_l1_ptr mailboxes_t *const mailboxes = (tt_l1_ptr mailboxes_t *)(MEM_IERISC_MA
 volatile tt_l1_ptr uint8_t *const slave_idle_erisc_run = &mailboxes->slave_sync.dm1;
 
 uint8_t noc_index = 0;  // TODO: hardcoding needed for profiler
+
+// Virtual X coordinate
 uint8_t my_x[NUM_NOCS] __attribute__((used));
+
+// Virtual Y coordinate
 uint8_t my_y[NUM_NOCS] __attribute__((used));
+
+// Logical X coordinate relative to the physical origin. Set during FW initialization.
+uint8_t my_logical_x __attribute__((used));
+
+// Logical Y coordinate relative to the physical origin. Set during FW initialization.
+uint8_t my_logical_y __attribute__((used));
+
+// Logical X coordinate relative to the sub device origin. Updated by the launch message for the kernel.
+uint8_t my_sub_device_x __attribute__((used));
+
+// Logical Y coordinate relative to the sub device origin. Updated by the launch message for the kernel.
+uint8_t my_sub_device_y __attribute__((used));
 
 uint32_t noc_reads_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
@@ -66,6 +82,8 @@ int main(int argc, char *argv[]) {
 
     noc_bank_table_init(MEM_IERISC_BANK_TO_NOC_SCRATCH);
 
+    my_logical_x = mailboxes->core_info.absolute_logical_x;
+    my_logical_y = mailboxes->core_info.absolute_logical_y;
     risc_init();
 
     // Cleanup profiler buffer incase we never get the go message
@@ -79,6 +97,10 @@ int main(int argc, char *argv[]) {
         flush_erisc_icache();
 
         uint32_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::IDLE_ETH, DISPATCH_CLASS_ETH_DM1);
+        my_sub_device_x =
+            my_logical_x - mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.sub_device_origin_x;
+        my_sub_device_y =
+            my_logical_y - mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.sub_device_origin_y;
 
         WAYPOINT("R");
         int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM1);

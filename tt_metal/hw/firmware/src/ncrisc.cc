@@ -29,8 +29,23 @@ uint32_t halt_stack_ptr_save;
 tt_l1_ptr mailboxes_t *const mailboxes = (tt_l1_ptr mailboxes_t *)(MEM_MAILBOX_BASE);
 volatile tt_l1_ptr uint8_t *const ncrisc_run = &mailboxes->slave_sync.dm1;
 
+// Virtual X coordinate
 uint8_t my_x[NUM_NOCS] __attribute__((used));
+
+// Virtual Y coordinate
 uint8_t my_y[NUM_NOCS] __attribute__((used));
+
+// Logical X coordinate relative to the physical origin. Set during FW initialization.
+uint8_t my_logical_x __attribute__((used));
+
+// Logical Y coordinate relative to the physical origin. Set during FW initialization.
+uint8_t my_logical_y __attribute__((used));
+
+// Logical X coordinate relative to the sub device origin. Updated by the launch message for the kernel.
+uint8_t my_sub_device_x __attribute__((used));
+
+// Logical Y coordinate relative to the sub device origin. Updated by the launch message for the kernel.
+uint8_t my_sub_device_y __attribute__((used));
 
 uint32_t noc_reads_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
@@ -119,6 +134,9 @@ int main(int argc, char *argv[]) {
     // Need to save address to jump to after BRISC resumes NCRISC
     set_ncrisc_resume_addr();
 
+    my_logical_x = mailboxes->core_info.absolute_logical_x;
+    my_logical_y = mailboxes->core_info.absolute_logical_y;
+
     // Cleanup profiler buffer incase we never get the go message
     while (1) {
         WAYPOINT("W");
@@ -148,6 +166,9 @@ int main(int argc, char *argv[]) {
         end_cb_index = launch_msg->kernel_config.min_remote_cb_start_index;
         // NOC argument is unused
         experimental::setup_remote_cb_interfaces<false>(cb_l1_base, end_cb_index, 0, 0, 0, 0);
+        my_sub_device_x = my_logical_x - launch_msg->kernel_config.sub_device_origin_x;
+        my_sub_device_y = my_logical_y - launch_msg->kernel_config.sub_device_origin_y;
+
         WAYPOINT("R");
 
         void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
