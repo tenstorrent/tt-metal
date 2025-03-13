@@ -303,7 +303,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
 
     auto compute_kernels_id = CreateKernel(
         program,
-        large_tensor_needed
+        large_tensor_needed and !use_row_major_kernel
             ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_large_tensor.cpp"
             : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp",
         all_cores,
