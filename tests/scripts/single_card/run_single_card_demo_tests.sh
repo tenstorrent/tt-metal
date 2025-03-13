@@ -61,8 +61,11 @@ run_common_func_tests() {
   #RoBERTa
   pytest --disable-warnings models/demos/roberta/demo/demo.py --timeout 600; fail+=$?
 
-  #Segformer Demo
+  #Segformer Segmentation Demo
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/segformer/demo/demo_for_semantic_segmentation.py --timeout 600; fail+=$?
+
+  #Segformer Classification Demo
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/segformer/demo/demo_for_image_classification.py --timeout 600; fail+=$?
 
   return $fail
 }
