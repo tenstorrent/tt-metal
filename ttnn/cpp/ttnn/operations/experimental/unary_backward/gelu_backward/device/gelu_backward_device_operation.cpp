@@ -60,6 +60,8 @@ void GeluBackwardDeviceOperation::validate_on_program_cache_miss(
         static_cast<int>(input_tensor.memory_config().memory_layout),
         static_cast<int>(out_memory_config.memory_layout));
 
+    TT_FATAL(!input_tensor.is_sharded(), "GELU_BW operation does not support sharded input tensor.");
+
     TT_FATAL(
         input_tensor.get_layout() == Layout::TILE,
         "GELU_BW operation requires tensor to be in Tile layout when working with non-sharded input tensor. Input "
@@ -81,12 +83,6 @@ void GeluBackwardDeviceOperation::validate_on_program_cache_miss(
             "shape. Computed shape: {}, Shape in preallocated output tensor: {}",
             computed_output_shape,
             preallocated_output_shape);
-
-        if (!input_tensor.is_sharded()) {
-            TT_FATAL(
-                (preallocated_input_grad.value().get_layout() == Layout::TILE),
-                "GELU_BW operation requires output tensor to be in Tile layout when working with non-sharded tensor.");
-        }
     }
 }
 
