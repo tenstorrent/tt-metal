@@ -109,13 +109,24 @@ class ModelArgs:
     ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
-        self.device_name = {0: "CPU", 1: "N150", 2: "N300", 4: "N150x4", 8: "T3K", 32: "TG"}[self.num_devices]
+        self.arch_name = ttnn.get_arch_name()
+        self.device_name = {
+            0: "CPU",
+            1: "P150" if self.arch_name == "blackhole" else "N150",
+            2: "P300" if self.arch_name == "blackhole" else "N300",
+            4: "P150x4",  # Config only exists in BH at the moment
+            8: "T3K",
+            32: "TG",
+        }[self.num_devices]
         self.model_name = "Unknown"  # Llama model name will be dependent on the checkpoint directory
         self.max_seq_len = max_seq_len
         self.max_batch_size = max_batch_size
         self.tile_size = 32
         self.is_70b = False
         self.from_hf_url = False  # updated below if true
+        self.prefill_len_cutoff = 512 if self.arch_name == "blackhole" else 1024
+        # TODO the following is parametrized for a vocab size of 128256 (used in LLama3). Should generalize for other models
+        self.max_columns_per_device_lm_head = 128256 // 8 if self.arch_name == "blackhole" else 128256 // 4
 
         assert not os.getenv(
             "FAKE_DEVICE"
@@ -202,17 +213,18 @@ class ModelArgs:
         # Set the max number of tokens for each prefill chunk based on the model and device
         max_prefill_chunk_size_div1024 = os.getenv("MAX_PREFILL_CHUNK_SIZE")
         if max_prefill_chunk_size_div1024 is None:
+            # TODO Improve this to be more general to more devices and models
             MAX_PREFILL_CHUNK_SIZES_DIV1024 = {
-                "Llama3.2-1B": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128},
-                "Llama3.2-3B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128},
-                "Llama3.1-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128},
-                "Llama3.2-11B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128},
-                "Llama3.1-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128},
-                "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128},
-                "Qwen2.5-7B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128},
-                "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 32, "TG": 128},
-                "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128},
-                "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128},
+                "Llama3.2-1B": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Llama3.2-3B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Llama3.1-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Llama3.2-11B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Llama3.1-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
+                "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
+                "Qwen2.5-7B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
+                "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
             }
             try:
                 max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.base_model_name][self.device_name]
@@ -389,7 +401,7 @@ class ModelArgs:
 
             # For maximum performance, set the prefill grid row to 8, even if it can fit in a smaller grid
             # prefill_rows = lambda seq_len: min(seq_len, 1024) // self.tile_size
-            prefill_rows = 8
+            prefill_rows = 8  # TODO if BH = 10, if wh = 8
             mlp1_3_grid = lambda seq_len: (
                 (8, min(min(seq_len, 1024) // 32, 4))
                 if self.is_galaxy
@@ -402,13 +414,13 @@ class ModelArgs:
             )
 
             self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
-                m=min(seq_len, 1024),
+                m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
                 k=self.dim // self.cluster_shape[0],
                 n=self.hidden_dim // self.cluster_shape[1],
                 grid_size=mlp1_3_grid(seq_len),
             )
             self.model_config["PREFILL_MLP_W2_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
-                m=min(seq_len, 1024),
+                m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
                 k=self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1),
                 n=self.dim,
                 grid_size=mlp2_grid(seq_len),
@@ -1232,7 +1244,7 @@ class ModelArgs:
 
     def create_dram_sharded_mem_config(self, k, n):
         """Create DRAM-sharded memory config for width-sharded tensors"""
-        dram_cores = 12
+        dram_cores = 8 if self.arch_name == "blackhole" else 12  # WH has 12 dram cores
         padded_size = math.ceil(n / (self.tile_size * dram_cores)) * (self.tile_size * dram_cores)
         shard_spec = ttnn.ShardSpec(
             self.dram_weight_grid, (k, padded_size // dram_cores), ttnn.ShardOrientation.ROW_MAJOR
@@ -1320,6 +1332,7 @@ class ModelArgs:
         """
         max_rows = 8
         max_cols = 8
+        # TODO Improve configuration for BH (higher core grid than WH)
 
         # Find number of cols that evenly divides into the number of columns
         cols = None
