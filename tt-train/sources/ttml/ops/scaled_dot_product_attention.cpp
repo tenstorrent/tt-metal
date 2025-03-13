@@ -4,6 +4,7 @@
 
 #include "scaled_dot_product_attention.hpp"
 
+#include <sstream>
 #include <stdexcept>
 
 #include "autograd/auto_context.hpp"
@@ -48,7 +49,11 @@ ttnn::Tensor group_shared_matmul(
     auto [B_H, H, S, E] = H_tensor.get_logical_shape().to_array_4D();
     auto [B_G, G, T, K] = G_tensor.get_logical_shape().to_array_4D();
     if (B_H != B_G) {
-        throw std::invalid_argument("H_tensor and G_tensor must have the same batch size");
+        std::stringstream ss;
+        ss << "H_tensor and G_tensor must have the same batch size, got shapes ";
+        ss << H_tensor.get_logical_shape() << " and ";
+        ss << G_tensor.get_logical_shape() << " respectively";
+        throw std::invalid_argument(ss.str());
     }
     uint32_t B = B_H;
     if (H == G) {
@@ -73,13 +78,40 @@ ttnn::Tensor group_shared_matmul(
     return reshaped_mm;
 }
 
+// helper function to collect grads from the query groups associated
+// with each key/value
+ttnn::Tensor sum_over_groups(const ttnn::Tensor& ungrouped_grads, uint32_t num_groups) {
+    if (ungrouped_grads.get_logical_shape().rank() != 4) {
+        std::stringstream ss;
+        ss << "ungrouped_grads must have rank 4, but got rank " << ungrouped_grads.get_logical_shape().rank();
+        throw std::invalid_argument(ss.str());
+    }
+    // [B,H,S,E]
+    auto [batch_size, num_heads, seq_len, head_dim] = ungrouped_grads.get_logical_shape().to_array_4D();
+    if (num_groups == num_heads) {
+        // group size is 1, nothing to do
+        return ungrouped_grads;
+    }
+    // sum over groups:
+    // [B,H,S,E] -> [B*G,H/G,S,E] -> [B*G,1,S,E] -> [B,G,S,E]
+    auto grouped_grads =
+        ttnn::reshape(ungrouped_grads, ttnn::Shape{batch_size * num_groups, num_heads / num_groups, seq_len, head_dim});
+    auto summed_grads = ttnn_fixed::sum_moreh(grouped_grads, /*dim=*/1, /*keep_dim=*/true);
+    return ttnn::reshape(summed_grads, ttnn::Shape{batch_size, num_groups, seq_len, head_dim});
+}
+
 autograd::TensorPtr scaled_dot_product_attention(
     const autograd::TensorPtr& query,
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,
     const std::optional<autograd::TensorPtr>& mask) {
     if (!std::ranges::all_of(std::array{query, key, value}, [](const auto& t) { return t->get_rank() == 4U; })) {
-        throw std::invalid_argument("query, key, and value must have rank 4");
+        std::stringstream ss;
+        ss << "query, key, and value must have rank 4, but got ranks: ";
+        ss << "query=" << query->get_rank() << ", ";
+        ss << "key=" << key->get_rank() << ", ";
+        ss << "value=" << value->get_rank();
+        throw std::invalid_argument(ss.str());
     }
 
     auto [B, H, S, E] = query->get_value().get_logical_shape().to_array_4D();
@@ -87,7 +119,12 @@ autograd::TensorPtr scaled_dot_product_attention(
     auto [BV, HV, SV, EV] = value->get_value().get_logical_shape().to_array_4D();
 
     if (B != BK || B != BV || S != SK || S != SV || E != EK || E != EV) {
-        throw std::invalid_argument("query, key, and value must have the same shape, except for the number of heads");
+        std::stringstream ss;
+        ss << "query, key, and value must have the same shape, except for the number of heads. Got shapes: ";
+        ss << "query=(" << B << ", " << H << ", " << S << ", " << E << "), ";
+        ss << "key=(" << BK << ", " << HK << ", " << SK << ", " << EK << "), ";
+        ss << "value=(" << BV << ", " << HV << ", " << SV << ", " << EV << ")";
+        throw std::invalid_argument(ss.str());
     }
 
     uint32_t G = H;            // number of KV groups, H for MHA mode
@@ -95,13 +132,19 @@ autograd::TensorPtr scaled_dot_product_attention(
     if (H != HK || H != HV) {
         // grouped query mode
         if (HV != HK) {
-            throw std::invalid_argument("query and key must have the same number of groups in grouped query mode");
+            std::stringstream ss;
+            ss << "query, key, and value must have the same number of groups in grouped query mode. Got: ";
+            ss << "query heads=" << H << ", key heads=" << HK << ", value heads=" << HV;
+            throw std::invalid_argument(ss.str());
         }
         G = HV;
         group_size = H / G;
         if (H % G != 0) {
-            throw std::invalid_argument(
-                "In grouped query mode, the number of heads must be divisible by the number of groups");
+            std::stringstream ss;
+            ss << "In grouped query mode, the number of query heads must be divisible by the number of key/value "
+                  "groups. Got: ";
+            ss << "heads=" << H << ", groups=" << G;
+            throw std::invalid_argument(ss.str());
         }
     }
 
@@ -151,27 +194,13 @@ autograd::TensorPtr scaled_dot_product_attention(
         ttnn::Tensor dL_dQ =
             group_shared_matmul(dL_dscaled_dot, key->get_value(), /*transpose_a=*/false, /*transpose_b=*/false);
 
-        // helper function to collect grads from the query groups associated
-        // with each key/value
-        auto sum_over_groups = [&](const auto& ungrouped_grads) {
-            if (G == H) {
-                // group size is 1, nothing to do
-                return ungrouped_grads;
-            }
-            // sum over groups:
-            // [B,H,S,E] -> [B*G,H/G,S,E] -> [B*G,1,S,E] -> [B,G,S,E]
-            auto grouped_grads = ttnn::reshape(ungrouped_grads, ttnn::Shape{B * G, H / G, S, E});
-            auto summed_grads = ttnn_fixed::sum_moreh(grouped_grads, /*dim=*/1, /*keep_dim=*/true);
-            return ttnn::reshape(summed_grads, ttnn::Shape{B, G, S, E});
-        };
-
         // dL_dK = Σ_g [dL_dscaled_dot^T @ query]
         ttnn::Tensor dL_dK = matmul(
             dL_dscaled_dot,
             query->get_value(),
             /*transpose_a=*/true,
             /*transpose_b=*/false);
-        dL_dK = sum_over_groups(dL_dK);  // no-op when G=H
+        dL_dK = sum_over_groups(dL_dK, G);  // no-op when G=H
 
         // dL_dV = Σ_g [attention_weights^T @ dL_dout]
         ttnn::Tensor dL_dV = matmul(
@@ -179,7 +208,7 @@ autograd::TensorPtr scaled_dot_product_attention(
             dL_dout,
             /*transpose_a=*/true,
             /*transpose_b=*/false);
-        dL_dV = sum_over_groups(dL_dV);  // no-op when G=H
+        dL_dV = sum_over_groups(dL_dV, G);  // no-op when G=H
 
         query->add_grad(dL_dQ);
         key->add_grad(dL_dK);
