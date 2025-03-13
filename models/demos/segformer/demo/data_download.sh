@@ -15,11 +15,7 @@ if ! command -v wget &> /dev/null; then
 fi
 
 
-if ! command -v unzip &> /dev/null; then
-    echo "unzip is not installed. Installing..."
-    sudo apt-get update
-    sudo apt-get install -y unzip
-fi
+# No need to check for 'unzip' anymore since we will use Python for unzipping
 
 
 ONEDRIVE_ZIP_LINK="https://tinyurl.com/4xtuxr3k"
@@ -45,8 +41,24 @@ fi
 echo "Verifying the downloaded file..."
 file "$OUTPUT_FILE"
 
-echo "Unzipping the downloaded file..."
-unzip "$OUTPUT_FILE" -d "models/demos/segformer/demo/"
+
+# Unzipping the downloaded file using Python's zipfile module
+echo "Unzipping the downloaded file using Python..."
+python -c "
+import zipfile
+import os
+
+zip_file = '$OUTPUT_FILE'
+output_dir = 'models/demos/segformer/demo/'
+
+if zipfile.is_zipfile(zip_file):
+    with zipfile.ZipFile(zip_file, 'r') as zip_ref:
+        zip_ref.extractall(output_dir)
+    print(f'Unzip complete: Files extracted to {output_dir}')
+else:
+    print('Not a valid zip file!')
+    exit(1)
+"
 
 if [ $? -eq 0 ]; then
     echo "Unzip complete: Files extracted to models/demos/segformer/demo/"
