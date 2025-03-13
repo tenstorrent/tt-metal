@@ -600,6 +600,7 @@ static OptimizedConvBlockConfig get_opt_block_config(
             shard_orientation,
             !mm_conv,
             true,
+            true,
             conv_config.act_block_h_override);
     }
     auto output_parallel_config = parallel_config;
@@ -1102,6 +1103,7 @@ ttnn::Tensor prepare_conv_weights(
             shard_orientation,
             !mm_conv,
             true,
+            true,
             conv_config.act_block_h_override);
     }
 
@@ -1203,6 +1205,7 @@ ttnn::Tensor prepare_conv_bias(
             compute_grid,
             shard_orientation,
             !mm_conv,
+            true,
             true,
             conv_config.act_block_h_override);
     }
