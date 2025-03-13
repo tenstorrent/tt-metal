@@ -249,7 +249,13 @@ def run_reduce_scatter_impl(
 def test_fabric_reduce_scatter(n300_mesh_device):
     torch.manual_seed(2005)
     dim = 3
-    input = torch.range(0, (32 * 160 * 4) - 1, dtype=torch.bfloat16).reshape((1, 1, 32, 160 * 4))
+    shard_height = 32
+    shard_width = 160
+    num_devices = n300_mesh_device.get_num_devices()
+    num_cores = 2
+    input = torch.range(0, (shard_height * shard_width * num_cores * num_devices) - 1, dtype=torch.bfloat16).reshape(
+        (1, 1, shard_height, shard_width * num_devices * num_cores)
+    )
     torch.set_printoptions(precision=10)
     n300_mesh_device.enable_async(True)
     sharded_mem_config = ttnn.create_sharded_memory_config(

@@ -62,11 +62,11 @@ void kernel_main() {
     constexpr uint32_t num_packets_total_per_device =
         (input_shard_cores_per_device * tiles_per_core_width + num_pages_per_packet - 1) / num_pages_per_packet;
 
-    constexpr uint32_t device_order[num_devices - 1] =
+    constexpr uint8_t device_order[num_devices - 1] =
         DEVICE_ORDER;  // this is code gen'd in the program factory using the defines
-    constexpr uint32_t receiver_core_for_device[num_devices][2] = RECEIVER_CORE_XY;
-    constexpr uint32_t input_core_xy[input_tensor_cores][2] = INPUT_CORE_XY;
-    constexpr uint32_t output_core_xy[ncores_output][2] = OUTPUT_CORE_XY;
+    constexpr uint8_t receiver_core_for_device[num_devices][2] = RECEIVER_CORE_XY;
+    constexpr uint8_t input_core_xy[input_tensor_cores][2] = INPUT_CORE_XY;
+    constexpr uint8_t output_core_xy[ncores_output][2] = OUTPUT_CORE_XY;
 
     uint32_t receiver_semaphore_address = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t local_semaphore_address = get_semaphore(get_arg_val<uint32_t>(rt_arg_idx++));
