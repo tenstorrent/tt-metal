@@ -60,9 +60,6 @@ jobs:
         with:
           submodules: recursive
           path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
-      - name: Enable performance mode
-        run: |
-          sudo cpupower frequency-set -g performance
       - uses: actions/download-artifact@v4
         with:
           name: ${{ inputs.build-artifact-name }}
