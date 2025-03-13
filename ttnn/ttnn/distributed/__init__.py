@@ -16,7 +16,6 @@ from .distributed import (
     get_pcie_device_ids,
     get_device_ids,
     create_mesh_device,
-    synchronize_devices,
     visualize_mesh_device,
     distribute,
 )
