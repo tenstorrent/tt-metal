@@ -109,14 +109,21 @@ class ModelArgs:
     ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
-        self.device_name = {0: "CPU", 1: "N150", 2: "N300", 4: "P150x4", 8: "T3K", 32: "TG"}[self.num_devices]
+        self.arch_name = ttnn.get_arch_name()
+        self.device_name = {
+            0: "CPU",
+            1: "P150" if self.arch_name == "blackhole" else "N150",
+            2: "P300" if self.arch_name == "blackhole" else "N300",
+            4: "P150x4",  # Config only exists in BH at the moment
+            8: "T3K",
+            32: "TG",
+        }[self.num_devices]
         self.model_name = "Unknown"  # Llama model name will be dependent on the checkpoint directory
         self.max_seq_len = max_seq_len
         self.max_batch_size = max_batch_size
         self.tile_size = 32
         self.is_70b = False
         self.from_hf_url = False  # updated below if true
-        self.arch_name = ttnn.get_arch_name()
         self.prefill_len_cutoff = 512 if self.arch_name == "blackhole" else 1024
         # TODO the following is parametrized for a vocab size of 128256 (used in LLama3). Should generalize for other models
         self.max_columns_per_device_lm_head = 128256 // 8 if self.arch_name == "blackhole" else 128256 // 4
