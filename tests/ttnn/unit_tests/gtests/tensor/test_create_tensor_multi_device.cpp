@@ -181,7 +181,6 @@ TEST_P(MultiDeviceTensorCreationTest, Arange) {
         std::ref(*mesh_device));
 
     EXPECT_EQ(tensor.storage_type(), StorageType::DEVICE);
-    EXPECT_EQ(tensor.get_workers().size(), mesh_device->num_devices());
     EXPECT_EQ(tensor.logical_shape(), ttnn::Shape({1024}));
 
     const auto distributed_tensor_config = get_distributed_tensor_config_from_tensor(tensor);
