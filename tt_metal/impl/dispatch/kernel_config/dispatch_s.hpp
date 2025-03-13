@@ -14,7 +14,7 @@ typedef struct dispatch_s_static_config {
     std::optional<uint32_t> mcast_go_signal_addr;
     std::optional<uint32_t> unicast_go_signal_addr;
     std::optional<uint32_t> distributed_dispatcher;
-    std::optional<uint32_t> worker_sem_base_addr;
+    std::optional<uint32_t> first_stream_used;
     std::optional<uint32_t> max_num_worker_sems;
     std::optional<uint32_t> max_num_go_signal_noc_data_entries;
 } dispatch_s_static_config_t;

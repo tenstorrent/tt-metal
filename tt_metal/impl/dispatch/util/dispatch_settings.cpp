@@ -117,8 +117,7 @@ DispatchSettings DispatchSettings::defaults(
 std::vector<std::string> DispatchSettings::get_errors() const {
     std::vector<std::string> msgs;
 
-    if (!prefetch_q_rd_ptr_size_ || !prefetch_q_pcie_rd_ptr_size_ || !dispatch_s_sync_sem_ || !dispatch_message_ ||
-        !other_ptrs_size) {
+    if (!prefetch_q_rd_ptr_size_ || !prefetch_q_pcie_rd_ptr_size_ || !dispatch_s_sync_sem_ || !other_ptrs_size) {
         msgs.push_back(fmt::format("configuration with_alignment() is a required\n"));
     }
 
@@ -190,9 +189,9 @@ void DispatchSettings::initialize(const DispatchSettings& other) {
 bool DispatchSettings::operator==(const DispatchSettings& other) const {
     return num_hw_cqs_ == other.num_hw_cqs_ && prefetch_q_rd_ptr_size_ == other.prefetch_q_rd_ptr_size_ &&
            prefetch_q_pcie_rd_ptr_size_ == other.prefetch_q_pcie_rd_ptr_size_ &&
-           dispatch_s_sync_sem_ == other.dispatch_s_sync_sem_ && dispatch_message_ == other.dispatch_message_ &&
-           other_ptrs_size == other.other_ptrs_size && prefetch_q_entries_ == other.prefetch_q_entries_ &&
-           prefetch_q_size_ == other.prefetch_q_size_ && prefetch_max_cmd_size_ == other.prefetch_max_cmd_size_ &&
+           dispatch_s_sync_sem_ == other.dispatch_s_sync_sem_ && other_ptrs_size == other.other_ptrs_size &&
+           prefetch_q_entries_ == other.prefetch_q_entries_ && prefetch_q_size_ == other.prefetch_q_size_ &&
+           prefetch_max_cmd_size_ == other.prefetch_max_cmd_size_ &&
            prefetch_cmddat_q_size_ == other.prefetch_cmddat_q_size_ &&
            prefetch_scratch_db_size_ == other.prefetch_scratch_db_size_ &&
            prefetch_d_buffer_size_ == other.prefetch_d_buffer_size_ && prefetch_d_pages_ == other.prefetch_d_pages_ &&
@@ -276,7 +275,6 @@ DispatchSettings& DispatchSettings::with_alignment(uint32_t l1_alignment) {
     this->prefetch_q_rd_ptr_size_ = sizeof(prefetch_q_ptr_type);
     this->prefetch_q_pcie_rd_ptr_size_ = l1_alignment - sizeof(prefetch_q_ptr_type);
     this->dispatch_s_sync_sem_ = DISPATCH_MESSAGE_ENTRIES * l1_alignment;
-    this->dispatch_message_ = DISPATCH_MESSAGE_ENTRIES * l1_alignment;
     this->other_ptrs_size = l1_alignment;
 
     return *this;
