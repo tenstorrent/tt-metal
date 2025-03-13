@@ -30,7 +30,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(
     // in1/inB - loaded to SrcA
 
     const bool reuse_a                      = ct_dim >= rt_dim;
-    const std::uint32_t replay_buf_prog_len = (reuse_a && unpA_partial_face) ? 12 : ((!reuse_a && unpB_partial_face) ? 12 : 6);
+    const std::uint32_t replay_buf_prog_len = (reuse_a && unpA_partial_face) ? 18 : ((!reuse_a && unpB_partial_face) ? 18 : 12);
     const std::uint32_t replay_buf_run_len  = replay_buf_prog_len / 2;
 
     if (reuse_a)
@@ -62,11 +62,16 @@ inline void _llk_unpack_AB_matmul_mop_config_(
                 if constexpr (kernel_broadcast_b == 1)
                 {
                     TTI_NOP;
+                    TTI_NOP;
+                    TTI_NOP;
+                    TTI_NOP;
                 }
                 else
                 {
-                    // THCON_SEC0_REG3_Base_address_ADDR32 =  THCON_SEC0_REG3_Base_address_ADDR32 +  SCRATCH_SEC0_val_ADDR32
-                    TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG3_Base_address_ADDR32);
+                    TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC0_REG3_Base_address_ADDR32);
+                    TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TILE_SIZE_A);
+                    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+                    TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC0_REG3_Base_address_ADDR32);
                 }
                 // Added to ensure WRCFG instruction has finished, since it takes 2 cycles.
                 TTI_NOP;
@@ -87,11 +92,16 @@ inline void _llk_unpack_AB_matmul_mop_config_(
                 if constexpr (kernel_broadcast_b == 1)
                 {
                     TTI_NOP;
+                    TTI_NOP;
+                    TTI_NOP;
+                    TTI_NOP;
                 }
                 else
                 {
-                    // THCON_SEC0_REG3_Base_cntx1_address_ADDR32 =  THCON_SEC0_REG3_Base_cntx1_address_ADDR32 +  SCRATCH_SEC0_val_ADDR32
-                    TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
+                    TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
+                    TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TILE_SIZE_A);
+                    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+                    TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
                 }
                 // Added to ensure WRCFG instruction has finished, since it takes 2 cycles.
                 TTI_NOP;
@@ -127,11 +137,16 @@ inline void _llk_unpack_AB_matmul_mop_config_(
                 if constexpr (kernel_broadcast_a == 1)
                 {
                     TTI_NOP;
+                    TTI_NOP;
+                    TTI_NOP;
+                    TTI_NOP;
                 }
                 else
                 {
-                    // THCON_SEC1_REG3_Base_address_ADDR32 =  THCON_SEC1_REG3_Base_address_ADDR32 +  SCRATCH_SEC0_val_ADDR32
-                    TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC1_REG3_Base_address_ADDR32);
+                    TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC1_REG3_Base_address_ADDR32);
+                    TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP_LO);
+                    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+                    TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC1_REG3_Base_address_ADDR32);
                 }
                 // Added to ensure WRCFG instruction has finished, since it takes 2 cycles.
                 TTI_NOP;
@@ -152,11 +167,16 @@ inline void _llk_unpack_AB_matmul_mop_config_(
                 if constexpr (kernel_broadcast_a == 1)
                 {
                     TTI_NOP;
+                    TTI_NOP;
+                    TTI_NOP;
+                    TTI_NOP;
                 }
                 else
                 {
-                    // THCON_SEC1_REG3_Base_cntx1_address_ADDR32 =  THCON_SEC1_REG3_Base_cntx1_address_ADDR32 +  SCRATCH_SEC0_val_ADDR32
-                    TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC1_REG3_Base_cntx1_address_ADDR32);
+                    TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC1_REG3_Base_cntx1_address_ADDR32);
+                    TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP_LO);
+                    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+                    TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC1_REG3_Base_cntx1_address_ADDR32);
                 }
                 // Added to ensure WRCFG instruction has finished, since it takes 2 cycles.
                 TTI_NOP;
@@ -270,19 +290,6 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
 
     TT_SETDMAREG(0, LOWER_HALFWORD(kt_dim), 0, LO_16(p_gpr_unpack::KT_DIM)); // store kt_dim to gpr for scaling tile size
 
-    // Write to scratch cfg register L1 address increment
-    if (reuse_a)
-    {
-        TTI_WRCFG(p_gpr_unpack::TILE_SIZE_A, 0, SCRATCH_SEC0_val_ADDR32);
-    }
-    else
-    {
-        TTI_MULDMAREG(0, p_gpr_unpack::TMP_LO, p_gpr_unpack::TILE_SIZE_B, p_gpr_unpack::KT_DIM);
-        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
-        TTI_WRCFG(p_gpr_unpack::TMP_LO, 0, SCRATCH_SEC0_val_ADDR32);
-    }
-    TTI_NOP;
-
     _llk_unpack_AB_matmul_mop_config_<kernel_broadcast_a, kernel_broadcast_b>(transpose != 0, ct_dim, rt_dim, kt_dim, unpA_partial_face, unpB_partial_face);
 }
 
@@ -309,6 +316,11 @@ inline void _llk_unpack_AB_matmul_(
 
     const bool reuse_a        = ct_dim >= rt_dim;
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
+
+    if (!reuse_a)
+    {
+        TTI_MULDMAREG(0, p_gpr_unpack::TMP_LO, p_gpr_unpack::TILE_SIZE_B, p_gpr_unpack::KT_DIM);
+    }
 
     for (uint t = 0; t < t_dim; t++)
     {
