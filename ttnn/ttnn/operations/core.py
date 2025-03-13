@@ -316,10 +316,12 @@ def to_torch(
     if ttnn.is_tensor_storage_on_device(tensor):
         tensor = ttnn.from_device(tensor, cq_id=cq_id)
 
+    # TODO: remove this once all integration is done
     if mesh_composer:
         if isinstance(mesh_composer, ttnn.MeshToTensor):
             return mesh_composer.compose(tensor)
         else:
+            assert isinstance(mesh_composer, ttnn.CppMeshToTensor)
             return ttnn.aggregate_tensor(tensor, mesh_composer).to_torch()
 
     if tensor.storage_type() == ttnn.DEVICE_STORAGE_TYPE:
