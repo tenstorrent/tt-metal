@@ -14,7 +14,7 @@
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/math.hpp>
 
-#include <tt-metalium/reflection.hpp>
+#include <tt_stl/reflection.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
 
 using namespace tt::constants;

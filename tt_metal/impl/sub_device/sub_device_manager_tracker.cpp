@@ -18,7 +18,7 @@
 #include <data_types.hpp>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
-#include <span.hpp>
+#include <tt_stl/span.hpp>
 
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 

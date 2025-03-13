@@ -13,7 +13,7 @@
 #include <string>
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/program_impl.hpp>
-#include <tt-metalium/reflection.hpp>
+#include <tt_stl/reflection.hpp>
 #include <typeindex>
 #include <unordered_map>
 

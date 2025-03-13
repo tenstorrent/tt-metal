@@ -9,11 +9,9 @@
 
 #include "core_coord.hpp"
 #include "hal.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 
 namespace tt::tt_metal {
-
-inline namespace v0 {
 
 class SubDevice {
 public:
@@ -39,7 +37,5 @@ private:
     // There is no remapping of logical coords
     std::array<CoreRangeSet, NumHalProgrammableCoreTypes> cores_;
 };
-
-}  // namespace v0
 
 }  // namespace tt::tt_metal

@@ -17,7 +17,7 @@
 #include "hal.hpp"
 #include "command_queue_interface.hpp"
 #include "sub_device_types.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 
 namespace tt {
 
@@ -35,23 +35,13 @@ size: bytes
 using MemoryBlockTable = std::vector<std::unordered_map<std::string, std::string>>;
 enum class BufferType;
 
-inline namespace v0 {
-
 class Buffer;
 class Program;
 class SubDevice;
 
-}  // namespace v0
-
 class CommandQueue;
 class TraceBuffer;
 struct TraceDescriptor;
-
-namespace detail {
-struct TraceDescriptor;
-}
-
-inline namespace v0 {
 
 class IDevice {
 public:
@@ -208,8 +198,6 @@ public:
 
     static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
 };
-
-}  // namespace v0
 
 template <typename T>
 inline T IDevice::get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const {

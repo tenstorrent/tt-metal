@@ -10,7 +10,6 @@ on:
           - Release
           - Debug
           - RelWithDebInfo
-          - CI
         default: "Release"
       extra-tag:
         required: true
@@ -42,6 +41,10 @@ on:
         default: false
       t3000-profiler:
         description: "T3000 profiler tests (requires tracy build)"
+        required: false
+        type: boolean
+        default: false
+      t3000-perplexity:
         required: false
         type: boolean
         default: false
@@ -96,3 +99,10 @@ jobs:
     with:
       extra-tag: ${{ inputs.extra-tag }}
     if: ${{ inputs.t3000-profiler }}
+  t3000-perplexity-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/t3000-perplexity-tests-impl.yaml
+    with:
+      extra-tag: ${{ inputs.extra-tag }}
+    if: ${{ inputs.t3000-perplexity }}
