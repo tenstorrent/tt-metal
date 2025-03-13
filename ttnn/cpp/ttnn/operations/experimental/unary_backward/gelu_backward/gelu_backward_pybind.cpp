@@ -4,8 +4,8 @@
 
 #include "cpp/pybind11/decorators.hpp"
 
-#include "ttnn/operations/experimental/unary_backward/unary_backward.hpp"
-#include "ttnn/operations/experimental/unary_backward/unary_backward_pybind.hpp"
+#include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward.hpp"
+#include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_pybind.hpp"
 
 #include <fmt/format.h>
 

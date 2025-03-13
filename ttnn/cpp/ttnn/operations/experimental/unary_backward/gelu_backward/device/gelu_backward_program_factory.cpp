@@ -98,9 +98,9 @@ GeluBackwardProgramFactory::cached_program_t GeluBackwardProgramFactory::create(
 
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        args.approximate == "tanh" ? "ttnn/cpp/ttnn/operations/experimental/unary_backward/device/gelu_backward/"
+        args.approximate == "tanh" ? "ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/"
                                      "kernels/compute/eltwise_bw_gelu_approx_tanh.cpp"
-                                   : "ttnn/cpp/ttnn/operations/experimental/unary_backward/device/gelu_backward/"
+                                   : "ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/"
                                      "kernels/compute/eltwise_bw_gelu_approx_none.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{
