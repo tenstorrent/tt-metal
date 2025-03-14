@@ -48,7 +48,6 @@ jobs:
     container:
       image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
       env:
-        TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ inputs.arch || 'wormhole_b0' }}
