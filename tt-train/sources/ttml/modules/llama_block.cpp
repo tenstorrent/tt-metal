@@ -4,8 +4,10 @@
 
 #include "llama_block.hpp"
 
-#include "core/tt_tensor_utils.hpp"
+#include "modules/grouped_query_attention.hpp"
+#include "modules/rotary_embedding.hpp"
 #include "ops/binary_ops.hpp"
+#include "ops/rope_op.hpp"
 #include "ops/unary_ops.hpp"
 
 namespace ttml::modules {
@@ -39,13 +41,18 @@ LlamaBlock::LlamaBlock(
     uint32_t embedding_size,
     uint32_t num_heads,
     uint32_t num_groups,
-    float dropout_prob,
-    const ops::RotaryEmbeddingParams* rope_params) {
+    const ops::RotaryEmbeddingParams& rope_params,
+    float dropout_prob) {
     m_mlp = std::make_shared<LlamaMLP>(embedding_size, dropout_prob);
     m_attention_norm = std::make_shared<RMSNormLayer>(embedding_size);
     m_mlp_norm = std::make_shared<RMSNormLayer>(embedding_size);
-    m_attention =
-        std::make_shared<GroupedQueryAttention>(embedding_size, num_heads, num_groups, dropout_prob, rope_params);
+    m_attention = std::make_shared<GroupedQueryAttention>(GQAConfig{
+        .embedding_dim = embedding_size,
+        .num_heads = num_heads,
+        .num_groups = num_groups,
+        .dropout_prob = dropout_prob,
+        .embedding = std::make_shared<RotaryEmbedding>(rope_params),
+    });
 
     create_name("llama_block");
     register_module(m_mlp, "mlp");

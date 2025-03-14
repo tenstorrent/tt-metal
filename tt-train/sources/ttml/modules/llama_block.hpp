@@ -38,8 +38,8 @@ public:
         uint32_t embedding_size,
         uint32_t num_heads,
         uint32_t num_groups,
-        float dropout_prob = 0.0F,
-        const ops::RotaryEmbeddingParams* rope_params = nullptr);
+        const ops::RotaryEmbeddingParams& rope_params,
+        float dropout_prob = 0.0F);
 
     autograd::TensorPtr operator()(const autograd::TensorPtr& input, const autograd::TensorPtr& mask);
 };
