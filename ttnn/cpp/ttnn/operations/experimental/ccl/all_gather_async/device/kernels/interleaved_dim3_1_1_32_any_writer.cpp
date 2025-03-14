@@ -50,6 +50,7 @@ void kernel_main() {
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
     uint32_t ring_size = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t num_tiles_per_chip = get_arg_val<uint32_t>(arg_idx++);
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_idx);
 
@@ -146,31 +147,21 @@ void kernel_main() {
 
     uint32_t tile_id = tile_id_start;
     uint32_t row = 0;
-    uint32_t total = 0;
-    if constexpr (!last_dim) {
-        total = tile_id_start;
-    }
-    while (total < tile_id_end) {
-        cb_wait_front(cb0_id, packet_size_in_pages);
+    for (uint32_t i = 0; i < num_tiles_per_chip; i += packet_size_in_pages) {
+        uint32_t num_pages_to_read = min(num_tiles_per_chip - i, packet_size_in_pages);
+        cb_wait_front(cb0_id, num_pages_to_read);
         size_t l1_read_addr = get_read_ptr(cb0_id);
-        uint32_t num_pages_to_read = std::min(tile_id_end - tile_id, packet_size_in_pages);
-        if constexpr (last_dim) {
-            num_pages_to_read = packet_size_in_pages;
-        }
-
-        uint32_t contig_pages_advanced = 1;  // always 1 for interleaved
-        for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
+        for (uint32_t j = 0; j < num_pages_to_read; j++) {
             uint64_t noc0_dest_noc_addr = get_noc_addr(tile_id, tensor0_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-            DPRINT << "j: " << j << "noc0_dest_noc_addr: " << noc0_dest_noc_addr << "tile_id: " << tile_id << "\n";
+            DPRINT << "\t[W][" << (uint32_t)my_chip_id << "] rest_tiles tile_id: " << tile_id
+                   << ", noc0_dest_noc_addr: " << noc0_dest_noc_addr << "\n";
             write_and_advance_local_read_address_for_fabric_write(
                 noc0_dest_noc_addr,
                 pkt_hdr_forward,
                 pkt_hdr_backward,
                 fabric_connection,
                 l1_read_addr,
-                contig_pages_advanced * tensor0_page_size);
-
-            total++;
+                tensor0_page_size);
             tile_id++;
             if constexpr (last_dim) {
                 if (tile_id % tile_cols_for_chip == 0) {
@@ -180,7 +171,7 @@ void kernel_main() {
             }
         }
         noc_async_writes_flushed();
-        cb_pop_front(cb0_id, packet_size_in_pages);
+        cb_pop_front(cb0_id, num_pages_to_read);
     }
 
     // 2. mcast output ready semaphore
