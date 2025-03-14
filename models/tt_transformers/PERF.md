@@ -13,7 +13,7 @@ This configuration uses bfp4 MLP FF1+FF3 for all models. **Batch_size=1 and pref
 | Model          | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) | TTFT (ms) |
 |----------------|--------|-----------|-----------|---------------|-----------|
 | Llama3.2-1B    | N150   | 88        | 98        | 84.5          | 58        |
-| Llama3.2-1B    | N300   | 91        | 98        | 100.5         | 54        |
+| Llama3.2-1B    | N300   | 88        | 98        | 100.5         | 54        |
 | Llama3.2-1B    | T3K    | 89        | 98        | 113.8         | 41        |
 | Llama3.2-1B    | TG     | 88        | 99        | 51.0          |           |
 | Llama3.2-3B    | N150   | 92        | 95        | 52.4          | 76        |
