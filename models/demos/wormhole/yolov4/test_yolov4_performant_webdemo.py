@@ -2,14 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
-import ttnn
 import time
+
+import pytest
 import torch
 from loguru import logger
 
-from models.utility_functions import run_for_wormhole_b0
+import ttnn
 from models.demos.yolov4.tests.yolov4_perfomant_webdemo import Yolov4Trace2CQ
+from models.utility_functions import run_for_wormhole_b0
 
 
 @run_for_wormhole_b0()
@@ -67,7 +68,62 @@ def test_run_yolov4_trace_2cqs_inference(
         inference_time_iter.append(t1 - t0)
     yolov4_trac2_2cq.release_yolov4_trace_2cqs_inference()
     inference_time_avg = round(sum(inference_time_iter) / len(inference_time_iter), 6)
-    # print(batch_size/inference_time_avg)
     logger.info(
         f"ttnn_yolov4_batch_size: {batch_size}, resolution: {resolution}. One inference iteration time (sec): {inference_time_avg}, FPS: {round(batch_size/inference_time_avg)}"
     )
+
+
+@run_for_wormhole_b0()
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 32768, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+)
+@pytest.mark.parametrize(
+    "batch_size, act_dtype, weight_dtype",
+    ((1, ttnn.bfloat16, ttnn.bfloat16),),
+)
+@pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
+@pytest.mark.parametrize(
+    "resolution",
+    [
+        (320, 320),
+        (640, 640),
+    ],
+)
+@pytest.mark.parametrize("test_duration", [60])
+def test_yolov4_stability(
+    device,
+    use_program_cache,
+    batch_size,
+    act_dtype,
+    weight_dtype,
+    enable_async_mode,
+    model_location_generator,
+    resolution,
+    test_duration,
+):
+    yolov4_trac2_2cq = Yolov4Trace2CQ()
+
+    yolov4_trac2_2cq.initialize_yolov4_trace_2cqs_inference(
+        device,
+        batch_size,
+        act_dtype,
+        weight_dtype,
+        resolution=resolution,
+        model_location_generator=None,
+    )
+
+    start_time = time.time()
+    last_log_time = start_time
+    while True:
+        curr_time = time.time()
+        if curr_time - start_time > test_duration:
+            break
+
+        if last_log_time + 30 < curr_time:
+            logger.info(f"Elapsed time: {curr_time - start_time:.1f} seconds")
+            last_log_time = curr_time
+
+        torch_input_tensor = torch.randn((1, *resolution, 3), dtype=torch.float32)
+        _ = yolov4_trac2_2cq.run_traced_inference(torch_input_tensor)
+
+    yolov4_trac2_2cq.release_yolov4_trace_2cqs_inference()
