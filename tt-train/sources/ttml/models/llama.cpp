@@ -59,7 +59,7 @@ Llama::Llama(const LlamaConfig& config) {
     blocks.reserve(num_blocks);
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
         blocks.push_back(std::make_shared<ttml::modules::LlamaBlock>(
-            embedding_dim, num_heads, num_groups, dropout_prob, &m_rope_params));
+            embedding_dim, num_heads, num_groups, m_rope_params, dropout_prob));
     }
     ln_fc = std::make_shared<ttml::modules::RMSNormLayer>(embedding_dim);
     fc = last_fc;
