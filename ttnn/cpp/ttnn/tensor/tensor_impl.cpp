@@ -611,7 +611,7 @@ Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking, ttnn::QueueId cq
         const auto tensor_size_bytes = shard_tensor_spec.compute_packed_buffer_size_bytes();
         shard_data_transfers.push_back(distributed::MeshCommandQueue::ShardDataTransfer{
             .shard_coord = coord,
-            .host_data = std::visit([](auto& b) { return reinterpret_cast<T*>(b.data()); }, buffers.back()),
+            .host_data = std::visit([](auto& b) { return reinterpret_cast<T*>(b.data()); }, buffers[buffer_idx]),
             .region = BufferRegion(0, tensor_size_bytes)});
         buffer_idx++;
     }

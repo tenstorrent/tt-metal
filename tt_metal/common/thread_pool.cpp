@@ -8,6 +8,8 @@
 #include <numa.h>
 #include <semaphore>
 
+#include <sched.h>
+#include <sys/resource.h>
 #include <tt-metalium/device.hpp>
 #include "tt_metal/common/thread_pool.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
@@ -73,6 +75,7 @@ namespace threading_primitives {
 // Data Structure used to queue and submit tasks to custom thread-pool backends.
 // Implemented as a statically allocated ring buffer that holds a task in each slot.
 class TaskQueue {
+    // Use boost spsc here.
 public:
     TaskQueue() {
         // Initialize ring buffer for traversal. Each node points to the subsequent node, except for the last one,
@@ -141,14 +144,30 @@ private:
 // logical base offset within a NUMA node when binding the worker thread.
 // The CPU selection algorithm is:
 // CPUs[numa_node][(physical_device_id + logical_cpu_offset) % num_cores_on_numa_node]
+inline void set_process_priority(int requested_priority) {
+    // Get priority for calling process
+    int process_priority = getpriority(PRIO_PROCESS, 0);
+    log_debug(tt::LogMetal, "Initial Process Priority: {}", process_priority);
+    if (process_priority == requested_priority) {
+        return;
+    }
+    // Set priority for calling process to user specified value
+    int rc = setpriority(PRIO_PROCESS, 0, requested_priority);
+    if (rc) {
+        log_warning(tt::LogMetal, "Unable to set process priority to {}, error code: {}", requested_priority, rc);
+    }
+}
+
 class NumaAwareExecutor {
 public:
     NumaAwareExecutor(uint32_t physical_device_id, uint32_t logical_cpu_offset) : tasks_() {
+        set_process_priority(0);
         worker = std::thread([this]() {
+            set_process_priority(0);
             std::function<void()> task;  // Task container for this thread
             while (true) {
                 {
-                    task_semaphore_.acquire();
+                    while (counter_.load(std::memory_order_acquire) == 0);
                     if (shutdown_) {
                         return;
                     }
@@ -164,9 +183,7 @@ public:
                 }
                 // Atomically decrement counter used to synchronize with main thread
                 // and notify the main thread if all tasks have completed
-                if (counter_.fetch_sub(1, std::memory_order_release) == 1) {
-                    counter_.notify_all();
-                }
+                counter_.fetch_sub(1, std::memory_order_release);
             }
         });
 
@@ -181,25 +198,21 @@ public:
         // Wait to ensure that the worker thread has completed.
         this->wait();
         shutdown_ = true;
-        task_semaphore_.release();
+        counter_.fetch_add(1, std::memory_order_relaxed);
         worker.join();
     }
 
     void enqueue(std::function<void()>&& f) {
         tasks_.push(std::move(f));  // Move the task directly into queue
-        task_semaphore_.release();  // Notify a worker that a task is available
         // Light-Weight counter increment to track the number of tasks in flight
-        // Need this because a counting_semaphore does not allow querying state
-        counter_++;
+        counter_.fetch_add(1, std::memory_order_relaxed);
     }
 
     std::exception_ptr wait() const {
         // Wait until all tasks have completed (counter_ == 0)
         // To avoid spinning, sleep until notified by the worker threads
         // or counter_ changes (this only happens with a spurious wakeup)
-        int current;
-        while ((current = counter_.load(std::memory_order_acquire)) > 0) {
-            counter_.wait(current, std::memory_order_relaxed);
+        while (counter_.load(std::memory_order_acquire) > 0) {
         }
         // Return the stored exception to the caller.
         // If an exception was caught by the worker thread
@@ -213,7 +226,6 @@ private:
     TaskQueue tasks_;
     std::thread worker;
     std::atomic<int> counter_ = 0;
-    std::counting_semaphore<> task_semaphore_{0};
     bool shutdown_ = false;
     mutable std::exception_ptr stored_exception_;
 };
