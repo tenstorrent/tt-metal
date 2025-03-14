@@ -56,7 +56,7 @@ const ttnn::TensorSpec TTNNFixtureWithTraceEnabledDevice::m_interleaved_1_3_1024
 // Binary Eltwise Op tests
 // ============================================================================
 
-class BinaryOpTraceRuntime : public distributed::test::TTNNFixtureWithTraceEnabledDevice,
+class BinaryOpTraceRuntime : public TTNNFixtureWithTraceEnabledDevice,
                              public testing::WithParamInterface<std::tuple<ttnn::TensorSpec, ttnn::TensorSpec>> {};
 
 TEST_P(BinaryOpTraceRuntime, Add) {
