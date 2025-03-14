@@ -75,7 +75,7 @@ tests/tt_metal/distributed/**/requirements*.txt @tenstorrent/metalium-developers
 
 # metal - fw, llks, risc-v
 tt_metal/hw/ckernels/ @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelickovicTT
-tt_metal/hw/cmake/sfpi-version.cmake @nathan-TT @pgkeller
+tt_metal/hw/cmake/sfpi-version.cmake @nathan-TT
 tt_metal/hw/firmware/riscv/common/dataflow_internals.h @davorchap @mywoodstock
 tt_metal/hw/firmware/src/*erisc* @aliuTT @ubcheema
 tt_metal/hw/inc/ethernet/ @aliuTT @ubcheema
