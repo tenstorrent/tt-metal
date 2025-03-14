@@ -115,7 +115,7 @@ std::unordered_map<chip_id_t, RouterEdge> MeshGraph::get_valid_connections(
                      .connected_chip_ids = std::vector<chip_id_t>(this->chip_spec_.num_eth_ports_per_direction, W),
                      .weight = 0}});
         }
-    } else if (fabric_type == FabricType::TORUS) {
+    } else if (fabric_type == FabricType::TORUS_1D) {
         // TODO: add support
     }
     return valid_connections;

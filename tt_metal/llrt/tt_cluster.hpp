@@ -41,6 +41,9 @@ enum class ClusterType : std::uint8_t {
     T3K = 3,     // Production T3K, built with 4 N300s
     GALAXY = 4,  // Production Galaxy, all chips with mmio
     TG = 5,      // Will be deprecated
+    P100 = 6,    // Blackhole single card, ethernet disabled
+    P150_X2 = 7,    // 2 Blackhole single card, ethernet connected
+    P150_X4 = 8,    // 4 Blackhole single card, ethernet connected
 };
 
 enum class EthRouterMode : uint32_t {
