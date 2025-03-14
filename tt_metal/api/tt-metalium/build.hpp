@@ -188,7 +188,7 @@ public:
     // Called to process the user defines
     virtual void process_defines(const std::function<void(const string& define, const string& value)>) const = 0;
     // Called to process the user compile time args
-    virtual void process_compile_time_args(const std::function<void(int i, uint32_t value)>) const = 0;
+    virtual void process_compile_time_args(const std::function<void(const std::vector<uint32_t>& values)>) const = 0;
 
     virtual ~JitBuildSettings() = default;
 };

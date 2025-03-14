@@ -163,10 +163,8 @@ std::string_view EthernetKernel::get_compiler_opt_level() const {
 
 std::string_view EthernetKernel::get_linker_opt_level() const { return this->get_compiler_opt_level(); }
 
-void Kernel::process_compile_time_args(const std::function<void(int i, uint32_t value)> callback) const {
-    for (int i = 0; i < this->compile_time_args_.size(); i++) {
-        callback(i, this->compile_time_args_[i]);
-    }
+void Kernel::process_compile_time_args(const std::function<void(const std::vector<uint32_t>& values)> callback) const {
+    callback(this->compile_time_args());
 }
 
 uint8_t DataMovementKernel::expected_num_binaries() const { return 1; }

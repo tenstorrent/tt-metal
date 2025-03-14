@@ -13,19 +13,11 @@ void kernel_main() {
     constexpr uint32_t src_cb_id = get_compile_time_arg_val(0);
     constexpr bool input_is_dram = get_compile_time_arg_val(1) == 1;
 
-#define src_stick_size_is_power_of_two get_compile_time_arg_val(2) == 1
-#if (src_stick_size_is_power_of_two)
+    constexpr bool src_stick_size_is_power_of_two = get_compile_time_arg_val(2) == 1;
     constexpr uint32_t src_log_base_2_of_page_size = get_compile_time_arg_val(3);
-    const InterleavedPow2AddrGen<input_is_dram> s = {
-        .bank_base_address = input_buffer_address,
-        .log_base_2_of_page_size = src_log_base_2_of_page_size,
-    };
-#else
-    const InterleavedAddrGen<input_is_dram> s = {
-        .bank_base_address = input_buffer_address,
-        .page_size = stick_size,
-    };
-#endif
+
+    const auto s = get_interleaved_addr_gen<input_is_dram, src_stick_size_is_power_of_two>(
+        input_buffer_address, stick_size, src_log_base_2_of_page_size);
 
     uint32_t end_id = start_id + num_sticks;
     for (uint32_t i = start_id; i < end_id; ++i) {
