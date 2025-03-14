@@ -39,13 +39,14 @@ void MAIN {
     sub_binary_tile_init();
 
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
-        cb_wait_front(cb_grad_out, per_core_block_size);
-        cb_wait_front(cb_input, per_core_block_size);
         cb_reserve_back(cb_grad_in, per_core_block_size);
 
-        tile_regs_acquire();
-        tile_regs_wait();
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
+            cb_wait_front(cb_grad_out, per_core_block_size);
+            cb_wait_front(cb_input, per_core_block_size);
+
+            tile_regs_acquire();
+            tile_regs_wait();
             copy_tile(cb_grad_out, i, 0);
             copy_tile(cb_input, i, 1);
             copy_tile(cb_input, i, 2);  // tile[2] = x
@@ -67,8 +68,9 @@ void MAIN {
             mul_binary_tile(1, 3);
 
             // tile[1] = tanh(sqrt(2/π) * (x + 0.044715 * x^3))
+            tanh_tile_init();
             tanh_tile(1);
-            copy_value(7, 1);  // save tanh to tile[7]
+            copy_value(4, 1);  // save tanh to tile[7]
 
             // CDF term: tile[1] = 0.5 * (1 + tanh(sqrt(2/π) * (x + 0.044715 * x^3)))
             load_immediate_value(3, 1.0f);
@@ -76,41 +78,41 @@ void MAIN {
             load_immediate_value(3, 0.5f);
             mul_binary_tile(1, 3);
 
-            // tile[7] = 1 - tanh^2
-            square_tile(7);
-            load_immediate_value(6, 1.0f);
-            sub_binary_tile(6, 7);
-            copy_value(7, 6);
+            // tile[4] = 1 - tanh^2
+            square_tile(4);
+            load_immediate_value(3, 1.0f);
+            sub_binary_tile(3, 4);
+            copy_value(4, 3);
 
-            // tile[5] = (1 + 0.134145 * x**2)
-            load_immediate_value(6, kKappa * 3.0f);
-            copy_value(5, 8);
-            square_tile(5);         // x^2
-            mul_binary_tile(5, 6);  // 0.134145 * x**2
-            load_immediate_value(6, 1.0f);
-            add_binary_tile(5, 6);  // 1 + 0.134145 * x**2
+            // tile[2] = (1 + 0.134145 * x**2)
+            load_immediate_value(3, kKappa * 3.0f);
+            square_tile(2);         // x^2
+            mul_binary_tile(2, 3);  // 0.134145 * x**2
+            load_immediate_value(3, 1.0f);
+            add_binary_tile(2, 3);  // 1 + 0.134145 * x**2
 
-            // PDF term: tile[5] = 0.5 * sqrt(2/π) * (1 + 0.134145 * x^2) * (1 - tanh^2)
-            mul_binary_tile(5, 7);
-            load_immediate_value(6, kBeta / 2.0f);
-            mul_binary_tile(5, 6);
+            // PDF term: tile[2] = 0.5 * sqrt(2/π) * (1 + 0.134145 * x^2) * (1 - tanh^2)
+            mul_binary_tile(2, 4);
+            load_immediate_value(3, kBeta / 2.0f);
+            mul_binary_tile(2, 3);
 
-            // tile[5] = x * pdf tern
-            copy_value(6, 2);
-            mul_binary_tile(5, 6);
+            // tile[2] = x * pdf tern
+            copy_value(3, 8);
+            mul_binary_tile(2, 3);
 
             // result: tile[1] = grad * (cdf_term + x * pdf_term)
-            add_binary_tile(1, 5);  // cdf_term + x * pdf_term
+            add_binary_tile(1, 2);  // cdf_term + x * pdf_term
             // tile[0] = grad * (cdf_term + x * pdf_term)
             mul_binary_tile(0, 1);
 
             pack_tile(0, cb_grad_in);
-        }
-        tile_regs_commit();
-        tile_regs_release();
+            tile_regs_commit();
+            tile_regs_release();
 
-        cb_pop_front(cb_grad_out, per_core_block_size);
-        cb_pop_front(cb_input, per_core_block_size);
+            cb_pop_front(cb_grad_out, per_core_block_size);
+            cb_pop_front(cb_input, per_core_block_size);
+        }
+
         cb_push_back(cb_grad_in, per_core_block_size);
     }
 }

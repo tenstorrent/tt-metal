@@ -32,7 +32,7 @@ def test_bw_gelu(input_shapes, approximate, device):
     golden_function = ttnn.get_golden_function(ttnn.experimental.gelu_bw)
     golden_tensor = golden_function(grad_data, in_data)
 
-    comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
+    comp_pass = compare_pcc([tt_output_tensor_on_device], golden_tensor)
     assert comp_pass
 
 
@@ -53,7 +53,7 @@ def test_bw_gelu_default(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.experimental.gelu_bw)
     golden_tensor = golden_function(grad_data, in_data)
 
-    comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
+    comp_pass = compare_pcc([tt_output_tensor_on_device], golden_tensor)
     assert comp_pass
 
 
