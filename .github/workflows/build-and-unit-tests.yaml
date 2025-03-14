@@ -93,7 +93,7 @@ jobs:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
         TT_METAL_SLOW_DISPATCH_MODE: 1
-        GTEST_OUTPUT: xml:generated/test_reports/
+        GTEST_OUTPUT: xml:/work/generated/test_reports/
         DONT_USE_VIRTUAL_ENVIRONMENT: 1
         GITHUB_ACTIONS: true
       volumes:
