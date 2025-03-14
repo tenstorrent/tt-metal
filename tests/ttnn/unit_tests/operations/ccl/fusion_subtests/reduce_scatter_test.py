@@ -254,24 +254,20 @@ def test_fabric_reduce_scatter(n300_mesh_device):
     shard_height = 32
     shard_width = 160
     num_devices = n300_mesh_device.get_num_devices()
-    num_cores = 2
-    torch_input_tensors = [
-        torch.range(0, shard_height * shard_width * num_cores - 1).reshape(1, 1, shard_height, shard_width * num_cores)
-        # torch.rand(1, 1, shard_height, shard_width * num_cores)
-    ]
-    for i in range(1, num_devices):
-        torch_input_tensors.append(
-            (i + 1)
-            * torch.range(0, shard_height * shard_width * num_cores - 1).reshape(torch_input_tensors[0].shape)
-            # torch.rand(1, 1, shard_height, shard_width * num_cores)
-        )
+    num_cores = 8
+    torch_input_tensors = []
 
-    print(torch_input_tensors)
+    for _ in range(num_devices):
+        for _ in range(num_cores):
+            for _ in range(shard_width // 32):
+                torch_input_tensors.append((len(torch_input_tensors) + 1) * torch.ones(1, 1, shard_height, 32))
     input = torch.cat(torch_input_tensors, dim=3)
+    print(input.shape)
 
-    output = torch_input_tensors[0]
-    for i in range(1, num_devices):
-        output += torch_input_tensors[i]
+    intermediate_outputs = torch.chunk(input, chunks=num_devices, dim=3)
+    output = torch.zeros(intermediate_outputs[0].shape)
+    for i in range(0, len(intermediate_outputs)):
+        output += intermediate_outputs[i]
 
     torch.set_printoptions(precision=10)
     n300_mesh_device.enable_async(True)
@@ -292,6 +288,7 @@ def test_fabric_reduce_scatter(n300_mesh_device):
         memory_config=sharded_mem_config,
         dtype=ttnn.bfloat8_b,
     )
+
     enable_persistent_fabric = True
     ccl_sub_device_crs = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
@@ -332,6 +329,7 @@ def test_fabric_reduce_scatter(n300_mesh_device):
     print(tt_torch_tensor)
     print("Torch tensor")
     print(output)
+
     eq, output_results = comp_pcc(tt_torch_tensor, output)
 
     print(f"PCC: {output_results}")
@@ -352,7 +350,8 @@ def test_fabric_reduce_scatter(n300_mesh_device):
     for index in torch.nonzero(differences == max_difference, as_tuple=False):
         first_max_diff_index = tuple(index.tolist())
         break
-
+    print("Tenstorrent", tt_torch_tensor[first_max_diff_index])
+    print("Torch", output[first_max_diff_index])
     if first_max_diff_index is not None:
         print(f"First index with maximum difference: {first_max_diff_index}")
         print(f"Maximum difference: {max_difference.item()}")
