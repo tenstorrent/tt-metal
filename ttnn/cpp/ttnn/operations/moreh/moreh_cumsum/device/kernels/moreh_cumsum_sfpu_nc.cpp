@@ -59,7 +59,6 @@ void MAIN {
             cb_pop_front(cb_in0, 1);
 
             // Add tiles in dst0 and dst1. Store result to dst0
-            // Add tiles in dst0 and dst1. Store result to dst0
             add_int32_tile_init();
             add_int32_tile(dst0, dst1);
             tile_regs_commit();

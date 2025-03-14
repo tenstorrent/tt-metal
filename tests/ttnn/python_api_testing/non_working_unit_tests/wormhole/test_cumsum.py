@@ -38,24 +38,12 @@ def run_moreh_cumsum_tests(
             tt_x,
             0,
         )
-        # tt_result = ttnn.typecast(tt_result, ttnn.uint32)
-
-        print(f"tt_result {ttnn.to_torch(tt_result)}")
-        print(f"ref_value {ref_value}")
-
-        passed, message = check_with_pcc(ref_value.reshape(1, 32, 1, 1), ttnn.to_torch(tt_result))
-        assert passed, f"{message, tt_x}"
-
-        tt_result = ttnn.to_layout(
-            tt_result,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
-        tt_result = ttnn.reshape(
-            tt_result,
-            (1, 32),
-        )
-
         tt_result = ttnn.to_torch(tt_result)
+        print(f"tt_result {tt_result.shape} {tt_result}")
+        print(f"ref_value {ref_value.shape} {ref_value}")
+
+        passed, message = check_with_pcc(ref_value, tt_result)
+        assert passed, f"{message, tt_x}"
 
     except Exception as e:
         logger.warning(f"Test execution crashed: {e}")
