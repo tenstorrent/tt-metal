@@ -419,7 +419,7 @@ operation::ProgramWithCallbacks slice_write_rm_sharded_input_multi_core(
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/slice_write/device/kernels/dataflow/"
+        "ttnn/cpp/ttnn/operations/experimental/slice_write/device/kernels/dataflow/"
         "slice_write_writer_interleaved.cpp",
         input_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args_vec));
