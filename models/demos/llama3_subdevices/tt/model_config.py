@@ -163,7 +163,7 @@ class TtModelArgs:
             self.use_prefetcher = True
 
         # Set up prefetcher stuff
-        _, _, self.pf_receiver_cores_list, _, _, _, _ = get_core_ranges(12, 2, False)
+        _, _, _, self.pf_receiver_cores_list, _, _, _, _ = get_core_ranges(12, 2, False)
 
         self.sub_core_grids = ttnn.CoreRangeSet(
             [
