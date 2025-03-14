@@ -112,7 +112,7 @@ jobs:
         if: ${{ failure() }}
         with:
           path: |
-            generated/test_reports/
+            /work/generated/test_reports/
 
       - name: Cleanup
         if: always()
