@@ -558,18 +558,21 @@ struct GatherConfig {
     std::vector<GatherRoute> routes;
 };
 
+// transfer = noc_x noc_y num_transfers
 void serialize_gather_header(const GatherHeader& header, std::vector<uint16_t>& output) {
     output.push_back(header.noc_x);
     output.push_back(header.noc_y);
     output.push_back(header.num_transfers);
 }
 
+// transfer = src_id dst_id size
 void serialize_gather_transfer(const GatherTransfer& transfer, std::vector<uint16_t>& output) {
     output.push_back(transfer.src_id);
     output.push_back(transfer.dst_id);
     output.push_back(transfer.size);
 }
 
+// route = header [tranfer0 transfer1 ... ]
 void serialize_gather_route(const GatherRoute& route, std::vector<uint16_t>& output) {
     serialize_gather_header(route.header, output);
     for (const auto& transfer : route.transfers) {
@@ -577,13 +580,13 @@ void serialize_gather_route(const GatherRoute& route, std::vector<uint16_t>& out
     }
 }
 
-// [num_routes] [route0] [route1] ...
+// config = len [route0 route1 ...]
 std::vector<uint16_t> serialize_gather_config(const GatherConfig& config) {
     std::vector<uint16_t> output;
     output.push_back(config.routes.size());
     for (const auto& route : config.routes) {
+        TT_FATAL(!route.transfers.empty(), "Expected all routes to have at least one transfer");
         serialize_gather_route(route, output);
-        tt::log_info("added route {}", output);
     }
     return output;
 }
@@ -591,8 +594,7 @@ std::vector<uint16_t> serialize_gather_config(const GatherConfig& config) {
 std::vector<std::vector<uint16_t>> serialize_gather_configs(const std::vector<GatherConfig>& configs) {
     std::vector<std::vector<uint16_t>> serialized_configs;
     for (const auto& config : configs) {
-        const auto c = serialize_gather_config(config);
-        serialized_configs.push_back(c);
+        serialized_configs.push_back(serialize_gather_config(config));
     }
 
     // Pad each core's config to the same length so we can shard it
@@ -602,6 +604,7 @@ std::vector<std::vector<uint16_t>> serialize_gather_configs(const std::vector<Ga
     }
     max_size = round((max_size + 1) / 2) * 2;  // Align to 32 bytes by adding a value - do we need to do this?
     for (std::vector<uint16_t>& config : serialized_configs) {
+        TT_ASSERT(config.size() <= max_size);
         config.resize(max_size, 0);
     }
 
@@ -663,14 +666,14 @@ GatherConfig regenerate_ordered(const GatherConfig& input) {
 
     // Sort transfers globally
     std::sort(all_transfers.begin(), all_transfers.end(), [](const RouteTransferPair& a, const RouteTransferPair& b) {
-        return a.transfer < b.transfer;  // Order by transfer criteria
+        return a.transfer < b.transfer;
     });
 
     // Rebuild GatherConfig with ordered transfers
     GatherConfig ordered_config;
     std::map<GatherHeader, std::vector<GatherTransfer>> grouped;
     for (const auto& rt : all_transfers) {
-        grouped[rt.header].push_back(rt.transfer);
+        grouped[rt.header].push_back(rt.transfer);  // This works because std::map is ordered
     }
 
     for (const auto& [header, transfers] : grouped) {
@@ -680,7 +683,45 @@ GatherConfig regenerate_ordered(const GatherConfig& input) {
         route.transfers = transfers;
         ordered_config.routes.push_back(route);
     }
+    tt::log_info("before routes? {} - after routes? {}", input.routes.size(), ordered_config.routes.size());
     return ordered_config;
+}
+
+GatherConfig reorder_gather_config(const GatherConfig& input) {
+    struct TransferInfo {
+        uint16_t noc_x;
+        uint16_t noc_y;
+        GatherTransfer transfer;
+    };
+    std::vector<TransferInfo> global_transfers;
+    for (const auto& route : input.routes) {
+        for (const auto& transfer : route.transfers) {
+            global_transfers.push_back({route.header.noc_x, route.header.noc_y, transfer});
+        }
+    }
+    TT_FATAL(!global_transfers.empty(), "Expected there to be at least one transfer");
+
+    GatherConfig output;
+    GatherRoute current_route;
+    current_route.header = {global_transfers[0].noc_x, global_transfers[0].noc_y, 0};
+    for (const auto& info : global_transfers) {
+        if (info.noc_x != current_route.header.noc_x || info.noc_y != current_route.header.noc_y) {
+            current_route.header.num_transfers = current_route.transfers.size();
+            TT_FATAL(current_route.header.num_transfers > 0, "Expected at least a single transfer");
+
+            output.routes.push_back(current_route);
+
+            current_route = GatherRoute();
+            current_route.header.noc_x = info.noc_x;
+            current_route.header.noc_y = info.noc_y;
+        }
+        current_route.transfers.push_back(info.transfer);
+    }
+    current_route.header.num_transfers = current_route.transfers.size();
+    TT_FATAL(current_route.header.num_transfers > 0, "Route should not have zero transfers");
+    output.routes.push_back(current_route);
+
+    return output;
 }
 
 std::tuple<
@@ -827,7 +868,7 @@ generate_halo_kernel_config_tensors(
 
     std::vector<GatherConfig> ordered_gather_configs;
     for (const auto& config : gather_configs) {
-        ordered_gather_configs.push_back(regenerate_ordered(config));
+        ordered_gather_configs.push_back(reorder_gather_config(config));
     }
 
     const auto serialized_gather_configs = serialize_gather_configs(ordered_gather_configs);
