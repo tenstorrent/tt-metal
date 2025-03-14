@@ -105,9 +105,6 @@ jobs:
     container:
       image: ${{ inputs.docker-image }}
       env:
-        TT_METAL_HOME: /work
-        PYTHONPATH: /work
-        LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
         GITHUB_ACTIONS: true
