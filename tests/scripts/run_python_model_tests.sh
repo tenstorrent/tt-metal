@@ -69,3 +69,7 @@ run_python_model_tests_slow_runtime_mode_wormhole_b0() {
     }'
     WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/experimental/functional_unet/tests/test_unet_model.py
 }
+
+run_python_model_tests_blackhole() {
+    pytest "tests/ttnn/integration_tests/resnet/test_ttnn_functional_resnet50_ci.py::test_resnet_batch_16"
+}
