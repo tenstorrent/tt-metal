@@ -8,9 +8,9 @@
 
 // split REDUCE across cores
 void kernel_main() {
-    uint32_t reduce_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(1));
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
-    constexpr uint32_t num_tiles_per_worker_bytes = get_compile_time_arg_val(7);
+    uint32_t reduce_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(0));
+    constexpr uint32_t num_blocks = get_compile_time_arg_val(1);
+    constexpr uint32_t num_tiles_per_worker_bytes = get_compile_time_arg_val(2);
 
     const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(0);
     const uint32_t mcast_dest_noc_start_y = get_arg_val<uint32_t>(1);
