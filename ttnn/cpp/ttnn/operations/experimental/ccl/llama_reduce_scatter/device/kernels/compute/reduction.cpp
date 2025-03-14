@@ -5,6 +5,25 @@
 #include <cstdint>
 #include "compute_kernel_api/eltwise_binary.h"
 
+void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+    for (uint16_t r = 0; r < 32; ++r) {
+        DPRINT << (uint)r << " : "
+               << TileSlice(
+                      cb_id,
+                      tile_id,
+                      SliceRange{
+                          .h0 = (uint8_t)r,
+                          .h1 = (uint8_t)(r + 1),
+                          .hs = (uint8_t)1,
+                          .w0 = (uint8_t)0,
+                          .w1 = (uint8_t)32,
+                          .ws = (uint8_t)1},
+                      true,
+                      untilize)
+               << ENDL();
+    }
+    DPRINT << ENDL();
+}
 namespace NAMESPACE {
 void MAIN {
     constexpr uint32_t accumulator_cb_id = get_compile_time_arg_val(0);
@@ -17,7 +36,6 @@ void MAIN {
     UNPACK(DPRINT << "waiting on cb" << accumulator_cb_id << " num tiles:" << num_devices << ENDL());
     cb_wait_front(accumulator_cb_id, num_devices);
 
-    PACK(DPRINT << "reserving back on cb" << output_tensor_cb_id << " tiles:" << tiles_per_core_width_output << ENDL());
     cb_reserve_back(output_tensor_cb_id, tiles_per_core_width_output);
 
     tile_regs_acquire();
@@ -30,12 +48,10 @@ void MAIN {
     tile_regs_wait();
     pack_tile(0, output_tensor_cb_id);
     tile_regs_release();
-
     UNPACK(DPRINT << "popping front from cb " << accumulator_cb_id << " tiles: " << num_devices << ENDL());
     cb_pop_front(accumulator_cb_id, num_devices);
-    PACK(DPRINT << "pushing back to cb " << output_tensor_cb_id << " tiles:" << tiles_per_core_width_output << ENDL());
     cb_push_back(output_tensor_cb_id, tiles_per_core_width_output);
-
+    PACK(print_full_tile(output_tensor_cb_id, 0, true));
     DPRINT << "Kernel finished" << ENDL();
 }
 }  // namespace NAMESPACE
