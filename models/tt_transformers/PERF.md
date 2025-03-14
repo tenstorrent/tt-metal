@@ -21,7 +21,7 @@ This configuration uses bfp4 MLP FF1+FF3 for all models. **Batch_size=1 and pref
 | Llama3.2-3B    | T3K    | 91        | 97        | 65.4          | 64        |
 | Llama3.2-3B    | TG     | 90        | 97        | 33.5          |           |
 | Llama3.1-8B    | N150   | 88        | 100       | 27.8          | 121       |
-| Llama3.1-8B    | N300   | 88        | 100       | 43.3          | 85        |
+| Llama3.1-8B    | N300   | 88        | 98        | 43.3          | 85        |
 | Llama3.1-8B    | T3K    | 88        | 100       | 62.3          | 69        |
 | Llama3.1-8B    | TG     | 86        | 98        | 29.5          |           |
 | Llama3.2-11B   | N300   | 88        | 99        | 42.8          | 84        |
