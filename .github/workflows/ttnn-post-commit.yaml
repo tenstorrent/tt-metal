@@ -106,8 +106,9 @@ jobs:
       image: ${{ inputs.docker-image }}
       env:
         ARCH_NAME: ${{ inputs.arch }}
-        LOGURU_LEVEL: INFO
         GITHUB_ACTIONS: true
+        LOGURU_LEVEL: INFO
+        PYTHONPATH: /work
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
