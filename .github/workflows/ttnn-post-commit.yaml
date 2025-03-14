@@ -96,7 +96,7 @@ jobs:
       env:
         ARCH_NAME: ${{ inputs.arch }}
         GITHUB_ACTIONS: true
-        LOGURU_LEVEL: INFO
+        LOGURU_LEVEL: DEBUG
         PYTHONPATH: /work
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
@@ -122,7 +122,7 @@ jobs:
       - name: Create conda environment
         run: |
           source /opt/conda/etc/profile.d/conda.sh
-          conda create -y -n metalium_env python=3.10 tt-metalium pytest -c conda-forge
+          conda create -y -n metalium_env python=3.10 tt-metalium multiprocess pytest -c conda-forge
 
       - name: Set ttnn fast runtime if exists in config
         if: ${{ matrix.test-group.fast_runtime_mode_off }}
