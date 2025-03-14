@@ -71,7 +71,8 @@ jobs:
           pip3 install $WHEEL_FILENAME
       - name: Enable Performance mode
         run: |
-          sudo apt-get install cpufrequtils
+          sudo apt-get update
+          sudo apt-get -y install cpufrequtils
           sudo cpupower frequency-set -g performance
       - name: Run performance regressions
         timeout-minutes: 70
