@@ -63,8 +63,8 @@ ttnn::Tensor group_shared_matmul(
     }
     // result will have shape (B, H, M, N)
     // we determine M,N based on the transpose options
-    auto M = !transpose_a ? S : E;
-    auto N = !transpose_b ? T : K;
+    auto M = transpose_a ? E : S;
+    auto N = transpose_b ? T : K;
 
     // - G != H:
     //   bcast G_tensor to groups in H_tensor then reshape back to H_tensor_shape:
@@ -73,7 +73,7 @@ ttnn::Tensor group_shared_matmul(
     auto G_tensor_batched = ttnn::reshape(G_tensor, ttnn::Shape{B * G, 1U, T, K});
 
     // repeat G_tensor to group size for each group (manual bcast)
-    ttnn::Tensor G_tensor_repeated = ttnn::repeat(G_tensor, ttnn::Shape{1U, H / G, 1U, 1U});
+    ttnn::Tensor G_tensor_repeated = ttnn::repeat(G_tensor_batched, ttnn::Shape{1U, H / G, 1U, 1U});
     auto bcasted_mm = matmul(H_tensor_grouped, G_tensor_repeated, transpose_a, transpose_b);
     auto reshaped_mm = ttnn::reshape(bcasted_mm, ttnn::Shape{B, H, M, N});
     return reshaped_mm;
