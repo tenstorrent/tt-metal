@@ -10,7 +10,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::operations::experimental {
 
 void SliceWriteDeviceOperation::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
@@ -79,4 +79,4 @@ operation::ProgramWithCallbacks SliceWriteDeviceOperation::create_program(
         input_tensor_a, output_tensor, this->slice_start, this->slice_end, this->step);
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::experimental

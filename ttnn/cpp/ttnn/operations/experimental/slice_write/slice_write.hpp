@@ -8,7 +8,7 @@
 
 namespace ttnn {
 namespace operations {
-namespace data_movement {
+namespace experimental {
 
 struct SliceWriteOperation {
     template <typename T, std::size_t N>
@@ -29,10 +29,11 @@ struct SliceWriteOperation {
         const std::array<T, N>& step);
 };
 
-}  // namespace data_movement
+}  // namespace experimental
 }  // namespace operations
-
-constexpr auto slice_write = ttnn::
-    register_operation_with_auto_launch_op<"ttnn::slice_write", ttnn::operations::data_movement::SliceWriteOperation>();
-
 }  // namespace ttnn
+
+namespace ttnn::experimental {
+constexpr auto slice_write = ttnn::
+    register_operation_with_auto_launch_op<"ttnn::slice_write", ttnn::operations::experimental::SliceWriteOperation>();
+}

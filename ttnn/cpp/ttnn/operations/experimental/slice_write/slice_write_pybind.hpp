@@ -11,7 +11,7 @@
 
 #include "slice_write.hpp"
 
-namespace ttnn::operations::data_movement::detail {
+namespace ttnn::operations::experimental::slice_write {
 namespace py = pybind11;
 
 void bind_slice_write(py::module& module) {
@@ -44,10 +44,10 @@ void bind_slice_write(py::module& module) {
 
     // TODO: implementing the array version and overloading the pybind with all the possible array sizes is better than
     // a vector with a fixed size default value
-    using OperationType = decltype(ttnn::slice_write);
+    using OperationType = decltype(ttnn::experimental::slice_write);
     ttnn::bind_registered_operation(
         module,
-        ttnn::slice_write,
+        ttnn::experimental::slice_write,
         doc,
         ttnn::pybind_overload_t{
             [](const OperationType& self,
@@ -66,4 +66,4 @@ void bind_slice_write(py::module& module) {
             py::arg("queue_id") = DefaultQueueId,
         });
 }
-}  // namespace ttnn::operations::data_movement::detail
+}  // namespace ttnn::operations::experimental::slice_write

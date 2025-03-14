@@ -14,7 +14,7 @@
 #include "cpp/ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::operations::experimental {
 
 // Specialization for uint32_t and N=4
 template <>
@@ -160,4 +160,4 @@ template ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
     const std::array<uint32_t, 4>& output_tensor_end,
     const std::array<uint32_t, 4>& step);
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::experimental

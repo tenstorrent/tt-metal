@@ -20,7 +20,7 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::detail {
+namespace ttnn::operations::experimental::detail {
 
 inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_slice_write_runtime_args_rm(
     const Tensor& input_tensor,
@@ -530,14 +530,14 @@ operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/slice_write/device/kernels/dataflow/"
+        "ttnn/cpp/ttnn/operations/experimental/slice_write/device/kernels/dataflow/"
         "slice_write_reader_interleaved.cpp",
         total_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args_vec));
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/slice_write/device/kernels/dataflow/"
+        "ttnn/cpp/ttnn/operations/experimental/slice_write/device/kernels/dataflow/"
         "slice_write_writer_interleaved.cpp",
         total_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args_vec));
@@ -584,7 +584,7 @@ operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
                     tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_sticks);
 
             const auto tensor_start =
-                static_cast<const ttnn::operations::data_movement::SliceWriteDeviceOperation*>(operation)->slice_start;
+                static_cast<const ttnn::operations::experimental::SliceWriteDeviceOperation*>(operation)->slice_start;
             auto all_runtime_args = get_slice_write_runtime_args_rm(
                 src_tensor,
                 dst_tensor,
@@ -638,4 +638,4 @@ operation::ProgramWithCallbacks slice_write_multi_core(
     TT_THROW("Unsupport input memory layout for slice_write operation");
 }
 
-}  // namespace ttnn::operations::data_movement::detail
+}  // namespace ttnn::operations::experimental::detail

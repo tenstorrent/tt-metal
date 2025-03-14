@@ -9,7 +9,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::operations::experimental {
 
 struct SliceWriteDeviceOperation {
     const ttnn::Shape slice_start;
@@ -28,4 +28,4 @@ struct SliceWriteDeviceOperation {
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
 };
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::experimental
