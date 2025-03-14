@@ -36,25 +36,29 @@ void issue_record_event_commands(
     std::vector<uint32_t> event_payload(DispatchSettings::EVENT_PADDED_SIZE / sizeof(uint32_t), 0);
     event_payload[0] = event_id;
 
-    uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
-    uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
-    // uint32_t packed_event_payload_sizeB =
-    //     align(sizeof(CQDispatchCmd) + num_command_queues * sizeof(CQDispatchWritePackedUnicastSubCmd), l1_alignment)
-    //     + (align(DispatchSettings::EVENT_PADDED_SIZE, l1_alignment) * num_command_queues);
-    // uint32_t packed_write_sizeB = align(sizeof(CQPrefetchCmd) + packed_event_payload_sizeB, pcie_alignment);
-
-    uint32_t num_worker_counters = sub_device_ids.size();
-    tt::tt_metal::DeviceCommandCalculator calculator;
+    const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
+    const uint32_t num_worker_counters = sub_device_ids.size();
     const uint32_t packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);
-    calculator.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
-        num_command_queues, DispatchSettings::EVENT_PADDED_SIZE, packed_write_max_unicast_sub_cmds, false);
-    // used for prefetch size
-    const uint32_t packed_event_payload_sizeB =
-        tt::align(calculator.write_offset_bytes() - sizeof(CQPrefetchCmd), l1_alignment);
+
+    // Calculate the packed event payload size
+    uint32_t packed_event_payload_sizeB;
+    {
+        tt::tt_metal::DeviceCommandCalculator event_payload_calculator;
+        event_payload_calculator.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
+            num_command_queues, DispatchSettings::EVENT_PADDED_SIZE, packed_write_max_unicast_sub_cmds, false);
+        packed_event_payload_sizeB =
+            tt::align(event_payload_calculator.write_offset_bytes() - sizeof(CQPrefetchCmd), l1_alignment);
+    }
+
+    // Calculate the actual command size
+    tt::tt_metal::DeviceCommandCalculator calculator;
     for (int i = 0; i < num_worker_counters; ++i) {
         calculator.add_dispatch_wait();
     }
-    // Extra event for notifying host
+
+    calculator.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
+        num_command_queues, DispatchSettings::EVENT_PADDED_SIZE, packed_write_max_unicast_sub_cmds, false);
+
     if (notify_host) {
         calculator.add_dispatch_write_linear_host_event(DispatchSettings::EVENT_PADDED_SIZE);
     }
