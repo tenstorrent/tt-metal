@@ -75,7 +75,7 @@ tests/tt_metal/distributed/**/requirements*.txt @tenstorrent/metalium-developers
 
 # metal - fw, llks, risc-v
 tt_metal/hw/ckernels/ @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelickovicTT
-tt_metal/hw/cmake/sfpi-version.cmake @nathan-TT @pgkeller
+tt_metal/hw/cmake/sfpi-version.cmake @nathan-TT
 tt_metal/hw/firmware/riscv/common/dataflow_internals.h @davorchap @mywoodstock
 tt_metal/hw/firmware/src/*erisc* @aliuTT @ubcheema
 tt_metal/hw/inc/ethernet/ @aliuTT @ubcheema
@@ -169,6 +169,7 @@ models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu
 models/demos/wormhole @uaydonat
 models/demos/t3000 @uaydonat
 models/tt_transformers @cglagovichTT @yieldthought @mtairum @uaydonat
+models/demos/llama3_subdevices @johanna-rock-tt @kpaigwar @avoraTT @sraizada-tt @djordje-tt
 models/tt_transformers/tt/generator*.py @cglagovichTT @yieldthought @mtairum @skhorasganiTT @uaydonat
 models/demos/qwen @sraizada-tt @mtairum @uaydonat @yieldthought
 models/demos/falcon7b_common @skhorasganiTT @djordje-tt @uaydonat
