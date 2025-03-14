@@ -108,6 +108,11 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
+      - name: Install Git
+        run: |
+          yum install -y git
+          git --version  # Verify installation
+
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
         with:
