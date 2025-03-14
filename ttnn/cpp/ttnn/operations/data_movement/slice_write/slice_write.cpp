@@ -36,19 +36,18 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
     bool ends_max = ends[0] == padded_output_shape[0] && ends[1] == padded_output_shape[1] &&
                     ends[2] == padded_output_shape[2] && ends[3] == padded_output_shape[3];
 
-    // if (no_step && starts_zero && ends_max) {
-    //     ttnn::copy(queue_id, input_tensor, output_tensor);
-    //     return output_tensor;
-    // }
     bool rm_only = !no_step && input_tensor.get_layout() == Layout::TILE;
     ttnn::Tensor input = input_tensor;
     if (rm_only) {
         input = ttnn::to_layout(input_tensor, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (IDevice*)nullptr);
     }
     TT_FATAL(
-        (!input_tensor.is_sharded()) || (input_tensor.is_sharded() && input_tensor.memory_config().memory_layout ==
-                                                                          TensorMemoryLayout::HEIGHT_SHARDED),
-        "Slice Write currently supports only Height Sharding for input tensors.");
+        (!input_tensor.is_sharded()) ||
+            (input_tensor.is_sharded() &&
+             input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) ||
+            (input_tensor.is_sharded() &&
+             input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED),
+        "Slice Write currently supports Interleaved or Height & Block Sharding for input tensors.");
 
     TT_FATAL(!output_tensor.is_sharded(), "Slice Write currently doesn't support sharded output tensors.");
     const bool tiled = input.get_layout() == Layout::TILE;
@@ -79,13 +78,6 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
         tt::log_debug("Empty tensor slice, returning unchanged output tensor");
         return output_tensor;
     }
-
-    // // Early exit if slice is a no-op
-    // if (padded_shape == padded_output_shape && no_step) {
-    //     ttnn::copy(queue_id, input_tensor, output_tensor);
-    //     tt::log_debug("Input Tensor same shape as output tensor. Performing copy");
-    //     return output_tensor;
-    // }
 
     for (int i = 0; i < 4; i++) {
         TT_FATAL(
