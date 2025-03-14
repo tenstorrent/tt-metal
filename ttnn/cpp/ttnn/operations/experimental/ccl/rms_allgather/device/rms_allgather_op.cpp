@@ -307,7 +307,6 @@ operation::ProgramWithCallbacks RMSAllGather::create_program(
                     printf("Running Post \n");
                     return frmsnorm_post_multi_core_sharded(
                         a,
-                        b,
                         gamma,
                         beta,
                         stats,

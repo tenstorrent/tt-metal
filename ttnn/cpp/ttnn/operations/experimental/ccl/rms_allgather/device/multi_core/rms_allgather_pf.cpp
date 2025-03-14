@@ -440,9 +440,6 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     }
     // defines
     std::map<string, string> compute_defines;
-    if (b) {
-        compute_defines["FUSE_PRE_ADD"] = "1";
-    }
     // compute kernel compile time args
     std::vector<uint32_t> all_to_all_except_top_compute_compile_time_args = {
         num_blocks_first_stage,
@@ -760,7 +757,6 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
 
 operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
     const Tensor& a,                           // input
-    const std::optional<const Tensor>& b,      // residual
     const std::optional<const Tensor>& gamma,  // weight
     const std::optional<const Tensor>& beta,   // bias
     const std::optional<const Tensor>& stats,  // stats
@@ -904,16 +900,10 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
 
     // get sharded addr
     auto in0_addr = a.buffer()->address();
-    uint32_t in1_addr;
     bool b_sharded;
-    if (b) {
-        in1_addr = b.value().buffer()->address();
-    } else {
-        in1_addr = 0;
-    }
     auto out_addr = output.buffer()->address();
     // b, gamma, beta addr
-    auto in1_dram_addr = b ? b.value().buffer()->address() : 0;
+    auto in1_dram_addr = 0;
     auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
     auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
     // num tiles for a, gamma, beta
@@ -1191,10 +1181,6 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
     // reader defines
     std::map<string, string> reader_mcast_sender_defines;
     std::map<string, string> reader_mcast_receiver_defines;
-    if (b) {
-        reader_mcast_sender_defines["FUSE_PRE_ADD"] = "1";
-        reader_mcast_receiver_defines["FUSE_PRE_ADD"] = "1";
-    }
     if (gamma.has_value()) {
         reader_mcast_sender_defines["FUSE_GAMMA"] = "1";
         reader_mcast_receiver_defines["FUSE_GAMMA"] = "1";
@@ -1405,11 +1391,6 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
                 .compile_args = writer_mcast_receiver_compile_time_args,
                 .defines = writer_defines});
     }
-    // defines
-    std::map<string, string> compute_defines;
-    if (b) {
-        compute_defines["FUSE_PRE_ADD"] = "1";
-    }
     // compute kernel compile time args
     std::vector<uint32_t> all_to_all_except_top_compute_compile_time_args = {
         0,
@@ -1450,8 +1431,7 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
-            .compile_args = all_to_all_except_top_compute_compile_time_args,
-            .defines = compute_defines});
+            .compile_args = all_to_all_except_top_compute_compile_time_args});
     if (num_none_all_to_all_workers > 0) {
         compute_kernels_id = CreateKernel(
             program,
@@ -1461,8 +1441,7 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
                 .math_fidelity = math_fidelity,
                 .fp32_dest_acc_en = fp32_dest_acc_en,
                 .math_approx_mode = math_approx_mode,
-                .compile_args = not_all_to_all_compute_compile_time_args,
-                .defines = compute_defines});
+                .compile_args = not_all_to_all_compute_compile_time_args});
     }
     // Create circular buffers
     // in0 sharded
@@ -1476,13 +1455,6 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
     uint32_t in1_cb_index = tt::CBIndex::c_1;
     CBHandle cb_in1 = 0;
     CBHandle cb_add_out = 0;
-    if (b) {
-        tt::tt_metal::CircularBufferConfig in1_cb_config =
-            tt::tt_metal::CircularBufferConfig(in1_CB_size, {{in1_cb_index, in_data_format}})
-                .set_page_size(in1_cb_index, in_single_tile_size)
-                .set_globally_allocated_address(*b.value().buffer());
-        cb_in1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in1_cb_config);
-    }
     // in2 scaler
     uint32_t in2_cb_index = tt::CBIndex::c_2;
     tt::tt_metal::CircularBufferConfig in2_cb_config =
