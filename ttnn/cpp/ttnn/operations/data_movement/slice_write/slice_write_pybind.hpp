@@ -17,10 +17,16 @@ namespace py = pybind11;
 void bind_slice_write(py::module& module) {
     auto doc =
         R"doc(
-            Returns a sliced tensor. If the input tensor is on host, the slice will be performed on host, and if its on device it will be performed on device.
+            Writes the input tensor to a slice of the output tensor.
+            Supports only Row Major Tensors.
+            Output Tensor must be interleaved.
+            Input Tensor can be interleaved, height sharded or block sharded.
+            Steps must be all ones.
+            Slicing along the last dimension is not supported.
 
             Args:
                 input_tensor: Input Tensor.
+                output_tensor: Output Tensor.
                 slice_start: Start indices of input tensor. Values along each dim must be < input_tensor_shape[i].
                 slice_end: End indices of input tensor. Values along each dim must be < input_tensor_shape[i].
                 slice_step: (Optional[List[int[tensor rank]]) Step size for each dim. Default is None, which works out be 1 for each dimension.
@@ -30,10 +36,10 @@ void bind_slice_write(py::module& module) {
                 queue_id (uint8, optional) command queue id
 
             Returns:
-                ttnn.Tensor: the output tensor.
+                ttnn.Tensor: the output tensor after writing the input tensor to it.
 
             Example:
-                >>> tensor = ttnn.slice_write
+                >>> ttnn.slice_write(ttnn_input_tensor, ttnn_output_tensor, output_start_indices, output_end_indices, strides)
                 )doc";
 
     // TODO: implementing the array version and overloading the pybind with all the possible array sizes is better than
