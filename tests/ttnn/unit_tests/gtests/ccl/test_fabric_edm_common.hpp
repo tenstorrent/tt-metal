@@ -2142,14 +2142,12 @@ void run_ring_all_gather_with_persistent_fabric(
         topology);
     log_info(tt::LogTest, "launching op");
 
-    ttnn::global_semaphore::MultiDeviceGlobalSemaphore multi_device_global_semaphore =
-        ttnn::global_semaphore::create_global_semaphore_with_same_address(
-            test_fixture.mesh_device_.get(),
-            devices[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
-            0,                             // initial value
-            tt::tt_metal::BufferType::L1,  // buffer type
-            10                             // attempts
-        );
+    GlobalSemaphore multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore(
+        test_fixture.mesh_device_.get(),
+        devices[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
+        0,                            // initial value
+        tt::tt_metal::BufferType::L1  // buffer type
+    );
 
     auto output_tensor = ttnn::operations::experimental::ccl::all_gather_async(
         input_mesh_tensor,
@@ -2599,18 +2597,16 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
 
     std::vector<tt::tt_metal::DeviceAddr> global_semaphore_addrs;
     global_semaphore_addrs.reserve(line_size + 1);
-    std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> global_semaphore_handles;
+    std::vector<GlobalSemaphore> global_semaphore_handles;
     for (size_t i = 0; i < line_size * 4; i++) {
-        auto global_semaphores = ttnn::global_semaphore::create_global_semaphore_with_same_address(
+        auto global_semaphores = ttnn::global_semaphore::create_global_semaphore(
             test_fixture.mesh_device_.get(),
             devices[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
-            0,                             // initial value
-            tt::tt_metal::BufferType::L1,  // buffer type
-            1000                           // attempts
+            0,                            // initial value
+            tt::tt_metal::BufferType::L1  // buffer type
         );
         global_semaphore_handles.push_back(global_semaphores);
-        auto global_semaphore_addr =
-            ttnn::global_semaphore::get_global_semaphore_address(global_semaphores.global_semaphores.at(0));
+        auto global_semaphore_addr = ttnn::global_semaphore::get_global_semaphore_address(global_semaphores);
         global_semaphore_addrs.push_back(global_semaphore_addr);
     }
 
