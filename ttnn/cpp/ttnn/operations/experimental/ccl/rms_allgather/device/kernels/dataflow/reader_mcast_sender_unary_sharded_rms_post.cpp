@@ -10,9 +10,6 @@
 void kernel_main() {
     uint32_t reduce_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(1));
     constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
-    constexpr uint32_t block_h = get_compile_time_arg_val(3);
-    constexpr uint32_t block_h_size_bytes = get_compile_time_arg_val(4);
-    constexpr uint32_t num_tiles_per_worker = get_compile_time_arg_val(6);
     constexpr uint32_t num_tiles_per_worker_bytes = get_compile_time_arg_val(7);
 
     const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(0);
@@ -51,10 +48,10 @@ void kernel_main() {
                                                noc_async_write_barrier();
                                            };
 
-    cb_wait_front(cb_stats_reduced, block_h);
-    cb_reserve_back(cb_ex_global, block_h);
+    cb_wait_front(cb_stats_reduced, 1);
+    cb_reserve_back(cb_ex_global, 1);
     global_reduce_sender(cb_stats_reduced, cb_ex_global);
-    cb_push_back(cb_ex_global, block_h);
-    cb_pop_front(cb_stats_reduced, block_h);
+    cb_push_back(cb_ex_global, 1);
+    cb_pop_front(cb_stats_reduced, 1);
     global_semaphore_set();
 }
