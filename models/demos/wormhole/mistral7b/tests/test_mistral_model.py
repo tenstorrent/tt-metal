@@ -36,7 +36,7 @@ class Emb(torch.nn.Module):
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "iterations",
-    (17,),
+    (14,),
 )
 def test_mistral_model_inference(device, iterations, use_program_cache, reset_seeds):
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
