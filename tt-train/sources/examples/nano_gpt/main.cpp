@@ -486,9 +486,7 @@ int main(int argc, char **argv) {
             },
             config.transformer_config);
 
-        wandbcpp::init(
-            {.project = config.project_name,
-             .name = run_name /* generate_run_name(run_name, config, add_time_to_name) */});
+        wandbcpp::init({.project = config.project_name, .name = generate_run_name(run_name, config, add_time_to_name)});
         wandbcpp::update_config({
             {"model", "transformer"},
             {"num_heads",
@@ -640,23 +638,26 @@ int main(int argc, char **argv) {
         [&](auto &&arg) {
             if constexpr (requires { arg.vocab_size; }) {
                 arg.vocab_size = round_up_to_tile(tokenizer->get_vocab_size(), (enable_tp ? num_devices : 1U) * 32U);
+            } else {
+                throw std::runtime_error(
+                    "Unsupported transformer configuration type: " + std::string(typeid(arg).name()));
             }
         },
         config.transformer_config);
 
     Model model = std::visit(
         [enable_tp](auto &&arg) -> Model {
-            if constexpr (std::is_same_v<decltype(arg), ttml::models::llama::LlamaConfig>) {
+            if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::llama::LlamaConfig>) {
                 return ttml::models::llama::create(arg);
-            } else if constexpr (std::is_same_v<decltype(arg), ttml::models::gpt2::TransformerConfig>) {
+            } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::gpt2::TransformerConfig>) {
                 if (enable_tp) {
                     return ttml::models::distributed::gpt2::create(arg);
                 } else {
                     return ttml::models::gpt2::create(arg);
                 }
             } else {
-                // This code path should never be reached
-                throw std::runtime_error("Unsupported transformer configuration type");
+                throw std::runtime_error(
+                    "Unsupported transformer configuration type: " + std::string(typeid(arg).name()));
             }
         },
         config.transformer_config);
