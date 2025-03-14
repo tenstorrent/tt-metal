@@ -12,6 +12,7 @@ runs:
     - name: Cleanup
       shell: bash
       run: |
+        cd /
         echo "pre rm"
         ls -al "${{ inputs.path }}"
         rm -rf "${{ inputs.path }}"
