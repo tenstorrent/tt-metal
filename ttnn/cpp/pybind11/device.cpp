@@ -551,12 +551,7 @@ void device_module(py::module& m_device) {
         Disables generation of memory allocation statistics reports in tt-metal
     )doc");
 
-    m_device.def(
-        "DumpDeviceMemoryState",
-        &tt::tt_metal::detail::DumpDeviceMemoryState,
-        py::arg().noconvert(),
-        py::arg("prefix").noconvert() = std::string(""),
-        R"doc(
+    constexpr std::string_view dump_device_memory_state_doc = R"doc(
         Generates reports to dump device memory state. Three reports are generated:
         - `<prefix>l1_usage_summary.csv` has a table with an entry for each program indicating the minimum largest free L1 block and size of largest L1 buffer that can be interleaved across available free L1 blocks
         - `<prefix>memory_usage_summary.csv` for each program there is an entry indicating total allocatable, allocated, free, and largest free block sizes for each DRAM and L1 bank
@@ -568,14 +563,23 @@ void device_module(py::module& m_device) {
         | device           | Device to dump memory state for  | ttnn.Device           |             | Yes      |
         | prefix           | Dumped report filename prefix    | str                   |             | No       |
         +------------------+----------------------------------+-----------------------+-------------+----------+
-    )doc");
-
+    )doc";
     m_device.def(
-        "GetMemoryView",
-        &tt::tt_metal::detail::GetMemoryView,
+        "DumpDeviceMemoryState",
+        &tt::tt_metal::detail::DumpDeviceMemoryState,
         py::arg().noconvert(),
+        py::arg("prefix").noconvert() = std::string(""),
+        dump_device_memory_state_doc.data());
+    m_device.def(
+        "DumpDeviceMemoryState",
+        [](MeshDevice* device, const std::string& prefix) {
+            tt::tt_metal::detail::DumpDeviceMemoryState(device, prefix);
+        },
         py::arg().noconvert(),
-        R"doc(
+        py::arg("prefix").noconvert() = std::string(""),
+        dump_device_memory_state_doc.data());
+
+    constexpr std::string_view get_memory_view_doc = R"doc(
         Populates MemoryView for BufferType [dram, l1, l1 small, trace]. Used when storing to disk is not an option.
 
         +------------------+----------------------------------+-----------------------+-------------+----------+
@@ -584,7 +588,21 @@ void device_module(py::module& m_device) {
         | device           | Device to dump memory state for  | ttnn.Device           |             | Yes      |
         | buffer_type      | Type of buffer for memory view   | ttnn.BufferType       |             | Yes      |
         +------------------+----------------------------------+-----------------------+-------------+----------+
-    )doc");
+    )doc";
+    m_device.def(
+        "GetMemoryView",
+        &tt::tt_metal::detail::GetMemoryView,
+        py::arg().noconvert(),
+        py::arg().noconvert(),
+        get_memory_view_doc.data());
+    m_device.def(
+        "GetMemoryView",
+        [](MeshDevice* device, const BufferType& buffer_type) {
+            return tt::tt_metal::detail::GetMemoryView(device, buffer_type);
+        },
+        py::arg().noconvert(),
+        py::arg().noconvert(),
+        get_memory_view_doc.data());
 
     constexpr std::string_view synchronize_device_doc = R"doc(
                 Synchronize the device with host by waiting for all operations to complete.
