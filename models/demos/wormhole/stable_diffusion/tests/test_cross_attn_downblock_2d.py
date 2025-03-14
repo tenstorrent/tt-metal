@@ -34,7 +34,16 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 )
 @pytest.mark.parametrize("temb", [[1, 1, 2, 1280]])
 def test_cross_attention_downblock_512x512(
-    reset_seeds, device, block_index, hidden_states, shard_layout, shard_end_core, shard_shape, out_channels, temb
+    reset_seeds,
+    device,
+    block_index,
+    hidden_states,
+    shard_layout,
+    shard_end_core,
+    shard_shape,
+    out_channels,
+    temb,
+    use_program_cache,
 ):
     # Initialize PyTorch component
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)

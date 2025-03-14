@@ -45,7 +45,7 @@ def torch_to_ttnn(input, device, layout=ttnn.TILE_LAYOUT):
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-def test_upsample2d_512x512(device, input_shape, shard_layout, shard_end_core, shard_shape, index):
+def test_upsample2d_512x512(device, input_shape, shard_layout, shard_end_core, shard_shape, index, use_program_cache):
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
 
