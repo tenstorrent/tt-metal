@@ -10,6 +10,8 @@
 #include <sstream>
 
 #include "autograd/tensor.hpp"
+#include "models/gpt2.hpp"
+#include "models/llama.hpp"
 #include "schedulers/lambda_scheduler.hpp"
 #include "schedulers/linear_scheduler.hpp"
 #include "schedulers/scheduler_base.hpp"
@@ -97,14 +99,46 @@ std::string generate_run_name(const std::string &run_name, const TrainingConfig 
     auto build_run_name = [&]() {
         auto &transformer_config = config.transformer_config;
 
-        auto is_nano_gpt_config = [&transformer_config]() {
-            return transformer_config.num_heads == 6 && transformer_config.embedding_dim == 384 &&
-                   transformer_config.num_blocks == 6;
+        auto is_nano_gpt_config = [&transformer_config]() -> bool {
+            return std::visit(
+                [](auto &&arg) -> bool {
+                    if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::gpt2::TransformerConfig>) {
+                        return arg.num_heads == 6 && arg.embedding_dim == 384 && arg.num_blocks == 6;
+                    } else if constexpr (std::
+                                             is_same_v<std::decay_t<decltype(arg)>, ttml::models::llama::LlamaConfig>) {
+                        return false;
+                    } else {
+                        return false;
+                    }
+                },
+                transformer_config);
         };
 
-        auto is_gpt2s_config = [&transformer_config]() {
-            return transformer_config.num_heads == 12 && transformer_config.embedding_dim == 768 &&
-                   transformer_config.num_blocks == 12;
+        auto is_gpt2s_config = [&transformer_config]() -> bool {
+            return std::visit(
+                [](auto &&arg) -> bool {
+                    if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::gpt2::TransformerConfig>) {
+                        return arg.num_heads == 12 && arg.embedding_dim == 768 && arg.num_blocks == 12;
+                    } else if constexpr (std::
+                                             is_same_v<std::decay_t<decltype(arg)>, ttml::models::llama::LlamaConfig>) {
+                        return false;
+                    } else {
+                        return false;
+                    }
+                },
+                transformer_config);
+        };
+
+        auto is_llama_config = [&transformer_config]() -> bool {
+            return std::visit(
+                [](auto &&arg) -> bool {
+                    if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::llama::LlamaConfig>) {
+                        return true;
+                    } else {
+                        return false;
+                    }
+                },
+                transformer_config);
         };
 
         auto batch_size = config.batch_size * config.gradient_accumulation_steps;
@@ -113,6 +147,8 @@ std::string generate_run_name(const std::string &run_name, const TrainingConfig 
             ss << "nano_gpt";
         } else if (is_gpt2s_config()) {
             ss << "gpt2s";
+        } else if (is_llama_config()) {
+            ss << "llama";
         } else {
             ss << "transformer";
         }
