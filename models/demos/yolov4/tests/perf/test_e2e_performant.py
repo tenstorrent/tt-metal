@@ -29,7 +29,7 @@ from models.utility_functions import run_for_wormhole_b0
         (640, 640),
     ],
 )
-def test_run_yolov4_trace_2cqs_inference(
+def test_e2e_performant(
     device,
     use_program_cache,
     batch_size,
