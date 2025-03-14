@@ -1,0 +1,15 @@
+vim ./tg-nightly-tests-impl.yaml
+vim ./code-analysis.yaml
+vim ./tg-quick.yaml
+vim ./build-artifact.yaml
+vim ./run-profiler-regression.yaml
+vim ./publish-release-image.yaml
+vim ./release-cleanup.yaml
+vim ./release-cleanup.yaml
+vim ./t3000-fast-tests-impl.yaml
+vim ./tgg-demo-tests.yaml
+vim ./tgg-unit-tests-impl.yaml
+vim ./tg-frequent-tests-impl.yaml
+vim ./perf-device-models-impl.yaml
+vim ./tt-train-post-commit.yaml
+vim ./tgg-frequent-tests-impl.yaml
