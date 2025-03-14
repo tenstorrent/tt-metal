@@ -467,6 +467,8 @@ void kernel_main() {
     fabric_endpoint_init<decltype(client_interface), RoutingType::ROUTING_TABLE>(client_interface, outbound_eth_chan);
     routing_table = reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(client_interface->routing_tables_l1_offset);
 
+    test_results[TT_FABRIC_MISC_INDEX] = 0xff000002;
+
 #ifndef FVC_MODE_PULL
     test_producer.register_with_routers<FVC_MODE_ENDPOINT>(dest_device & 0xFFFF, dest_device >> 16);
 #endif
@@ -506,6 +508,7 @@ void kernel_main() {
 #endif
             if (curr_packet_words_sent == curr_packet_size) {
                 curr_packet_words_sent = 0;
+                test_results[TT_FABRIC_MISC_INDEX]++;
                 packet_count++;
             }
         } else if (test_producer.packet_corrupted) {

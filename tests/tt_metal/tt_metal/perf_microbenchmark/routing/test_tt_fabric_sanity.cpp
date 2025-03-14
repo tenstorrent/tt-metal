@@ -1040,9 +1040,34 @@ typedef struct test_traffic {
         }
     }
 
+    void wait_for_tx_workers_to_finish() {
+        for (auto& tx_core : tx_virtual_cores) {
+            log_info(
+                LogTest,
+                "waiting for tx worker(virtual): {},{} on device: {} to finish",
+                tx_core.x,
+                tx_core.y,
+                tx_device->physical_chip_id);
+            while (true) {
+                auto tx_status =
+                    tt::llrt::read_hex_vec_from_core(tx_device->physical_chip_id, tx_core, test_results_address, 128);
+                log_info(LogTest, "worker status: {}", tx_status[TT_FABRIC_MISC_INDEX]);
+                if ((tx_status[TT_FABRIC_STATUS_INDEX] & 0xFFFF) != 0) {
+                    break;
+                }
+            }
+        }
+    }
+
     void wait_for_rx_workers_to_finish() {
         for (const auto& rx_device : rx_devices) {
             for (auto& rx_core : rx_virtual_cores) {
+                log_info(
+                    LogTest,
+                    "waiting for rx worker(virtual): {},{} on device: {} to finish",
+                    rx_core.x,
+                    rx_core.y,
+                    rx_device->physical_chip_id);
                 while (true) {
                     auto tx_status =
                         tt::llrt::read_hex_vec_from_core(rx_device->physical_chip_id, rx_core, test_results_address, 4);
@@ -1492,6 +1517,8 @@ int main(int argc, char **argv) {
     global_rng.seed(prng_seed);
     time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
+    log_info(LogTest, "seed: {}", prng_seed);
+
     try {
         test_board_t test_board(board_type);
         num_available_devices = test_board.get_num_available_devices();
@@ -1685,6 +1712,8 @@ int main(int argc, char **argv) {
 
         auto start = std::chrono::system_clock::now();
 
+        log_info(LogTest, "programs launched");
+
         // launch programs
         for (auto& [chip_id, test_device] : test_devices) {
             tt_metal::detail::LaunchProgram(test_device->device_handle, test_device->program_handle, false);
@@ -1697,10 +1726,20 @@ int main(int argc, char **argv) {
             }
         }
 
+        log_info(LogTest, "router sync complete");
+
         // notify tx controller to signal the tx workers
         for (auto& traffic : fabric_traffic) {
             traffic.notify_tx_controller();
         }
+
+        log_info(LogTest, "waiting for tx workers to finish");
+
+        for (auto& traffic : fabric_traffic) {
+            traffic.wait_for_tx_workers_to_finish();
+        }
+
+        log_info(LogTest, "waiting for rx workers to finish");
 
         // wait for rx kernels to finish
         for (auto& traffic : fabric_traffic) {
@@ -1712,6 +1751,8 @@ int main(int argc, char **argv) {
                 test_device->terminate_router_kernels();
             }
         }
+
+        log_info(LogTest, "waiting for program done");
 
         // wait for programs to exit
         for (auto& [chip_id, test_device] : test_devices) {
