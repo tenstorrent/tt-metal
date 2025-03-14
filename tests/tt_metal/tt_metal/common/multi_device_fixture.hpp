@@ -91,7 +91,7 @@ protected:
     using MeshShape = ::tt::tt_metal::distributed::MeshShape;
 
     enum class MeshDeviceType {
-        // 150 devices opened as 1x1 meshes.
+        // N150/P150 devices opened as 1x1 meshes.
         N150,
         P150,
         N300,
@@ -178,7 +178,7 @@ private:
     // Determines the mesh device type based on the number of devices.
     std::optional<MeshDeviceType> derive_mesh_device_type(size_t num_devices, tt::ARCH arch) {
         switch (num_devices) {
-            case 150: {
+            case 1: {
                 switch (arch) {
                     case tt::ARCH::WORMHOLE_B0: return MeshDeviceType::N150;
                     case tt::ARCH::BLACKHOLE: return MeshDeviceType::P150;
