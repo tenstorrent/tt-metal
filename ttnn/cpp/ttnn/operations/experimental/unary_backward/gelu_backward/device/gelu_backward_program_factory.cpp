@@ -93,9 +93,6 @@ GeluBackwardProgramFactory::cached_program_t GeluBackwardProgramFactory::create(
     unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
     unpack_to_dest_mode[src1_cb_index] = UnpackToDestMode::UnpackToDestFp32;
 
-    const std::map<std::string, std::string> unary_defines = {
-        {"BINOP_INIT", "add_binary_tile_init();"}, {"BINARY_SFPU_OP", "add_binary_tile(i*2, i*2+1);"}};
-
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         args.approximate == "tanh" ? "ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/"
@@ -103,11 +100,7 @@ GeluBackwardProgramFactory::cached_program_t GeluBackwardProgramFactory::create(
                                    : "ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/"
                                      "kernels/compute/eltwise_bw_gelu_approx_none.cpp",
         all_cores,
-        tt::tt_metal::ComputeConfig{
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            // .fp32_dest_acc_en = true,
-            .unpack_to_dest_mode = unpack_to_dest_mode,
-            .defines = unary_defines});
+        tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .unpack_to_dest_mode = unpack_to_dest_mode});
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -156,8 +149,8 @@ void GeluBackwardProgramFactory::override_runtime_arguments(
 
     const auto& input = tensor_args.input;
     const auto& grad_output = tensor_args.grad_output;
-    auto src0_buffer = input.buffer();
-    auto src1_buffer = grad_output.buffer();
+    auto src0_buffer = grad_output.buffer();
+    auto src1_buffer = input.buffer();
     auto dst_buffer = output.buffer();
 
     // Only update buffer addresses
