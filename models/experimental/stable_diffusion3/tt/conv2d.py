@@ -31,12 +31,17 @@ class TtConv2dParameters:
         out_channels: int,
         device,
     ) -> TtConv2dParameters:
-        weight = state["weight"].flatten(1, 3)
-        assert (weight.shape[-1] % 32) == 0
-        # pad_len = nearest_32(weight.shape[-1]) - weight.shape[-1]
-        # padding = torch.zeros(out_channels, pad_len, dtype=weight.dtype)
-        # padded_weight = torch.cat([weight, padding], dim=-1)
-        weight = weight.permute(1, 0).reshape(1, 1, -1, out_channels)
+        ## for torch.unfold
+        # weight = state["weight"].flatten(1, 3)
+        # assert (weight.shape[-1] % 32) == 0
+        # weight = weight.permute(1, 0).reshape(1, 1, -1, out_channels)
+        # print("w_mod", weight.shape)
+        ## for ttnn.fold
+        weight = state["weight"]
+        out_channels, in_c, kh, kw = weight.shape
+        weight = torch.permute(weight, (2, 3, 1, 0))
+        weight = torch.reshape(weight, (kh * kw * in_c, out_channels))
+        # print("w_mod", weight.shape)
 
         return cls(
             weight=ttnn.as_tensor(
@@ -82,26 +87,14 @@ class TtConv2d:
         )
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        host_x = ttnn.from_device(x)
-        torch_tensor = ttnn.to_torch(host_x, mesh_composer=ttnn.ConcatMeshToTensor(self._device, dim=0)).permute(
-            [0, 3, 1, 2]
-        )
+        batch_size, img_h, img_w, img_c = x.shape  # permuted input NHWC
+        patch_size = 2
+        stride_h = patch_size
+        stride_w = 1
 
-        unfolded_x = ttnn.as_tensor(
-            self._unfold(torch_tensor[0 : x.shape[0], ...]),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self._device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self._device),
-        )
-        unfolded_permuted_x = ttnn.permute(unfolded_x, (0, 2, 1))
-
-        # Need to pad the last dimension of x to be a multiple of a tile
-        assert (unfolded_permuted_x.shape[-1] % 32) == 0
-        # pad_len = nearest_32(x.shape[-1]) - x.shape[-1]
-        # padding = torch.zeros((x.shape[0], x.shape[1], pad_len), dtype=x.dtype, device=x.device)
-        # x = torch.cat([x, padding], dim=-1)
+        unfolded_permuted_x = ttnn.fold(x, stride_h, stride_w)
+        folded_shape = unfolded_permuted_x.shape
+        unfolded_permuted_x = ttnn.to_layout(unfolded_permuted_x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
 
         out = ttnn.linear(
             unfolded_permuted_x,
@@ -112,5 +105,9 @@ class TtConv2d:
             compute_kernel_config=self.compute_kernel_config,
             core_grid=ttnn.CoreGrid(y=8, x=8),
         )
+
+        out = ttnn.to_layout(out, layout=ttnn.ROW_MAJOR_LAYOUT)
+        seq_len = out.shape[-2] // batch_size
+        out = ttnn.reshape(out, (batch_size, 1, seq_len, -1))
 
         return out
