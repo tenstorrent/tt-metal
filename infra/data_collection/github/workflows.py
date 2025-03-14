@@ -281,7 +281,7 @@ def get_tests_from_test_report_path(test_report_path):
 
     # Special case: Handle ctest: the report root is <testsuite>, not <testsuites>
     if report_root.tag == "testsuite":
-        logger.debug("Root tag is testsuite, found ctest xml")
+        logger.info("Root tag is testsuite, found ctest xml")
         tests = []
         # ctest timestamp format is not the same as pytest/gtest
         default_timestamp = datetime.strptime(report_root.attrib["timestamp"], "%Y-%m-%dT%H:%M:%S")
