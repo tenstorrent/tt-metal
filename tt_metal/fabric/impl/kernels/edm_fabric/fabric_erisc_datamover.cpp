@@ -1136,6 +1136,10 @@ void __attribute__((noinline)) init_local_sender_channel_worker_interfaces(
     std::array<tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS>&
         local_sender_channel_worker_interfaces,
     std::array<size_t, NUM_SENDER_CHANNELS>& local_sender_flow_control_semaphores) {
+    // manual unrol because previously, going from having this in a loop to unrolling this would
+    // lead to a performance regression. Having these unrolled is needed to enable some performance optimizations
+    // because setup will differ in that each will be a different type. Keeping them unrolled here let's us
+    // stay safe from perf regression due to weirdness of codegen.
     {
         auto connection_live_semaphore_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_connection_live_semaphore_addresses[0]);
@@ -1157,6 +1161,20 @@ void __attribute__((noinline)) init_local_sender_channel_worker_interfaces(
             connection_worker_info_ptr,
             reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_flow_control_semaphores[1]),
             reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr));
+    }
+    if constexpr (NUM_SENDER_CHANNELS > 2) {
+        {
+            auto connection_live_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(
+                local_sender_connection_live_semaphore_addresses[2]);
+            auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
+                local_sender_connection_info_addresses[2]);
+            connection_worker_info_ptr->edm_rdptr = 0;
+            new (&local_sender_channel_worker_interfaces[2])
+                tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>(
+                    connection_worker_info_ptr,
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_flow_control_semaphores[2]),
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr));
+        }
     }
 }
 
