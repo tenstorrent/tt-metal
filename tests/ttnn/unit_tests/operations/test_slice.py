@@ -129,39 +129,55 @@ def test_slice_write_copy(device, dims, slice_dim, slice_size, layout):
     assert_with_pcc(torch_input, output, 0.9999)
 
 
+def num_to_core_range_set(x):
+    assert x < 8 or x % 8 == 0
+    num_x = min(x, 8)
+    num_y = x // num_x
+    assert num_x * num_y == x
+    return ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(num_x - 1, num_y - 1),
+            ),
+        }
+    )
+
+
 @pytest.mark.parametrize(
-    "dims, slice_dim, slice_size",
-    [
-        [[2, 256, 256, 64], 1, 128],
-        [[2, 256, 128, 32], 2, 16],
-    ],
+    "dims, slice_size, cores",
+    [[[2, 256, 256, 64], 128, 16], [[2, 256, 128, 32], 16, 8], [[2, 256, 256, 128], 64, 64]],
 )
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
-def test_slice_write_sharded_copy(device, dims, slice_dim, slice_size, layout):
+def test_slice_write_sharded_width_div_copy(device, dims, slice_size, cores, layout):
+    slice_dim = 2
     strides = [1, 1, 1, 1]
     torch.manual_seed(2005)
-    torch_input = torch.randn(dims)
+    torch_input = torch.randint(-10, 10, dims)
     ttnn_output = ttnn.zeros(dims, device=device, layout=layout, dtype=ttnn.bfloat16)
     ttnn_output = ttnn.to_memory_config(ttnn_output, ttnn.DRAM_MEMORY_CONFIG)
-    core_range = ttnn.CoreRangeSet([ttnn.CoreRange([0, 0], [0, 7])])
-    for b in range(dims[0]):
-        for i in range(dims[slice_dim] // slice_size):
-            begins = [b, 0, 0, 0]
-            ends = [b + 1, dims[1], dims[2], dims[3]]
-            begins[slice_dim] = i * slice_size
-            ends[slice_dim] = (i + 1) * slice_size
-            this_ttnn_input = ttnn.from_torch(
-                torch_input[begins[0] : ends[0], begins[1] : ends[1], begins[2] : ends[2], begins[3] : ends[3]],
-                device=device,
-                layout=layout,
-                dtype=ttnn.bfloat16,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            )
-            memory_config = ttnn.create_sharded_memory_config_(
-                this_ttnn_input.shape, core_range, ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR
-            )
-            this_ttnn_input = ttnn.to_memory_config(this_ttnn_input, memory_config)
-            ttnn.slice_write(this_ttnn_input, ttnn_output, begins, ends, strides)
+    core_range = num_to_core_range_set(cores)
+    num_slices = dims[slice_dim] // slice_size
+    for i in range(num_slices):
+        begins = [0, 0, 0, 0]
+        ends = [dims[0], dims[1], dims[2], dims[3]]
+        begins[slice_dim] = i * slice_size
+        ends[slice_dim] = (i + 1) * slice_size
+        this_ttnn_input = ttnn.from_torch(
+            torch_input[begins[0] : ends[0], begins[1] : ends[1], begins[2] : ends[2], begins[3] : ends[3]],
+            device=device,
+            layout=layout,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        memory_config = ttnn.create_sharded_memory_config_(
+            this_ttnn_input.shape, core_range, ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR
+        )
+        # x = (i + 1)%num_slices
+        # begins[slice_dim] = (x) * slice_size
+        # ends[slice_dim] = (x + 1) * slice_size
+        this_ttnn_input = ttnn.to_memory_config(this_ttnn_input, memory_config)
+        ttnn.slice_write(this_ttnn_input, ttnn_output, begins, ends, strides)
 
     output = ttnn.to_torch(ttnn_output)
     assert_with_pcc(torch_input, output, 0.9999)

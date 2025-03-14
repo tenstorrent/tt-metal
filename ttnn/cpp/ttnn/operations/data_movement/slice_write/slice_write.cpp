@@ -36,10 +36,10 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
     bool ends_max = ends[0] == padded_output_shape[0] && ends[1] == padded_output_shape[1] &&
                     ends[2] == padded_output_shape[2] && ends[3] == padded_output_shape[3];
 
-    if (no_step && starts_zero && ends_max) {
-        ttnn::copy(queue_id, input_tensor, output_tensor);
-        return output_tensor;
-    }
+    // if (no_step && starts_zero && ends_max) {
+    //     ttnn::copy(queue_id, input_tensor, output_tensor);
+    //     return output_tensor;
+    // }
     bool rm_only = !no_step && input_tensor.get_layout() == Layout::TILE;
     ttnn::Tensor input = input_tensor;
     if (rm_only) {
@@ -80,12 +80,12 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
         return output_tensor;
     }
 
-    // Early exit if slice is a no-op
-    if (padded_shape == padded_output_shape && no_step) {
-        ttnn::copy(queue_id, input_tensor, output_tensor);
-        tt::log_debug("Input Tensor same shape as output tensor. Performing copy");
-        return output_tensor;
-    }
+    // // Early exit if slice is a no-op
+    // if (padded_shape == padded_output_shape && no_step) {
+    //     ttnn::copy(queue_id, input_tensor, output_tensor);
+    //     tt::log_debug("Input Tensor same shape as output tensor. Performing copy");
+    //     return output_tensor;
+    // }
 
     for (int i = 0; i < 4; i++) {
         TT_FATAL(
