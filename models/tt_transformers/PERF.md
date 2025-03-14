@@ -8,32 +8,37 @@ Also note that all the performance metrics below were taken for a maximum genera
 
 ## Performance
 
-This configuration uses bfp4 MLP FF1+FF3 for all models. **Batch_size=1 and prefill_length is 128 tokens.**
+This configuration uses bfp4 MLP FF1+FF3 for all models. **Batch_size=1 (per DP group) and prefill_length is 128 tokens.**
 
-| Model          | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) | TTFT (ms) |
-|----------------|--------|-----------|-----------|---------------|-----------|
-| Llama3.2-1B    | N150   | 88        | 98        | 84.5          | 58        |
-| Llama3.2-1B    | N300   | 88        | 98        | 100.5         | 54        |
-| Llama3.2-1B    | T3K    | 89        | 98        | 113.8         | 41        |
-| Llama3.2-1B    | TG     | 88        | 99        | 51.0          |           |
-| Llama3.2-3B    | N150   | 92        | 95        | 52.4          | 76        |
-| Llama3.2-3B    | N300   | 92        | 97        | 65.3          | 56        |
-| Llama3.2-3B    | T3K    | 91        | 97        | 65.4          | 64        |
-| Llama3.2-3B    | TG     | 90        | 97        | 33.5          |           |
-| Llama3.1-8B    | N150   | 88        | 100       | 27.8          | 121       |
-| Llama3.1-8B    | N300   | 88        | 98        | 43.3          | 85        |
-| Llama3.1-8B    | T3K    | 88        | 100       | 62.3          | 69        |
-| Llama3.1-8B    | TG     | 86        | 98        | 29.5          |           |
-| Llama3.2-11B   | N300   | 88        | 99        | 42.8          | 84        |
-| Llama3.2-11B   | T3K    | 87        | 99        | 61.2          | 75        |
-| Llama3.2-11B   | TG     | 86        | 98        | 29.5          |           |
-| Llama3.1-70B   | T3K    | 97        | 100       | 16.3          | 182       |
-| Llama3.1-70B   | TG     | 95        | 100       | 12.7          |           |
-| Qwen2.5-7B     | N300   | 80        | 96        | 37.9          |           |
-| Qwen2.5-72B    | T3K    | 98        | 100       | 12.8          |           |
-| Phi3.5-mini    | N150   |           |           | 43.2          | 98        |
-| Phi3.5-mini    | N300   |           |           | 57.8          | 62        |
-| Phi3.5-mini    | T3K    |           |           | 48.8          | 51        |
+| Model          | Device     | Top-1 (%) | Top-5 (%) | Speed (t/s/u) | TTFT (ms) |
+|----------------|------------|-----------|-----------|---------------|-----------|
+| Llama3.2-1B    | N150       | 88        | 98        | 84.5          | 58        |
+| Llama3.2-1B    | N300       | 88        | 98        | 100.5         | 54        |
+| Llama3.2-1B    | T3K        | 89        | 98        | 113.8         | 41        |
+| Llama3.2-1B    | T3K  (DP=4)|           |           | 83.5          | 19        |
+| Llama3.2-1B    | T3K  (DP=8)|           |           | 63.9          | 19        |
+| Llama3.2-1B    | TG         | 88        | 99        | 51.0          |           |
+| Llama3.2-3B    | N150       | 92        | 95        | 52.4          | 76        |
+| Llama3.2-3B    | N300       | 92        | 97        | 65.3          | 56        |
+| Llama3.2-3B    | T3K        | 91        | 97        | 65.4          | 64        |
+| Llama3.2-3B    | TG         | 90        | 97        | 33.5          |           |
+| Llama3.1-8B    | N150       | 88        | 100       | 27.8          | 121       |
+| Llama3.1-8B    | N300       | 88        | 98        | 43.3          | 85        |
+| Llama3.1-8B    | T3K        | 88        | 100       | 62.3          | 69        |
+| Llama3.1-8B    | T3K  (DP=4)|           |           | 39.6          | 57        |
+| Llama3.1-8B    | T3K  (DP=8)|           |           | 24.9          | 86        |
+| Llama3.1-8B    | TG         | 86        | 98        | 29.5          |           |
+| Llama3.2-11B   | N300       | 88        | 99        | 42.8          | 84        |
+| Llama3.2-11B   | T3K        | 87        | 99        | 61.2          | 75        |
+| Llama3.2-11B   | TG         | 86        | 98        | 29.5          |           |
+| Llama3.1-70B   | T3K        | 97        | 100       | 16.3          | 182       |
+| Llama3.1-70B   | TG         | 95        | 100       | 12.7          |           |
+| Llama3.1-70B   | TG   (DP=4)|           |           | 14.8          | 189       |
+| Qwen2.5-7B     | N300       | 80        | 96        | 37.9          |           |
+| Qwen2.5-72B    | T3K        | 98        | 100       | 12.8          |           |
+| Phi3.5-mini    | N150       |           |           | 43.2          | 98        |
+| Phi3.5-mini    | N300       |           |           | 57.8          | 62        |
+| Phi3.5-mini    | T3K        |           |           | 48.8          | 51        |
 
 
 ## Accuracy
