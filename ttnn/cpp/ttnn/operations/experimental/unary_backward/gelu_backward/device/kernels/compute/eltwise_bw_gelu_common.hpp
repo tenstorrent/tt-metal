@@ -65,10 +65,10 @@ void llk_math_eltwise_binary_sfpu_copy_value(uint dst_index0, uint32_t dst_index
 
 inline void load_immediate_value_init() { MATH(_llk_math_load_imm_sfpu_init_()); }
 
-// Load immediate value (val) to the destination register
+// Load immediate value (val) to the destination register dst_index
 inline void load_immediate_value(uint dst_index, float val) { MATH(llk_math_eltwise_unary_load_imm(val, dst_index)); }
 
-// Copy value from one destination register to another
+// Copy value from dst_index1 destination register to dst_index0
 inline void copy_value(uint dst_index0, uint32_t dst_index1) {
     MATH(llk_math_eltwise_binary_sfpu_copy_value(dst_index0, dst_index1));
 }
