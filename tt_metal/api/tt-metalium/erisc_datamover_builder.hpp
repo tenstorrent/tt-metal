@@ -171,7 +171,8 @@ public:
 
         const FabricEriscDatamoverConfig& config,
         bool enable_persistent_mode,
-        bool build_in_worker_connection_mode = false);
+        bool build_in_worker_connection_mode = false,
+        bool dateline_connection = false);
 
     static FabricEriscDatamoverBuilder build(
         tt::tt_metal::IDevice* device,
@@ -181,7 +182,8 @@ public:
         chip_id_t peer_chip_id,
         const FabricEriscDatamoverConfig& config,
         bool enable_persistent_mode,
-        bool build_in_worker_connection_mode = false);
+        bool build_in_worker_connection_mode = false,
+        bool dateline_connection = false);
 
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_worker_channel() const;
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc) const;
@@ -251,6 +253,7 @@ public:
     size_t firmware_context_switch_interval = default_firmware_context_switch_interval;
     bool enable_first_level_ack = false;
     bool fuse_receiver_flush_and_completion_ptr = true;
+    bool dateline_connection = false;
 };
 
 }  // namespace tt::tt_fabric

@@ -262,7 +262,6 @@ struct PacketHeaderBase {
 };
 
 struct PacketHeader : public PacketHeaderBase<PacketHeader> {
-    static constexpr uint8_t default_high_vc_distance = 0;
     ChipSendType chip_send_type;
     RoutingFields routing_fields;
     // Sort of hack to work-around DRAM read alignment issues that must be 32B aligned
@@ -313,18 +312,15 @@ public:
 };
 
 struct LowLatencyRoutingFields {
-    static constexpr uint32_t FIELD_WIDTH = 3;
-    static constexpr uint32_t FIELD_MASK = 0b111;
-    static constexpr uint32_t PATH_ROUTING_FIELD_MASK = 0b011;
-    static constexpr uint32_t VC_FIELD_MASK = 0b100;
-    static constexpr uint32_t NOOP = 0b000;
-    static constexpr uint32_t WRITE_ONLY = 0b001;
-    static constexpr uint32_t FORWARD_ONLY = 0b010;
-    static constexpr uint32_t WRITE_AND_FORWARD = 0b011;
+    static constexpr uint32_t FIELD_WIDTH = 2;
+    static constexpr uint32_t FIELD_MASK = 0b11;
+    static constexpr uint32_t NOOP = 0b00;
+    static constexpr uint32_t WRITE_ONLY = 0b01;
+    static constexpr uint32_t FORWARD_ONLY = 0b10;
+    static constexpr uint32_t WRITE_AND_FORWARD = 0b11;
     static constexpr uint32_t MAX_NUM_ENCODINGS = sizeof(uint32_t) * CHAR_BIT / FIELD_WIDTH;
-    static constexpr uint32_t FWD_ONLY_FIELD = 0x92492492;
-    static constexpr uint32_t WR_ONLY_FIELD = 0x49249249;
-    static constexpr uint32_t HIGH_VC_FIELD = 0x24924924;
+    static constexpr uint32_t FWD_ONLY_FIELD = 0xAAAAAAAA;
+    static constexpr uint32_t WR_ONLY_FIELD = 0x55555555;
     uint32_t value;
 };
 
@@ -341,10 +337,7 @@ private:
         // the 3rd chip, we will write only Together this means the final encoding is 0b011010
         return (LowLatencyRoutingFields::FWD_ONLY_FIELD &
                 ((1 << (distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH) - 1)) |
-               (LowLatencyRoutingFields::WRITE_ONLY << (distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH) |
-               (LowLatencyRoutingFields::HIGH_VC_FIELD
-                << ((distance_in_hops - 1) >> 1) *
-                       LowLatencyRoutingFields::FIELD_WIDTH);  // Flip to high VC at the middle of the path
+               (LowLatencyRoutingFields::WRITE_ONLY << (distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH);
     }
     inline static uint32_t calculate_chip_multicast_routing_fields_value(
         const MulticastRoutingCommandHeader& chip_multicast_command_header) {
@@ -362,11 +355,7 @@ private:
                // of readability of the packet header
                ((LowLatencyRoutingFields::WR_ONLY_FIELD &
                  ((1 << (chip_multicast_command_header.range_hops) * LowLatencyRoutingFields::FIELD_WIDTH) - 1))
-                << ((chip_multicast_command_header.start_distance_in_hops - 1) *
-                    LowLatencyRoutingFields::FIELD_WIDTH)) |
-               (LowLatencyRoutingFields::HIGH_VC_FIELD
-                << ((distance_in_hops - 1) >> 1) *
-                       LowLatencyRoutingFields::FIELD_WIDTH);  // Flip to high VC at the middle of the path
+                << ((chip_multicast_command_header.start_distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH));
     }
 
 public:

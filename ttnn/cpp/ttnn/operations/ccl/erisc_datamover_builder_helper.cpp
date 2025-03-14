@@ -51,6 +51,10 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     bool build_in_worker_connection_mode,
     Topology topology) :
     device_sequence(device_sequence), programs(program_sequence) {
+    if (topology == Topology::Ring) {
+        TT_FATAL(device_sequence.size() > 2, "Ring topology only supports more than 2 devices");
+    }
+
     static constexpr std::size_t edm_buffer_size =
         tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
         sizeof(tt::tt_fabric::PacketHeader);
@@ -110,6 +114,11 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                 [dest_device](const CoreCoord& core) { return dest_device->is_active_ethernet_core(core, true); });
 
             TT_ASSERT(local_link_cores.size() == remote_link_cores.size());
+            bool dateline = false;
+            if (src_device->id() == device_sequence.back()->id() &&
+                dest_device->id() == device_sequence.front()->id()) {
+                dateline = true;
+            }
 
             edm_builders_forward_direction[src_device->id()].reserve(local_link_cores.size());
             edm_builders_backward_direction[dest_device->id()].reserve(local_link_cores.size());
@@ -128,7 +137,8 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                         dest_device->id(),
                         config,
                         enable_persistent_mode,
-                        build_in_worker_connection_mode));
+                        build_in_worker_connection_mode,
+                        dateline));
 
                 log_trace(
                     tt::LogOp,
@@ -144,7 +154,8 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                         src_device->id(),
                         config,
                         enable_persistent_mode,
-                        build_in_worker_connection_mode));
+                        build_in_worker_connection_mode,
+                        dateline));
             }
         };
 
@@ -204,6 +215,14 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     bool build_in_worker_connection_mode,
     Topology topology) :
     device_sequence({local_device}), programs({program}) {
+    if (topology == Topology::Ring) {
+        TT_FATAL(
+            forward_device.has_value() && backward_device.has_value(),
+            "RING topology requires both forward and backward devices to be specified");
+        TT_FATAL(
+            forward_device.value() != backward_device.value(),
+            "Ring topology requires different forward and backward devices");
+    }
     static constexpr std::size_t edm_buffer_size =
         tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
         sizeof(tt::tt_fabric::PacketHeader);
