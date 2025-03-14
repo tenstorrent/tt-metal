@@ -121,6 +121,7 @@ jobs:
 
       - name: Create conda environment
         run: |
+          source /opt/conda/etc/profile.d/conda.sh
           conda create -y -n metalium_env python=3.10 tt-metalium pytest -c conda-forge
           conda activate metalium_env
 
