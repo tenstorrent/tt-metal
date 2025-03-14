@@ -21,17 +21,18 @@ from tt_metal.tools.profiler.common import (
 def profile_command(test_command, output_folder, name_append, collect_noc_traces):
     currentEnvs = dict(os.environ)
     currentEnvs["TT_METAL_DEVICE_PROFILER"] = "1"
-    if collect_noc_traces:
-        currentEnvs["TT_METAL_DEVICE_PROFILER_NOC_EVENTS"] = "1"
-        currentEnvs["TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH"] = os.path.join(
-            os.path.abspath(output_folder), ".logs"
-        )
 
     options = ""
     if output_folder:
         options += f"-o {output_folder}"
     if name_append:
         options += f" -n {name_append}"
+    if collect_noc_traces:
+        options += f" --collect-noc-traces "
+        currentEnvs["TT_METAL_DEVICE_PROFILER_NOC_EVENTS"] = "1"
+        currentEnvs["TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH"] = os.path.join(
+            os.path.abspath(output_folder), ".logs"
+        )
     opProfilerTestCommand = f"python3 -m tracy -v -r -p {options} -m {test_command}"
     subprocess.run([opProfilerTestCommand], shell=True, check=False, env=currentEnvs)
 
