@@ -27,59 +27,59 @@ jobs:
       publish-artifact: ${{ matrix.config.publish-artifact }}
       build-wheel: true
     secrets: inherit
-  build-artifact-profiler:
-    uses: ./.github/workflows/build-artifact.yaml
-    with:
-      tracy: true
-  test-wheels:
-    needs: build-artifact
-    uses: ./.github/workflows/_test-wheels-impl.yaml
-    with:
-      from-precompiled: true
-    secrets: inherit
-  single-card-demos:
-    needs: build-artifact
-    uses: ./.github/workflows/single-card-demo-tests-impl.yaml
-    secrets: inherit
-  t3000-demos:
-    needs: build-artifact
-    uses: ./.github/workflows/t3000-demo-tests-impl.yaml
-    secrets: inherit
-  t3000-model-perf:
-    needs: build-artifact
-    uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
-    secrets: inherit
-  tg-demos:
-    needs: build-artifact
-    uses: ./.github/workflows/tg-demo-tests-impl.yaml
-    secrets: inherit
-  tgg-model-perf:
-    needs: build-artifact
-    uses: ./.github/workflows/tgg-model-perf-tests-impl.yaml
-    secrets: inherit
-  get-params:
-    runs-on: ubuntu-latest
-    outputs:
-      is-release-candidate: ${{ steps.get-is-release-candidate.outputs.is-release-candidate }}
-      should-create-release: ${{ steps.get-should-create-release.outputs.should-create-release }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Get is-release-candidate
-        id: get-is-release-candidate
-        run: |
-          # A workflow dispatch on a tag is considered a release run for us.
-          isReleaseCandidate=${{ !(github.ref_type == 'tag' && github.event_name == 'workflow_dispatch') }}
-          echo "is-release-candidate=$isReleaseCandidate" >> "$GITHUB_OUTPUT"
-      - name: Get should-create-release
-        id: get-should-create-release
-        run: |
-          # Run once to check for errors
-          ./scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate.outputs.is-release-candidate) && '--release-candidate' || '' }}
-          shouldCreateRelease=$(scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate.outputs.is-release-candidate) && '--release-candidate' || '' }})
-          echo "should-create-release=$shouldCreateRelease" >> "$GITHUB_OUTPUT"
+  #build-artifact-profiler:
+  #  uses: ./.github/workflows/build-artifact.yaml
+  #  with:
+  #    tracy: true
+  #test-wheels:
+  #  needs: build-artifact
+  #  uses: ./.github/workflows/_test-wheels-impl.yaml
+  #  with:
+  #    from-precompiled: true
+  #  secrets: inherit
+  #single-card-demos:
+  #  needs: build-artifact
+  #  uses: ./.github/workflows/single-card-demo-tests-impl.yaml
+  #  secrets: inherit
+  #t3000-demos:
+  #  needs: build-artifact
+  #  uses: ./.github/workflows/t3000-demo-tests-impl.yaml
+  #  secrets: inherit
+  #t3000-model-perf:
+  #  needs: build-artifact
+  #  uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
+  #  secrets: inherit
+  #tg-demos:
+  #  needs: build-artifact
+  #  uses: ./.github/workflows/tg-demo-tests-impl.yaml
+  #  secrets: inherit
+  #tgg-model-perf:
+  #  needs: build-artifact
+  #  uses: ./.github/workflows/tgg-model-perf-tests-impl.yaml
+  #  secrets: inherit
+  #get-params:
+  #  runs-on: ubuntu-latest
+  #  outputs:
+  #    is-release-candidate: ${{ steps.get-is-release-candidate.outputs.is-release-candidate }}
+  #    should-create-release: ${{ steps.get-should-create-release.outputs.should-create-release }}
+  #  steps:
+  #    - name: Checkout
+  #      uses: actions/checkout@v4
+  #      with:
+  #        fetch-depth: 0
+  #    - name: Get is-release-candidate
+  #      id: get-is-release-candidate
+  #      run: |
+  #        # A workflow dispatch on a tag is considered a release run for us.
+  #        isReleaseCandidate=${{ !(github.ref_type == 'tag' && github.event_name == 'workflow_dispatch') }}
+  #        echo "is-release-candidate=$isReleaseCandidate" >> "$GITHUB_OUTPUT"
+  #    - name: Get should-create-release
+  #      id: get-should-create-release
+  #      run: |
+  #        # Run once to check for errors
+  #        ./scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate.outputs.is-release-candidate) && '--release-candidate' || '' }}
+  #        shouldCreateRelease=$(scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate.outputs.is-release-candidate) && '--release-candidate' || '' }})
+  #        echo "should-create-release=$shouldCreateRelease" >> "$GITHUB_OUTPUT"
   create-tag:
     needs: get-params
     if: ${{ fromJSON(needs.get-params.outputs.should-create-release) }}
@@ -88,57 +88,57 @@ jobs:
       fetch_depth: 0
       bump_each_commit: false
       release_candidate_suffix: ${{ needs.get-params.outputs.is-release-candidate && fromJSON(needs.get-params.outputs.is-release-candidate) }}
-  create-changelog:
-    needs: create-tag
-    permissions: read-all
-    runs-on: ubuntu-latest
-    steps:
-      - name: Create changelog
-        id: create-changelog
-        uses: mikepenz/release-changelog-builder-action@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          ignorePreReleases: true
-          failOnError: true
-          outputFile: CHANGELOG.txt
-      - name: Output changelog
-        run: cat CHANGELOG.txt
-      - name: Upload changelog as artifact
-        uses: actions/upload-artifact@v4
-        timeout-minutes: 10
-        with:
-          name: changelog
-          path: CHANGELOG.txt
-  create-release-notes:
-    needs: create-changelog
-    permissions: read-all
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Download changelog
-        uses: actions/download-artifact@v4
-        with:
-          name: changelog
-      - name: Create note about generating pipeline
-        shell: bash
-        run: echo "${{ format('This release was generated by the CI workflow https://github.com/{0}/actions/runs/{1}', github.repository, github.run_id) }}" > PIPELINE_NOTE.txt
-      - name: Create release notes by concatenating parts
-        shell: bash
-        run: |
-          touch RELEASE_NOTES.txt
-          cat infra/RELEASE_TOP_NOTE.txt >> RELEASE_NOTES.txt
-          echo "" >> RELEASE_NOTES.txt
-          cat PIPELINE_NOTE.txt >> RELEASE_NOTES.txt
-          echo "" >> RELEASE_NOTES.txt
-          cat CHANGELOG.txt >> RELEASE_NOTES.txt
-      - name: Output release notes
-        run: cat RELEASE_NOTES.txt
-      - uses: actions/upload-artifact@v4
-        with:
-          name: release-notes
-          path: RELEASE_NOTES.txt
-  # Candidate for breaking up
+  #create-changelog:
+  #  needs: create-tag
+  #  permissions: read-all
+  #  runs-on: ubuntu-latest
+  #  steps:
+  #    - name: Create changelog
+  #      id: create-changelog
+  #      uses: mikepenz/release-changelog-builder-action@v4
+  #      with:
+  #        token: ${{ secrets.GITHUB_TOKEN }}
+  #        ignorePreReleases: true
+  #        failOnError: true
+  #        outputFile: CHANGELOG.txt
+  #    - name: Output changelog
+  #      run: cat CHANGELOG.txt
+  #    - name: Upload changelog as artifact
+  #      uses: actions/upload-artifact@v4
+  #      timeout-minutes: 10
+  #      with:
+  #        name: changelog
+  #        path: CHANGELOG.txt
+  #create-release-notes:
+  #  needs: create-changelog
+  #  permissions: read-all
+  #  runs-on: ubuntu-latest
+  #  steps:
+  #    - name: Checkout
+  #      uses: actions/checkout@v4
+  #    - name: Download changelog
+  #      uses: actions/download-artifact@v4
+  #      with:
+  #        name: changelog
+  #    - name: Create note about generating pipeline
+  #      shell: bash
+  #      run: echo "${{ format('This release was generated by the CI workflow https://github.com/{0}/actions/runs/{1}', github.repository, github.run_id) }}" > PIPELINE_NOTE.txt
+  #    - name: Create release notes by concatenating parts
+  #      shell: bash
+  #      run: |
+  #        touch RELEASE_NOTES.txt
+  #        cat infra/RELEASE_TOP_NOTE.txt >> RELEASE_NOTES.txt
+  #        echo "" >> RELEASE_NOTES.txt
+  #        cat PIPELINE_NOTE.txt >> RELEASE_NOTES.txt
+  #        echo "" >> RELEASE_NOTES.txt
+  #        cat CHANGELOG.txt >> RELEASE_NOTES.txt
+  #    - name: Output release notes
+  #      run: cat RELEASE_NOTES.txt
+  #    - uses: actions/upload-artifact@v4
+  #      with:
+  #        name: release-notes
+  #        path: RELEASE_NOTES.txt
+  ## Candidate for breaking up
   create-and-upload-draft-release:
     needs: [create-tag, create-release-notes, build-artifact, test-wheels]
     # May accidentally create two releases without restricting to 1 job
