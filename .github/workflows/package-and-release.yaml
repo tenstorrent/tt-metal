@@ -57,29 +57,29 @@ jobs:
   #  needs: build-artifact
   #  uses: ./.github/workflows/tgg-model-perf-tests-impl.yaml
   #  secrets: inherit
-  #get-params:
-  #  runs-on: ubuntu-latest
-  #  outputs:
-  #    is-release-candidate: ${{ steps.get-is-release-candidate.outputs.is-release-candidate }}
-  #    should-create-release: ${{ steps.get-should-create-release.outputs.should-create-release }}
-  #  steps:
-  #    - name: Checkout
-  #      uses: actions/checkout@v4
-  #      with:
-  #        fetch-depth: 0
-  #    - name: Get is-release-candidate
-  #      id: get-is-release-candidate
-  #      run: |
-  #        # A workflow dispatch on a tag is considered a release run for us.
-  #        isReleaseCandidate=${{ !(github.ref_type == 'tag' && github.event_name == 'workflow_dispatch') }}
-  #        echo "is-release-candidate=$isReleaseCandidate" >> "$GITHUB_OUTPUT"
-  #    - name: Get should-create-release
-  #      id: get-should-create-release
-  #      run: |
-  #        # Run once to check for errors
-  #        ./scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate.outputs.is-release-candidate) && '--release-candidate' || '' }}
-  #        shouldCreateRelease=$(scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate.outputs.is-release-candidate) && '--release-candidate' || '' }})
-  #        echo "should-create-release=$shouldCreateRelease" >> "$GITHUB_OUTPUT"
+  get-params:
+    runs-on: ubuntu-latest
+    outputs:
+      is-release-candidate: ${{ steps.get-is-release-candidate.outputs.is-release-candidate }}
+      should-create-release: ${{ steps.get-should-create-release.outputs.should-create-release }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Get is-release-candidate
+        id: get-is-release-candidate
+        run: |
+          # A workflow dispatch on a tag is considered a release run for us.
+          isReleaseCandidate=${{ !(github.ref_type == 'tag' && github.event_name == 'workflow_dispatch') }}
+          echo "is-release-candidate=$isReleaseCandidate" >> "$GITHUB_OUTPUT"
+      - name: Get should-create-release
+        id: get-should-create-release
+        run: |
+          # Run once to check for errors
+          ./scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate.outputs.is-release-candidate) && '--release-candidate' || '' }}
+          shouldCreateRelease=$(scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate.outputs.is-release-candidate) && '--release-candidate' || '' }})
+          echo "should-create-release=$shouldCreateRelease" >> "$GITHUB_OUTPUT"
   create-tag:
     needs: get-params
     if: ${{ fromJSON(needs.get-params.outputs.should-create-release) }}
