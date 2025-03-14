@@ -208,25 +208,25 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
 
     // One sender per link - rn hardcoded to 6,6 for testing
     uint32_t num_workers_per_link = 1;
-    // const auto [sender_worker_core_range, sender_worker_cores] = choose_worker_cores(
+    // const auto [sender_core_grid, sender_worker_cores] = choose_worker_cores(
     //     num_links, num_workers_per_link, enable_persistent_fabric, device, operation_attributes.subdevice_id);
     auto full_shard_grid_with_receiver_grid = full_shard_grid.merge(receiver_grid);
     // auto sender_core = sender_worker_cores.at(0);
-    auto sender_worker_core_range = detail::next_core_range_set(
+    auto sender_core_grid = detail::next_core_range_set(
         full_shard_grid_with_receiver_grid,
         device->compute_with_storage_grid_size(),
         num_workers_per_link * num_links,
         shard_spec.orientation == ShardOrientation::ROW_MAJOR);
-    auto sender_core = sender_worker_core_range.bounding_box().start_coord;
-    auto sender_worker_cores = corerange_to_cores(sender_worker_core_range, std::nullopt);
+    auto sender_core = sender_core_grid.bounding_box().start_coord;
+    auto sender_worker_cores = corerange_to_cores(sender_core_grid, std::nullopt);
 
-    auto all_cores = full_shard_grid_with_receiver_grid.merge(sender_core);
+    auto all_cores_grid = full_shard_grid_with_receiver_grid.merge(sender_core);
 
     std::cout << "input_grid: " << input_grid.str() << std::endl;
     std::cout << "output_grid: " << output_grid.str() << std::endl;
     std::cout << "receiver_grid: " << receiver_grid.str() << std::endl;
     std::cout << "sender_cores: " << CoreRange(sender_core).str() << std::endl;
-    std::cout << "all_cores: " << all_cores.str() << std::endl;
+    std::cout << "all_cores_grid: " << all_cores_grid.str() << std::endl;
 
     // input sharded buffer
     uint32_t input_tensor_cb_id = tt::CBIndex::c_0;
@@ -334,13 +334,13 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
               << buffering_factor * tiles_per_core_width_output * input_page_size * num_devices
               << " page size: " << tiles_per_core_width_output * input_page_size << std::endl;
 
-    auto cb_src = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src_config);  // input buffer
-    auto cb_dst = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_dst_config);  // output buffer
+    auto cb_src = tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, cb_src_config);  // input buffer
+    auto cb_dst = tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, cb_dst_config);  // output buffer
     auto cb_client_interface =
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, packet_header_cb_config);  // client interface
-    auto cb_fabric_receiver = tt::tt_metal::CreateCircularBuffer(program, all_cores, fabric_receiver_cb_config);
-    auto cb_fabric_sender = tt::tt_metal::CreateCircularBuffer(program, all_cores, fabric_sender_cb_config);
-    auto cb_accumulator = tt::tt_metal::CreateCircularBuffer(program, all_cores, accumulator_cb_config);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, packet_header_cb_config);  // client interface
+    auto cb_fabric_receiver = tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, fabric_receiver_cb_config);
+    auto cb_fabric_sender = tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, fabric_sender_cb_config);
+    auto cb_accumulator = tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, accumulator_cb_config);
 
     const uint32_t chip_id = ring_index;
 
@@ -376,7 +376,8 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     auto input_cores = corerange_to_cores(input_grid, std::nullopt);
     auto output_cores = corerange_to_cores(output_grid, std::nullopt);
     auto receiver_cores = corerange_to_cores(receiver_grid, std::nullopt);
-    auto sender_cores = corerange_to_cores(sender_worker_core_range, std::nullopt);
+    auto sender_cores = corerange_to_cores(sender_core_grid, std::nullopt);
+    auto all_cores = corerange_to_cores(all_cores_grid, std::nullopt);
 
     reader_defines["INPUT_CORE_XY"] = detail::cores_to_string(to_worker_cores(input_cores));
     reader_defines["OUTPUT_CORE_XY"] = detail::cores_to_string(to_worker_cores(output_cores));
@@ -386,7 +387,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     std::cout << "output_cores: " << reader_defines["OUTPUT_CORE_XY"] << std::endl;
     std::cout << "receiver_cores: " << reader_defines["RECEIVER_CORE_XY"] << std::endl;
     // create local semaphore
-    auto local_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto local_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores_grid, INVALID);
     std::cout << "Program factory local_semaphore: " << local_semaphore << std::endl;
 
     std::vector<uint32_t> reader_runtime_args = {cross_device_semaphore->address(), local_semaphore, false, false, 0};
@@ -398,22 +399,38 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/device/kernels/dataflow/"
         "reader_llama_reduce_scatter.cpp",
-        sender_worker_core_range.merge(output_grid),
+        all_cores_grid,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
-    for (auto core : sender_cores) {
-        reader_runtime_args[is_reader_sender_core_idx] = true;
-        reader_runtime_args[is_worker_core_idx] = false;
+    uint32_t local_input_page = chip_id * input_shard_cores_per_device * tiles_per_core_width;
+    for (auto core : all_cores) {
+        if (sender_core_grid.contains(core)) {
+            reader_runtime_args[is_reader_sender_core_idx] = true;
+            reader_runtime_args[is_worker_core_idx] = false;
+        } else if (output_grid.contains(core)) {
+            reader_runtime_args[is_reader_sender_core_idx] = false;
+            reader_runtime_args[is_worker_core_idx] = true;
+            reader_runtime_args[local_input_page_idx] = local_input_page++;
+        } else {
+            reader_runtime_args[is_reader_sender_core_idx] = false;
+            reader_runtime_args[is_worker_core_idx] = false;
+        }
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
     }
 
-    uint32_t local_input_page = chip_id * input_shard_cores_per_device * tiles_per_core_width;
-    for (auto core : output_cores) {
-        reader_runtime_args[is_reader_sender_core_idx] = false;
-        reader_runtime_args[is_worker_core_idx] = true;
-        reader_runtime_args[local_input_page_idx] = local_input_page++;
-        tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
-    }
+    // for (auto core : sender_cores) {
+    //     reader_runtime_args[is_reader_sender_core_idx] = true;
+    //     reader_runtime_args[is_worker_core_idx] = false;
+    //     tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
+    // }
+
+    // uint32_t local_input_page = chip_id * input_shard_cores_per_device * tiles_per_core_width;
+    // for (auto core : output_cores) {
+    //     reader_runtime_args[is_reader_sender_core_idx] = false;
+    //     reader_runtime_args[is_worker_core_idx] = true;
+    //     reader_runtime_args[local_input_page_idx] = local_input_page++;
+    //     tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
+    // }
 
     std::vector<uint32_t> compute_kernel_args = {};
 
@@ -439,7 +456,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/device/kernels/dataflow/"
         "writer_llama_reduce_scatter.cpp",
-        sender_worker_core_range.merge(receiver_grid),
+        all_cores_grid,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
 
     std::vector<uint32_t> writer_runtime_args = {
@@ -468,26 +485,47 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
 
     std::cout << "Sender core: " << sender_core.x << ", " << sender_core.y << std::endl;
 
-    for (auto core : sender_cores) {
-        writer_runtime_args[is_writer_sender_core_idx] = true;
-        writer_runtime_args[is_receiver_core_idx] = false;
+    uint32_t receiver_for_device_id = 0;
+    for (auto core : all_cores) {
+        if (sender_core_grid.contains(core)) {
+            writer_runtime_args[is_writer_sender_core_idx] = true;
+            writer_runtime_args[is_receiver_core_idx] = false;
+        } else if (receiver_grid.contains(core)) {
+            TT_FATAL(
+                receiver_for_device_id < num_devices,
+                "receiver_for_device_id {} is greater than num_devices {}",
+                receiver_for_device_id,
+                num_devices);
+            writer_runtime_args[is_writer_sender_core_idx] = false;
+            writer_runtime_args[is_receiver_core_idx] = true;
+            writer_runtime_args[is_receiver_for_device_idx] = receiver_for_device_id++;
+        } else {
+            writer_runtime_args[is_writer_sender_core_idx] = false;
+            writer_runtime_args[is_receiver_core_idx] = false;
+        }
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
     }
 
-    uint32_t receiver_for_device_id = 0;
-    for (auto core : receiver_cores) {
-        std::cout << "Setting receiver core: " << core.x << ", " << core.y << " for device: " << receiver_for_device_id
-                  << std::endl;
-        writer_runtime_args[is_writer_sender_core_idx] = false;
-        writer_runtime_args[is_receiver_core_idx] = true;
-        TT_FATAL(
-            receiver_for_device_id < num_devices,
-            "receiver_for_device_id {} is greater than num_devices {}",
-            receiver_for_device_id,
-            num_devices);
-        writer_runtime_args[is_receiver_for_device_idx] = receiver_for_device_id++;
-        tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
-    }
+    // for (auto core : sender_cores) {
+    //     writer_runtime_args[is_writer_sender_core_idx] = true;
+    //     writer_runtime_args[is_receiver_core_idx] = false;
+    //     tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
+    // }
+
+    // for (auto core : receiver_cores) {
+    //     std::cout << "Setting receiver core: " << core.x << ", " << core.y << " for device: " <<
+    //     receiver_for_device_id
+    //               << std::endl;
+    //     writer_runtime_args[is_writer_sender_core_idx] = false;
+    //     writer_runtime_args[is_receiver_core_idx] = true;
+    //     TT_FATAL(
+    //         receiver_for_device_id < num_devices,
+    //         "receiver_for_device_id {} is greater than num_devices {}",
+    //         receiver_for_device_id,
+    //         num_devices);
+    //     writer_runtime_args[is_receiver_for_device_idx] = receiver_for_device_id++;
+    //     tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
+    // }
 
     const std::vector<uint32_t> compute_compile_time_args = {
         accumulator_cb_index, output_tensor_cb_id, num_devices, tiles_per_core_width_output};
@@ -508,8 +546,8 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
          .unary_writer_kernel_id = unary_writer_kernel_id,
          .compute_kernel_id = compute_kernel_id,
          .cb_ids = {input_tensor_cb_id, output_tensor_cb_id},
-         .core_range = all_cores,
-         .sender_core_range = sender_worker_core_range}};
+         .core_range = all_cores_grid,
+         .sender_core_range = sender_core_grid}};
 }
 
 void LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::override_runtime_arguments(
@@ -526,10 +564,10 @@ void LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::override_runtime_
 
     auto src_buffer = input_tensor.buffer();
     auto dst_buffer = output_tensor.buffer();
-    auto& all_cores = cached_program.shared_variables.core_range;
+    auto& all_cores_grid = cached_program.shared_variables.core_range;
     auto& sender_cores = cached_program.shared_variables.sender_core_range;
 
-    auto cores = corerange_to_cores(all_cores, std::nullopt);
+    auto cores = corerange_to_cores(all_cores_grid, std::nullopt);
     auto sender_cores_list = corerange_to_cores(sender_cores, std::nullopt);
 
     UpdateDynamicCircularBufferAddress(program, cached_program.shared_variables.cb_ids[0], *src_buffer);

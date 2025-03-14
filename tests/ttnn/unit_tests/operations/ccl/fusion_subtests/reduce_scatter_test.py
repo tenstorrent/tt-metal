@@ -249,7 +249,7 @@ def run_reduce_scatter_impl(
 
 
 def test_fabric_reduce_scatter(n300_mesh_device):
-    torch.manual_seed(2005)
+    # torch.manual_seed(2005)
     dim = 3
     shard_height = 32
     shard_width = 160
