@@ -9,7 +9,7 @@ show_help() {
     echo "  -e, --export-compile-commands    Enable CMAKE_EXPORT_COMPILE_COMMANDS."
     echo "  -c, --enable-ccache              Enable ccache for the build."
     echo "  -b, --build-type build_type      Set the build type. Default is Release. Other options are Debug, RelWithDebInfo, and CI."
-    echo "  -t, --trace                      Enable build time trace (clang only)."
+    echo "  -t, --enable-time-trace          Enable build time trace (clang only)."
     echo "  -a, --enable-asan                Enable AddressSanitizer."
     echo "  -m, --enable-msan                Enable MemorySanitizer."
     echo "  -s, --enable-tsan                Enable ThreadSanitizer."
