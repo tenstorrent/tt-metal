@@ -1,9 +1,9 @@
-name: "(T3K) T3000 unit tests"
+name: "TG Quick"
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 */3 * * *" # This cron schedule runs the workflow every 3 hours
+  push:
+    branches: ["main"]
 
 jobs:
   build-artifact:
@@ -11,11 +11,12 @@ jobs:
     secrets: inherit
     with:
       build-wheel: true
-  t3000-unit-tests:
+      version: 22.04
+
+  tg-quick-test:
     needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/t3000-unit-tests-impl.yaml
+    uses: ./.github/workflows/tg-quick.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}

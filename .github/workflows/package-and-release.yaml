@@ -4,7 +4,7 @@ on:
   schedule:
     # Create rc every day at EOD of PST Mon-Fri + night of Sunday to kick off
     # releases for beginning of work week
-    - cron: "0 1 * * 1,2,3,4,5,6"
+    - cron: "0 1,10,17 * * *"
 
 permissions:
   contents: write
