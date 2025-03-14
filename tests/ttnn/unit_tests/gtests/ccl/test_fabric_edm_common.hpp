@@ -69,6 +69,9 @@ using tt::tt_metal::distributed::MeshShape;
 class T3000TestDevice {
 public:
     T3000TestDevice() : device_open(false) {
+        constexpr size_t TG_num_devices = 36;
+        constexpr size_t galaxy_6u_num_devices = 32;
+
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
             TT_THROW("This suite can only be run without TT_METAL_SLOW_DISPATCH_MODE set");
@@ -77,7 +80,7 @@ public:
 
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         if (arch_ == tt::ARCH::WORMHOLE_B0 and num_devices_ >= 8 and tt::tt_metal::GetNumPCIeDevices() == 4) {
-            if (num_devices_ == 32) {
+            if (num_devices_ == TG_num_devices || num_devices_ == galaxy_6u_num_devices) {
                 mesh_device_ = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape{8, 4}});
             } else {
                 mesh_device_ = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape{2, 4}});
@@ -1078,7 +1081,8 @@ void setup_test_with_persistent_fabric(
     std::vector<Program*>& fabric_program_ptrs,
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& line_fabric,
     bool enable_persistent_fabric,
-    std::optional<size_t> num_links = std::nullopt) {
+    std::optional<size_t> num_links = std::nullopt,
+    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear) {
     if (enable_persistent_fabric) {
         log_info(tt::LogTest, "Enabling persistent fabric");
         fabric_programs = std::vector<Program>(devices.size());
@@ -1093,7 +1097,7 @@ void setup_test_with_persistent_fabric(
     }
 
     line_fabric = ttnn::ccl::EdmLineFabricOpInterface(
-        devices, fabric_program_ptrs, enable_persistent_fabric, num_links.value_or(1));
+        devices, fabric_program_ptrs, enable_persistent_fabric, num_links.value_or(1), false, topology);
     line_fabric->set_firmware_context_switch_interval(0);
 
     if (enable_persistent_fabric) {
@@ -2072,6 +2076,7 @@ struct WriteThroughputStabilityTestWithPersistentFabricParams {
     size_t line_size = 4;
     size_t num_devices_with_workers = 0;
     bool line_sync = true;
+    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear;
 };
 
 void RunWriteThroughputStabilityTestWithPersistentFabric(
@@ -2092,6 +2097,8 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
         log_info("Test must be run on WH");
         return;
     }
+
+    auto topology = params.topology;
 
     size_t line_size = params.line_size;
     size_t num_devices_with_workers = params.num_devices_with_workers;
@@ -2151,7 +2158,8 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
         fabric_program_ptrs,
         fabric_handle,
         enable_persistent_fabric_mode,
-        num_links);
+        num_links,
+        topology);
 
     // Other boiler plate setup
     CoreRangeSet worker_cores = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(num_links - 1, 0)));
@@ -2217,22 +2225,46 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
         const size_t sync_core_noc_x = device->worker_core_from_logical_core(sync_core_coord).x;
         const size_t sync_core_noc_y = device->worker_core_from_logical_core(sync_core_coord).y;
 
-        IDevice* backward_device = i == 0 ? nullptr : devices[i - 1];
-        IDevice* forward_device = i == line_size - 1 ? nullptr : devices[i + 1];
+        IDevice* backward_device;
+        IDevice* forward_device;
+        bool has_forward_connection;
+        bool has_backward_connection;
+        bool unicast_forward;
+        size_t mcast_fwd_hops;
+        size_t mcast_bwd_hops;
+        size_t unicast_hops;
+        if (topology == ttnn::ccl::Topology::Ring) {
+            backward_device = i == 0 ? devices.back() : devices[i - 1];
+            forward_device = i == line_size - 1 ? devices.front() : devices[i + 1];
 
-        // Initialize the fabric handle for worker connection
-        bool start_of_line = line_index == 0;
-        bool end_of_line = line_index == line_size - 1;
-        bool has_forward_connection = !end_of_line;
-        bool has_backward_connection = !start_of_line;
-        bool unicast_forward = !end_of_line;
-        size_t mcast_fwd_hops = line_size - line_index - 1;
-        size_t mcast_bwd_hops = line_index;
-        size_t unicast_hops = unicast_forward ? mcast_fwd_hops : mcast_bwd_hops;
+            // Initialize the fabric handle for worker connection
+            has_forward_connection = true;
+            has_backward_connection = true;
+            unicast_forward = true;
+            mcast_fwd_hops = tt::div_up(line_size - 1, 2);
+            mcast_bwd_hops = line_size - 1 - mcast_fwd_hops;
+            if (i % 2 == 0) {
+                std::swap(mcast_fwd_hops, mcast_bwd_hops);
+            }
+            unicast_hops = mcast_fwd_hops;
+        } else {
+            backward_device = i == 0 ? nullptr : devices[i - 1];
+            forward_device = i == line_size - 1 ? nullptr : devices[i + 1];
+
+            // Initialize the fabric handle for worker connection
+            bool start_of_line = line_index == 0;
+            bool end_of_line = line_index == line_size - 1;
+            has_forward_connection = !end_of_line;
+            has_backward_connection = !start_of_line;
+            unicast_forward = !end_of_line;
+            mcast_fwd_hops = line_size - line_index - 1;
+            mcast_bwd_hops = line_index;
+            unicast_hops = unicast_forward ? mcast_fwd_hops : mcast_bwd_hops;
+        }
 
         auto local_device_fabric_handle =
             ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
-                device, forward_device, backward_device, &program, enable_persistent_fabric_mode, num_links);
+                device, forward_device, backward_device, &program, enable_persistent_fabric_mode, num_links, topology);
 
         // reserve CB
         tt_metal::CircularBufferConfig cb_src0_config =
