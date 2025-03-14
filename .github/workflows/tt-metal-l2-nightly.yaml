@@ -41,12 +41,13 @@ jobs:
     secrets: inherit
     with:
       build-wheel: true
+      version: 22.04
   test:
     needs: build
     strategy:
       fail-fast: false
       matrix:
-        os: ["ubuntu-20.04"]
+        os: ["ubuntu-22.04"]
         test-group:
           - name: ttnn nightly conv tests
             cmd: pytest tests/ttnn/nightly/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode"
