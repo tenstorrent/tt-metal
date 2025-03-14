@@ -210,7 +210,7 @@ jobs:
             build_command="$build_command --enable-profiler"
           fi
           if [ "${{ inputs.profile }}" = "true" ]; then
-            build_command="$build_command --enable-time-trace"
+            build_command="$build_command --enable-time-trace --disable-unity-builds"
           fi
 
           nice -n 19 $build_command
