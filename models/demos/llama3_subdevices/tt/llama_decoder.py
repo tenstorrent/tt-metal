@@ -107,9 +107,11 @@ class TtTransformerBlock(LightweightModule):
             tt_ccl=tt_ccl,
         )
 
-    def prefetch(self):
-        self.attention.prefetch()
-        self.feed_forward.prefetch()
+    def prefetch(self, prefetcher_setup, tt_ccl):
+        self.prefetcher_setup = prefetcher_setup
+        self.tt_ccl = tt_ccl
+        self.attention.prefetch(prefetcher_setup, tt_ccl)
+        self.feed_forward.prefetch(prefetcher_setup, tt_ccl)
 
     def forward(
         self,

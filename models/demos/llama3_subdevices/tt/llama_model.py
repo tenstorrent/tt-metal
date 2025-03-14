@@ -263,13 +263,14 @@ class TtTransformer(LightweightModule):
         Get rope sin/cos
         Embed tokens
         """
+        # print("tokens", tokens.shape, tokens.memory_config)
         tt_rot_mats = self.rope_setup.get_rot_mats(rope_idxs)
         tt_tokens = self.embd(tokens)
-        tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
-        tt_tokens = ttnn.to_memory_config(
-            tt_tokens,
-            self.args.model_config["DECODE_RESIDUAL_MEMCFG"],
-        )
+        # tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
+        # tt_tokens = ttnn.to_memory_config(
+        #     tt_tokens,
+        #     self.args.model_config["DECODE_RESIDUAL_MEMCFG"],
+        # )
         return tt_tokens, current_pos, tt_rot_mats, page_table
 
     def process_output_prefill(self, tt_out, last_token_idx):
@@ -397,7 +398,7 @@ class TtTransformer(LightweightModule):
                 self.decode_setup = True
                 # prefetch
                 for layer in self.layers:
-                    layer.prefetch()
+                    layer.prefetch(self.prefetcher_setup, self.tt_ccl)
                 self.tt_tensors = self.prefetcher_setup.get_input_tensors()
 
         else:

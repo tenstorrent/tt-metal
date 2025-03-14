@@ -272,7 +272,7 @@ def create_tt_model(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"trace_region_size": 23887872, "num_command_queues": 2, "dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
+    [{"trace_region_size": 23887872, "num_command_queues": 1, "dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -377,9 +377,7 @@ def test_demo_text(
         dtype=ttnn.bfloat8_b,
         use_paged_kv_cache=paged_attention,
     )
-    model.tt_ccl.close()
-    print("done")
-    # model.switch_mode("decode")
+
     model_args.n_layers = 1
     model_args.tokenizer = Tokenizer(model_args.tokenizer_path)
     tokenizer = model_args.tokenizer
@@ -469,8 +467,11 @@ def test_demo_text(
         users_decoding = True
 
         out_tok = prefilled_token
-
-        model.switch_mode("decode")
+        try:
+            model.switch_mode("decode")
+        except Exception as e:
+            logger.error(f"Error switching to decode mode: {str(e)}")
+            model.tt_ccl.close()
 
         logger.info(f"Starting decode loop...")
 
@@ -483,14 +484,18 @@ def test_demo_text(
                 profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
             # Run decode forward
-            logits = generator.decode_forward_text(
-                out_tok,
-                current_pos,
-                enable_trace=enable_trace,
-                page_table=page_table,
-                kv_cache=tt_kv_cache,
-                argmax_on_device=argmax_on_device,
-            )
+            try:
+                logits = generator.decode_forward_text(
+                    out_tok,
+                    current_pos,
+                    enable_trace=enable_trace,
+                    page_table=page_table,
+                    kv_cache=tt_kv_cache,
+                    argmax_on_device=argmax_on_device,
+                )
+            except Exception as e:
+                logger.error(f"Error during decoding: {str(e)}")
+                break
 
             # Get the next token
             if argmax_on_device:

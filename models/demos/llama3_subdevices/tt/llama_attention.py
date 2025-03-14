@@ -186,9 +186,11 @@ class TtLlamaAttention(LightweightModule):
         if tt_ccl.mode == "decode":
             self.prefetch()
 
-    def prefetch(self):
+    def prefetch(self, prefetcher_setup, tt_ccl):
+        self.prefetcher_setup = prefetcher_setup
         self.prefetcher_setup.insert_tensor(self.wqkv)
         self.prefetcher_setup.insert_tensor(self.wo)
+        self.tt_ccl = tt_ccl
 
     def init_kv_cache(self, configuration, weight_cache_path):
         """
@@ -238,9 +240,9 @@ class TtLlamaAttention(LightweightModule):
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                # cache_file_name=f"{weight_cache_path}/kvcache_{k_or_v.shape}"
-                # if weight_cache_path and not configuration.dummy_weights
-                # else None,
+                cache_file_name=f"{weight_cache_path}/kvcache_{k_or_v.shape}"
+                if weight_cache_path and not configuration.dummy_weights
+                else None,
             )
             for k_or_v in [cache_k, cache_v]
         ]
