@@ -11,8 +11,9 @@
 
 using namespace sfpi;
 
+namespace {
 template <bool APPROXIMATE, int ITERATIONS = 8>
-inline void _load_imm_(float imm) {
+void _load_imm_(float imm) {
     vFloat const_v = s2vFloat16b(imm);
     for (int d = 0; d < ITERATIONS; d++) {
         dst_reg[0] = const_v;
@@ -20,14 +21,12 @@ inline void _load_imm_(float imm) {
     }
 }
 
-inline void llk_math_eltwise_unary_load_imm(float val, uint dst_index, int vector_mode = (int)VectorMode::RC) {
+void llk_math_eltwise_unary_load_imm(float val, uint dst_index, int vector_mode = (int)VectorMode::RC) {
     constexpr bool APPROXIMATE = 0;
     llk_math_eltwise_unary_sfpu_params<APPROXIMATE>([val]() { _load_imm_<APPROXIMATE>(val); }, dst_index, vector_mode);
 }
 
-inline void load_immediate_value(uint dst_index, float val) { MATH(llk_math_eltwise_unary_load_imm(val, dst_index)); }
-
-inline void _llk_math_load_imm_sfpu_init_() {
+void _llk_math_load_imm_sfpu_init_() {
     sfpu::_init_sfpu_config_reg();
     addr_mod_t{
         .srca = {.incr = 0},
@@ -38,10 +37,8 @@ inline void _llk_math_load_imm_sfpu_init_() {
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
-inline void load_immediate_value_init() { MATH(_llk_math_load_imm_sfpu_init_()); }
-
 template <bool APPROXIMATION_MODE, bool small_to_big_index, int ITERATIONS = 8>
-inline void _copy_value_(const uint dst_offset) {
+void _copy_value_(const uint dst_offset) {
     for (int d = 0; d < ITERATIONS; d++) {
         constexpr uint dst_tile_size = 32;
         if constexpr (small_to_big_index) {
@@ -53,8 +50,7 @@ inline void _copy_value_(const uint dst_offset) {
     }
 }
 
-inline void llk_math_eltwise_binary_sfpu_copy_value(
-    uint dst_index0, uint32_t dst_index1, int vector_mode = VectorMode::RC) {
+void llk_math_eltwise_binary_sfpu_copy_value(uint dst_index0, uint32_t dst_index1, int vector_mode = VectorMode::RC) {
     constexpr bool APPROXIMATE = 0;
     if (dst_index0 > dst_index1) {
         llk_math_eltwise_binary_sfpu_params<APPROXIMATE>(
@@ -65,6 +61,14 @@ inline void llk_math_eltwise_binary_sfpu_copy_value(
     }
 }
 
+}  // namespace
+
+inline void load_immediate_value_init() { MATH(_llk_math_load_imm_sfpu_init_()); }
+
+// Load immediate value (val) to the destination register
+inline void load_immediate_value(uint dst_index, float val) { MATH(llk_math_eltwise_unary_load_imm(val, dst_index)); }
+
+// Copy value from one destination register to another
 inline void copy_value(uint dst_index0, uint32_t dst_index1) {
     MATH(llk_math_eltwise_binary_sfpu_copy_value(dst_index0, dst_index1));
 }
