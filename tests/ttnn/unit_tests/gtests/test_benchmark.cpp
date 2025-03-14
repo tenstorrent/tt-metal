@@ -25,8 +25,16 @@
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/trace.hpp"
 
-int get_device_freq() { return 1e9; }
+int get_device_freq() { return 1000; }
 
+std::string dtype_to_string(DataType dtype) {
+    switch (dtype) {
+        case DataType::BFLOAT16: return "BFLOAT16";
+        case DataType::BFLOAT8_B: return "BFLOAT8_B";
+        case DataType::BFLOAT4_B: return "BFLOAT4_B";
+        default: return "UNKNOWN";
+    }
+}
 std::vector<std::pair<int, int>> SUBBLOCK_HW_CHOICES = {{4, 2}, {2, 4}, {8, 1}, {1, 8}, {7, 1}, {1, 7}, {3, 2},
                                                         {2, 3}, {6, 1}, {1, 6}, {5, 1}, {1, 5}, {2, 2}, {4, 1},
                                                         {1, 4}, {3, 1}, {1, 3}, {2, 1}, {1, 2}, {1, 1}};
@@ -146,7 +154,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
     const bool& use_program_cache = std::get<5>(GetParam());
 
     TT_FATAL(std::get<0>(grid_size) > 0 && std::get<1>(grid_size) > 0, "Invalid grid size");
-    TT_ASSERT(num_measurement_iterations > 0, "Won't have data without at least one measurement iteration");
+    TT_FATAL(num_measurement_iterations > 0, "Won't have data without at least one measurement iteration");
     tt::tt_metal::IDevice* device = &getDevice();
     const char* TT_METAL_HOME = std::getenv("TT_METAL_HOME");
     std::string ARTIFACTS_DIR = std::string(TT_METAL_HOME) + "/generated";
@@ -233,7 +241,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
                     ttnn::Shape({k, n}),
                     tt::tt_metal::TensorLayout(dtype, tt::tt_metal::Layout::TILE, ttnn::DRAM_MEMORY_CONFIG)),
                 device);
-
+            tt::log_info("In0, in1 ready!");
             ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig program_config{
                 /* compute_with_storage_grid_size */ {std::get<0>(grid_size), std::get<1>(grid_size)},
                 /* in0_block_w */ in0_block_w,
@@ -272,7 +280,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
                 /* output_tile */ output_tile);
 
             ttnn::Tensor output_tensor;
-
+            tt::log_info("Running warmup matmul!");
             // Warmup iterations
             for (int iter = 0; iter < num_warmup_iterations; ++iter) {
                 output_tensor = ttnn::operations::matmul::matmul(
@@ -282,7 +290,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
                     /* parameters */ matmul_params);
                 output_tensor.deallocate();
             }
-
+            tt::log_info("Running perf matmul!");
             std::chrono::duration<double> total_time = std::chrono::duration<double>::zero();
 
             // Performance measurement iterations
@@ -316,10 +324,9 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
                 auto end_time = std::chrono::high_resolution_clock::now();
                 total_time = end_time - start_time;
             }
-            // TODO: Calculate metrics
-            /*
-            const std::chrono::duration<double> inference_time_avg = total_time / num_measurement_iterations;
-            double tflops = 2.0 * m * k * n / 1e12 / inference_time_avg;
+
+            const double inference_time_avg_s = total_time.count() / num_measurement_iterations;
+            double tflops = 2.0 * m * k * n / 1e12 / inference_time_avg_s;
             int cycle_per_tile = (math_fidelity == MathFidelity::LoFi)    ? LoFi_cycle
                                  : (math_fidelity == MathFidelity::HiFi2) ? HiFi2_cycle
                                  : (math_fidelity == MathFidelity::HiFi3) ? HiFi3_cycle
@@ -327,27 +334,40 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
             int num_cores_user_grid = std::get<0>(grid_size) * std::get<1>(grid_size);
             auto compute_grid_size = device->compute_with_storage_grid_size();
             int num_cores_full_grid = compute_grid_size.x * compute_grid_size.y;
-            double ideal_cycle_full_grid =
-                static_cast<double>(m * k * n) / tile_h / tile_w / 32 * cycle_per_tile / num_cores_full_grid;
-            double ideal_cycle_user_grid =
-                static_cast<double>(m * k * n) / tile_h / tile_w / 32 * cycle_per_tile / num_cores_user_grid;
-            double inference_cycle = inference_time_avg * get_device_freq() * 1e6;
+            tt::log_info("Full compute grid size: {}x{}", compute_grid_size.x, compute_grid_size.y);
+            tt::log_info(
+                "Cycle per tile: {}, num_cores_user_grid: {}, num_cores_full_grid: {}",
+                cycle_per_tile,
+                num_cores_user_grid,
+                num_cores_full_grid);
+            const double dim_per_tile = (double)m * (double)k * (double)n / tile_h / tile_w;
+            double ideal_cycle_full_grid = dim_per_tile / 32 * cycle_per_tile / num_cores_full_grid;
+            double ideal_cycle_user_grid = dim_per_tile / 32 * cycle_per_tile / num_cores_user_grid;
+            tt::log_info(
+                "Ideal cycle (full grid): {}, Ideal cycle (user grid): {}",
+                ideal_cycle_full_grid,
+                ideal_cycle_user_grid);
+            double inference_cycle = inference_time_avg_s * get_device_freq() * 1e6;
             double utilization_full_grid = ideal_cycle_full_grid / inference_cycle;
             double utilization_user_grid = ideal_cycle_user_grid / inference_cycle;
-            std::string utilization_full_grid_percentage = std::to_string(utilization_full_grid * 100) + "%";
-            std::string utilization_user_grid_percentage = std::to_string(utilization_user_grid * 100) + "%";
-            tt::log_info("M*K*N = {}*{}*{} == inference time (avg): {}, tflops (avg): {}, utilization (vs user grid):
-            {}, utilization (vs 8x8 grid): {}", m, k, n, inference_time_avg, tflops,
-            utilization_user_grid_percentage.c_str(), utilization_full_grid_percentage.c_str());
+            std::string utilization_full_grid_percentage = std::to_string(utilization_full_grid * 100);
+            std::string utilization_user_grid_percentage = std::to_string(utilization_user_grid * 100);
+            tt::log_info(
+                "M*K*N = {}*{}*{} == inference time (avg): {}, tflops (avg): {}, utilization (vs user grid): {}%, "
+                "utilization (vs 8x8 grid): {}%",
+                m,
+                k,
+                n,
+                inference_time_avg_s,
+                tflops,
+                utilization_user_grid_percentage,
+                utilization_full_grid_percentage);
 
             file << m << "," << k << "," << n << "," << (use_trace ? "true" : "false") << "," << std::get<0>(grid_size)
-            << "x" << std::get<1>(grid_size) << ","
-                 << in0_sharded << "," << out_sharded << "," << in0_storage_type << "," << in1_storage_type << "," <<
-            out_storage_type << ","
-                 << dtype << "," << math_fidelity << "," << inference_time_avg * 1e9 << "," << tflops << "," <<
-            utilization_user_grid_percentage << ","
-                 << utilization_full_grid_percentage << "\n";
-            */
+                 << "x" << std::get<1>(grid_size) << "," << in0_sharded << "," << out_sharded << "," << in0_storage_type
+                 << "," << in1_storage_type << "," << out_storage_type << "," << dtype_to_string(dtype) << ","
+                 << math_fidelity << "," << inference_time_avg_s * 1e9 << "," << tflops << ","
+                 << utilization_user_grid_percentage << "," << utilization_full_grid_percentage << "\n";
 
             // Deallocate input tensors
             in0_t.deallocate();
