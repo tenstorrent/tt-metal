@@ -69,6 +69,9 @@ using tt::tt_metal::distributed::MeshShape;
 class T3000TestDevice {
 public:
     T3000TestDevice() : device_open(false) {
+        constexpr size_t TG_num_devices = 36;
+        constexpr size_t galaxy_6u_num_devices = 32;
+
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
             TT_THROW("This suite can only be run without TT_METAL_SLOW_DISPATCH_MODE set");
@@ -77,7 +80,7 @@ public:
 
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         if (arch_ == tt::ARCH::WORMHOLE_B0 and num_devices_ >= 8 and tt::tt_metal::GetNumPCIeDevices() == 4) {
-            if (num_devices_ == 32) {
+            if (num_devices_ == TG_num_devices || num_devices_ == galaxy_6u_num_devices) {
                 mesh_device_ = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape{8, 4}});
             } else {
                 mesh_device_ = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape{2, 4}});
