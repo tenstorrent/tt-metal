@@ -27,6 +27,10 @@ using namespace tt::tt_metal;  // For test
 namespace ttnn {
 
 class TTNNFixtureWithDevice : public ::testing::Test {
+private:
+    int trace_region_size;
+    int l1_small_size;
+
 protected:
     tt::tt_metal::IDevice* device_ = nullptr;
     tt::ARCH arch_ = tt::ARCH::Invalid;
@@ -36,10 +40,20 @@ protected:
         std::srand(0);
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
-        device_ = tt::tt_metal::CreateDevice(/*device_id=*/0);
+        device_ = tt::tt_metal::CreateDevice(
+            /*device_id=*/0,
+            /*num_hw_cqs*/ 1,
+            /*l1_small_size*/ l1_small_size,
+            /*trace_region_size*/ trace_region_size);
     }
 
     void TearDown() override { tt::tt_metal::CloseDevice(device_); }
+
+public:
+    TTNNFixtureWithDevice() : trace_region_size(DEFAULT_TRACE_REGION_SIZE), l1_small_size(DEFAULT_L1_SMALL_SIZE) {}
+
+    TTNNFixtureWithDevice(int trace_region_size, int l1_small_size) :
+        trace_region_size(trace_region_size), l1_small_size(l1_small_size) {}
 };
 
 // TODO: deduplicate the code with `TTNNFixtureWithDevice`.
@@ -99,5 +113,4 @@ protected:
     tt::ARCH arch_;
     size_t num_devices_;
 };
-
 }  // namespace ttnn
