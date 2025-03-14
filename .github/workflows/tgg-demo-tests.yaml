@@ -28,7 +28,7 @@ jobs:
     name: ${{ matrix.test-group.name }}
     runs-on: ${{ matrix.test-group.runs-on }}
     container:
-      image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      image: ${{ needs.build-artifact.outputs.ci-build-docker-image || 'docker-image-unresolved!' }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
