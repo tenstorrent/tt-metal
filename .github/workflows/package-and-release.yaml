@@ -139,7 +139,7 @@ jobs:
           name: release-notes
           path: RELEASE_NOTES.txt
   # Candidate for breaking up
-  reate-and-upload-draft-release:
+  create-and-upload-draft-release:
     needs: [create-tag, create-release-notes, build-artifact, test-wheels]
     # May accidentally create two releases without restricting to 1 job
     concurrency: create_upload_draft_release
