@@ -18,9 +18,15 @@ from tt_metal.tools.profiler.common import (
 )
 
 
-def profile_command(test_command, output_folder, name_append):
+def profile_command(test_command, output_folder, name_append, collect_noc_traces):
     currentEnvs = dict(os.environ)
     currentEnvs["TT_METAL_DEVICE_PROFILER"] = "1"
+    if collect_noc_traces:
+        currentEnvs["TT_METAL_DEVICE_PROFILER_NOC_EVENTS"] = "1"
+        currentEnvs["TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH"] = os.path.join(
+            os.path.abspath(output_folder), ".logs"
+        )
+
     options = ""
     if output_folder:
         options += f"-o {output_folder}"
@@ -34,13 +40,14 @@ def profile_command(test_command, output_folder, name_append):
 @click.option("-o", "--output-folder", type=click.Path(), help="Output folder for artifacts")
 @click.option("-c", "--command", type=str, required=True, help="Test command to profile")
 @click.option("-n", "--name-append", type=str, help="Name to be appended to artifact names and folders")
-def main(command, output_folder, name_append):
+@click.option("--collect-noc-traces", is_flag=True, default=False)
+def main(command, output_folder, name_append, collect_noc_traces):
     logger.warning(
         "profile_this.py is getting deprecated soon. Please use the tracy.py module with -r option to obtain op reports."
     )
     if command:
         logger.info(f"profile_this.py is running {command}")
-        profile_command(command, output_folder, name_append)
+        profile_command(command, output_folder, name_append, collect_noc_traces)
 
 
 if __name__ == "__main__":
