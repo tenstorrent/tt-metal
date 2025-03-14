@@ -4,6 +4,9 @@ description: "Make sure weka mount is active"
 runs:
   using: "composite"
   steps:
+    - name: Echo some info
+      shell: bash
+      run: cat ./.github/scripts/cloud_utils/mount_weka.sh
     - name: Ensure active weka mount
       shell: bash
       run: |
