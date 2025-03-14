@@ -123,7 +123,6 @@ jobs:
         run: |
           source /opt/conda/etc/profile.d/conda.sh
           conda create -y -n metalium_env python=3.10 tt-metalium pytest -c conda-forge
-          conda activate metalium_env
 
       - name: Set ttnn fast runtime if exists in config
         if: ${{ matrix.test-group.fast_runtime_mode_off }}
@@ -133,6 +132,8 @@ jobs:
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
+          source /opt/conda/etc/profile.d/conda.sh
+          conda activate metalium_env
           ${{ matrix.test-group.cmd }}
 
       - uses: ./.github/actions/slack-report
