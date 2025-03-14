@@ -5,7 +5,7 @@ inputs:
   path:
     description: "The directory to clean up"
     required: false
-    default: "/work"
+    default: "/__w/tt-metal/tt-metal/docker-job"
 runs:
   using: "composite"
   steps:
