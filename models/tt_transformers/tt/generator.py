@@ -1135,5 +1135,9 @@ class Generator:
         if hasattr(self, "trace_id_text"):
             ttnn.release_trace(self.mesh_device, self.trace_id_text)
 
+        # Workaround for issue #19052
+        for m in self.model:
+            ttnn.close_mesh_device(m.mesh_device)
+
         if hasattr(super(Generator, self), "__del__"):
             super().__del__()
