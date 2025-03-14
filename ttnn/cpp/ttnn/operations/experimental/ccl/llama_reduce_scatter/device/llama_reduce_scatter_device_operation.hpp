@@ -26,6 +26,7 @@ struct LlamaReduceScatterDeviceOperation {
         const uint32_t cluster_axis;
         const MemoryConfig output_mem_config;
         const uint32_t ring_devices;
+        const uint32_t num_links;
         std::optional<IDevice*> forward_device;
         std::optional<IDevice*> backward_device;
     };
@@ -98,6 +99,7 @@ struct LlamaReduceScatterDeviceOperation {
         std::optional<IDevice*>& forward_device,
         std::optional<IDevice*>& backward_device,
         const uint32_t ring_devices,
+        const uint32_t num_links,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
 };
 }  // namespace ttnn::operations::experimental::ccl

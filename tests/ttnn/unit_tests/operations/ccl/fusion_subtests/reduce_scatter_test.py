@@ -254,19 +254,21 @@ def test_fabric_reduce_scatter(n300_mesh_device):
     shard_height = 32
     shard_width = 160
     num_devices = n300_mesh_device.get_num_devices()
-    num_cores = 12
-    torch_input_tensors = [torch.rand(1, 1, shard_height, shard_width * num_cores)]
+    num_cores = 8
+    torch_input_tensors = [
+        torch.range(0, shard_height * shard_width * num_cores - 1).reshape(1, 1, shard_height, shard_width * num_cores)
+    ]
     for i in range(1, num_devices):
-        torch_input_tensors.append(torch.rand(torch_input_tensors[0].shape))
+        torch_input_tensors.append(
+            (i + 1) * torch.range(0, shard_height * shard_width * num_cores - 1).reshape(torch_input_tensors[0].shape)
+        )
 
+    print(torch_input_tensors)
     input = torch.cat(torch_input_tensors, dim=3)
-    print(input)
 
     output = torch_input_tensors[0]
     for i in range(1, num_devices):
         output += torch_input_tensors[i]
-
-    print(output)
 
     torch.set_printoptions(precision=10)
     n300_mesh_device.enable_async(True)
@@ -287,7 +289,6 @@ def test_fabric_reduce_scatter(n300_mesh_device):
         memory_config=sharded_mem_config,
         dtype=ttnn.bfloat8_b,
     )
-    print(tt_input)
     enable_persistent_fabric = True
     ccl_sub_device_crs = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
@@ -317,25 +318,18 @@ def test_fabric_reduce_scatter(n300_mesh_device):
 
     # create global semaphore handles
     ccl_semaphore_handles = [create_global_semaphore_with_same_address(n300_mesh_device, ccl_sub_device_crs, 0)]
-    try:
-        tt_out_tensor = ttnn.experimental.llama_reduce_scatter(
-            tt_input,
-            dim,
-            ccl_semaphore_handles[0],
-            worker_sub_device_id,
-            cluster_axis=1,
-        )
-        ttnn.synchronize_device(n300_mesh_device, sub_device_ids=sub_device_stall_group)
-        print(tt_out_tensor)
-        print("Convert to torch")
-        tt_torch_tensor = ttnn.to_torch(tt_out_tensor, mesh_composer=ttnn.ConcatMeshToTensor(n300_mesh_device, dim))
-        print("Torch conversion done")
-        print(tt_torch_tensor)
-        print("Torch tensor done")
-        n300_mesh_device.reset_sub_device_stall_group()
-        teardown_fabric_interface(n300_mesh_device)
-        assert_with_pcc(tt_torch_tensor, output, 0.999)
-    except Exception as e:
-        ttnn.synchronize_device(n300_mesh_device, sub_device_ids=sub_device_stall_group)
-        n300_mesh_device.reset_sub_device_stall_group()
-        teardown_fabric_interface(n300_mesh_device)
+    tt_out_tensor = ttnn.experimental.llama_reduce_scatter(
+        tt_input, dim, ccl_semaphore_handles[0], worker_sub_device_id, cluster_axis=1, num_links=1
+    )
+    ttnn.synchronize_device(n300_mesh_device, sub_device_ids=sub_device_stall_group)
+    tt_torch_tensor = ttnn.to_torch(tt_out_tensor, mesh_composer=ttnn.ConcatMeshToTensor(n300_mesh_device, dim))
+    print("Torch conversion done")
+    print("TT tensor")
+    print(tt_torch_tensor)
+    print("Torch tensor")
+    print(output)
+    eq, output = comp_pcc(tt_torch_tensor, output)
+    print(f"PCC: {output}")
+    n300_mesh_device.reset_sub_device_stall_group()
+    teardown_fabric_interface(n300_mesh_device)
+    assert eq, f"FAILED: {output}"
