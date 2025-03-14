@@ -104,7 +104,7 @@ jobs:
         run: |
             pip install pytest
             ${{ matrix.test_group.cmd }}
-      - uses: tenstorrent/tt_metal/.github/actions/cleanup@main
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
   tag-docker-image-as-latest:
     needs: [smoke-test-docker-image, create-docker-release-image]

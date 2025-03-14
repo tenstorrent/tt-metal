@@ -291,5 +291,5 @@ jobs:
           path: /work/ttm_any.tar
           if-no-files-found: error
 
-      - uses: tenstorrent/tt_metal/.github/actions/cleanup@main
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
