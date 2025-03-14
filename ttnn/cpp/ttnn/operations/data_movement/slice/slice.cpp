@@ -6,12 +6,11 @@
 #include "slice.hpp"
 #include "device/slice_op.hpp"
 #include "ttnn/run_operation.hpp"
+#include "ttnn/operations/copy.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "cpp/ttnn/operations/creation.hpp"
 #include "ttnn/common/constants.hpp"
-#include "cpp/ttnn/operations/data_movement/copy/copy.hpp"
-#include "cpp/ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::operations::data_movement {
@@ -30,6 +29,8 @@ ttnn::Tensor SliceOperation::invoke(
     const auto& input_shape = input_tensor.get_logical_shape();
     uint32_t input_rank = input_shape.rank();
     auto input_layout = input_tensor.get_layout();
+
+    const auto& input_dtype = input_tensor.get_dtype();
 
     if (input_rank == 0) {
         return input_tensor;
@@ -62,6 +63,13 @@ ttnn::Tensor SliceOperation::invoke(
         if (input_tensor.storage_type() == StorageType::DEVICE) {
             auto tensor = ttnn::to_memory_config(input_tensor, memory_config, std::nullopt);
             tensor = ttnn::to_layout(tensor, input_layout, std::nullopt, std::nullopt, (IDevice*)nullptr);
+
+            // TODO un/tilize LLKs don't work with various integer types so we have to do this hack
+            // see https://github.com/tenstorrent/tt-metal/issues/16860
+            if (input_dtype == DataType::UINT16 || input_dtype == DataType::UINT32) {
+                tensor = ttnn::typecast(tensor, input_dtype);
+            }
+
             return tensor;
         }
         return input_tensor;
@@ -109,6 +117,12 @@ ttnn::Tensor SliceOperation::invoke(
         }
         rm_only = !no_step || !aligned_begins || !aligned_ends || one_dimensional || input_tensor.is_sharded();
         if (rm_only) {
+            // TODO un/tilize LLKs don't work with various integer types so we have to do this hack
+            // see https://github.com/tenstorrent/tt-metal/issues/16860
+            if (input_dtype == DataType::UINT16 || input_dtype == DataType::UINT32) {
+                input = ttnn::typecast(input, DataType::FLOAT32);
+            }
+
             if (!no_step) {
                 TT_FATAL(
                     input.get_dtype() != DataType::BFLOAT8_B, "Strided slice is not supported for BFLOAT8 tensors");
