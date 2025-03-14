@@ -9,15 +9,15 @@
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"
-#include "impl/allocator/l1_banking_allocator.hpp"
+#include "hostdevcommon/kernel_structs.h"  // Not used here, but leaked to programming examples
 #include "work_executor_types.hpp"
 #include "data_types.hpp"
 #include "program_device_map.hpp"
-#include "build.hpp"
 #include "hal.hpp"
 #include "command_queue_interface.hpp"
-#include "sub_device_manager.hpp"
 #include "sub_device_types.hpp"
+#include <tt-metalium/allocator_types.hpp>
+
 #include <tt_stl/span.hpp>
 
 namespace tt {

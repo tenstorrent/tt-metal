@@ -11,10 +11,10 @@ from tt_lib.utils import find_closest_largest_divisor
 import math
 
 
-def _golden_function(input_tensor: ttnn.Tensor, dim: int, **_):
+def _golden_function(input_tensor: ttnn.Tensor, dim: Optional[int] = None, **_):
     import torch
 
-    return torch.softmax(input_tensor, dim)
+    return torch.nn.Softmax(dim)(input_tensor)
 
 
 ttnn.attach_golden_function(

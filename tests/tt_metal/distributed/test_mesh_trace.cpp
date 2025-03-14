@@ -10,6 +10,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/sub_device.hpp>
 
 #include <tt_stl/indestructible.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"

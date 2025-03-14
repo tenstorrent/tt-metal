@@ -9,10 +9,10 @@
 
 #include "device.hpp"
 #include "hostdevcommon/common_values.hpp"
+#include "hostdevcommon/kernel_structs.h"  // Leaked up to ttnn level from here
 #include "work_executor_types.hpp"
 #include "data_types.hpp"
 #include "program_device_map.hpp"
-#include "build.hpp"
 #include "hal.hpp"
 #include "command_queue_interface.hpp"
 #include "command_queue.hpp"
@@ -209,8 +209,6 @@ private:
     void initialize_firmware(const HalProgrammableCoreType &core_type, CoreCoord virtual_core, launch_msg_t *launch_msg, go_msg_t* go_msg);
 
     void initialize_default_sub_device_state(size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap);
-
-    void update_dispatch_cores_for_multi_cq_eth_dispatch();
 
     void compile_command_queue_programs();
     void configure_command_queue_programs();
