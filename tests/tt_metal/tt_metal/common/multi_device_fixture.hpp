@@ -91,6 +91,9 @@ protected:
     using MeshShape = ::tt::tt_metal::distributed::MeshShape;
 
     enum class MeshDeviceType {
+        // 150 devices opened as 1x1 meshes.
+        N150,
+        P150,
         N300,
         P300,
         T3000,
@@ -162,6 +165,8 @@ private:
     // Returns the mesh shape for a given mesh device type.
     MeshShape get_mesh_shape(MeshDeviceType mesh_device_type) {
         switch (mesh_device_type) {
+            case MeshDeviceType::N150:
+            case MeshDeviceType::P150: return MeshShape(1, 1);
             case MeshDeviceType::N300:
             case MeshDeviceType::P300: return MeshShape(2, 1);
             case MeshDeviceType::T3000: return MeshShape(2, 4);
@@ -173,6 +178,13 @@ private:
     // Determines the mesh device type based on the number of devices.
     std::optional<MeshDeviceType> derive_mesh_device_type(size_t num_devices, tt::ARCH arch) {
         switch (num_devices) {
+            case 150: {
+                switch (arch) {
+                    case tt::ARCH::WORMHOLE_B0: return MeshDeviceType::N150;
+                    case tt::ARCH::BLACKHOLE: return MeshDeviceType::P150;
+                    default: return std::nullopt;
+                }
+            }
             case 2: {
                 switch (arch) {
                     case tt::ARCH::WORMHOLE_B0: return MeshDeviceType::N300;
@@ -214,11 +226,6 @@ protected:
 // Fixtures that specify the mesh device type explicitly.
 // The associated test will be run if the cluster topology matches
 // what is specified.
-class N300MeshDeviceFixture : public MeshDeviceFixtureBase {
-protected:
-    N300MeshDeviceFixture() : MeshDeviceFixtureBase(Config{.mesh_device_types = {MeshDeviceType::N300}}) {}
-};
-
 class T3000MeshDeviceFixture : public MeshDeviceFixtureBase {
 protected:
     T3000MeshDeviceFixture() : MeshDeviceFixtureBase(Config{.mesh_device_types = {MeshDeviceType::T3000}}) {}
@@ -227,12 +234,6 @@ protected:
 class TGMeshDeviceFixture : public MeshDeviceFixtureBase {
 protected:
     TGMeshDeviceFixture() : MeshDeviceFixtureBase(Config{.mesh_device_types = {MeshDeviceType::TG}}) {}
-};
-
-class N300MultiCQMeshDeviceFixture : public MeshDeviceFixtureBase {
-protected:
-    N300MultiCQMeshDeviceFixture() :
-        MeshDeviceFixtureBase(Config{.mesh_device_types = {MeshDeviceType::N300}, .num_cqs = 2}) {}
 };
 
 class T3000MultiCQMeshDeviceFixture : public MeshDeviceFixtureBase {
