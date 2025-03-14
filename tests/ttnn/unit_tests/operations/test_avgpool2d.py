@@ -9,12 +9,11 @@ import pytest
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-def run_avg_pool(device, input_shape, kernel_size, stride, padding, dilation):
-    # Test setup for both.
-    batch_size, in_c, in_h, in_w = input_shape
-    ## Decimal
+def run_avg_pool(device, input_shape, kernel_size, stride, padding, dilation, ceil_mode=False):
+    ## Test setup for both.
+    in_n, in_c, in_h, in_w = input_shape
+    torch.manual_seed(0)
     torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
-    ## Integer
     # torch_input = torch.zeros(input_shape, dtype=torch.bfloat16)
     # for n in range(input_shape[0]):
     #     for c in range(input_shape[1]):
@@ -22,103 +21,107 @@ def run_avg_pool(device, input_shape, kernel_size, stride, padding, dilation):
     #             for w in range(input_shape[3]):
     #                 torch_input[n, c, h, w] = h * in_w + w
 
-    # Test setup for Actual.
+    ## Test setup for Actual.
     input_tensor = torch.permute(torch_input, (0, 2, 3, 1))
-    input_tensor = torch.reshape(input_tensor, (1, 1, -1, in_c))
+    input_tensor = torch.reshape(input_tensor, (1, 1, in_n * in_h * in_w, in_c))
     input_tensor = ttnn.from_torch(input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_input_tensor = ttnn.to_device(input_tensor, device)
 
-    # Get Expected output.
+    ## Get Expected output.
     expected_output = torch.nn.functional.avg_pool2d(
-        torch_input, kernel_size, stride, padding, ceil_mode=False, count_include_pad=True, divisor_override=None
+        torch_input,
+        kernel_size,
+        stride,
+        padding,
+        ceil_mode=ceil_mode,
+        count_include_pad=True,
+        divisor_override=None,
     )
 
-    # Get Actual output
-    output_tensor = ttnn.avg_pool2d(input_tensor, batch_size, in_h, in_w, in_c, kernel_size, stride, padding, dilation)
+    ## Get Actual output
+    output_tensor = ttnn.avg_pool2d(
+        input_tensor=tt_input_tensor,
+        batch_size=in_n,
+        input_h=in_h,
+        input_w=in_w,
+        channels=in_c,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+        # memory_config=memory_config,
+        # applied_shard_scheme=shard_scheme,
+        ceil_mode=ceil_mode,
+    )
 
-    # Test teardown for Actual.
-    output_tensor = ttnn.to_torch(output_tensor)
-    output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
-    output_tensor = torch.reshape(output_tensor, expected_output.shape)
+    ## Test teardown for Actual.
+    output_tensor = output_tensor.cpu()
+    output_tensor = torch.Tensor(ttnn.to_torch(output_tensor))
+    output_tensor = output_tensor[:, :, :, :in_c]
+    output_tensor = output_tensor.reshape(
+        expected_output.shape[0], expected_output.shape[2], expected_output.shape[3], expected_output.shape[1]
+    )
+    output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))  # N, C, H, W
 
-    # Assertion
-    # assert_with_pcc(expected_output, output_tensor, 0.99)
-    # print(input_tensor.shape)
-    # torch.set_printoptions(profile="full")
-    print(f"Expected_output.shape: {expected_output.shape}")
-    print(f"Output_tensor.shape: {output_tensor.shape}")
-    # print(torch_input)
-    # print(expected_output)
-    # print(f"output_tensor[0][0]: {output_tensor[0][0]}")
-
-    ## Find and print mismatched indices and values.
-    # mismatches = (expected_output != output_tensor).nonzero(as_tuple=True)
-    # for idx in zip(*mismatches):
-    #     print(f"Index: {idx}, | Expected: {expected_output[idx]}, | Actual: {output_tensor[idx]}, | Diff: {expected_output[idx] - output_tensor[idx]}, | Error: {100*abs(expected_output[idx] - output_tensor[idx])/expected_output[idx]} %")
-    ## Find and print indices and values based on rtol=0.01.
-    # mismatch_mask = ~torch.isclose(expected_output, output_tensor, rtol=0.01) # Find mismatches based on rtol.
-    # mismatch_indices = torch.nonzero(mismatch_mask, as_tuple=True) # Get indices where mismatch occurs.
-    # mismatched_expected = expected_output[mismatch_indices] # Get mismatched values
-    # mismatched_output = output_tensor[mismatch_indices] # Get mismatched values
-    # for idx, (exp_val, out_val) in enumerate(zip(mismatched_expected, mismatched_output)):
-    #     print(f"Mismatch {idx+1}: Index {tuple(mismatch_indices[i][idx].item() for i in range(len(mismatch_indices)))}, "
-    #       f"Expected = {exp_val.item()}, Actual = {out_val.item()}, Diff = {exp_val.item() - out_val.item()}, Error: {100*abs(exp_val.item() - out_val.item())/exp_val.item()} %")
-
-    assert torch.allclose(expected_output, output_tensor, rtol=0.02)
+    ## Assertion
+    assert_with_pcc(expected_output, output_tensor, 0.99)
+    assert torch.allclose(output_tensor, expected_output, rtol=0.02)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
-    "input_shape, kernel_size, stride, padding, dilation",
+    "input_shape",
+    (
+        [1, 32, 16, 16],
+        [1, 32, 112, 112],
+        [1, 512, 16, 16],
+        [2, 32, 16, 16],
+        [2, 32, 112, 112],
+        [2, 512, 16, 16],
+        [1, 800, 16, 16],
+        [2, 800, 16, 16],
+    ),
+)
+@pytest.mark.parametrize(
+    "kernel_size",
+    (
+        (2, 2),
+        (3, 3),
+        (5, 5),
+        (9, 9),
+        (13, 13),
+    ),
+)
+@pytest.mark.parametrize(
+    "stride",
+    (
+        (1, 1),
+        (2, 2),
+    ),
+)
+@pytest.mark.parametrize(
+    "padding",
+    (
+        (0, 0),
+        (1, 1),
+    ),
+)
+@pytest.mark.parametrize("dilation", ((1, 1),))
+@pytest.mark.parametrize(
+    "ceil_mode",
     [
-        ## Case 1. Normal compute & Normal reader, Batch = 1.
-        (
-            (1, 32, 16, 16),
-            (2, 2),
-            (2, 2),
-            (0, 0),
-            (1, 1),
-        ),  # Decimal Passed. Integer Passed. DONE!
-        ((1, 32, 112, 112), (2, 2), (2, 2), (0, 0), (1, 1)),  # Decimal Passed. Integer Passed. DONE!
-        ## Case 2. Normal computer & Normal reader, Batch > 1.
-        # ((2, 32, 16, 16), (2, 2), (2, 2), (0, 0), (1, 1)),        # Decimal FAILED. Integer Passed.
-        # ((2, 32, 112, 112), (2, 2), (1, 1), (0, 0), (1, 1)),      # Decimal FAILED. Integer Passed.
-        ## Case 3. Normal compute & Wide (C>256) reader kernel, Batch = 1.
-        ((1, 512, 16, 16), (2, 2), (2, 2), (0, 0), (1, 1)),  # Decimal Passed. Integer Passed. DONE!
-        ((1, 512, 112, 112), (2, 2), (2, 2), (0, 0), (1, 1)),  # Decimal Passed. Integer Passed. DONE!
-        ## Case 4. Normal compute & Wide (C>256) reader kernel, Batch > 1.
-        # ((2, 512, 16, 16), (2, 2), (2, 2), (0, 0), (1, 1)),         # Decimal FAILED. Integer FAILED.
-        # ((2, 512, 112, 112), (2, 2), (2, 2), (0, 0), (1, 1)),       # Decimal FAILED. Integer FAILED.
-        ## Case 5. Large compute & Large reader kernel, Batch = 1.  # TODO(jongbinlimTT): This case fails. Need to remove double division.
-        ((1, 32, 16, 16), (5, 5), (2, 2), (0, 0), (1, 1)),  # Decimal Passed only r=0.02. Integer Passed r=0.01.
-        ((1, 32, 112, 112), (5, 5), (2, 2), (0, 0), (1, 1)),  # Decimal Passed only r=0.02. Integer Passed only r=0.02.
-        ## Case 6. Large compute & Large reader kernel, Batch > 1.
-        # ((2, 32, 16, 16), (5, 5), (2, 2), (0, 0), (1, 1)),        # Decimal FAILED. Integer FAILED.
-        # ((2, 32, 112, 12), (5, 5), (2, 2), (0, 0), (1, 1)),       # Decimal FAILED. Integer FAILED.
-        ## Case 7. Large compute & Large + wide -> Large reader kernel, Batch = 1.
-        ((1, 512, 32, 32), (5, 5), (2, 2), (0, 0), (1, 1)),  # Decimal Passed. Integer Passed.
-        ((1, 512, 32, 32), (5, 5), (2, 2), (0, 0), (1, 1)),  # Decimal Passed. Integer Passed.
-        ## Case 8. Large compute & Large + wide -> Large reader kernel, Batch > 1.
-        # ((2, 512, 112, 112), (5, 5), (2, 2), (0, 0), (1, 1)),     # Decimal FAILED. Integer FAILED.
-        # ((2, 512, 112, 112), (5, 5), (2, 2), (0, 0), (1, 1)),     # Decimal FAILED. Integer FAILED.
-        # ((4, 256, 40, 40), (2, 2), (2, 2), (0, 0), (1, 1)),
-        # ((1, 128, 56, 56), (2, 2), (2, 2), (0, 0), (1, 1)),
-        # ((1, 256, 28, 28), (2, 2), (2, 2), (0, 0), (1, 1)),
-        # ((1, 192, 56, 56), (2, 2), (2, 2), (0, 0), (1, 1)),
-        # ((1, 160, 7, 7), (2, 2), (2, 2), (0, 0), (1, 1)),
-        # ((1, 256, 56, 56), (13, 13), (1, 1), (0, 0), (1, 1)),
-        # pytest.param((1, 512, 14, 14), (2, 2), (2, 2), (0, 0), (1, 1), marks=pytest.mark.xfail(reason="incorrect results (#14459)")),
-        # pytest.param((1, 384, 28, 28), (2, 2), (2, 2), (0, 0), (1, 1), marks=pytest.mark.xfail(reason="in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 (#13901)")),
-        # pytest.param((1, 1056, 14, 14), (2, 2), (2, 2), (0, 0), (1, 1), marks=pytest.mark.xfail(reason="in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 (#13901)")),
-        # pytest.param((1, 640, 14, 14), (2, 2), (2, 2), (0, 0), (1, 1), marks=pytest.mark.xfail(reason="in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 (#13901)")),
-        # pytest.param((1, 896, 14, 14), (2, 2), (2, 2), (0, 0), (1, 1), marks=pytest.mark.xfail(reason="in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 (#13901)")),
-        # pytest.param((1, 24, 56, 56), (2, 2), (2, 2), (0, 0), (1, 1), marks=pytest.mark.xfail(reason="in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 (#13901)")),
-        # pytest.param((1, 40, 28, 28), (2, 2), (2, 2), (0, 0), (1, 1), marks=pytest.mark.xfail(reason="incorrect results (#15731)")),
-        # pytest.param((1, 80, 14, 14), (2, 2), (2, 2), (0, 0), (1, 1), marks=pytest.mark.xfail(reason="incorrect results (#15731)")),
-        # pytest.param((1, 112, 14, 14), (2, 2), (2, 2), (0, 0), (1, 1), marks=pytest.mark.xfail(reason="incorrect results (#15731)")),
-        # pytest.param((1, 384, 35, 35), (3, 3), (1, 1), (1, 1), (1, 1), marks=pytest.mark.xfail(reason="in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 (#13901)")),
-        # pytest.param((1, 1024, 17, 17), (3, 3), (1, 1), (1, 1), (1, 1), marks=pytest.mark.xfail(reason="incorrect results (#14459)")),
-        # pytest.param((1, 1536, 8, 8), (3, 3), (1, 1), (1, 1), (1, 1), marks=pytest.mark.xfail(reason="incorrect results (#14459)")),
+        False,
+        # True # TODO(jongbinlimTT): Need to support.
     ],
 )
-def test_run_avg_pool(device, input_shape, kernel_size, stride, padding, dilation):
-    run_avg_pool(device, input_shape, kernel_size, stride, padding, dilation)
+def test_run_avg_pool(device, input_shape, kernel_size, stride, padding, dilation, ceil_mode):
+    run_avg_pool(
+        device,
+        input_shape,
+        kernel_size,
+        stride,
+        padding,
+        dilation,
+        # shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ceil_mode=ceil_mode,
+    )
