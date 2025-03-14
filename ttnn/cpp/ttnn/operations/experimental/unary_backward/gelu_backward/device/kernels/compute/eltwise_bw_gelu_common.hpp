@@ -27,6 +27,19 @@ inline void llk_math_eltwise_unary_load_imm(float val, uint dst_index, int vecto
 
 inline void load_immediate_value(uint dst_index, float val) { MATH(llk_math_eltwise_unary_load_imm(val, dst_index)); }
 
+inline void _llk_math_load_imm_sfpu_init_() {
+    sfpu::_init_sfpu_config_reg();
+    addr_mod_t{
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 0},
+    }
+        .set(ADDR_MOD_7);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
+
+inline void load_immediate_value_init() { MATH(_llk_math_load_imm_sfpu_init_()); }
+
 template <bool APPROXIMATION_MODE, bool small_to_big_index, int ITERATIONS = 8>
 inline void _copy_value_(const uint dst_offset) {
     for (int d = 0; d < ITERATIONS; d++) {
