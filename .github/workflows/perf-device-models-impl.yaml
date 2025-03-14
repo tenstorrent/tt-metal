@@ -124,5 +124,5 @@ jobs:
             /work/generated/test_reports/
           prefix: "test_reports_"
 
-      - uses: ./.github/actions/cleanup
+      - uses: tenstorrent/tt_metal/.github/actions/cleanup@main
         if: always()

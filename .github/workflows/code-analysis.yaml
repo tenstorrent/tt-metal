@@ -189,5 +189,5 @@ jobs:
           ccache -s >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
-      - uses: ./.github/actions/cleanup
+      - uses: tenstorrent/tt_metal/.github/actions/cleanup@main
         if: always()

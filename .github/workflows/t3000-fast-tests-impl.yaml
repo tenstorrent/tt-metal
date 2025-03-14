@@ -102,5 +102,5 @@ jobs:
           path: |
             generated/test_reports/
 
-      - uses: ./.github/actions/cleanup
+      - uses: tenstorrent/tt_metal/.github/actions/cleanup@main
         if: always()
