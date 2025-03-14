@@ -620,7 +620,7 @@ class resnet50:
         conv_input_face_shape_hw = [224, 224]
         self.device = device
         self.conv_input_face_shape_hw = conv_input_face_shape_hw
-        self.batch_size = batch_size // (1 if isinstance(device, ttnn.Device) else device.get_num_devices())
+        self.batch_size = batch_size
         self.model_config = model_config
         self.conv_op_cache = {}
         self.inplanes = 64
@@ -861,7 +861,6 @@ class resnet50:
 
     ## merged runs (first and optimized)
     def run(self, input_tensor, device, ops_parallel_config, conv_op_cache={}) -> ttnn.Tensor:
-        self.batch_size = 16
         is_first_run = False
         if not ops_parallel_config:
             is_first_run = True

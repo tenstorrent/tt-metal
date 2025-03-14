@@ -27,7 +27,7 @@ ops_parallel_config = {}
 
 
 def run_resnet_imagenet_inference(
-    batch_size,
+    batch_size_per_device,
     iterations,
     imagenet_label_dict,
     model_location_generator,
@@ -41,6 +41,8 @@ def run_resnet_imagenet_inference(
     # set up image processor
     image_processor = AutoImageProcessor.from_pretrained(model_version)
 
+    batch_size = batch_size_per_device * (1 if isinstance(device, ttnn.Device) else device.get_num_devices())
+
     # load inputs
     logger.info("ImageNet-1k validation Dataset")
     input_loc = str(model_location_generator("ImageNet_data"))
@@ -50,7 +52,7 @@ def run_resnet_imagenet_inference(
     # this will move weights to device
     test_infra = create_test_infra(
         device,
-        batch_size,
+        batch_size_per_device,
         model_config["ACTIVATIONS_DTYPE"],
         model_config["WEIGHTS_DTYPE"],
         model_config["MATH_FIDELITY"],
