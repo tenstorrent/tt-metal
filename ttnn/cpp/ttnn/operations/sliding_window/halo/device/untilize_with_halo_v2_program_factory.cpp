@@ -89,12 +89,17 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         input_to_writer_cb_id = untilize_out_cb_id;
 
         // output of untilize from compute kernel goes into this CB
-        uint32_t output_ntiles = ntiles_per_block * input_nblocks_per_core;
+        uint32_t output_ntiles = 2;  // ntiles_per_block * input_nblocks_per_core;
         auto untilize_out_cb_config =
             CircularBufferConfig(output_ntiles * out_tile_size, {{untilize_out_cb_id, out_df}})
                 .set_page_size(untilize_out_cb_id, out_tile_size);
         auto untilize_out_cb = CreateCircularBuffer(program, all_cores, untilize_out_cb_config);
-        log_debug(tt::LogOp, "CB {} :: npages = {}, pagesize = {}", untilize_out_cb_id, output_ntiles, out_tile_size);
+        tt::log_info(
+            tt::LogOp,
+            "UNTILIZE OUT CB {} :: npages = {}, pagesize = {}",
+            untilize_out_cb_id,
+            output_ntiles,
+            out_tile_size);
     }
 
     // output shard, after inserting halo and padding, goes into this CB as input to next op.

@@ -22,16 +22,17 @@ inline bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val) {
     return true;
 }
 
-template <uint32_t STICK_SIZE_BYTES, uint32_t PAGE_SIZE>
+template <uint32_t STICK_SIZE_BYTES, uint32_t PAGE_SIZE, uint32_t BLOCK_HEIGHT_STICKS>
 static inline void execute_transfer(
     uint32_t in_base_l1_addr,
     uint64_t out_base_l1_addr,
     uint16_t src_offset_id,
     uint16_t dst_offset_id,
     uint16_t transfer_size) {
-    const uint32_t size = transfer_size * STICK_SIZE_BYTES;
-    const uint32_t src_offset = src_offset_id * PAGE_SIZE;
+    const uint32_t src_offset = (src_offset_id % BLOCK_HEIGHT_STICKS) *
+                                PAGE_SIZE;  // Convert from global stick offset to local block stick offset
     const uint32_t dst_offset = dst_offset_id * STICK_SIZE_BYTES;
+    const uint32_t size = transfer_size * STICK_SIZE_BYTES;
     const uint32_t src_addr = in_base_l1_addr + src_offset;
     const uint64_t dst_addr = out_base_l1_addr + dst_offset;
     noc_async_write(src_addr, dst_addr, size);
@@ -66,7 +67,13 @@ void execute_config(
 
     uint16_t block_id = 0;
 
+    // Wait for the first set of tiles from compute before beginning
+    const uint32_t block_width_tiles = 2;
+    const uint32_t block_height_sticks = 32;
+    cb_wait_front(16, block_width_tiles);
+
     while (number_of_segments_remaining) {
+        DPRINT << "start of segment =" << number_of_segments_remaining << ENDL();
         // Read header for to get destination for this route
         destination_noc_x = config[index++];
         destination_noc_y = config[index++];
@@ -78,18 +85,19 @@ void execute_config(
 
         // Perform all transfers in this route
         while (transfers_remaining > 0) {
+            DPRINT << "transfers rem " << transfers_remaining << ENDL();
             src_offset = config[index++];
             dst_offset = config[index++];
             transfer_size = config[index++];
 
-            if ((src_offset / 32) > block_id) {
-                // TODO: sync and discard last block
-                // TODO: wait for next block
-                DPRINT << "done block " << block_id << "at src_offset=" << src_offset << ENDL();
+            if ((src_offset / block_height_sticks) > block_id) {
+                noc_async_write_barrier();
+                cb_pop_front(16, block_width_tiles);
+                cb_wait_front(16, block_width_tiles);
                 block_id++;
             }
 
-            execute_transfer<stick_nbytes, input_aligned_page_size>(
+            execute_transfer<stick_nbytes, input_aligned_page_size, block_height_sticks>(
                 in_base_l1_addr, out_l1_addr, src_offset, dst_offset, transfer_size);
             transfers_remaining--;
         }
@@ -164,7 +172,7 @@ void kernel_main() {
         cb_push_back(src_cb_id, in_nsticks);
     }
 
-    cb_wait_front(in_cb_id, in_nsticks);
+    // #cb_wait_front(in_cb_id, in_nsticks);
 
     const uint32_t config_data_l1_addr = get_read_ptr(local_config_cb_id);
     const tt_l1_ptr uint16_t* config_data = reinterpret_cast<const tt_l1_ptr uint16_t*>(config_data_l1_addr);

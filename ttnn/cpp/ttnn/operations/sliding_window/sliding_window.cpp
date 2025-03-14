@@ -683,7 +683,6 @@ GatherConfig regenerate_ordered(const GatherConfig& input) {
         route.transfers = transfers;
         ordered_config.routes.push_back(route);
     }
-    tt::log_info("before routes? {} - after routes? {}", input.routes.size(), ordered_config.routes.size());
     return ordered_config;
 }
 
@@ -783,9 +782,6 @@ generate_halo_kernel_config_tensors(
     const auto flattened_blocking_configs = flatten_blocking_config(blocking_configs, num_cores_nhw);
 
     tt::log_info("gather data = {}", per_core_gather_data);
-    tt::log_info("blocked_gather_data = {}", blocked_gather_data);
-    tt::log_info("blocked gather data = {}", blocking_configs);
-    tt::log_info("flattened configs = {}", flattened_blocking_configs);
 
     // construct the config tensors
     /**
@@ -831,8 +827,6 @@ generate_halo_kernel_config_tensors(
         }
     }
 
-    tt::log_info("local config = {}", local_config);
-    tt::log_info("remote config = {}", remote_config);
     validate_blocking_configs(blocking_configs, local_config, remote_config);
 
     std::vector<GatherConfig> gather_configs(num_cores_nhw);
@@ -871,6 +865,8 @@ generate_halo_kernel_config_tensors(
         ordered_gather_configs.push_back(reorder_gather_config(config));
     }
 
+    tt::log_info("gather config = {}", gather_configs);
+    tt::log_info("ordered gather config = {}", ordered_gather_configs);
     const auto serialized_gather_configs = serialize_gather_configs(ordered_gather_configs);
     tt::log_info("serialized gather config = {}", serialized_gather_configs);
 
