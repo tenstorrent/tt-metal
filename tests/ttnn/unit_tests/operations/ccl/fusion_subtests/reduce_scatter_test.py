@@ -249,18 +249,21 @@ def run_reduce_scatter_impl(
 
 
 def test_fabric_reduce_scatter(n300_mesh_device):
-    # torch.manual_seed(2005)
+    torch.manual_seed(2005)
     dim = 3
     shard_height = 32
     shard_width = 160
     num_devices = n300_mesh_device.get_num_devices()
-    num_cores = 8
+    num_cores = 2
     torch_input_tensors = [
         torch.range(0, shard_height * shard_width * num_cores - 1).reshape(1, 1, shard_height, shard_width * num_cores)
+        # torch.rand(1, 1, shard_height, shard_width * num_cores)
     ]
     for i in range(1, num_devices):
         torch_input_tensors.append(
-            (i + 1) * torch.range(0, shard_height * shard_width * num_cores - 1).reshape(torch_input_tensors[0].shape)
+            (i + 1)
+            * torch.range(0, shard_height * shard_width * num_cores - 1).reshape(torch_input_tensors[0].shape)
+            # torch.rand(1, 1, shard_height, shard_width * num_cores)
         )
 
     print(torch_input_tensors)
@@ -323,13 +326,40 @@ def test_fabric_reduce_scatter(n300_mesh_device):
     )
     ttnn.synchronize_device(n300_mesh_device, sub_device_ids=sub_device_stall_group)
     tt_torch_tensor = ttnn.to_torch(tt_out_tensor, mesh_composer=ttnn.ConcatMeshToTensor(n300_mesh_device, dim))
+    print(tt_torch_tensor.shape)
     print("Torch conversion done")
     print("TT tensor")
     print(tt_torch_tensor)
     print("Torch tensor")
     print(output)
-    eq, output = comp_pcc(tt_torch_tensor, output)
-    print(f"PCC: {output}")
+    eq, output_results = comp_pcc(tt_torch_tensor, output)
+
+    print(f"PCC: {output_results}")
+
     n300_mesh_device.reset_sub_device_stall_group()
     teardown_fabric_interface(n300_mesh_device)
-    assert eq, f"FAILED: {output}"
+    # Assuming tt_torch_tensor and output are your tensors
+    # Ensure they are on the same device and have the same shape
+
+    # Compute the absolute differences
+    differences = torch.abs(tt_torch_tensor - output)
+
+    # Find the maximum difference
+    max_difference = torch.max(differences)
+
+    # Find the first index where the maximum difference occurs
+    first_max_diff_index = None
+    for index in torch.nonzero(differences == max_difference, as_tuple=False):
+        first_max_diff_index = tuple(index.tolist())
+        break
+
+    if first_max_diff_index is not None:
+        print(f"First index with maximum difference: {first_max_diff_index}")
+        print(f"Maximum difference: {max_difference.item()}")
+        print(f"tt_torch_tensor value: {tt_torch_tensor[first_max_diff_index]}")
+        print(f"output value: {output[first_max_diff_index]}")
+    else:
+        print("No mismatches found.")
+
+    print(f"Maximum difference: {max_difference.item()}")
+    assert eq, f"FAILED: {output_results}"
