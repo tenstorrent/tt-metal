@@ -79,7 +79,7 @@ jobs:
           ]
     runs-on: ${{ matrix.test_group.runs-on }}
     container:
-      image: ${{ 'ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-amd64-release:${{ inputs.version }}' || 'docker-image-unresolved!' }}
+      image: ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-amd64-release:${{ inputs.version }}
       env:
         LOGURU_LEVEL: INFO
         ARCH_NAME: ${{ matrix.test_group.arch }}
