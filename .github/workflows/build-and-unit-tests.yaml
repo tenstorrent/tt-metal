@@ -149,6 +149,6 @@ jobs:
         if: ${{ failure() }}
         with:
           path: |
-            generated/test_reports/
+            /work/generated/test_reports/
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
