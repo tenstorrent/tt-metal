@@ -1,4 +1,4 @@
-name: "conda post commit"
+name: "[internal] ttnn unit tests impl"
 
 on:
   workflow_call:
@@ -20,7 +20,12 @@ on:
       docker-image:
         required: true
         type: string
-        default: quay.io/condaforge/linux-anvil-x86_64:alma9
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
 
   workflow_dispatch:
     inputs:
@@ -48,7 +53,12 @@ on:
       docker-image:
         required: true
         type: string
-        default: quay.io/condaforge/linux-anvil-x86_64:alma9
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
 
 jobs:
   ttnn:
@@ -57,6 +67,7 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
+        os: ["ubuntu-22.04"]
         test-group:
           - name: ttnn group 1
             cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 1 -m "not disable_fast_runtime_mode"
@@ -96,7 +107,7 @@ jobs:
       env:
         ARCH_NAME: ${{ inputs.arch }}
         GITHUB_ACTIONS: true
-        LOGURU_LEVEL: DEBUG
+        LOGURU_LEVEL: INFO
         PYTHONPATH: /work
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
@@ -108,21 +119,22 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: Install Git
-        run: |
-          yum install -y git
-          git --version  # Verify installation
-
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
           path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
 
-      - name: Create conda environment
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.wheel-artifact-name }}
+          path: docker-job
+
+      - name: Install Wheel
         run: |
-          source /opt/conda/etc/profile.d/conda.sh
-          conda create -y -n metalium_env python=3.10 tt-metalium multiprocess psutil pytest pytest-split pytest-timeout pytest-xdist -c conda-forge
+          WHEEL_FILENAME=$(ls -1 *.whl)
+          pip3 install $WHEEL_FILENAME
 
       - name: Set ttnn fast runtime if exists in config
         if: ${{ matrix.test-group.fast_runtime_mode_off }}
@@ -132,15 +144,13 @@ jobs:
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-          source /opt/conda/etc/profile.d/conda.sh
-          conda activate metalium_env
           ${{ matrix.test-group.cmd }}
 
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          owner: U07J3K6KS1K # Bryan Lozano
+          owner: U06CXU895AP # Michael Chiou
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
