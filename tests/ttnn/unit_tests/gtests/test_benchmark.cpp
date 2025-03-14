@@ -125,15 +125,14 @@ std::vector<std::tuple<DataType, MathFidelity, bool>> matmul_configs = {
     {DataType::BFLOAT8_B, MathFidelity::HiFi2, false},
     {DataType::BFLOAT8_B, MathFidelity::LoFi, false},
     {DataType::BFLOAT4_B, MathFidelity::LoFi, false},
-    // TODO: Enable tracing
-    //  {DataType::BFLOAT16, MathFidelity::HiFi2, true},
-    //  {DataType::BFLOAT16, MathFidelity::HiFi4, true},
-    //  {DataType::BFLOAT8_B, MathFidelity::HiFi2, true},
-    //  {DataType::BFLOAT8_B, MathFidelity::LoFi, true},
-    //  {DataType::BFLOAT4_B, MathFidelity::LoFi, true},
+    {DataType::BFLOAT16, MathFidelity::HiFi2, true},
+    {DataType::BFLOAT16, MathFidelity::HiFi4, true},
+    {DataType::BFLOAT8_B, MathFidelity::HiFi2, true},
+    {DataType::BFLOAT8_B, MathFidelity::LoFi, true},
+    {DataType::BFLOAT4_B, MathFidelity::LoFi, true},
 };
 
-class Matmul2DHostPerfTestFixture : public ttnn::distributed::test::TTNNFixtureWithTraceEnabledDevice,
+class Matmul2DHostPerfTestFixture : public ttnn::TTNNFixtureWithDevice,
                                     public testing::WithParamInterface<std::tuple<
                                         /* grid_size */ std::tuple<int, int>,
                                         /* tile_h */ int,
@@ -143,7 +142,7 @@ class Matmul2DHostPerfTestFixture : public ttnn::distributed::test::TTNNFixtureW
                                         /* use_program_cache */ bool>> {
 public:
     Matmul2DHostPerfTestFixture() : ttnn::TTNNFixtureWithDevice(24576, 200000) {}
-
+};
 
 TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
     const std::tuple<int, int>& grid_size = std::get<0>(GetParam());
@@ -155,7 +154,14 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
 
     TT_FATAL(std::get<0>(grid_size) > 0 && std::get<1>(grid_size) > 0, "Invalid grid size");
     TT_FATAL(num_measurement_iterations > 0, "Won't have data without at least one measurement iteration");
-    tt::tt_metal::IDevice* device = &getDevice();
+    tt::tt_metal::IDevice* device = device_;
+    TT_ASSERT(
+        use_program_cache,
+        "If program cache is disabled, the test will have an unrealistically high dispatch overhead and will not be "
+        "representative of expected performance")
+    if (use_program_cache) {
+        device->enable_program_cache();
+    }
     const char* TT_METAL_HOME = std::getenv("TT_METAL_HOME");
     std::string ARTIFACTS_DIR = std::string(TT_METAL_HOME) + "/generated";
     std::string FILE_NAME = ARTIFACTS_DIR + "/matmul_2d_host_perf_report.csv";
@@ -174,6 +180,13 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
         DataType dtype = std::get<0>(config);
         MathFidelity math_fidelity = std::get<1>(config);
         const bool use_trace = std::get<2>(config);
+
+        if (use_trace) {
+            TT_FATAL(
+                use_program_cache,
+                "Tracing requires program cache to be enabled, as DRAM can't be written to during tracing");
+        }
+
         tt::log_info("Running test with dtype: {}, math_fidelity: {}, use_trace: {}", dtype, math_fidelity, use_trace);
         std::vector<std::tuple<int, int, int, bool, bool, int, int, int>> matmul_shapes;
         if (dtype == DataType::BFLOAT16) {
@@ -385,4 +398,4 @@ INSTANTIATE_TEST_SUITE_P(
         /* tile_w */ 32,
         /* num_warmup_iterations */ 1,
         /* num_measurement_iterations */ 1,
-        /* use_program_cache */ false)));
+        /* use_program_cache */ true)));
