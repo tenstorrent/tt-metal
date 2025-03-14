@@ -46,7 +46,7 @@ inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-// computes layernorm(a+*b)*gamma + beta
+// computes layernorm(a+*b)*gamma
 // if b is nullptr it's treated as zero (no addition)
 
 operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
@@ -1393,11 +1393,7 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
     }
     // compute kernel compile time args
     std::vector<uint32_t> all_to_all_except_top_compute_compile_time_args = {
-        0,
-        gamma.has_value(),
-        beta.has_value(),
         num_blocks_first_stage,
-        1,
         block_wt,
         subblock_wt,
         num_subblocks_w,
@@ -1406,11 +1402,7 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
         fp32_dest_acc_en,
         num_blocks_second_stage};
     std::vector<uint32_t> not_all_to_all_compute_compile_time_args = {
-        0,
-        gamma.has_value(),
-        beta.has_value(),
         num_blocks_first_stage,
-        1,
         block_wt,
         subblock_wt,
         num_subblocks_w,
@@ -1480,14 +1472,6 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
             tt::tt_metal::CircularBufferConfig(in5_CB_size, {{in5_cb_index, gamma_cb_data_format}})
                 .set_page_size(in5_cb_index, gamma_single_tile_size);
         auto cb_in5 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in5_cb_config);
-    }
-    // beta
-    if (beta.has_value()) {
-        uint32_t in6_cb_index = tt::CBIndex::c_6;
-        tt::tt_metal::CircularBufferConfig in6_cb_config =
-            tt::tt_metal::CircularBufferConfig(in6_CB_size, {{in6_cb_index, beta_cb_data_format}})
-                .set_page_size(in6_cb_index, beta_single_tile_size);
-        auto cb_in6 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in6_cb_config);
     }
     // x
     uint32_t x_cb_index;
@@ -1662,7 +1646,7 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
             num_reduce_tiles_per_block_h = Kt - last_core_width_index * block_wt;
         }
 
-        std::vector<uint32_t> compute_args{num_reduce_tiles_per_block_h};
+        std::vector<uint32_t> compute_args{};
         if ((not use_two_stage_reduce and width_index < num_cores_all_to_all) or
             (use_two_stage_reduce and width_index_two_stage < num_cores_all_to_all_first_stage)) {
             uint32_t num_rows;
@@ -1674,15 +1658,13 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
                 num_rows = width_index == num_cores_all_to_all - 1 ? num_rows_per_all_to_all_worker_last
                                                                    : num_rows_per_all_to_all_worker;
             }
-            compute_args.push_back(num_rows);
-            compute_args.push_back((uint32_t)use_two_stage_reduce);
             bool is_second_stage_reader;
             if (use_two_stage_reduce) {
                 is_second_stage_reader = width_index < num_cores_all_to_all_first_stage;
             } else {
                 is_second_stage_reader = false;
             }
-            compute_args.push_back((uint32_t)is_second_stage_reader);
+            compute_args.push_back((uint32_t)(!(use_two_stage_reduce && (!is_second_stage_reader))));
             compute_args.push_back((uint32_t)num_distributed_devices);
             tt::tt_metal::SetRuntimeArgs(program, compute_kernels_id_all_to_all, core, compute_args);
         } else {
