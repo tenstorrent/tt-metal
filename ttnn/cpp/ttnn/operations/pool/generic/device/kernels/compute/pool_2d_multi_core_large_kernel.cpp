@@ -126,8 +126,6 @@ void MAIN {
     static_assert(REDUCE_OP == PoolType::MAX || REDUCE_OP == PoolType::SUM, "Only supports REDUCE_OP = MAX or Sum");
     constexpr bool neginf_srca_maxpool = (REDUCE_OP == PoolType::MAX) ? true : false;
     constexpr bool zero_srca_avgpool = (REDUCE_OP == PoolType::SUM) ? true : false;
-    // DPRINT << "Large compute kernel - neginf_srca_maxpool : " << (uint32_t)neginf_srca_maxpool << ENDL();
-    // DPRINT << "Large compute kernel - zero_srca_avgpool : " << (uint32_t)zero_srca_avgpool << ENDL();
 
     tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
         in_cb_id, in_scalar_cb_id, max_tiles_per_iter, interm_cb_id, num_faces_in_input_tile, max_rows_for_reduction);
@@ -141,8 +139,9 @@ void MAIN {
             pack_untilize_dst_init_short<max_tiles_per_iter>(interm_cb_id, num_out_rows, num_faces_in_output_tile);
             cb_reserve_back(interm_cb_id, 1);
             for (uint32_t h = 0; h <= interm_reduction_chunks;
-                 h++) {  // Reduction over first 16 sticks AND next 9 sticks. It runs twice, and both results are
-                         // written to interm_cb_id. interm_cb_id will be the input to the next level of reduction.
+                 h++) {  // For 5x5 kernel as an example, reduction over first 16 sticks AND next 9 sticks. It runs
+                         // twice, and both results are written to interm_cb_id. interm_cb_id will be the input to the
+                         // next level of reduction.
                 reduce_h_fused_interm<
                     max_tiles_per_iter,
                     is_partial_tile,
@@ -153,7 +152,6 @@ void MAIN {
             cb_push_back(interm_cb_id, 1);
 
             // perform the final reduction over the first N - 1 whole chunks // Reduction of final 2 sticks.
-            // TODO(jongbinlimTT): Here, in_scalar_cb_id should be in_one_cb_id.
             pack_untilize_uninit(out_cb_id);
             pack_untilize_dst_init_short<max_tiles_per_iter>(out_cb_id, num_out_rows, num_faces_in_output_tile);
             reduce_h_fused<max_tiles_per_iter, is_partial_tile, max_rows_for_reduction>(

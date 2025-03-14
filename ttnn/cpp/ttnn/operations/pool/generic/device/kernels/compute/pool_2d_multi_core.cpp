@@ -8,45 +8,12 @@
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/pack_untilize.h"
 
-#define DEBUG_PRINT 1
+#define DEBUG_PRINT 0
 
 #if DEBUG_PRINT == 1
 #include "debug/dprint.h"
 #include "debug/dprint_pages.h"
 #include "debug/dprint_tensix.h"
-
-// inline void print_tile_rows(uint32_t cb_id, uint32_t rows = 32, uint32_t tile_id = 0, bool untilize = false) {
-//     // UNPACK(( DPRINT << "======" << ENDL() ));
-//     for (uint16_t r = 0; r < rows; ++r) {
-//         SliceRange sr = SliceRange{.h0 = r, .h1 = (uint16_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
-//         UNPACK((DPRINT << (uint)r << " :: " << TileSlice(cb_id, tile_id, sr, true, untilize) << ENDL()));
-//     }
-//     // UNPACK(( DPRINT << "++++++" << ENDL() ));
-// }
-inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-    UNPACK((DPRINT << "======" << ENDL()));
-    for (uint16_t r = 0; r < 32; ++r) {
-        SliceRange sr = SliceRange{
-            .h0 = (uint8_t)r,
-            .h1 = (uint8_t)(r + 1),
-            .hs = (uint8_t)1,
-            .w0 = (uint8_t)0,
-            .w1 = (uint8_t)32,
-            .ws = (uint8_t)1};
-        UNPACK((DPRINT << (uint)r << TileSlice(cb_id, tile_id, sr, true, untilize) << ENDL()));
-    }
-    UNPACK((DPRINT << "++++++" << ENDL()));
-}
-inline void print_cb_details(uint32_t cb_id) {
-    DPRINT << "cb_id " << cb_id << ": { "
-           << "size: " << get_local_cb_interface(cb_id).fifo_size << ", "
-           << "limit: " << get_local_cb_interface(cb_id).fifo_limit << ", "
-           << "page_size: " << get_local_cb_interface(cb_id).fifo_page_size << ", "
-           << "num_pages: " << get_local_cb_interface(cb_id).fifo_num_pages << ", "
-           << "rd_ptr: " << get_local_cb_interface(cb_id).fifo_rd_ptr << ", "
-           << "wr_ptr: " << get_local_cb_interface(cb_id).fifo_wr_ptr << ", "
-           << "wr_tile_ptr: " << get_local_cb_interface(cb_id).fifo_wr_tile_ptr << " }" << ENDL();
-}
 
 #endif
 
@@ -58,8 +25,8 @@ inline void reduce_h_fused(
 
     cb_reserve_back(out_cb_id, num_output_tiles);
     const uint32_t curr_in_cb_id = split_reader ? (in_cb_id + (in_stick_index & 0x1)) : in_cb_id;
-    cb_wait_front(curr_in_cb_id, 1);  // paird with cb_pop_front(curr_in_cb_id, 1);
-    tile_regs_acquire();              // paired with tile_regs_release(); // Acquire lock on the dest register.
+    cb_wait_front(curr_in_cb_id, 1);  // paired with cb_pop_front(curr_in_cb_id, 1);
+    tile_regs_acquire();              // paired with tile_regs_release(). Acquire lock on the dest register.
     unpack_tilizeA_B_block(
         curr_in_cb_id,
         in_scalar_cb_id,
@@ -71,17 +38,12 @@ inline void reduce_h_fused(
         reduce_tile_math(c_i, num_faces_in_tile /* reduce 1 or 2 faces */);
     }
 
-    // print_cb_details(curr_in_cb_id);
-    // print_full_tile(curr_in_cb_id, 0, false); // Print the Input tile.
-
     cb_pop_front(curr_in_cb_id, 1);
     tile_regs_wait();
     tile_regs_commit();
     pack_untilize_dst<num_output_tiles>(
         out_cb_id, /*out_subblock_h=*/1, 0, num_out_rows, num_faces_in_tile); /* pack 1 row (1x16 or 1x32) */
     tile_regs_release();
-
-    // print_full_tile(out_cb_id, 0, false); // Print the Output tile.
 
     cb_push_back(out_cb_id, num_output_tiles);
 }
@@ -121,8 +83,6 @@ void MAIN {
     static_assert(REDUCE_OP == PoolType::MAX || REDUCE_OP == PoolType::SUM, "Only supports REDUCE_OP = MAX or Sum");
     constexpr bool neginf_srca_maxpool = (REDUCE_OP == PoolType::MAX) ? true : false;
     constexpr bool zero_srca_avgpool = (REDUCE_OP == PoolType::SUM) ? true : false;
-    // DPRINT << "Normal compute kernel - neginf_srca_maxpool : " << (uint32_t)neginf_srca_maxpool << ENDL();
-    // DPRINT << "Normal compute kernel - zero_srca_avgpool : " << (uint32_t)zero_srca_avgpool << ENDL();
 
     tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
         in_cb_id, in_scalar_cb_id, max_tiles_per_iter, out_cb_id, num_faces_in_tile, window_size_hw);

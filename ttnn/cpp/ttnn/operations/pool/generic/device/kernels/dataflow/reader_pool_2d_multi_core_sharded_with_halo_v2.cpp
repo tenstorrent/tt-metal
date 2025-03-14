@@ -52,9 +52,6 @@ void kernel_main() {
     // BF16 value packed in UINT32. For maxpool, value is 1.
     constexpr uint32_t bf16_scalar = get_compile_time_arg_val(11);  // This scalar is bf16_one_u32 for maxpool.
 
-    // DPRINT << "Normal reader kernel - bf16_scalar : " << bf16_scalar << ENDL();
-    // DPRINT << "Normal reader kernel - bf16_scalar >> 16 : " << (bf16_scalar >> 16) << ENDL();
-
     constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(14);
 
     constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(17);
@@ -71,12 +68,7 @@ void kernel_main() {
     // Reduce scalar = 1
     if (reader_id == 0) {
         cb_reserve_back(in_scalar_cb_id, 1);
-
-        // uint32_t bf16_one_u16 = bf16_scalar >> 16;  // This scalar is bf16_one_u32 for maxpool.
-        // needed for maxpool.
-        // fill 1 row w/ scalar
-        // fill_with_val(get_write_ptr(in_scalar_cb_id), ROW_HW, bf16_one_u16);
-        fill_with_val(get_write_ptr(in_scalar_cb_id), ROW_HW, bf16_scalar >> 16);  // >> 16 is needed for maxpool.
+        fill_with_val(get_write_ptr(in_scalar_cb_id), ROW_HW, bf16_scalar >> 16);
         cb_push_back(in_scalar_cb_id, 1);
     }
 
