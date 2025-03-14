@@ -86,6 +86,7 @@ Tensor Pool2DOp<pool_type>::invoke(
                                             input_tensor.device()->compute_with_storage_grid_size(),
                                             ShardOrientation::ROW_MAJOR,
                                             false,
+                                            false,
                                             false);
         num_cores_nhw = conv::get_num_cores_nhw_from_parallel_config(parallel_config);
         num_cores_c = conv::get_num_cores_channels_from_parallel_config(parallel_config);

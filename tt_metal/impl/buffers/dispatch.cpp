@@ -227,7 +227,7 @@ uint32_t calculate_max_data_size(const CoreType& dispatch_core_type) {
 }
 
 bool are_pages_larger_than_max_prefetch_cmd_size(const Buffer& buffer) {
-    const CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(buffer.device()->id());
+    const CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type();
     const uint32_t max_data_size = calculate_max_data_size(dispatch_core_type);
     return buffer.aligned_page_size() > max_data_size;
 }
@@ -282,7 +282,7 @@ ShardedBufferWriteDispatchParams initialize_sharded_buf_dispatch_params(
 
 uint32_t calculate_partial_page_size(const Buffer& buffer) {
     uint32_t partial_page_size = 0;
-    const CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(buffer.device()->id());
+    const CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type();
     if (dispatch_core_type == CoreType::WORKER) {
         partial_page_size = DispatchSettings::BASE_PARTIAL_PAGE_SIZE_TENSIX_DISPATCH;
     } else {
@@ -468,16 +468,13 @@ void issue_buffer_dispatch_command_sequence(
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
 
     if (dispatch_params.issue_wait) {
-        uint32_t dispatch_message_base_addr =
-            DispatchMemMap::get(dispatch_core_type)
-                .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
         for (const auto& sub_device_id : sub_device_ids) {
             auto offset_index = *sub_device_id;
-            uint32_t dispatch_message_addr =
-                dispatch_message_base_addr +
-                DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(offset_index);
             command_sequence.add_dispatch_wait(
-                false, dispatch_message_addr, dispatch_params.expected_num_workers_completed[offset_index]);
+                CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
+                0,
+                DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(offset_index),
+                dispatch_params.expected_num_workers_completed[offset_index]);
         }
     }
     if constexpr (std::is_same_v<T, ShardedBufferWriteDispatchParams>) {
@@ -838,24 +835,22 @@ void issue_read_buffer_dispatch_command_sequence(
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
 
-    uint32_t dispatch_message_base_addr =
-        DispatchMemMap::get(dispatch_core_type)
-            .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
     uint32_t last_index = num_worker_counters - 1;
     // We only need the write barrier + prefetch stall for the last wait cmd
     for (uint32_t i = 0; i < last_index; ++i) {
         auto offset_index = *sub_device_ids[i];
-        uint32_t dispatch_message_addr =
-            dispatch_message_base_addr +
-            DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(offset_index);
         command_sequence.add_dispatch_wait(
-            false, dispatch_message_addr, dispatch_params.expected_num_workers_completed[offset_index]);
+            CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
+            0,
+            DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(offset_index),
+            dispatch_params.expected_num_workers_completed[offset_index]);
     }
     auto offset_index = *sub_device_ids[last_index];
-    uint32_t dispatch_message_addr =
-        dispatch_message_base_addr + DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(offset_index);
     command_sequence.add_dispatch_wait_with_prefetch_stall(
-        true, dispatch_message_addr, dispatch_params.expected_num_workers_completed[offset_index]);
+        CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER,
+        0,
+        DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(offset_index),
+        dispatch_params.expected_num_workers_completed[offset_index]);
 
     bool flush_prefetch = false;
     command_sequence.add_dispatch_write_host(

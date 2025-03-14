@@ -18,7 +18,7 @@
 namespace {
 
 auto check_board_is_n300() {
-    return tt_ClusterDescriptor::create()->get_board_type(0) == BoardType::N300;
+    return tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0) == BoardType::N300;
 }
 
 class TrivialTnnFixedDistributedTest : public ::testing::Test {

@@ -7,6 +7,7 @@
 #include "dispatch_fixture.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/core_descriptor.hpp>
 #include "compile_program_with_kernel_path_env_var_fixture.hpp"
 
 namespace tt::tt_metal {
@@ -57,7 +58,7 @@ TEST_F(DispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) {
     for (unsigned int id = 0; id < this->devices_.size(); id++) {
         tt_metal::Program program = CreateProgram();
         IDevice* device = this->devices_.at(id);
-        const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(device->id());
+        const auto& dispatch_core_config = get_dispatch_core_config();
         CoreType dispatch_core_type = dispatch_core_config.get_core_type();
         std::vector<CoreCoord> dispatch_cores =
             tt::get_logical_dispatch_cores(device->id(), device->num_hw_cqs(), dispatch_core_config);
