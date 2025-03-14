@@ -40,11 +40,46 @@ struct OwnedStorage {
     }
 };
 
+// Defines mapping between tensor specs and non-overlapping mesh coordinate ranges.
+// In the common case, this spans the entire mesh uniformly.
+class TensorSpecMapping {
+public:
+    TensorSpecMapping() = default;
+
+    // Creates a `TensorSpecMapping` from individual per-device tensor specs.
+    // Optimizes for the common case of a uniform distribution of specs across `mesh_range`.
+    TensorSpecMapping(
+        const distributed::MeshCoordinateRange& mesh_range,
+        const std::vector<std::pair<TensorSpec, distributed::MeshCoordinate>>& specs);
+
+    // Shorthands for creating uniform `TensorSpecMapping`.
+    TensorSpecMapping(const TensorSpec& spec, const distributed::MeshCoordinateRange& range);
+    TensorSpecMapping(const TensorSpec& spec, const distributed::MeshCoordinate& coord);
+
+    // Returns the number of shards in the mapping.
+    size_t num_shards() const;
+
+    // Returns true if the mapping has uniform specs across all shards.
+    bool is_uniform_spec() const;
+
+    // Returns a flattened list of tensor specs and coordinates, sorted by the coordinate.
+    std::vector<std::pair<TensorSpec, distributed::MeshCoordinate>> flatten() const;
+
+    // Updates the spec for all shards in the mapping.
+    // Thrrows if the spec is non-uniform.
+    void update_uniform_spec(const TensorSpec& new_spec);
+
+private:
+    std::vector<std::pair<TensorSpec, distributed::MeshCoordinateRangeSet>> spec_mapping_;
+    size_t num_shards_ = 0;
+};
+
 // TODO: #17215 - Replace `DeviceStorage` with "mesh storage".
 struct DeviceStorage {
-    // TODO: come up with a better abstraction for this.
+    // TODO: come up with a better abstraction for `DistributedTensorConfig`.
     DistributedTensorConfig strategy;
-    std::vector<std::pair<distributed::MeshCoordinate, TensorSpec>> specs;
+
+    TensorSpecMapping spec_mapping;
 
     std::shared_ptr<Buffer> buffer;
     std::shared_ptr<distributed::MeshBuffer> mesh_buffer;
@@ -54,7 +89,7 @@ struct DeviceStorage {
     DeviceStorage(
         std::shared_ptr<distributed::MeshBuffer> mesh_buffer_,
         DistributedTensorConfig strategy_,
-        std::vector<std::pair<distributed::MeshCoordinate, TensorSpec>> specs_);
+        TensorSpecMapping spec_mapping_);
 
     MemoryConfig memory_config() const;
     void insert_buffer(const std::shared_ptr<Buffer>& buffer_);

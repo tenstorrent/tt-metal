@@ -27,9 +27,56 @@ using ::testing::HasSubstr;
 using ::testing::Pointwise;
 using ::testing::SizeIs;
 using ::testing::ThrowsMessage;
+using ::tt::tt_metal::distributed::MeshCoordinate;
+using ::tt::tt_metal::distributed::MeshCoordinateRange;
+using ::tt::tt_metal::distributed::MeshCoordinateRangeSet;
 
 using MeshTensorTest = GenericMeshDeviceFixture;
 using MeshTensorTestT3K = T3000MeshDeviceFixture;
+
+TEST(TensorSpecMappingTest, UniformSpec) {
+    const TensorSpec spec =
+        TensorSpec(ttnn::Shape{1, 1, 32, 32}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+
+    // Ok to have different coords, as long as they have the same spec.
+    TensorSpecMapping mapping(
+        MeshCoordinateRange(MeshShape{2, 2}),
+        {std::make_pair(spec, MeshCoordinate{0, 0}),  //
+         std::make_pair(spec, MeshCoordinate{1, 1})});
+
+    EXPECT_TRUE(mapping.is_uniform_spec());
+    EXPECT_EQ(mapping.num_shards(), 2);
+
+    auto flattened_specs = mapping.flatten();
+    ASSERT_EQ(flattened_specs.size(), 2);
+    EXPECT_EQ(flattened_specs[0].first, spec);
+    EXPECT_EQ(flattened_specs[1].first, spec);
+}
+
+TEST(TensorSpecMappingTest, NonUniformSpec) {
+    const TensorSpec spec1 =
+        TensorSpec(ttnn::Shape{1, 1, 32, 32}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    const TensorSpec spec2 =
+        TensorSpec(ttnn::Shape{1, 2, 32, 32}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+
+    std::vector<std::pair<TensorSpec, MeshCoordinate>> specs;
+    specs.push_back(std::make_pair(spec1, MeshCoordinate{0, 0}));
+    specs.push_back(std::make_pair(spec2, MeshCoordinate{1, 1}));
+    specs.push_back(std::make_pair(spec1, MeshCoordinate{0, 1}));
+    specs.push_back(std::make_pair(spec2, MeshCoordinate{1, 0}));
+
+    TensorSpecMapping mapping(MeshCoordinateRange(MeshShape{2, 2}), specs);
+
+    EXPECT_FALSE(mapping.is_uniform_spec());
+    EXPECT_EQ(mapping.num_shards(), specs.size());
+
+    auto flattened_specs = mapping.flatten();
+    ASSERT_EQ(flattened_specs.size(), specs.size());
+    EXPECT_EQ(flattened_specs[0].first, spec1);
+    EXPECT_EQ(flattened_specs[1].first, spec1);
+    EXPECT_EQ(flattened_specs[2].first, spec2);
+    EXPECT_EQ(flattened_specs[3].first, spec2);
+}
 
 TEST_F(MeshTensorTest, Lifecycle) {
     const TensorSpec tensor_spec =
@@ -94,8 +141,8 @@ TEST_F(MeshTensorTest, ReplicateOwnedTensor) {
     auto* device_storage = std::get_if<tt::tt_metal::DeviceStorage>(&device_tensor.get_storage());
     ASSERT_NE(device_storage, nullptr);
     EXPECT_NE(device_storage->mesh_buffer, nullptr);
-    EXPECT_THAT(device_storage->specs, SizeIs(mesh_device_->num_devices()));
-    for (const auto& [coord, spec] : device_storage->specs) {
+    EXPECT_EQ(device_storage->spec_mapping.num_shards(), mesh_device_->num_devices());
+    for (const auto& [spec, coord] : device_storage->spec_mapping.flatten()) {
         EXPECT_THAT(spec.logical_shape(), Eq(ttnn::Shape{1, 1, 32, 32}));
     }
 
@@ -126,24 +173,24 @@ TEST_F(MeshTensorTest, GetDeviceTensors) {
     auto* device_storage = std::get_if<tt::tt_metal::DeviceStorage>(&device_tensor.get_storage());
     ASSERT_NE(device_storage, nullptr);
     EXPECT_NE(device_storage->mesh_buffer, nullptr);
-    EXPECT_THAT(device_storage->specs, SizeIs(mesh_device_->num_devices()));
+    EXPECT_EQ(device_storage->spec_mapping.num_shards(), mesh_device_->num_devices());
 
     // Validate each tensor shard.
     std::vector<Tensor> device_tensors = get_device_tensors(device_tensor);
-    std::vector<distributed::MeshCoordinate> device_shard_coords;
+    std::vector<MeshCoordinate> device_shard_coords;
     EXPECT_THAT(device_tensors, SizeIs(mesh_device_->num_devices()));
     for (const auto& tensor_shard : device_tensors) {
         auto* shard_storage = std::get_if<tt::tt_metal::DeviceStorage>(&tensor_shard.get_storage());
         ASSERT_NE(shard_storage, nullptr);
         EXPECT_NE(shard_storage->mesh_buffer, nullptr);
-        EXPECT_THAT(shard_storage->specs, SizeIs(1));
-        device_shard_coords.push_back(shard_storage->specs.front().first);
+        EXPECT_EQ(shard_storage->spec_mapping.num_shards(), 1);
+        device_shard_coords.push_back(shard_storage->spec_mapping.flatten().front().second);
         EXPECT_THAT(tensor_shard.to_vector<float>(), Pointwise(FloatEq(), host_data));
     }
 
     // Expect coordiantes to cover the entire mesh.
-    std::vector<::testing::Matcher<distributed::MeshCoordinate>> coord_matchers;
-    for (const auto& expected_coord : distributed::MeshCoordinateRange(mesh_device_->shape())) {
+    std::vector<::testing::Matcher<MeshCoordinate>> coord_matchers;
+    for (const auto& expected_coord : MeshCoordinateRange(mesh_device_->shape())) {
         coord_matchers.push_back(Eq(expected_coord));
     }
     EXPECT_THAT(device_shard_coords, ElementsAreArray(coord_matchers));
@@ -198,18 +245,19 @@ TEST_F(MeshTensorTestT3K, AggregateAsTensor) {
     EXPECT_NE(partial_device_storage->mesh_buffer, nullptr);
 
     // Validate the shards are sorted, and are as expected.
-    ASSERT_THAT(partial_device_storage->specs, SizeIs(4));
-    EXPECT_EQ(partial_device_storage->specs[0].first, (distributed::MeshCoordinate{0, 0}));
-    EXPECT_EQ(partial_device_storage->specs[1].first, (distributed::MeshCoordinate{0, 2}));
-    EXPECT_EQ(partial_device_storage->specs[2].first, (distributed::MeshCoordinate{1, 0}));
-    EXPECT_EQ(partial_device_storage->specs[3].first, (distributed::MeshCoordinate{1, 2}));
+    ASSERT_EQ(partial_device_storage->spec_mapping.num_shards(), 4);
+    const auto flattened_specs = partial_device_storage->spec_mapping.flatten();
+    EXPECT_EQ(flattened_specs[0].second, (MeshCoordinate{0, 0}));
+    EXPECT_EQ(flattened_specs[1].second, (MeshCoordinate{0, 2}));
+    EXPECT_EQ(flattened_specs[2].second, (MeshCoordinate{1, 0}));
+    EXPECT_EQ(flattened_specs[3].second, (MeshCoordinate{1, 2}));
 }
 
 struct MeshTensorWriteTestParams {
     ttnn::Shape shape;
     bool use_pre_allocated_tensor = false;
     std::vector<ttnn::Shape> expected_shapes;
-    std::vector<distributed::MeshCoordinate> expected_coords;
+    std::vector<MeshCoordinate> expected_coords;
     std::function<std::unique_ptr<ttnn::distributed::TensorToMesh>(MeshDevice*)> get_mapper;
 };
 
@@ -227,7 +275,7 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
         shape_matchers.push_back(Eq(expected_shape));
     }
 
-    std::vector<::testing::Matcher<distributed::MeshCoordinate>> coord_matchers;
+    std::vector<::testing::Matcher<MeshCoordinate>> coord_matchers;
     for (const auto& expected_coord : GetParam().expected_coords) {
         coord_matchers.push_back(Eq(expected_coord));
     }
@@ -266,9 +314,9 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
     ASSERT_NE(device_storage, nullptr);
     EXPECT_EQ(device_storage->strategy, mapper->config());
 
-    std::vector<distributed::MeshCoordinate> device_shard_coords;
+    std::vector<MeshCoordinate> device_shard_coords;
     std::vector<ttnn::Shape> device_shard_shapes;
-    for (const auto& [coord, spec] : device_storage->specs) {
+    for (const auto& [spec, coord] : device_storage->spec_mapping.flatten()) {
         device_shard_coords.push_back(coord);
         device_shard_shapes.push_back(spec.logical_shape());
     }
@@ -310,14 +358,14 @@ auto get_mesh_tensor_write_test_params() {
                  ttnn::Shape{1, 1, 32, 32},
                  ttnn::Shape{1, 1, 32, 32}},
             .expected_coords =
-                {distributed::MeshCoordinate{0, 0},
-                 distributed::MeshCoordinate{0, 1},
-                 distributed::MeshCoordinate{0, 2},
-                 distributed::MeshCoordinate{0, 3},
-                 distributed::MeshCoordinate{1, 0},
-                 distributed::MeshCoordinate{1, 1},
-                 distributed::MeshCoordinate{1, 2},
-                 distributed::MeshCoordinate{1, 3}},
+                {MeshCoordinate{0, 0},
+                 MeshCoordinate{0, 1},
+                 MeshCoordinate{0, 2},
+                 MeshCoordinate{0, 3},
+                 MeshCoordinate{1, 0},
+                 MeshCoordinate{1, 1},
+                 MeshCoordinate{1, 2},
+                 MeshCoordinate{1, 3}},
             .get_mapper = [](MeshDevice* device) { return shard_tensor_to_mesh_mapper(*device, 1); },
         },
         MeshTensorWriteTestParams{
@@ -329,11 +377,11 @@ auto get_mesh_tensor_write_test_params() {
                  ttnn::Shape{1, 2, 32, 32},
                  ttnn::Shape{1, 1, 32, 32}},
             .expected_coords =
-                {distributed::MeshCoordinate{0, 0},
-                 distributed::MeshCoordinate{0, 1},
-                 distributed::MeshCoordinate{0, 2},
-                 distributed::MeshCoordinate{0, 3},
-                 distributed::MeshCoordinate{1, 0}},
+                {MeshCoordinate{0, 0},
+                 MeshCoordinate{0, 1},
+                 MeshCoordinate{0, 2},
+                 MeshCoordinate{0, 3},
+                 MeshCoordinate{1, 0}},
             .get_mapper = [](MeshDevice* device) { return shard_tensor_to_mesh_mapper(*device, 1); },
         },
         MeshTensorWriteTestParams{
@@ -348,14 +396,14 @@ auto get_mesh_tensor_write_test_params() {
                  ttnn::Shape{1, 1, 32, 32},
                  ttnn::Shape{1, 1, 32, 32}},
             .expected_coords =
-                {distributed::MeshCoordinate{0, 0},
-                 distributed::MeshCoordinate{0, 1},
-                 distributed::MeshCoordinate{0, 2},
-                 distributed::MeshCoordinate{0, 3},
-                 distributed::MeshCoordinate{1, 0},
-                 distributed::MeshCoordinate{1, 1},
-                 distributed::MeshCoordinate{1, 2},
-                 distributed::MeshCoordinate{1, 3}},
+                {MeshCoordinate{0, 0},
+                 MeshCoordinate{0, 1},
+                 MeshCoordinate{0, 2},
+                 MeshCoordinate{0, 3},
+                 MeshCoordinate{1, 0},
+                 MeshCoordinate{1, 1},
+                 MeshCoordinate{1, 2},
+                 MeshCoordinate{1, 3}},
             .get_mapper = [](MeshDevice* device) { return replicate_tensor_to_mesh_mapper(*device); },
         },
         MeshTensorWriteTestParams{
@@ -368,12 +416,12 @@ auto get_mesh_tensor_write_test_params() {
                  ttnn::Shape{7, 1, 32, 32},
                  ttnn::Shape{7, 1, 32, 32}},
             .expected_coords =
-                {distributed::MeshCoordinate{0, 0},
-                 distributed::MeshCoordinate{0, 1},
-                 distributed::MeshCoordinate{0, 2},
-                 distributed::MeshCoordinate{1, 0},
-                 distributed::MeshCoordinate{1, 1},
-                 distributed::MeshCoordinate{1, 2}},
+                {MeshCoordinate{0, 0},
+                 MeshCoordinate{0, 1},
+                 MeshCoordinate{0, 2},
+                 MeshCoordinate{1, 0},
+                 MeshCoordinate{1, 1},
+                 MeshCoordinate{1, 2}},
             .get_mapper =
                 [](MeshDevice* device) {
                     // Replicate to a submesh 2x3

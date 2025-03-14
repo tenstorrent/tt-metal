@@ -116,6 +116,9 @@ public:
     const MeshCoordinate& start_coord() const;
     const MeshCoordinate& end_coord() const;
 
+    // Returns the number of coordinates in the range.
+    size_t size() const;
+
     // Returns true if the range contains the given coordinate.
     bool contains(const MeshCoordinate& coord) const;
 
@@ -167,6 +170,7 @@ private:
 class MeshCoordinateRangeSet {
 public:
     MeshCoordinateRangeSet() = default;
+    explicit MeshCoordinateRangeSet(const MeshCoordinateRange& range);
 
     // Merges the given range into the set.
     void merge(const MeshCoordinateRange& range);

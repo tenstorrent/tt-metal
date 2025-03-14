@@ -163,6 +163,8 @@ TEST(MeshCoordinateRangeTest, FromShape) {
     MeshShape shape(2, 3);
     MeshCoordinateRange range(shape);
 
+    EXPECT_EQ(range.size(), shape.mesh_size());
+
     std::vector<MeshCoordinate> coords;
     for (const auto& coord : range) {
         coords.push_back(coord);
@@ -183,6 +185,8 @@ TEST(MeshCoordinateRangeTest, Subrange) {
     MeshCoordinate start(1, 1, 1);
     MeshCoordinate end(2, 1, 4);
     MeshCoordinateRange range(start, end);
+
+    EXPECT_EQ(range.size(), 8);
 
     std::vector<MeshCoordinate> coords;
     for (const auto& coord : range) {
@@ -206,6 +210,8 @@ TEST(MeshCoordinateRangeTest, SubrangeOneElement) {
     MeshCoordinate start(1, 1, 1);
     MeshCoordinate end(1, 1, 1);
     MeshCoordinateRange range(start, end);
+
+    EXPECT_EQ(range.size(), 1);
 
     std::vector<MeshCoordinate> coords;
     for (const auto& coord : range) {

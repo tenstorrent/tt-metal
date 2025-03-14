@@ -7,6 +7,83 @@
 
 namespace tt::tt_metal {
 
+TensorSpecMapping::TensorSpecMapping(
+    const distributed::MeshCoordinateRange& mesh_range,
+    const std::vector<std::pair<TensorSpec, distributed::MeshCoordinate>>& specs) {
+    const bool uniform_specs = std::adjacent_find(specs.begin(), specs.end(), [](const auto& a, const auto& b) {
+                                   return a.first != b.first;
+                               }) == specs.end();
+    const bool uniform_range = [&mesh_range, &specs]() {
+        if (mesh_range.size() != specs.size()) {
+            return false;
+        }
+        auto specs_it = specs.begin();
+        for (const auto& coord : mesh_range) {
+            if (coord != specs_it->second) {
+                return false;
+            }
+            ++specs_it;
+        }
+        return true;
+    }();
+
+    // Same tensor spec covers the entire `mesh_range` uniformly.
+    if (uniform_specs && uniform_range) {
+        num_shards_ = specs.size();
+        spec_mapping_ = {std::make_pair(specs.front().first, distributed::MeshCoordinateRangeSet(mesh_range))};
+    } else {
+        // Slow path for heterogeneous shards.
+        num_shards_ = specs.size();
+
+        auto add_to_specs = [this](const TensorSpec& spec, const distributed::MeshCoordinate& coord) {
+            // If `spec` was already seen, add the coordinate to the existing range set.
+            // If not, create a new range set with the coordinate.
+            auto existing_it = std::find_if(
+                spec_mapping_.begin(), spec_mapping_.end(), [&spec](const auto& p) { return p.first == spec; });
+            if (existing_it != spec_mapping_.end()) {
+                existing_it->second.merge(distributed::MeshCoordinateRange(coord, coord));
+            } else {
+                spec_mapping_.push_back(std::make_pair(
+                    spec, distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(coord, coord))));
+            }
+        };
+        for (const auto& [spec, coord] : specs) {
+            add_to_specs(spec, coord);
+        }
+    }
+}
+
+TensorSpecMapping::TensorSpecMapping(const TensorSpec& spec, const distributed::MeshCoordinateRange& range) :
+    spec_mapping_({std::make_pair(spec, distributed::MeshCoordinateRangeSet(range))}), num_shards_(range.size()) {}
+
+TensorSpecMapping::TensorSpecMapping(const TensorSpec& spec, const distributed::MeshCoordinate& coord) :
+    TensorSpecMapping(spec, distributed::MeshCoordinateRange(coord, coord)) {}
+
+size_t TensorSpecMapping::num_shards() const { return num_shards_; }
+
+bool TensorSpecMapping::is_uniform_spec() const { return spec_mapping_.size() == 1; }
+
+std::vector<std::pair<TensorSpec, distributed::MeshCoordinate>> TensorSpecMapping::flatten() const {
+    std::vector<std::pair<TensorSpec, distributed::MeshCoordinate>> result;
+    result.reserve(num_shards());
+
+    for (const auto& [spec, range_set] : spec_mapping_) {
+        for (const auto& coord_range : range_set.ranges()) {
+            for (const auto& coord : coord_range) {
+                result.emplace_back(spec, coord);
+            }
+        }
+    }
+
+    std::sort(result.begin(), result.end(), [](const auto& a, const auto& b) { return a.second < b.second; });
+    return result;
+}
+
+void TensorSpecMapping::update_uniform_spec(const TensorSpec& new_spec) {
+    TT_FATAL(is_uniform_spec(), "Cannot update non-uniform spec mapping");
+    spec_mapping_.front().first = new_spec;
+}
+
 DeviceStorage::DeviceStorage(std::shared_ptr<Buffer> buffer_) { buffer = std::move(buffer_); }
 
 MemoryConfig DeviceStorage::memory_config() const {
@@ -27,8 +104,8 @@ MemoryConfig DeviceStorage::memory_config() const {
 DeviceStorage::DeviceStorage(
     std::shared_ptr<distributed::MeshBuffer> mesh_buffer_,
     DistributedTensorConfig strategy_,
-    std::vector<std::pair<distributed::MeshCoordinate, TensorSpec>> specs_) :
-    strategy(std::move(strategy_)), specs(std::move(specs_)), mesh_buffer(std::move(mesh_buffer_)) {}
+    TensorSpecMapping spec_mapping_) :
+    strategy(std::move(strategy_)), spec_mapping(std::move(spec_mapping_)), mesh_buffer(std::move(mesh_buffer_)) {}
 
 void DeviceStorage::insert_buffer(const std::shared_ptr<Buffer>& buffer_) { this->buffer = buffer_; }
 

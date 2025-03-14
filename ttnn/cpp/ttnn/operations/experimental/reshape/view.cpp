@@ -64,11 +64,11 @@ Tensor tensor_reshape(
                 auto update_tensor_specs = [](const Tensor& tensor, const TensorSpec& new_spec) {
                     auto device_storage = std::get<tt::tt_metal::DeviceStorage>(tensor.get_storage());
                     if (device_storage.mesh_buffer != nullptr) {
-                        auto updated_storage = device_storage;
-                        for (auto& [_, spec] : updated_storage.specs) {
-                            spec = new_spec;
-                        }
-                        return Tensor(std::move(updated_storage), new_spec);
+                        TT_FATAL(
+                            device_storage.spec_mapping.is_uniform_spec(),
+                            "Reshape view operation expects all tensor shards to have the same tensor spec.");
+                        device_storage.spec_mapping.update_uniform_spec(new_spec);
+                        return Tensor(std::move(device_storage), new_spec);
                     } else {
                         return tensor;
                     }
@@ -77,14 +77,12 @@ Tensor tensor_reshape(
                 if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
                     auto device_storage = std::get<tt::tt_metal::DeviceStorage>(tensor.get_storage());
                     if (tensor.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
-                        tt::tt_metal::DeviceStorage device_storage = std::get<T>(tensor.get_storage());
                         auto device_buffer = device_storage.get_buffer();
                         const auto& tensor_spec = tensor.tensor_spec();
                         auto page_size_bytes = tensor_spec.compute_page_size_bytes();
                         device_buffer->set_page_size(page_size_bytes);
                         return update_tensor_specs(Tensor(device_storage, new_spec), new_spec);
                     } else {
-                        tt::tt_metal::DeviceStorage device_storage = std::get<T>(tensor.get_storage());
                         auto device_buffer = device_storage.get_buffer();
                         tt::tt_metal::ShardSpecBuffer shard_spec_buffer = device_buffer->shard_spec();
 
