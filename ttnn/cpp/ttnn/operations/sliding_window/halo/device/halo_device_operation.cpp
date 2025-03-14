@@ -95,6 +95,7 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
 
     bool is_in_tiled = input_tensor.get_layout() == Layout::TILE;
     bool is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
+    TT_FATAL(!(is_in_tiled && this->in_place_), "In-place halo does not support tiled input tensors");
 
     auto pad_metadata = sliding_window::generate_pad_metadata(config_);
     auto op_trace_metadata = sliding_window::generate_op_trace_metadata(config_);
