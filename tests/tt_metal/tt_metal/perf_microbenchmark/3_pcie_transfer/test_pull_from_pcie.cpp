@@ -15,6 +15,7 @@
 #include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/memcpy.hpp>
 #include <tt-metalium/allocator.hpp>
+#include <thread>
 
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 
