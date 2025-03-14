@@ -113,3 +113,92 @@ class DeviceSingleCardFastSlowDispatchFixture : public DeviceSingleCardFixture {
         }
     }
 };
+
+class DeviceSuiteFixture : public ::testing::Test {
+protected:
+    static void SetUpTestSuite() {
+        validate_dispatch_mode();
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+
+        num_devices_ = tt::tt_metal::GetNumAvailableDevices();
+        if (arch_ == tt::ARCH::GRAYSKULL && num_devices_ > 2) {
+            num_devices_ = 2;
+        }
+
+        std::vector<chip_id_t> ids;
+        for (unsigned int id = 0; id < num_devices_; id++) {
+            ids.push_back(id);
+        }
+        create_devices(ids);
+    }
+
+    static void TearDownTestSuite() {
+        tt::DevicePool::instance().shutdown();
+    }
+
+    static void validate_dispatch_mode() {
+        slow_dispatch_ = true;
+        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (!slow_dispatch) {
+            tt::log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
+            slow_dispatch_ = false;
+            GTEST_SKIP();
+        }
+    }
+
+    static void create_devices(const std::vector<chip_id_t>& device_ids) {
+        const auto& dispatch_core_config = tt::llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
+        tt::DevicePool::initialize(device_ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
+        devices_ = tt::DevicePool::instance().get_all_active_devices();
+        num_devices_ = devices_.size();
+    }
+
+    static size_t num_devices_;
+    static std::vector<tt::tt_metal::IDevice*> devices_;
+    static bool slow_dispatch_;
+    static tt::ARCH arch_;
+};
+
+size_t DeviceSuiteFixture::num_devices_ = 0;
+bool DeviceSuiteFixture::slow_dispatch_ = true;
+tt::ARCH DeviceSuiteFixture::arch_;
+std::vector<tt::tt_metal::IDevice*> DeviceSuiteFixture::devices_;
+
+
+class DeviceSingleCardSuiteFixture : public ::testing::Test {
+protected:
+    static void SetUpTestSuite() {
+        validate_dispatch_mode();
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        create_devices();
+    }
+
+    static void TearDownTestSuite() {
+        tt::tt_metal::detail::CloseDevices(reserved_devices_);
+    }
+
+    static void validate_dispatch_mode() {
+        slow_dispatch_ = true;
+        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (!slow_dispatch) {
+            tt::log_info(tt::LogTest, "This suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
+            slow_dispatch_ = false;
+            GTEST_SKIP();
+        }
+    }
+
+    static void create_devices() {
+        const chip_id_t mmio_device_id = 0;
+        reserved_devices_ = tt::tt_metal::detail::CreateDevices({mmio_device_id});
+        device_ = reserved_devices_.at(mmio_device_id);
+        devices_ = tt::DevicePool::instance().get_all_active_devices();
+        num_devices_ = reserved_devices_.size();
+    }
+
+    static tt::tt_metal::IDevice* device_;
+    static std::map<chip_id_t, tt::tt_metal::IDevice*> reserved_devices_;
+    static size_t num_devices_;
+    static bool slow_dispatch_;
+    static tt::ARCH arch_;
+};
+
