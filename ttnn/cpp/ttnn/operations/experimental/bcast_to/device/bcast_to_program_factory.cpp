@@ -6,16 +6,17 @@
 #include <string>
 #include <vector>
 
-#include "common/tt_backend_api_types.hpp"
-#include "common/work_split.hpp"
-#include "bcast_to_device_operation.hpp"
-#include "host_api.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "hostdevcommon/kernel_structs.h"
-#include "impl/buffers/buffer.hpp"
-#include "impl/buffers/circular_buffer_types.hpp"
-#include "impl/kernels/kernel_types.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/cb_utils.hpp"
+
+#include "bcast_to_device_operation.hpp"
 #include "bcast_to_utils.hpp"
 
 using namespace tt::tt_metal;
@@ -107,11 +108,11 @@ BcastToOperation::BcastToTileFactory::cached_program_t BcastToOperation::BcastTo
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     auto input = tensor_args.input;
-    auto input_shape = input.get_shape();
+    auto input_shape = input.logical_shape();
     uint32_t data_size = input.element_size();
     tt::DataFormat input_data_format = datatype_to_dataformat_converter(input.get_dtype());
 
-    auto output_shape = output.get_shape();
+    auto output_shape = output.logical_shape();
     auto output_data_format = datatype_to_dataformat_converter(output.get_dtype());
 
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_data_format);

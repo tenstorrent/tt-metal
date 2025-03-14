@@ -14,7 +14,7 @@
 namespace ttnn::operations::experimental {
 
 auto infer_size(const Tensor& input, const std::vector<int32_t>& sizes) {
-    auto input_shape = input.get_shape();
+    auto input_shape = input.get_logical_shape();
     auto output_shape = SmallVector<uint32_t>(sizes.size());
     TT_FATAL(
         input_shape.size() <= sizes.size(),
