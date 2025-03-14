@@ -6,18 +6,18 @@ import ttnn
 import torch
 from loguru import logger
 
-from llama_models.llama3_subdevices.api.datatypes import (
+from llama_models.llama3.api.datatypes import (
     InterleavedTextMedia,
     StopReason,
 )
 
-from llama_models.llama3_subdevices.reference_impl.generation import (
+from llama_models.llama3.reference_impl.generation import (
     ChatPrediction,
     CompletionPrediction,
     TokenResult,
     sample_top_p,
 )
-from models.demos.llama3_subdevices.tt.llama_common import (
+from models.tt_transformers.tt.common import (
     copy_host_to_device,
     get_padded_prefill_len,
     num_blocks_in_seq,
@@ -26,7 +26,7 @@ from models.demos.llama3_subdevices.tt.llama_common import (
 )
 
 
-class LlamaGenerator:
+class Generator:
     def __init__(self, model, model_args, mesh_device, tokenizer=None, formatter=None):
         """
         Creating a LlamaVision wrapper requires only a mesh_device and model_args.
@@ -65,14 +65,16 @@ class LlamaGenerator:
             )
             if page_table is not None:
                 page_table_user = self._get_prefill_user_page_table(page_table, kv_cache, seq_len)
-
-            logits = self.prefill_forward_single_user_text(
-                prefill_ids,
-                page_table=page_table_user if page_table is not None else None,
-                user_id=user_id,
-                last_token_idx=last_token_idx,
-                kv_cache=kv_cache,
-            )
+            try:
+                logits = self.prefill_forward_single_user_text(
+                    prefill_ids,
+                    page_table=page_table_user if page_table is not None else None,
+                    user_id=user_id,
+                    last_token_idx=last_token_idx,
+                    kv_cache=kv_cache,
+                )
+            except Exception as e:
+                logger.error(f"Error prefilling user {user_id}: {e}")
 
             # Since we give unpadded_seq_len, only the tile containing the last token is returned
             output_logits[user_id] = logits
@@ -141,10 +143,12 @@ class LlamaGenerator:
                     get_last_token=(last_token_idx_in_chunk // 32) * 32,
                     kv_cache=kv_cache,
                 )
-                logits = self.model.process_output_prefill(tt_logits, last_token_idx=(last_token_idx_in_chunk % 32))
 
                 if chunk_start == last_chunk_start:
+                    logits = self.model.process_output_prefill(tt_logits, last_token_idx=(last_token_idx_in_chunk % 32))
                     return logits
+                else:
+                    del tt_logits
         else:
             prefill_input, rot_mats_prefill, page_table_tt, _ = self.model.prepare_inputs_prefill(
                 tokens,
@@ -172,12 +176,14 @@ class LlamaGenerator:
         kv_cache=None,
         enable_trace=True,
         read_from_device=True,
+        argmax_on_device=False,
     ):
         decode_kwargs = {
             "current_pos": start_pos,
             "tokens": tokens,
             "page_table": page_table,
             "kv_cache": kv_cache,
+            "argmax_on_device": argmax_on_device,
         }
         if enable_trace:
             tt_logits = self._easy_trace_text(**decode_kwargs)
@@ -185,7 +191,7 @@ class LlamaGenerator:
             tt_logits = self._decode_forward_no_trace_text(**decode_kwargs)
 
         if read_from_device:
-            return self.read_decode_output(tt_logits, tokens.shape[0])
+            return self.read_decode_output(tt_logits, tokens.shape[0], argmax_on_device)
         else:
             return tt_logits
 
@@ -195,6 +201,7 @@ class LlamaGenerator:
         current_pos,
         page_table=None,
         kv_cache=None,
+        argmax_on_device=False,
     ):
         """
         Performs text decode step.
@@ -203,13 +210,13 @@ class LlamaGenerator:
         tt_tokens, tt_current_pos, tt_rot_mats, tt_page_table = self.model.prepare_inputs_decode(
             tokens, current_pos, page_table
         )
-
         tt_logits = self.model.ttnn_decode_forward(
             tt_tokens,
             tt_current_pos,
             rot_mats=tt_rot_mats,
             page_table=tt_page_table,
             kv_cache=kv_cache,
+            argmax_on_device=argmax_on_device,
         )
 
         return tt_logits
@@ -220,13 +227,16 @@ class LlamaGenerator:
         current_pos,
         page_table=None,
         kv_cache=None,
+        argmax_on_device=False,
     ):
         """
         Captures a trace for the decode_forward method.
         """
 
         # Compile run
-        self._decode_forward_no_trace_text(tokens, current_pos, page_table=page_table, kv_cache=kv_cache)
+        self._decode_forward_no_trace_text(
+            tokens, current_pos, page_table=page_table, kv_cache=kv_cache, argmax_on_device=argmax_on_device
+        )
         logger.info("Done Compiling Model")
 
         # Get inputs ready for trace run
@@ -236,11 +246,12 @@ class LlamaGenerator:
 
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         transformed_inputs = self.model.transform_decode_inputs_device(*device_inputs)
-        tt_out_trace = self.model.ttnn_decode_forward(*transformed_inputs, kv_cache=kv_cache)
+        tt_out_trace = self.model.ttnn_decode_forward(
+            *transformed_inputs, kv_cache=kv_cache, argmax_on_device=argmax_on_device
+        )
 
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         logger.info("Done Capturing Decode Trace")
-
         return trace_id, tt_out_trace, *device_inputs
 
     def _decode_forward_trace_text(
@@ -272,13 +283,14 @@ class LlamaGenerator:
         current_pos,
         page_table=None,
         kv_cache=None,
+        argmax_on_device=False,
     ):
         """
         Tracing is easy! Just call this method and we'll handle tracing for you.
         """
         if not hasattr(self, "trace_id_text"):
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_text(
-                tokens, current_pos, page_table=page_table, kv_cache=kv_cache
+                tokens, current_pos, page_table=page_table, kv_cache=kv_cache, argmax_on_device=argmax_on_device
             )
             self.trace_id_text = trace_id
             self.trace_inputs_text = device_inputs
@@ -314,18 +326,27 @@ class LlamaGenerator:
         """
         B = tokens.shape[0]
         last_token_idx = prefill_len - 1
-        vision_tokens, cross_attention_masks, full_text_row_masked_out_mask = self.model.compute_vision_tokens_masks(
-            batch_images=[vision_images],
-            batch_masks=[vision_mask],
-            total_len=total_len,
-        )
+
+        text_only_inference = vision_images is None
+        if not text_only_inference:
+            (
+                vision_tokens,
+                cross_attention_masks,
+                full_text_row_masked_out_mask,
+            ) = self.model.compute_vision_tokens_masks(
+                batch_images=[vision_images],
+                batch_masks=[vision_mask],
+                total_len=total_len,
+            )
+
+            if cross_page_table is not None:
+                num_vision_tokens = vision_tokens.shape[2]
+                cross_page_table = self._get_prefill_user_page_table(cross_page_table, kv_cache, num_vision_tokens)
+        else:
+            vision_tokens, cross_attention_masks, full_text_row_masked_out_mask = None, None, None
 
         if page_table is not None:
             page_table = self._get_prefill_user_page_table(page_table, kv_cache, prefill_len)
-
-        if cross_page_table is not None:
-            num_vision_tokens = vision_tokens.shape[2]
-            cross_page_table = self._get_prefill_user_page_table(cross_page_table, kv_cache, num_vision_tokens)
 
         (
             tt_h,
@@ -342,6 +363,7 @@ class LlamaGenerator:
             prefill_len=prefill_len,
             page_table=page_table,
             cross_page_table=cross_page_table,
+            text_only_inference=text_only_inference,
         )
 
         tt_logits = self.model.ttnn_prefill_forward(
@@ -357,6 +379,7 @@ class LlamaGenerator:
             kv_cache=kv_cache,
             get_last_token=(last_token_idx // 32) * 32,
             cross_page_table=tt_cross_page_table,
+            text_only_inference=text_only_inference,
         )
 
         del tt_page_table
@@ -447,8 +470,8 @@ class LlamaGenerator:
         else:
             return tt_logits
 
-    def read_decode_output(self, tt_logits, unpadded_batch):
-        logits = self.model.process_output_decode(tt_logits, B=unpadded_batch, S=1)
+    def read_decode_output(self, tt_logits, unpadded_batch, argmax_on_device=False):
+        logits = self.model.process_output_decode(tt_logits, B=unpadded_batch, S=1, argmax_on_device=argmax_on_device)
         return logits
 
     def _decode_forward_no_trace(
@@ -476,6 +499,7 @@ class LlamaGenerator:
             tt_h,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
+            tt_full_text_mask_expand_11SD,
             tt_position_id,
             tt_rot_mats,
             tt_page_table,
@@ -493,6 +517,7 @@ class LlamaGenerator:
             tt_h,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
+            tt_full_text_mask_expand_11SD,
             xattn_caches,
             tt_position_id,
             tt_rot_mats,
@@ -521,6 +546,7 @@ class LlamaGenerator:
             tt_h,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
+            tt_full_text_mask_expand_11SD,
             tt_position_id,
             tt_rot_mats,
             tt_page_table,
@@ -539,6 +565,7 @@ class LlamaGenerator:
             tt_h,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
+            tt_full_text_mask_expand_11SD,
             xattn_caches,
             tt_position_id,
             tt_rot_mats,
@@ -553,6 +580,7 @@ class LlamaGenerator:
             tt_h,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
+            tt_full_text_mask_expand_11SD,
             tt_position_id,
             tt_rope_id,
             tt_page_table,
@@ -570,6 +598,7 @@ class LlamaGenerator:
             tt_h,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
+            tt_full_text_mask_expand_11SD,
             tt_position_id,
             tt_rope_id,
             tt_page_table,
@@ -579,6 +608,7 @@ class LlamaGenerator:
                 tt_h,
                 tt_xattn_mask,
                 tt_full_text_mask_expand_1NSH,
+                tt_full_text_mask_expand_11SD,
                 tt_position_id,
                 tt_rope_id,
                 tt_page_table,
@@ -596,11 +626,13 @@ class LlamaGenerator:
             tt_rot_mats,
             tt_xattn_mask_transform,
             tt_full_text_mask_expand_1NSH_transform,
+            tt_full_text_mask_expand_11SD_transform,
         ) = self.model.transform_decode_inputs_device(
             tt_h,
             tt_rope_id,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
+            tt_full_text_mask_expand_11SD,
             B=B,
         )
 
@@ -608,6 +640,7 @@ class LlamaGenerator:
             tt_h_transform,
             tt_xattn_mask_transform,
             tt_full_text_mask_expand_1NSH_transform,
+            tt_full_text_mask_expand_11SD_transform,
             xattn_caches,
             tt_position_id,
             tt_rot_mats,
@@ -625,6 +658,7 @@ class LlamaGenerator:
             tt_h,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
+            tt_full_text_mask_expand_11SD,
             tt_position_id,
             tt_rope_id,
             tt_page_table,
@@ -644,6 +678,7 @@ class LlamaGenerator:
         trace_h,
         trace_xattn_mask,
         trace_full_text_mask_expand_1NSH,
+        trace_full_text_mask_expand_11SD,
         trace_position_id,
         trace_rope_id,
         trace_page_table,
@@ -656,6 +691,7 @@ class LlamaGenerator:
             tt_h,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
+            tt_full_text_mask_expand_11SD,
             tt_position_id,
             tt_rope_id,
             tt_page_table,
@@ -674,6 +710,7 @@ class LlamaGenerator:
                 tt_h,
                 tt_xattn_mask,
                 tt_full_text_mask_expand_1NSH,
+                tt_full_text_mask_expand_11SD,
                 tt_position_id,
                 tt_rope_id,
                 tt_page_table,
@@ -683,6 +720,7 @@ class LlamaGenerator:
                 trace_h,
                 trace_xattn_mask,
                 trace_full_text_mask_expand_1NSH,
+                trace_full_text_mask_expand_11SD,
                 trace_position_id,
                 trace_rope_id,
                 trace_page_table,
@@ -715,6 +753,7 @@ class LlamaGenerator:
                 tt_h,
                 tt_xattn_mask,
                 tt_full_text_mask_expand_1NSH,
+                tt_full_text_mask_expand_11SD,
                 tt_position_id,
                 tt_rope_id,
                 tt_page_table,
@@ -734,6 +773,7 @@ class LlamaGenerator:
                 "tt_h": tt_h,
                 "tt_xattn_mask": tt_xattn_mask,
                 "tt_full_text_mask_expand_1NSH": tt_full_text_mask_expand_1NSH,
+                "tt_full_text_mask_expand_11SD": tt_full_text_mask_expand_11SD,
                 "tt_position_id": tt_position_id,
                 "tt_rope_id": tt_rope_id,
                 "tt_page_table": tt_page_table,
@@ -755,6 +795,7 @@ class LlamaGenerator:
             self.trace_inputs["tt_h"],
             self.trace_inputs["tt_xattn_mask"],
             self.trace_inputs["tt_full_text_mask_expand_1NSH"],
+            self.trace_inputs["tt_full_text_mask_expand_11SD"],
             self.trace_inputs["tt_position_id"],
             self.trace_inputs["tt_rope_id"],
             self.trace_inputs["tt_page_table"],
@@ -905,5 +946,5 @@ class LlamaGenerator:
         if hasattr(self, "trace_id_text"):
             ttnn.release_trace(self.mesh_device, self.trace_id_text)
 
-        if hasattr(super(LlamaGenerator, self), "__del__"):
+        if hasattr(super(Generator, self), "__del__"):
             super().__del__()
