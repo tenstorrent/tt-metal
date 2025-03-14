@@ -264,9 +264,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
         "reduction_receiver.cpp",
         output_cores_all,
         reduction_reader_kernel_config);
-    if (output_cores_unused.size() > 0) {
-        tt::tt_metal::SetRuntimeArgs(program, reduction_reader_kernel_id, output_cores_unused, {0, 0});
-    }
+    // if (output_cores_unused.size() > 0) {
+    //     tt::tt_metal::SetRuntimeArgs(program, reduction_reader_kernel_id, output_cores_unused, {0, 0});
+    // }
 
     // Create reduction dataflow kernel
     auto reduction_kernel_config = tt::tt_metal::ComputeConfig{};
@@ -439,14 +439,14 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
                 sender_worker_buffer_index_semaphore_id,
                 writer_rt_args);
         }
-        tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
+        // tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
 
-        std::vector<uint32_t> reduction_reader_rt_args = {
-            1,
-            reduction_semaphore_ids[link],  // reduction_semaphore_id
-        };
-        tt::tt_metal::SetRuntimeArgs(
-            program, reduction_reader_kernel_id, output_corerangeset_per_link[link], reduction_reader_rt_args);
+        // std::vector<uint32_t> reduction_reader_rt_args = {
+        //     1,
+        //     reduction_semaphore_ids[link],  // reduction_semaphore_id
+        // };
+        // tt::tt_metal::SetRuntimeArgs(
+        //     program, reduction_reader_kernel_id, output_corerangeset_per_link[link], reduction_reader_rt_args);
 
         input_first_core_tile_start_offset =
             (worker_num_tiles_to_read % input_tensor_shard_num_pages) + input_first_core_tile_start_offset;
@@ -466,15 +466,16 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
             auto semaphore = static_cast<const ttnn::AllReduceAsync*>(operation)->semaphore;
 
             // update senders
-            auto& worker_reader_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_reader_kernel_id);
-            auto& worker_writer_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_writer_kernel_id);
+            // auto& worker_reader_sender_runtime_args_by_core = GetRuntimeArgs(program,
+            // worker_sender_reader_kernel_id); auto& worker_writer_sender_runtime_args_by_core =
+            // GetRuntimeArgs(program, worker_sender_writer_kernel_id);
             for (const auto& core : sender_worker_cores) {
                 // reader
-                auto& worker_reader_sender_runtime_args = worker_reader_sender_runtime_args_by_core[core.x][core.y];
-                worker_reader_sender_runtime_args[0] = input.buffer()->address();
-                // writer
-                auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
-                worker_writer_sender_runtime_args[1] = semaphore.address();
+                // auto& worker_reader_sender_runtime_args = worker_reader_sender_runtime_args_by_core[core.x][core.y];
+                // worker_reader_sender_runtime_args[0] = input.buffer()->address();
+                // // writer
+                // auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
+                // worker_writer_sender_runtime_args[1] = semaphore.address();
             }
             UpdateDynamicCircularBufferAddress(program, cb_out, *output.buffer());
             UpdateDynamicCircularBufferAddress(program, cb_reduction, *all_gather_output.buffer());
