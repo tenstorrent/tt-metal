@@ -185,6 +185,7 @@ public:
             this->dst_page_index %= this->num_banks;
             this->page_size_to_write = this->size_of_partial_page;
             this->data_size_to_copy = this->size_of_partial_page;
+            TT_ASSERT(!this->end_bank_indices.empty());
             if (this->end_bank_indices.top() != this->num_banks) {
                 this->end_bank_indices.pop();
             }
