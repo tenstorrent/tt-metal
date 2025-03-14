@@ -5,8 +5,6 @@
 import torch
 import pytest
 import ttnn
-from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data_gen_with_range, compare_pcc
-from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
 from models.utility_functions import skip_for_grayskull, torch_random
 from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
@@ -51,16 +49,30 @@ def test_broken_remainder1(input_shapes, device):
     assert torch.allclose(result, golden, atol=0.01, rtol=0)
 
 
+# This test was added for #17361
+# If input is a multiple of the scalar, the result should be 0, but both Torch and TT output either 0 or the scalar value itself depending on the operands.
+# This inconsistency is persistent due to some fp precision loss in both Torch and TT.
+# Eg: torch.remainder of (3, 1.5) = 0.0 and of (3, 0.003) = 0.003
+# Eg: ttnn.remainder of (4, 0.004) = 0.004 and of (3, 0.003) = 0.0
 @skip_for_grayskull("Op not supported for Grayskull, supported for wormhole_b0")
 @pytest.mark.parametrize(
     "input_shapes",
-    ((torch.Size([1, 1, 10, 10])),),
+    (
+        (torch.Size([6, 5, 90, 112])),
+        (torch.Size([2, 1, 120, 11])),
+        (torch.Size([3, 123, 115])),
+        (torch.Size([69, 178])),
+    ),
 )
-def test_remainder_scalar(input_shapes, device):
+@pytest.mark.parametrize(
+    "scalar", [-0.002, -0.001, -0.0006, -0.0005, -0.0003, 0.0, 0.0003, 0.0005, 0.0006, 0.001, 0.002]
+)
+def test_remainder_scalar(input_shapes, scalar, device):
+    torch.manual_seed(0)
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.bfloat16), ttnn.bfloat16
     )(input_shapes)
-    scalar = 2
+
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
         dtype=ttnn.bfloat16,
@@ -74,43 +86,8 @@ def test_remainder_scalar(input_shapes, device):
 
     output_tensor = ttnn.remainder(input_tensor_a, scalar)
     output_tensor = ttnn.to_torch(output_tensor)
-    print("tt input a: ", input_tensor_a)
-    print("Torch out: ", torch_output_tensor)
-    print("TT out: ", output_tensor)
-    print("Diff: ", torch_output_tensor - output_tensor)
-    diff = torch.abs(torch_output_tensor - output_tensor)
-    max_atol = torch.max(diff)
-    print(f"Max absolute tolerance (atol): {max_atol.item()}")
 
-    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.999
-
-
-def test_remainder_small_matrix(device):
-    torch_input_tensor_a = torch.tensor([[5, 2], [3, 4]], dtype=torch.bfloat16)
-    print("torch input: ", torch_input_tensor_a)
-    input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a,
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    scalar = 0.003
-    # golden_function = ttnn.get_golden_function(ttnn.remainder)
-    # torch_output_tensor = golden_function(torch_input_tensor_a, scalar, device=device)
-    torch_output_tensor = torch.remainder(torch_input_tensor_a.float(), scalar).bfloat16()
-    output_tensor = ttnn.remainder(input_tensor_a, scalar)
-    print("tt input: ", input_tensor_a)
-    print("Torch input: ", torch_input_tensor_a)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    print("Torch out: ", torch_output_tensor)
-    print("TT out: ", output_tensor)
-    print("Diff: ", torch_output_tensor - output_tensor)
-    diff = torch.abs(torch_output_tensor - output_tensor)
-    max_atol = torch.max(diff)
-    print(f"Max absolute tolerance (atol): {max_atol.item()}")
-
-    # assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.999
-    assert torch.allclose(output_tensor, torch_output_tensor, atol=0.01, rtol=0)
+    if scalar == 0.0:
+        assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.999
+    else:
+        assert torch.allclose(output_tensor, torch_output_tensor, atol=0.001, rtol=0)
