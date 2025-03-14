@@ -214,6 +214,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         uint32_t remainder = input_tensor_num_pages % num_links;
         uint32_t input_tile_id_start = link * base_pages_per_worker + std::min(link, remainder);
         uint32_t input_tile_id_end = (link + 1) * base_pages_per_worker + std::min(link + 1, remainder);
+        uint32_t num_tiles_per_chip = input_tensor_shape[2] * input_tensor_shape[3] / 1024;
         std::vector<uint32_t> reader_rt_args = {
             input_tensor.buffer()->address(),  // tensor_address0
             input_tile_id_start,               // tile_id_start
@@ -246,6 +247,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
             drain_sync_core.y,                  // out_ready_sem_noc0_y
             out_ready_sem_wait_value,           // out_ready_sem_wait_value
             ring_size,                          // ring_size
+            num_tiles_per_chip,                 // num_tiles_per_chip
         };
         log_trace(tt::LogOp, "Writer Runtime Args:");
         for (const auto& arg : writer_rt_args) {
