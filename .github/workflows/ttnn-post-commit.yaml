@@ -122,7 +122,7 @@ jobs:
       - name: Create conda environment
         run: |
           source /opt/conda/etc/profile.d/conda.sh
-          conda create -y -n metalium_env python=3.10 tt-metalium multiprocess pytest -c conda-forge
+          conda create -y -n metalium_env python=3.10 tt-metalium multiprocess psutil pytest -c conda-forge
 
       - name: Set ttnn fast runtime if exists in config
         if: ${{ matrix.test-group.fast_runtime_mode_off }}
