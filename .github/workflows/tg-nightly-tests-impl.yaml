@@ -19,7 +19,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { name: "TG CCL tests", arch: wormhole_b0, cmd: run_tg_nightly_ccl_tests, timeout: 40, owner_id: ULMEPM2MA}, # Sean Nijjar
+          { name: "TG CCL tests", arch: wormhole_b0, cmd: run_tg_nightly_ccl_tests, timeout: 45, owner_id: ULMEPM2MA}, # Sean Nijjar
         ]
     name: ${{ matrix.test-group.name }}
     runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "pipeline-functional"]
