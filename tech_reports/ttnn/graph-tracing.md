@@ -187,7 +187,7 @@ captured_graph = ttnn.graph.end_graph_capture()
 ### How to add it in C++?
 https://github.com/tenstorrent/tt-metal/blob/a24a9be806feec4c3bf980443a35ce02e2498d0a/tests/ttnn/unit_tests/gtests/test_graph_capture_arguments_morehdot.cpp#L27-L30
 
-### What is the output expected?
+### How do I get the output?
 
 #### For C++
 https://github.com/tenstorrent/tt-metal/blob/main/tests/ttnn/unit_tests/gtests/test_graph_capture_arguments_morehdot.cpp
@@ -196,7 +196,7 @@ https://github.com/tenstorrent/tt-metal/blob/main/tests/ttnn/unit_tests/gtests/t
 https://github.com/tenstorrent/tt-metal/blob/a24a9be806feec4c3bf980443a35ce02e2498d0a/tests/ttnn/unit_tests/test_graph_capture.py#L189
 
 ### What about getting the information in Json?
-Since not everybody is familiar with TT format to present the trace data, we have created a tool to convert it to json, so it can be parsed in any way of your convenience, to use it just do the following after coll
+Since not everybody is familiar with TT format to present the trace data, we have created a tool to convert it to json, so it can be parsed in any way of your convenience, to use it just do the following after calling
 
 https://github.com/tenstorrent/tt-metal/blob/de8049beac0a2fe81f50a91c9f56543731fecfcb/tests/ttnn/unit_tests/test_graph_capture.py#L372-L375
 
