@@ -49,7 +49,7 @@ jobs:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ matrix.test-group.arch }}
-        LOGURU_LEVEL: DEBUG
+        LOGURU_LEVEL: INFO
         GITHUB_ACTIONS: true
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
