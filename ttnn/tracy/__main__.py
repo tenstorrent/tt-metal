@@ -56,6 +56,13 @@ def main():
         help="Only process the logs avaialble in the default logs folder",
         default=False,
     )
+    parser.add_option(
+        "--collect-noc-traces",
+        dest="collect_noc_traces",
+        action="store_true",
+        help="Collect noc event traces when profiling",
+        default=False,
+    )
 
     if not sys.argv[1:]:
         parser.print_usage()
@@ -75,7 +82,7 @@ def main():
         outputFolder = Path(options.output_folder)
 
     if options.processLogsOnly:
-        generate_report(generate_logs_folder(outputFolder), "", None)
+        generate_report(generate_logs_folder(outputFolder), "", None, options.collect_noc_traces)
         sys.exit(0)
 
     if options.port:
@@ -176,7 +183,7 @@ def main():
 
             try:
                 captureProcess.communicate(timeout=15)
-                generate_report(outputFolder, options.name_append, options.child_functions)
+                generate_report(outputFolder, options.name_append, options.child_functions, options.collect_noc_traces)
             except subprocess.TimeoutExpired as e:
                 captureProcess.terminate()
                 captureProcess.communicate()
