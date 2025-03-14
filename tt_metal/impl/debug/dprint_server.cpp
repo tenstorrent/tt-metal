@@ -28,6 +28,7 @@
 #include <tt-metalium/device.hpp>
 
 #include "hostdevcommon/dprint_common.h"
+#include "hostdevcommon/kernel_structs.h"
 
 using std::cout;
 using std::endl;

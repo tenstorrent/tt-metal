@@ -7,6 +7,7 @@
 #include <functional>
 #include <limits>
 #include <random>
+#include <thread>
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/math.hpp>

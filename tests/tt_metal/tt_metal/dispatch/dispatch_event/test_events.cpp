@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <future>
+
 #include "command_queue_fixture.hpp"
 #include "gtest/gtest.h"
 #include <tt-metalium/host_api.hpp>

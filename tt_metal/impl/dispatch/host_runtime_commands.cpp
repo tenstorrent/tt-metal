@@ -44,6 +44,8 @@
 #include <hal.hpp>
 #include "lightmetal/host_api_capture_helpers.hpp"
 
+#include "tracy/Tracy.hpp"
+
 using namespace tt::tt_metal;
 
 namespace tt::tt_metal {

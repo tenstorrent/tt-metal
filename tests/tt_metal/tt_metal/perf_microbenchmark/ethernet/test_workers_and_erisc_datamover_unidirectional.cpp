@@ -7,6 +7,7 @@
 #include <functional>
 #include <limits>
 #include <random>
+#include <thread>
 
 #include "buffer_constants.hpp"
 #include "umd/device/types/arch.h"

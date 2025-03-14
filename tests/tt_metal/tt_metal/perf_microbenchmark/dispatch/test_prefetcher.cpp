@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <functional>
 #include <random>
+#include <thread>
 
 #include "assert.hpp"
 #include <tt-metalium/host_api.hpp>

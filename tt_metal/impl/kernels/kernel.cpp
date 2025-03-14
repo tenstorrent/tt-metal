@@ -11,7 +11,6 @@
 #include <magic_enum/magic_enum.hpp>
 #include <set>
 
-#include <build.hpp>
 #include "llrt.hpp"
 #include <string_view>
 #include <tt_metal.hpp>

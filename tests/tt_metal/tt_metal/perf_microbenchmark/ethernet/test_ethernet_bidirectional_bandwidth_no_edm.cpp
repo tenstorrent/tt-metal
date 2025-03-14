@@ -25,6 +25,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 
 #include <tt-metalium/persistent_kernel_cache.hpp>
+#include <thread>
 
 // TODO: ARCH_NAME specific, must remove
 #include "eth_l1_address_map.h"

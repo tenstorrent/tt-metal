@@ -11,8 +11,10 @@
 #include <type_traits>
 #include <memory>
 
-#include "build.hpp"
 #include "base_types.hpp"
+#include "core_coord.hpp"
+#include "jit_build_settings.hpp"
+#include "jit_build_options.hpp"
 #include "kernel_types.hpp"
 #include "tt_memory.h"
 #include <tt_stl/span.hpp>

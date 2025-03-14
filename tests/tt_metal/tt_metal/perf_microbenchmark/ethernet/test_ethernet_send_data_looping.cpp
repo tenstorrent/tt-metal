@@ -13,6 +13,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel.hpp>
+#include <thread>
 #include "llrt.hpp"
 #include "tt_cluster.hpp"
 #include "eth_l1_address_map.h"
