@@ -42,10 +42,18 @@ void py_bind_llama_reduce_scatter(py::module& module) {
                const global_semaphore::MultiDeviceGlobalSemaphore& cross_device_semaphore,
                const tt::tt_metal::SubDeviceId& subdevice_id,
                const uint32_t cluster_axis,
+               const uint32_t num_links,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                QueueId queue_id) {
                 return self(
-                    queue_id, input_tensor, dim, cross_device_semaphore, subdevice_id, cluster_axis, memory_config);
+                    queue_id,
+                    input_tensor,
+                    dim,
+                    cross_device_semaphore,
+                    subdevice_id,
+                    cluster_axis,
+                    num_links,
+                    memory_config);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("dim"),
@@ -53,6 +61,7 @@ void py_bind_llama_reduce_scatter(py::module& module) {
             py::arg("subdevice_id"),
             py::arg("cluster_axis"),
             py::kw_only(),
+            py::arg("num_links") = 1,
             py::arg("memory_config") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId,
         });

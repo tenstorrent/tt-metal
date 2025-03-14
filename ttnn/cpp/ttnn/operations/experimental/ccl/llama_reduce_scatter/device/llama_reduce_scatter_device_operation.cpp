@@ -74,6 +74,7 @@ LlamaReduceScatterDeviceOperation::invoke(
     std::optional<IDevice*>& forward_device,
     std::optional<IDevice*>& backward_device,
     const uint32_t ring_devices,
+    const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config) {
     std::cout << "Primitive operation called" << std::endl;
     return {
@@ -85,8 +86,10 @@ LlamaReduceScatterDeviceOperation::invoke(
             .cluster_axis = cluster_axis,
             .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
             .ring_devices = ring_devices,
+            .num_links = num_links,
             .forward_device = forward_device,
-            .backward_device = backward_device},
+            .backward_device = backward_device,
+        },
         tensor_args_t{.input_tensor = input_tensor}};
 }
 

@@ -20,9 +20,9 @@ ttnn::Tensor ExecuteLlamaReduceScatter::invoke(
     const global_semaphore::MultiDeviceGlobalSemaphore& cross_device_semaphore,
     const SubDeviceId& subdevice_id,
     const uint32_t cluster_axis,
+    const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config) {
     bool enable_persistent_fabric = true;
-    uint32_t num_links = 1;
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
         "all_gather_async op is only supported for Fast Dispatch");
@@ -40,7 +40,7 @@ ttnn::Tensor ExecuteLlamaReduceScatter::invoke(
     std::vector<GlobalSemaphore> semaphores = cross_device_semaphore.global_semaphores;
     std::cout << "Calling llama_reduce_scatter" << std::endl;
     operation::launch_op(
-        [dim, semaphores, subdevice_id, cluster_axis, ring_devices, memory_config, devices](
+        [dim, semaphores, subdevice_id, cluster_axis, ring_devices, memory_config, devices, num_links](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -74,6 +74,7 @@ ttnn::Tensor ExecuteLlamaReduceScatter::invoke(
                 forward_device,
                 backward_device,
                 ring_devices,
+                num_links,
                 memory_config)};
         },
         {input_tensor},

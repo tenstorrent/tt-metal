@@ -141,7 +141,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     const auto& input_tensor = tensor_args.input_tensor;
     tt::tt_metal::IDevice* device = input_tensor.device();
     bool enable_persistent_fabric = true;
-    uint32_t num_links = 1;
+    uint32_t num_links = operation_attributes.num_links;
 
     uint32_t ring_index = operation_attributes.ring_index;
     std::string device_order = detail::device_order_array_string(ring_size, ring_index);
@@ -302,7 +302,8 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
 
     tt::tt_metal::CircularBufferConfig fabric_sender_cb_config =
         tt::tt_metal::CircularBufferConfig(
-            buffering_factor * input_shard_cores_per_device * (tiles_per_core_width - num_pages_per_packet) *
+            buffering_factor *
+                (input_shard_cores_per_device * (tiles_per_core_width - num_pages_per_packet) + tiles_per_core_width) *
                 input_page_size,
             {{fabric_sender_cb_index, cb_data_format}})
             .set_page_size(fabric_sender_cb_index, input_page_size);
