@@ -254,10 +254,10 @@ def test_fabric_reduce_scatter(n300_mesh_device):
     shard_height = 32
     shard_width = 160
     num_devices = n300_mesh_device.get_num_devices()
-    num_cores = 4
-    torch_input_tensors = [torch.ones(1, 1, shard_height, shard_width * num_cores) + 1]
+    num_cores = 12
+    torch_input_tensors = [torch.rand(1, 1, shard_height, shard_width * num_cores)]
     for i in range(1, num_devices):
-        torch_input_tensors.append(torch_input_tensors[0] * (i + 1))
+        torch_input_tensors.append(torch.rand(torch_input_tensors[0].shape))
 
     input = torch.cat(torch_input_tensors, dim=3)
     print(input)

@@ -302,10 +302,14 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
 
     tt::tt_metal::CircularBufferConfig fabric_sender_cb_config =
         tt::tt_metal::CircularBufferConfig(
-            buffering_factor * tiles_per_core_width * input_page_size, {{fabric_sender_cb_index, cb_data_format}})
+            buffering_factor * input_shard_cores_per_device * (tiles_per_core_width - num_pages_per_packet) *
+                input_page_size,
+            {{fabric_sender_cb_index, cb_data_format}})
             .set_page_size(fabric_sender_cb_index, input_page_size);
 
-    std::cout << "CB fabric sender config total size: " << buffering_factor * num_pages_per_packet * input_page_size
+    std::cout << "CB fabric sender config total size: "
+              << buffering_factor * input_shard_cores_per_device * (tiles_per_core_width - num_pages_per_packet) *
+                     input_page_size
               << " page size: " << num_pages_per_packet * input_page_size << std::endl;
 
     // buffer for receiving shards from the another device. Each receiver core will take each device's shard. The
