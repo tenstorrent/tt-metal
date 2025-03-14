@@ -150,8 +150,4 @@ TYPED_TEST(MeshOpsTest, ConcatenateSameParametersAsCompose) {
         TypeParam(0), TypeParam(1), TypeParam(2), TypeParam(3), TypeParam(4), TypeParam(5)};
     EXPECT_TRUE(xt::allclose(composed, expected));
 }
-
-TYPED_TEST(MeshOpsTest, DummyRemoveMe) {
-    ASSERT_EQ(0, 1);
-}
 }  // namespace
