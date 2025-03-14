@@ -61,7 +61,7 @@ GeluBackwardProgramFactory::cached_program_t GeluBackwardProgramFactory::create(
             .set_page_size(output_cb_index, dst_single_tile_size);
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
-    auto src0_buffer = input.buffer();
+    auto src0_buffer = grad_output.buffer();
     auto src1_buffer = input.buffer();
 
     auto dst_buffer = output.buffer();
@@ -105,6 +105,7 @@ GeluBackwardProgramFactory::cached_program_t GeluBackwardProgramFactory::create(
         all_cores,
         tt::tt_metal::ComputeConfig{
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            // .fp32_dest_acc_en = true,
             .unpack_to_dest_mode = unpack_to_dest_mode,
             .defines = unary_defines});
 

@@ -16,6 +16,9 @@
 
 #include "eltwise_bw_gelu_common.hpp"
 
+#define M_SQRT2 1.41421356237309504880f    /* sqrt(2) */
+#define M_2_SQRTPI 1.12837916709551257390f /* 2/sqrt(pi) */
+
 namespace NAMESPACE {
 void MAIN {
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
@@ -25,12 +28,8 @@ void MAIN {
     constexpr auto cb_input = tt::CBIndex::c_1;
     constexpr auto cb_grad_in = tt::CBIndex::c_2;
 
-    constexpr uint32_t bits_1p0 = 0x3f800000;                 // 1.0f
-    constexpr uint32_t bits_0p5 = 0x3F000000;                 // 0.5f
-    constexpr uint32_t bits_sqrt_2_over_pi = 0x3f4c422a;      // sqrt(2/pi)
-    constexpr uint32_t bits_0p5_sqrt_2_over_pi = 0x3ecc422a;  // ~0.3989423f (0.5 * sqrt(2/π))
-    constexpr uint32_t bits_0p044715 = 0x3d372713;            // 0.044715
-    constexpr uint32_t bits_0p134145 = 0x3e095d4f;            // 0.134145
+    constexpr float kBeta = M_SQRT2 * M_2_SQRTPI * 0.5;
+    constexpr float kKappa = 0.044715;
 
     unary_op_init_common(cb_grad_out, cb_grad_in);
     add_binary_tile_init();
@@ -49,23 +48,22 @@ void MAIN {
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
             copy_tile(cb_grad_out, i, 0);
             copy_tile(cb_input, i, 1);
-
-            // tile[2] = x
-            copy_value(2, 1);
+            copy_tile(cb_input, i, 2);  // tile[2] = x
+            copy_tile(cb_input, i, 8);  // tile[8] = x
 
             // tile[1] = x^3
             square_tile(1);
             mul_binary_tile(1, 2);
 
             // tile[1] = 0.044715 * x^3
-            load_immediate_value<bits_0p044715>(3);
+            load_immediate_value(3, kKappa);
             mul_binary_tile(1, 3);
 
             // tile[1] = x + 0.044715 * x^3
             add_binary_tile(1, 2);
 
             // tile[1] = sqrt(2/π) * (x + 0.044715 * x^3)
-            load_immediate_value<bits_sqrt_2_over_pi>(3);
+            load_immediate_value(3, kBeta);
             mul_binary_tile(1, 3);
 
             // tile[1] = tanh(sqrt(2/π) * (x + 0.044715 * x^3))
@@ -73,28 +71,28 @@ void MAIN {
             copy_value(7, 1);  // save tanh to tile[7]
 
             // CDF term: tile[1] = 0.5 * (1 + tanh(sqrt(2/π) * (x + 0.044715 * x^3)))
-            load_immediate_value<bits_1p0>(3);
+            load_immediate_value(3, 1.0f);
             add_binary_tile(1, 3);
-            load_immediate_value<bits_0p5>(3);
+            load_immediate_value(3, 0.5f);
             mul_binary_tile(1, 3);
 
             // tile[7] = 1 - tanh^2
             square_tile(7);
-            load_immediate_value<bits_1p0>(6);
+            load_immediate_value(6, 1.0f);
             sub_binary_tile(6, 7);
             copy_value(7, 6);
 
             // tile[5] = (1 + 0.134145 * x**2)
-            load_immediate_value<bits_0p134145>(6);
-            copy_value(5, 2);
+            load_immediate_value(6, kKappa * 3.0f);
+            copy_value(5, 8);
             square_tile(5);         // x^2
             mul_binary_tile(5, 6);  // 0.134145 * x**2
-            load_immediate_value<bits_1p0>(6);
+            load_immediate_value(6, 1.0f);
             add_binary_tile(5, 6);  // 1 + 0.134145 * x**2
 
             // PDF term: tile[5] = 0.5 * sqrt(2/π) * (1 + 0.134145 * x^2) * (1 - tanh^2)
             mul_binary_tile(5, 7);
-            load_immediate_value<bits_0p5_sqrt_2_over_pi>(6);
+            load_immediate_value(6, kBeta / 2.0f);
             mul_binary_tile(5, 6);
 
             // tile[5] = x * pdf tern
