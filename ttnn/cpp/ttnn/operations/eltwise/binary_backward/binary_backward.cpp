@@ -507,7 +507,10 @@ std::vector<std::optional<Tensor>> ExecuteBackwardConcat::invoke(
     if (are_required_outputs[0]) {
         ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
         ttnn::SmallVector<uint32_t> end_index = {
-            input.padded_shape()[0], input.padded_shape()[1], input.padded_shape()[2], input.padded_shape()[3]};
+            input.get_logical_shape()[0],
+            input.get_logical_shape()[1],
+            input.get_logical_shape()[2],
+            input.get_logical_shape()[3]};
         ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
         ttnn::slice(queue_id, grad, start_index, end_index, step, std::nullopt, input_grad);
         grad_tensor[0] = input_grad;
@@ -525,7 +528,10 @@ std::vector<std::optional<Tensor>> ExecuteBackwardConcat::invoke(
             start_index_2 = {0, 0, 0, input.padded_shape()[3]};
         }
         ttnn::SmallVector<uint32_t> end_index_2 = {
-            grad.padded_shape()[0], grad.padded_shape()[1], grad.padded_shape()[2], grad.padded_shape()[3]};
+            grad.get_logical_shape()[0],
+            grad.get_logical_shape()[1],
+            grad.get_logical_shape()[2],
+            grad.get_logical_shape()[3]};
         ttnn::SmallVector<uint32_t> step_2 = {1, 1, 1, 1};
         ttnn::slice(queue_id, grad, start_index_2, end_index_2, step_2, std::nullopt, other_grad);
         grad_tensor[1] = other_grad;
