@@ -637,6 +637,50 @@ def test_slice_output_tensor_tile(device):
 @pytest.mark.parametrize(
     "input_shape, input_start, input_ends",
     (
+        ((1, 32, 32, 32), (0, 0, 0, 0), (1, 32, 32, 2)),
+        ((2, 32, 32, 32), (0, 0, 0, 0), (1, 32, 32, 3)),
+        ((3, 32, 32, 32), (0, 0, 0, 0), (1, 32, 32, 4)),
+        ((1, 32, 32, 32), (0, 0, 0, 0), (1, 32, 2, 32)),
+        ((2, 32, 32, 32), (0, 0, 0, 0), (1, 32, 3, 32)),
+        ((1, 32, 4, 32), (0, 0, 0, 0), (1, 32, 4, 1)),
+        ((2, 32, 2, 32), (0, 0, 0, 0), (1, 32, 2, 2)),
+        ((1, 32, 3, 32), (0, 0, 0, 0), (1, 32, 3, 3)),
+        ((1, 32, 4, 32), (0, 0, 0, 0), (1, 32, 4, 4)),
+    ),
+)
+@pytest.mark.parametrize(
+    "dtype",
+    (ttnn.uint32, ttnn.uint32),
+)
+@pytest.mark.parametrize(
+    "memory_config",
+    (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+)
+def test_ttnn_slice_uint_unaligned_tile(
+    input_shape, input_start, input_ends, memory_config, dtype, device, use_program_cache
+):
+    if input_shape[0] == 32 and memory_config == ttnn.L1_MEMORY_CONFIG:
+        pytest.skip("OoM")
+
+    torch_input = torch.randint(10000, input_shape, dtype=torch.int32).abs()
+    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+
+    torch_output = torch_input[
+        input_start[0] : input_ends[0],
+        input_start[1] : input_ends[1],
+        input_start[2] : input_ends[2],
+        input_start[3] : input_ends[3],
+    ]
+
+    ttnn_output = ttnn.slice(ttnn_input, input_start, input_ends, memory_config=memory_config)
+
+    ttnn_output = ttnn.to_torch(ttnn_output)
+    assert_with_pcc(torch_output, ttnn_output, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "input_shape, input_start, input_ends",
+    (
         ((1, 1, 1, 256), (0, 0, 0, 0), (1, 1, 1, 255)),
         ((1, 32, 32, 32), (0, 0, 0, 0), (1, 32, 32, 1)),
         ((1, 32, 32, 64), (0, 0, 0, 0), (1, 32, 1, 32)),
