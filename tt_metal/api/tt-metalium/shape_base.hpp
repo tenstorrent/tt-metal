@@ -7,7 +7,7 @@
 #include <vector>
 
 #include "small_vector.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 
 namespace tt::tt_metal {
 

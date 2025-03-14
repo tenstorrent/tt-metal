@@ -12,10 +12,10 @@
 #include "utils.hpp"
 #include "core_coord.hpp"
 #include "data_format.hpp"
-#include "settings.hpp"
+#include "jit_build_options.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "tracy/Tracy.hpp"
-#include "aligned_allocator.hpp"
+#include <tt_stl/aligned_allocator.hpp>
 #include "rtoptions.hpp"
 
 namespace tt::tt_metal {
@@ -171,26 +171,6 @@ class JitBuildIdleEthernet : public JitBuildState {
 private:
 public:
     JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuiltStateConfig& build_config);
-};
-
-// Abstract base class for kernel specialization
-// Higher levels of the SW derive from this and fill in build details not known to the build system
-// (eg, API specified settings)
-class JitBuildSettings {
-public:
-    // Returns the full kernel name
-    virtual const std::string& get_full_kernel_name() const = 0;
-    // Returns the compiler optimization level
-    virtual std::string_view get_compiler_opt_level() const = 0;
-    // Returns the linker optimization level
-    virtual std::string_view get_linker_opt_level() const = 0;
-
-    // Called to process the user defines
-    virtual void process_defines(const std::function<void(const string& define, const string& value)>) const = 0;
-    // Called to process the user compile time args
-    virtual void process_compile_time_args(const std::function<void(int i, uint32_t value)>) const = 0;
-
-    virtual ~JitBuildSettings() = default;
 };
 
 void jit_build(const JitBuildState& build, const JitBuildSettings* settings);

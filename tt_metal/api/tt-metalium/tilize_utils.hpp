@@ -14,7 +14,7 @@
 #include <concepts>
 #include <type_traits>
 
-#include <tt-metalium/span.hpp>
+#include <tt_stl/span.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/math.hpp>

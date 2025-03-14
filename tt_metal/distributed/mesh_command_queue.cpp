@@ -94,10 +94,10 @@ void MeshCommandQueue::populate_dispatch_core_type() {
     for (auto device : this->mesh_device_->get_devices()) {
         if (device_idx) {
             TT_FATAL(
-                this->dispatch_core_type_ == dispatch_core_manager::instance().get_dispatch_core_type(device->id()),
+                this->dispatch_core_type_ == dispatch_core_manager::instance().get_dispatch_core_type(),
                 "Expected the Dispatch Core Type to match across device in a Mesh");
         } else {
-            this->dispatch_core_type_ = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+            this->dispatch_core_type_ = dispatch_core_manager::instance().get_dispatch_core_type();
         }
         device_idx++;
     }
@@ -113,7 +113,7 @@ void MeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool b
     SubDeviceId sub_device_id = *(sub_device_ids.begin());
     auto mesh_device_id = this->mesh_device_->id();
     auto& sysmem_manager = this->reference_sysmem_manager();
-    auto dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
+    auto dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
 
     TT_FATAL(
@@ -702,7 +702,7 @@ void MeshCommandQueue::write_program_cmds_to_subgrid(
     bool stall_first,
     bool stall_before_program,
     std::unordered_set<uint32_t>& chip_ids_in_workload) {
-    auto dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
+    auto dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
 
     for (const auto& coord : sub_grid) {
@@ -747,7 +747,7 @@ void MeshCommandQueue::capture_program_trace_on_subgrid(
     auto& sysmem_manager_for_trace = mesh_device_->get_device(sub_grid.start_coord())->sysmem_manager();
     uint32_t sysmem_manager_offset = sysmem_manager_for_trace.get_issue_queue_write_ptr(id_);
 
-    auto dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
+    auto dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
 
     program_dispatch::write_program_command_sequence(

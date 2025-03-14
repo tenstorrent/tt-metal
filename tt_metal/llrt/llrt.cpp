@@ -25,7 +25,7 @@
 #include <rtoptions.hpp>
 #include "hal.hpp"
 
-#include <settings.hpp>
+#include <jit_build_options.hpp>
 
 #include <fmt/base.h>
 #include <fmt/ranges.h>

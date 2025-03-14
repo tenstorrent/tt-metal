@@ -18,6 +18,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/kernel.hpp>
+#include <tt-metalium/allocator.hpp>
 #include "umd/device/tt_soc_descriptor.h"
 
 namespace tt::tt_metal {

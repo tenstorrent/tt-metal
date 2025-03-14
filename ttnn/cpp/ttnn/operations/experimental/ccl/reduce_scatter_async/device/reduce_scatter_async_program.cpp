@@ -13,7 +13,7 @@
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/device_impl.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/span.hpp>
+#include <tt_stl/span.hpp>
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include <tt-metalium/host_api.hpp>
@@ -30,7 +30,7 @@
 #include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 #include "cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 #include <tt-metalium/global_semaphore.hpp>
-#include <tt-metalium/overloaded.hpp>
+#include <tt_stl/overloaded.hpp>
 
 /*
  * This file contains the program factory for reduce scatter operation implemented on line (and soon, ring) topologies.
