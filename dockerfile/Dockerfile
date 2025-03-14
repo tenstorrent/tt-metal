@@ -247,7 +247,7 @@ FROM ci-test AS dev
 
 # Need this to build GDB
 RUN apt-get -y update \
-    && apt-get install -y libmpfr-dev \
+    && apt-get install -y libmpfr-dev python3.8-venv \
     && rm -rf /var/lib/apt/lists/*
 
 # Install the gdb that is compatible with clang-17
