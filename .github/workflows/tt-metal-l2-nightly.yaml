@@ -46,7 +46,7 @@ jobs:
             cmd: pytest tests/ttnn/nightly/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode"
             owner: U052J2QDDKQ # Pavle Josipovic
     container:
-      image: ${{ needs.build-artifact-profiler.outputs.ci-build-docker-image }}
+      image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
