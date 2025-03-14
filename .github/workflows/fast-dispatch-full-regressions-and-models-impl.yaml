@@ -78,7 +78,11 @@ jobs:
         run: |
           WHEEL_FILENAME=$(ls -1 *.whl)
           pip3 install $WHEEL_FILENAME
-      - uses: ./.github/actions/ensure-active-weka-mount
+      - name: Mount weka
+        timeout-minutes: 3
+        run: |
+          cat .github/scripts/cloud_utils/mount_weka.sh
+          timeout --preserve-status 300 .github/scripts/cloud_utils/mount_weka.sh
       - name: Run frequent reg tests scripts
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: ${{ matrix.test-group.cmd }}
@@ -148,7 +152,11 @@ jobs:
         run: |
           WHEEL_FILENAME=$(ls -1 *.whl)
           pip3 install $WHEEL_FILENAME
-      - uses: ./.github/actions/ensure-active-weka-mount
+      - name: Mount weka
+        timeout-minutes: 3
+        run: |
+          cat .github/scripts/cloud_utils/mount_weka.sh
+          timeout --preserve-status 300 .github/scripts/cloud_utils/mount_weka.sh
       - name: Set up WH_ARCH_YAML for eth-enabled models
         if: ${{ matrix.model != 'mistral7b' }}
         run: |
@@ -244,7 +252,11 @@ jobs:
         run: |
           WHEEL_FILENAME=$(ls -1 *.whl)
           pip3 install $WHEEL_FILENAME
-      - uses: ./.github/actions/ensure-active-weka-mount
+      - name: Mount weka
+        timeout-minutes: 3
+        run: |
+          cat .github/scripts/cloud_utils/mount_weka.sh
+          timeout --preserve-status 300 .github/scripts/cloud_utils/mount_weka.sh
       - name: Set up WH_ARCH_YAML for eth-enabled models
         run: |
           echo "WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml" >> $GITHUB_ENV
