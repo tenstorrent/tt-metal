@@ -10,7 +10,6 @@
 void kernel_main() {
     uint32_t reduce_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(0));
     constexpr uint32_t num_blocks = get_compile_time_arg_val(1);
-    constexpr uint32_t num_tiles_per_worker_bytes = get_compile_time_arg_val(2);
 
     const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(0);
     const uint32_t mcast_dest_noc_start_y = get_arg_val<uint32_t>(1);
@@ -41,7 +40,7 @@ void kernel_main() {
                                                noc_async_write_multicast_loopback_src(
                                                    l1_read_addr_ex,
                                                    multicast_data_noc | l1_read_addr_ex_global,
-                                                   num_tiles_per_worker_bytes,
+                                                   1,
                                                    num_blocks,
                                                    false,
                                                    false);
