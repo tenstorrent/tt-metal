@@ -532,12 +532,21 @@ struct GatherHeader {
     uint16_t noc_x;
     uint16_t noc_y;
     uint16_t num_transfers;
+
+    bool operator<(const GatherHeader& other) const {
+        return std::tie(noc_x, noc_y) < std::tie(other.noc_x, other.noc_y);
+    }
 };
 
 struct GatherTransfer {
     uint16_t src_id;
     uint16_t dst_id;
     uint16_t size;
+
+    // Order based on position in input
+    bool operator<(const GatherTransfer& other) const {
+        return std::tie(src_id, dst_id, size) < std::tie(other.src_id, other.dst_id, other.size);
+    }
 };
 
 struct GatherRoute {
@@ -636,6 +645,42 @@ void run(std::vector<uint16_t> config) {
         }
         number_of_segments_remaining--;
     }
+}
+
+GatherConfig regenerate_ordered(const GatherConfig& input) {
+    // Flatten all transfers with their headers
+    struct RouteTransferPair {
+        GatherHeader header;
+        GatherTransfer transfer;
+    };
+
+    std::vector<RouteTransferPair> all_transfers;
+    for (const auto& route : input.routes) {
+        for (const auto& transfer : route.transfers) {
+            all_transfers.push_back({route.header, transfer});
+        }
+    }
+
+    // Sort transfers globally
+    std::sort(all_transfers.begin(), all_transfers.end(), [](const RouteTransferPair& a, const RouteTransferPair& b) {
+        return a.transfer < b.transfer;  // Order by transfer criteria
+    });
+
+    // Rebuild GatherConfig with ordered transfers
+    GatherConfig ordered_config;
+    std::map<GatherHeader, std::vector<GatherTransfer>> grouped;
+    for (const auto& rt : all_transfers) {
+        grouped[rt.header].push_back(rt.transfer);
+    }
+
+    for (const auto& [header, transfers] : grouped) {
+        GatherRoute route;
+        route.header = header;
+        route.header.num_transfers = transfers.size();
+        route.transfers = transfers;
+        ordered_config.routes.push_back(route);
+    }
+    return ordered_config;
 }
 
 std::tuple<
@@ -764,13 +809,39 @@ generate_halo_kernel_config_tensors(
         gather_configs[core_id].routes.push_back(GatherRoute{header, transfers});
     }
 
-    const auto serialized_gather_configs = serialize_gather_configs(gather_configs);
-    tt::log_info("gather config = {}", gather_configs);
+    // std::vector<std::vector<std::pair<uint32_triplet_t, std::vector<uint32_triplet_t>>>> remote_config;
+    for (int core_id = 0; core_id < remote_config.size(); core_id++) {
+        for (const auto& destination : remote_config[core_id]) {
+            const auto& [src_core_id, dst_core_id, num_copies] = destination.first;
+            std::vector<GatherTransfer> transfers;
+            for (const auto& transfer : destination.second) {
+                const uint16_t src_offset_id = std::get<0>(transfer);
+                const uint16_t dst_offset_id = std::get<1>(transfer);
+                const uint16_t size = std::get<2>(transfer);
+                transfers.emplace_back(src_offset_id, dst_offset_id, size);
+            }
+            GatherHeader header{src_core_id, dst_core_id, transfers.size()};
+            gather_configs[core_id].routes.push_back(GatherRoute{header, transfers});
+        }
+    }
+
+    std::vector<GatherConfig> ordered_gather_configs;
+    for (const auto& config : gather_configs) {
+        ordered_gather_configs.push_back(regenerate_ordered(config));
+    }
+
+    const auto serialized_gather_configs = serialize_gather_configs(ordered_gather_configs);
     tt::log_info("serialized gather config = {}", serialized_gather_configs);
-    run(serialized_gather_configs[0]);
-    run(serialized_gather_configs[1]);
-    run(serialized_gather_configs[2]);
-    run(serialized_gather_configs[3]);
+
+    // Need to sort based using input offsets so that they are grouped by location
+    // for (auto& config : gather_configs) {
+    // for (auto& route : config.routes) {
+    // std::sort(
+    // route.transfers.begin(), route.transfers.end(), [](const GatherTransfer& a, const GatherTransfer& b) {
+    // return a.src_id < b.src_id;
+    // });
+    // }
+    // }
 
     // flatten and uniformize the lengths of each config list
     auto flatten_pad_config = [](auto& config) -> std::vector<std::vector<uint16_t>> {

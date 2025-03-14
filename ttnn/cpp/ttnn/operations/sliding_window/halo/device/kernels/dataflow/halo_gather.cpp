@@ -240,16 +240,25 @@ static inline void copy_sticks_async(
     }
 }
 
-template <uint32_t stick_nbytes, uint32_t input_aligned_page_size>
-void execute_config(const tt_l1_ptr uint16_t* config, uint32_t in_base_l1_addr, uint32_t out_base_l1_addr) {
+template <
+    uint32_t stick_nbytes,
+    uint32_t input_aligned_page_size,
+    bool is_block_sharded,
+    bool is_width_sharded,
+    bool is_col_major>
+void execute_config(
+    const tt_l1_ptr uint16_t* config,
+    uint32_t in_base_l1_addr,
+    uint32_t out_base_l1_addr,
+    uint32_t my_noc_x,
+    uint32_t my_noc_y) {
     uint16_t index = 0;
     const uint16_t total_number_of_segments = config[index++];
-    DPRINT << "total num segments " << total_number_of_segments << ENDL();
 
     uint16_t number_of_segments_remaining = total_number_of_segments;
 
-    uint16_t current_noc_x = 0;
-    uint16_t current_noc_y = 0;
+    uint16_t destination_noc_x = 0;
+    uint16_t destination_noc_y = 0;
     uint16_t transfers_remaining = 0;
 
     uint16_t src_offset = 0;
@@ -259,19 +268,20 @@ void execute_config(const tt_l1_ptr uint16_t* config, uint32_t in_base_l1_addr, 
     uint64_t out_l1_addr = 0;
 
     while (number_of_segments_remaining) {
-        DPRINT << " num segments " << number_of_segments_remaining << ENDL();
-        // read header for destination
-        current_noc_x = config[index++];
-        current_noc_y = config[index++];
+        // Read header for to get destination for this route
+        destination_noc_x = config[index++];
+        destination_noc_y = config[index++];
         transfers_remaining = config[index++];
-        DPRINT << " header x=" << current_noc_x << " y=" << current_noc_y << " transfers=" << transfers_remaining
-               << ENDL();
 
-        out_l1_addr = get_noc_addr(current_noc_x, current_noc_y, out_base_l1_addr);
+        const uint16_t noc_x = ((is_block_sharded && !is_col_major) || is_width_sharded) ? my_noc_x : destination_noc_x;
+        const uint16_t noc_y = ((is_block_sharded && is_col_major) || is_width_sharded) ? my_noc_y : destination_noc_y;
+        out_l1_addr = get_noc_addr(noc_x, noc_y, out_base_l1_addr);
 
-        // perform all transfers corresponding to the decoded destination
+        DPRINT << " header x=" << destination_noc_x << " y=" << destination_noc_y
+               << " transfers=" << transfers_remaining << ENDL();
+
+        // Perform all transfers in this route
         while (transfers_remaining > 0) {
-            DPRINT << " transfer rem " << transfers_remaining << ENDL();
             src_offset = config[index++];
             dst_offset = config[index++];
             transfer_size = config[index++];
@@ -352,32 +362,12 @@ void kernel_main() {
 
     cb_wait_front(in_cb_id, in_nsticks);
 
-    if constexpr (remote_config_cb_id) {
-        const uint32_t config_data_l1_addr = get_read_ptr(remote_config_cb_id);
-        const tt_l1_ptr uint16_t* config_data = reinterpret_cast<const tt_l1_ptr uint16_t*>(config_data_l1_addr);
-        copy_sticks_async<
-            stick_nbytes,
-            input_aligned_page_size,
-            is_block_sharded,
-            is_width_sharded,
-            remote_read,  // is_read
-            is_col_major,
-            true  // blocking
-            >(
-            config_data,
-            blocking_remote_config_data + 1,  // skip the first element (num_blocks)
-            my_noc_x,
-            my_noc_y,
-            in_base_l1_addr,
-            out_base_l1_addr,
-            num_blocks);
-    }
-
     // Local config
     if constexpr (local_config_cb_id) {
         const uint32_t config_data_l1_addr = get_read_ptr(local_config_cb_id);
         const tt_l1_ptr uint16_t* config_data = reinterpret_cast<const tt_l1_ptr uint16_t*>(config_data_l1_addr);
-        execute_config<stick_nbytes, input_aligned_page_size>(config_data, in_base_l1_addr, out_base_l1_addr);
+        execute_config<stick_nbytes, input_aligned_page_size, is_block_sharded, is_width_sharded, is_col_major>(
+            config_data, in_base_l1_addr, out_base_l1_addr, my_noc_x, my_noc_y);
     }
 
     noc_async_read_barrier();
