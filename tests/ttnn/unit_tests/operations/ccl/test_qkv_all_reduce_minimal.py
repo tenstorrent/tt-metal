@@ -133,6 +133,7 @@ def run_all_reduce_impl(
 
         logger.info(f"Input shape: {input_shape[2:]}, Padded shape: {[M, N_per_shard * input_num_cores]}")
         input_tensor = torch.randn(input_shape)
+        # input_tensor torch.Size([8, 4, 32, 1280])
         tt_qkv = ttnn.from_torch(
             input_tensor,
             device=mesh_device,
@@ -174,7 +175,9 @@ def run_all_reduce_impl(
         ##################################
         ##### Run the op
         ##################################
-
+        # tt_qkv Shape([1, 1, 32, 1280])
+        # tt_qkv_reduced Shape([1, 1, 32, 1280])
+        # MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=0,y=0) - (x=7,y=4)]},shape={32, 32},orientation=ShardOrientation::ROW_MAJOR,mode=ShardMode::PHYSICAL,physical_shard_shape=std::nullopt))
         tt_qkv_reduced = ttnn.experimental.all_reduce_async(
             tt_qkv,
             tt_intermediate_tensors[0],
@@ -186,15 +189,15 @@ def run_all_reduce_impl(
             num_links=num_links,
             subdevice_id=worker_sub_device_id,
         )  # [1, 1, 32, 1280]
-
+        breakpoint()
         # Batch Slicing
         # 32 BS is split into 8 Mini BS across 4 devices
         ttnn.synchronize_device(mesh_device)
 
         (
-            q_heads_pre_rot_1BQD,
-            k_heads_pre_rot_1BKD,
-            v_heads_1BKD,
+            q_heads_pre_rot_1BQD,  # Shape([1, 8, 8, 128])
+            k_heads_pre_rot_1BKD,  # Shape([1, 8, 1, 128])
+            v_heads_1BKD,  # Shape([1, 8, 1, 128])
         ) = ttnn.experimental.nlp_create_qkv_heads_decode(
             tt_qkv_reduced,
             num_heads=8,
@@ -204,7 +207,10 @@ def run_all_reduce_impl(
             batch_offset=batch_offset_tt_tensor,
             slice_size=8,
         )  # [1, 8, 8[32], 128], [1, 8, 1[32], 128], [1, 8, 1[32], 128]
-
+        # q MemoryConfig(memory_layout=TensorMemoryLayout::HEIGHT_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=0,y=0) - (x=7,y=0)]},shape={32, 128},orientation=ShardOrientation::ROW_MAJOR,mode=ShardMode::PHYSICAL,physical_shard_shape=std::nullopt))
+        # k MemoryConfig(memory_layout=TensorMemoryLayout::HEIGHT_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=0,y=1) - (x=7,y=1)]},shape={32, 128},orientation=ShardOrientation::ROW_MAJOR,mode=ShardMode::PHYSICAL,physical_shard_shape=std::nullopt))
+        # v MemoryConfig(memory_layout=TensorMemoryLayout::HEIGHT_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=0,y=0) - (x=7,y=0)]},shape={32, 128},orientation=ShardOrientation::ROW_MAJOR,mode=ShardMode::PHYSICAL,physical_shard_shape=std::nullopt))
+        breakpoint()
         # After ConcatMesh2dToTensor
         # [1, 8, 8[32], 128] -> [8, 32, 8[32], 128]
 
