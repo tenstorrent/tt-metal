@@ -212,16 +212,16 @@ void DeviceProfiler::readRiscProfilerResults(
                             index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
                             uint32_t data_H = profile_buffer[index];
                             uint32_t data_L = profile_buffer[index + 1];
-                            std::string zone_name = "";
-                            if (hash_to_zone_src_locations.find((uint16_t)timer_id) !=
-                                hash_to_zone_src_locations.end()) {
-                                std::stringstream source_info(hash_to_zone_src_locations[timer_id]);
-                                getline(source_info, zone_name, ',');
-                                if (zone_name.find("runtime_host_id_dispatch") != std::string::npos) {
-                                    runHostCounterRead = data_L;
-                                    runHostCounterDispatchSet = true;
-                                }
-                            }
+                            //std::string zone_name = "";
+                            //if (hash_to_zone_src_locations.find((uint16_t)timer_id) !=
+                                //hash_to_zone_src_locations.end()) {
+                                //std::stringstream source_info(hash_to_zone_src_locations[timer_id]);
+                                //getline(source_info, zone_name, ',');
+                                //if (zone_name.find("runtime_host_id_dispatch") != std::string::npos) {
+                                    //runHostCounterRead = data_L;
+                                    //runHostCounterDispatchSet = true;
+                                //}
+                            //}
                             logPacketData(
                                 log_file_ofs,
                                 noc_trace_json_log,
@@ -296,6 +296,10 @@ void DeviceProfiler::logPacketData(
     std::string source_file = "";
     uint64_t source_line = 0;
 
+    static std::set<tracy::TTDeviceEvent>::iterator last_event_it;
+    static uint32_t dispatch_runtime_id = 0;
+    static std::string cmd_type = "";
+
     if (hash_to_zone_src_locations.find((uint16_t)timer_id) != hash_to_zone_src_locations.end()) {
         std::stringstream source_info(hash_to_zone_src_locations[timer_id]);
         getline(source_info, zone_name, ',');
@@ -312,6 +316,13 @@ void DeviceProfiler::logPacketData(
             zone_phase = tracy::TTDeviceEventPhase::end;
         }
 
+        if (zone_name.find("DISPATCH") != std::string::npos) {
+            run_host_id = dispatch_runtime_id;
+            zone_name = fmt::format("{}:CQ-DISPATCH", dispatch_runtime_id);
+        } else if (zone_name.find("BRISC-FW") == std::string::npos && zone_name.find("ERISC-FW") == std::string::npos) {
+            run_host_id = 0;
+        }
+
         tracy::TTDeviceEvent event = tracy::TTDeviceEvent(
             run_host_id,
             device_id,
@@ -326,6 +337,8 @@ void DeviceProfiler::logPacketData(
             zone_phase);
 
         auto ret = device_events.insert(event);
+        last_event_it = ret.first;
+        event.run_num = 1;
 
         if (!ret.second) {
             return;
@@ -333,43 +346,33 @@ void DeviceProfiler::logPacketData(
     }
 
     if (packet_type == kernel_profiler::TS_DATA) {
-        std::string name = "";
-        if (zone_name.find("process_cmd") != std::string::npos) {
-            name = fmt::format("{}:{}", zone_name, magic_enum::enum_name((CQDispatchCmdId)data));
-        } else {
-            name = fmt::format("{}:{}", zone_name, data);
-        }
-
-        tracy::TTDeviceEventPhase zone_phase = tracy::TTDeviceEventPhase::begin;
-        tracy::TTDeviceEvent event = tracy::TTDeviceEvent(
-            run_host_id,
-            device_id,
-            core.x,
-            core.y,
-            risc_num,
-            timer_id,
-            timestamp,
-            source_line,
-            source_file,
-            name,
-            zone_phase);
-
-        auto ret = device_events.insert(event);
-
-        if (!ret.second) {
-            return;
-        }
-
-        event.zone_phase = tracy::TTDeviceEventPhase::end;
-        event.timestamp += 20;
-        ret = device_events.insert(event);
-
-        if (!ret.second) {
-            return;
+        if (last_event_it->zone_phase == tracy::TTDeviceEventPhase::begin &&
+            last_event_it->zone_name.find("DISPATCH") != std::string::npos) {
+            if (zone_name.find("process_cmd") != std::string::npos) {
+                cmd_type = fmt::format("{}", magic_enum::enum_name((CQDispatchCmdId)data));
+            } else if (zone_name.find("runtime_host_id_dispatch") != std::string::npos) {
+                dispatch_runtime_id = (uint32_t)data;
+            }
+            tracy::TTDeviceEvent event = tracy::TTDeviceEvent(
+                dispatch_runtime_id,
+                last_event_it->chip_id,
+                last_event_it->core_x,
+                last_event_it->core_y,
+                last_event_it->risc,
+                last_event_it->marker,
+                last_event_it->timestamp,
+                last_event_it->line,
+                last_event_it->file,
+                fmt::format("{}:{}", dispatch_runtime_id, cmd_type),
+                last_event_it->zone_phase);
+            device_events.erase(last_event_it);
+            auto ret = device_events.insert(event);
+            last_event_it = ret.first;
         }
     }
 
     firstTimestamp(timestamp);
+    return;
 
     logPacketDataToCSV(
         log_file_ofs,
