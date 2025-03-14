@@ -41,7 +41,6 @@ jobs:
     container:
       image: ${{ inputs.docker-image }}
       env:
-        TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ matrix.test-group.arch }}
@@ -112,7 +111,6 @@ jobs:
     container:
       image: ${{ inputs.docker-image }}
       env:
-        TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: wormhole_b0
@@ -209,7 +207,6 @@ jobs:
     container:
       image: ${{ inputs.docker-image }}
       env:
-        TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: wormhole_b0
