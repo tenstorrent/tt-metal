@@ -8,6 +8,7 @@
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 
+#include <stack>
 #include <tt-metalium/command_queue_interface.hpp>
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include <tt-metalium/dispatch_settings.hpp>
@@ -99,7 +100,7 @@ public:
 
     virtual uint32_t num_full_pages_written() const { return this->total_pages_written; }
 
-    virtual uint32_t num_partial_pages_per_full_page() const { return 1; }
+    virtual uint32_t num_partial_pages_written_for_current_transaction_full_pages() const { return 1; }
 
     virtual uint32_t partial_page_size() const { return this->page_size_to_write; }
 
@@ -126,12 +127,21 @@ public:
         this->full_pages_to_write = num_full_pages;
         this->num_partial_pages_in_single_full_page = partial_page_spec.num_partial_pages_per_full_page;
         this->curr_full_pages_start_address = buffer.address();
+        this->end_bank_indices.push(this->num_banks);
+        for (uint32_t i = 0; i < this->num_banks; i++) {
+            this->curr_full_pages_curr_addresses.push_back(this->curr_full_pages_start_address);
+        }
     }
 
     void calculate_num_pages_for_write_transaction(uint32_t num_pages_available_in_cq) override {
-        TT_ASSERT(this->num_banks > this->dst_page_index);
-        this->pages_per_txn =
-            std::min({this->full_pages_to_write, this->num_banks - this->dst_page_index, num_pages_available_in_cq});
+        TT_ASSERT(this->end_bank_indices.top() > this->dst_page_index);
+        this->pages_per_txn = std::min(
+            {this->full_pages_to_write,
+             this->end_bank_indices.top() - this->dst_page_index,
+             num_pages_available_in_cq});
+        if (this->dst_page_index + num_pages_available_in_cq < this->end_bank_indices.top()) {
+            this->end_bank_indices.push(this->dst_page_index + num_pages_available_in_cq);
+        }
     }
 
     bool is_page_offset_out_of_bounds() const override { return this->dst_page_index >= this->num_banks; }
@@ -143,23 +153,44 @@ public:
         this->dst_page_index %= this->num_banks;
     }
 
+    uint32_t num_partial_pages_written_for_current_transaction_full_pages() const override {
+        if (this->address - this->curr_full_pages_start_address == this->buffer.aligned_page_size()) {
+            return this->num_partial_pages_in_single_full_page;
+        } else {
+            return (this->address - this->curr_full_pages_start_address) / this->size_of_partial_page;
+        }
+    }
+
     void update_params_after_write_transaction() override {
         this->total_pages_to_write -= this->pages_per_txn;
         this->total_pages_written += this->pages_per_txn;
         this->address += this->page_size_to_write;
+        for (uint32_t i = this->dst_page_index; i < this->dst_page_index + this->pages_per_txn; i++) {
+            this->curr_full_pages_curr_addresses[i] = this->address;
+        }
         if (this->were_full_pages_written_in_last_write_transaction()) {
             this->full_pages_to_write -= this->pages_per_txn;
             this->full_pages_written += this->pages_per_txn;
             if (!this->will_next_full_page_be_round_robined()) {
-                this->address = this->curr_full_pages_start_address;
+                TT_ASSERT(this->dst_page_index + this->pages_per_txn < this->num_banks);
+                this->address = this->curr_full_pages_curr_addresses[this->dst_page_index + this->pages_per_txn];
+            } else {
+                this->curr_full_pages_start_address = this->address;
+                for (uint32_t i = 0; i < this->num_banks; i++) {
+                    this->curr_full_pages_curr_addresses[i] = this->curr_full_pages_start_address;
+                }
             }
-            TT_ASSERT((this->address - this->curr_full_pages_start_address) % this->buffer.aligned_page_size() == 0);
-            this->curr_full_pages_start_address = this->address;
+
             this->dst_page_index += this->pages_per_txn;
             this->dst_page_index %= this->num_banks;
             this->page_size_to_write = this->size_of_partial_page;
             this->data_size_to_copy = this->size_of_partial_page;
-        } else if (this->will_full_pages_be_written_in_next_write_transaction()) {
+            TT_ASSERT(!this->end_bank_indices.empty());
+            if (this->end_bank_indices.top() != this->num_banks) {
+                this->end_bank_indices.pop();
+            }
+        }
+        if (this->will_full_pages_be_written_in_next_write_transaction()) {
             this->page_size_to_write =
                 this->buffer.aligned_page_size() - (this->address - this->curr_full_pages_start_address);
             this->data_size_to_copy = this->buffer.page_size() - (this->address - this->curr_full_pages_start_address);
@@ -170,8 +201,6 @@ public:
 
     uint32_t num_full_pages_written() const override { return this->full_pages_written; }
 
-    uint32_t num_partial_pages_per_full_page() const override { return this->num_partial_pages_in_single_full_page; }
-
     uint32_t partial_page_size() const override { return this->size_of_partial_page; }
 
 private:
@@ -181,6 +210,8 @@ private:
     uint32_t num_partial_pages_in_single_full_page = 0;
     uint32_t full_pages_written = 0;
     uint32_t full_pages_to_write = 0;
+    std::stack<uint32_t> end_bank_indices;
+    std::vector<uint32_t> curr_full_pages_curr_addresses;
 
     bool were_full_pages_written_in_last_write_transaction() const {
         const int32_t page_size = this->address - this->curr_full_pages_start_address;
@@ -189,7 +220,7 @@ private:
 
     bool will_full_pages_be_written_in_next_write_transaction() const {
         const int32_t page_size = this->address + this->page_size_to_write - this->curr_full_pages_start_address;
-        return page_size >= this->buffer.aligned_page_size();
+        return page_size == (this->num_partial_pages_in_single_full_page * this->page_size_to_write);
     }
 
     bool will_next_full_page_be_round_robined() const {
@@ -361,18 +392,14 @@ void populate_interleaved_buffer_write_dispatch_cmds(
     // TODO: Consolidate
     if (dispatch_params.write_large_pages()) {
         const uint32_t num_full_pages_written = dispatch_params.num_full_pages_written();
-        const uint32_t num_partial_pages_written = dispatch_params.total_pages_written;
-        const uint32_t num_partial_pages_per_full_page = dispatch_params.num_partial_pages_per_full_page();
-        const uint32_t num_partial_pages_written_associated_with_current_full_pages =
-            num_partial_pages_written - (num_full_pages_written * num_partial_pages_per_full_page);
-        const uint32_t num_partial_pages_written_per_current_full_page =
-            num_partial_pages_written_associated_with_current_full_pages / dispatch_params.pages_per_txn;
+        const uint32_t num_partial_pages_written_per_curr_full_pages =
+            dispatch_params.num_partial_pages_written_for_current_transaction_full_pages();
         uint32_t num_partial_pages_written_curr_txn = 0;
         for (uint32_t sysmem_address_offset = 0; sysmem_address_offset < data_size_bytes;
              sysmem_address_offset += dispatch_params.page_size_to_write) {
             const uint32_t src_address_offset =
                 num_full_pages_written * buffer.page_size() +
-                num_partial_pages_written_per_current_full_page * dispatch_params.partial_page_size() +
+                num_partial_pages_written_per_curr_full_pages * dispatch_params.partial_page_size() +
                 num_partial_pages_written_curr_txn * buffer.page_size();
             command_sequence.add_data(
                 (char*)src + src_address_offset, dispatch_params.data_size_to_copy, dispatch_params.page_size_to_write);
