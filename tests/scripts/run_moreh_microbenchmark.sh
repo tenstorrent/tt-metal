@@ -20,8 +20,6 @@ run_profiling_test() {
 
   echo "Make sure this test runs in a build with cmake option ENABLE_TRACY=ON"
 
-  source python_env/bin/activate
-  export PYTHONPATH=$TT_METAL_HOME
   export TT_METAL_CLEAR_L1=1
 
   pytest --capture=tee-sys $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_pcie_h2d_dram --timeout=720
