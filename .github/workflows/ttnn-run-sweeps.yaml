@@ -627,7 +627,7 @@ jobs:
             }
           ]
     container:
-      image: ${{ needs.build-artifact.outputs.docker-image }}
+      image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
