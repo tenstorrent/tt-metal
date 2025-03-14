@@ -28,7 +28,11 @@ CoreCoord get_sub_device_worker_origin(
     const tt::tt_metal::IDevice* device,
     tt::tt_metal::SubDeviceId sub_device_id,
     tt::tt_metal::HalProgrammableCoreType core_type) {
-    return device->worker_cores(core_type, sub_device_id).bounding_box().start_coord;
+    const auto grid = device->worker_cores(core_type, sub_device_id);
+    if (grid.empty()) {
+        return {0, 0};
+    }
+    return grid.bounding_box().start_coord;
 }
 };  // namespace
 

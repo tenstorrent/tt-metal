@@ -1463,6 +1463,10 @@ TEST_F(CommandQueueSingleCardProgramFixture, TestLogicalCoordinatesDataMovement)
 // Ensure the eth core can access their own logical coordinate. Same binary enqueued to multiple cores.
 TEST_F(CommandQueueSingleCardProgramFixture, TestLogicalCoordinatesEth) {
     for (IDevice* device : devices_) {
+        if (!does_device_have_active_eth_cores(device)) {
+            GTEST_SKIP() << "Skipping test because device " << device->id()
+                         << " does not have any active ethernet cores";
+        }
         local_test_functions::test_my_coordinates(device, tt::RISCV::ERISC);
     }
 }
@@ -1480,6 +1484,10 @@ TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TestLogicalCoordinatesDataMo
 // Ensure the eth core can access their own logical coordinate. Same binary enqueued to multiple cores.
 TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TestLogicalCoordinatesEth) {
     for (IDevice* device : devices_) {
+        if (!does_device_have_active_eth_cores(device)) {
+            GTEST_SKIP() << "Skipping test because device " << device->id()
+                         << " does not have any active ethernet cores";
+        }
         local_test_functions::test_my_coordinates(device, tt::RISCV::ERISC, 0);
         local_test_functions::test_my_coordinates(device, tt::RISCV::ERISC, 1);
     }
