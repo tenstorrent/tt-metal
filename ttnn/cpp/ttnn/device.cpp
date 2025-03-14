@@ -30,7 +30,13 @@ void enable_program_cache(IDevice& device) { device.enable_program_cache(); }
 
 void disable_and_clear_program_cache(IDevice& device) { device.disable_and_clear_program_cache(); }
 
-void close_device(IDevice& device) { device.close(); }
+void close_device(IDevice& device) {
+    if (auto mesh_device = dynamic_cast<MeshDevice*>(&device)) {
+        mesh_device->close();
+    } else {
+        tt::DevicePool::instance().close_device(device.id());
+    }
+}
 
 bool is_wormhole_or_blackhole(tt::ARCH arch) { return arch == tt::ARCH::WORMHOLE_B0 or arch == tt::ARCH::BLACKHOLE; }
 
