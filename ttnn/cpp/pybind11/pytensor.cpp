@@ -1428,7 +1428,7 @@ void pytensor_module(py::module& m_tensor) {
         )doc")
         .def(
             "device",
-            [](const Tensor& self) { return self.device(); },
+            [](const Tensor& self) { return dynamic_cast<MeshDevice*>(self.device()); },
             R"doc(
             Get the device of the tensor.
 
@@ -1440,7 +1440,7 @@ void pytensor_module(py::module& m_tensor) {
             py::return_value_policy::reference)
         .def(
             "devices",
-            [](const Tensor& self) { return self.get_workers(); },
+            [](const Tensor& self) { return std::vector<MeshDevice*>{dynamic_cast<MeshDevice*>(self.device())}; },
             R"doc(
             Get devices tensor is mapped on to.
 
