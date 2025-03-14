@@ -74,7 +74,7 @@ def run_with_trace(
     num_links,
     output_mem_config,
     enable_persistent_fabric,
-    multi_device_global_semaphore,
+    cores,
     num_iter=20,
     subdevice_id=None,
 ):
@@ -83,7 +83,8 @@ def run_with_trace(
     tt_out_tensor = ttnn.experimental.all_gather_async(
         input_tensor_mesh,
         dim,
-        multi_device_global_semaphore=multi_device_global_semaphore,
+        mesh_device=mesh_device,
+        cores=cores,
         num_links=num_links,
         memory_config=output_mem_config,
         topology=all_gather_topology,
@@ -99,7 +100,8 @@ def run_with_trace(
         tt_out_tensor = ttnn.experimental.all_gather_async(
             input_tensor_mesh,
             dim,
-            multi_device_global_semaphore=multi_device_global_semaphore,
+            mesh_device=mesh_device,
+            cores=cores,
             num_links=num_links,
             memory_config=output_mem_config,
             topology=all_gather_topology,
@@ -175,11 +177,6 @@ def run_all_gather_impl(
             wrap_fabric_around_mesh=wrap_fabric_around_mesh,
         )
         mesh_device.set_sub_device_stall_group(sub_device_stall_group)
-
-    # create global semaphore handles
-    ccl_semaphore_handles = [
-        create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
-    ]
 
     logger.info(f"Output shape: {output_shape}")
     logger.info(f"dim: {dim}")
@@ -272,7 +269,7 @@ def run_all_gather_impl(
             num_links,
             output_mem_config,
             enable_persistent_fabric,
-            multi_device_global_semaphore=ccl_semaphore_handles[0],
+            ccl_sub_device_crs=ccl_sub_device_crs,
             num_iter=num_iters,
             subdevice_id=worker_sub_device_id,
         )
@@ -287,7 +284,6 @@ def run_all_gather_impl(
                     mesh_device=mesh_device,
                     memory_config=output_mem_config,
                     topology=all_gather_topology,
-                    multi_device_global_semaphore=ccl_semaphore_handles[i],
                     subdevice_id=worker_sub_device_id,
                     enable_persistent_fabric_mode=enable_persistent_fabric,
                     num_preferred_links=num_links,
@@ -297,7 +293,8 @@ def run_all_gather_impl(
                 tt_out_tensor = ttnn.experimental.all_gather_async(
                     input_tensor_mesh_list[i],
                     dim,
-                    multi_device_global_semaphore=ccl_semaphore_handles[i],
+                    mesh_device=mesh_device,
+                    cores=ccl_sub_device_crs,
                     num_links=num_links,
                     memory_config=output_mem_config,
                     topology=all_gather_topology,
