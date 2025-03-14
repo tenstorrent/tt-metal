@@ -43,9 +43,6 @@ inline void fabric_send_non_contig_tiles(
     uint32_t row = 0;
     for (uint32_t i = 0; i < num_tiles; i += packet_size_in_pages) {
         uint32_t num_pages_to_read = min(num_tiles - i, packet_size_in_pages);
-        if constexpr (last_dim) {
-            num_pages_to_read = packet_size_in_pages;
-        }
         cb_wait_front(cb0_id, num_pages_to_read);
         size_t l1_read_addr = get_read_ptr(cb0_id);
         for (uint32_t j = 0; j < num_pages_to_read; j++) {
@@ -197,40 +194,8 @@ void kernel_main() {
         total = tile_id_start;
     }
     if (true) {
-        // while (total < tile_id_end) {
-        //     uint32_t num_pages_to_read = std::min(tile_id_end - tile_id, packet_size_in_pages);
-        //     if constexpr (last_dim) {
-        //         num_pages_to_read = packet_size_in_pages;
-        //     }
-        //     cb_wait_front(cb0_id, num_pages_to_read);
-        //     size_t l1_read_addr = get_read_ptr(cb0_id);
-
-        //     uint32_t contig_pages_advanced = 1;  // always 1 for interleaved
-        //     for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
-        //         uint64_t noc0_dest_noc_addr = get_noc_addr(tile_id, tensor0_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-        //         DPRINT << "j: " << j << "noc0_dest_noc_addr: " << noc0_dest_noc_addr << "tile_id: " << tile_id <<
-        //         "\n"; write_and_advance_local_read_address_for_fabric_write(
-        //             noc0_dest_noc_addr,
-        //             pkt_hdr_forward,
-        //             pkt_hdr_backward,
-        //             fabric_connection,
-        //             l1_read_addr,
-        //             contig_pages_advanced * tensor0_page_size);
-
-        //         total++;
-        //         tile_id++;
-        //         if constexpr (last_dim) {
-        //             if (tile_id % tile_cols_for_chip == 0) {
-        //                 row++;
-        //                 tile_id = row * (tile_cols_for_chip * ring_size) + tile_id_start;
-        //             }
-        //         }
-        //     }
-        //     noc_async_writes_flushed();
-        //     cb_pop_front(cb0_id, num_pages_to_read);
-        // }
         fabric_send_non_contig_tiles<is_dram>(
-            tile_id_end - tile_id_start,
+            num_tiles_per_chip,
             tile_id_start,
             tensor0_addrgen,
             pkt_hdr_forward,
@@ -238,28 +203,6 @@ void kernel_main() {
             fabric_connection,
             ring_size,
             tile_id_start);
-
-        // for (uint32_t i = 0; i < rest_tiles; i += packet_size_in_pages) {
-        //     uint32_t num_pages_to_read = min(rest_tiles - i, packet_size_in_pages);
-        //     cb_wait_front(cb0_id, num_pages_to_read);
-        //     size_t l1_read_addr = get_read_ptr(cb0_id);
-        //     for (uint32_t j = 0; j < num_pages_to_read; j++) {
-        //         uint64_t noc0_dest_noc_addr =
-        //             get_noc_addr(total + tile_id_start + j, tensor0_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-        //         DPRINT << "\t[W][" << (uint32_t)my_chip_id << "] rest_tiles tile_id: " << total + tile_id_start + j
-        //                << ", noc0_dest_noc_addr: " << noc0_dest_noc_addr << "\n";
-        //         write_and_advance_local_read_address_for_fabric_write(
-        //             noc0_dest_noc_addr,
-        //             pkt_hdr_forward,
-        //             pkt_hdr_backward,
-        //             fabric_connection,
-        //             l1_read_addr,
-        //             tensor0_page_size);
-        //     }
-        //     total += num_pages_to_read;
-        //     noc_async_writes_flushed();
-        //     cb_pop_front(cb0_id, num_pages_to_read);
-        // }
     } else {
         total = 0;
         if (packet_size_in_pages == 2) {  // bf16
