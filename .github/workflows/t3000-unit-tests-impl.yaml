@@ -49,7 +49,7 @@ jobs:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ matrix.test-group.arch }}
-        LOGURU_LEVEL: INFO
+        LOGURU_LEVEL: DEBUG
         GITHUB_ACTIONS: true
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
@@ -90,6 +90,7 @@ jobs:
       - name: Run unit regression tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
+          ls -lart /mnt/MLPerf/tt_dnn-models/tt/Falcon/tiiuae/falcon-40b-instruct/
           export GTEST_OUTPUT=xml:generated/test_reports/
           mkdir -p generated/test_reports
           source tests/scripts/t3000/run_t3000_unit_tests.sh
