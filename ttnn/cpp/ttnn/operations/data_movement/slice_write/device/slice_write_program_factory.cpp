@@ -260,10 +260,6 @@ get_slice_write_runtime_args_rm_sharded_input(
 
     auto total_num_input_sticks = input_tensor.volume() / input_shape[-1];
     const auto num_sticks_per_core = shard_spec.shape[0];
-    TT_FATAL(
-        num_sticks_per_core == (total_num_input_sticks / input_cores.num_cores()),
-        "Input sticks per core should be equal to total input sticks divided by number of cores");
-
     // issue more reads before calling barrier
     const auto num_sticks_per_core_pad32 = num_sticks_per_core + (32 - num_sticks_per_core % 32) % 32;
     const uint32_t num_sticks_per_core_read =
@@ -279,24 +275,21 @@ get_slice_write_runtime_args_rm_sharded_input(
 
     uint32_t start_offset = ttnn::operations::data_movement::get_rm_start_offset(output_tensor, output_tensor_start);
     uint32_t num_sticks_read = 0;
-
     uint32_t core_index = 0;
     for (const auto& core : cores) {
         id_per_dim[0] = num_sticks_read % num_input_sticks_per_dim[0];
         uint32_t unpadded_written = num_sticks_read / num_input_sticks_per_dim[0];
         uint32_t start_id = id_per_dim[0] + start_offset;
-
         for (uint32_t j = 1; j < num_dims; j++) {
             id_per_dim[j] = unpadded_written % num_input_sticks_per_dim[j];
             unpadded_written = unpadded_written / num_input_sticks_per_dim[j];
             start_id += id_per_dim[j] * accumulated_total_per_dim[j - 1];
         }
         std::vector<uint32_t> writer_kernel_args = common_writer_kernel_args;
-
         uint32_t addr_offset = 5;  // output buffer addr, output_row_size_bytes, input_row_size_bytes, num_dims
         writer_kernel_args[addr_offset++] = start_id;
         writer_kernel_args[addr_offset++] = num_sticks_per_core;
-        writer_kernel_args[addr_offset++] = num_sticks_per_core_read;
+        writer_kernel_args[addr_offset++] = num_sticks_per_core;
         writer_kernel_args[addr_offset] = num_read_per_barrier;
         writer_kernel_args.insert(writer_kernel_args.end(), id_per_dim.begin(), id_per_dim.end());
 
@@ -343,9 +336,6 @@ operation::ProgramWithCallbacks slice_write_rm_sharded_input_multi_core(
 
     auto total_num_input_sticks = input.volume() / input_shape[-1];
     auto num_input_sticks_per_core = shard_spec.shape[0];
-    TT_FATAL(
-        num_input_sticks_per_core == (total_num_input_sticks / input_cores.num_cores()),
-        "Input sticks per core should be equal to total input sticks divided by number of cores");
 
     uint32_t output_row_size_bytes = output_shape[-1] * output.element_size();
     uint32_t input_row_size_bytes = input_shape[-1] * input.element_size();
@@ -380,12 +370,18 @@ operation::ProgramWithCallbacks slice_write_rm_sharded_input_multi_core(
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
-
+    TT_FATAL(
+        input_cb_data_format == output_cb_data_format,
+        "Input & output should have the same data format, {} , {}",
+        input_cb_data_format,
+        output_cb_data_format);
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(
             num_input_sticks_per_core * input_row_size_bytes, {{src0_cb_index, input_cb_data_format}})
             .set_page_size(src0_cb_index, input_row_size_bytes)
             .set_globally_allocated_address(*input.buffer());
+
+    auto input_cb_handle = tt::tt_metal::CreateCircularBuffer(program, input_cores, cb_src0_config);
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
 
@@ -417,52 +413,31 @@ operation::ProgramWithCallbacks slice_write_rm_sharded_input_multi_core(
         i++;
     }
 
-    auto override_runtime_args_callback = [](const void* operation,
-                                             const Program& program,
-                                             const std::vector<Tensor>& input_tensors,
-                                             const std::vector<std::optional<const Tensor>>&,
-                                             const std::vector<Tensor>& output_tensors) {
-        // auto src_tensor = input_tensors.at(0);
-        // auto dst_tensor = output_tensors.at(0);
-        // uint32_t num_cores_x = compute_with_storage_grid_size.x;
-        // uint32_t num_cores_y = compute_with_storage_grid_size.y;
-        // uint32_t num_cores_total = num_cores_x * num_cores_y;
-        // uint32_t num_unpadded_sticks = dst_tensor.volume() / dst_tensor.get_padded_shape()[-1];
-        // auto
-        //     [num_cores,
-        //      all_cores,
-        //      core_group_1,
-        //      core_group_2,
-        //      num_sticks_per_core_group_1,
-        //      num_sticks_per_core_group_2] =
-        //         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_sticks);
+    auto override_runtime_args_callback = [iter_cores,
+                                           unary_reader_kernel_id,
+                                           unary_writer_kernel_id,
+                                           output_tensor_start,
+                                           max_read_size,
+                                           input_cb_handle](
+                                              const void* operation,
+                                              Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>&,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto src_tensor = input_tensors.at(0);
+        auto dst_tensor = output_tensors.at(0);
 
-        // const auto tensor_start =
-        //     static_cast<const ttnn::operations::data_movement::SliceWriteDeviceOperation*>(operation)->slice_start;
-        // auto all_runtime_args = get_slice_write_runtime_args_rm(
-        //     src_tensor,
-        //     dst_tensor,
-        //     tensor_start,
-        //     num_cores_total,
-        //     num_cores,
-        //     num_cores_y,
-        //     core_group_1,
-        //     core_group_2,
-        //     num_sticks_per_core_group_1,
-        //     num_sticks_per_core_group_2,
-        //     max_read_size);
+        UpdateDynamicCircularBufferAddress(program, input_cb_handle, *src_tensor.buffer());
 
-        // for (uint32_t i = 0, num_tiles_written = 0; i < num_cores_total; i++) {
-        //     CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        auto all_runtime_args = get_slice_write_runtime_args_rm_sharded_input(
+            src_tensor, dst_tensor, output_tensor_start, iter_cores, max_read_size);
 
-        //     {
-        //         SetRuntimeArgs(program, unary_reader_kernel_id, core, all_runtime_args[i].first);
-        //     }
-
-        //     {
-        //         SetRuntimeArgs(program, unary_writer_kernel_id, core, all_runtime_args[i].second);
-        //     }
-        // }
+        uint32_t i = 0;
+        for (const auto& core : iter_cores) {
+            tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, all_runtime_args[i].first);
+            tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, all_runtime_args[i].second);
+            i++;
+        }
     };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
@@ -522,7 +497,6 @@ operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
             tt::tt_metal::merge_num_sticks_to_read(num_sticks_per_core_pad32, cb_page_size, max_read_size);
         num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
     }
-
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(num_read_per_barrier * 2 * cb_page_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, cb_page_size);
@@ -615,30 +589,6 @@ operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
         };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
-}
-
-inline std::vector<std::vector<uint32_t>> group_contiguous_values(std::vector<uint32_t>& values) {
-    std::vector<std::vector<uint32_t>> chunks;
-    if (values.empty()) {
-        return chunks;
-    }
-
-    // Initialize the first chunk
-    std::vector<uint32_t> current_chunk;
-    current_chunk.push_back(values[0]);
-
-    for (size_t i = 1; i < values.size(); ++i) {
-        if (values[i] == values[i - 1] + 1) {
-            current_chunk.push_back(values[i]);
-        } else {
-            chunks.push_back(current_chunk);
-            current_chunk.clear();
-            current_chunk.push_back(values[i]);
-        }
-    }
-    // Add the last chunk
-    chunks.push_back(current_chunk);
-    return chunks;
 }
 
 operation::ProgramWithCallbacks slice_write_multi_core(

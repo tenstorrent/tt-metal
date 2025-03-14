@@ -12,34 +12,6 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 
-inline __attribute__((always_inline)) uint32_t get_upper_dims_compressed(const ttnn::Shape& shape) {
-    return std::accumulate(shape.cbegin(), shape.cend() - 2, 1, std::multiplies<uint32_t>{});
-}
-
-inline __attribute__((always_inline)) uint32_t
-get_upper_start_offset(const Tensor& tensor, const ttnn::Shape& slice_start) {
-    // offset for every dim except last 2
-    uint32_t start_offset = 0;
-    const auto& shape = tensor.get_padded_shape();
-
-    uint32_t num_pages = tensor.volume();
-    if (tensor.get_layout() == Layout::TILE) {
-        num_pages /= tt::constants::TILE_HW;
-    } else {
-        uint32_t page_width = shape[-1];
-        num_pages /= page_width;
-    }
-
-    for (uint32_t dim_outer = 0; dim_outer < shape.rank() - 2; dim_outer++) {
-        uint32_t compressed_dims = 1;
-        for (uint32_t dim_inner = 0; dim_inner <= dim_outer; dim_inner++) {
-            compressed_dims *= shape[dim_inner];
-        }
-        start_offset += (num_pages / compressed_dims) * slice_start[dim_outer];
-    }
-    return start_offset;
-}
-
 void SliceWriteDeviceOperation::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     using namespace tt::constants;
