@@ -146,14 +146,16 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     // TODO(AP): can also add support for block_size=7 -> 63, 28
     uint32_t WtB = tt::div_up(Wt, block_size) * block_size;  // Wt padded to be divisible by block size
     bool large_tensor_needed = false;
-    if ((gamma.has_value() or beta.has_value() or in_data_format == tt::DataFormat::Float32) and
-        WtB > with_weights_max_size) {
-        // In the case that the required space is larger than what can be handeled by the single pass
-        large_tensor_needed = true;
-        WtB = with_weights_max_size;
-    } else if (WtB > with_weights_max_size) {
-        large_tensor_needed = true;
-        WtB = no_weights_max_size;
+    if (!rms_nrom and !use_row_major_kernel) {
+        if ((gamma.has_value() or beta.has_value() or in_data_format == tt::DataFormat::Float32) and
+            WtB > with_weights_max_size) {
+            // In the case that the required space is larger than what can be handeled by the single pass
+            large_tensor_needed = true;
+            WtB = with_weights_max_size;
+        } else if (WtB > with_weights_max_size) {
+            large_tensor_needed = true;
+            WtB = no_weights_max_size;
+        }
     }
     uint32_t in0_t = WtB;  // cb_x for no pre-add variant, x=a+b for fused pre-add, extra space for some buffering
     uint32_t in1_t = block_size * 2;  // buffer for fused pre-add b tensor
@@ -282,12 +284,10 @@ operation::ProgramWithCallbacks layernorm_multi_core(
                                     "reader_unary_interleaved_ln_rm_gb.cpp"
                                   : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
                                     "reader_unary_interleaved_ln.cpp";
-    if (!rms_norm) {
-        reader_kernel_path = large_tensor_needed
-                                 ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                                   "reader_unary_interleaved_ln_large_tensor.cpp"
-                                 : reader_kernel_path;
-    }
+    reader_kernel_path = large_tensor_needed
+                             ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                               "reader_unary_interleaved_ln_large_tensor.cpp"
+                             : reader_kernel_path;
     auto reader_kernels_id = CreateKernel(
         program,
         reader_kernel_path,
