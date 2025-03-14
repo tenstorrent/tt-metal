@@ -44,7 +44,6 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache
     mode = "decode" if seq_len <= 32 else "prefill"
 
     mesh_device.enable_async(True)
-    print("mesh_device", mesh_device.core_grid)
 
     model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, dummy_weights=False, max_seq_len=128)
     model_args.n_layers = 1
@@ -87,13 +86,6 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache
 
     logger.info("Run Llama_MLP_PF")
     for i in range(3):
-        # ttnn.dram_prefetcher(
-        #     prefetcher_setup.get_input_tensors(),
-        #     num_layers=1,
-        #     global_cb=prefetcher_setup.global_circular_buffer,
-        # )
-        # mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
-
         tt_input = ttnn.from_torch(
             torch_input,
             device=mesh_device,

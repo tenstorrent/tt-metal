@@ -10,12 +10,15 @@ from pathlib import Path
 from loguru import logger
 import torch
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
-from models.demos.llama3_subdevices.tt.llama_common import (
+from models.tt_transformers.tt.common import (
     precompute_freqs,
     freqs_to_rotation_matrix,
     num_to_core_range_set,
     calculate_hidden_dim,
     get_out_subblock_w,
+    encode_prompt_instruct,
+    encode_prompt_hf,
+    nearest_multiple,
 )
 from typing import Tuple
 from models.utility_functions import nearest_32
@@ -1701,6 +1704,12 @@ class TtModelArgs:
             block_w=block_w,
             inplace=False,
         )
+
+    def encode_prompt(self, prompt_text, system_prompt_text=None, instruct=True):
+        if instruct:
+            return encode_prompt_instruct(self.tokenizer, prompt_text, system_prompt_text)
+        else:
+            return self.tokenizer.encode(prompt_text, bos=True, eos=False)
 
 
 def load_llama_state_dict(ckpt_dir, n_layers=None, start_layer_idx=0):

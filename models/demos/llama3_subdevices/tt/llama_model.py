@@ -160,7 +160,15 @@ class TtTransformer(LightweightModule):
         tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
 
         # Slice the rot mats to the prefill seqlen
-        tt_rot_mats_prefill = [self.rope_setup.cos_matrix[:, :, :S, :], self.rope_setup.sin_matrix[:, :, :S, :]]
+        tt_rot_mats_prefill = get_prefill_rot_mat(
+            self.args.head_dim,
+            self.args.max_seq_len,
+            self.mesh_device,
+            seq_len=S,
+            scale_factor=self.args.rope_scaling_factor,
+        )
+
+        # [self.rope_setup.cos_matrix[:, :, :S, :], self.rope_setup.sin_matrix[:, :, :S, :]]
 
         if page_table is not None:
             tt_page_table = ttnn.from_torch(
@@ -269,6 +277,8 @@ class TtTransformer(LightweightModule):
         Input is ttnn device tensor of logits. Output is torch logits tensor.
         NOTE: In this model, prefill always uses get_last_token
         """
+        if isinstance(tt_out, list):
+            tt_out = tt_out[0]
         logits = ttnn.to_torch(
             tt_out,
             mesh_composer=ttnn.ConcatMesh2dToTensor(
@@ -281,6 +291,8 @@ class TtTransformer(LightweightModule):
         """
         Input is ttnn device tensor of logits. Output is torch logits tensor or the generated token if argmax on device
         """
+        if isinstance(tt_out, list):
+            tt_out = tt_out[0]
         if argmax_on_device:
             tt_out = ttnn.to_torch(
                 tt_out,  # tt_out.cpu(blocking=True, cq_id=1),

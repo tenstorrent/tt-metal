@@ -150,7 +150,7 @@ class TtLlamaAttention(LightweightModule):
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.mesh_device, dims=(3, 2) if self.TG else (2, 3), mesh_shape=configuration.cluster_shape
             ),
-            # cache_file_name=cache_name("wqkv_sharded_2d_prefetcher"),  ## TODO: Fix caching
+            cache_file_name=cache_name("wqkv_sharded_2d_prefetcher"),  ## TODO: Fix caching
         )
 
         # For ring topology we can use all gather matmul for wo
@@ -174,9 +174,9 @@ class TtLlamaAttention(LightweightModule):
                 dims=(2, 3) if (self.use_fused_all_gather_matmul or self.TG) else (3, 2),
                 mesh_shape=configuration.cluster_shape,
             ),
-            # cache_file_name=cache_name("wo_width_sharded_2d_prefetcher")
-            # if (self.use_fused_all_gather_matmul or self.TG)
-            # else cache_name("wo"),
+            cache_file_name=cache_name("wo_width_sharded_2d_prefetcher")
+            if (self.use_fused_all_gather_matmul or self.TG)
+            else cache_name("wo"),
         )
         if not use_paged_kv_cache:
             # vLLM provides its own kv cache

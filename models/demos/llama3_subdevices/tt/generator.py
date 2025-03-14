@@ -65,14 +65,16 @@ class Generator:
             )
             if page_table is not None:
                 page_table_user = self._get_prefill_user_page_table(page_table, kv_cache, seq_len)
-
-            logits = self.prefill_forward_single_user_text(
-                prefill_ids,
-                page_table=page_table_user if page_table is not None else None,
-                user_id=user_id,
-                last_token_idx=last_token_idx,
-                kv_cache=kv_cache,
-            )
+            try:
+                logits = self.prefill_forward_single_user_text(
+                    prefill_ids,
+                    page_table=page_table_user if page_table is not None else None,
+                    user_id=user_id,
+                    last_token_idx=last_token_idx,
+                    kv_cache=kv_cache,
+                )
+            except Exception as e:
+                logger.error(f"Error prefilling user {user_id}: {e}")
 
             # Since we give unpadded_seq_len, only the tile containing the last token is returned
             output_logits[user_id] = logits
