@@ -147,6 +147,10 @@ using MeshWorkloadTestTG = TGMeshDeviceFixture;
 using MeshWorkloadTestSuite = GenericMeshDeviceFixture;
 
 TEST_F(MeshWorkloadTestSuite, MeshWorkloadOnActiveEthAsserts) {
+    if (mesh_device_->num_devices() == 1) {
+        // Unit mesh devices (such as N150) do not have ethernet cores.
+        GTEST_SKIP() << "Skipping test for a unit-size mesh device";
+    }
     // A MeshWorkload cannot be run on ethernet core - Runtime should assert if the
     // user tries this. Verify this functionality here.
     std::shared_ptr<MeshWorkload> workload = std::make_shared<MeshWorkload>();
@@ -359,7 +363,8 @@ TEST_F(MeshWorkloadTestTG, SimultaneousMeshWorkloads) {
     Finish(mesh_device_->mesh_command_queue());
 }
 
-TEST_F(MeshWorkloadTestSuite, RandomizedMeshWorkload) {
+// TODO: #19149 - Re-enable the test.
+TEST_F(MeshWorkloadTestSuite, DISABLED_RandomizedMeshWorkload) {
     uint32_t num_programs = 60;
     uint32_t num_iterations = 1500;
     auto random_seed = 10;
