@@ -2,12 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "bcast_to_pybind.hpp"
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+#include "cpp/pybind11/decorators.hpp"
 
-#include "pybind11/decorators.hpp"
+#include "bcast_to_pybind.hpp"
 #include "ttnn/operations/experimental/bcast_to/bcast_to.hpp"
 
 namespace ttnn::operations::experimental::broadcast_to::detail {
+namespace py = pybind11;
+
 void py_bind_module(py::module& module) {
     const auto* doc =
         R"doc(broadcast_to(input: ttnn.Tensor, sizes: List[int], output: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
