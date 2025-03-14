@@ -460,7 +460,7 @@ static void PrintTypedUint32Array(
 // Used for debug print server startup sequence.
 void WriteInitMagic(IDevice* device, const CoreCoord& virtual_core, int risc_id, bool enabled) {
     // compute the buffer address for the requested risc
-    uint64_t base_addr = GetDprintBufAddr(device, virtual_core, risc_id);
+    uint64_t base_addr = GetDprintBufAddr(device->id(), virtual_core, risc_id);
 
     // TODO(AP): this could use a cleanup - need a different mechanism to know if a kernel is running on device.
     // Force wait for first kernel launch by first writing a non-zero and waiting for a zero.
@@ -492,7 +492,7 @@ void WriteInitMagic(IDevice* device, const CoreCoord& virtual_core, int risc_id,
 // Note that this is not a bulletproof way to bootstrap the print server (TODO(AP))
 bool CheckInitMagicCleared(IDevice* device, const CoreCoord& virtual_core, int risc_id) {
     // compute the buffer address for the requested risc
-    uint32_t base_addr = GetDprintBufAddr(device, virtual_core, risc_id);
+    uint32_t base_addr = GetDprintBufAddr(device->id(), virtual_core, risc_id);
 
     auto result = tt::llrt::read_hex_vec_from_core(device->id(), virtual_core, base_addr, 4);
     return (result[0] != DEBUG_PRINT_SERVER_STARTING_MAGIC && result[0] != DEBUG_PRINT_SERVER_DISABLED_MAGIC);
@@ -595,8 +595,8 @@ void DebugPrintServerContext::AttachDevice(IDevice* device) {
 
     // A set of all valid printable cores, used for checking the user input. Note that the coords
     // here are virtual.
-    tt::tt_metal::CoreDescriptorSet all_cores = GetAllCores(device);
-    tt::tt_metal::CoreDescriptorSet dispatch_cores = GetDispatchCores(device);
+    tt::tt_metal::CoreDescriptorSet all_cores = GetAllCores(device->id());
+    tt::tt_metal::CoreDescriptorSet dispatch_cores = GetDispatchCores(device->id());
 
     // Initialize all print buffers on all cores on the device to have print disabled magic. We
     // will then write print enabled magic for only the cores the user has specified to monitor.
@@ -605,7 +605,7 @@ void DebugPrintServerContext::AttachDevice(IDevice* device) {
     // flushed from the host.
     for (auto& logical_core : all_cores) {
         CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
-        for (int risc_index = 0; risc_index < GetNumRiscs(device, logical_core); risc_index++) {
+        for (int risc_index = 0; risc_index < GetNumRiscs(logical_core); risc_index++) {
             WriteInitMagic(device, virtual_core, risc_index, false);
         }
     }
@@ -707,7 +707,7 @@ void DebugPrintServerContext::AttachDevice(IDevice* device) {
     // Write print enable magic for the cores the user specified.
     for (auto& logical_core : print_cores_sanitized) {
         CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
-        for (int risc_index = 0; risc_index < GetNumRiscs(device, logical_core); risc_index++) {
+        for (int risc_index = 0; risc_index < GetNumRiscs(logical_core); risc_index++) {
             if (RiscEnabled(logical_core, risc_index)) {
                 WriteInitMagic(device, virtual_core, risc_index, true);
             }
@@ -754,7 +754,7 @@ void DebugPrintServerContext::DetachDevice(IDevice* device) {
         outstanding_prints = false;
         for (auto& logical_core : device_to_core_range_.at(device)) {
             CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
-            for (int risc_id = 0; risc_id < GetNumRiscs(device, logical_core); risc_id++) {
+            for (int risc_id = 0; risc_id < GetNumRiscs(logical_core); risc_id++) {
                 if (RiscEnabled(logical_core, risc_id)) {
                     // No need to check if risc is not dprint-enabled.
                     if (!CheckInitMagicCleared(device, virtual_core, risc_id)) {
@@ -763,7 +763,7 @@ void DebugPrintServerContext::DetachDevice(IDevice* device) {
 
                     // Check if rpos < wpos, indicating unprocessed prints.
                     constexpr int eightbytes = 8;
-                    uint32_t base_addr = GetDprintBufAddr(device, virtual_core, risc_id);
+                    uint32_t base_addr = GetDprintBufAddr(device->id(), virtual_core, risc_id);
                     auto from_dev = tt::llrt::read_hex_vec_from_core(chip_id, virtual_core, base_addr, eightbytes);
                     uint32_t wpos = from_dev[0], rpos = from_dev[1];
                     if (rpos < wpos) {
@@ -813,10 +813,14 @@ void DebugPrintServerContext::DetachDevice(IDevice* device) {
     log_info(tt::LogMetal, "DPRINT Server dettached device {}", device->id());
 
     // When detaching a device, disable prints on it.
+<<<<<<< HEAD
     tt::tt_metal::CoreDescriptorSet all_cores = GetAllCores(device);
+=======
+    CoreDescriptorSet all_cores = GetAllCores(device->id());
+>>>>>>> 5b54de6523... #0: Change debug_helpers.hpp to no longer use Device
     for (auto& logical_core : all_cores) {
         CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
-        for (int risc_index = 0; risc_index < GetNumRiscs(device, logical_core); risc_index++) {
+        for (int risc_index = 0; risc_index < GetNumRiscs(logical_core); risc_index++) {
             WriteInitMagic(device, virtual_core, risc_index, false);
         }
     }
@@ -851,7 +855,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
     }
 
     // compute the buffer address for the requested risc
-    uint32_t base_addr = GetDprintBufAddr(device, virtual_core, risc_id);
+    uint32_t base_addr = GetDprintBufAddr(device->id(), virtual_core, risc_id);
     chip_id_t chip_id = device->id();
     HartKey risc_key{chip_id, logical_core, risc_id};
 
@@ -1176,7 +1180,7 @@ void DebugPrintServerContext::PollPrintData() {
             }
             device_intermediate_streams_force_flush_lock_.unlock();
             for (auto& logical_core : device_and_cores.second) {
-                int risc_count = GetNumRiscs(device, logical_core);
+                int risc_count = GetNumRiscs(logical_core);
                 for (int risc_index = 0; risc_index < risc_count; risc_index++) {
                     if (RiscEnabled(logical_core, risc_index)) {
                         try {
