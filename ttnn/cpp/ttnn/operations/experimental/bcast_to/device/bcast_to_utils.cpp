@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "bcast_to_utils.hpp"
-#include "tt_metal/common/assert.hpp"
 
 #include <fmt/core.h>
 #include <fmt/format.h>
