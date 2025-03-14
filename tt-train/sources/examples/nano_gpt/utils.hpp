@@ -143,12 +143,12 @@ std::string generate_run_name(const std::string &run_name, const TrainingConfig 
 
         auto batch_size = config.batch_size * config.gradient_accumulation_steps;
 
-        if (is_nano_gpt_config()) {
+        if (is_llama_config()) {
+            ss << "llama";
+        } else if (is_nano_gpt_config()) {
             ss << "nano_gpt";
         } else if (is_gpt2s_config()) {
             ss << "gpt2s";
-        } else if (is_llama_config()) {
-            ss << "llama";
         } else {
             ss << "transformer";
         }
