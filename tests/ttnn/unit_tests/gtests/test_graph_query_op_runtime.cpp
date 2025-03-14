@@ -20,8 +20,6 @@
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
 
-namespace ttnn::operations::binary::test {
-
 // ============================================================================
 // Test data
 // ============================================================================
@@ -55,8 +53,8 @@ const ttnn::TensorSpec TTNNFixtureWithTraceEnabledDevice::m_interleaved_1_3_1024
 // ============================================================================
 // Binary Eltwise Op tests
 // ============================================================================
-
-class BinaryOpTraceRuntime : public TTNNFixtureWithTraceEnabledDevice,
+namespace ttnn::operations::binary::test {
+class BinaryOpTraceRuntime : public distributed::test::TTNNFixtureWithTraceEnabledDevice,
                              public testing::WithParamInterface<std::tuple<ttnn::TensorSpec, ttnn::TensorSpec>> {};
 
 TEST_P(BinaryOpTraceRuntime, Add) {

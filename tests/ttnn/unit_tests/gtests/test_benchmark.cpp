@@ -132,7 +132,7 @@ std::vector<std::tuple<DataType, MathFidelity, bool>> matmul_configs = {
     {DataType::BFLOAT4_B, MathFidelity::LoFi, true},
 };
 
-class Matmul2DHostPerfTestFixture : public ttnn::TTNNFixtureWithDevice,
+class Matmul2DHostPerfTestFixture : public ttnn::distributed::test::TTNNFixtureWithTraceEnabledDevice,
                                     public testing::WithParamInterface<std::tuple<
                                         /* grid_size */ std::tuple<int, int>,
                                         /* tile_h */ int,
