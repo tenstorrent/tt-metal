@@ -20,7 +20,7 @@ from models.utility_functions import torch_random
 
 
 parameters = {
-    "xfail": {
+    "nightly": {
         "input_shape": [[1]],
         "input_a_dtype": [ttnn.int32],
         "input_b_dtype": [ttnn.int32],
