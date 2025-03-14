@@ -110,31 +110,26 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
 
     tt::log_debug("CB matmul_result_rm: page_size={} bytes, num_pages={}", C_out_block_bytes, num_patches_tile_padded);
 
-    uint32_t cb_vol2col_rm_id = tt::CBIndex::c_0;
-    uint32_t cb_vol2col_tiled_id = tt::CBIndex::c_1;
-    uint32_t cb_weight_tiled_id = tt::CBIndex::c_2;
-    uint32_t cb_matmul_interm_tiled_id = tt::CBIndex::c_3;
-    uint32_t cb_matmul_result_rm_id = tt::CBIndex::c_4;
-    uint32_t cb_reduction_tiled_id = tt::CBIndex::c_5;
-    uint32_t cb_bias_tiled_id = tt::CBIndex::c_6;
-    uint32_t cb_worker_ack_back_id = tt::CBIndex::c_7;
-
     // Create circular buffers for vol2col, weights, bias and matmul intermediates
-    auto [_id0, cb_vol2col_rm_handle] =
-        tt::tt_metal::create_cb(cb_vol2col_rm_id, program, core_grid, patch_size_bytes, num_patches, data_format);
+    uint32_t next_cb_index = tt::CBIndex::c_0;
 
-    auto [_id1, cb_vol2col_tiled_handle] = tt::tt_metal::create_cb(
-        cb_vol2col_tiled_id, program, core_grid, tile_size, matmul_M_t * matmul_K_t, data_format);
+    uint32_t cb_vol2col_rm_id = next_cb_index++;
+    tt::tt_metal::create_cb(cb_vol2col_rm_id, program, core_grid, patch_size_bytes, num_patches, data_format);
 
-    auto [_id2, cb_weight_tiled_handle] = tt::tt_metal::create_cb(
-        cb_weight_tiled_id, program, core_grid, tile_size, matmul_K_t * matmul_N_t, data_format);
+    uint32_t cb_vol2col_tiled_id = next_cb_index++;
+    tt::tt_metal::create_cb(cb_vol2col_tiled_id, program, core_grid, tile_size, matmul_M_t * matmul_K_t, data_format);
 
-    auto [_id3, cb_matmul_interm_tiled_handle] = tt::tt_metal::create_cb(
+    uint32_t cb_weight_tiled_id = next_cb_index++;
+    tt::tt_metal::create_cb(cb_weight_tiled_id, program, core_grid, tile_size, matmul_K_t * matmul_N_t, data_format);
+
+    uint32_t cb_matmul_interm_tiled_id = next_cb_index++;
+    tt::tt_metal::create_cb(
         cb_matmul_interm_tiled_id, program, core_grid, tile_size, matmul_M_t * matmul_N_t, data_format);
 
     // NOTE: Most kernels create RM CB with tile_size pages and num_tile number of pages.
     // Using stick pages led to PCC issues.
-    auto [_id4, cb_matmul_result_rm_handle] = tt::tt_metal::create_cb(
+    uint32_t cb_matmul_result_rm_id = next_cb_index++;
+    tt::tt_metal::create_cb(
         cb_matmul_result_rm_id,
         program,
         core_grid,
@@ -142,18 +137,25 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
         matmul_M_t * matmul_N_t,  // untilize will write padded rows, so this must be sized to avoid overflowing CB
         data_format);
 
+    uint32_t cb_reduction_tiled_id =
+        32;  // Invalid value for cb index since there is only 32 of them and the indices go from 0 to 31
+    uint32_t cb_worker_ack_back_id =
+        32;  // Invalid value for cb index since there is only 32 of them and the indices go from 0 to 31
     if (C_in_num_blocks > 1) {
         // Implies reduction step
-        auto [_id5, cb_reduction_tiled_handle] = tt::tt_metal::create_cb(
+        cb_reduction_tiled_id = next_cb_index++;
+        tt::tt_metal::create_cb(
             cb_reduction_tiled_id, program, core_grid, tile_size, matmul_M_t * matmul_N_t, data_format);
 
-        auto [_id6, cb_worker_ack_back_handle] =
-            tt::tt_metal::create_cb(cb_worker_ack_back_id, program, core_grid, tile_size, 1, data_format);
+        cb_worker_ack_back_id = next_cb_index++;
+        tt::tt_metal::create_cb(cb_worker_ack_back_id, program, core_grid, tile_size, 1, data_format);
     }
 
+    uint32_t cb_bias_tiled_id =
+        32;  // Invalid value for cb index since there is only 32 of them and the indices go from 0 to 31
     if (use_bias) {
-        auto [_id7, cb_bias_tiled_handle] =
-            tt::tt_metal::create_cb(cb_bias_tiled_id, program, core_grid, tile_size, matmul_N_t, data_format);
+        cb_bias_tiled_id = next_cb_index++;
+        tt::tt_metal::create_cb(cb_bias_tiled_id, program, core_grid, tile_size, matmul_N_t, data_format);
     }
 
     bool is_padding_zeros = config.padding_mode == "zeros";
