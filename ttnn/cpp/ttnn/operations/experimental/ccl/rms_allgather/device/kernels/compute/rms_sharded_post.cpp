@@ -21,7 +21,7 @@ void MAIN {
     constexpr uint32_t block_w = get_compile_time_arg_val(1);
     constexpr uint32_t subblock_w_const = get_compile_time_arg_val(2);
     constexpr uint32_t num_subblocks_w = get_compile_time_arg_val(3);
-    constexpr bool is_allgather_worker = get_compile_time_arg_val(4) == 1;  // TODO FIX THIS
+    constexpr bool is_allgather_worker = get_compile_time_arg_val(4) == 1;
     constexpr uint32_t num_tiles_per_block = get_compile_time_arg_val(5);
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(6) == 1;
     constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(7);

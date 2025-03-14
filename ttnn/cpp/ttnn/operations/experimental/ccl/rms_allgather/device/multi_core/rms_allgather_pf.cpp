@@ -1090,8 +1090,6 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
     // reader compile time args
     std::vector<uint32_t> reader_mcast_sender_compile_time_args = {
         (std::uint32_t)reduce_sender_semaphore_id, (std::uint32_t)num_blocks};
-    std::vector<uint32_t> reader_mcast_receiver_all_to_all_compile_time_args = {
-        (std::uint32_t)reduce_sender_semaphore_id};
     std::vector<uint32_t> reader_mcast_receiver_compile_time_args = {(std::uint32_t)reduce_sender_semaphore_id};
 
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
@@ -1129,7 +1127,7 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = reader_noc,
-                .compile_args = reader_mcast_receiver_all_to_all_compile_time_args,
+                .compile_args = reader_mcast_receiver_compile_time_args,
                 .defines = reader_mcast_receiver_defines});
     }
     if (num_none_all_to_all_workers > 0) {
