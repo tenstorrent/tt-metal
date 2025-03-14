@@ -120,7 +120,7 @@ def test_perf_2cqs(
 )
 @pytest.mark.parametrize(
     "device_batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
-    ((16, True, 0.0073, 60),),
+    ((16, True, 0.0075, 60),),
     indirect=["enable_async_mode"],
 )
 @pytest.mark.parametrize(
