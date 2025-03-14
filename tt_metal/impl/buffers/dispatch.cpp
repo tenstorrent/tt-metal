@@ -100,8 +100,6 @@ public:
 
     virtual uint32_t num_full_pages_written() const { return this->total_pages_written; }
 
-    virtual uint32_t num_partial_pages_per_full_page() const { return 1; }
-
     virtual uint32_t num_partial_pages_written_for_current_transaction_full_pages() const { return 1; }
 
     virtual uint32_t partial_page_size() const { return this->page_size_to_write; }
@@ -182,8 +180,7 @@ public:
                     this->curr_full_pages_curr_addresses[i] = this->curr_full_pages_start_address;
                 }
             }
-            // TT_ASSERT((this->address - this->curr_full_pages_start_address) % this->buffer.aligned_page_size() == 0);
-            // this->curr_full_pages_start_address = this->address;
+
             this->dst_page_index += this->pages_per_txn;
             this->dst_page_index %= this->num_banks;
             this->page_size_to_write = this->size_of_partial_page;
@@ -202,8 +199,6 @@ public:
     bool write_large_pages() const override { return true; }
 
     uint32_t num_full_pages_written() const override { return this->full_pages_written; }
-
-    uint32_t num_partial_pages_per_full_page() const override { return this->num_partial_pages_in_single_full_page; }
 
     uint32_t partial_page_size() const override { return this->size_of_partial_page; }
 
@@ -396,12 +391,6 @@ void populate_interleaved_buffer_write_dispatch_cmds(
     // TODO: Consolidate
     if (dispatch_params.write_large_pages()) {
         const uint32_t num_full_pages_written = dispatch_params.num_full_pages_written();
-        // const uint32_t num_partial_pages_written = dispatch_params.total_pages_written;
-        // const uint32_t num_partial_pages_per_full_page = dispatch_params.num_partial_pages_per_full_page();
-        // const uint32_t num_partial_pages_written_associated_with_current_full_pages =
-        //     num_partial_pages_written - (num_full_pages_written * num_partial_pages_per_full_page);
-        // const uint32_t num_partial_pages_written_per_current_full_page =
-        //     num_partial_pages_written_associated_with_current_full_pages / dispatch_params.pages_per_txn;
         const uint32_t num_partial_pages_written_per_curr_full_pages =
             dispatch_params.num_partial_pages_written_for_current_transaction_full_pages();
         uint32_t num_partial_pages_written_curr_txn = 0;
