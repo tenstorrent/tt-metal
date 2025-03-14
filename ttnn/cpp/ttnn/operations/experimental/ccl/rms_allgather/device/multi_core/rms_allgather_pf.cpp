@@ -1106,37 +1106,8 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
         (std::uint32_t)num_blocks_second_stage,
         (std::uint32_t)reduce_second_stage_semaphore_id};
     std::vector<uint32_t> reader_mcast_receiver_all_to_all_compile_time_args = {
-        (std::uint32_t)reduce_receiver_semaphore_id,
-        (std::uint32_t)reduce_sender_semaphore_id,
-        (std::uint32_t)num_blocks,
-        (std::uint32_t)1,
-        (std::uint32_t)1,
-        (std::uint32_t)1,
-        (std::uint32_t)1,
-        (std::uint32_t)1,
-        (std::uint32_t)1,
-        (std::uint32_t)num_cores_x_mcast,
-        (std::uint32_t)num_cores_y_mcast,
-        (std::uint32_t)use_two_stage_reduce,
-        (std::uint32_t)num_blocks_first_stage,
-        (std::uint32_t)num_blocks_second_stage,
-        (std::uint32_t)reduce_second_stage_semaphore_id};
-    std::vector<uint32_t> reader_mcast_receiver_compile_time_args = {
-        (std::uint32_t)reduce_receiver_semaphore_id,
-        (std::uint32_t)reduce_sender_semaphore_id,
-        (std::uint32_t)num_blocks,
-        (std::uint32_t)1,
-        (std::uint32_t)0,
-        (std::uint32_t)1,
-        (std::uint32_t)1,
-        (std::uint32_t)1,
-        (std::uint32_t)1,
-        (std::uint32_t)1,
-        (std::uint32_t)1,
-        (std::uint32_t)0,
-        (std::uint32_t)0,
-        (std::uint32_t)0,
-        (std::uint32_t)reduce_second_stage_semaphore_id};
+        (std::uint32_t)reduce_sender_semaphore_id};
+    std::vector<uint32_t> reader_mcast_receiver_compile_time_args = {(std::uint32_t)reduce_sender_semaphore_id};
 
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
@@ -1579,51 +1550,11 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
         } else if (
             (not use_two_stage_reduce and width_index < num_cores_all_to_all) or
             (use_two_stage_reduce and width_index_two_stage < 1)) {
-            std::vector<uint32_t> mcast_receiver_args;
-            bool is_last_all_to_all_worker;
-            if (use_two_stage_reduce) {
-                is_last_all_to_all_worker = width_index_two_stage == 0 ? true : false;
-            } else {
-                is_last_all_to_all_worker = width_index == num_cores_all_to_all - 1 ? true : false;
-            }
-            mcast_receiver_args.push_back(is_last_all_to_all_worker);
-            mcast_receiver_args.push_back(all_to_all_worker_tile_offset_size_bytes);
-            bool is_second_stage_reader;
-            if (use_two_stage_reduce and width_index < 1) {
-                is_second_stage_reader = true;
-                mcast_receiver_args.push_back((uint32_t)is_second_stage_reader);
-            } else {
-                is_second_stage_reader = false;
-                mcast_receiver_args.push_back((uint32_t)is_second_stage_reader);
-            }
-            if (mcast_1d) {
-                mcast_receiver_args.push_back(core.x - start_core.x);
-                mcast_receiver_args.push_back(core.y - start_core.y);
-                mcast_receiver_args.insert(mcast_receiver_args.end(), in0_mcast_noc_x.begin(), in0_mcast_noc_x.end());
-                mcast_receiver_args.insert(mcast_receiver_args.end(), in0_mcast_noc_y.begin(), in0_mcast_noc_y.end());
-            } else {
-                mcast_receiver_args.push_back(core.x - start_core.x);
-                mcast_receiver_args.push_back(0);
-                mcast_receiver_args.insert(mcast_receiver_args.end(), in0_mcast_noc_x.begin(), in0_mcast_noc_x.end());
-                mcast_receiver_args.push_back(in0_mcast_noc_y[height_index]);
-            }
+            std::vector<uint32_t> mcast_receiver_args = {};
             tt::tt_metal::SetRuntimeArgs(
                 program, reader_mcast_receiver_kernels_id_all_to_all, core, mcast_receiver_args);
         } else {
-            std::vector<uint32_t> mcast_receiver_args;
-            bool is_last_all_to_all_worker = false;
-            mcast_receiver_args.push_back(is_last_all_to_all_worker);
-            mcast_receiver_args.push_back(all_to_all_worker_tile_offset_size_bytes);
-            mcast_receiver_args.push_back(0);
-            mcast_receiver_args.push_back(0);
-            mcast_receiver_args.push_back(0);
-            if (mcast_1d) {
-                mcast_receiver_args.push_back(in0_mcast_noc_x[0]);
-                mcast_receiver_args.push_back(in0_mcast_noc_y[0]);
-            } else {
-                mcast_receiver_args.push_back(in0_mcast_noc_x[0]);
-                mcast_receiver_args.push_back(in0_mcast_noc_y[height_index]);
-            }
+            std::vector<uint32_t> mcast_receiver_args = {};
             tt::tt_metal::SetRuntimeArgs(program, reader_mcast_receiver_kernels_id, core, mcast_receiver_args);
         }
 

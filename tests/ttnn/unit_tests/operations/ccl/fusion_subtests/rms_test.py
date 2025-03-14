@@ -55,7 +55,7 @@ def run_rms_fuse_impl(
         wrap_fabric_around_mesh=True,
     )
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
-    torch.manual_seed(2345)
+    torch.manual_seed(3487)
     num_cores = input_shard_grid.num_cores()
     total_cores = num_cores * num_devices
     padded_dim_per_core = int(math.ceil(elements_per_batch / total_cores / 32) * 32)
@@ -125,6 +125,7 @@ def run_rms_fuse_impl(
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
+
     tt_stats = ttnn.experimental.all_gather_async(
         tt_stats,
         3,
@@ -161,12 +162,25 @@ def run_rms_fuse_impl(
         stats=tt_stats,
         is_pre=False,
     )
+    tt_out2 = ttnn.rms_norm_post_all_gather(
+        input_tensor,
+        tt_stats,
+        program_config=layer_norm_config,
+        dtype=ttnn.bfloat8_b,
+        memory_config=output_memory_config,
+        epsilon=epsilon,
+        weight=gamma_tensor,
+    )
+
+    print(tt_out)
+    print(tt_out2)
 
     tt_out_torch = ttnn.to_torch(
         tt_out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 3), mesh_shape=(1, num_devices))
     )[0].unsqueeze(0)
 
     ref_lnorm = rms_norm(input_tensor_torch, [3], gamma_torch, torch.zeros_like(gamma_torch), epsilon)
+
     passing, output = comp_pcc(tt_out_torch, ref_lnorm, 0.999)
     logger.info(output)
 
