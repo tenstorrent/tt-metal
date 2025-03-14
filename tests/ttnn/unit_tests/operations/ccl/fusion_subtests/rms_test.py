@@ -115,7 +115,6 @@ def run_rms_fuse_impl(
 
     ccl_semaphore = ttnn.create_global_semaphore(mesh_device, input_shard_grid, 0)
     tt_stats = ttnn.fused_rms_1_1_32_8192(input_tensor, ccl_semaphore, layer_norm_config)
-    print(tt_stats)
     ag_memory_config = ttnn.create_sharded_memory_config(
         shape=(
             32,
@@ -151,14 +150,16 @@ def run_rms_fuse_impl(
         use_height_and_width_as_shard_shape=True,
     )
 
-    tt_out = ttnn.rms_norm_post_all_gather(
+    tt_out = ttnn.fused_rms_1_1_32_8192(
         input_tensor,
+        ccl_semaphore,
+        layer_norm_config,
+        dtype=ttnn.bfloat8_b,
+        memory_config=output_memory_config,
         epsilon=epsilon,
         weight=gamma_tensor,
-        program_config=layer_norm_config,
         stats=tt_stats,
-        memory_config=output_memory_config,
-        dtype=ttnn.bfloat8_b,
+        is_pre=False,
     )
 
     tt_out_torch = ttnn.to_torch(

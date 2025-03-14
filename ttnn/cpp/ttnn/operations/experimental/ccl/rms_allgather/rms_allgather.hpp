@@ -27,6 +27,7 @@ struct ExecuteFusedRMSNorm {
         float epsilon = 1e-12,
         const std::optional<const ttnn::Tensor>& weight = std::nullopt,
         const std::optional<const ttnn::Tensor>& bias = std::nullopt,
+        const std::optional<const ttnn::Tensor>& stats = std::nullopt,
         bool is_pre = true);
 };
 

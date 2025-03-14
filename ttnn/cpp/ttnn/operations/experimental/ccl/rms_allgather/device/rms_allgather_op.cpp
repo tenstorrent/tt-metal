@@ -20,11 +20,12 @@ void RMSAllGather::validate(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     TT_FATAL(
-        input_tensors.size() == 1 and optional_input_tensors.size() <= 3, "Must have between 1 to 4 input tensors");
+        input_tensors.size() == 1 and optional_input_tensors.size() <= 4, "Must have between 1 to 4 input tensors");
     auto& a = input_tensors.at(0);
     const auto& b = optional_input_tensors.at(0);
     const auto& gamma = optional_input_tensors.at(1);
     const auto& beta = optional_input_tensors.at(2);
+    const auto& stats = optional_input_tensors.at(3);
     TT_FATAL(
         this->output_mem_config.shard_spec.value().orientation == ShardOrientation::ROW_MAJOR,
         "Minimal version requires row major sharding orientation");
@@ -46,6 +47,23 @@ void RMSAllGather::validate(
         TT_FATAL(a.get_padded_shape() == b.value().get_padded_shape(), "shape is not same!");
         TT_FATAL(b.value().buffer() != nullptr, "Operands to frmsnorm need to be allocated in buffers on device!");
         TT_FATAL(a.device() == b.value().device(), "device is not same!");
+    }
+    if (!this->is_pre) {
+        TT_FATAL(
+            gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR,
+            "Post all gather requires a weight which is row major");
+        TT_FATAL(stats.has_value(), "Post all gather layernorm requires stats");
+        TT_FATAL(stats.value().is_sharded(), "Stats must be sharded");
+        TT_FATAL(stats.value().get_layout() == Layout::TILE, "Only tile layout is supported for stats");
+        TT_FATAL(stats.value().get_dtype() == DataType::BFLOAT16, "Only bfloat16 is supported for stats");
+        TT_FATAL(
+            stats.value().storage_type() == StorageType::DEVICE ||
+                stats.value().storage_type() == StorageType::MULTI_DEVICE,
+            "Operands to layernorm need to be on device!");
+        TT_FATAL(stats.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+        TT_FATAL(
+            stats.value().get_padded_shape()[-1] % TILE_WIDTH == 0,
+            "Stats is expected to have E(x) for each device stacked in the last dimension");
     }
 
     if (gamma.has_value()) {
@@ -186,7 +204,9 @@ std::vector<TensorSpec> RMSAllGather::compute_output_specs(const std::vector<Ten
     auto output_padded_shape = input_tensor.get_padded_shape();
 
     // WARNING!!!!! This line is ONLY true when only doing pre-allgather only
-    output_shape[3] = TILE_WIDTH;
+    if (this->is_pre) {
+        output_shape[3] = TILE_WIDTH;
+    }
 
     return std::visit(
         [&](const auto& program_config) -> std::vector<TensorSpec> {
@@ -260,6 +280,7 @@ operation::ProgramWithCallbacks RMSAllGather::create_program(
     const auto& b = optional_input_tensors.at(0);
     const auto& gamma = optional_input_tensors.at(1);
     const auto& beta = optional_input_tensors.at(2);
+    const auto& stats = optional_input_tensors.at(3);
     auto& output_tensor = output_tensors.at(0);
 
     return std::visit(
@@ -283,11 +304,13 @@ operation::ProgramWithCallbacks RMSAllGather::create_program(
                         program_config.block_w,
                         this->compute_kernel_config);
                 } else {
+                    printf("Running Post \n");
                     return frmsnorm_post_multi_core_sharded(
                         a,
                         b,
                         gamma,
                         beta,
+                        stats,
                         output_tensor,
                         this->eps,
                         program_config.compute_with_storage_grid_size,
