@@ -60,13 +60,6 @@ struct ConcreteMeshToTensor : MeshToTensor {
     }
 };
 
-// unused empty implementations to satisfy pybind's desire for unique objects
-class ReplicateTensorToMesh : public TensorToMesh {};
-class ShardTensorToMesh : public TensorToMesh {};
-class ShardTensorTo2dMesh : public TensorToMesh {};
-class ConcatMeshToTensor : public MeshToTensor {};
-class Concat2dMeshToTensor : public MeshToTensor {};
-
 void py_module_types(py::module& module) {
     py::class_<MeshToTensor, ConcreteMeshToTensor, std::unique_ptr<MeshToTensor>>(module, "CppMeshToTensor");
     py::class_<TensorToMesh, ConcreteTensorToMesh, std::unique_ptr<TensorToMesh>>(module, "CppTensorToMesh");
