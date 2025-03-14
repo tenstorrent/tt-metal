@@ -19,7 +19,7 @@ on:
       os:
         required: false
         type: string
-        default: "ubuntu-20.04"
+        default: "ubuntu-22.04"
       build-artifact-name:
         required: true
         type: string
@@ -51,7 +51,7 @@ on:
       os:
         required: false
         type: string
-        default: "ubuntu-20.04"
+        default: "ubuntu-22.04"
       build-artifact-name:
         required: true
         type: string
