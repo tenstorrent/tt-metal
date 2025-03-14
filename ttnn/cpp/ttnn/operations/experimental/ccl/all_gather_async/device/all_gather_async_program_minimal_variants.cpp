@@ -63,7 +63,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     const uint32_t ring_size,
     const uint32_t ring_index,
     ccl::Topology topology,
-    const GlobalSemaphore& semaphore,
+    const std::pair<GlobalSemaphore, GlobalSemaphore>& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode) {
     tt::tt_metal::Program program{};
@@ -238,7 +238,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         }
         std::vector<uint32_t> writer_rt_args = {
             output_tensor.buffer()->address(),  // tensor_address0
-            semaphore.address(),                // out_ready_sem_bank_addr (absolute address)
+            semaphore.first.address(),          // out_ready_sem_bank_addr (absolute address)
+            semaphore.second.address(),         // out_ready_sem_bank_addr (absolute address)
             output_tile_id_start,               // tile_id_start
             output_tile_id_end,                 // tile_id_end
             wait_output_semaphore,              // wait_output_semaphore
@@ -270,7 +271,11 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
 
             auto semaphore = static_cast<const ttnn::AllGatherAsync*>(operation)->semaphore;
 
-            log_trace(tt::LogOp, "DEBUG: semaphore: {}", semaphore.address());
+            log_trace(
+                tt::LogOp,
+                "DEBUG: semaphore.first: {}, semaphore.second: {}",
+                semaphore.first.address(),
+                semaphore.second.address());
 
             // update senders
             auto& worker_reader_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_reader_kernel_id);
@@ -282,7 +287,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
                 // writer
                 auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
                 worker_writer_sender_runtime_args[0] = output.buffer()->address();
-                worker_writer_sender_runtime_args[1] = semaphore.address();
+                worker_writer_sender_runtime_args[1] = semaphore.first.address();
+                worker_writer_sender_runtime_args[2] = semaphore.second.address();
             }
         };
 
@@ -299,7 +305,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     const uint32_t ring_size,
     const uint32_t ring_index,
     ccl::Topology topology,
-    const GlobalSemaphore& semaphore,
+    const std::pair<GlobalSemaphore, GlobalSemaphore>& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode) {
     tt::tt_metal::Program program{};
@@ -521,7 +527,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
         uint32_t out_ready_sem_wait_value = ring_size * num_links;
         std::vector<uint32_t> writer_rt_args = {
             output_tensor.buffer()->address(),    // tensor_address0
-            semaphore.address(),                  // out_ready_sem_bank_addr (absolute address)
+            semaphore.first.address(),            // out_ready_sem_bank_addr (absolute address)
+            semaphore.second.address(),           // out_ready_sem_bank_addr (absolute address)
             output_tensor_shard_num_pages,        // num_tiles_per_core
             worker_num_tiles_to_read,             // num_tiles_to_read
             output_first_core_tile_start_offset,  // first_core_tile_start_offset
@@ -555,7 +562,11 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
 
             auto semaphore = static_cast<const ttnn::AllGatherAsync*>(operation)->semaphore;
 
-            log_trace(tt::LogOp, "DEBUG: semaphore: {}", semaphore.address());
+            log_trace(
+                tt::LogOp,
+                "DEBUG: semaphore.first: {}, semaphore.second: {}",
+                semaphore.first.address(),
+                semaphore.second.address());
 
             // update senders
             auto& worker_reader_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_reader_kernel_id);
@@ -567,7 +578,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
                 // writer
                 auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
                 worker_writer_sender_runtime_args[0] = output.buffer()->address();
-                worker_writer_sender_runtime_args[1] = semaphore.address();
+                worker_writer_sender_runtime_args[1] = semaphore.first.address();
+                worker_writer_sender_runtime_args[2] = semaphore.second.address();
             }
         };
 
