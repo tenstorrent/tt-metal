@@ -11,19 +11,8 @@
 
 using namespace sfpi;
 
-// TODO: This conversation is obsolete. Remove it.
-template <uint32_t Bits>
-constexpr float asFloat() {
-    union {
-        uint32_t i;
-        float f;
-    } u{Bits};
-    return u.f;
-}
-
-template <bool APPROXIMATE, uint32_t IMM_BITS, int ITERATIONS = 8>
-inline void _load_imm_() {
-    float imm = asFloat<IMM_BITS>();
+template <bool APPROXIMATE, int ITERATIONS = 8>
+inline void _load_imm_(float imm) {
     vFloat const_v = s2vFloat16b(imm);
     for (int d = 0; d < ITERATIONS; d++) {
         dst_reg[0] = const_v;
@@ -31,16 +20,12 @@ inline void _load_imm_() {
     }
 }
 
-template <uint32_t IMM_BITS>
-inline void llk_math_eltwise_unary_load_imm(uint dst_index, int vector_mode = (int)VectorMode::RC) {
+inline void llk_math_eltwise_unary_load_imm(float val, uint dst_index, int vector_mode = (int)VectorMode::RC) {
     constexpr bool APPROXIMATE = 0;
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(_load_imm_<APPROXIMATE, IMM_BITS>, dst_index, vector_mode);
+    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>([val]() { _load_imm_<APPROXIMATE>(val); }, dst_index, vector_mode);
 }
 
-template <uint32_t IMM_BITS>
-inline void load_immediate_value(uint dst_index) {
-    MATH(llk_math_eltwise_unary_load_imm<IMM_BITS>(dst_index));
-}
+inline void load_immediate_value(uint dst_index, float val) { MATH(llk_math_eltwise_unary_load_imm(val, dst_index)); }
 
 template <bool APPROXIMATION_MODE, bool small_to_big_index, int ITERATIONS = 8>
 inline void _copy_value_(const uint dst_offset) {
