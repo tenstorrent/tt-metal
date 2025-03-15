@@ -55,11 +55,16 @@ run_common_func_tests() {
   # SqueezeBERT
   pytest --disable-warnings models/demos/squeezebert/demo/demo.py --timeout 600; fail+=$?
 
+  #MobileNetv2
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings -k "pretrained_weight_true" models/experimental/functional_mobilenetv2/demo/demo.py::test_mobilenetv2_imagenenet_demo --timeout 600; fail+=$?
+
   # Distilbert
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/wormhole/distilbert/demo/demo.py --timeout 600; fail+=$?
 
   #RoBERTa
   pytest --disable-warnings models/demos/roberta/demo/demo.py --timeout 600; fail+=$?
+
+
 
   return $fail
 }
