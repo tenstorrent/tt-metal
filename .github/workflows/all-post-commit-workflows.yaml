@@ -17,6 +17,8 @@ on:
           - Release
           - Debug
           - RelWithDebInfo
+          - ASan
+          - TSan
       with-retries:
         default: false
         type: boolean
