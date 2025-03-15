@@ -117,7 +117,8 @@ class TT_CCL:
             persistent_buffers[cluster_axis].append(tt_buffer)
 
         # Create persistent buffer for lm_head
-        N_per_shard = (16 * 1024) // 16 * cluster_shape[cluster_axis]  # LM Head
+        num_cores_after_lm_head = 32  # Use 32 cores instead of 16 to reduce L1 memory usage per core
+        N_per_shard = (16 * 1024) // num_cores_after_lm_head * cluster_shape[cluster_axis]  # LM Head
         self.lm_head_buffer_mem_cfg = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
@@ -132,7 +133,7 @@ class TT_CCL:
             torch.zeros((*cluster_shape, M, N_per_shard * num_cores)),
             device=self.mesh_device,
             layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
         )
