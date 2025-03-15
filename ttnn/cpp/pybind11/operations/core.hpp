@@ -221,7 +221,9 @@ void py_module(py::module& module) {
 
     module.def(
         "allocate_tensor_on_device",
-        py::overload_cast<const ttnn::TensorSpec&, MeshDevice*>(&ttnn::operations::core::allocate_tensor_on_device),
+        [](const ttnn::TensorSpec& spec, MeshDevice* device) {
+            return tt::tt_metal::allocate_tensor_on_mesh(spec, device);
+        },
         py::arg("tensor_spec"),
         py::arg("mesh_device"));
 
@@ -241,12 +243,18 @@ void py_module(py::module& module) {
 
     module.def(
         "allocate_tensor_on_device",
-        py::overload_cast<
-            const ttnn::Shape&,
-            ttnn::DataType,
-            ttnn::Layout,
-            MeshDevice*,
-            const std::optional<ttnn::MemoryConfig>&>(&ttnn::operations::core::allocate_tensor_on_device),
+        [](const ttnn::Shape& shape,
+           ttnn::DataType dtype,
+           ttnn::Layout layout,
+           MeshDevice* device,
+           const std::optional<ttnn::MemoryConfig>& mem_config) {
+            return tt::tt_metal::allocate_tensor_on_mesh(
+                TensorSpec(
+                    shape,
+                    tt::tt_metal::TensorLayout(
+                        dtype, tt::tt_metal::PageConfig(layout), mem_config.value_or(MemoryConfig{}))),
+                device);
+        },
         py::arg("shape"),
         py::arg("dtype"),
         py::arg("layout"),
