@@ -36,8 +36,8 @@ jobs:
           {
             arch: wormhole_b0,
             runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"],
-            name: "tests/ttnn/unit_tests/operations/ccl/perf/run_all_gather_profile.sh -t n300",
-            cmd: "N300 ccl all gather",
+            name: "N300 ccl all gather",
+            cmd: "tests/ttnn/unit_tests/operations/ccl/perf/run_all_gather_profile.sh -t n300",
           },
           {
             arch: wormhole_b0,
