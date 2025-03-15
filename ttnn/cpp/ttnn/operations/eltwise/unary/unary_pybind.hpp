@@ -1617,6 +1617,7 @@ void py_module(py::module& module) {
     detail::bind_unary_operation(module, ttnn::eqz, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ == 0}}))doc");
     detail::bind_unary_operation(module, ttnn::floor, R"doc(\mathrm{{output\_tensor}}_i = \verb|floor|(\mathrm{{input\_tensor}}_i))doc", R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(Supported only for Wormhole_B0.)doc");
     detail::bind_unary_operation(module, ttnn::ceil, R"doc(\mathrm{{output\_tensor}}_i = \verb|ceil|(\mathrm{{input\_tensor}}_i))doc", R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(Supported only for Wormhole_B0.)doc");
+    detail::bind_unary_operation(module, ttnn::mish, R"doc(\mathrm{{output\_tensor}}_i = \verb|mish|(\mathrm{{input\_tensor}}_i))doc", R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(Supported only for Wormhole_B0. [supported range -20 to inf].)doc");
     detail::bind_unary_operation(module, ttnn::gez, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ >= 0}}))doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation(module, ttnn::gtz, R"doc(\mathrm{{output\_tensor}}_i= (\mathrm{{input\_tensor_i\ > 0}}))doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
@@ -1748,8 +1749,6 @@ void py_module(py::module& module) {
         R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(TILE)doc", R"doc(2, 3, 4)doc", "", R"doc(torch.tensor([[2, 3], [4, 5]], dtype=torch.bfloat16))doc");
     detail::bind_unary_composite(module, ttnn::lgamma, R"doc(Performs lgamma function on :attr:`input_tensor`.)doc", "[supported for value greater than 0].", R"doc(BFLOAT16)doc");
     detail::bind_unary_composite(module, ttnn::log1p, R"doc(Performs log1p function on :attr:`input_tensor`.)doc", "[supported range -1 to 1].", R"doc(BFLOAT16, BFLOAT8_B)doc");
-    detail::bind_unary_composite(module, ttnn::mish, R"doc(Performs mish function on :attr:`input_tensor`.)doc", "[supported range -20 to inf].", R"doc(BFLOAT16, BFLOAT8_B)doc",
-        R"doc(TILE)doc", R"doc(2, 3, 4)doc", R"doc(Not supported on Grayskull.)doc");
     detail::bind_unary_composite(module, ttnn::multigammaln, R"doc(Performs multigammaln function on :attr:`input_tensor`.)doc", "[supported range 1.6 to inf].", R"doc(BFLOAT16)doc",
         R"doc(TILE)doc", R"doc(2, 3, 4)doc", "", R"doc(torch.tensor([[2, 3], [4, 5]], dtype=torch.bfloat16))doc");
     detail::bind_unary_composite(module, ttnn::sinh, R"doc(Performs sinh function on :attr:`input_tensor`.)doc", "[supported range -9 to 9].", R"doc(BFLOAT16, BFLOAT8_B)doc");
