@@ -18,6 +18,7 @@ jobs:
     runs-on:
       - in-service
       - config-tg
+      - arch-wormhole_b0
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
       env:
