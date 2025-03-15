@@ -211,7 +211,7 @@ def get_pydantic_test_from_testcase_(testcase, default_timestamp=datetime.now(),
         filepath_no_ext = testcase.attrib["classname"].replace(".", "/")
         filepath = f"{filepath_no_ext}.py"
     else:
-        filepath = testcase.attrib["file"]
+        filepath = testcase.attrib.get("file", "")
         if filepath.startswith("/work/"):
             filepath = filepath.lstrip("/work/")
 
@@ -219,7 +219,7 @@ def get_pydantic_test_from_testcase_(testcase, default_timestamp=datetime.now(),
         categories = ["models", "ttnn", "tt_eager", "tt_metal"]
         for category in categories:
             identifier_attrib = "classname" if is_pytest else "file"
-            if category in testcase_.attrib[identifier_attrib]:
+            if category in testcase_.attrib.get(identifier_attrib, ""):
                 return category
         return "other"
 
@@ -278,6 +278,21 @@ def get_tests_from_test_report_path(test_report_path):
     report_root_tree = junit_xml_utils.get_xml_file_root_element_tree(test_report_path)
 
     report_root = report_root_tree.getroot()
+
+    # Special case: Handle ctest: the report root is <testsuite>, not <testsuites>
+    if report_root.tag == "testsuite":
+        logger.info("Root tag is testsuite, found ctest xml")
+        tests = []
+        # ctest timestamp format is not the same as pytest/gtest
+        default_timestamp = datetime.strptime(report_root.attrib["timestamp"], "%Y-%m-%dT%H:%M:%S")
+        for testcase in report_root.findall("testcase"):
+            if is_valid_testcase_(testcase):
+                # Process ctest testcase
+                pyd_test_info = get_pydantic_test_from_testcase_(
+                    default_timestamp=default_timestamp, is_pytest=False, testsuite_name=None, testcase=testcase
+                )
+                tests.append(pyd_test_info)
+        return tests
 
     is_pytest = junit_xml_utils.is_pytest_junit_xml(report_root)
     is_gtest = junit_xml_utils.is_gtest_xml(report_root)

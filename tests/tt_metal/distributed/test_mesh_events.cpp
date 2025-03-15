@@ -105,6 +105,9 @@ TEST_F(MeshEventsTestT3000, ShardedAsyncIO) {
 }
 
 TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
+    if (mesh_device_->num_devices() == 1) {
+        GTEST_SKIP() << "Skipping test for a unit-size mesh device";
+    }
     uint32_t num_iters = 5;
     std::vector<std::shared_ptr<MeshBuffer>> src0_bufs = {};
     std::vector<std::shared_ptr<MeshBuffer>> src1_bufs = {};
@@ -186,6 +189,9 @@ TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
 }
 
 TEST_F(MeshEventsTestSuite, CustomDeviceRanges) {
+    if (mesh_device_->num_devices() == 1) {
+        GTEST_SKIP() << "Skipping test for a unit-size mesh device";
+    }
     uint32_t NUM_TILES = 1000;
     uint32_t num_iterations = 20;
     int32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);

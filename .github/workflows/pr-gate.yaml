@@ -37,6 +37,7 @@ jobs:
     with:
       version: "22.04"
       build-type: Debug
+      publish-artifact: false
 
   find-changed-files:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft

@@ -108,13 +108,26 @@ jobs:
     - uses: actions/checkout@v4
       with:
         submodules: recursive
+    - name: Look for changed CMake files
+      id: changed-files-list
+      uses: jitterbit/get-changed-files@b17fbb00bdc0c0f63fcf166580804b4d2cdc2a42
+      with:
+        format: 'json'
     - name: Check for changed CMake files
       id: changed-cmake-files
-      uses: tj-actions/changed-files@c3a1bb2c992d77180ae65be6ae6c166cf40f857c
-      with:
-        files: |
-          **/*.cmake
-          **/CMakeLists.txt
+      run: |
+        # Parse the JSON and check for changes in .cmake or CMakeLists.txt
+        cmake_changed=false
+        # Loop through the files and check for CMake files
+        readarray -t changed_files <<<"$(jq -r '.[]' <<<'${{ steps.changed-files-list.outputs.all }}')"
+        for file in ${changed_files[@]}; do
+          if [[ "$file" == *.cmake || "$file" == *CMakeLists.txt ]]; then
+            cmake_changed=true
+            break
+          fi
+        done
+        # Set output for the next steps
+        echo "any_changed=$cmake_changed" >> $GITHUB_OUTPUT
     - uses: lukka/get-cmake@b516803a3c5fac40e2e922349d15cdebdba01e60
       if: steps.changed-cmake-files.outputs.any_changed == 'true'
       with:
