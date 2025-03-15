@@ -336,6 +336,188 @@ std::vector<PixelMetadata> generate_tensor_metadata(
     return tensor_metadata;
 }
 
+const uint16_t PAD_LOCAL_SENTINAL = 0xFFFF;
+
+using GatherStep = std::tuple<uint32_t, uint32_t, uint32_t>;
+using PerCoreGatherData = std::map<std::pair<uint32_t, uint32_t>, std::vector<GatherStep>>;
+using ReblockedData = std::map<std::pair<uint32_t, uint32_t>, std::map<uint32_t, std::vector<GatherStep>>>;
+using uint32_triplet_t = std::tuple<uint32_t, uint32_t, uint32_t>;
+
+// Split gather data up by a specified block size
+// This information is needed to interleave input untilization with gather
+ReblockedData reblock_per_core_gather_data(const PerCoreGatherData& per_core_gather_data, uint32_t block_size) {
+    ReblockedData block_data;
+    for (const auto& [core_src_dst, step] : per_core_gather_data) {
+        for (const auto& [src_start, dst_start, len] : step) {
+            uint32_t src_offset = src_start;
+            uint32_t dst_offset = dst_start;
+            uint32_t length = len;
+            while (length > 0) {
+                const uint32_t block_id = src_offset / block_size;
+                const uint32_t offset_in_block = src_offset % block_size;
+                const uint32_t remaining_space_in_block = block_size - offset_in_block;
+                const uint32_t transfer_size = (length <= remaining_space_in_block ? length : remaining_space_in_block);
+
+                block_data[core_src_dst][block_id].push_back({offset_in_block, dst_offset, transfer_size});
+
+                src_offset += transfer_size;
+                dst_offset += transfer_size;
+                length -= transfer_size;
+            }
+        }
+    }
+    return block_data;
+}
+
+// Local and remote fields map nhw_core_id => block_id => num_copies
+struct BlockingConfig {
+    std::vector<std::map<uint32_t, uint32_t>> local;
+    std::vector<std::map<uint32_t, uint32_t>> remote;
+};
+
+// Determined the number of transfers needed for each block
+BlockingConfig generate_blocking_configs(const ReblockedData& reblocked_gather_data, uint32_t num_cores_nhw) {
+    std::vector<std::map<uint32_t, uint32_t>> local_block_config(num_cores_nhw);
+    std::vector<std::map<uint32_t, uint32_t>> remote_block_config(num_cores_nhw);
+
+    // Given each route (src_core->dst_core) we want to count up the amount of transfers from each block
+    for (auto [src_dst, reblocked_data] : reblocked_gather_data) {
+        auto [src_core_id, dst_core_id] = src_dst;
+        bool is_pad = src_core_id == PAD_LOCAL_SENTINAL;
+        bool is_local = src_core_id == dst_core_id;
+        bool is_remote = !is_local && !is_pad;
+        if (is_pad) {
+            continue;  // We don't need blocking information for padding because it is not dependant on input
+        }
+        // auto& config =
+        // is_local ? local_block_config[src_core_id] : remote_block_config[is_remote ? dst_core_id : src_core_id];
+        auto& config = is_local ? local_block_config[src_core_id] : remote_block_config[src_core_id];
+
+        for (const auto& [block_id, transfers] : reblocked_data) {
+            const auto transfers_in_block = transfers.size();
+            if (config.contains(block_id)) {
+                config[block_id] += transfers_in_block;
+            } else {
+                config[block_id] = transfers_in_block;
+            }
+        }
+    }
+    return {local_block_config, remote_block_config};
+}
+
+struct FlattenedBlockingConfig {
+    std::vector<std::vector<uint16_t>> local;
+    std::vector<std::vector<uint16_t>> remote;
+};
+
+FlattenedBlockingConfig flatten_blocking_config(const BlockingConfig& blocking, uint32_t num_cores_nhw) {
+    uint32_t max_block_id = 0;
+    for (const auto& core_map : blocking.local) {
+        if (!core_map.empty()) {
+            auto it = core_map.rbegin();  // last item = greatest block_id since map is ordered
+            if (it->first > max_block_id) {
+                max_block_id = it->first;
+            }
+        }
+    }
+    for (const auto& core_map : blocking.remote) {
+        if (!core_map.empty()) {
+            auto it = core_map.rbegin();
+            if (it->first > max_block_id) {
+                max_block_id = it->first;
+            }
+        }
+    }
+
+    // We want to return num_cores_nhw rows, each (max_block_id+1) columns
+    FlattenedBlockingConfig result;
+    result.local.resize(num_cores_nhw);
+    result.remote.resize(num_cores_nhw);
+
+    const uint32_t max_num_blocks = max_block_id + 1;
+
+    for (uint32_t core_id = 0; core_id < num_cores_nhw; ++core_id) {
+        // local
+        {
+            result.local[core_id].resize(max_num_blocks, 0);
+            const auto& core_map = blocking.local[core_id];
+            for (const auto& kv : core_map) {
+                auto block_id = kv.first;
+                auto transfers = kv.second;
+                if (block_id <= max_block_id) {
+                    result.local[core_id][block_id] = transfers;
+                }
+            }
+            result.local[core_id].insert(result.local[core_id].begin(), max_num_blocks);  // add a header
+        }
+        // remote
+        {
+            result.remote[core_id].resize(max_num_blocks, 0);  // include
+            const auto& core_map = blocking.remote[core_id];
+            for (const auto& kv : core_map) {
+                auto block_id = kv.first;
+                auto transfers = kv.second;
+                if (block_id <= max_block_id) {
+                    result.remote[core_id][block_id] = transfers;
+                }
+            }
+            result.remote[core_id].insert(result.remote[core_id].begin(), max_num_blocks);  // add a header
+        }
+    }
+
+    return result;
+}
+
+void validate_blocking_configs(
+    const BlockingConfig& blocking_configs,
+    const std::vector<std::pair<uint32_triplet_t, std::vector<uint32_triplet_t>>>& local_config,
+    const std::vector<std::vector<std::pair<uint32_triplet_t, std::vector<uint32_triplet_t>>>>& remote_config) {
+    // local
+    for (size_t core = 0; core < local_config.size(); ++core) {
+        const auto& gather_entry = local_config[core];
+        const auto& gather_steps = gather_entry.second;
+        uint32_t num_steps = gather_steps.size();
+
+        uint32_t sum = 0;
+        if (core < blocking_configs.local.size()) {
+            for (const auto& kv : blocking_configs.local[core]) {
+                sum += kv.second;
+            }
+        }
+        // If there are any gather steps there should be at least 1 blocking transfers
+        // We can't check equiality here because we can create multiple chunks from a single transfer
+        TT_FATAL(
+            (num_steps == 0 && sum == 0) || (num_steps > 0 && sum > 0),
+            "Local blocking config mismatch for core {}: found {} gather steps but blocking sum is {}",
+            core,
+            num_steps,
+            sum);
+    }
+
+    // remote
+    for (size_t core = 0; core < remote_config.size(); ++core) {
+        uint32_t num_steps = 0;
+        for (const auto& entry : remote_config[core]) {
+            num_steps += entry.second.size();
+        }
+
+        uint32_t sum = 0;
+        if (core < blocking_configs.remote.size()) {
+            for (const auto& kv : blocking_configs.remote[core]) {
+                sum += kv.second;
+            }
+        }
+        // If there are any gather steps there should be at least 1 blocking transfers
+        // We can't check equiality here because we can create multiple chunks from a single transfer
+        TT_FATAL(
+            (num_steps == 0 && sum == 0) || (num_steps > 0 && sum > 0),
+            "Remote blocking config mismatch for core {}: found {} gather steps but blocking sum is {}",
+            core,
+            num_steps,
+            sum);
+    }
+}
+
 uint32_t generate_max_out_nsticks_per_core(const std::vector<ShardBoundary>& shard_boundaries) {
     // calculate max_out_nsticks_per_core
     uint32_t max_out_nsticks_per_core = 0;
@@ -346,7 +528,208 @@ uint32_t generate_max_out_nsticks_per_core(const std::vector<ShardBoundary>& sha
     return max_out_nsticks_per_core;
 }
 
-std::vector<std::vector<std::vector<uint16_t>>> generate_halo_kernel_config_tensors(
+struct GatherHeader {
+    uint16_t noc_x;
+    uint16_t noc_y;
+    uint16_t num_transfers;
+
+    bool operator<(const GatherHeader& other) const {
+        return std::tie(noc_x, noc_y) < std::tie(other.noc_x, other.noc_y);
+    }
+};
+
+struct GatherTransfer {
+    uint16_t src_id;
+    uint16_t dst_id;
+    uint16_t size;
+
+    // Order based on position in input
+    bool operator<(const GatherTransfer& other) const {
+        return std::tie(src_id, dst_id, size) < std::tie(other.src_id, other.dst_id, other.size);
+    }
+};
+
+struct GatherRoute {
+    GatherHeader header;
+    std::vector<GatherTransfer> transfers;
+};
+
+struct GatherConfig {
+    std::vector<GatherRoute> routes;
+};
+
+// transfer = noc_x noc_y num_transfers
+void serialize_gather_header(const GatherHeader& header, std::vector<uint16_t>& output) {
+    output.push_back(header.noc_x);
+    output.push_back(header.noc_y);
+    output.push_back(header.num_transfers);
+}
+
+// transfer = src_id dst_id size
+void serialize_gather_transfer(const GatherTransfer& transfer, std::vector<uint16_t>& output) {
+    output.push_back(transfer.src_id);
+    output.push_back(transfer.dst_id);
+    output.push_back(transfer.size);
+}
+
+// route = header [tranfer0 transfer1 ... ]
+void serialize_gather_route(const GatherRoute& route, std::vector<uint16_t>& output) {
+    serialize_gather_header(route.header, output);
+    for (const auto& transfer : route.transfers) {
+        serialize_gather_transfer(transfer, output);
+    }
+}
+
+// config = len [route0 route1 ...]
+std::vector<uint16_t> serialize_gather_config(const GatherConfig& config) {
+    std::vector<uint16_t> output;
+    output.push_back(config.routes.size());
+    for (const auto& route : config.routes) {
+        TT_FATAL(!route.transfers.empty(), "Expected all routes to have at least one transfer");
+        serialize_gather_route(route, output);
+    }
+    return output;
+}
+
+std::vector<std::vector<uint16_t>> serialize_gather_configs(const std::vector<GatherConfig>& configs) {
+    std::vector<std::vector<uint16_t>> serialized_configs;
+    for (const auto& config : configs) {
+        serialized_configs.push_back(serialize_gather_config(config));
+    }
+
+    // Pad each core's config to the same length so we can shard it
+    size_t max_size = 0;
+    for (const auto& config : serialized_configs) {
+        max_size = std::max(max_size, config.size());
+    }
+    max_size = round((max_size + 1) / 2) * 2;  // Align to 32 bytes by adding a value - do we need to do this?
+    for (std::vector<uint16_t>& config : serialized_configs) {
+        TT_ASSERT(config.size() <= max_size);
+        config.resize(max_size, 0);
+    }
+
+    return serialized_configs;
+}
+
+void run(std::vector<uint16_t> config) {
+    const uint16_t total_number_of_segments = config[0];
+
+    uint16_t number_of_segments_remaining = total_number_of_segments;
+    uint16_t index = 1;
+
+    uint16_t current_noc_x = 0;
+    uint16_t current_noc_y = 0;
+    uint16_t transfers_remaining = 0;
+
+    uint16_t src_offset = 0;
+    uint16_t dst_offset = 0;
+    uint16_t transfer_size = 0;
+
+    while (number_of_segments_remaining) {
+        // read header
+        current_noc_x = config[index++];
+        current_noc_y = config[index++];
+        transfers_remaining = config[index++];
+
+        while (transfers_remaining > 0) {
+            src_offset = config[index++];
+            dst_offset = config[index++];
+            transfer_size = config[index++];
+            // do copy
+            tt::log_info(
+                "copy x={} y={} src={} dst={} size={}",
+                current_noc_x,
+                current_noc_y,
+                src_offset,
+                dst_offset,
+                transfer_size);
+
+            transfers_remaining--;
+        }
+        number_of_segments_remaining--;
+    }
+}
+
+GatherConfig regenerate_ordered(const GatherConfig& input) {
+    // Flatten all transfers with their headers
+    struct RouteTransferPair {
+        GatherHeader header;
+        GatherTransfer transfer;
+    };
+
+    std::vector<RouteTransferPair> all_transfers;
+    for (const auto& route : input.routes) {
+        for (const auto& transfer : route.transfers) {
+            all_transfers.push_back({route.header, transfer});
+        }
+    }
+
+    // Sort transfers globally
+    std::sort(all_transfers.begin(), all_transfers.end(), [](const RouteTransferPair& a, const RouteTransferPair& b) {
+        return a.transfer < b.transfer;
+    });
+
+    // Rebuild GatherConfig with ordered transfers
+    GatherConfig ordered_config;
+    std::map<GatherHeader, std::vector<GatherTransfer>> grouped;
+    for (const auto& rt : all_transfers) {
+        grouped[rt.header].push_back(rt.transfer);  // This works because std::map is ordered
+    }
+
+    for (const auto& [header, transfers] : grouped) {
+        GatherRoute route;
+        route.header = header;
+        route.header.num_transfers = transfers.size();
+        route.transfers = transfers;
+        ordered_config.routes.push_back(route);
+    }
+    return ordered_config;
+}
+
+GatherConfig reorder_gather_config(const GatherConfig& input) {
+    struct TransferInfo {
+        uint16_t noc_x;
+        uint16_t noc_y;
+        GatherTransfer transfer;
+    };
+    std::vector<TransferInfo> global_transfers;
+    for (const auto& route : input.routes) {
+        for (const auto& transfer : route.transfers) {
+            global_transfers.push_back({route.header.noc_x, route.header.noc_y, transfer});
+        }
+    }
+    TT_FATAL(!global_transfers.empty(), "Expected there to be at least one transfer");
+
+    GatherConfig output;
+    GatherRoute current_route;
+    current_route.header = {global_transfers[0].noc_x, global_transfers[0].noc_y, 0};
+    for (const auto& info : global_transfers) {
+        if (info.noc_x != current_route.header.noc_x || info.noc_y != current_route.header.noc_y) {
+            current_route.header.num_transfers = current_route.transfers.size();
+            TT_FATAL(current_route.header.num_transfers > 0, "Expected at least a single transfer");
+
+            output.routes.push_back(current_route);
+
+            current_route = GatherRoute();
+            current_route.header.noc_x = info.noc_x;
+            current_route.header.noc_y = info.noc_y;
+        }
+        current_route.transfers.push_back(info.transfer);
+    }
+    current_route.header.num_transfers = current_route.transfers.size();
+    TT_FATAL(current_route.header.num_transfers > 0, "Route should not have zero transfers");
+    output.routes.push_back(current_route);
+
+    return output;
+}
+
+std::tuple<
+    std::vector<std::vector<uint16_t>>,
+    std::vector<std::vector<uint16_t>>,
+    std::vector<std::vector<uint16_t>>,
+    std::vector<std::vector<uint16_t>>,
+    std::vector<std::vector<uint16_t>>>
+generate_halo_kernel_config_tensors(
     const std::vector<PixelMetadata>& tensor_metadata,
     const std::vector<ShardBoundary>& shard_boundaries,
     bool is_block_sharded,
@@ -360,8 +743,9 @@ std::vector<std::vector<std::vector<uint16_t>>> generate_halo_kernel_config_tens
         return device->worker_core_from_logical_core(core_coord);
     };
 
-    const uint16_t pad_local = 0xFFFF;
-    std::map<uint32_pair_t, std::vector<std::tuple<uint32_t, uint32_t, uint32_t>>> per_core_gather_data;
+    PerCoreGatherData
+        per_core_gather_data;  // This maps all routes (src_core->dst_core) onto a sequence of operations on the
+                               // input sticks that can be padding, local copy/transfer, or remote copy/transfer
 
     uint32_t num_cores_nhw = shard_boundaries.size();
 
@@ -372,10 +756,10 @@ std::vector<std::vector<std::vector<uint16_t>>> generate_halo_kernel_config_tens
             uint32_t dst_core_id = core_id;
             uint32_t local_idx = global_idx - input_start;
             auto [is_pad_stick, src_core_id, src_local_idx] = tensor_metadata[global_idx];
-            TT_ASSERT(local_idx < pad_local && src_local_idx < pad_local, "Index overflow");
+            TT_ASSERT(local_idx < PAD_LOCAL_SENTINAL && src_local_idx < PAD_LOCAL_SENTINAL, "Index overflow");
             if (is_pad_stick) {
                 TT_ASSERT(src_local_idx == 0);
-                src_core_id = pad_local;
+                src_core_id = PAD_LOCAL_SENTINAL;
             }
             if (per_core_gather_data.find({src_core_id, dst_core_id}) != per_core_gather_data.end()) {
                 auto& [src_start, dst_start, length] = per_core_gather_data[{src_core_id, dst_core_id}].back();
@@ -391,6 +775,14 @@ std::vector<std::vector<std::vector<uint16_t>>> generate_halo_kernel_config_tens
         ++core_id;
     }
 
+    const int block_size = 32;
+    const auto blocked_gather_data = reblock_per_core_gather_data(per_core_gather_data, block_size);
+
+    const auto blocking_configs = generate_blocking_configs(blocked_gather_data, num_cores_nhw);
+    const auto flattened_blocking_configs = flatten_blocking_config(blocking_configs, num_cores_nhw);
+
+    tt::log_info("gather data = {}", per_core_gather_data);
+
     // construct the config tensors
     /**
      * pad_config: length num_cores_nhw
@@ -402,7 +794,7 @@ std::vector<std::vector<std::vector<uint16_t>>> generate_halo_kernel_config_tens
      * dst_start0, length0, src_start1, dst_start1, length1, ...], (nocx, nocy, len) -> [src_start0, dst_start0,
      * length0, src_start1, dst_start1, length1, ...], ...}
      */
-    using uint32_triplet_t = std::tuple<uint32_t, uint32_t, uint32_t>;
+
     std::vector<std::vector<uint32_pair_t>> pad_config;
     std::vector<std::pair<uint32_triplet_t, std::vector<uint32_triplet_t>>> local_config;
     std::vector<std::vector<std::pair<uint32_triplet_t, std::vector<uint32_triplet_t>>>> remote_config;
@@ -410,9 +802,10 @@ std::vector<std::vector<std::vector<uint16_t>>> generate_halo_kernel_config_tens
     local_config.resize(num_cores_nhw);
     remote_config.resize(num_cores_nhw);
 
+    // Split off padding, local transfer, remote transfer operations into their own configs
     for (auto [src_dst, data] : per_core_gather_data) {
         auto [src_core_id, dst_core_id] = src_dst;
-        bool is_pad = src_core_id == pad_local;
+        bool is_pad = src_core_id == PAD_LOCAL_SENTINAL;
         bool is_local = src_core_id == dst_core_id;
         bool is_remote = !is_local && !is_pad;
         if (is_pad) {
@@ -434,131 +827,144 @@ std::vector<std::vector<std::vector<uint16_t>>> generate_halo_kernel_config_tens
         }
     }
 
-    // flatten and uniformize the lengths of each config list
-    auto flatten_pad_config = [](auto& config) -> std::vector<std::vector<std::vector<uint16_t>>> {
-        // Find max length for vector which is going to be processed on each core
-        size_t max_len = 0;
-        for (const auto& data : config) {
-            max_len = std::max(
-                max_len,
-                data.size() +
-                    4);  // For split reader, each vector size is ((2 * data.size()) / 2 + 2) and 2 for null plug.
+    validate_blocking_configs(blocking_configs, local_config, remote_config);
+
+    std::vector<GatherConfig> gather_configs(num_cores_nhw);
+    for (int core_id = 0; core_id < local_config.size(); core_id++) {
+        const auto& config = local_config[core_id];
+        const auto& [src_core_id, dst_core_id, num_copies] = config.first;
+        std::vector<GatherTransfer> transfers;
+        for (const auto& transfer : config.second) {
+            const uint16_t src_offset_id = std::get<0>(transfer);
+            const uint16_t dst_offset_id = std::get<1>(transfer);
+            const uint16_t size = std::get<2>(transfer);
+            transfers.emplace_back(src_offset_id, dst_offset_id, size);
         }
+        GatherHeader header{src_core_id, dst_core_id, transfers.size()};
+        gather_configs[core_id].routes.push_back(GatherRoute{header, transfers});
+    }
 
-        std::vector<std::vector<std::vector<uint16_t>>> flattened_config(2);
-        for (const auto& data : config) {
-            std::vector<std::vector<uint16_t>> flat_data(2, std::vector<uint16_t>(max_len, 0));
-            uint32_t idx1 = 0, idx2 = 0;
-            for (size_t i = 0; i < data.size(); ++i) {
-                auto [dst_start, length] = data[i];
-                if (i % 2 == 0) {
-                    flat_data[0][idx1++] = dst_start;
-                    flat_data[0][idx1++] = length;
-                } else {
-                    flat_data[1][idx2++] = dst_start;
-                    flat_data[1][idx2++] = length;
-                }
+    // std::vector<std::vector<std::pair<uint32_triplet_t, std::vector<uint32_triplet_t>>>> remote_config;
+    for (int core_id = 0; core_id < remote_config.size(); core_id++) {
+        for (const auto& destination : remote_config[core_id]) {
+            const auto& [src_core_id, dst_core_id, num_copies] = destination.first;
+            std::vector<GatherTransfer> transfers;
+            for (const auto& transfer : destination.second) {
+                const uint16_t src_offset_id = std::get<0>(transfer);
+                const uint16_t dst_offset_id = std::get<1>(transfer);
+                const uint16_t size = std::get<2>(transfer);
+                transfers.emplace_back(src_offset_id, dst_offset_id, size);
             }
+            GatherHeader header{src_core_id, dst_core_id, transfers.size()};
+            gather_configs[core_id].routes.push_back(GatherRoute{header, transfers});
+        }
+    }
 
-            flattened_config[0].emplace_back(std::move(flat_data[0]));
-            flattened_config[1].emplace_back(std::move(flat_data[1]));
+    std::vector<GatherConfig> ordered_gather_configs;
+    for (const auto& config : gather_configs) {
+        ordered_gather_configs.push_back(reorder_gather_config(config));
+    }
+
+    tt::log_info("gather config = {}", gather_configs);
+    tt::log_info("ordered gather config = {}", ordered_gather_configs);
+    const auto serialized_gather_configs = serialize_gather_configs(ordered_gather_configs);
+    tt::log_info("serialized gather config = {}", serialized_gather_configs);
+
+    // Need to sort based using input offsets so that they are grouped by location
+    // for (auto& config : gather_configs) {
+    // for (auto& route : config.routes) {
+    // std::sort(
+    // route.transfers.begin(), route.transfers.end(), [](const GatherTransfer& a, const GatherTransfer& b) {
+    // return a.src_id < b.src_id;
+    // });
+    // }
+    // }
+
+    // flatten and uniformize the lengths of each config list
+    auto flatten_pad_config = [](auto& config) -> std::vector<std::vector<uint16_t>> {
+        // find max length
+        size_t max_len = 0;
+        for (auto& data : config) {
+            max_len = std::max(max_len, 2 * data.size());  // each data is 2 * data.size()
+        }
+        std::vector<std::vector<uint16_t>> flattened_config;
+        for (auto& data : config) {
+            std::vector<uint16_t> flat_data(max_len, 0);
+            uint32_t idx = 0;
+            for (auto data_elem : data) {
+                auto [dst_start, length] = data_elem;
+                flat_data[idx++] = dst_start;
+                flat_data[idx++] = length;
+            }
+            // null plug
+            flat_data.emplace_back(0);
+            flat_data.emplace_back(0);
+            flattened_config.emplace_back(flat_data);
         }
         return flattened_config;
     };
 
-    auto flatten_local_config = [](auto& config) -> std::vector<std::vector<std::vector<uint16_t>>> {
-        // Find max length
+    auto flatten_local_config = [](auto& config) -> std::vector<std::vector<uint16_t>> {
+        // find max length
         size_t max_len = 0;
-        for (const auto& [_, data] : config) {
-            max_len = std::max(max_len, 3 * (data.size() / 2 + 1));  // For split reader, each vector is ( 3 *
-                                                                     // data.size() / 2 + 1).
+        for (auto& [_, data] : config) {
+            max_len = std::max(max_len, 3 * data.size());  // each key is 3, data is 3 * data.size()
         }
-        max_len += 6;  // account for the key tuple and null plug
-
-        std::vector<std::vector<std::vector<uint16_t>>> flattened_config(2);
-        for (const auto& [key, data] : config) {
+        max_len += 3;  // key tuple
+        std::vector<std::vector<uint16_t>> flattened_config;
+        for (auto& [key, data] : config) {
             auto [nocx, nocy, len] = key;
-            std::vector<std::vector<uint16_t>> flat_data(2, std::vector<uint16_t>(max_len, 0));
-            flat_data[0][0] = nocx;
-            flat_data[0][1] = nocy;
-            flat_data[1][0] = nocx;
-            flat_data[1][1] = nocy;
-
-            uint32_t idx1 = 3, idx2 = 3;
+            std::vector<uint16_t> flat_data(max_len, 0);
+            flat_data[0] = nocx;
+            flat_data[1] = nocy;
+            flat_data[2] = len;
+            uint32_t idx = 3;
             for (size_t i = 0; i < data.size(); ++i) {
                 auto [src_start, dst_start, length] = data[i];
-                if (i % 2 != 0) {
-                    flat_data[0][idx1++] = src_start;
-                    flat_data[0][idx1++] = dst_start;
-                    flat_data[0][idx1++] = length;
-                    flat_data[0][2] += 3;
-                } else {
-                    flat_data[1][idx2++] = src_start;
-                    flat_data[1][idx2++] = dst_start;
-                    flat_data[1][idx2++] = length;
-                    flat_data[1][2] += 3;
-                }
+                flat_data[idx++] = src_start;
+                flat_data[idx++] = dst_start;
+                flat_data[idx++] = length;
             }
-
-            flattened_config[0].emplace_back(std::move(flat_data[0]));
-            flattened_config[1].emplace_back(std::move(flat_data[1]));
+            // null plug
+            flat_data.emplace_back(0);
+            flat_data.emplace_back(0);
+            flat_data.emplace_back(0);
+            flattened_config.emplace_back(flat_data);
         }
         return flattened_config;
     };
 
-    auto flatten_remote_config = [](auto& config) -> std::vector<std::vector<std::vector<uint16_t>>> {
-        // Find max length
+    auto flatten_remote_config = [](auto& config) -> std::vector<std::vector<uint16_t>> {
+        // find max length
         size_t max_len = 0;
-        for (const auto& core_config : config) {
+        for (auto& core_config : config) {
             size_t curr_len = 0;
-            for (const auto& [key, subdata] : core_config) {
-                curr_len += 3 + (3 * (subdata.size() / 2 + 1));  // For split reader,  3 for source[nocx, nocy, length]
-                                                                 // and each vector is ( 3 * data.size() / 2 + 1).
+            for (auto& [key, subdata] : core_config) {
+                curr_len += 3 + 3 * subdata.size();  // each key is len 3
             }
-            max_len = std::max(max_len, curr_len);
+            max_len = std::max(max_len, curr_len);  // each key is 3, data is 3 * data.size()
         }
-        max_len += 3;  // account for null plug
-
-        std::vector<std::vector<std::vector<uint16_t>>> flattened_config(2);
-        for (const auto& core_config : config) {
-            std::vector<std::vector<uint16_t>> flat_data(2, std::vector<uint16_t>(max_len, 0));
-            uint32_t idx1 = 0, idx2 = 0;
-            uint32_t len_idx1 = 0, len_idx2 = 0;
-            uint32_t vector_id = 0;
-
-            for (const auto& [key, subdata] : core_config) {
-                auto [nocx, nocy, len] = key;
-                flat_data[0][idx1++] = nocx;
-                flat_data[0][idx1++] = nocy;
-                len_idx1 = idx1;
-                flat_data[0][idx1++] = 0;
-
-                flat_data[1][idx2++] = nocx;
-                flat_data[1][idx2++] = nocy;
-                len_idx2 = idx2;
-                flat_data[1][idx2++] = 0;
-
-                for (size_t i = 0; i < subdata.size(); ++i) {
-                    auto [src_start, dst_start, length] = subdata[i];
-                    if (vector_id) {
-                        flat_data[0][idx1++] = src_start;
-                        flat_data[0][idx1++] = dst_start;
-                        flat_data[0][idx1++] = length;
-                        flat_data[0][len_idx1] += 3;
-                    } else {
-                        flat_data[1][idx2++] = src_start;
-                        flat_data[1][idx2++] = dst_start;
-                        flat_data[1][idx2++] = length;
-                        flat_data[1][len_idx2] += 3;
-                    }
-                    vector_id = (vector_id + 1) % 2;
+        std::vector<std::vector<uint16_t>> flattened_config;
+        for (auto& core_config : config) {
+            std::vector<uint16_t> flat_data(max_len, 0);
+            uint32_t idx = 0;
+            for (auto& key_data : core_config) {
+                auto [nocx, nocy, len] = key_data.first;
+                flat_data[idx++] = nocx;
+                flat_data[idx++] = nocy;
+                flat_data[idx++] = len;
+                for (size_t i = 0; i < key_data.second.size(); ++i) {
+                    auto [src_start, dst_start, length] = key_data.second[i];
+                    flat_data[idx++] = src_start;
+                    flat_data[idx++] = dst_start;
+                    flat_data[idx++] = length;
                 }
-                idx1 = flat_data[0][len_idx1] ? idx1 : idx1 - 3;
-                idx2 = flat_data[1][len_idx2] ? idx2 : idx2 - 3;
             }
-
-            flattened_config[0].emplace_back(std::move(flat_data[0]));
-            flattened_config[1].emplace_back(std::move(flat_data[1]));
+            // null plug
+            flat_data.emplace_back(0);
+            flat_data.emplace_back(0);
+            flat_data.emplace_back(0);
+            flattened_config.emplace_back(flat_data);
         }
         return flattened_config;
     };
@@ -586,20 +992,18 @@ std::vector<std::vector<std::vector<uint16_t>>> generate_halo_kernel_config_tens
         }
     };
 
-    align_config(flattened_pad_config[0], 2);
-    align_config(flattened_pad_config[1], 2);
-    align_config(flattened_local_config[0], 2);
-    align_config(flattened_local_config[1], 2);
-    align_config(flattened_remote_config[0], 2);
-    align_config(flattened_remote_config[1], 2);
+    tt::log_info("flattened local config = {} ", flattened_local_config);
 
-    return {
-        flattened_pad_config[0],
-        flattened_pad_config[1],
-        flattened_local_config[0],
-        flattened_local_config[1],
-        flattened_remote_config[0],
-        flattened_remote_config[1]};
+    align_config(flattened_pad_config, 2);
+    align_config(flattened_local_config, 2);
+    align_config(flattened_remote_config, 2);
+
+    return std::make_tuple(
+        flattened_pad_config,
+        serialized_gather_configs,
+        flattened_remote_config,
+        flattened_blocking_configs.local,
+        flattened_blocking_configs.remote);
 }
 
 std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
