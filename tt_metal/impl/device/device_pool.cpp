@@ -317,15 +317,26 @@ void DevicePool::initialize_active_devices() const {
         }
 
         auto tunnels_from_mmio = tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_device_id);
+
+        // 1. Generate static args
         populate_cq_static_args(dev);
+        for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
+            // Need to create devices from farthest to the closest.
+            for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0; ts--) {
+                uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
+                auto device = get_device(mmio_controlled_device_id);
+                populate_cq_static_args(device);
+            }
+        }
+
+        // 2. Init / compile programs
         dev->init_command_queue_device();
-        if (not this->skip_remote_devices) {
-            for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
-                // Need to create devices from farthest to the closest.
-                for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0; ts--) {
-                    uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
-                    auto device = get_device(mmio_controlled_device_id);
-                    populate_cq_static_args(device);
+        for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
+            // Need to create devices from farthest to the closest.
+            for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0; ts--) {
+                uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
+                auto device = get_device(mmio_controlled_device_id);
+                if (not this->skip_remote_devices) {
                     device->init_command_queue_device();
                 }
             }
