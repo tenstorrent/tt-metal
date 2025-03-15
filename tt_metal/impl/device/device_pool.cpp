@@ -272,7 +272,7 @@ void DevicePool::initialize_host(IDevice* dev) const {
         TT_ASSERT(dev->num_hw_cqs() == 1, "num_hw_cqs must be 1 in slow dispatch");
     }
 
-    ClearNocData(dev);
+    ClearNocData(dev->id());
     DprintServerAttach(dev);
     watcher_init(dev);
 
