@@ -150,7 +150,7 @@ void DispatchMemMap::reset(const CoreType& core_type, const uint32_t num_hw_cqs)
             device_cq_addr_sizes_[dev_addr_idx] = settings.dispatch_s_sync_sem_;
         } else if (dev_addr_type == CommandQueueDeviceAddrType::FABRIC_INTERFACE) {
             if (llrt::RunTimeOptions::get_instance().get_fd_fabric()) {
-                device_cq_addr_sizes_[dev_addr_idx] = tt_fabric::PACKET_HEADER_SIZE_BYTES;
+                device_cq_addr_sizes_[dev_addr_idx] = tt_fabric::CLIENT_INTERFACE_SIZE;
             } else {
                 device_cq_addr_sizes_[dev_addr_idx] = 0;
             }
