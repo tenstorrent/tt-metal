@@ -8,6 +8,8 @@
 #include "ttnn/operations/ccl/all_gather/all_gather.hpp"
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/cpp/ttnn/operations/copy.hpp"
 #include <cstdint>
 
 namespace ttnn {
@@ -282,7 +284,27 @@ Tensor all_reduce(
             TT_FATAL(input_tensors.size() >= 1, "All reduce op expects an input tensor but it received none");
             bool is_linear = topology == ttnn::ccl::Topology::Linear;
 
-            const auto& input_tensor = input_tensors.at(0);
+            auto input_tensor = input_tensors.at(0);
+
+            ttnn::SmallVector<uint32_t> unpad_elements = {
+                input_tensor.get_logical_shape()[-4],
+                input_tensor.get_logical_shape()[-3],
+                input_tensor.get_logical_shape()[-2],
+                input_tensor.get_logical_shape()[-1]};
+            bool needs_padding = input_tensor.get_layout() == Layout::TILE &&
+                                 (input_tensor.get_logical_shape()[-2] % tt::constants::TILE_HEIGHT != 0 ||
+                                  input_tensor.get_logical_shape()[-1] % tt::constants::TILE_WIDTH != 0);
+            if (needs_padding) {
+                ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding = {{0, 0}, {0, 0}, {0, 0}, {0, 0}};
+                DataType original_dtype = input_tensor.get_dtype();
+                if (input_tensor.get_dtype() != DataType::BFLOAT16 && input_tensor.get_dtype() != DataType::FLOAT32) {
+                    input_tensor = ttnn::typecast(input_tensor, DataType::BFLOAT16);
+                }
+                input_tensor = ttnn::pad(0, input_tensor, padding, 0, false, std::nullopt);
+                if (original_dtype != input_tensor.get_dtype()) {
+                    input_tensor = ttnn::typecast(input_tensor, original_dtype);
+                }
+            }
 
             // Choose the appropriate strategy
             AllReduceStrategy strategy = choose_all_reduce_strategy(input_tensor, num_devices, num_links, topology);
@@ -300,7 +322,11 @@ Tensor all_reduce(
                 devices,
                 topology);
 
-            return {result};
+            if (needs_padding) {
+                return ttnn::ccl::unpad_all_reduce_output_tensor({result}, unpad_elements);
+            } else {
+                return {result};
+            }
         },
         {input_tensor},
         output_tensors);
