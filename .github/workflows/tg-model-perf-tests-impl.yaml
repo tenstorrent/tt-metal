@@ -23,13 +23,15 @@ jobs:
             runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "bare-metal", "pipeline-perf"],
             cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type cnn_model_perf_tg_device --dispatch-mode ""'
           },
-          { name: "TG CCL perf tests",
+          {
+            name: "Llama TG Perf Unit Tests",
             arch: wormhole_b0,
-            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type ccl_perf_tg_device --dispatch-mode ""',
+            cmd: 'pytest models/demos/llama3_subdevices/tests/tg_perf_unit_tests',
             timeout: 75,
             tracy: true,
             runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "bare-metal", "pipeline-perf"],
-            owner_id: ULMEPM2MA}, # Sean Nijjar
+            owner_id: U071CKL4AFK # Ammar Vora
+          }
         ]
     name: ${{ matrix.test-group.name }}
     env:
@@ -61,9 +63,24 @@ jobs:
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           ${{ matrix.test-group.cmd }}
+      - name: Save environment data
+        if: ${{ (matrix.test-group.name == 'Llama TG Perf Unit Tests') && !cancelled() }}
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          source ${{ github.workspace }}/python_env/bin/activate
+          python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+      - name: Upload benchmark data
+        if: ${{ (matrix.test-group.name == 'Llama TG Perf Unit Tests') && !cancelled() }}
+        uses: ./.github/actions/upload-data-via-sftp
+        with:
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
+          username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
       - name: Check perf report exists
         id: check-perf-report
-        if: ${{ !cancelled() }}
+        if: ${{ !(matrix.test-group.name == 'Llama TG Perf Unit Tests') && !cancelled() }}
         run: |
           TODAY=$(date +%Y_%m_%d)
           PERF_REPORT_FILENAME_MODELS="Models_Perf_${TODAY}.csv"

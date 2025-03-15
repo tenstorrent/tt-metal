@@ -66,7 +66,7 @@ static std::ostream& operator<<(std::ostream& os, const CoreGrid& core_grid) {
 using tt::tt_metal::GlobalSemaphore;
 using tt::tt_metal::SubDevice;
 using tt::tt_metal::SubDeviceManagerId;
-using tt::tt_metal::v1::experimental::GlobalCircularBuffer;
+using tt::tt_metal::experimental::GlobalCircularBuffer;
 
 }  // namespace types
 

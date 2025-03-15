@@ -4,9 +4,9 @@
 
 #include "dataflow_api.h"
 #include <tt-metalium/buffer_constants.hpp>
-#include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
-#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
+#include <tt-metalium/fabric_edm_packet_header.hpp>
 #include <cstdint>
 #include <utility>
 
@@ -20,8 +20,10 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
     const auto [dest_noc_xy, dest_addr] = get_noc_address_components(noc0_dest_noc_addr);
     const size_t payload_l1_address = l1_read_addr;
 
-    pkt_hdr_forward->to_noc_unicast_write(tt::fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, payload_size_bytes);
-    pkt_hdr_backward->to_noc_unicast_write(tt::fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, payload_size_bytes);
+    pkt_hdr_forward->to_noc_unicast_write(
+        tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, payload_size_bytes);
+    pkt_hdr_backward->to_noc_unicast_write(
+        tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, payload_size_bytes);
 
     noc_async_write(payload_l1_address, safe_get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr), payload_size_bytes);
     if (fabric_connection.has_forward_connection()) {

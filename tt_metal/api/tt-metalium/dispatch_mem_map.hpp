@@ -68,7 +68,14 @@ public:
 
     uint32_t get_host_command_queue_addr(const CommandQueueHostAddrType& host_addr) const;
 
-    uint32_t get_dispatch_message_offset(uint32_t index) const;
+    uint32_t get_sync_offset(uint32_t index) const;
+
+    uint32_t get_dispatch_message_addr_start() const;
+
+    uint32_t get_dispatch_stream_index(uint32_t index) const;
+
+    // Offset to be passed in the go message.
+    uint8_t get_dispatch_message_update_offset(uint32_t index) const;
 
 private:
     DispatchMemMap() = default;

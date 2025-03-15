@@ -16,7 +16,7 @@
 // #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"  // for reduce_op_utils
 
-#include <tt-metalium/reflection.hpp>
+#include <tt_stl/reflection.hpp>
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"

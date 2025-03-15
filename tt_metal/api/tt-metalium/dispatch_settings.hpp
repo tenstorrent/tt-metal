@@ -149,7 +149,6 @@ public:
     uint32_t prefetch_q_rd_ptr_size_{0};    // configured with alignment
     uint32_t prefetch_q_pcie_rd_ptr_size_;  // configured with alignment
     uint32_t dispatch_s_sync_sem_;          // configured with alignment
-    uint32_t dispatch_message_;             // configured with alignment
     uint32_t other_ptrs_size;               // configured with alignment
 
     // cq_prefetch

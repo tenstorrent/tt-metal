@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <build.hpp>
+#include "build.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -160,6 +160,13 @@ void JitBuildEnv::init(
         } else {
             this->defines_ += "-DPROFILE_KERNEL=1 ";
         }
+    }
+    if (tt::llrt::RunTimeOptions::get_instance().get_profiler_noc_events_enabled()) {
+        // force profiler on if noc events are being profiled
+        if (not tt::tt_metal::getDeviceProfilerState()) {
+            this->defines_ += "-DPROFILE_KERNEL=1 ";
+        }
+        this->defines_ += "-DPROFILE_NOC_EVENTS=1 ";
     }
 
     if (tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {

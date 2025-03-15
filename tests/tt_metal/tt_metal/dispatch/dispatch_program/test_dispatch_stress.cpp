@@ -6,6 +6,7 @@
 #include "gtest/gtest.h"
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
 
 namespace tt::tt_metal {

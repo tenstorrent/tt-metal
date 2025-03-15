@@ -5,7 +5,8 @@
 #include "ethernet/dataflow_api.h"
 #include "tt_metal/hw/inc/ethernet/dataflow_api.h"
 #include <array>
-#include "cpp/ttnn/operations/ccl/kernels/edm/edm_handshake.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/edm_handshake.hpp"
+
 #define MIN_WAIT 100000
 
 FORCE_INLINE void perform_rs_loop(uint64_t channel_sem_addr, volatile eth_channel_sync_t* eth_channel_syncs) {

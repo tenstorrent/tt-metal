@@ -5,7 +5,7 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 
-#include "tt_metal/tt_stl/indestructible.hpp"
+#include <tt_stl/indestructible.hpp>
 
 namespace tt::stl {
 namespace {

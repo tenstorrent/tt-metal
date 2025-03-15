@@ -12,12 +12,10 @@
 
 namespace tt {
 namespace tt_metal {
-inline namespace v0 {
 
 // Forward declarations
 class IDevice;
 
-}  // namespace v0
 }  // namespace tt_metal
 }  // namespace tt
 

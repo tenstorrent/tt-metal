@@ -4,10 +4,13 @@
 
 #pragma once
 
+#include <tt-metalium/fabric_edm_types.hpp>
+
 namespace ttnn {
 namespace ccl {
 
-enum Topology { Ring = 0, Linear = 1, Mesh = 2 };
+// TODO: Remove
+using tt::tt_fabric::Topology;
 
 };  // namespace ccl
 };  // namespace ttnn

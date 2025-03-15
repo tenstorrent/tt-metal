@@ -7,12 +7,15 @@
 
 #include <hal.hpp>
 #include <host_api.hpp>
+#include <dispatch_core_common.hpp>
+#include <core_descriptor.hpp>
 
 #include <profiler.hpp>
 #include "hostdevcommon/profiler_common.h"
 
 #include <tt_metal.hpp>
 
+#include "tracy/Tracy.hpp"
 #include "tracy/TracyTTDevice.hpp"
 #include <device.hpp>
 #include <device_pool.hpp>
@@ -25,7 +28,6 @@
 namespace tt {
 
 namespace tt_metal {
-inline namespace v0 {
 
 void DumpDeviceProfileResults(IDevice* device, const Program& program) {
 #if defined(TRACY_ENABLE)
@@ -50,8 +52,6 @@ void DumpDeviceProfileResults(IDevice* device, const Program& program) {
     detail::DumpDeviceProfileResults(device, cores_in_program);
 #endif
 }
-
-}  // namespace v0
 
 namespace detail {
 
@@ -625,13 +625,13 @@ void InitDeviceProfiler(IDevice* device) {
 #endif
 }
 
-void DumpDeviceProfileResults(IDevice* device, ProfilerDumpState state) {
+void DumpDeviceProfileResults(IDevice* device, ProfilerDumpState state, const std::optional<ProfilerOptionalMetadata>& metadata) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
     std::vector<CoreCoord> workerCores;
     auto device_id = device->id();
     auto device_num_hw_cqs = device->num_hw_cqs();
-    const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(device_id);
+    const auto& dispatch_core_config = get_dispatch_core_config();
     for (const CoreCoord& core : tt::get_logical_compute_cores(device_id, device_num_hw_cqs, dispatch_core_config)) {
         const CoreCoord curr_core = device->worker_core_from_logical_core(core);
         workerCores.push_back(curr_core);
@@ -640,8 +640,8 @@ void DumpDeviceProfileResults(IDevice* device, ProfilerDumpState state) {
         auto virtualCore = device->virtual_core_from_logical_core(core, CoreType::ETH);
         workerCores.push_back(virtualCore);
     }
-    device->push_work([device, workerCores, state]() mutable {
-        DumpDeviceProfileResults(device, workerCores, state);
+    device->push_work([device, workerCores, state, metadata]() mutable {
+        DumpDeviceProfileResults(device, workerCores, state, metadata);
         if (deviceDeviceTimePair.find(device->id()) != deviceDeviceTimePair.end() and
             state == ProfilerDumpState::CLOSE_DEVICE_SYNC) {
             for (auto& connected_device : deviceDeviceTimePair.at(device->id())) {
@@ -654,13 +654,13 @@ void DumpDeviceProfileResults(IDevice* device, ProfilerDumpState state) {
 #endif
 }
 
-void DumpDeviceProfileResults(IDevice* device, std::vector<CoreCoord>& worker_cores, ProfilerDumpState state) {
+void DumpDeviceProfileResults(IDevice* device, std::vector<CoreCoord>& worker_cores, ProfilerDumpState state, const std::optional<ProfilerOptionalMetadata>& metadata) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
     std::string name = fmt::format("Device Dump {}", device->id());
     ZoneName(name.c_str(), name.size());
     std::scoped_lock<std::mutex> lock(device_mutex);
-    const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(device->id());
+    const auto& dispatch_core_config = get_dispatch_core_config();
     auto dispatch_core_type = dispatch_core_config.get_core_type();
     if (tt::llrt::RunTimeOptions::get_instance().get_profiler_do_dispatch_cores()) {
         auto device_id = device->id();
@@ -740,7 +740,7 @@ void DumpDeviceProfileResults(IDevice* device, std::vector<CoreCoord>& worker_co
                 }
             }
             tt_metal_device_profiler_map.at(device_id).setDeviceArchitecture(device->arch());
-            tt_metal_device_profiler_map.at(device_id).dumpResults(device, worker_cores, state);
+            tt_metal_device_profiler_map.at(device_id).dumpResults(device, worker_cores, state, metadata);
 
             if (state == ProfilerDumpState::LAST_CLOSE_DEVICE) {
                 // Process is ending, no more device dumps are coming, reset your ref on the buffer so deallocate is the
