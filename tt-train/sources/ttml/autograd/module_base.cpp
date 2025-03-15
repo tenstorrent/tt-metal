@@ -78,6 +78,9 @@ serialization::NamedParameters ModuleBase::parameters() const {
 
         for (const auto& [module_name, next_module_ptr] : module_ptr->m_named_modules) {
             const auto module_name_with_prefix = name_prefix + module_name;
+            if (next_module_ptr == nullptr) {
+                throw std::runtime_error(fmt::format("Module {} is uninitialized.", module_name_with_prefix));
+            }
             if (!modules_in_queue.contains(module_name_with_prefix)) {
                 modules_to_process.emplace(next_module_ptr.get(), name_prefix + module_name + "/");
                 modules_in_queue.insert(module_name_with_prefix);

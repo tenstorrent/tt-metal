@@ -4,76 +4,15 @@
 
 #include "gpt2.hpp"
 
-#include "autograd/graph_utils.hpp"
 #include "autograd/tensor.hpp"
-#include "core/scoped.hpp"
-#include "init/tensor_initializers.hpp"
+#include "models/common/transformer_common.hpp"
 #include "modules/embedding_module.hpp"
 #include "modules/gpt_block.hpp"
 #include "modules/layer_norm_module.hpp"
 #include "modules/positional_embeddings.hpp"
 #include "ops/unary_ops.hpp"
+
 namespace ttml::models::gpt2 {
-
-namespace {
-
-autograd::TensorPtr memory_efficient_runner(
-    auto&& forward_impl, const autograd::TensorPtr& input, const autograd::TensorPtr& mask) {
-    if (autograd::ctx().get_gradient_mode() == autograd::GradMode::DISABLED) {
-        return forward_impl(input, mask);
-    }
-
-    // make a copy of a generator before running forward pass
-    auto generator = autograd::ctx().get_generator();
-
-    // running forward pass
-    autograd::TensorPtr out;
-    {
-        auto scoped = ttml::core::Scoped(
-            []() { autograd::ctx().set_gradient_mode(autograd::GradMode::DISABLED); },
-            []() { autograd::ctx().set_gradient_mode(autograd::GradMode::ENABLED); });
-        out = forward_impl(input, mask);
-    }
-
-    // define grad function and copy generator (in the state before forward pass)
-    autograd::GradFunction grad = [input, mask, out, &forward_impl, generator]() {
-        // detach input from existing graph
-        auto input_detached = autograd::create_tensor(input->get_value());
-        // run forward pass again
-        autograd::TensorPtr output;
-        {
-            // set generator to the state before forward pass during construction
-            // restore generator state after grad function is executed
-            auto scoped = ttml::core::Scoped(
-                [&generator]() { autograd::ctx().set_generator(generator); },
-                [generator = autograd::ctx().get_generator()]() { autograd::ctx().set_generator(generator); });
-            output = forward_impl(input_detached, mask);
-        }
-        // use gradients from new output
-        output->set_grad(out->get_grad());
-        output->backward();
-        // reuse gradients from detached input
-        input->add_grad(input_detached->get_grad());
-    };
-
-    auto links = autograd::get_links(input);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
-    return out;
-}
-
-void weights_initialization(Transformer& model) {
-    auto params = model.parameters();
-    for (auto& [name, tensor_ptr] : params) {
-        const auto& tensor = tensor_ptr->get_value();
-        if (name.find("weight") != std::string::npos) {
-            init::normal_init(tensor_ptr, tensor.get_logical_shape(), {0.F, 0.02F});
-        } else if (name.find("bias") != std::string::npos) {
-            init::constant_init(tensor_ptr, tensor.get_logical_shape(), 0.F);
-        }
-    }
-}
-
-}  // namespace
 
 Transformer::Transformer(const TransformerConfig& config) {
     uint32_t vocab_size = config.vocab_size;
@@ -157,7 +96,7 @@ Transformer::Transformer(const TransformerConfig& config) {
     register_module(ln_fc, "ln_fc");
     register_module(fc, "fc");
 
-    weights_initialization(*this);
+    common::transformer::weights_initialization(*this);
 }
 
 ttml::autograd::TensorPtr Transformer::operator()(
@@ -166,7 +105,7 @@ ttml::autograd::TensorPtr Transformer::operator()(
     auto out = (*pos_emb)(tok_emb_out);
     for (auto& block : blocks) {
         if (runner_type == RunnerType::MemoryEfficient) {
-            out = memory_efficient_runner(*block, out, mask);
+            out = common::transformer::memory_efficient_runner(*block, out, mask);
         } else if (runner_type == RunnerType::Default) {
             out = (*block)(out, mask);
         } else {
@@ -177,18 +116,6 @@ ttml::autograd::TensorPtr Transformer::operator()(
     auto logits = (*fc)(out);
     auto log_softmax = ttml::ops::log_softmax_moreh(logits, 3);
     return log_softmax;
-}
-
-RunnerType read_runner_type(const YAML::Node& config) {
-    auto runner_type_str = config["runner_type"].as<std::string>("default");
-    if (runner_type_str == "default") {
-        return RunnerType::Default;
-    } else if (runner_type_str == "memory_efficient") {
-        return RunnerType::MemoryEfficient;
-    } else {
-        throw std::runtime_error(fmt::format(
-            "Unknown runner type: {}. Supported runner types [default, memory_efficient]", runner_type_str));
-    }
 }
 
 PositionalEmbeddingType read_positional_embedding_type(const YAML::Node& config) {
@@ -204,18 +131,6 @@ PositionalEmbeddingType read_positional_embedding_type(const YAML::Node& config)
     }
 }
 
-WeightTyingType read_weight_tying_type(const YAML::Node& config) {
-    auto weight_tying_str = config["weight_tying"].as<std::string>("disabled");
-    if (weight_tying_str == "disabled") {
-        return WeightTyingType::Disabled;
-    } else if (weight_tying_str == "enabled") {
-        return WeightTyingType::Enabled;
-    } else {
-        throw std::runtime_error(fmt::format(
-            "Unknown weight tying type: {}. Supported weight tying types [disabled, enabled]", weight_tying_str));
-    }
-}
-
 TransformerConfig read_config(const YAML::Node& config) {
     TransformerConfig transformer_config;
     transformer_config.num_heads = config["num_heads"].as<uint32_t>();
@@ -225,8 +140,8 @@ TransformerConfig read_config(const YAML::Node& config) {
     transformer_config.vocab_size = config["vocab_size"].as<uint32_t>();
     transformer_config.max_sequence_length = config["max_sequence_length"].as<uint32_t>();
     transformer_config.positional_embedding_type = read_positional_embedding_type(config);
-    transformer_config.runner_type = read_runner_type(config);
-    transformer_config.weight_tying = read_weight_tying_type(config);
+    transformer_config.runner_type = common::transformer::read_runner_type(config);
+    transformer_config.weight_tying = common::transformer::read_weight_tying_type(config);
 
     if (auto experimental_config = config["experimental"]) {
         transformer_config.experimental.use_composite_layernorm =
