@@ -29,6 +29,20 @@ void kernel_main() {
     constexpr uint32_t block_w = get_compile_time_arg_val(12);
     constexpr uint32_t block_hw = get_compile_time_arg_val(13);
 
+    constexpr uint32_t num_cols_per_group = get_compile_time_arg_val(14);
+
+    constexpr uint32_t block_w_last = get_compile_time_arg_val(15);
+    constexpr uint32_t GROUP_SIZE_IS_POWER_OF_2 = get_compile_time_arg_val(16);
+    constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_compile_time_arg_val(17);
+    constexpr uint32_t group_row_offset = get_compile_time_arg_val(18);
+
+    constexpr uint32_t block_w_minus_one = block_w - 1;
+    constexpr uint32_t block_w_minus_two = block_w - 2;
+    constexpr uint32_t TILE_WIDTH = 32;
+    constexpr uint32_t tile_w_minux_group_size = TILE_WIDTH - num_cols_per_group;
+    uint32_t row_offset = num_cols_per_group;
+    uint32_t index_g_offset = 0;
+
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t start_id = get_arg_val<uint32_t>(1);
     uint32_t num_channels_tiles = get_arg_val<uint32_t>(2);
@@ -196,6 +210,7 @@ void kernel_main() {
     uint32_t num_out_blocks = block_h / out_block_h;
 
     if constexpr (num_mcast_cores > 1) {
+        index_g_offset = 0;
         for (uint32_t m = 0; m < num_batch_group; ++m) {
             for (uint32_t n = 0; n < 3; ++n) {
                 uint32_t out_block_start_id_offset = 0;
@@ -209,17 +224,12 @@ void kernel_main() {
                     const InterleavedAddrGenFast<src0_is_dram> src_a = {
                         .bank_base_address = src_addr, .page_size = src0_tile_bytes, .data_format = src0_data_format};
                     uint32_t l1_write_addr;
-                    if (n == 0) {
-                        l1_write_addr = get_write_ptr(cb_in0);
-                        cb_reserve_back(cb_in0, out_block_hw);
-                    } else if (n == 1 || n == 2) {
-                        l1_write_addr = get_write_ptr(cb_x);
-                        cb_reserve_back(cb_x, out_block_hw);
-                    }
+                    l1_write_addr = get_write_ptr(cb_in0);
+                    cb_reserve_back(cb_in0, out_block_hw);
                     for (uint32_t mt = 0; mt < out_block_h; mt++) {
                         for (uint32_t nt = 0; nt < block_w; nt++) {
                             noc_async_read_tile(
-                                start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt,
+                                start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt + index_g_offset,
                                 src_a,
                                 l1_write_addr);
                             l1_write_addr += src0_tile_bytes;
@@ -227,11 +237,8 @@ void kernel_main() {
                         }
                     }
                     out_block_start_id_offset += block_h * num_channels_tiles;
-                    if (n == 0) {
-                        cb_push_back(cb_in0, out_block_hw);
-                    } else if (n == 1 || n == 2) {
-                        cb_push_back(cb_x, out_block_hw);
-                    }
+                    cb_push_back(cb_in0, out_block_hw);
+
 #endif
                     if (n == 0 || n == 1) {
                         // wait for local data ready
@@ -337,6 +344,37 @@ void kernel_main() {
                     }
                     noc_async_write_barrier();
                     cb_pop_front(cb_mcast, 1);
+                }
+            }
+
+            if constexpr (GROUP_SIZE_IS_POWER_OF_2) {
+                if (row_offset == TILE_WIDTH) {
+                    index_g_offset += block_w;
+                    row_offset = num_cols_per_group;
+
+                } else {
+                    index_g_offset += block_w_minus_one;
+                    row_offset += num_cols_per_group;
+                }
+            } else if constexpr (GROUP_SIZE_SMALLER_THAN_TILE_W) {
+                if (row_offset == TILE_WIDTH) {
+                    index_g_offset += block_w_minus_one;
+                    row_offset = num_cols_per_group;
+
+                } else if (row_offset > TILE_WIDTH) {
+                    index_g_offset += block_w_minus_one;
+                    row_offset = row_offset + group_row_offset;
+
+                } else {
+                    row_offset += num_cols_per_group;
+                }
+            } else {
+                if (row_offset > TILE_WIDTH) {
+                    index_g_offset += block_w_minus_one;
+                    row_offset = row_offset - tile_w_minux_group_size;
+                } else {
+                    row_offset += num_cols_per_group;
+                    index_g_offset += block_w_minus_two;
                 }
             }
         }
