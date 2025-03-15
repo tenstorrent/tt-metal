@@ -44,7 +44,8 @@ Tensor Pool2DOp<pool_type>::invoke(
     std::array<uint32_t, 2> dilation,
     const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme,
-    bool ceil_mode) {
+    bool ceil_mode,
+    bool in_place_halo) {
     sliding_window::SlidingWindowConfig sliding_window_config{
             .batch_size = batch_size,
             .input_hw = {input_h, input_w},
@@ -140,7 +141,8 @@ Tensor Pool2DOp<pool_type>::invoke(
         parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
         0,
         input_tensor_sharded.memory_config(),
-        is_out_tiled);
+        is_out_tiled,
+        in_place_halo);
 
     auto output_tensor = ttnn::prim::pool2d(
         queue_id,
