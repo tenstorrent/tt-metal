@@ -39,14 +39,12 @@ MeshDeviceID generate_unique_mesh_id() {
     return next_id++;
 }
 
-std::shared_ptr<ThreadPool> create_default_thread_pool(
-    const std::vector<IDevice*>& physical_devices, uint32_t logical_cpu_offset = 0) {
+std::shared_ptr<ThreadPool> create_default_thread_pool(const std::vector<IDevice*>& physical_devices) {
     // Bind the thread-pool to the physical devices being used.
-    std::cout << "Create thread pool" << std::endl;
     if (tt::parse_env("TT_MESH_BOOST_THREAD_POOL", false)) {
         return create_boost_thread_pool(physical_devices.size());
     } else {
-        return create_device_bound_thread_pool(physical_devices, logical_cpu_offset);
+        return create_device_bound_thread_pool(physical_devices);
     }
 }
 
@@ -155,8 +153,7 @@ MeshDevice::MeshDevice(
     parent_mesh_(std::move(parent_mesh)),
     program_cache_(std::make_unique<program_cache::detail::ProgramCache>()),
     dispatch_thread_pool_(create_default_thread_pool(scoped_devices_->root_devices())),
-    reader_thread_pool_(
-        create_default_thread_pool(scoped_devices_->root_devices(), 16 /*view_->shape().mesh_size()*/)) {}
+    reader_thread_pool_(create_default_thread_pool(scoped_devices_->root_devices())) {}
 
 std::shared_ptr<MeshDevice> MeshDevice::create(
     const MeshDeviceConfig& config,

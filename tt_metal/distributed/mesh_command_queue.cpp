@@ -475,9 +475,7 @@ void MeshCommandQueue::enqueue_write_shards(
     bool blocking) {
     // TODO: #17215 - this API is used by TTNN, as it currently implements rich ND sharding API for multi-devices.
     // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
-    ZoneScopedN("EnqueueWriteShards");
     auto dispatch_lambda = [&shard_data_transfers, &buffer, this](uint32_t shard_idx) {
-        ZoneScopedN("WriteShard");
         auto& shard_data_transfer = shard_data_transfers[shard_idx];
         auto device_shard_view = buffer->get_device_buffer(shard_data_transfer.shard_coord);
         this->write_shard_to_device(
@@ -524,7 +522,6 @@ void MeshCommandQueue::enqueue_read_shards(
     bool blocking) {
     // TODO: #17215 - this API is used by TTNN, as it currently implements rich ND sharding API for multi-devices.
     // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
-    ZoneScopedN("EnqueueReadShards");
     std::unordered_map<IDevice*, uint32_t> num_txns_per_device = {};
     for (const auto& shard_data_transfer : shard_data_transfers) {
         auto device_shard_view = buffer->get_device_buffer(shard_data_transfer.shard_coord);
@@ -572,13 +569,11 @@ MeshEvent MeshCommandQueue::enqueue_record_event_helper(
 
 MeshEvent MeshCommandQueue::enqueue_record_event(
     tt::stl::Span<const SubDeviceId> sub_device_ids, const std::optional<MeshCoordinateRange>& device_range) {
-    ZoneScopedN("RecordEvent");
     return this->enqueue_record_event_helper(sub_device_ids, /*notify_host=*/false, device_range);
 }
 
 MeshEvent MeshCommandQueue::enqueue_record_event_to_host(
     tt::stl::Span<const SubDeviceId> sub_device_ids, const std::optional<MeshCoordinateRange>& device_range) {
-    ZoneScopedN("RecordEventToHost");
     auto event = this->enqueue_record_event_helper(sub_device_ids, /*notify_host=*/true, device_range);
     completion_queue_reads_.push(std::make_shared<MeshCompletionReaderVariant>(
         std::in_place_type<MeshReadEventDescriptor>, ReadEventDescriptor(event.id()), event.device_range()));
@@ -587,7 +582,6 @@ MeshEvent MeshCommandQueue::enqueue_record_event_to_host(
 }
 
 void MeshCommandQueue::enqueue_wait_for_event(const MeshEvent& sync_event) {
-    ZoneScopedN("WaitForEvent");
     TT_FATAL(!trace_id_.has_value(), "Event Synchronization is not supported during trace capture.");
     for (const auto& coord : sync_event.device_range()) {
         event_dispatch::issue_wait_for_event_commands(
@@ -661,7 +655,6 @@ void MeshCommandQueue::copy_buffer_data_to_user_space(MeshBufferReadDescriptor& 
         for (auto& metadata : read_buffer_descriptor.num_reads_per_dev) {
             reader_thread_pool_->enqueue(
                 [&reader_lambda, device = metadata.first, num_reads = metadata.second]() {
-                    ZoneScopedN("ReadCQData");
                     reader_lambda(device, num_reads);
                 },
                 metadata.first->id());
@@ -802,7 +795,6 @@ void MeshCommandQueue::capture_go_signal_trace_on_unused_subgrids(
 }
 
 void MeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blocking) {
-    ZoneScopedN("EnqueueTrace");
     auto trace_inst = mesh_device_->get_mesh_trace(trace_id);
     auto descriptor = trace_inst->desc;
     auto buffer = trace_inst->mesh_buffer;

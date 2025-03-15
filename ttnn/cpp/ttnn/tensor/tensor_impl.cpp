@@ -575,51 +575,47 @@ Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking, ttnn::QueueId cq
     const auto& mesh_buffer = storage.mesh_buffer;
     ttnn::MeshDevice* device = mesh_buffer->device();
     distributed::MeshCommandQueue& mesh_cq = device->mesh_command_queue(*cq_id);
-    const auto num_buffers = storage.specs.size();
+    const auto num_buffers = device->num_devices();
 
     // Initialize vector of host buffers that data will be read into
-    std::vector<OwnedBuffer> buffers;
+    std::vector<OwnedBuffer> buffers(num_buffers);
     std::vector<distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfers;
     std::vector<TensorSpec> specs;
-    buffers.reserve(num_buffers);
     specs.reserve(num_buffers);
     shard_data_transfers.reserve(num_buffers);
 
-    // Mutex guarding the list of buffers that allocated host memory will be inserted into
+    // Mutex guarding the vector of buffers that allocated host memory will be inserted into
     std::mutex buffers_mutex;
-    // Buffer index for current shard
-    uint32_t buffer_idx = 0;
-    for (const auto& [coord, shard_tensor_spec] : storage.specs) {
-        // Multithreaded memory allocation on host.
+    for (std::size_t shard_idx = 0; shard_idx < num_buffers; shard_idx++) {
+        const auto& [coord, shard_tensor_spec] = storage.specs[shard_idx];
         const auto tensor_size_bytes = shard_tensor_spec.compute_packed_buffer_size_bytes();
-        tensor.mesh_device()->enqueue_to_thread_pool([buffer_idx, &buffers_mutex, &buffers, tensor_size_bytes]() {
+        // Multithreaded memory allocation on host. This is a bottleneck for models with large outputs
+        // and must thus be parallelized across devices.
+        tensor.mesh_device()->enqueue_to_thread_pool([shard_idx, &buffers_mutex, &buffers, tensor_size_bytes]() {
             ZoneScopedN("AllocateBuffer");
             std::vector<T> host_buffer(tensor_size_bytes / sizeof(T));
             {
+                // Track the buffer index, since the order of shards matters
                 std::lock_guard lock(buffers_mutex);
-                buffers[buffer_idx] = owned_buffer::create<T>(std::move(host_buffer));
+                buffers[shard_idx] = owned_buffer::create<T>(std::move(host_buffer));
             }
         });
+        // Populate tensor specs in storage and initialize the shard_data_transfers
+        // that will be used to issue the read.
         specs.push_back(shard_tensor_spec);
-        buffer_idx++;
+        shard_data_transfers.push_back(distributed::MeshCommandQueue::ShardDataTransfer{
+            .shard_coord = coord, .region = BufferRegion(0, tensor_size_bytes)});
     }
     // Wait for allocations to complete
     tensor.mesh_device()->wait_for_thread_pool();
-    // Construct shard data transfers
-    buffer_idx = 0;
-    for (const auto& [coord, shard_tensor_spec] : storage.specs) {
-        const auto tensor_size_bytes = shard_tensor_spec.compute_packed_buffer_size_bytes();
-        shard_data_transfers.push_back(distributed::MeshCommandQueue::ShardDataTransfer{
-            .shard_coord = coord,
-            .host_data = std::visit([](auto& b) { return reinterpret_cast<T*>(b.data()); }, buffers[buffer_idx]),
-            .region = BufferRegion(0, tensor_size_bytes)});
-        buffer_idx++;
+    // Point shard_data_transfers to their associated host memory, which was allocated
+    // through the thread-pool.
+    for (std::size_t shard_idx = 0; shard_idx < num_buffers; shard_idx++) {
+        shard_data_transfers[shard_idx].host_data =
+            std::visit([](auto& b) { return reinterpret_cast<T*>(b.data()); }, buffers[shard_idx]);
     }
-    // Issue read
-    {
-        ZoneScopedN("EnqueueReadShards");
-        mesh_cq.enqueue_read_shards(shard_data_transfers, mesh_buffer, blocking);
-    }
+
+    mesh_cq.enqueue_read_shards(shard_data_transfers, mesh_buffer, blocking);
 
     MultiDeviceHostStorage host_storage(storage.strategy, std::move(buffers), std::move(specs));
     return Tensor(std::move(host_storage), tensor.get_tensor_spec());

@@ -31,16 +31,15 @@ void issue_record_event_commands(
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     bool notify_host) {
-    thread_local static std::vector<uint32_t> event_payload(DispatchSettings::EVENT_PADDED_SIZE / sizeof(uint32_t), 0);
+    std::vector<uint32_t> event_payload(DispatchSettings::EVENT_PADDED_SIZE / sizeof(uint32_t), 0);
     event_payload[0] = event_id;
 
-    thread_local static uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
-    thread_local static uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
-    thread_local static uint32_t packed_event_payload_sizeB =
+    uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
+    uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
+    uint32_t packed_event_payload_sizeB =
         align(sizeof(CQDispatchCmd) + num_command_queues * sizeof(CQDispatchWritePackedUnicastSubCmd), l1_alignment) +
         (align(DispatchSettings::EVENT_PADDED_SIZE, l1_alignment) * num_command_queues);
-    thread_local static uint32_t packed_write_sizeB =
-        align(sizeof(CQPrefetchCmd) + packed_event_payload_sizeB, pcie_alignment);
+    uint32_t packed_write_sizeB = align(sizeof(CQPrefetchCmd) + packed_event_payload_sizeB, pcie_alignment);
     uint32_t num_worker_counters = sub_device_ids.size();
 
     uint32_t cmd_sequence_sizeB =
@@ -58,10 +57,10 @@ void issue_record_event_commands(
 
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
 
-    thread_local static auto dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
-    thread_local static CoreType dispatch_core_type = dispatch_core_config.get_core_type();
+    auto dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
+    CoreType dispatch_core_type = dispatch_core_config.get_core_type();
 
-    thread_local static uint32_t dispatch_message_base_addr =
+    uint32_t dispatch_message_base_addr =
         DispatchMemMap::get(dispatch_core_type)
             .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
 
@@ -83,8 +82,8 @@ void issue_record_event_commands(
             false /* recording an event does not have any side-effects on the dispatch completion count */);
     }
 
-    thread_local static std::vector<CQDispatchWritePackedUnicastSubCmd> unicast_sub_cmds(num_command_queues);
-    thread_local static std::vector<std::pair<const void*, uint32_t>> event_payloads(num_command_queues);
+    std::vector<CQDispatchWritePackedUnicastSubCmd> unicast_sub_cmds(num_command_queues);
+    std::vector<std::pair<const void*, uint32_t>> event_payloads(num_command_queues);
 
     for (auto cq_id = 0; cq_id < num_command_queues; cq_id++) {
         tt_cxy_pair dispatch_location = DispatchQueryManager::instance().get_dispatch_core(cq_id);
@@ -160,7 +159,7 @@ void read_events_from_completion_queue(
     uint8_t cq_id,
     SystemMemoryManager& sysmem_manager) {
     uint32_t read_ptr = sysmem_manager.get_completion_queue_read_ptr(cq_id);
-    thread_local static std::vector<uint32_t> dispatch_cmd_and_event(
+    std::vector<uint32_t> dispatch_cmd_and_event(
         (sizeof(CQDispatchCmd) + DispatchSettings::EVENT_PADDED_SIZE) / sizeof(uint32_t));
     tt::Cluster::instance().read_sysmem(
         dispatch_cmd_and_event.data(),
