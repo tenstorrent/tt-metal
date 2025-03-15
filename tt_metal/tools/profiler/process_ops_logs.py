@@ -84,8 +84,9 @@ OPS_CSV_HEADER = [
     "PM BANDWIDTH [ns]",
     "PM REQ I BW",
     "PM REQ O BW",
-    "NoC Util (%)",
-    "DRAM Util (%)",
+    "PM FPU UTIL (%)",
+    "NOC UTIL (%)",
+    "DRAM BW UTIL (%)",
 ]
 
 
@@ -385,8 +386,8 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces):
                 op_npe_stats = npe_stats.getDatapointByID(op_id)
                 if op_npe_stats is not None:
                     ops_found += 1
-                    ops[op_id]["NoC Util (%)"] = round(op_npe_stats.result.overall_avg_link_util, 2)
-                    ops[op_id]["DRAM Util (%)"] = round(op_npe_stats.result.dram_bw_util, 2)
+                    ops[op_id]["NOC UTIL (%)"] = round(op_npe_stats.result.overall_avg_link_util, 1)
+                    ops[op_id]["DRAM BW UTIL (%)"] = round(op_npe_stats.result.dram_bw_util, 1)
             logger.info(f"Found {ops_found} operations with noc trace data")
 
     return devicesOps, traceOps
@@ -657,8 +658,8 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
                 )
                 rowDict["HOST DURATION [ns]"] = int(opData["host_time"]["exec_time_ns"])
 
-                rowDict["NoC Util (%)"] = opData.get("NoC Util (%)", 0.0)
-                rowDict["DRAM Util (%)"] = opData.get("DRAM Util (%)", 0.0)
+                rowDict["NOC UTIL (%)"] = opData.get("NOC UTIL (%)", 0.0)
+                rowDict["DRAM BW UTIL (%)"] = opData.get("DRAM BW UTIL (%)", 0.0)
 
                 if "kernel_info" in opData.keys():
                     rowDict["COMPUTE KERNEL SOURCE"] = []
@@ -731,6 +732,15 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
                     rowDict["PM BANDWIDTH [ns]"] = opData["performance_model"]["bandwidth_ns"]
                     rowDict["PM REQ I BW"] = opData["performance_model"]["input_bws"]
                     rowDict["PM REQ O BW"] = opData["performance_model"]["output_bws"]
+
+                    if "DEVICE FW DURATION [ns]" in rowDict:
+                        try:
+                            fpu_util = (
+                                100.0 * float(rowDict["PM COMPUTE [ns]"]) / float(rowDict["DEVICE FW DURATION [ns]"])
+                            )
+                            rowDict["PM FPU UTIL (%)"] = round(fpu_util, 1)
+                        except ZeroDivisionError:
+                            rowDict["PM FPU UTIL (%)"] = 0.0
 
             rowDicts.append(rowDict)
 
