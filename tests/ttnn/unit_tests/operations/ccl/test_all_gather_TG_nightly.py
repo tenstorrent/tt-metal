@@ -12,7 +12,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_gather_TG_post_commit import 
 )
 from models.utility_functions import skip_for_grayskull
 
-from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
+from ttnn import shard_tensor_to_2d_mesh_mapperd_mesh_mapper, ConcatMesh2dToTensor
 
 
 # Enumerate the post-commit cases explicitly

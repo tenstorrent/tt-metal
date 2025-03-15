@@ -9,7 +9,7 @@ from typing import Optional, Tuple
 
 from models.demos.falcon7b_common.tt.model_utils import get_falcon_default_core_grid
 import ttnn
-from ttnn import ReplicateTensorToMesh
+from ttnn import replicate_tensor_to_mesh_mapper
 
 from models.utility_functions import (
     nearest_32,
@@ -155,7 +155,7 @@ class TtFalconAttentionPrefill(nn.Module):
             dtype=model_config["DEFAULT_DTYPE"],
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
 
         # optimized version can utilize single float value for softmax
@@ -175,7 +175,7 @@ class TtFalconAttentionPrefill(nn.Module):
                     device=self.mesh_device,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=self.model_config["ATTN_OPTIMIZED_MEMCFG"],
-                    mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+                    mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
                 )
                 self.model_config["ATTN_OUTPUT_TENSORS"][seq_len] = tt_tensors
 
@@ -553,7 +553,7 @@ class TtFalconAttentionDecode(nn.Module):
                 dtype=model_config["DEFAULT_DTYPE"],
                 device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ReplicateTensorToMesh(mesh_device),
+                mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
             )
 
     def forward(

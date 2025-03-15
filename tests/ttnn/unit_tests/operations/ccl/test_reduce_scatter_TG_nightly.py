@@ -13,7 +13,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
     teardown_fabric_interface,
     create_global_semaphore_with_same_address,
 )
-from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
+from ttnn import shard_tensor_to_2d_mesh_mapperd_mesh_mapper, ConcatMesh2dToTensor
 
 
 def report_mismatches(golden, actual, max_printable=None):
@@ -232,7 +232,7 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
         device=mesh_device,
         layout=layout,
         memory_config=input_mem_config,
-        mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dims),
+        mesh_mapper=shard_tensor_to_2d_mesh_mapper(mesh_device, mesh_shape=mesh_shape, dims=shard_dims),
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
 

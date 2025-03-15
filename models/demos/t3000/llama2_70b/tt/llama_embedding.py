@@ -4,7 +4,7 @@
 
 import torch
 import ttnn
-from ttnn import ShardTensorToMesh
+from ttnn import shard_tensor_to_mesh_mapper
 
 
 class TtLlamaEmbedding:
@@ -44,7 +44,7 @@ class TtLlamaEmbedding:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensorToMesh(mesh_device, dim=3),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=3),
             cache_file_name=cache_path / base_name,
         )
         self.emb_weights = ttnn.to_device(embd_weights_ttn, mesh_device)

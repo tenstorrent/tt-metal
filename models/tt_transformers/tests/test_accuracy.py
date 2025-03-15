@@ -183,7 +183,7 @@ def test_tt_model_acc(
             device=mesh_device,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_mapper=ttnn.shard_tensor_to_2d_mesh_mapper(
                 mesh_device,
                 dims=(None, -2) if batch_size > 1 else (None, None),
                 mesh_shape=model_args.cluster_shape,
@@ -260,7 +260,7 @@ def test_tt_model_acc(
         current_pos,
         device=mesh_device,
         dtype=ttnn.int32,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
+        mesh_mapper=ttnn.shard_tensor_to_2d_mesh_mapper(
             mesh_device,
             dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
             mesh_shape=model_args.cluster_shape,

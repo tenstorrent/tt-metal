@@ -763,6 +763,7 @@ Tensor Tensor::to_device(IDevice* target_device, const MemoryConfig& mem_config,
 
 Tensor Tensor::to_device(distributed::MeshDevice* mesh_device, const MemoryConfig& mem_config, QueueId cq_id) const {
     std::vector<IDevice*> workers_to_use = ttnn::distributed::get_mapped_devices(*this, *mesh_device);
+
     return tensor_ops::tensor_to_device(*this, workers_to_use, mem_config, cq_id);
 }
 

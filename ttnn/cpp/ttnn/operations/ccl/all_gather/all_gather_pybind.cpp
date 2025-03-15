@@ -115,7 +115,7 @@ void py_bind_all_gather(pybind11::module& module) {
                             device=mesh_device,
                             layout=layout,
                             memory_config=mem_config,
-                            mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(1, 8), dims=(-1, -2)))
+                            mesh_mapper=shard_tensor_to_2d_mesh_mapper(mesh_device, mesh_shape=(1, 8), dims=(-1, -2)))
             >>> ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
             >>> output = ttnn.all_gather(ttnn_tensor, dim=0, topology=ttnn.Topology.Ring)
 

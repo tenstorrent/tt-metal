@@ -6,7 +6,7 @@ from loguru import logger
 from typing import List
 import torch
 import ttnn
-from ttnn import ShardTensorToMesh
+from ttnn import shard_tensor_to_mesh_mapper
 from models.utility_functions import nearest_32
 from models.demos.t3000.falcon40b.tt.model_utils import matmul_2d_config
 
@@ -89,7 +89,7 @@ class TtLlamaMLP_optimized:
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=w3_mem_config,
-            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=3),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=3),
             cache_file_name=self.cache_path / w1_dram_shard_str,
         )
 
@@ -105,7 +105,7 @@ class TtLlamaMLP_optimized:
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=w2_memory_config,
-            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=2),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=2),
             cache_file_name=self.cache_path / w2_dram_shard_str,
         )
 
@@ -115,7 +115,7 @@ class TtLlamaMLP_optimized:
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=w3_mem_config,
-            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=3),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=3),
             cache_file_name=self.cache_path / w3_dram_shard_str,
         )
 

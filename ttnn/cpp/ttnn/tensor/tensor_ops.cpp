@@ -198,7 +198,6 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, distri
             host_storage != nullptr) {
             distributed_config = host_storage->strategy;
         }
-
         Tensor tensor_modified_layout = Tensor(workers.size(), distributed_config);
         for (int worker_index = 0; worker_index < workers.size(); ++worker_index) {
             auto& worker = workers[worker_index];

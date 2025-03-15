@@ -9,7 +9,7 @@ from loguru import logger
 from sklearn.metrics import top_k_accuracy_score
 
 import ttnn
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
+from ttnn import replicate_tensor_to_mesh_mapper, ConcatMeshToTensor
 
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import prepare_inputs_ttnn
 from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer

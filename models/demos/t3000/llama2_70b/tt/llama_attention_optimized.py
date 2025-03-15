@@ -6,7 +6,7 @@ from loguru import logger
 import math
 import torch
 import ttnn
-from ttnn import ShardTensorToMesh
+from ttnn import shard_tensor_to_mesh_mapper
 from models.demos.t3000.falcon40b.tt.model_utils import matmul_2d_config_from_tensor_shapes
 
 
@@ -110,7 +110,7 @@ class TtLlamaAttention_optimized:
                 ttnn.as_tensor(
                     lp,
                     device=self.mesh_device,
-                    mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=1),
+                    mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=1),
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     dtype=self.kv_dtype,
@@ -179,7 +179,7 @@ class TtLlamaAttention_optimized:
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=3),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=3),
             cache_file_name=self.cache_path / wqkv_cache_str,
         )
         self.qkv = ttnn.to_device(qkv_ttnn, self.mesh_device)
@@ -190,7 +190,7 @@ class TtLlamaAttention_optimized:
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=3),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=3),
             cache_file_name=self.cache_path / wo_str,
         )
 

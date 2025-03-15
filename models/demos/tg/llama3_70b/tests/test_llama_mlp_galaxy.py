@@ -19,10 +19,10 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     UNIT_TEST_LAYER_NUM,
     comp_pcc,
     should_skip_model_load,
-    ShardTensor2dMesh,
     ConcatMesh2DToTensor,
 )
 import gc
+from ttnn import shard_tensor_to_2d_mesh_mapper
 
 
 class PytorchLlamaMLPModel(torch.nn.Module):
@@ -58,8 +58,8 @@ def tt_llama_mlp_prepare_inputs(llama_mlp_model, x, mode):
             layout=ttnn.TILE_LAYOUT,
             device=llama_mlp_model.mesh_device,
             memory_config=act_mem_config,
-            mesh_mapper=ShardTensor2dMesh(
-                llama_mlp_model.mesh_device, dims=(3, None), cluster_shape=llama_mlp_model.cluster_shape
+            mesh_mapper=shard_tensor_to_2d_mesh_mapper(
+                llama_mlp_model.mesh_device, dims=(None, 3), cluster_shape=llama_mlp_model.cluster_shape
             ),
         )
     elif mode == "prefill":
@@ -69,8 +69,8 @@ def tt_llama_mlp_prepare_inputs(llama_mlp_model, x, mode):
             layout=ttnn.TILE_LAYOUT,
             device=llama_mlp_model.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensor2dMesh(
-                llama_mlp_model.mesh_device, dims=(3, None), cluster_shape=llama_mlp_model.cluster_shape
+            mesh_mapper=shard_tensor_to_2d_mesh_mapper(
+                llama_mlp_model.mesh_device, dims=(None, 3), cluster_shape=llama_mlp_model.cluster_shape
             ),
         )
 

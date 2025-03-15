@@ -88,7 +88,9 @@ def test_rms_norm_inference(
         device=mesh_device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=model_args.cluster_shape),
+        mesh_mapper=ttnn.shard_tensor_to_2d_mesh_mapper(
+            mesh_device, dims=(None, -1), mesh_shape=model_args.cluster_shape
+        ),
         memory_config=(
             model_args.get_model_config()["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
         ),

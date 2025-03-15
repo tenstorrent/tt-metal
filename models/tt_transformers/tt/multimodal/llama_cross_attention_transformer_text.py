@@ -93,7 +93,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             lm_head_torch[split],
             dtype=type,
             device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=dim),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=dim),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name(name, suffix, split),
@@ -254,7 +254,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     dtype=ttnn.bfloat16,
-                    mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=1),
+                    mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=1),
                 )
                 for _ in range(2)
             ]

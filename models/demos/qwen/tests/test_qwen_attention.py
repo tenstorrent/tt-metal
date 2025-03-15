@@ -88,7 +88,7 @@ def test_qwen_attention_inference(mesh_device, use_program_cache, reset_seeds, e
             torch.tensor([current_pos] * batch),
             device=mesh_device,
             dtype=ttnn.int32,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
 
         attention_input = model_args.prepare_inputs_ttnn_decode(

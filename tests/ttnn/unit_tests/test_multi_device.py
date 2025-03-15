@@ -11,7 +11,7 @@ from loguru import logger
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
+from ttnn import shard_tensor_to_mesh_mapper, replicate_tensor_to_mesh_mapper, ConcatMeshToTensor
 
 
 #######
@@ -110,7 +110,7 @@ def test_ttnn_to_multi_device_multiple_times(mesh_device, layout, memory_config,
     torch_tensor = torch.rand((1, 1, 32, 32 * mesh_device.get_num_devices()), dtype=torch.bfloat16)
 
     ttnn_tensor = ttnn.from_torch(
-        torch_tensor, dtype=dtype, layout=layout, mesh_mapper=ShardTensorToMesh(mesh_device, dim=3)
+        torch_tensor, dtype=dtype, layout=layout, mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=3)
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device, memory_config=memory_config)
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device, memory_config=memory_config)
@@ -136,7 +136,7 @@ def test_ttnn_to_and_from_multi_device_shard(mesh_device, layout, memory_config,
     torch_tensor = torch.rand((1, 1, 32, 32 * mesh_device.get_num_devices()), dtype=torch.bfloat16)
 
     ttnn_tensor = ttnn.from_torch(
-        torch_tensor, dtype=dtype, layout=layout, mesh_mapper=ShardTensorToMesh(mesh_device, dim=3)
+        torch_tensor, dtype=dtype, layout=layout, mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=3)
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device, memory_config=memory_config)
     ttnn_loop_back_tensor = ttnn.from_device(ttnn_tensor)
@@ -161,7 +161,7 @@ def test_multi_device_check_per_device_shard(mesh_device, layout, memory_config,
     torch_tensor = torch.rand((1, 1, 32, 64 * mesh_device.get_num_devices()), dtype=torch.bfloat16)
 
     ttnn_tensor = ttnn.from_torch(
-        torch_tensor, dtype=dtype, mesh_mapper=ShardTensorToMesh(mesh_device, dim=3), layout=layout
+        torch_tensor, dtype=dtype, mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=3), layout=layout
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device, memory_config=memory_config)
     ttnn_loop_back_tensor = ttnn.from_device(ttnn_tensor)
@@ -182,14 +182,14 @@ def test_multi_device_check_per_device_shard(mesh_device, layout, memory_config,
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
 def test_multi_device_replicate(mesh_device, shape, layout, memory_config):
-    """Test ReplicateTensorToMesh to broadcast a tensor across multiple devices"""
-    from ttnn import ReplicateTensorToMesh
+    """Test replicate_tensor_to_mesh_mapper to broadcast a tensor across multiple devices"""
+    from ttnn import replicate_tensor_to_mesh_mapper
 
     full_tensor = torch.rand(shape, dtype=torch.bfloat16)
 
     ttnn_tensor = ttnn.from_torch(
         full_tensor,
-        mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         layout=layout,
         memory_config=memory_config,
         device=mesh_device,
@@ -214,7 +214,7 @@ def test_ttnn_multi_device_all_gather(pcie_mesh_device):
         pytest.skip("Requires multiple devices to run")
     full_tensor = torch.rand((1, 1, 32, 32 * pcie_mesh_device.get_num_devices()), dtype=torch.bfloat16)
 
-    ttnn_tensor = ttnn.from_torch(full_tensor, mesh_mapper=ShardTensorToMesh(pcie_mesh_device, dim=3))
+    ttnn_tensor = ttnn.from_torch(full_tensor, mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(pcie_mesh_device, dim=3))
     ttnn_tensor = ttnn.to_device(ttnn_tensor, pcie_mesh_device)
     ttnn_tensor = ttnn.all_gather(ttnn_tensor, dim=3, num_links=1)
 
@@ -237,7 +237,7 @@ def test_multi_device_single_op_unary(mesh_device):
     ttnn_input_tensor = ttnn.from_torch(
         torch_input_tensor,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ShardTensorToMesh(mesh_device, dim=3),
+        mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=3),
         device=mesh_device,
     )
     ttnn_output_tensor = ttnn.gelu(ttnn_input_tensor)
@@ -261,13 +261,13 @@ def test_multi_device_single_op_binary(mesh_device):
         torch_input_a_tensor,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
-        mesh_mapper=ShardTensorToMesh(mesh_device, dim=3),
+        mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=3),
     )
     ttnn_input_b_tensor = ttnn.from_torch(
         torch_input_b_tensor,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
-        mesh_mapper=ShardTensorToMesh(mesh_device, dim=3),
+        mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=3),
     )
     ttnn_output_tensor = ttnn.add(ttnn_input_a_tensor, ttnn_input_b_tensor)
 
@@ -289,7 +289,7 @@ def test_multi_device_multi_op(mesh_device):
     ttnn_input_tensor = ttnn.from_torch(
         torch_input_tensor,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ShardTensorToMesh(mesh_device, dim=3),
+        mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=3),
         device=mesh_device,
     )
     ttnn_gelu_output = ttnn.gelu(ttnn_input_tensor)
@@ -314,13 +314,13 @@ def test_multi_device_data_parallel_matmul_op(mesh_device):
         torch_input_a_tensor,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
-        mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
+        mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0),
     )
     ttnn_input_b_tensor = ttnn.from_torch(
         torch_input_b_tensor,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
-        mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
     ttnn_output_tensor = ttnn_input_a_tensor @ ttnn_input_b_tensor
 
@@ -349,7 +349,7 @@ def test_multi_device_as_tensor_api(mesh_device, layout, memory_config, dtype):
         layout=layout,
         memory_config=memory_config,
         device=mesh_device,
-        mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
+        mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0),
     )
 
     with tempfile.NamedTemporaryFile() as temp_file:
@@ -360,7 +360,7 @@ def test_multi_device_as_tensor_api(mesh_device, layout, memory_config, dtype):
             device=mesh_device,
             memory_config=memory_config,
             cache_file_name=f"{temp_file.name}.weight",
-            mesh_mapper=ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
 
         ttnn_input_b_tensor = ttnn.as_tensor(
@@ -370,7 +370,7 @@ def test_multi_device_as_tensor_api(mesh_device, layout, memory_config, dtype):
             device=mesh_device,
             memory_config=memory_config,
             cache_file_name=f"{temp_file.name}.weight",
-            mesh_mapper=ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
 
         ttnn_output_tensor = ttnn_input_a_tensor @ ttnn_input_b_tensor
@@ -404,7 +404,7 @@ def test_multi_device_as_tensor_api_sharded_tensor(mesh_device, layout, memory_c
             device=mesh_device,
             memory_config=memory_config,
             cache_file_name=f"{temp_file.name}.weight",
-            mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0),
         )
         load_tensor = ttnn.as_tensor(
             input_tensor,
@@ -413,7 +413,7 @@ def test_multi_device_as_tensor_api_sharded_tensor(mesh_device, layout, memory_c
             device=mesh_device,
             memory_config=memory_config,
             cache_file_name=f"{temp_file.name}.weight",
-            mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0),
         )
         torch_loaded_tensor = ttnn.to_torch(load_tensor, mesh_composer=ConcatMeshToTensor(mesh_device, dim=0))
         expected_pcc = 0.98 if dtype == ttnn.bfloat4_b else 0.99
@@ -436,7 +436,7 @@ def test_multi_device_permute(mesh_device, layout, memory_config, dtype):
     torch_golden = torch.permute(torch_tensor, (0, 1, 3, 2))
 
     ttnn_tensor = ttnn.from_torch(
-        torch_tensor, dtype=dtype, layout=layout, mesh_mapper=ShardTensorToMesh(mesh_device, dim=3)
+        torch_tensor, dtype=dtype, layout=layout, mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=3)
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device, memory_config=memory_config)
     ttnn_permute = ttnn.permute(ttnn_tensor, (0, 1, 3, 2))
@@ -457,7 +457,7 @@ def test_max(mesh_device):
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
-        mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
     gate_logits_1SB8 = ttnn.to_device(gate_logits_1SB8, mesh_device)
     weights_ex0_1SB1 = ttnn.max(gate_logits_1SB8, dim=3)
@@ -478,7 +478,7 @@ def test_ttnn_multi_device_all_gather_all_devices(t3k_mesh_device):
     for i in range(t3k_mesh_device.get_num_devices()):
         full_tensor[..., i * 32 : (i + 1) * 32] = i
 
-    ttnn_tensor = ttnn.from_torch(full_tensor, mesh_mapper=ShardTensorToMesh(t3k_mesh_device, dim=3))
+    ttnn_tensor = ttnn.from_torch(full_tensor, mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(t3k_mesh_device, dim=3))
     ttnn_tensor = ttnn.to_device(ttnn_tensor, t3k_mesh_device)
     ttnn_tensor = ttnn.all_gather(ttnn_tensor, dim=3, num_links=1)
 
@@ -499,14 +499,14 @@ def test_sharded_matmul(t3k_mesh_device):
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=t3k_mesh_device,
-        mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(t3k_mesh_device),
     )
     keys_1BDP = ttnn.from_torch(
         torch.randn(1, 32, 128, 32),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=t3k_mesh_device,
-        mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(t3k_mesh_device),
     )
 
     q_heads_1B4D = ttnn.to_device(q_heads_1B4D, t3k_mesh_device)
@@ -561,7 +561,7 @@ def test_4b_tensor(mesh_device):
         dtype=ttnn.bfloat4_b,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
-        mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
     tensor = ttnn.to_device(tensor, mesh_device)
     x = ttnn.from_torch(
@@ -569,7 +569,7 @@ def test_4b_tensor(mesh_device):
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
-        mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
     x = ttnn.to_device(x, mesh_device)
     tensor = ttnn.matmul(
@@ -588,7 +588,7 @@ def test_slicing(mesh_device):
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
-        mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
     tensor = ttnn.to_device(tensor, mesh_device)
     tensor = tensor[:, :, :, :1]
@@ -601,7 +601,7 @@ def test_clone(mesh_device):
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
-        mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
     results_11BH = ttnn.to_device(results_11BH, mesh_device)
     results_11BH = ttnn.clone(results_11BH, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -617,7 +617,7 @@ def test_device_shard_to_torch(mesh_device):
     ttnn_input_tensor = ttnn.from_torch(
         torch_input_tensor,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ShardTensorToMesh(mesh_device, dim=3),
+        mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=3),
         device=mesh_device,
     )
 
@@ -643,7 +643,7 @@ def test_validate_as_tensor(tmp_path, mesh_device, height, width):
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         memory_config=memory_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         cache_file_name=tmp_path / "cache_file",
     )
     assert tensor.dtype == ttnn.float32
@@ -657,7 +657,7 @@ def test_validate_as_tensor(tmp_path, mesh_device, height, width):
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         memory_config=memory_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         cache_file_name=tmp_path / "cache_file",
     )
     assert tensor.dtype == ttnn.float32
@@ -687,7 +687,7 @@ def test_all_gather_multiple_submeshes(mesh_device):
         for i in range(submesh.get_num_devices()):
             full_tensor[..., i * 32 : (i + 1) * 32] = i
 
-        ttnn_tensor = ttnn.from_torch(full_tensor, mesh_mapper=ShardTensorToMesh(submesh, dim=3))
+        ttnn_tensor = ttnn.from_torch(full_tensor, mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(submesh, dim=3))
         ttnn_tensor = ttnn.to_device(ttnn_tensor, submesh)
         ttnn_tensor = ttnn.all_gather(ttnn_tensor, dim=3, num_links=1)
 
@@ -711,7 +711,7 @@ def test_line_all_gather_after_reshape(mesh_device):
         torch_input_tensor,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=list(mesh_device.shape), dims=(2, 3)),
+        mesh_mapper=ttnn.shard_tensor_to_2d_mesh_mapper(mesh_device, mesh_shape=list(mesh_device.shape), dims=(2, 3)),
     )
     output_tensor = ttnn.all_gather(
         mesh_tensor,
@@ -724,7 +724,7 @@ def test_line_all_gather_after_reshape(mesh_device):
 
 def test_distribute_api(mesh_device):
     torch_hidden_states = torch.rand((1, 1, 32, 32), dtype=torch.bfloat16)
-    with ttnn.distribute(ttnn.ReplicateTensorToMesh(mesh_device)):
+    with ttnn.distribute(ttnn.replicate_tensor_to_mesh_mapper(mesh_device)):
         hidden_states = ttnn.from_torch(
             torch_hidden_states,
             dtype=ttnn.bfloat8_b,

@@ -104,7 +104,7 @@ def test_block_inference(batch, num_chunks, mesh_device, gated, use_program_cach
         dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
 
     tt_out = tt_model(attention_input, mask=tt_mask)

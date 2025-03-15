@@ -158,7 +158,7 @@ def test_qwen_model_inference(mesh_device, weights, layers, use_program_cache, r
             torch.tensor([current_pos] * batch),
             device=mesh_device,
             dtype=ttnn.int32,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
 
         # Run TT model

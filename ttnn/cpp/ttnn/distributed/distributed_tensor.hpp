@@ -4,24 +4,43 @@
 
 #pragma once
 
+#include "tt-metalium/mesh_device.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/distributed/api.hpp"
+#include "ttnn/distributed/distributed_tensor_config.hpp"
+#include "ttnn/distributed/types.hpp"
+#include "ttnn/tensor/xtensor/partition.hpp"
+#include <algorithm>
+#include <tt-metalium/assert.hpp>
 
 namespace ttnn::distributed {
 
 // Mapper interface that distributes a host tensor onto a multi-device configuration.
+// The __attribute__((weak)) instructs pybind imports not to look for a symbol for these functions, as the linker won't
+// create one.
 class TensorToMesh {
 public:
     virtual ~TensorToMesh() = default;
-    virtual std::vector<Tensor> map(const Tensor& tensor) const = 0;
-    virtual tt::tt_metal::DistributedTensorConfig config() const = 0;
+    virtual __attribute__((weak)) std::vector<Tensor> map(const Tensor& tensor) const = 0;
+    virtual __attribute__((weak)) tt::tt_metal::DistributedTensorConfig config() const = 0;
 };
 
 // Composer interface that aggregates a multi-device tensor into a host tensor.
 class MeshToTensor {
 public:
     virtual ~MeshToTensor() = default;
-    virtual Tensor compose(const std::vector<Tensor>& tensors) const = 0;
+    virtual __attribute__((weak)) Tensor compose(const std::vector<Tensor>& tensors) const = 0;
+};
+
+struct Shard2dConfig {
+    std::optional<int> row_dim;
+    std::optional<int> col_dim;
+};
+
+struct Concat2dConfig {
+    int row_dim = -1;
+    int col_dim = -1;
 };
 
 // Creates a mapper that replicates a tensor across all devices.
@@ -32,10 +51,6 @@ std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(MeshDevice& mesh_devic
 
 // Creates a mapper that shards a tensor along two dimensions, which will be intepreted as rows and columns.
 // If either dimension is not specified, the tensor is replicated along that dimension.
-struct Shard2dConfig {
-    std::optional<int> row_dim;
-    std::optional<int> col_dim;
-};
 std::unique_ptr<TensorToMesh> shard_tensor_to_2d_mesh_mapper(
     MeshDevice& mesh_device, const MeshShape& mesh_shape, const Shard2dConfig& config);
 
@@ -43,10 +58,8 @@ std::unique_ptr<TensorToMesh> shard_tensor_to_2d_mesh_mapper(
 std::unique_ptr<MeshToTensor> concat_mesh_to_tensor_composer(int dim);
 
 // Creates a composer that concatenates a tensor across two dimensions.
-struct Concat2dConfig {
-    int row_dim = -1;
-    int col_dim = -1;
-};
+
+
 std::unique_ptr<MeshToTensor> concat_2d_mesh_to_tensor_composer(MeshDevice& mesh_device, const Concat2dConfig& config);
 
 // Distributes a host tensor onto multi-device configuration according to the `mapper`.

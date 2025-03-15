@@ -6,9 +6,8 @@ from loguru import logger
 import math
 import torch
 import ttnn
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
+from ttnn import shard_tensor_to_mesh_mapper, shard_tensor_to_2d_mesh_mapper, replicate_tensor_to_mesh_mapper
 from models.demos.t3000.llama2_70b.tt.llama_common import (
-    ShardTensor2dMesh,
     ConcatMesh2DToTensor,
 )
 from models.demos.t3000.llama2_70b.tt.llama_common import (
@@ -91,7 +90,7 @@ class TtLlamaAttention_galaxy:
             dtype=ttnn.bfloat4_b,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
-            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=1),
+            mesh_mapper=shard_tensor_to_mesh_mapper(self.mesh_device, dim=1),
         )
 
     def get_user_selection_mat(self):
@@ -104,7 +103,7 @@ class TtLlamaAttention_galaxy:
             dtype=ttnn.bfloat4_b,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
-            mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=replicate_tensor_to_mesh_mapper(self.mesh_device),
         )
 
     def init_kv_cache(self):
@@ -133,7 +132,7 @@ class TtLlamaAttention_galaxy:
             ttnn.as_tensor(
                 lp,
                 device=self.mesh_device,
-                mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+                mesh_mapper=replicate_tensor_to_mesh_mapper(self.mesh_device),
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 dtype=ttnn.bfloat8_b,
@@ -206,7 +205,7 @@ class TtLlamaAttention_galaxy:
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensor2dMesh(self.mesh_device, dims=(2, 3), cluster_shape=self.cluster_shape),
+            mesh_mapper=shard_tensor_to_2d_mesh_mapper(self.mesh_device, cluster_shape=self.cluster_shape, dims=(3, 2)),
             cache_file_name=self.cache_path / wqkv_cache_str,
         )
 
@@ -216,7 +215,7 @@ class TtLlamaAttention_galaxy:
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensor2dMesh(self.mesh_device, dims=(3, 2), cluster_shape=self.cluster_shape),
+            mesh_mapper=shard_tensor_to_2d_mesh_mapper(self.mesh_device, cluster_shape=self.cluster_shape, dims=(2, 3)),
             cache_file_name=self.cache_path / wo_cache_str,
         )
 

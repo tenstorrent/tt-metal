@@ -127,7 +127,7 @@ def run_reduce_scatter_test(
         torch_tensor,
         dtype=input_dtype,
         layout=layout,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim),
+        mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim),
         device=mesh_device,
     )
     # Run the op

@@ -75,7 +75,7 @@ def test_qwen_mlp_inference(mesh_device, seq_len, use_program_cache, reset_seeds
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         dtype=ttnn.bfloat8_b,
         memory_config=model_args.model_config["SHARDED_MLP_INPUT_MEMCFG"]
         if mode == "decode"

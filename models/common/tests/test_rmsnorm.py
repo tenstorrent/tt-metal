@@ -12,7 +12,7 @@ if os.getenv("CI") == "true":
     os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
 
 import ttnn
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
+from ttnn import replicate_tensor_to_mesh_mapper, ConcatMeshToTensor
 
 from models.common.rmsnorm import RMSNorm as TtRMSNorm
 from models.utility_functions import (
@@ -130,7 +130,7 @@ def test_rmsnorm_multidevice(t3k_mesh_device, is_sharded, use_program_cache, res
         device=t3k_mesh_device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
+        mesh_mapper=replicate_tensor_to_mesh_mapper(t3k_mesh_device),
     )
 
     tt_output = tt_model(tt_input)
