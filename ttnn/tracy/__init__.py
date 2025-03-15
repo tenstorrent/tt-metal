@@ -120,7 +120,7 @@ def run_report_setup(verbose, outputFolder, port):
     return toolsReady, captureProcess
 
 
-def generate_report(outputFolder, nameAppend, childCalls):
+def generate_report(outputFolder, nameAppend, childCalls, collect_noc_traces=False):
     logsFolder = generate_logs_folder(outputFolder)
     tracyOutFile = logsFolder / TRACY_FILE_NAME
     timeOut = 15
@@ -164,7 +164,7 @@ def generate_report(outputFolder, nameAppend, childCalls):
 
     logger.info(f"Host side ops data report generated at {logsFolder / TRACY_OPS_DATA_FILE_NAME}")
 
-    process_ops(outputFolder, nameAppend, True)
+    process_ops(outputFolder, nameAppend, True, device_only=False, analyze_noc_traces=collect_noc_traces)
 
 
 def get_available_port():

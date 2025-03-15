@@ -84,6 +84,10 @@ OPS_CSV_HEADER = [
     "PM BANDWIDTH [ns]",
     "PM REQ I BW",
     "PM REQ O BW",
+    "PM FPU UTIL (%)",
+    "NOC UTIL (%)",
+    "DRAM BW UTIL (%)",
+    "SHARE OF DEVICE DURATION (%)",
 ]
 
 
@@ -255,7 +259,7 @@ def get_device_op_data(ops):
 
 
 # Append device data to device ops and return the list of mapped device op ref list
-def append_device_data(ops, traceReplays, logFolder):
+def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces):
     traceReplayCounts = {}
     for deviceID in traceReplays:
         traceReplayCounts[deviceID] = {}
@@ -372,6 +376,21 @@ def append_device_data(ops, traceReplays, logFolder):
                     else:
                         # Update host reported device op with device populated version
                         ops[deviceOp["global_call_count"]] = deviceOp
+
+    # if enabled, analyze noc trace files present in log folder and add
+    # relevant statistics to 'ops' dict
+    if analyze_noc_traces:
+        npe_stats = analyzeNoCTraces(logFolder)
+        if npe_stats is not None:
+            ops_found = 0
+            for op_id in ops:
+                op_npe_stats = npe_stats.getDatapointByID(op_id)
+                if op_npe_stats is not None:
+                    ops_found += 1
+                    ops[op_id]["NOC UTIL (%)"] = round(op_npe_stats.result.overall_avg_link_util, 1)
+                    ops[op_id]["DRAM BW UTIL (%)"] = round(op_npe_stats.result.dram_bw_util, 1)
+            logger.info(f"Found {ops_found} operations with noc trace data")
+
     return devicesOps, traceOps
 
 
@@ -640,6 +659,9 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
                 )
                 rowDict["HOST DURATION [ns]"] = int(opData["host_time"]["exec_time_ns"])
 
+                rowDict["NOC UTIL (%)"] = opData.get("NOC UTIL (%)", 0.0)
+                rowDict["DRAM BW UTIL (%)"] = opData.get("DRAM BW UTIL (%)", 0.0)
+
                 if "kernel_info" in opData.keys():
                     rowDict["COMPUTE KERNEL SOURCE"] = []
                     rowDict["COMPUTE KERNEL HASH"] = []
@@ -712,7 +734,32 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
                     rowDict["PM REQ I BW"] = opData["performance_model"]["input_bws"]
                     rowDict["PM REQ O BW"] = opData["performance_model"]["output_bws"]
 
+                    if "DEVICE FW DURATION [ns]" in rowDict:
+                        try:
+                            fpu_util = (
+                                100.0 * float(rowDict["PM COMPUTE [ns]"]) / float(rowDict["DEVICE FW DURATION [ns]"])
+                            )
+                            rowDict["PM FPU UTIL (%)"] = round(fpu_util, 1)
+                        except ZeroDivisionError:
+                            rowDict["PM FPU UTIL (%)"] = 0.0
+
             rowDicts.append(rowDict)
+
+        # calculate % share of device duration for each op
+        total_device_fw_duration = 0
+        for rowDict in rowDicts:
+            try:
+                total_device_fw_duration += float(rowDict.get("DEVICE FW DURATION [ns]", 0))
+            except ValueError:
+                pass
+
+        for rowDict in rowDicts:
+            try:
+                rowDict["SHARE OF DEVICE DURATION (%)"] = round(
+                    100.0 * float(rowDict.get("DEVICE FW DURATION [ns]", 0)) / total_device_fw_duration, 1
+                )
+            except:
+                rowDict["SHARE OF DEVICE DURATION (%)"] = 0.0
 
         ioHeaderIndex = OPS_CSV_HEADER.index("INPUTS")
         allHeaders = (
@@ -731,7 +778,24 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
     logger.info(f"OPs csv generated at: {allOpsCSVPath}")
 
 
-def process_ops(output_folder, name_append, date, device_only=False):
+def analyzeNoCTraces(logFolder):
+    """Attempts to import tt-npe from $PYTHONPATH and process noc traces to
+    obtain per-operation dram and noc utilization statistics"""
+    try:
+        from npe_analyze_noc_trace_dir import analyze_noc_traces_in_dir
+
+        logger.info(f"tt-npe imported successfully; analyzing noc traces ... ")
+        return analyze_noc_traces_in_dir(logFolder, False, True)
+    except ImportError:
+        logger.warning("tt-npe is not available in this python environment. Try sourcing 'tt-npe/ENV_SETUP'")
+        return None
+    except Exception as e:
+        logger.error("Unexpected error occured when analyzing noc traces, aborting ... ")
+        logger.error(" ↳ " + repr(e))
+        return None
+
+
+def process_ops(output_folder, name_append, date, device_only=False, analyze_noc_traces=False):
     if not output_folder:
         output_folder = PROFILER_ARTIFACTS_DIR
     logFolder = generate_logs_folder(output_folder)
@@ -740,7 +804,7 @@ def process_ops(output_folder, name_append, date, device_only=False):
     ops, signposts, traceReplays = import_tracy_op_logs(logFolder)
 
     if ops and not device_only:
-        deviceOps, traceOps = append_device_data(ops, traceReplays, logFolder)
+        deviceOps, traceOps = append_device_data(ops, traceReplays, logFolder, analyze_noc_traces)
         generate_reports(ops, deviceOps, traceOps, signposts, logFolder, reportFolder, date, name_append)
     else:
         deviceOps = get_device_data_generate_report(logFolder, reportFolder, date, name_append)
@@ -751,10 +815,13 @@ def process_ops(output_folder, name_append, date, device_only=False):
 @click.option("-n", "--name-append", type=str, help="Name to be appended to default csv name")
 @click.option("--date", default=False, is_flag=True, help="Append date to output files")
 @click.option("--device-only", default=False, is_flag=True, help="Only generate a device data report")
-def main(output_folder, name_append, date, device_only):
+@click.option(
+    "--analyze-noc-traces", is_flag=True, help="Attempt to use tt-npe to analyze profiler noc event trace files"
+)
+def main(output_folder, name_append, date, device_only, analyze_noc_traces):
     if output_folder:
         output_folder = Path(output_folder)
-    process_ops(output_folder, name_append, date, device_only)
+    process_ops(output_folder, name_append, date, device_only, analyze_noc_traces)
 
 
 if __name__ == "__main__":
