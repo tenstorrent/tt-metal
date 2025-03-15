@@ -18,11 +18,16 @@ ANY_CODE_CHANGED=false
 
 while IFS= read -r FILE; do
     case "$FILE" in
-        **/CMakeLists.txt|**/*.cmake)
+        CMakeLists.txt|**/CMakeLists.txt|**/*.cmake)
             CMAKE_CHANGED=true
             ;;
         .clang-tidy|**/.clang-tidy)
             CLANG_TIDY_CONFIG_CHANGED=true
+            ;;
+        tt_stl/**/*.h|tt_stl/**/*.hpp|tt_stl/**/*.c|tt_stl/**/*.cpp)
+            # TT-STL is so small; not going to be so fine grained; just treat it as a TT-Metalium change
+            TTMETALIUM_CHANGED=true
+            ANY_CODE_CHANGED=true
             ;;
         tt_metal/**/*.h|tt_metal/**/*.hpp|tt_metal/**/*.c|tt_metal/**/*.cpp)
             TTMETALIUM_CHANGED=true
