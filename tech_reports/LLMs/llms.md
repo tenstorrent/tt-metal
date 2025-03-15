@@ -91,7 +91,7 @@ Fused operation uses a different parallelization scheme internally depending on 
 
 
 #### 2.2.2 Decode mode specifics
-The cos/sin matrices, are generated in two slightly different ways, depending on the mode of operation. For *prefill* mode, the cos/sin matrices are computed once at intialization using the *prefill* sequence length, and then passed into the RoPE OP. However, in *decode* mode, since the position index of each user is updated from token-to-token, the cos/sin matrices must be updated across iterations. Here, we leverage our `RotarySetup` module, that can be used at each decode iteration to get the corresponding cos/sin matrices.
+The cos/sin matrices, are generated in two slightly different ways, depending on the mode of operation. For *prefill* mode, the cos/sin matrices are computed once at initialization using the *prefill* sequence length, and then passed into the RoPE OP. However, in *decode* mode, since the position index of each user is updated from token-to-token, the cos/sin matrices must be updated across iterations. Here, we leverage our `RotarySetup` module, that can be used at each decode iteration to get the corresponding cos/sin matrices.
 
 The following code sample shows how `RotarySetup` can be used in decode mode:
 ```py
@@ -115,8 +115,7 @@ position_ids = torch.arange(batch)
 
 
 # Step 3: Retreive the relevant cos/sin matrices
-cos_sin_matrices = rope_setup_decode.get_rot_mats(position_ids)
-cos_matrix, sin_matrix = cos_sin_matrices
+cos_matrix, sin_matrix = rope_setup_decode.get_rot_mats(position_ids)
 
 
 # Step 4: Perform the RoPE operation
@@ -160,7 +159,8 @@ import ttnn
 def torch_rms_norm(x, gamma, eps):
     return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) * gamma
 
-batch, seq_len, embedding_dim = 32, 1, 8192
+device = ttnn.open_device(device_id=0)
+batch, seq_len, embedding_dim = 16, 1, 8192
 torch_input = torch.randn((batch, seq_len, embedding_dim))
 torch_gamma = torch.randn((embedding_dim))
 torch_output = torch_rms_norm(torch_input, torch_gamma, eps=1e-5)
@@ -330,7 +330,7 @@ For example, the Llama model is implemented as follows:
         return self.wo(output)
 ```
 
-The generic `torch` implementation is agnostic to **prefill** and **decode** modes, however, our implementation differientiates them. For more information about differences between modes and how we handle them in TT-NN, see [3.2 Prefill and Decode](#32-prefill-and-decode). In general, our high performance attention module uses specialized implementations for each mode as they have different memory and compute patterns and bottlenecks, requiring different optimizations.
+The generic `torch` implementation is agnostic to **prefill** and **decode** modes, however, our implementation differentiates them. For more information about differences between modes and how we handle them in TT-NN, see [3.2 Prefill and Decode](#32-prefill-and-decode). In general, our high performance attention module uses specialized implementations for each mode as they have different memory and compute patterns and bottlenecks, requiring different optimizations.
 
 In this section we split the attention module into two parts -- **prefill** and **decode** -- and describe the six implementation steps for each mode. We discuss limitations of the current implementation and helpful facts for debugging and performance optimization.
 
@@ -1300,13 +1300,13 @@ Matmul weights on the other hand can be sharded in width, height, or both. Shard
 
 ##### 3.3.5 1D Column parallel
 
-Weights are sharded in width, such that each device contains a horizontal slice of the weights. For this scheme the activations must be gathered beforehead, i.e. each device processes the whole activation. The result of a column parallel matmul is an activation that is sharded in width. Use an AllGather operation on dim=3 to gather (i.e., replicate) activations.
+Weights are sharded in width, such that each device contains a vertical slice of the weights. For this scheme the activations must be gathered beforehead, i.e. each device processes the whole activation. The result of a column parallel matmul is an activation that is sharded in width. Use an AllGather operation on dim=3 to gather (i.e., replicate) activations.
 
 <img src="images/column_parallel.png" style="width:500px;"/>
 
 ##### 3.3.6 1D Row parallel
 
-Weights are sharded in height, such that each device contains a vertical slice of the weights. For this scheme the activations must be sharded beforehand, i.e. each device processes a width-shard of the activation. The result of a row parallel matmul are activation partials with the final result's output dimensions, each device containing a partial result. To reduce the activations, i.e. compute the final output, use a ReduceScatter operation to compute the reduced result across all devices and shard the result along a specified dimension.
+Weights are sharded in height, such that each device contains a hoizontal slice of the weights. For this scheme the activations must be sharded beforehand, i.e. each device processes a width-shard of the activation. The result of a row parallel matmul are activation partials with the final result's output dimensions, each device containing a partial result. To reduce the activations, i.e. compute the final output, use a ReduceScatter operation to compute the reduced result across all devices and shard the result along a specified dimension.
 Additionally use an AllGather operation (ReduceScatter+AllGather = AllReduce) to gather the reduced shards and thus replicate the final output on each device.
 
 <img src="images/row_parallel.png" style="width:500px;"/>
