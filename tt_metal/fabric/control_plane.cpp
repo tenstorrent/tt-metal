@@ -181,7 +181,7 @@ void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_
         mesh_ns_size = routing_table_generator_->get_mesh_ns_size(/*mesh_id=*/0);
         mesh_ew_size = routing_table_generator_->get_mesh_ew_size(/*mesh_id=*/0);
     } else if (mesh_graph_desc_filename == "t3k_mesh_graph_descriptor.yaml") {
-        nw_chip_eth_coord = {0, 0, 1, 0, 0};
+        nw_chip_eth_coord = {0, 0, 0, 0, 0};
         mesh_ns_size = routing_table_generator_->get_mesh_ns_size(/*mesh_id=*/0);
         mesh_ew_size = routing_table_generator_->get_mesh_ew_size(/*mesh_id=*/0);
     } else if (mesh_graph_desc_filename == "n300_mesh_graph_descriptor.yaml") {
