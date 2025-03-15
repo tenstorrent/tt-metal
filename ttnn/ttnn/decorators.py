@@ -26,7 +26,7 @@ def compare_tensors_using_pcc(
 ):
     import torch
 
-    from models.utility_functions import comp_pcc
+    from models.utility_functions import comp_pcc, comp_allclose
 
     if isinstance(outputs, ttnn.Tensor):
         if not isinstance(golden_outputs, torch.Tensor):
@@ -50,18 +50,32 @@ def compare_tensors_using_pcc(
             torch_output = ttnn.to_torch(output)
         else:
             torch_output = output
-        matches, actual_pcc = comp_pcc(golden_output, torch_output, desired_pcc)
+        pcc_matches, actual_pcc = comp_pcc(golden_output, torch_output, desired_pcc)
         commparison_record = ttnn.database.TensorComparisonRecord(
             tensor_id=output.tensor_id,
             golden_tensor_id=golden_output.tensor_id,
-            matches=matches,
+            matches=pcc_matches,
             desired_pcc=desired_pcc,
             actual_pcc=actual_pcc,
         )
         comparison_records.append(commparison_record)
 
-        if not matches:
+        if not pcc_matches:
             error_message = f"{python_fully_qualified_name}: Comparing output tensor {index} against CPU {level} failed: pcc is {actual_pcc} but should be >={desired_pcc}"
+            if fail_on_bad_comparison:
+                raise RuntimeError(error_message)
+            else:
+                logger.error(error_message)
+
+        if golden_output.dtype != torch_output.dtype:
+            torch_output = torch_output.type(golden_output.dtype)
+        desired_rtol, desired_atol = 1e-6, 1e-6
+        atol_delta = torch.max(torch.abs(golden_output - torch_output)).item()
+        rtol_delta = torch.max(torch.abs(golden_output - torch_output) / torch.abs(torch_output)).item()
+        allclose_matches = torch.allclose(golden_output, torch_output, desired_rtol, desired_atol, True)
+
+        if not allclose_matches:
+            error_message = f"{python_fully_qualified_name}: Comparing output tensor {index} against CPU {level} failed: rtol/atol is {rtol_delta}/{atol_delta} but should be >={desired_rtol}/{desired_atol}"
             if fail_on_bad_comparison:
                 raise RuntimeError(error_message)
             else:
