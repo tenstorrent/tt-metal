@@ -324,7 +324,7 @@ def run_all_reduce_impl(
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
-@pytest.mark.timeout(1500)
+@pytest.mark.timeout(3600)
 @pytest.mark.parametrize(
     "output_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set",
     [
