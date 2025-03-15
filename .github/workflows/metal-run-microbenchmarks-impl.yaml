@@ -61,6 +61,8 @@ jobs:
     container:
       image: ${{ inputs.docker-image }}
       env:
+        # All of these tests need this environment variable...
+        TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ matrix.test-group.arch }}
