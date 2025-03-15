@@ -97,12 +97,7 @@ AllReduceAsync create_all_reduce_async_struct(
 }  // namespace ccl
 
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
-    size_t num_links,
-    size_t num_workers_per_link,
-    bool persistent_fabric_mode,
-    IDevice* device,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    const std::optional<CoreRangeSet>& reserved_core_range = std::nullopt);
+    size_t num_links, size_t num_workers_per_link, bool persistent_fabric_mode, const CoreRangeSet& available_cores);
 
 tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers(
     const Tensor& input_tensor,

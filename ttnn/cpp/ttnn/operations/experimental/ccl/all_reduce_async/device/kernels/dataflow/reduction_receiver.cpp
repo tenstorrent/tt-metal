@@ -13,6 +13,11 @@ void kernel_main() {
 
     // runtime args
     size_t arg_idx = 0;
+    const uint32_t has_work = get_arg_val<uint32_t>(arg_idx++);
+    if (has_work == 0) {
+        return;
+    }
+
     const uint32_t signal_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
 
     volatile tt_l1_ptr uint32_t* signal_semaphore_addr_ptr =
