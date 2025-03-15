@@ -126,7 +126,7 @@ def test_chunked_prefill_single_user(
         weight_cache_path=model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
     )
-    generator = Generator(tt_model, model_args, mesh_device)
+    generator = Generator([tt_model], [model_args], mesh_device)
 
     logger.info("Model and caches loaded.")
 
@@ -150,13 +150,15 @@ def test_chunked_prefill_single_user(
     logger.info("Running TT model")
     for last_token_idx in range(prefill_chunk_size - 10, seq_len, prefill_chunk_size):
         logger.info(f"Running TT model for last_token_idx: {last_token_idx}")
-        tt_output_torch = generator.prefill_forward_single_user_text(
+        tt_output_device = generator.prefill_forward_single_user_text(
             tt_prefill_input,
             page_table=static_page_table,
             user_id=0,
             last_token_idx=last_token_idx,
             kv_cache=tt_kv_cache,
         )
+
+        tt_output_torch = tt_model.process_output_prefill(tt_output_device, last_token_idx=(last_token_idx % 32))
         tt_output_torch = tt_output_torch.reshape(batch_size, 1, -1)
 
         ref_output_slice = ref_output[:, last_token_idx : last_token_idx + 1, :]

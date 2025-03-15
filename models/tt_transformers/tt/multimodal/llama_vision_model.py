@@ -685,6 +685,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             get_last_token=get_last_token,
         )
         tt_out = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
+        tt_out = ttnn.to_memory_config(tt_out, ttnn.DRAM_MEMORY_CONFIG)
         return tt_out
 
     def ttnn_decode_forward(
