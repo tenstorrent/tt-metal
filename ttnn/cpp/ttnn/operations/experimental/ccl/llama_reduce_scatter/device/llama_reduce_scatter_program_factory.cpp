@@ -374,11 +374,16 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         }
         return worker_cores;
     };
-    auto input_cores = corerange_to_cores(input_grid, std::nullopt);
-    auto output_cores = corerange_to_cores(output_grid, std::nullopt);
-    auto receiver_cores = corerange_to_cores(receiver_grid, std::nullopt);
-    auto sender_cores = corerange_to_cores(sender_core_grid, std::nullopt);
-    auto all_cores = corerange_to_cores(all_cores_grid, std::nullopt);
+    auto input_cores =
+        corerange_to_cores(input_grid, std::nullopt, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    auto output_cores =
+        corerange_to_cores(output_grid, std::nullopt, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    auto receiver_cores =
+        corerange_to_cores(receiver_grid, std::nullopt, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    auto sender_cores =
+        corerange_to_cores(sender_core_grid, std::nullopt, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    auto all_cores =
+        corerange_to_cores(all_cores_grid, std::nullopt, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
     reader_defines["INPUT_CORE_XY"] = detail::cores_to_string(to_worker_cores(input_cores));
     reader_defines["OUTPUT_CORE_XY"] = detail::cores_to_string(to_worker_cores(output_cores));
@@ -412,6 +417,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
             reader_runtime_args[is_reader_sender_core_idx] = false;
             reader_runtime_args[is_worker_core_idx] = true;
             reader_runtime_args[local_input_page_idx] = local_input_page++;
+            std::cout << core.str() << " local input page " << reader_runtime_args[local_input_page_idx] << std::endl;
         } else {
             reader_runtime_args[is_reader_sender_core_idx] = false;
             reader_runtime_args[is_worker_core_idx] = false;

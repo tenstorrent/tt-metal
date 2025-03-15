@@ -260,16 +260,15 @@ def test_fabric_reduce_scatter(n300_mesh_device):
     for _ in range(num_devices):
         for _ in range(num_cores):
             for _ in range(shard_width // 32):
-                torch_input_tensors.append((len(torch_input_tensors) + 1) * torch.ones(1, 1, shard_height, 32))
-    input = torch.cat(torch_input_tensors, dim=3)
-    print(input.shape)
+                torch_input_tensors.append((len(torch_input_tensors)) * torch.ones(1, 1, shard_height, 32))
 
+    input = torch.cat(torch_input_tensors, dim=3)
+    print("input.shape", input.shape)
     intermediate_outputs = torch.chunk(input, chunks=num_devices, dim=3)
     output = torch.zeros(intermediate_outputs[0].shape)
     for i in range(0, len(intermediate_outputs)):
         output += intermediate_outputs[i]
 
-    torch.set_printoptions(precision=10)
     n300_mesh_device.enable_async(True)
     compute_grid_size = n300_mesh_device.compute_with_storage_grid_size()
     sharded_mem_config = ttnn.create_sharded_memory_config(
@@ -279,7 +278,6 @@ def test_fabric_reduce_scatter(n300_mesh_device):
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-    print(sharded_mem_config)
     tt_input = ttnn.from_torch(
         input,
         mesh_mapper=ttnn.ShardTensorToMesh(n300_mesh_device, dim),
@@ -323,12 +321,11 @@ def test_fabric_reduce_scatter(n300_mesh_device):
     )
     ttnn.synchronize_device(n300_mesh_device, sub_device_ids=sub_device_stall_group)
     tt_torch_tensor = ttnn.to_torch(tt_out_tensor, mesh_composer=ttnn.ConcatMeshToTensor(n300_mesh_device, dim))
-    print(tt_torch_tensor.shape)
-    print("Torch conversion done")
+    torch.set_printoptions(threshold=10000)
     print("TT tensor")
-    print(tt_torch_tensor)
+    print(tt_torch_tensor[:, :, 0, 0::32])
     print("Torch tensor")
-    print(output)
+    print(output[:, :, 0, 0::32])
 
     eq, output_results = comp_pcc(tt_torch_tensor, output)
 
@@ -354,6 +351,7 @@ def test_fabric_reduce_scatter(n300_mesh_device):
     print("Torch", output[first_max_diff_index])
     if first_max_diff_index is not None:
         print(f"First index with maximum difference: {first_max_diff_index}")
+        print(f"Index at tile: {first_max_diff_index[3]/32}")
         print(f"Maximum difference: {max_difference.item()}")
         print(f"tt_torch_tensor value: {tt_torch_tensor[first_max_diff_index]}")
         print(f"output value: {output[first_max_diff_index]}")
