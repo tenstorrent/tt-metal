@@ -21,6 +21,7 @@
 #include "tt_backend_api_types.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "command_queue_fixture.hpp"
+#include "multi_command_queue_fixture.hpp"
 #include "sub_device_test_utils.hpp"
 #include "dispatch_test_utils.hpp"
 
@@ -29,8 +30,7 @@ namespace tt::tt_metal {
 constexpr uint32_t k_local_l1_size = 3200;
 const std::string k_coordinates_kernel_path = "tests/tt_metal/tt_metal/test_kernels/misc/read_my_coordinates.cpp";
 
-TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceSynchronization) {
-    auto* device = devices_[0];
+void test_sub_device_synchronization(IDevice* device) {
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
     SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})})});
     CoreRangeSet sharded_cores_1 = CoreRange({0, 0}, {2, 2});
@@ -98,6 +98,15 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceSynchronization) {
     // Full synchronization
     device->reset_sub_device_stall_group();
     Synchronize(device);
+}
+
+TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceSynchronization) {
+    auto* device = devices_[0];
+    test_sub_device_synchronization(device);
+}
+
+TEST_F(MultiCommandQueueSingleDeviceFixture, TensixTestMultiCQSubDeviceSynchronization) {
+    test_sub_device_synchronization(device_);
 }
 
 TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceBasicPrograms) {
