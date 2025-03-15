@@ -29,6 +29,7 @@ from models.demos.whisper.tt.ttnn_optimized_functional_whisper import (
 )
 from models.generation_utils import get_logits_processor
 from models.demos.utils.llm_demo_utils import verify_perf
+from models.utility_functions import is_blackhole
 
 
 def load_input_paths(folder_path):
@@ -467,18 +468,23 @@ def test_demo_for_audio_classification_dataset(ttnn_model, device, use_program_c
     (ttnn_optimized_functional_whisper,),
 )
 @pytest.mark.parametrize(
-    "num_inputs, expected_perf_metrics",
-    ((2, {"prefill_t/s": 3.81, "decode_t/s": 41.2, "decode_t/s/u": 41.2}),),
+    "num_inputs",
+    (2,),
 )
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_demo_for_conditional_generation(
-    input_path, ttnn_model, device, num_inputs, expected_perf_metrics, use_program_cache, enable_async_mode, is_ci_env
+    input_path, ttnn_model, device, num_inputs, use_program_cache, enable_async_mode, is_ci_env
 ):
     ttft, decode_throughput = run_demo_whisper_for_conditional_generation_inference(
         input_path, ttnn_model, device, num_inputs
     )
     if is_ci_env:
+        if is_blackhole():
+            expected_perf_metrics = {"prefill_t/s": 7.74, "decode_t/s/u": 86.3}
+        else:  # wormhole_b0
+            expected_perf_metrics = {"prefill_t/s": 3.84, "decode_t/s/u": 41.7}
+        expected_perf_metrics["decode_t/s"] = expected_perf_metrics["decode_t/s/u"]  # Only supporting batch 1
         measurements = {"prefill_t/s": 1 / ttft, "decode_t/s": decode_throughput, "decode_t/s/u": decode_throughput}
         verify_perf(measurements, expected_perf_metrics)
 

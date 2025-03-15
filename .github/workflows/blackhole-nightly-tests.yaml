@@ -2,9 +2,9 @@ name: "(Blackhole) Blackhole nightly tests"
 
 on:
   workflow_dispatch:
-  # workflow_call:
-  # schedule:
-  #   - cron: "0 */6 * * *"
+  workflow_call:
+  schedule:
+    - cron: "0 */12 * * *"  # Every day at 0:00 and 12:00 UTC
 
 jobs:
   build-artifact:

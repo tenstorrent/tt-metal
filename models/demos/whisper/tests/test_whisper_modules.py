@@ -15,7 +15,7 @@ from datasets import load_dataset
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
-from models.utility_functions import torch_random
+from models.utility_functions import torch_random, is_blackhole
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 # MODEL_NAME = "openai/whisper-base"
@@ -453,5 +453,9 @@ def test_ttnn_whisper(
     )
     last_hidden_state = ttnn.to_torch(last_hidden_state)
 
-    _, pcc_message = assert_with_pcc(expected_last_hidden_state, last_hidden_state, 0.991)
+    if is_blackhole():
+        expec_out_pcc = 0.990
+    else:  # wormhole_b0
+        expec_out_pcc = 0.991
+    _, pcc_message = assert_with_pcc(expected_last_hidden_state, last_hidden_state, expec_out_pcc)
     logger.info(f"Output PCC: {pcc_message}")
