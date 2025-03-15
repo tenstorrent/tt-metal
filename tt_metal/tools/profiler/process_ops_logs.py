@@ -87,6 +87,7 @@ OPS_CSV_HEADER = [
     "PM FPU UTIL (%)",
     "NOC UTIL (%)",
     "DRAM BW UTIL (%)",
+    "SHARE OF DEVICE DURATION (%)",
 ]
 
 
@@ -743,6 +744,22 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
                             rowDict["PM FPU UTIL (%)"] = 0.0
 
             rowDicts.append(rowDict)
+
+        # calculate % share of device duration for each op
+        total_device_fw_duration = 0
+        for rowDict in rowDicts:
+            try:
+                total_device_fw_duration += float(rowDict.get("DEVICE FW DURATION [ns]", 0))
+            except ValueError:
+                pass
+
+        for rowDict in rowDicts:
+            try:
+                rowDict["SHARE OF DEVICE DURATION (%)"] = round(
+                    100.0 * float(rowDict.get("DEVICE FW DURATION [ns]", 0)) / total_device_fw_duration, 1
+                )
+            except:
+                rowDict["SHARE OF DEVICE DURATION (%)"] = 0.0
 
         ioHeaderIndex = OPS_CSV_HEADER.index("INPUTS")
         allHeaders = (
