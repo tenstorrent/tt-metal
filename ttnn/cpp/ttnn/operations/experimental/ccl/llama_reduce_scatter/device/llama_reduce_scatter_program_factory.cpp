@@ -417,7 +417,6 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
             reader_runtime_args[is_reader_sender_core_idx] = false;
             reader_runtime_args[is_worker_core_idx] = true;
             reader_runtime_args[local_input_page_idx] = local_input_page++;
-            std::cout << core.str() << " local input page " << reader_runtime_args[local_input_page_idx] << std::endl;
         } else {
             reader_runtime_args[is_reader_sender_core_idx] = false;
             reader_runtime_args[is_worker_core_idx] = false;
