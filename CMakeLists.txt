@@ -9,6 +9,12 @@ endif()
 # Project setup
 ############################################
 
+# For single-config generators, choose a default build type if not specified
+get_property(isMultiConfig GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(NOT isMultiConfig)
+    set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build type")
+endif()
+
 list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 include(version)
 ParseGitDescribe()
@@ -23,6 +29,11 @@ project(
 )
 message(STATUS "Metalium version: ${PROJECT_VERSION}")
 message(STATUS "Building Unified Library for all architectures, thanks to blozano-tt")
+
+# Defining build types is the pervue of the top-level project
+if(PROJECT_IS_TOP_LEVEL)
+    include(sanitizers)
+endif()
 
 if(${PROJECT_SOURCE_DIR} STREQUAL ${PROJECT_BINARY_DIR})
     message(
@@ -56,17 +67,7 @@ include(CTest)
 get_property(isMultiConfig GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
 
 # Global settings if we're the top-level project
-if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-    set(CMAKE_CONFIGURATION_TYPES
-        Release
-        RelWithDebInfo
-        Debug
-    )
-    if(NOT CMAKE_BUILD_TYPE AND NOT isMultiConfig)
-        message(STATUS "Setting build type to 'Release' as none was specified.")
-        set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Release build is the default" FORCE)
-    endif()
-
+if(PROJECT_IS_TOP_LEVEL)
     set_property(
         GLOBAL
         PROPERTY
@@ -75,7 +76,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     )
 
     if(ENABLE_CCACHE)
-        include(cmake/ccache.cmake)
+        include(ccache)
     endif()
 endif()
 
