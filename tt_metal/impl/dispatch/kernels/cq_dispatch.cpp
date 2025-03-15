@@ -105,7 +105,7 @@ static uint32_t write_offset[3];  // added to write address on non-host writes
 static uint32_t upstream_total_acquired_page_count;
 
 static auto client_interface =
-    reinterpret_cast<volatile tt_l1_ptr fabric_pull_client_interface_t*>(client_interface_addr);
+    reinterpret_cast<volatile tt_l1_ptr tt::tt_fabric::fabric_pull_client_interface_t*>(client_interface_addr);
 
 constexpr uint32_t packed_write_max_multicast_sub_cmds =
     get_packed_write_max_multicast_sub_cmds(packed_write_max_unicast_sub_cmds);

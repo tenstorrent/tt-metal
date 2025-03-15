@@ -10,6 +10,7 @@
 #include "debug/dprint.h"
 #include "debug/ring_buffer.h"
 #include "cq_helpers.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 
 // The command queue read interface controls reads from the issue region, host owns the issue region write interface
 // Commands and data to send to device are pushed into the issue region
