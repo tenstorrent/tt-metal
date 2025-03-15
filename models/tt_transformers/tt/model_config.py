@@ -265,6 +265,7 @@ class ModelArgs:
         "LLAMA3_1_8B_PARAMS": "models/tt_transformers/model_params/Llama3.1-8B-Instruct",
         "LLAMA3_2_11B_PARAMS": "models/tt_transformers/model_params/Llama3.2-11B-Vision-Instruct",
         "LLAMA3_1_70B_PARAMS": "models/tt_transformers/model_params/Llama3.1-70B-Instruct",
+        "LLAMA3_2_90B_PARAMS": "models/tt_transformers/model_params/Llama3.2-90B-Vision-Instruct",
     }
 
     def __init__(
@@ -358,11 +359,16 @@ class ModelArgs:
                 local_params = "LLAMA3_2_11B_PARAMS"
             elif "3.1-70B" in self.CKPT_DIR:
                 local_params = "LLAMA3_1_70B_PARAMS"
+            elif "3.2-90B" in self.CKPT_DIR:
+                local_params = "LLAMA3_2_90B_PARAMS"
             else:
                 raise ValueError(
                     f"No local params found for {self.CKPT_DIR}, dummy weights are not supported for this model"
                 )
             self._set_model_params(self.LOCAL_LLAMA_PARAMS[local_params])
+
+        # gongyu TODO: remove this
+        self.n_layers = 1
 
         # Set the max number of tokens for each prefill chunk based on the model and device
         max_prefill_chunk_size_div1024 = os.getenv("MAX_PREFILL_CHUNK_SIZE")
@@ -373,6 +379,12 @@ class ModelArgs:
                 "Llama3.1-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128},
                 "Llama3.2-11B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128},
                 "Llama3.1-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128},
+                "Llama3.2-90B": {
+                    "N150": None,
+                    "N300": None,
+                    "T3K": 32,
+                    "TG": 128,
+                },
                 "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128},
                 "Qwen2.5-7B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128},
                 "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 32, "TG": 128},
@@ -1330,6 +1342,10 @@ class ModelArgs:
             self.model_name = "Llama3.1-70B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8
             self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
+        elif "3.2-90B" in checkpoint_dir:
+            self.model_name = "Llama3.2-90B" + ("-Instruct" if self.instruct else "")
+            self.rope_scaling_factor = 8
+            self.is_90b = True
         else:
             logger.warning(f"Unknown Meta-style model: {checkpoint_dir}")
         self.orig_context_len = 8192

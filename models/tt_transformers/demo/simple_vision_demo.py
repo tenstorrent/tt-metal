@@ -48,10 +48,10 @@ def create_multimodal_model(mesh_device, max_batch_size, max_seq_len, dtype=ttnn
     tt_model_args = ModelArgs(mesh_device, max_batch_size=max_batch_size)
     # limit length or we'll run out of space
     tt_model_args.max_seq_len = max_seq_len
-    checkpoint = torch.load(tt_model_args.consolidated_weights_path, map_location="cpu", weights_only=True)
+    checkpoint = tt_model_args.load_state_dict()
     model = CrossAttentionTransformer(
         mesh_device,
-        checkpoint,
+        state_dict=checkpoint,
         weight_cache_path=tt_model_args.weight_cache_path(dtype),
         dtype=dtype,
         configuration=tt_model_args,
@@ -106,7 +106,9 @@ def test_multimodal_demo_text(
 
     mesh_device.enable_program_cache()
     mesh_device.enable_async(True)
-    model_args, model = create_multimodal_model(mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len)
+    model_args, model = create_multimodal_model(
+        mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len, dtype=ttnn.bfloat16
+    )
     generator = Generator(model, model_args, mesh_device)
     tokenizer = Tokenizer(model_path=tokenizer_path)
     formatter = ChatFormat(tokenizer)

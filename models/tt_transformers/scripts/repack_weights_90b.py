@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Llama2-70B weights are saved as 8 sharded checkpoints. Loading weights for a
-single layer is slow since we load all 80 layers into memory to construct the
+Llama3.2-90B weights are saved as 8 sharded checkpoints. Loading weights for a
+single layer is slow since we load all layers into memory to construct the
 model. This script repacks the weights into checkpoints chunked by layers to
 speed up development.
 """
@@ -30,10 +30,6 @@ def chunk_key(key, chunk_size):
     chunk_id = layer_num(key) // chunk_size
     print(f"Key: {key} -> chunk_id: {chunk_id}")
     return chunk_id
-
-
-def is_param_different_across_shards():
-    pass
 
 
 def repack(in_dir, out_dir, chunk_size, num_layers, hidden_size):
@@ -89,7 +85,7 @@ def repack(in_dir, out_dir, chunk_size, num_layers, hidden_size):
 
 if __name__ == "__main__":
     # Take in command line arguments
-    parser = argparse.ArgumentParser(description="Repack llama2-70b weights")
+    parser = argparse.ArgumentParser(description="Repack llama3.2-90b weights")
     parser.add_argument("in_dir", type=str, help="input directory")
     parser.add_argument("out_dir", type=str, help="output directory")
     parser.add_argument("chunk_size", type=int, default=10, help="number of layers per chunk")

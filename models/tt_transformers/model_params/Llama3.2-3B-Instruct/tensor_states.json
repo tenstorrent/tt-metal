@@ -1,0 +1,1475 @@
+{
+    "tok_embeddings.weight": {
+        "full_shape": [
+            128256,
+            3072
+        ]
+    },
+    "layers.0.attention.wq.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.0.attention.wk.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.0.attention.wv.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.0.attention.wo.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.0.feed_forward.w1.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.0.feed_forward.w3.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.0.feed_forward.w2.weight": {
+        "full_shape": [
+            3072,
+            8192
+        ]
+    },
+    "layers.0.attention_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.0.ffn_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.1.attention.wq.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.1.attention.wk.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.1.attention.wv.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.1.attention.wo.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.1.feed_forward.w1.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.1.feed_forward.w3.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.1.feed_forward.w2.weight": {
+        "full_shape": [
+            3072,
+            8192
+        ]
+    },
+    "layers.1.attention_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.1.ffn_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.2.attention.wq.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.2.attention.wk.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.2.attention.wv.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.2.attention.wo.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.2.feed_forward.w1.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.2.feed_forward.w3.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.2.feed_forward.w2.weight": {
+        "full_shape": [
+            3072,
+            8192
+        ]
+    },
+    "layers.2.attention_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.2.ffn_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.3.attention.wq.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.3.attention.wk.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.3.attention.wv.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.3.attention.wo.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.3.feed_forward.w1.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.3.feed_forward.w3.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.3.feed_forward.w2.weight": {
+        "full_shape": [
+            3072,
+            8192
+        ]
+    },
+    "layers.3.attention_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.3.ffn_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.4.attention.wq.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.4.attention.wk.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.4.attention.wv.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.4.attention.wo.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.4.feed_forward.w1.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.4.feed_forward.w3.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.4.feed_forward.w2.weight": {
+        "full_shape": [
+            3072,
+            8192
+        ]
+    },
+    "layers.4.attention_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.4.ffn_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.5.attention.wq.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.5.attention.wk.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.5.attention.wv.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.5.attention.wo.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.5.feed_forward.w1.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.5.feed_forward.w3.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.5.feed_forward.w2.weight": {
+        "full_shape": [
+            3072,
+            8192
+        ]
+    },
+    "layers.5.attention_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.5.ffn_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.6.attention.wq.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.6.attention.wk.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.6.attention.wv.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.6.attention.wo.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.6.feed_forward.w1.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.6.feed_forward.w3.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.6.feed_forward.w2.weight": {
+        "full_shape": [
+            3072,
+            8192
+        ]
+    },
+    "layers.6.attention_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.6.ffn_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.7.attention.wq.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.7.attention.wk.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.7.attention.wv.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.7.attention.wo.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.7.feed_forward.w1.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.7.feed_forward.w3.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.7.feed_forward.w2.weight": {
+        "full_shape": [
+            3072,
+            8192
+        ]
+    },
+    "layers.7.attention_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.7.ffn_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.8.attention.wq.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.8.attention.wk.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.8.attention.wv.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.8.attention.wo.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.8.feed_forward.w1.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.8.feed_forward.w3.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.8.feed_forward.w2.weight": {
+        "full_shape": [
+            3072,
+            8192
+        ]
+    },
+    "layers.8.attention_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.8.ffn_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.9.attention.wq.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.9.attention.wk.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.9.attention.wv.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.9.attention.wo.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.9.feed_forward.w1.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.9.feed_forward.w3.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.9.feed_forward.w2.weight": {
+        "full_shape": [
+            3072,
+            8192
+        ]
+    },
+    "layers.9.attention_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.9.ffn_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.10.attention.wq.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.10.attention.wk.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.10.attention.wv.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.10.attention.wo.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.10.feed_forward.w1.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.10.feed_forward.w3.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.10.feed_forward.w2.weight": {
+        "full_shape": [
+            3072,
+            8192
+        ]
+    },
+    "layers.10.attention_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.10.ffn_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.11.attention.wq.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.11.attention.wk.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.11.attention.wv.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.11.attention.wo.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.11.feed_forward.w1.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.11.feed_forward.w3.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.11.feed_forward.w2.weight": {
+        "full_shape": [
+            3072,
+            8192
+        ]
+    },
+    "layers.11.attention_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.11.ffn_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.12.attention.wq.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.12.attention.wk.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.12.attention.wv.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.12.attention.wo.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.12.feed_forward.w1.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.12.feed_forward.w3.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.12.feed_forward.w2.weight": {
+        "full_shape": [
+            3072,
+            8192
+        ]
+    },
+    "layers.12.attention_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.12.ffn_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.13.attention.wq.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.13.attention.wk.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.13.attention.wv.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.13.attention.wo.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.13.feed_forward.w1.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.13.feed_forward.w3.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.13.feed_forward.w2.weight": {
+        "full_shape": [
+            3072,
+            8192
+        ]
+    },
+    "layers.13.attention_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.13.ffn_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.14.attention.wq.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.14.attention.wk.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.14.attention.wv.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.14.attention.wo.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.14.feed_forward.w1.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.14.feed_forward.w3.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.14.feed_forward.w2.weight": {
+        "full_shape": [
+            3072,
+            8192
+        ]
+    },
+    "layers.14.attention_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.14.ffn_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.15.attention.wq.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.15.attention.wk.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.15.attention.wv.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.15.attention.wo.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.15.feed_forward.w1.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.15.feed_forward.w3.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.15.feed_forward.w2.weight": {
+        "full_shape": [
+            3072,
+            8192
+        ]
+    },
+    "layers.15.attention_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.15.ffn_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.16.attention.wq.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.16.attention.wk.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.16.attention.wv.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.16.attention.wo.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.16.feed_forward.w1.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.16.feed_forward.w3.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.16.feed_forward.w2.weight": {
+        "full_shape": [
+            3072,
+            8192
+        ]
+    },
+    "layers.16.attention_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.16.ffn_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.17.attention.wq.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.17.attention.wk.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.17.attention.wv.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.17.attention.wo.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.17.feed_forward.w1.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.17.feed_forward.w3.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.17.feed_forward.w2.weight": {
+        "full_shape": [
+            3072,
+            8192
+        ]
+    },
+    "layers.17.attention_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.17.ffn_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.18.attention.wq.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.18.attention.wk.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.18.attention.wv.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.18.attention.wo.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.18.feed_forward.w1.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.18.feed_forward.w3.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.18.feed_forward.w2.weight": {
+        "full_shape": [
+            3072,
+            8192
+        ]
+    },
+    "layers.18.attention_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.18.ffn_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.19.attention.wq.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.19.attention.wk.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.19.attention.wv.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.19.attention.wo.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.19.feed_forward.w1.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.19.feed_forward.w3.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.19.feed_forward.w2.weight": {
+        "full_shape": [
+            3072,
+            8192
+        ]
+    },
+    "layers.19.attention_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.19.ffn_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.20.attention.wq.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.20.attention.wk.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.20.attention.wv.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.20.attention.wo.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.20.feed_forward.w1.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.20.feed_forward.w3.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.20.feed_forward.w2.weight": {
+        "full_shape": [
+            3072,
+            8192
+        ]
+    },
+    "layers.20.attention_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.20.ffn_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.21.attention.wq.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.21.attention.wk.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.21.attention.wv.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.21.attention.wo.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.21.feed_forward.w1.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.21.feed_forward.w3.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.21.feed_forward.w2.weight": {
+        "full_shape": [
+            3072,
+            8192
+        ]
+    },
+    "layers.21.attention_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.21.ffn_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.22.attention.wq.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.22.attention.wk.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.22.attention.wv.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.22.attention.wo.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.22.feed_forward.w1.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.22.feed_forward.w3.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.22.feed_forward.w2.weight": {
+        "full_shape": [
+            3072,
+            8192
+        ]
+    },
+    "layers.22.attention_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.22.ffn_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.23.attention.wq.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.23.attention.wk.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.23.attention.wv.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.23.attention.wo.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.23.feed_forward.w1.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.23.feed_forward.w3.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.23.feed_forward.w2.weight": {
+        "full_shape": [
+            3072,
+            8192
+        ]
+    },
+    "layers.23.attention_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.23.ffn_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.24.attention.wq.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.24.attention.wk.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.24.attention.wv.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.24.attention.wo.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.24.feed_forward.w1.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.24.feed_forward.w3.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.24.feed_forward.w2.weight": {
+        "full_shape": [
+            3072,
+            8192
+        ]
+    },
+    "layers.24.attention_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.24.ffn_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.25.attention.wq.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.25.attention.wk.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.25.attention.wv.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.25.attention.wo.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.25.feed_forward.w1.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.25.feed_forward.w3.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.25.feed_forward.w2.weight": {
+        "full_shape": [
+            3072,
+            8192
+        ]
+    },
+    "layers.25.attention_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.25.ffn_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.26.attention.wq.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.26.attention.wk.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.26.attention.wv.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.26.attention.wo.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.26.feed_forward.w1.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.26.feed_forward.w3.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.26.feed_forward.w2.weight": {
+        "full_shape": [
+            3072,
+            8192
+        ]
+    },
+    "layers.26.attention_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.26.ffn_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.27.attention.wq.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.27.attention.wk.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.27.attention.wv.weight": {
+        "full_shape": [
+            1024,
+            3072
+        ]
+    },
+    "layers.27.attention.wo.weight": {
+        "full_shape": [
+            3072,
+            3072
+        ]
+    },
+    "layers.27.feed_forward.w1.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.27.feed_forward.w3.weight": {
+        "full_shape": [
+            8192,
+            3072
+        ]
+    },
+    "layers.27.feed_forward.w2.weight": {
+        "full_shape": [
+            3072,
+            8192
+        ]
+    },
+    "layers.27.attention_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "layers.27.ffn_norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "norm.weight": {
+        "full_shape": [
+            3072
+        ]
+    },
+    "output.weight": {
+        "full_shape": [
+            128256,
+            3072
+        ]
+    }
+}
