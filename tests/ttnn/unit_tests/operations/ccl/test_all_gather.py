@@ -208,7 +208,7 @@ def run_all_gather_on_n300_impl(
     )
     if is_known_failure:
         pytest.skip(f"Skipping unsupported case {message}.")
-
+    pytest.skip("TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)")
     return run_all_gather_impl(
         mesh_device,
         num_devices,
@@ -253,7 +253,7 @@ def run_all_gather_on_t3000_impl(
     )
     if is_known_failure:
         pytest.skip(f"Skipping unsupported case {message}.")
-
+    pytest.skip("TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)")
     return run_all_gather_impl(
         mesh_device,
         num_devices,
@@ -1450,6 +1450,7 @@ def test_all_gather_sharded_post_commit(
     function_level_defaults,
     enable_async,
 ):
+    pytest.skip("TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)")
     run_all_gather_sharded_t3k(
         t3k_mesh_device,
         num_devices,
@@ -1540,6 +1541,7 @@ def test_all_gather_height_sharded_post_commit(
     function_level_defaults,
     enable_async,
 ):
+    pytest.skip("TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)")
     run_all_gather_sharded_t3k(
         t3k_mesh_device,
         num_devices,

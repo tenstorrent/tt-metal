@@ -5,6 +5,8 @@
 #include "ttnn_ops.hpp"
 
 #include <core/ttnn_all_includes.hpp>
+#include <ttnn/distributed/api.hpp>
+#include <ttnn/tensor/tensor.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
@@ -46,8 +48,8 @@ tt::tt_metal::Tensor scatter(const tt::tt_metal::Tensor& tensor, int dim) {
     }
 
     auto device_grid_shape = current_device->shape();
-    const auto& storage = std::get<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage());
-    auto num_tensor_buffers = storage.num_buffers();
+    const auto& storage = std::get<tt::tt_metal::DeviceStorage>(tensor.get_storage());
+    const auto num_tensor_buffers = storage.specs.size();
 
     if (num_devices != num_tensor_buffers) {
         throw std::logic_error(fmt::format(
@@ -82,22 +84,22 @@ tt::tt_metal::Tensor scatter(const tt::tt_metal::Tensor& tensor, int dim) {
     ttnn::SmallVector<uint32_t> end{tensor_shape[0], tensor_shape[1], tensor_shape[2], tensor_shape[3]};
     ttnn::SmallVector<uint32_t> stride{1U, 1U, 1U, 1U};
 
-    std::vector<tt::tt_metal::Tensor> scattered_tensors;
-    scattered_tensors.reserve(num_tensor_buffers);
-    for (size_t device_index = 0; device_index < num_tensor_buffers; ++device_index) {
-        auto device = storage.get_buffer_for_device_id(device_index)->device();
-        auto tensor_on_device =
-            tt::tt_metal::Tensor(storage.get_buffer_for_device(device), storage.get_tensor_spec_for_device(device));
+    ttnn::SmallVector<uint32_t> shape{tensor_shape[0], tensor_shape[1], tensor_shape[2], tensor_shape[3]};
+    shape[dim] = split_size_per_device;
 
-        start[dim] = split_size_per_device * device_index;
-        end[dim] = split_size_per_device * (device_index + 1);
+    ttnn::Tensor scattered_tensor = tt::tt_metal::allocate_tensor_on_mesh(
+        ttnn::TensorSpec(ttnn::Shape(shape), tensor.get_tensor_spec().tensor_layout()), current_device);
+    std::vector<tt::tt_metal::Tensor> scattered_tensors = ttnn::distributed::get_device_tensors(scattered_tensor);
 
-        auto sliced_tensor = ttnn::slice(tensor_on_device, start, end, stride);
-        scattered_tensors.push_back(sliced_tensor);
+    size_t idx = 0;
+    for (const auto& tensor_shard : ttnn::distributed::get_device_tensors(tensor)) {
+        start[dim] = split_size_per_device * idx;
+        end[dim] = split_size_per_device * (idx + 1);
+
+        ttnn::slice(tensor_shard, start, end, stride, std::nullopt, scattered_tensors[idx]);
+        ++idx;
     }
-    auto distributed_tensor = ttnn::distributed::create_multi_device_tensor(
-        scattered_tensors, ttnn::StorageType::MULTI_DEVICE, storage.strategy);
-    return distributed_tensor;
+    return ttnn::distributed::aggregate_as_tensor(scattered_tensors, tt::tt_metal::AllGatherTensor{});
 }
 
 }  // namespace ttml::ttnn_fixed::distributed

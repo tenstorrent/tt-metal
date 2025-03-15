@@ -41,8 +41,7 @@ TEST_P(MultiDeviceTensorCreationTest, Empty) {
         mesh_device,
         MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
 
-    EXPECT_EQ(mesh_replicated_tensor.storage_type(), StorageType::MULTI_DEVICE);
-    EXPECT_EQ(mesh_replicated_tensor.get_workers().size(), mesh_device->num_devices());
+    EXPECT_EQ(mesh_replicated_tensor.storage_type(), StorageType::DEVICE);
 
     const auto distributed_tensor_config = get_distributed_tensor_config_from_tensor(mesh_replicated_tensor);
     EXPECT_TRUE(std::holds_alternative<ReplicateTensor>(distributed_tensor_config));
@@ -58,11 +57,10 @@ TEST_P(MultiDeviceTensorCreationTest, EmptyLike) {
         ttnn::Shape({32, 32}),
         DataType::BFLOAT16,
         Layout::ROW_MAJOR,
-        mesh_device->get_devices().at(0),
+        mesh_device,
         MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
 
     EXPECT_EQ(tensor.storage_type(), StorageType::DEVICE);
-    EXPECT_THAT(tensor.get_workers(), SizeIs(1));
 
     const Tensor mesh_replicated_tensor = ttnn::empty_like(
         tensor,
@@ -71,8 +69,7 @@ TEST_P(MultiDeviceTensorCreationTest, EmptyLike) {
         *mesh_device,
         MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
 
-    EXPECT_EQ(mesh_replicated_tensor.storage_type(), StorageType::MULTI_DEVICE);
-    EXPECT_THAT(mesh_replicated_tensor.get_workers(), SizeIs(mesh_device->num_devices()));
+    EXPECT_EQ(mesh_replicated_tensor.storage_type(), StorageType::DEVICE);
 
     const auto distributed_tensor_config = get_distributed_tensor_config_from_tensor(mesh_replicated_tensor);
     EXPECT_TRUE(std::holds_alternative<ReplicateTensor>(distributed_tensor_config));
@@ -90,8 +87,7 @@ TEST_P(MultiDeviceTensorCreationTest, Full) {
         std::ref(*mesh_device),
         MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
 
-    EXPECT_EQ(mesh_replicated_tensor.storage_type(), StorageType::MULTI_DEVICE);
-    EXPECT_THAT(mesh_replicated_tensor.get_workers(), SizeIs(mesh_device->num_devices()));
+    EXPECT_EQ(mesh_replicated_tensor.storage_type(), StorageType::DEVICE);
     EXPECT_EQ(mesh_replicated_tensor.logical_shape(), ttnn::Shape({32, 32}));
     EXPECT_EQ(mesh_replicated_tensor.dtype(), DataType::BFLOAT16);
     EXPECT_EQ(mesh_replicated_tensor.layout(), Layout::ROW_MAJOR);
@@ -110,11 +106,10 @@ TEST_P(MultiDeviceTensorCreationTest, FullLike) {
         ttnn::Shape({32, 32}),
         DataType::BFLOAT16,
         Layout::ROW_MAJOR,
-        mesh_device->get_devices().at(0),
+        mesh_device,
         MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
 
     EXPECT_EQ(tensor.storage_type(), StorageType::DEVICE);
-    EXPECT_THAT(tensor.get_workers(), SizeIs(1));
 
     Tensor mesh_replicated_tensor = ttnn::full_like(
         tensor,
@@ -123,8 +118,7 @@ TEST_P(MultiDeviceTensorCreationTest, FullLike) {
         /*layout=*/std::nullopt,
         std::ref(*mesh_device));
 
-    EXPECT_EQ(mesh_replicated_tensor.storage_type(), StorageType::MULTI_DEVICE);
-    EXPECT_THAT(mesh_replicated_tensor.get_workers(), SizeIs(mesh_device->num_devices()));
+    EXPECT_EQ(mesh_replicated_tensor.storage_type(), StorageType::DEVICE);
     EXPECT_EQ(mesh_replicated_tensor.logical_shape(), tensor.logical_shape());
     EXPECT_EQ(mesh_replicated_tensor.padded_shape(), tensor.padded_shape());
     EXPECT_EQ(mesh_replicated_tensor.dtype(), tensor.dtype());
@@ -144,11 +138,10 @@ TEST_P(MultiDeviceTensorCreationTest, FullLikeWithOptTensor) {
         ttnn::Shape({32, 32}),
         DataType::BFLOAT16,
         Layout::ROW_MAJOR,
-        mesh_device->get_devices().at(0),
+        mesh_device,
         MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
 
     EXPECT_EQ(tensor.storage_type(), StorageType::DEVICE);
-    EXPECT_EQ(tensor.get_workers().size(), 1);
 
     Tensor opt_output = ttnn::empty(
         ttnn::Shape({32, 32}),
@@ -166,8 +159,7 @@ TEST_P(MultiDeviceTensorCreationTest, FullLikeWithOptTensor) {
         /*memory_config=*/std::nullopt,
         opt_output);
 
-    EXPECT_EQ(mesh_replicated_tensor.storage_type(), StorageType::MULTI_DEVICE);
-    EXPECT_THAT(mesh_replicated_tensor.get_workers(), SizeIs(mesh_device->num_devices()));
+    EXPECT_EQ(mesh_replicated_tensor.storage_type(), StorageType::DEVICE);
     EXPECT_EQ(mesh_replicated_tensor.logical_shape(), tensor.logical_shape());
     EXPECT_EQ(mesh_replicated_tensor.padded_shape(), tensor.padded_shape());
     EXPECT_EQ(mesh_replicated_tensor.dtype(), tensor.dtype());
@@ -188,8 +180,7 @@ TEST_P(MultiDeviceTensorCreationTest, Arange) {
         ttnn::DataType::BFLOAT16,
         std::ref(*mesh_device));
 
-    EXPECT_EQ(tensor.storage_type(), StorageType::MULTI_DEVICE);
-    EXPECT_EQ(tensor.get_workers().size(), mesh_device->num_devices());
+    EXPECT_EQ(tensor.storage_type(), StorageType::DEVICE);
     EXPECT_EQ(tensor.logical_shape(), ttnn::Shape({1024}));
 
     const auto distributed_tensor_config = get_distributed_tensor_config_from_tensor(tensor);

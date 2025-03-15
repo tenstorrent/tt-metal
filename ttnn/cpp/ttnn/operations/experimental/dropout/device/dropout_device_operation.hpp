@@ -12,6 +12,7 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
+#include "ttnn/mesh_execution.hpp"
 
 #include "dropout_device_operation_types.hpp"
 
@@ -23,6 +24,7 @@ struct DropoutDeviceOperation {
     using spec_return_value_t = dropout::spec_return_value_t;
     using tensor_return_value_t = dropout::tensor_return_value_t;
     using program_factory_t = std::variant<program::DropoutProgramFactory>;
+    using shared_variables_t = program::DropoutProgramFactory::shared_variables_t;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -49,6 +51,6 @@ struct DropoutDeviceOperation {
 }  // namespace ttnn::operations::experimental::dropout
 
 namespace ttnn::prim {
-constexpr auto dropout =
-    ttnn::register_operation<"ttnn::prim::dropout", ttnn::operations::experimental::dropout::DropoutDeviceOperation>();
+constexpr auto dropout = ttnn::
+    register_mesh_operation<"ttnn::prim::dropout", ttnn::operations::experimental::dropout::DropoutDeviceOperation>();
 }  // namespace ttnn::prim

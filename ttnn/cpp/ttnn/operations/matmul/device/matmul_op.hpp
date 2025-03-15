@@ -8,7 +8,6 @@
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
-#include "ttnn/operations/global_cb_utils.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -180,7 +179,7 @@ struct Matmul {
     const bool transpose_a = false;
     const bool transpose_b = false;
     const std::optional<const tt::tt_metal::Tile> output_tile;
-    const std::optional<const tt::tt_metal::DeviceGlobalCircularBuffer> global_cb;
+    const std::optional<const GlobalCircularBuffer> global_cb;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
 
     void validate(

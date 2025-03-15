@@ -454,14 +454,17 @@ void DevicePool::wait_for_fabric_router_sync() const {
         std::vector<uint32_t> signal(1, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
 
         auto wait_for_handshake = [&](IDevice* dev) {
-            auto [mesh_id, chip_id] = tt::Cluster::instance().get_control_plane()->get_mesh_chip_id_from_physical_chip_id(dev->id());
+            auto [mesh_id, chip_id] =
+                tt::Cluster::instance().get_control_plane()->get_mesh_chip_id_from_physical_chip_id(dev->id());
             for (const auto& direction : routing_directions) {
                 auto fabric_active_eth_chans =
-                    tt::Cluster::instance().get_control_plane()->get_active_fabric_eth_channels_in_direction(mesh_id, chip_id, direction);
+                    tt::Cluster::instance().get_control_plane()->get_active_fabric_eth_channels_in_direction(
+                        mesh_id, chip_id, direction);
                 if (fabric_active_eth_chans.empty()) {
                     continue;
                 }
-                auto neighbors = tt::Cluster::instance().get_control_plane()->get_intra_chip_neighbors(mesh_id, chip_id, direction);
+                auto neighbors =
+                    tt::Cluster::instance().get_control_plane()->get_intra_chip_neighbors(mesh_id, chip_id, direction);
                 if (neighbors.empty()) {
                     continue;
                 }
@@ -661,7 +664,7 @@ bool DevicePool::close_device(chip_id_t device_id) {
     return pass;
 }
 
-void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
+void DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_synchronize) {
     // Ordered, because we need to shutdown tunnels from the farthest to the closest.
     std::vector<chip_id_t> devices_to_close;
 
@@ -697,15 +700,16 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
     // the main thread will modify device state while the CCL is running on device.
     // On TG - this should not be done on MMIO mapped devices, since we don't run
     // any workloads on them
-    for (const auto& dev_id : devices_to_close) {
-        auto dev = tt::DevicePool::instance().get_active_device(dev_id);
-        if (tt::Cluster::instance().is_galaxy_cluster() and dev->is_mmio_capable()) {
-            continue;
+    if (!skip_synchronize) {
+        for (const auto& dev_id : devices_to_close) {
+            auto dev = tt::DevicePool::instance().get_active_device(dev_id);
+            if (tt::Cluster::instance().is_galaxy_cluster() and dev->is_mmio_capable()) {
+                continue;
+            }
+            dev->synchronize();  // Synchronize worker queue
+            Synchronize(dev);    // Synchronize device
         }
-        dev->synchronize();  // Synchronize worker queue
-        Synchronize(dev);    // Synchronize device
     }
-
     // Terminate fabric routers
     FabricConfig fabric_config = tt::Cluster::instance().get_fabric_config();
     if (fabric_config == FabricConfig::FABRIC_1D) {
@@ -718,14 +722,17 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
         auto routing_directions = {RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
 
         for (const auto& dev : this->get_all_active_devices()) {
-            auto [mesh_id, chip_id] = tt::Cluster::instance().get_control_plane()->get_mesh_chip_id_from_physical_chip_id(dev->id());
+            auto [mesh_id, chip_id] =
+                tt::Cluster::instance().get_control_plane()->get_mesh_chip_id_from_physical_chip_id(dev->id());
             for (const auto& direction : routing_directions) {
                 auto fabric_active_eth_chans =
-                    tt::Cluster::instance().get_control_plane()->get_active_fabric_eth_channels_in_direction(mesh_id, chip_id, direction);
+                    tt::Cluster::instance().get_control_plane()->get_active_fabric_eth_channels_in_direction(
+                        mesh_id, chip_id, direction);
                 if (fabric_active_eth_chans.size() == 0) {
                     continue;
                 }
-                auto neighbors = tt::Cluster::instance().get_control_plane()->get_intra_chip_neighbors(mesh_id, chip_id, direction);
+                auto neighbors =
+                    tt::Cluster::instance().get_control_plane()->get_intra_chip_neighbors(mesh_id, chip_id, direction);
                 if (neighbors.size() == 0) {
                     continue;
                 }
