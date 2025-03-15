@@ -71,7 +71,7 @@ jobs:
       - name: Enable Performance mode
         run: |
           sudo apt-get update
-          sudo apt-get -y install linux-tools-common linux-tools-generic linux-tools-$(uname -r) cpufrequtils
+          sudo apt-get -y install linux-tools-common linux-tools-generic cpufrequtils
           sudo cpupower frequency-set -g performance
       - name: Run performance regressions
         timeout-minutes: 70
