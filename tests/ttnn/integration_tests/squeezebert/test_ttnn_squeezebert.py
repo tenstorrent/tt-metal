@@ -8,8 +8,25 @@ import pytest
 import transformers
 from models.utility_functions import torch_random, is_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from ttnn.model_preprocessing import preprocess_model_parameters
+from ttnn.model_preprocessing import preprocess_model_parameters, ParameterDict, ParameterList
 from models.demos.squeezebert.tt import ttnn_functional_squeezebert
+
+
+def move_to_device(object, device):
+    if isinstance(object, ParameterDict):
+        for name, value in list(object.items()):
+            if name in ["attention", "query", "key", "value", "intermediate", "conv1d"]:
+                continue
+            object[name] = move_to_device(value, device)
+        return object
+    elif isinstance(object, ParameterList):
+        for index, element in enumerate(object):
+            object[index] = move_to_device(element, device)
+        return object
+    elif isinstance(object, ttnn.Tensor):
+        return ttnn.to_device(object, device)
+    else:
+        return object
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
@@ -41,8 +58,8 @@ def test_squeezebert_attention(device, model_name, batch_size, sequence_size, to
         model_name=tt_model_name,
         initialize_model=lambda: model,
         custom_preprocessor=ttnn_functional_squeezebert.custom_preprocessor,
-        device=device,
     )
+    parameters = move_to_device(parameters, device)
 
     hidden_states = ttnn.from_torch(torch_hidden_states, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -51,7 +68,6 @@ def test_squeezebert_attention(device, model_name, batch_size, sequence_size, to
         hidden_states,
         attention_mask=ttnn_attention_mask,
         state_dict=state_dict,
-        base_addr=f"",
         parameters=parameters,
         device=device,
         reader_patterns_cache={},
@@ -86,8 +102,8 @@ def test_squeezebert_intermediate(device, model_name, batch_size, sequence_size,
         model_name=tt_model_name,
         initialize_model=lambda: model,
         custom_preprocessor=ttnn_functional_squeezebert.custom_preprocessor,
-        device=device,
     )
+    parameters = move_to_device(parameters, device)
 
     hidden_states = ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -95,7 +111,6 @@ def test_squeezebert_intermediate(device, model_name, batch_size, sequence_size,
         config=config,
         hidden_states=hidden_states,
         state_dict=state_dict,
-        base_addr=f"",
         parameters=parameters,
         device=device,
     )
@@ -136,8 +151,8 @@ def test_squeezebert_output(device, model_name, batch_size, sequence_size, torch
         model_name=tt_model_name,
         initialize_model=lambda: model,
         custom_preprocessor=ttnn_functional_squeezebert.custom_preprocessor,
-        device=device,
     )
+    parameters = move_to_device(parameters, device)
 
     hidden_states = ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     residual = ttnn.from_torch(torch_residual, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -147,7 +162,6 @@ def test_squeezebert_output(device, model_name, batch_size, sequence_size, torch
         hidden_states=hidden_states,
         input_tensor=residual,
         state_dict=state_dict,
-        base_addr=f"",
         parameters=parameters,
         device=device,
         cin=config.intermediate_size,
@@ -183,9 +197,9 @@ def test_squeezebert_layer(device, model_name, batch_size, sequence_size, torch_
     parameters = preprocess_model_parameters(
         model_name=tt_model_name,
         initialize_model=lambda: model,
-        device=device,
         custom_preprocessor=ttnn_functional_squeezebert.custom_preprocessor,
     )
+    parameters = move_to_device(parameters, device)
 
     hidden_states = ttnn.from_torch(torch_hidden_states, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_attention_mask = ttnn.from_torch(torch_attention_mask, layout=ttnn.TILE_LAYOUT, device=device)
@@ -195,7 +209,6 @@ def test_squeezebert_layer(device, model_name, batch_size, sequence_size, torch_
         hidden_states,
         attention_mask=ttnn_attention_mask,
         state_dict=state_dict,
-        base_addr=f"",
         parameters=parameters,
         device=device,
         reader_patterns_cache={},
@@ -229,8 +242,8 @@ def test_squeezebert_encoder(device, model_name, batch_size, sequence_size, torc
         model_name=tt_model_name,
         initialize_model=lambda: model,
         custom_preprocessor=ttnn_functional_squeezebert.custom_preprocessor,
-        device=device,
     )
+    parameters = move_to_device(parameters, device)
 
     hidden_states = ttnn.from_torch(torch_hidden_states, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_attention_mask = ttnn.from_torch(torch_attention_mask, layout=ttnn.TILE_LAYOUT, device=device)
@@ -240,7 +253,6 @@ def test_squeezebert_encoder(device, model_name, batch_size, sequence_size, torc
         hidden_states,
         attention_mask=ttnn_attention_mask,
         state_dict=state_dict,
-        base_addr=f"",
         parameters=parameters,
         device=device,
         reader_patterns_cache={},
@@ -278,9 +290,9 @@ def test_squeezebert_model(device, model_name, batch_size, sequence_size, reset_
     parameters = preprocess_model_parameters(
         model_name=tt_model_name,
         initialize_model=lambda: model,
-        device=device,
         custom_preprocessor=ttnn_functional_squeezebert.custom_preprocessor,
     )
+    parameters = move_to_device(parameters, device)
 
     ttnn_bert_inputs = ttnn_functional_squeezebert.preprocess_inputs(
         torch_input_ids,
@@ -294,7 +306,6 @@ def test_squeezebert_model(device, model_name, batch_size, sequence_size, reset_
         config,
         *ttnn_bert_inputs,
         state_dict=state_dict,
-        base_addr=f"",
         parameters=parameters,
         device=device,
         reader_patterns_cache={},
@@ -331,8 +342,8 @@ def test_squeezebert_for_question_answering(device, model_name, batch_size, sequ
         model_name=tt_model_name,
         initialize_model=lambda: rf_model,
         custom_preprocessor=ttnn_functional_squeezebert.custom_preprocessor,
-        device=device,
     )
+    parameters = move_to_device(parameters, device)
 
     ttnn_squeezebert_inputs = ttnn_functional_squeezebert.preprocess_inputs(
         torch_squeezebert_input,
@@ -346,7 +357,6 @@ def test_squeezebert_for_question_answering(device, model_name, batch_size, sequ
         config,
         *ttnn_squeezebert_inputs,
         state_dict=state_dict,
-        base_addr=f"transformer.",
         parameters=parameters,
         device=device,
         reader_patterns_cache={},

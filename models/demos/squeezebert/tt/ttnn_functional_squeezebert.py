@@ -14,7 +14,7 @@ def transpose_for_scores(config, x, device, permute_tensor: bool):
     new_x_shape = (x.shape[0], config.num_attention_heads, config.attention_head_size, x.shape[-1])
     x = ttnn.from_device(x)
     x = ttnn.reshape(x, new_x_shape)
-    x = ttnn.to_device(x, device)
+    x = ttnn.to_device(x, device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     if permute_tensor:
         x = ttnn.permute(x, (0, 1, 3, 2))
@@ -52,7 +52,7 @@ def ttnn_conv1d(
     output_dtype=ttnn.bfloat16,
     weights_dtype=ttnn.bfloat8_b,
     math_fidelity=ttnn.MathFidelity.LoFi,
-    deallocate_activation=False,
+    deallocate_activation=True,
     act_block_h=None,
     height_sharding=True,
     use_shallow_conv_variant=False,
@@ -63,11 +63,10 @@ def ttnn_conv1d(
     math_approx=True,
     activation="",
     reallocate_halo=False,
-    reshard=False,
+    reshard=True,
+    shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    act_block_h_override=32,
 ):
-    weights = ttnn.from_torch(weights, dtype=ttnn.float32)
-    bias = ttnn.from_torch(bias.unsqueeze(0).unsqueeze(0).unsqueeze(0), dtype=ttnn.float32)
-
     conv_config = ttnn.Conv1dConfig(
         dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat8_b,
@@ -75,11 +74,9 @@ def ttnn_conv1d(
         input_channels_alignment=(16 if use_shallow_conv_variant else 32),
         deallocate_activation=deallocate_activation,
         reallocate_halo_output=reallocate_halo,
-        act_block_h_override=32,
+        act_block_h_override=act_block_h_override,
         reshard_if_not_optimal=reshard,
-        shard_layout=(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED if height_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
-        ),
+        shard_layout=shard_layout,
         core_grid=get_shard_grid_from_num_cores(56, device),
     )
     compute_config = ttnn.init_device_compute_kernel_config(
@@ -127,20 +124,27 @@ def squeezebert_conv_layernorm(
     input_tensor,
     *,
     state_dict,
-    base_addr,
     parameters,
     device,
     cin,
     cout,
     groups,
 ):
-    torch_hidden_states = ttnn.to_torch(hidden_states).to(torch.float32)
-    self_output_conv1d_ = nn.Conv1d(in_channels=cin, out_channels=cout, kernel_size=1, groups=groups)
-    self_output_conv1d_.weight = nn.Parameter(state_dict[f"{base_addr}conv1d.weight"])
-    self_output_conv1d_.bias = nn.Parameter(state_dict[f"{base_addr}conv1d.bias"])
+    hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
+    hidden_states = permute_reshape(hidden_states)
 
-    torch_self_output = self_output_conv1d_(torch_hidden_states)
-    self_output = ttnn.from_torch(torch_self_output, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    self_output = ttnn_conv1d(
+        device,
+        hidden_states,
+        parameters.conv1d.weight,
+        conv_params=[1, 0],
+        bias=parameters.conv1d.bias,
+        groups=groups,
+        shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        act_block_h_override=32,
+    )
+    self_output = ttnn.to_device(self_output, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    self_output = ttnn.permute(self_output, (0, 2, 1))
 
     self_output_layernorm = ttnn.add(self_output, input_tensor)
     self_output_layernorm = permute_reshape(self_output_layernorm)
@@ -150,6 +154,7 @@ def squeezebert_conv_layernorm(
         weight=parameters.layernorm.weight,
         bias=parameters.layernorm.bias,
         epsilon=config.layer_norm_eps,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn.deallocate(self_output_layernorm)
     attention_output = permute_reshape(attention_output)
@@ -163,26 +168,26 @@ def squeezebert_attention(
     attention_mask,
     *,
     state_dict,
-    base_addr,
     parameters,
     device,
     reader_patterns_cache,
-    num_cores_x=12,
+    num_cores_x=12 if is_grayskull() else 8,
 ):
     num_heads = config.num_attention_heads
+
     batch_size, hidden_size, _ = hidden_states.shape
     head_size = hidden_size // num_heads
     config.attention_head_size = head_size
 
     hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
-    hidden_states = permute_reshape(hidden_states)
-    hidden_states = ttnn.from_device(hidden_states)
+    hidden_states = permute_reshape(hidden_states, reshape=False)
+
     mixed_query_layer = ttnn_conv1d(
         device,
         hidden_states,
-        nn.Parameter(state_dict[f"{base_addr}query.weight"]),
+        parameters.query.weight,
         conv_params=[1, 0],
-        bias=nn.Parameter(state_dict[f"{base_addr}query.bias"]),
+        bias=parameters.query.bias,
     )
     mixed_query_layer = ttnn.to_device(mixed_query_layer, device)
     mixed_query_layer = ttnn.permute(mixed_query_layer, (0, 2, 1))
@@ -190,9 +195,9 @@ def squeezebert_attention(
     mixed_key_layer = ttnn_conv1d(
         device,
         hidden_states,
-        nn.Parameter(state_dict[f"{base_addr}key.weight"]),
+        parameters.key.weight,
         conv_params=[1, 0],
-        bias=nn.Parameter(state_dict[f"{base_addr}key.bias"]),
+        bias=parameters.key.bias,
     )
     mixed_key_layer = ttnn.to_device(mixed_key_layer, device)
     mixed_key_layer = ttnn.permute(mixed_key_layer, (0, 2, 1))
@@ -200,11 +205,11 @@ def squeezebert_attention(
     mixed_value_layer = ttnn_conv1d(
         device,
         hidden_states,
-        nn.Parameter(state_dict[f"{base_addr}value.weight"]),
+        parameters.value.weight,
         conv_params=[1, 0],
-        bias=nn.Parameter(state_dict[f"{base_addr}value.bias"]),
+        bias=parameters.value.bias,
     )
-    mixed_value_layer = ttnn.to_device(mixed_value_layer, device)
+    mixed_value_layer = ttnn.to_device(mixed_value_layer, device, memory_config=ttnn.L1_MEMORY_CONFIG)
     mixed_value_layer = ttnn.permute(mixed_value_layer, (0, 2, 1))
 
     query = transpose_for_scores(config, mixed_query_layer, device, True)
@@ -220,14 +225,18 @@ def squeezebert_attention(
         key,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
-        core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
+        core_grid=ttnn.CoreGrid(y=6, x=2),
     )
     ttnn.deallocate(query)
     ttnn.deallocate(key)
 
     attention_probs = ttnn.transformer.attention_softmax_(
-        attention_scores, attention_mask=attention_mask, head_size=head_size
+        attention_scores,
+        attention_mask=attention_mask,
+        head_size=head_size,
     )
+
+    ttnn.deallocate(attention_scores)
 
     context_layer = ttnn.matmul(
         attention_probs,
@@ -237,6 +246,7 @@ def squeezebert_attention(
         core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
     )
     context_layer = transpose_output(config, context_layer, device)
+    ttnn.deallocate(attention_probs)
 
     return context_layer
 
@@ -246,26 +256,26 @@ def squeezebert_intermediate(
     hidden_states,
     *,
     state_dict,
-    base_addr,
     parameters,
     device,
-    num_cores_x=12,
+    num_cores_x=12 if is_grayskull() else 8,
 ):
-    torch_hidden_states = ttnn.to_torch(hidden_states).to(torch.float32)
+    hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
+    hidden_states = permute_reshape(hidden_states)
 
-    torch_conv_ = nn.Conv1d(
-        in_channels=config.hidden_size,
-        out_channels=config.intermediate_size,
-        kernel_size=1,
-        groups=config.intermediate_groups,
+    ttnn_conv_output = ttnn_conv1d(
+        device,
+        hidden_states,
+        parameters.conv1d.weight,
+        conv_params=[1, 0],
+        bias=parameters.conv1d.bias,
+        shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
     )
-    torch_conv_.weight = nn.Parameter(state_dict[f"{base_addr}conv1d.weight"])
-    torch_conv_.bias = nn.Parameter(state_dict[f"{base_addr}conv1d.bias"])
-
-    torch_conv_output = torch_conv_(torch_hidden_states)
-    ttnn_conv_output = ttnn.from_torch(torch_conv_output, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-
+    ttnn.deallocate(hidden_states)
+    ttnn_conv_output = ttnn.to_device(ttnn_conv_output, device)
+    ttnn_conv_output = ttnn.permute(ttnn_conv_output, (0, 2, 1))
     output = ttnn.gelu(ttnn_conv_output)
+    ttnn.deallocate(ttnn_conv_output)
     return output
 
 
@@ -274,7 +284,6 @@ def squeezebert_layer(
     hidden_states,
     attention_mask,
     state_dict,
-    base_addr,
     parameters,
     device,
     reader_patterns_cache,
@@ -284,18 +293,15 @@ def squeezebert_layer(
         hidden_states=hidden_states,
         attention_mask=attention_mask,
         state_dict=state_dict,
-        base_addr=f"{base_addr}attention.",
         parameters=parameters.attention,
         device=device,
         reader_patterns_cache=reader_patterns_cache,
     )
-
     attention_output = squeezebert_conv_layernorm(
         config,
         hidden_states=multi_head_attention_output,
         input_tensor=hidden_states,
         state_dict=state_dict,
-        base_addr=f"{base_addr}post_attention.",
         parameters=parameters.post_attention,
         device=device,
         cin=config.hidden_size,
@@ -309,24 +315,22 @@ def squeezebert_layer(
         config,
         attention_output,
         state_dict=state_dict,
-        base_addr=f"{base_addr}intermediate.",
         parameters=parameters.intermediate,
         device=device,
     )
-
     output = squeezebert_conv_layernorm(
         config,
         hidden_states=intermediate,
         input_tensor=attention_output,
         state_dict=state_dict,
-        base_addr=f"{base_addr}output.",
         parameters=parameters.output,
         device=device,
         cin=config.intermediate_size,
         cout=config.hidden_size,
         groups=config.output_groups,
     )
-
+    ttnn.deallocate(attention_output)
+    ttnn.deallocate(intermediate)
     return output
 
 
@@ -336,21 +340,18 @@ def squeezebert_encoder(
     attention_mask,
     *,
     state_dict,
-    base_addr,
     parameters,
     device,
     reader_patterns_cache,
 ):
     hidden_states = permute_reshape(hidden_states)
     encoder_output = None
-
     for layer_idx, encoder_parameters in enumerate(parameters.layers):
         encoder_output = squeezebert_layer(
             config,
             hidden_states,
             attention_mask,
             state_dict,
-            base_addr=f"{base_addr}layers.{layer_idx}.",
             parameters=encoder_parameters,
             device=device,
             reader_patterns_cache=reader_patterns_cache,
@@ -370,37 +371,36 @@ def squeezebert(
     position_ids,
     attention_mask,
     state_dict,
-    base_addr,
     parameters,
     device,
     reader_patterns_cache,
 ):
+    if input_ids.is_sharded():
+        input_ids = ttnn.sharded_to_interleaved(input_ids, ttnn.L1_MEMORY_CONFIG)
     word_embeddings = ttnn.embedding(
         input_ids,
         parameters.embeddings.word_embeddings.weight,
         layout=ttnn.TILE_LAYOUT,
         padding_idx=config.pad_token_id,
     )
-    ttnn.deallocate(input_ids)
-
+    if token_type_ids.is_sharded():
+        token_type_ids = ttnn.sharded_to_interleaved(token_type_ids, ttnn.L1_MEMORY_CONFIG)
     token_type_embeddings = ttnn.embedding(
         token_type_ids,
         parameters.embeddings.token_type_embeddings.weight,
         layout=ttnn.TILE_LAYOUT,
     )
-    ttnn.deallocate(token_type_ids)
-
     word_plus_token_type_embeddings = word_embeddings + token_type_embeddings
     ttnn.deallocate(word_embeddings)
     ttnn.deallocate(token_type_embeddings)
 
+    if position_ids.is_sharded():
+        position_ids = ttnn.sharded_to_interleaved(position_ids, ttnn.L1_MEMORY_CONFIG)
     position_embeddings = ttnn.embedding(
         position_ids,
         parameters.embeddings.position_embeddings.weight,
         layout=ttnn.TILE_LAYOUT,
     )
-    ttnn.deallocate(position_ids)
-
     embeddings = word_plus_token_type_embeddings + position_embeddings
     ttnn.deallocate(word_plus_token_type_embeddings)
     ttnn.deallocate(position_embeddings)
@@ -418,7 +418,6 @@ def squeezebert(
         hidden_states=encoder_input,
         attention_mask=attention_mask,
         state_dict=state_dict,
-        base_addr=f"{base_addr}encoder.",
         parameters=parameters.encoder,
         device=device,
         reader_patterns_cache=reader_patterns_cache,
@@ -436,7 +435,6 @@ def squeezebert_for_question_answering(
     attention_mask,
     *,
     state_dict,
-    base_addr,
     parameters,
     device,
     reader_patterns_cache,
@@ -449,7 +447,6 @@ def squeezebert_for_question_answering(
         position_ids,
         attention_mask,
         state_dict,
-        base_addr,
         parameters=parameters.transformer,
         device=device,
         reader_patterns_cache=reader_patterns_cache,
@@ -473,13 +470,26 @@ def preprocess_inputs(
 ):
     import torch
 
+    inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(device)
     batch_size, _ = input_ids.shape
 
-    input_ids = ttnn.from_torch(input_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
-    token_type_ids = ttnn.from_torch(
-        token_type_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    input_ids = ttnn.from_torch(
+        input_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG, mesh_mapper=inputs_mesh_mapper
     )
-    position_ids = ttnn.from_torch(position_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    token_type_ids = ttnn.from_torch(
+        token_type_ids,
+        dtype=ttnn.uint32,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        mesh_mapper=inputs_mesh_mapper,
+    )
+    position_ids = ttnn.from_torch(
+        position_ids,
+        dtype=ttnn.uint32,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        mesh_mapper=inputs_mesh_mapper,
+    )
 
     if attention_mask is not None:
         attention_mask = get_extended_attention_mask(attention_mask, input_ids.shape, torch.float32)
@@ -491,13 +501,14 @@ def preprocess_inputs(
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            mesh_mapper=inputs_mesh_mapper,
         )
 
     return input_ids, token_type_ids, position_ids, attention_mask
 
 
 def preprocess_conv_parameter(parameter, *, dtype):
-    parameter = ttnn.from_torch(parameter, dtype=dtype)
+    parameter = ttnn.from_torch(parameter, dtype=dtype, layout=ttnn.TILE_LAYOUT)
     return parameter
 
 
@@ -506,10 +517,37 @@ def custom_preprocessor(model, name):
     if isinstance(model, nn.Conv1d):
         weight = model.weight
         bias = model.bias
-
         while bias.dim() < 4:
             bias = bias.unsqueeze(0).unsqueeze(0).unsqueeze(0)
-        parameters["weight"] = preprocess_conv_parameter(weight, dtype=ttnn.float32)
-        parameters["bias"] = preprocess_conv_parameter(bias, dtype=ttnn.float32)
+        parameters["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
 
+    elif isinstance(model, nn.Embedding):
+        parameters[f"weight"] = ttnn.from_torch(model.weight, dtype=ttnn.bfloat16)
+
+    elif isinstance(model, nn.LayerNorm):
+        weight = model.weight.reshape((1, -1))
+        bias = model.bias.reshape((1, -1))
+        parameters[f"weight"] = ttnn.from_torch(weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        parameters[f"bias"] = ttnn.from_torch(bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    elif isinstance(model, nn.Linear):
+        weight = model.weight.T.contiguous()
+        parameters[f"weight"] = ttnn.from_torch(weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        if model.bias is not None:
+            bias = model.bias.reshape((1, -1))
+            parameters[f"bias"] = ttnn.from_torch(bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     return parameters
+
+
+def get_mesh_mappers(device):
+    is_mesh_device = isinstance(device, ttnn.MeshDevice)
+    if is_mesh_device:
+        inputs_mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
+        weights_mesh_mapper = ttnn.ReplicateTensorToMesh(device)
+        output_mesh_composer = ttnn.ConcatMeshToTensor(device, dim=0)
+    else:
+        inputs_mesh_mapper = None
+        weights_mesh_mapper = None
+        output_mesh_composer = None
+    return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer
