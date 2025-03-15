@@ -166,6 +166,14 @@ size_t MeshCoordinateRange::dims() const { return start_.dims(); }
 const MeshCoordinate& MeshCoordinateRange::start_coord() const { return start_; }
 const MeshCoordinate& MeshCoordinateRange::end_coord() const { return end_; }
 
+size_t MeshCoordinateRange::size() const {
+    size_t range_size = 1;
+    for (size_t i = 0; i < dims(); ++i) {
+        range_size *= end_[i] - start_[i] + 1;
+    }
+    return range_size;
+}
+
 bool MeshCoordinateRange::contains(const MeshCoordinate& coord) const {
     TT_FATAL(coord.dims() == dims(), "Coordinate dimensions do not match: {} != {}", coord.dims(), dims());
     for (int i = 0; i < coord.dims(); ++i) {
@@ -263,6 +271,8 @@ size_t to_linear_index(const MeshShape& shape, const MeshCoordinate& coord) {
     }
     return linear_index;
 }
+
+MeshCoordinateRangeSet::MeshCoordinateRangeSet(const MeshCoordinateRange& range) { merge(range); }
 
 void MeshCoordinateRangeSet::merge(const MeshCoordinateRange& to_merge) {
     TT_FATAL(
