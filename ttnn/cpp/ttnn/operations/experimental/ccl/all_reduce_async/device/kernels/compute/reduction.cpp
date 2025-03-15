@@ -11,14 +11,15 @@ void MAIN {
     constexpr uint32_t cb_out0 = get_compile_time_arg_val(1);
     constexpr uint32_t cb_in1 = cb_in0;
 
-    uint32_t rt_args_idx = 0;
-    const uint32_t has_work = get_arg_val<uint32_t>(rt_args_idx++);
-    if (has_work == 0) {
+    uint32_t arg_idx = 0;
+    const uint32_t is_worker = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t is_reducer = get_arg_val<uint32_t>(arg_idx++);
+    if (is_reducer == 0) {
         return;
     }
 
-    const uint32_t num_blocks = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t block_num_tiles = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t num_blocks = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t block_num_tiles = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t copy_first_block = num_blocks % 2 != 0;
 
     constexpr uint32_t max_dst_tiles = 8;  // TODO: Make general

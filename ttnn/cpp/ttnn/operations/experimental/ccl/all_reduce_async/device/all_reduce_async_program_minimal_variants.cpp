@@ -116,33 +116,31 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     const auto output_tensor_shard_num_pages = output_tensor_shard_shape[0] * output_tensor_shard_shape[1] / TILE_HW;
     const auto num_output_cores = output_tensor_cores.num_cores();
 
+    // Get worker cores, assuming 1 worker per link
+    uint32_t num_workers_per_link = 1;
     auto sub_device_cores = device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value_or(device->get_sub_device_ids().at(0)));
+    const auto [sender_worker_core_range, sender_worker_cores] =
+        choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, sub_device_cores);
 
-    std::vector<CoreRange> output_cores;
+    auto worker_reducer_cores = output_tensor_cores.merge(sender_worker_core_range);
+
+    std::vector<CoreRange> worker_reducer_corerange_vec;
     for (const auto& cr : sub_device_cores.ranges()) {
-        const auto intersection = output_tensor_cores.intersection(cr);
+        const auto intersection = worker_reducer_cores.intersection(cr);
         if (intersection.size() > 0) {
-            output_cores.push_back(intersection.bounding_box());
+            worker_reducer_corerange_vec.push_back(intersection.bounding_box());
         }
     }
 
-    // output_cores_all is the bounding box of the output_tensor_cores but respecting boundaries of subdevice grids
-    CoreRangeSet output_cores_all(output_cores);
+    // worker_reducer_corerange_vec is the bounding box of the output_tensor_cores + worker and but respecting
+    // boundaries of subdevice grids
+    CoreRangeSet worker_reducer_cores_all(worker_reducer_corerange_vec);
+    // worker_reducer_cores_unused is the cores that should do no work
+    auto worker_reducer_cores_unused = worker_reducer_cores_all.subtract(worker_reducer_cores);
 
-    CoreRangeSet reserved_cores = output_cores_all;
-    auto available_cores = sub_device_cores.subtract(reserved_cores);
-    // Get worker cores, assuming 1 worker per link
-    uint32_t num_workers_per_link = 1;
-    const auto [sender_worker_core_range, sender_worker_cores] =
-        ar_choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, available_cores);
-
-    constexpr bool has_work = 1;
-
-    // output_cores_unused is the cores that should do no work
-    auto output_cores_unused = output_cores_all.subtract(output_tensor_cores);
-    // all_cores is both sender and worker cores
-    auto all_cores = output_cores_all.merge(sender_worker_core_range);
+    auto non_worker_reducer_cores = output_tensor_cores.subtract(sender_worker_core_range);
+    auto non_reducer_worker_cores = sender_worker_core_range.subtract(output_tensor_cores);
 
     tt::log_debug(tt::LogOp, "input_tensor_num_pages: {}", input_tensor_num_pages);
     tt::log_debug(tt::LogOp, "input_tensor_cores: {}", input_tensor_cores);
@@ -263,7 +261,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     // Create reduction semaphores for each link
     std::vector<uint32_t> reduction_semaphore_ids(num_links, 0);
     for (uint32_t link = 0; link < num_links; link++) {
-        reduction_semaphore_ids[link] = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+        reduction_semaphore_ids[link] = tt::tt_metal::CreateSemaphore(program, worker_reducer_cores_all, 0);
     }
 
     /* reduction cb */
@@ -276,7 +274,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
         tt::tt_metal::CircularBufferConfig(reduction_CB_size, {{reduction_cb_index, df}})
             .set_page_size(reduction_cb_index, reduction_CB_single_tile_size)
             .set_globally_allocated_address(*buffer_tensor.buffer());
-    auto cb_reduction = tt::tt_metal::CreateCircularBuffer(program, all_cores, reduction_cb_config);
+    auto cb_reduction = tt::tt_metal::CreateCircularBuffer(program, worker_reducer_cores_all, reduction_cb_config);
 
     /* out cb */
     uint32_t out_CB_single_tile_size = output_tensor.get_tensor_spec().tile().get_tile_size(df);
@@ -291,40 +289,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     auto cb_out = tt::tt_metal::CreateCircularBuffer(
         program, output_tensor_cores, out_cb_config);  // TODO: This should be the output cores instead
 
-    // Create reduction dataflow kernel
-    auto reduction_reader_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
-    reduction_reader_kernel_config.compile_args = {
-        reduction_cb_index,  // reduction_cb_index
-        reduction_CB_tiles,  // total_num_reduction_tiles
-    };
-    auto reduction_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device/kernels/dataflow/"
-        "reduction_receiver.cpp",
-        output_cores_all,
-        reduction_reader_kernel_config);
-    if (output_cores_unused.size() > 0) {
-        tt::tt_metal::SetRuntimeArgs(program, reduction_reader_kernel_id, output_cores_unused, {!has_work, 0});
-    }
-
-    // Create reduction dataflow kernel
-    auto reduction_kernel_config = tt::tt_metal::ComputeConfig{};
-    reduction_kernel_config.compile_args = {
-        reduction_cb_index,  // reduction_cb_index
-        out_cb_index,        // out_cb_index
-    };
-    auto reduction_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device/kernels/compute/"
-        "reduction.cpp",
-        output_cores_all,
-        reduction_kernel_config);
-    tt::tt_metal::SetRuntimeArgs(
-        program, reduction_kernel_id, output_tensor_cores, {1, ring_size, output_tensor_shard_num_pages});
-    if (output_cores_unused.size() > 0) {
-        tt::tt_metal::SetRuntimeArgs(program, reduction_kernel_id, output_cores_unused, {!has_work, 0, 0});
-    }
-
     // KERNEL CREATION
     tt::tt_metal::NOC reader_noc = tt::tt_metal::NOC::NOC_1;
     tt::tt_metal::NOC writer_noc = tt::tt_metal::NOC::NOC_0;
@@ -333,13 +297,15 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
         ring_index,                 // my_chip_id
         src0_cb_index,              // cb0_id
         op_config.get_page_size(),  // tensor0_page_size
+        reduction_cb_index,         // reduction_cb_index
+        reduction_CB_tiles,         // total_num_reduction_tiles
     };
     log_trace(tt::LogOp, "Reader Compile Args:");
-    auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
+    auto worker_reducer_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device/kernels/dataflow/"
         "worker_reader.cpp",
-        sender_worker_core_range,
+        worker_reducer_cores_all,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = reader_noc,
@@ -358,15 +324,41 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
         static_cast<uint32_t>(dynamic_alternate)  // dynamic_alternate
     };
     log_trace(tt::LogOp, "Writer Compile Args:");
-    auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
+    auto worker_reducer_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device/kernels/dataflow/"
         "worker_writer.cpp",
-        sender_worker_core_range,
+        worker_reducer_cores_all,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = writer_noc,
             .compile_args = writer_compile_args});
+
+    // Create reduction dataflow kernel
+    if (worker_reducer_cores_unused.size() > 0) {
+        tt::tt_metal::SetRuntimeArgs(program, worker_reducer_reader_kernel_id, worker_reducer_cores_unused, {0, 0});
+        tt::tt_metal::SetRuntimeArgs(program, worker_reducer_writer_kernel_id, worker_reducer_cores_unused, {0, 0});
+    }
+    tt::tt_metal::SetRuntimeArgs(program, worker_reducer_writer_kernel_id, non_worker_reducer_cores, {0, 1});
+
+    // Create reduction dataflow kernel
+    auto reduction_kernel_config = tt::tt_metal::ComputeConfig{};
+    reduction_kernel_config.compile_args = {
+        reduction_cb_index,  // reduction_cb_index
+        out_cb_index,        // out_cb_index
+    };
+    auto reduction_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device/kernels/compute/"
+        "reduction.cpp",
+        worker_reducer_cores_all,
+        reduction_kernel_config);
+    tt::tt_metal::SetRuntimeArgs(
+        program, reduction_kernel_id, output_tensor_cores, {0, 1, ring_size, output_tensor_shard_num_pages});
+    tt::tt_metal::SetRuntimeArgs(program, reduction_kernel_id, non_reducer_worker_cores, {1, 0});
+    if (worker_reducer_cores_unused.size() > 0) {
+        tt::tt_metal::SetRuntimeArgs(program, reduction_kernel_id, worker_reducer_cores_unused, {0, 0});
+    }
 
     // Kernel Runtime Args
     for (uint32_t link = 0; link < num_links; link++) {
@@ -406,21 +398,58 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
                       device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
 
         // Set reader runtime args
-        std::vector<uint32_t> reader_rt_args = {
-            input_tensor.buffer()->address(),    // tensor_address0
-            input_tensor_shard_num_pages,        // num_tiles_per_core
-            worker_num_tiles_to_read,            // num_tiles_to_read
-            input_first_core_tile_start_offset,  // first_core_tile_start_offset
-            input_tensor_cores_x.size(),         // num_cores
-        };
-        reader_rt_args.insert(reader_rt_args.end(), input_tensor_cores_x.begin(), input_tensor_cores_x.end());
-        reader_rt_args.insert(reader_rt_args.end(), input_tensor_cores_y.begin(), input_tensor_cores_y.end());
-        log_trace(tt::LogOp, "Reader Runtime Args:");
-        for (const auto& arg : reader_rt_args) {
-            log_trace(tt::LogOp, "\t{}", arg);
-        }
-        tt::tt_metal::SetRuntimeArgs(program, worker_sender_reader_kernel_id, {core}, reader_rt_args);
+        bool worker_reducer_overlap = output_corerangeset_per_link[link].contains(core);
+        if (!worker_reducer_overlap) {
+            std::vector<uint32_t> worker_reader_rt_args = {
+                1,                                   // is_worker
+                0,                                   // is_reducer
+                input_tensor.buffer()->address(),    // tensor_address0
+                input_tensor_shard_num_pages,        // num_tiles_per_core
+                worker_num_tiles_to_read,            // num_tiles_to_read
+                input_first_core_tile_start_offset,  // first_core_tile_start_offset
+                input_tensor_cores_x.size(),         // num_cores
+            };
+            worker_reader_rt_args.insert(
+                worker_reader_rt_args.end(), input_tensor_cores_x.begin(), input_tensor_cores_x.end());
+            worker_reader_rt_args.insert(
+                worker_reader_rt_args.end(), input_tensor_cores_y.begin(), input_tensor_cores_y.end());
+            log_trace(tt::LogOp, "Reader Runtime Args:");
+            for (const auto& arg : worker_reader_rt_args) {
+                log_trace(tt::LogOp, "\t{}", arg);
+            }
+            tt::tt_metal::SetRuntimeArgs(program, worker_reducer_reader_kernel_id, {core}, worker_reader_rt_args);
 
+            // Set reduction worker runtime args
+            std::vector<uint32_t> reducer_reader_rt_args = {
+                0,                              // is_worker
+                1,                              // is_reducer
+                reduction_semaphore_ids[link],  // reduction_semaphore_id
+            };
+            tt::tt_metal::SetRuntimeArgs(
+                program, worker_reducer_reader_kernel_id, output_corerangeset_per_link[link], reducer_reader_rt_args);
+        } else {
+            std::vector<uint32_t> worker_reducer_reader_rt_args = {
+                1,                                   // is_worker
+                1,                                   // is_reducer
+                input_tensor.buffer()->address(),    // tensor_address0
+                input_tensor_shard_num_pages,        // num_tiles_per_core
+                worker_num_tiles_to_read,            // num_tiles_to_read
+                input_first_core_tile_start_offset,  // first_core_tile_start_offset
+                input_tensor_cores_x.size(),         // num_cores
+            };
+            worker_reducer_reader_rt_args.insert(
+                worker_reducer_reader_rt_args.end(), input_tensor_cores_x.begin(), input_tensor_cores_x.end());
+            worker_reducer_reader_rt_args.insert(
+                worker_reducer_reader_rt_args.end(), input_tensor_cores_y.begin(), input_tensor_cores_y.end());
+
+            worker_reducer_reader_rt_args.push_back(reduction_semaphore_ids[link]);  // Add reduction semaphore ID
+
+            tt::tt_metal::SetRuntimeArgs(
+                program,
+                worker_reducer_reader_kernel_id,
+                output_corerangeset_per_link[link],
+                worker_reducer_reader_rt_args);
+        }
         // Set writer runtime args
         std::vector<uint32_t> mcast_start_x;
         std::vector<uint32_t> mcast_start_y;
@@ -448,6 +477,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
 
         uint32_t out_ready_sem_wait_value = dynamic_alternate ? (ring_size + 1) : ring_size;
         std::vector<uint32_t> writer_rt_args = {
+            1,                                    // is_worker
+            0,                                    // is_reducer
             reduction_cb_index,                   // tensor_address0
             semaphore.address(),                  // out_ready_sem_bank_addr (absolute address)
             output_tensor_shard_num_pages,        // num_tiles_per_core
@@ -498,19 +529,11 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
                 sender_worker_buffer_index_semaphore_id,
                 writer_rt_args);
         }
-        tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
-
-        // Set reduction worker runtime args
-        std::vector<uint32_t> reduction_reader_rt_args = {
-            has_work,
-            reduction_semaphore_ids[link],  // reduction_semaphore_id
-        };
-        tt::tt_metal::SetRuntimeArgs(
-            program, reduction_reader_kernel_id, output_corerangeset_per_link[link], reduction_reader_rt_args);
+        tt::tt_metal::SetRuntimeArgs(program, worker_reducer_writer_kernel_id, {core}, writer_rt_args);
     }
 
     auto override_runtime_arguments_callback =
-        [worker_sender_reader_kernel_id, worker_sender_writer_kernel_id, sender_worker_cores, cb_out, cb_reduction](
+        [worker_reducer_reader_kernel_id, worker_reducer_writer_kernel_id, sender_worker_cores, cb_out, cb_reduction](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -523,15 +546,15 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
             auto semaphore = static_cast<const ttnn::AllReduceAsync*>(operation)->semaphore;
 
             // update senders
-            auto& worker_reader_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_reader_kernel_id);
-            auto& worker_writer_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_writer_kernel_id);
+            auto& worker_reducer_reader_runtime_args_by_core = GetRuntimeArgs(program, worker_reducer_reader_kernel_id);
+            auto& worker_reducer_writer_runtime_args_by_core = GetRuntimeArgs(program, worker_reducer_writer_kernel_id);
             for (const auto& core : sender_worker_cores) {
                 // reader
-                auto& worker_reader_sender_runtime_args = worker_reader_sender_runtime_args_by_core[core.x][core.y];
-                worker_reader_sender_runtime_args[0] = input.buffer()->address();
+                auto& worker_reducer_reader_runtime_args = worker_reducer_reader_runtime_args_by_core[core.x][core.y];
+                worker_reducer_reader_runtime_args[2] = input.buffer()->address();
                 // writer
-                auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
-                worker_writer_sender_runtime_args[1] = semaphore.address();
+                auto& worker_reducer_writer_runtime_args = worker_reducer_writer_runtime_args_by_core[core.x][core.y];
+                worker_reducer_writer_runtime_args[3] = semaphore.address();
             }
             UpdateDynamicCircularBufferAddress(program, cb_out, *output.buffer());
             UpdateDynamicCircularBufferAddress(program, cb_reduction, *buffer_tensor.buffer());
