@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from math import ceil
 import torch.nn as nn
 import ttnn
 from typing import Optional
@@ -52,7 +53,10 @@ class TtGEGLU(nn.Module):
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         hidden_states = self.proj(hidden_states)
         # hidden_states, gate = fallback_ops.chunk(hidden_states, 2, -1)
-        hidden_states, gate = ttnn.split(hidden_states, 2, 3)
+
+        # amorrison ttnn.split API made to match torch.split in #1461
+        split_chunk_size = ceil(hidden_states.shape[3] / 2)
+        hidden_states, gate = ttnn.split(hidden_states, split_chunk_size, 3)
         act = self.gelu(gate)
         return ttnn.multiply(hidden_states, act)
 
