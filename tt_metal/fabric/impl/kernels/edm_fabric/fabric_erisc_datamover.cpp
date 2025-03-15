@@ -1564,6 +1564,16 @@ void kernel_main() {
     }
 
     *edm_status_ptr = tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE;
+
+    wait_for_notification((uint32_t)edm_status_ptr, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
+
+    if constexpr (is_local_handshake_master) {
+        notify_slave_routers(
+            edm_channels_mask,
+            local_handshake_master_eth_chan,
+            (uint32_t)edm_status_ptr,
+            tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
+    }
 #endif
 
     //////////////////////////////

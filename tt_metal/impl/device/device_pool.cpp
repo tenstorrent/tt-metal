@@ -449,6 +449,7 @@ void DevicePool::wait_for_fabric_router_sync() const {
             tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
             sizeof(tt::tt_fabric::PacketHeader);
         const auto edm_config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
+        std::vector<uint32_t> signal(1, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
 
         auto wait_for_handshake = [&](IDevice* dev) {
             std::vector<std::uint32_t> master_router_status{0};
@@ -470,6 +471,9 @@ void DevicePool::wait_for_fabric_router_sync() const {
                     master_router_status,
                     CoreType::ETH);
             }
+
+            tt_metal::detail::WriteToDeviceL1(
+                dev, fabric_master_router_core, edm_config.edm_status_address, signal, CoreType::ETH);
         };
 
         for (const auto& dev : this->get_all_active_devices()) {
