@@ -8,11 +8,6 @@ run_profiling_test() {
     exit 1
   fi
 
-  if [[ -z "$TT_METAL_HOME" ]]; then
-    echo "Must provide TT_METAL_HOME in environment" 1>&2
-    exit 1
-  fi
-
   if [[ "$TT_METAL_DEVICE_PROFILER" != 1 ]]; then
     echo "Must set TT_METAL_DEVICE_PROFILER to 1 to run microbenchmarks" 1>&2
     exit 1
