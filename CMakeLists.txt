@@ -83,10 +83,6 @@ endif()
 include(compilers)
 CHECK_COMPILERS()
 
-if(NOT isMultiConfig AND NOT CMAKE_BUILD_TYPE IN_LIST CMAKE_CONFIGURATION_TYPES)
-    message(FATAL_ERROR "Invalid build type: ${CMAKE_BUILD_TYPE}. Valid options are: ${CMAKE_CONFIGURATION_TYPES}")
-endif()
-
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3")
 set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -DDEBUG")
