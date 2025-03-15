@@ -59,6 +59,8 @@ void kernel_launch(uint32_t kernel_base_addr) {
 #endif
     wait_for_go_message();
     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+    WAYPOINT("K");
     run_kernel();
+    WAYPOINT("KD");
 #endif
 }
