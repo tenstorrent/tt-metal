@@ -7,6 +7,7 @@ import pytest
 import ttnn
 from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
     data_gen_with_range,
+    data_gen_with_range_dtype,
     compare_pcc,
 )
 
@@ -19,15 +20,17 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_bw_logaddexp2(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device, True)
-    other_data, other_tensor = data_gen_with_range(input_shapes, -20, 20, device, True)
+@pytest.mark.parametrize("dtype", (ttnn.bfloat16, ttnn.bfloat8_b))
+def test_bw_logaddexp2(input_shapes, dtype, device):
+    in_data, input_tensor = data_gen_with_range_dtype(input_shapes, -80, 80, device, True, False, dtype)
+    other_data, other_tensor = data_gen_with_range_dtype(input_shapes, -80, 80, device, True, False, dtype)
 
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device)
+    grad_data, grad_tensor = data_gen_with_range_dtype(input_shapes, -80, 80, device, False, False, dtype)
 
     tt_output_tensor_on_device = ttnn.logaddexp2_bw(grad_tensor, input_tensor, other_tensor)
 
     golden_function = ttnn.get_golden_function(ttnn.logaddexp2_bw)
+
     golden_tensor = golden_function(grad_data, in_data, other_data)
     status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert status
