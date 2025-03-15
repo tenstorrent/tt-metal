@@ -77,15 +77,12 @@ add_custom_target(
     DEPENDS
         ${METAL_TEST_TARGETS}
         metal_perf_microbenchmark_tests
-        unit_tests_api_grayskull
         unit_tests_api_wormhole_b0
         unit_tests_api_blackhole
-        unit_tests_debug_tools_grayskull
         unit_tests_debug_tools_wormhole_b0
         unit_tests_debug_tools_blackhole
         unit_tests_device
         unit_tests_dispatch
-        unit_tests_eth_grayskull
         unit_tests_eth_wormhole_b0
         unit_tests_eth_blackhole
         unit_tests_integration
@@ -144,6 +141,7 @@ target_sources(
             test_kernels/misc/watcher_pause.cpp
             test_kernels/misc/watcher_ringbuf.cpp
             test_kernels/misc/watcher_waypoints.cpp
+            test_kernels/misc/read_my_coordinates.cpp
 )
 
 install(

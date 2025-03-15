@@ -8,25 +8,6 @@ set(HAL_INCLUDE_DIRS
     ${PROJECT_SOURCE_DIR}/tt_metal
 )
 
-add_library(gs_hal OBJECT)
-add_library(HAL::grayskull ALIAS gs_hal)
-target_sources(gs_hal PRIVATE grayskull/gs_hal.cpp)
-target_include_directories(
-    gs_hal
-    BEFORE
-    PRIVATE
-        ${HAL_INCLUDE_DIRS}
-        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/grayskull
-        ${PROJECT_SOURCE_DIR}/tt_metal/api/grayskull/tt-metalium
-)
-target_link_libraries(
-    gs_hal
-    PRIVATE
-        hw
-        fmt::fmt-header-only
-        umd::device
-)
-
 add_library(wh_hal OBJECT)
 add_library(HAL::wormhole ALIAS wh_hal)
 target_sources(
@@ -100,7 +81,6 @@ target_link_libraries(
         umd::device
         Metalium::Metal::Hardware
     PRIVATE
-        HAL::grayskull
         HAL::wormhole
         HAL::blackhole
         Tracy::TracyClient

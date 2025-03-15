@@ -25,10 +25,12 @@ jobs:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
+        LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /work
         - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf
       options: --device /dev/tenstorrent
     defaults:
       run:
@@ -58,17 +60,11 @@ jobs:
       - name: Run quick tests
         timeout-minutes: 20
         run: |
-          # TODO: Run the chosen tests here
-          # pytest models/demos/llama3_subdevices/tests/test_llama_model.py -k quick
-          # pytest models/demos/llama3_subdevices/demo/demo_decode.py -k quick
+          pytest models/demos/llama3_subdevices/tests/test_llama_model.py -k quick
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: U06F3ER8X9A # Stuti Raizada
-      - name: Cleanup
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
-        run: |
-          # We are forced to checkout the repo into a subdir of the host's workdir; this pollutes the host
-          # with root-owned files.  Be sure to clean up after ourselves in case we're on a non-ephemeral runner.
-          rm -rf /__w/tt-metal/tt-metal/docker-job
