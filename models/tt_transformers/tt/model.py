@@ -350,7 +350,11 @@ class Transformer(LightweightModule):
     ):
         # No-op if callers already provide the right memory config
         if mode == "decode" and not self.args.is_galaxy:
-            x = ttnn.to_memory_config(x, self.model_config["DECODE_RESIDUAL_MEMCFG"])
+            x = ttnn.to_memory_config(
+                x, self.model_config["DECODE_RESIDUAL_MEMCFG"], self.model_config["ACTIVATION_DTYPE"]
+            )
+        elif self.model_config["ACTIVATION_DTYPE"] is not None and x.dtype != self.model_config["ACTIVATION_DTYPE"]:
+            x = ttnn.typecast(x, self.model_config["ACTIVATION_DTYPE"])
 
         for i, layer in enumerate(self.layers):
             x = layer(
