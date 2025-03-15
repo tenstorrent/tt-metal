@@ -1,139 +1,115 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
-from flask import Flask, request, jsonify, send_from_directory, send_file, send_from_directory
-import json
+from flask import Flask, request, jsonify, send_from_directory
+from gunicorn.app.base import BaseApplication
+from http import HTTPStatus
+from loguru import logger
+from models.demos.wormhole.stable_diffusion.demo.web_demo.task_queue import TaskQueue
+from models.demos.wormhole.stable_diffusion.demo.web_demo.model import warmup_model
 import os
-import atexit
+import pytest
+from threading import Thread
+import time
+
 
 app = Flask(__name__)
+
+# Initialize the task queue
+task_queue = TaskQueue()
+
+
+# worker thread to process the task queue
+def create_worker():
+    try:
+        while True:
+            # get task if one exists, otherwise block
+            task_id = task_queue.get_task()
+            if task_id:
+                task_queue.process_task(task_id)
+    except Exception as error:
+        logger.error(error)
 
 
 @app.route("/")
 def hello_world():
-    return "Hello, World!"
+    return jsonify({"message": "OK\n"}), 200
 
 
-@app.route("/submit", methods=["POST"])
-def submit():
-    data = request.get_json()
-    prompt = data.get("prompt")
-    print(prompt)
-
-    json_file_path = "models/demos/wormhole/stable_diffusion/demo/web_demo/input_prompts.json"
-
-    if not os.path.isfile(json_file_path):
-        with open(json_file_path, "w") as f:
-            json.dump({"prompts": []}, f)
-
-    with open(json_file_path, "r") as f:
-        prompts_data = json.load(f)
-
-    prompts_data["prompts"].append({"prompt": prompt, "status": "not generated"})
-
-    with open(json_file_path, "w") as f:
-        json.dump(prompts_data, f, indent=4)
-
-    return jsonify({"message": "Prompt received and added to queue."})
-
-
-@app.route("/update_status", methods=["POST"])
-def update_status():
+@app.route("/enqueue", methods=["POST"])
+def enqueue_prompt():
     data = request.get_json()
     prompt = data.get("prompt")
 
-    json_file_path = "models/demos/wormhole/stable_diffusion/demo/web_demo/input_prompts.json"
+    if not prompt:
+        return jsonify({"error": "No prompt provided"}), HTTPStatus.BAD_REQUEST
 
-    with open(json_file_path, "r") as f:
-        prompts_data = json.load(f)
-
-    for p in prompts_data["prompts"]:
-        if p["prompt"] == prompt:
-            p["status"] = "generated"
-            break
-
-    with open(json_file_path, "w") as f:
-        json.dump(prompts_data, f, indent=4)
-
-    return jsonify({"message": "Prompt status updated to generated."})
+    # Enqueue the prompt and start processing
+    task_id = task_queue.enqueue_task(prompt)
+    return jsonify({"task_id": task_id, "status": "Enqueued"}), HTTPStatus.CREATED
 
 
-@app.route("/get_image", methods=["GET"])
-def get_image():
-    image_name = "interactive_512x512_ttnn.png"
-    directory = os.getcwd()  # Get the current working directory
-    return send_from_directory(directory, image_name)
+@app.route("/status/<task_id>", methods=["GET"])
+def get_task_status(task_id):
+    task_status = task_queue.get_task_status(task_id)
+    if not task_status:
+        return jsonify({"error": "Task not found"}), HTTPStatus.NOT_FOUND
+    return jsonify({"task_id": task_id, "status": task_status["status"]}), HTTPStatus.OK
 
 
-@app.route("/image_exists", methods=["GET"])
-def image_exists():
-    image_path = "interactive_512x512_ttnn.png"
-    if os.path.isfile(image_path):
-        return jsonify({"exists": True}), 200
-    else:
-        return jsonify({"exists": False}), 200
+@app.route("/fetch_image/<task_id>", methods=["GET"])
+def fetch_image(task_id):
+    task_status = task_queue.get_task_status(task_id)
+    if not task_status:
+        return jsonify({"error": "Task not found"}), HTTPStatus.NOT_FOUND
+
+    if task_status["status"] != "Completed":
+        return jsonify({"error": "Task not completed yet"}), HTTPStatus.BAD_REQUEST
+
+    image_path = task_status["image_path"]
+    directory = os.getcwd()  # get the current working directory
+    return send_from_directory(directory, image_path)
 
 
-@app.route("/clean_up", methods=["POST"])
-def clean_up():
-    json_file_path = "models/demos/wormhole/stable_diffusion/demo/web_demo/input_prompts.json"
+class GunicornApp(BaseApplication):
+    def __init__(self, app, port):
+        self.app = app
+        self.port = port
+        super().__init__()
 
-    with open(json_file_path, "r") as f:
-        prompts_data = json.load(f)
+    def load(self):
+        return self.app
 
-    prompts_data["prompts"] = [p for p in prompts_data["prompts"] if p["status"] != "done"]
+    def load_config(self):
+        config = {
+            "bind": f"0.0.0.0:{self.port}",  # Specify the binding address
+            "workers": 1,  # Number of Gunicorn workers
+            "reload": False,
+            "worker_class": "gthread",
+            "threads": 16,
+            "post_worker_init": self.post_worker_init,
+            "timeout": 0,
+        }
 
-    with open(json_file_path, "w") as f:
-        json.dump(prompts_data, f, indent=4)
+        # Set the configurations for Gunicorn (optional but useful)
+        for key, value in config.items():
+            self.cfg.set(key, value)
 
-    return jsonify({"message": "Cleaned up done prompts."})
+    def post_worker_init(self, worker):
+        # all setup tasks and spinup background threads must be performed
+        # here as gunicorn spawns worker processes who must be the parent
+        # of all server threads
+        warmup_model()
 
-
-@app.route("/get_latest_time", methods=["GET"])
-def get_latest_time():
-    json_file_path = "models/demos/wormhole/stable_diffusion/demo/web_demo/input_prompts.json"
-
-    if not os.path.isfile(json_file_path):
-        return jsonify({"message": "No prompts found"}), 404
-
-    with open(json_file_path, "r") as f:
-        prompts_data = json.load(f)
-
-    # Filter prompts that have a total_acc time available
-    completed_prompts = [p for p in prompts_data["prompts"] if "total_acc" in p]
-
-    if not completed_prompts:
-        return jsonify({"message": "No completed prompts with time available"}), 404
-
-    # Get the latest prompt with total_acc
-    latest_prompt = completed_prompts[-1]  # Assuming prompts are in chronological order
-
-    return (
-        jsonify(
-            {
-                "prompt": latest_prompt["prompt"],
-                "total_acc": latest_prompt["total_acc"],
-                "batch_size": latest_prompt["batch_size"],
-                "steps": latest_prompt["steps"],
-            }
-        ),
-        200,
-    )
+        # run the model worker in a background thread
+        thread = Thread(target=create_worker)
+        thread.daemon = True
+        thread.start()
 
 
-def cleanup():
-    if os.path.isfile("models/demos/wormhole/stable_diffusion/demo/web_demo/input_prompts.json"):
-        os.remove("models/demos/wormhole/stable_diffusion/demo/web_demo/input_prompts.json")
-        print(f"Deleted json")
-
-    if os.path.isfile("interactive_512x512_ttnn.png"):
-        os.remove("interactive_512x512_ttnn.png")
-        print(f"Deleted image")
-
-
-atexit.register(cleanup)
-
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+def test_app(port):
+    # Ensure the generated images directory exists
+    os.makedirs("generated_images", exist_ok=True)
+    gunicorn_app = GunicornApp(app, port)
+    gunicorn_app.run()
