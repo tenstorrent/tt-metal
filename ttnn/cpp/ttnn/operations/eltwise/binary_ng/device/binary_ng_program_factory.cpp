@@ -5,6 +5,7 @@
 #include "binary_ng_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 using namespace tt::tt_metal;
@@ -401,6 +402,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     const auto& b = tensor_args.input_tensor_b;
     const auto a_dtype = a.get_dtype();
     const auto b_dtype = b.has_value() ? b->get_dtype() : a_dtype;
+    const auto c_dtype = c.get_dtype();
     auto is_sfpu_op = operation_attributes.is_sfpu;
 
     auto program = CreateProgram();
@@ -418,7 +420,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     auto b_data_format = b.has_value() ? datatype_to_dataformat_converter(b->get_dtype())
                          : is_sfpu_op  ? datatype_to_dataformat_converter(a_dtype)
                                        : DataFormat::Float16_b;
-    auto c_data_format = datatype_to_dataformat_converter(c.get_dtype());
+    auto c_data_format = datatype_to_dataformat_converter(c_dtype);
 
     uint32_t a_single_tile_size = tt_metal::detail::TileSize(a_data_format);
     uint32_t b_single_tile_size = tt_metal::detail::TileSize(b_data_format);
@@ -453,6 +455,14 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
 
         if (op_config.postprocess.has_value()) {
             post_activations.insert(post_activations.begin(), *op_config.postprocess);
+        }
+
+        if (binary::utils::is_typecast(a_dtype, c_dtype) and op_type != BinaryOpType::QUANT and
+            op_type != BinaryOpType::REQUANT and op_type != BinaryOpType::DEQUANT) {
+            post_activations.push_back({
+                unary::UnaryOpType::TYPECAST,
+                {static_cast<int>(a_dtype), static_cast<int>(c_dtype)},
+            });
         }
 
         add_activation_defines(compute_kernel_defines, lhs_activations, "LHS");

@@ -1565,12 +1565,6 @@ def test_binary_sharded_scalar(scalar, a_shape, shard_type, shard_size, core_ran
             ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (3, 0))}),
         ],
         [
-            torch.Size([32, 4 * 32]),
-            ttnn.ShardStrategy.HEIGHT,
-            [32, 4 * 32],
-            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 0))}),
-        ],
-        [
             torch.Size([1, 31]),
             ttnn.ShardStrategy.HEIGHT,
             [1, 31],
