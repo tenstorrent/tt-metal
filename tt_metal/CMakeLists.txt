@@ -201,9 +201,9 @@ target_link_libraries(
         nlohmann_json::nlohmann_json
         TT::Metalium::HostDevCommon
         Reflect::Reflect
+        TT:STL
     PRIVATE
         Metalium::Metal::Impl
-        TT:STL
         metal_common_libs
         common
         jit_build
