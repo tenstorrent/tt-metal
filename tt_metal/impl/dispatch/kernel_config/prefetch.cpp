@@ -399,6 +399,9 @@ void PrefetchKernel::CreateKernel() {
         {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual_noc_coords.y)},
         {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(downstream_s_virtual_noc_coords.x)},
         {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(downstream_s_virtual_noc_coords.y)},
+        {"FABRIC_ATOMIC_HEADER",
+         std::to_string(DispatchMemMap::get(GetCoreType())
+                            .get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_ATOMIC_HEADER))},
     };
     configure_kernel_variant(
         dispatch_kernel_file_names[PREFETCH],

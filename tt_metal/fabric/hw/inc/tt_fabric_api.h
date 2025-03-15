@@ -281,7 +281,7 @@ inline void fabric_client_router_reserve(
 
 template <ClientDataMode data_mode = ClientDataMode::PACKETIZED_DATA>
 inline void fabric_async_write_push_data(
-    fabric_push_client_interface_t* client_interface, uint32_t src_addr, uint32_t size, uint32_t header_id) {
+    volatile fabric_push_client_interface_t* client_interface, uint32_t src_addr, uint32_t size, uint32_t header_id) {
     uint32_t total_words_to_send = (size + PACKET_WORD_SIZE_BYTES - 1) >> 4;
     uint64_t push_addr = get_noc_addr_helper(client_interface->router_addr_h, client_interface->router_push_addr);
     uint32_t router_buf_space = *(volatile uint32_t*)client_interface->router_space;
@@ -354,7 +354,7 @@ inline void fabric_async_write_push_data(
 
 template <ClientDataMode data_mode = ClientDataMode::PACKETIZED_DATA, AsyncWriteMode mode = AsyncWriteMode::ALL>
 inline void fabric_async_write(
-    fabric_push_client_interface_t* client_interface,
+    volatile fabric_push_client_interface_t* client_interface,
     uint32_t routing_plane,  // the network plane to use for this transaction
     uint32_t src_addr,       // source address in sender’s memory
     uint16_t dst_mesh_id,

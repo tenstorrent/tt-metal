@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "dispatch.hpp"
 #include "assert.hpp"
+#include "command_queue_common.hpp"
+#include "dispatch_mem_map.hpp"
 #include "hal.hpp"
 #include "prefetch.hpp"
 #include "dispatch_s.hpp"
@@ -144,7 +146,11 @@ void DispatchKernel::GenerateStaticConfigs() {
             my_dispatch_constants.mux_buffer_pages(device_->num_hw_cqs()),
             GetCoreType());  // Apparently unused
 
-        static_config_.split_dispatch_page_preamble_size = sizeof(tt::packet_queue::dispatch_packet_header_t);
+        if (tt::llrt::RunTimeOptions::get_instance().get_fd_fabric()) {
+            static_config_.split_dispatch_page_preamble_size = 0;  // Out of band headers are used
+        } else {
+            static_config_.split_dispatch_page_preamble_size = sizeof(tt::packet_queue::dispatch_packet_header_t);
+        }
         static_config_.prefetch_h_max_credits = my_dispatch_constants.mux_buffer_pages(device_->num_hw_cqs());
 
         static_config_.packed_write_max_unicast_sub_cmds =
@@ -398,6 +404,9 @@ void DispatchKernel::CreateKernel() {
         {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual_noc_coords.y)},
         {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(downstream_s_virtual_noc_coords.x)},
         {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(downstream_s_virtual_noc_coords.y)},
+        {"FABRIC_ATOMIC_HEADER",
+         std::to_string(DispatchMemMap::get(GetCoreType())
+                            .get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_ATOMIC_HEADER))},
     };
     configure_kernel_variant(dispatch_kernel_file_names[DISPATCH], compile_args, defines, false, false, false);
 }
