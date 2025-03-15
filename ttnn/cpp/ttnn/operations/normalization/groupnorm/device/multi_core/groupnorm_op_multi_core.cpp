@@ -1228,7 +1228,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     // block size for in0 (tensor a)
-    uint32_t in0_block_tiles = per_core_Nt * per_core_Mt;
+    uint32_t in0_block_tiles = block_ht * block_wt;
     uint32_t in0_CB_size = in0_block_tiles * in_single_tile_size;
     uint32_t in_CB_size = in0_block_tiles * in_single_tile_size;
     // in2 - scaler
@@ -1381,7 +1381,12 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)TILE_HEIGHT,
         (std::uint32_t)block_ht,
         (std::uint32_t)block_wt,
-        (std::uint32_t)block_ht * block_wt};
+        (std::uint32_t)block_ht * block_wt,
+        (std::uint32_t)num_datum_row_per_group_mod_tile_w,
+        (std::uint32_t)block_wt_last,
+        (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0,
+        (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
+        (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH};
     std::vector<uint32_t> reader_mcast_receiver_compile_time_args = {
         (std::uint32_t)1,
         (std::uint32_t)reduce_receiver_semaphore_id,
@@ -1394,7 +1399,12 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)TILE_HEIGHT,
         (std::uint32_t)block_ht,
         (std::uint32_t)block_wt,
-        (std::uint32_t)block_ht * block_wt};
+        (std::uint32_t)block_ht * block_wt,
+        (std::uint32_t)num_datum_row_per_group_mod_tile_w,
+        (std::uint32_t)block_wt_last,
+        (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0,
+        (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
+        (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH};
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
     // reader kernel
@@ -1504,8 +1514,6 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_batches_per_core,
         (std::uint32_t)num_groups_per_core,
 
-        (std::uint32_t)num_datum_row_per_group_mod_tile_w,
-
         (std::uint32_t)block_ht,
         (std::uint32_t)block_wt,
         (std::uint32_t)block_ht * block_wt,
@@ -1522,12 +1530,13 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)single_tile_size,
         (std::uint32_t)per_core_Mt * per_core_Nt / num_batches_per_core,
         (std::uint32_t)num_groups_per_core * block_wt,
+        (std::uint32_t)num_datum_row_per_group_mod_tile_w,
         (std::uint32_t)block_wt_last,
         (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0,
         (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
-        (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH
-
+        (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH,
     };
+
     std::vector<uint32_t> mcast_receiver_compute_compile_time_args = {
         (std::uint32_t)0,
         (std::uint32_t)gamma.has_value(),
@@ -1536,8 +1545,6 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_batches_per_core,
         (std::uint32_t)num_groups_per_core,
 
-        (std::uint32_t)num_datum_row_per_group_mod_tile_w,
-
         (std::uint32_t)block_ht,
         (std::uint32_t)block_wt,
         (std::uint32_t)block_ht * block_wt,
@@ -1554,6 +1561,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)single_tile_size,
         (std::uint32_t)per_core_Mt * per_core_Nt / num_batches_per_core,
         (std::uint32_t)num_groups_per_core * block_wt,
+        (std::uint32_t)num_datum_row_per_group_mod_tile_w,
         (std::uint32_t)block_wt_last,
         (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0,
         (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
@@ -1753,7 +1761,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         for (int j = 0; j < group.size(); ++j) {
             CoreCoord core = group[j];
             CoreCoord core_physical = device->worker_core_from_logical_core(core);
-            uint32_t in0_start_id = in0_block_tiles * mcast_groups.size() * j + per_core_Nt * i;
+            uint32_t in0_start_id = per_core_Mt * Wt * j + per_core_Nt * i;
 
             if (j == 0) {  // mcast sender
                 // get the bounding box for the mcast
