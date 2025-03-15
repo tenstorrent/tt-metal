@@ -121,39 +121,43 @@ enum CQNocSend {
     CQ_NOC_SEND = 1,
 };
 
-template <enum CQNocFlags flags, enum CQNocWait wait = CQ_NOC_WAIT, enum CQNocSend send = CQ_NOC_SEND>
+template <
+    enum CQNocFlags flags,
+    enum CQNocWait wait = CQ_NOC_WAIT,
+    enum CQNocSend send = CQ_NOC_SEND,
+    uint32_t cmd_buf = NCRISC_WR_CMD_BUF>
 FORCE_INLINE void cq_noc_async_write_with_state(
     uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1) {
     if constexpr (wait) {
         WAYPOINT("CNSW");
-        while (!noc_cmd_buf_ready(noc_index, NCRISC_WR_CMD_BUF));
+        while (!noc_cmd_buf_ready(noc_index, cmd_buf));
         WAYPOINT("CNSD");
     }
 
     if constexpr (flags & CQ_NOC_FLAG_SRC) {
-        NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_TARG_ADDR_LO, src_addr);
+        NOC_CMD_BUF_WRITE_REG(noc_index, cmd_buf, NOC_TARG_ADDR_LO, src_addr);
     }
     if constexpr (flags & CQ_NOC_FLAG_DST) {
-        NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_LO, (uint32_t)dst_addr);
+        NOC_CMD_BUF_WRITE_REG(noc_index, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dst_addr);
     }
     if constexpr (flags & CQ_NOC_FLAG_NOC) {
 #ifdef ARCH_BLACKHOLE
         // Handles writing to PCIe
-        NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_MID, (uint32_t)(dst_addr >> 32) & 0x1000000F);
+        NOC_CMD_BUF_WRITE_REG(noc_index, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dst_addr >> 32) & 0x1000000F);
 #endif
         NOC_CMD_BUF_WRITE_REG(
             noc_index,
-            NCRISC_WR_CMD_BUF,
+            cmd_buf,
             NOC_RET_ADDR_COORDINATE,
             (uint32_t)(dst_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
     }
     if constexpr (flags & CQ_NOC_FLAG_LEN) {
         ASSERT(size <= NOC_MAX_BURST_SIZE);
-        NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE, size);
+        NOC_CMD_BUF_WRITE_REG(noc_index, cmd_buf, NOC_AT_LEN_BE, size);
     }
     if constexpr (send) {
         DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_FROM_STATE(noc_index);
-        NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+        NOC_CMD_BUF_WRITE_REG(noc_index, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     }
 }
 
@@ -182,11 +186,11 @@ uint32_t cq_noc_async_write_with_state_any_len(
     }
 }
 
-template <enum CQNocFlags flags, bool mcast = false, bool linked = false>
+template <enum CQNocFlags flags, bool mcast = false, bool linked = false, uint32_t cmd_buf = NCRISC_WR_CMD_BUF>
 FORCE_INLINE void cq_noc_async_write_init_state(uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0) {
     WAYPOINT("CNIW");
     uint32_t heartbeat = 0;
-    while (!noc_cmd_buf_ready(noc_index, NCRISC_WR_CMD_BUF)) {
+    while (!noc_cmd_buf_ready(noc_index, cmd_buf)) {
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
     }
     WAYPOINT("CNID");
@@ -200,9 +204,9 @@ FORCE_INLINE void cq_noc_async_write_init_state(uint32_t src_addr, uint64_t dst_
         (mcast ? ((multicast_path_reserve ? NOC_CMD_PATH_RESERVE : 0) | NOC_CMD_BRCST_PACKET) : 0x0) |
         (posted ? 0 : NOC_CMD_RESP_MARKED);
 
-    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_CTRL, noc_cmd_field);
+    NOC_CMD_BUF_WRITE_REG(noc_index, cmd_buf, NOC_CTRL, noc_cmd_field);
 
-    cq_noc_async_write_with_state<flags, CQ_NOC_wait, CQ_NOC_send>(src_addr, dst_addr, size);
+    cq_noc_async_write_with_state<flags, CQ_NOC_wait, CQ_NOC_send, cmd_buf>(src_addr, dst_addr, size);
 }
 
 template <enum CQNocInlineFlags flags, enum CQNocWait wait = CQ_NOC_WAIT, enum CQNocSend send = CQ_NOC_SEND>
@@ -244,6 +248,7 @@ FORCE_INLINE void cq_noc_inline_dw_write_with_state(uint64_t dst_addr, uint32_t 
 
 // TODO: noc_inline_dw_write currently hardcodes most of these parameters, which we copied here
 // If needed, add templates for setting these
+// TODO: uplift for BH to not do inline write
 template <enum CQNocInlineFlags flags>
 FORCE_INLINE void cq_noc_inline_dw_write_init_state(uint64_t dst_addr, uint32_t val = 0, uint8_t be = 0xF) {
     WAYPOINT("NIIW");

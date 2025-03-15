@@ -299,7 +299,16 @@ void relay_to_next_cb(
     // counter so we would only need to inc atomics downstream
     uint64_t dst = get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr);
     cq_noc_async_write_init_state<CQ_NOC_sNdl>(0, dst, 0);
+#ifdef ARCH_BLACKHOLE
+    // On Blackhole inline writes are disabled so use cq_noc_async_write_init_state with inline write cmd buf
+    // See comment in `noc_inline_dw_write` for more details
+    uint32_t inline_l1_src_addr = noc_get_interim_inline_value_addr(noc_index, dst);
+    volatile tt_l1_ptr uint32_t* inline_l1_src_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(inline_l1_src_addr);
+    cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, NCRISC_WR_REG_CMD_BUF>(0, dst, 0);
+#else
     cq_noc_inline_dw_write_init_state<CQ_NOC_INLINE_Ndvb>(dst);
+#endif
 
     while (length > 0) {
         ASSERT(downstream_cb_end > downstream_cb_data_ptr);
@@ -318,8 +327,14 @@ void relay_to_next_cb(
 
         if constexpr (preamble_size > 0) {
             uint32_t flag;
+#ifdef ARCH_BLACKHOLE
+            *inline_l1_src_addr_ptr = xfer_size + preamble_size + not_end_of_cmd;
+            cq_noc_async_write_with_state<CQ_NOC_SnDL, CQ_NOC_WAIT, CQ_NOC_SEND, NCRISC_WR_REG_CMD_BUF>(
+                inline_l1_src_addr, downstream_cb_data_ptr, 4);
+#else
             cq_noc_inline_dw_write_with_state<CQ_NOC_INLINE_nDVB>(
                 downstream_cb_data_ptr, xfer_size + preamble_size + not_end_of_cmd);
+#endif
             noc_nonposted_writes_num_issued[noc_index]++;
             noc_nonposted_writes_acked[noc_index]++;
             downstream_cb_data_ptr += preamble_size;

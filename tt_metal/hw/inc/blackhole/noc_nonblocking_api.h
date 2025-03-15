@@ -131,6 +131,19 @@ inline __attribute__((always_inline)) bool noc_cmd_buf_ready(uint32_t noc, uint3
     return (NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_CMD_CTRL) == NOC_CTRL_STATUS_READY);
 }
 
+inline __attribute__((always_inline)) uint32_t noc_get_interim_inline_value_addr(uint32_t noc, uint64_t dst_noc_addr) {
+    // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
+    // time. If one port on the receipient has no back-pressure then the transaction will hang because there is no
+    // mechanism to allow one memory port to move ahead of another. To workaround this hang, we emulate inline writes on
+    // Blackhole by writing the value to be written to local L1 first and then issue a noc async write.
+
+    // If the dst addr is not L1 aligned then we need to offset the src address by the same misalignment to ensure
+    // src and dst address have same alignment.
+    uint32_t offset = dst_noc_addr & 0x3;
+    uint32_t src_addr = (uint32_t)MEM_L1_INLINE_BASE + (uint32_t)(noc * MEM_L1_INLINE_SIZE_PER_NOC) + offset;
+    return src_addr;
+}
+
 template <uint8_t noc_mode = DM_DEDICATED_NOC>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
     uint32_t noc, uint32_t cmd_buf, uint64_t src_addr, uint32_t dest_addr, uint32_t len_bytes) {
