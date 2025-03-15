@@ -11,6 +11,7 @@
 #include <stack>
 #include <tt-metalium/command_queue_interface.hpp>
 #include "tt_metal/impl/dispatch/device_command.hpp"
+#include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 #include <tt-metalium/dispatch_settings.hpp>
 #include <tt-metalium/program_impl.hpp>
 #include <tt-metalium/allocator.hpp>
@@ -479,16 +480,14 @@ void issue_buffer_dispatch_command_sequence(
     CoreType dispatch_core_type) {
     uint32_t num_worker_counters = sub_device_ids.size();
     uint32_t data_size_bytes = dispatch_params.pages_per_txn * dispatch_params.page_size_to_write;
-    uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
-    uint32_t cmd_sequence_sizeB = align(
-        sizeof(CQPrefetchCmd) +      // CQ_PREFETCH_CMD_RELAY_INLINE
-            sizeof(CQDispatchCmd) +  // CQ_DISPATCH_CMD_WRITE_PAGED or CQ_DISPATCH_CMD_WRITE_LINEAR
-            data_size_bytes,
-        pcie_alignment);
+    tt::tt_metal::DeviceCommandCalculator calculator;
+    calculator.add_dispatch_write_linear<true, true>(data_size_bytes);
     if (dispatch_params.issue_wait) {
-        cmd_sequence_sizeB +=
-            pcie_alignment * num_worker_counters;  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
+        for (int i = 0; i < num_worker_counters; ++i) {
+            calculator.add_dispatch_wait();
+        }
     }
+    const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
     SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
 
@@ -850,14 +849,14 @@ void issue_read_buffer_dispatch_command_sequence(
     Buffer& buffer, T& dispatch_params, tt::stl::Span<const SubDeviceId> sub_device_ids, CoreType dispatch_core_type) {
     SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
     uint32_t num_worker_counters = sub_device_ids.size();
-    // accounts for padding
-    uint32_t cmd_sequence_sizeB =
-        hal.get_alignment(HalMemType::HOST) *
-            num_worker_counters +              // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
-        hal.get_alignment(HalMemType::HOST) +  // CQ_PREFETCH_CMD_STALL
-        hal.get_alignment(
-            HalMemType::HOST) +  // CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH + CQ_DISPATCH_CMD_WRITE_LINEAR_HOST
-        hal.get_alignment(HalMemType::HOST);  // CQ_PREFETCH_CMD_RELAY_LINEAR or CQ_PREFETCH_CMD_RELAY_PAGED
+    tt::tt_metal::DeviceCommandCalculator calculator;
+    for (int i = 0; i < num_worker_counters; ++i) {
+        calculator.add_dispatch_wait();
+    }
+    calculator.add_prefetch_stall();
+    calculator.add_dispatch_write_linear_host();
+    calculator.add_prefetch_relay_paged();
+    const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
 
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
