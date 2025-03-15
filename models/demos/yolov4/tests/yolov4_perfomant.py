@@ -35,6 +35,7 @@ def run_yolov4_inference(
     act_dtype,
     weight_dtype,
     model_location_generator,
+    resolution,
 ):
     test_infra = create_test_infra(
         device,
@@ -42,6 +43,7 @@ def run_yolov4_inference(
         act_dtype,
         weight_dtype,
         model_location_generator=model_location_generator,
+        resolution=resolution,
     )
 
     tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(device)
@@ -75,6 +77,7 @@ def run_yolov4_trace_inference(
     act_dtype,
     weight_dtype,
     model_location_generator,
+    resolution,
 ):
     test_infra = create_test_infra(
         device,
@@ -82,6 +85,7 @@ def run_yolov4_trace_inference(
         act_dtype,
         weight_dtype,
         model_location_generator=model_location_generator,
+        resolution=resolution,
     )
     tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(device)
 
@@ -126,6 +130,7 @@ def run_yolov4_trace_2cqs_inference(
     act_dtype,
     weight_dtype,
     model_location_generator,
+    resolution,
 ):
     test_infra = create_test_infra(
         device,
@@ -133,6 +138,7 @@ def run_yolov4_trace_2cqs_inference(
         act_dtype,
         weight_dtype,
         model_location_generator=model_location_generator,
+        resolution=resolution,
     )
     tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(device)
     tt_image_res = tt_inputs_host.to(device, sharded_mem_config_DRAM)
