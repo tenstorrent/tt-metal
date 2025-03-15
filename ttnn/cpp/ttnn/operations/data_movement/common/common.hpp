@@ -13,6 +13,7 @@ namespace operations {
 namespace data_movement {
 
 ttnn::Shape squeeze_shape_to_4D(ttnn::Shape output_shape);
+ttnn::Shape squeeze_shape_to_3D(ttnn::Shape output_shape);
 ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor);
 
 uint32_t get_estimated_size_of_cbs(
@@ -163,6 +164,11 @@ private:
     PostTransformFunc post_transform_;
     OpType operation_;
 };
+
+ttnn::Shape compute_padded_shape(
+    const ttnn::Shape& logical_shape,
+    const uint32_t tile_height = tt::constants::TILE_HEIGHT,
+    const uint32_t tile_width = tt::constants::TILE_WIDTH);
 
 ttnn::Tensor pad_to_tile_vol(
     QueueId queue_id,
