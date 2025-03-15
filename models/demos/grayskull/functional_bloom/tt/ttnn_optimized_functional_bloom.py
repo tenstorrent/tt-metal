@@ -9,20 +9,20 @@ import transformers
 import torch
 from torch.nn import functional as F
 from transformers.models.bloom.configuration_bloom import BloomConfig
-
+import torch.nn as nn
 import ttnn
 from ttnn.model_preprocessing import (
     ParameterDict,
     preprocess_linear_weight,
     preprocess_linear_bias,
 )
+from typing import List, Optional, Tuple, Union
 
 BLOOM_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 BLOOM_DTYPE = ttnn.bfloat8_b
 ASSUME_FUSED_SOFTMAX = False
 
 
-# From transformers/models/bloom/modeling_bloom.py
 def build_alibi_tensor(attention_mask: torch.Tensor, num_heads: int, dtype: torch.dtype) -> torch.Tensor:
     """
     Link to paper: https://arxiv.org/abs/2108.12409 Alibi tensor is not causal as the original paper mentions, it
@@ -118,6 +118,7 @@ def compute_attention_scores(query_layer, key_layer, alibi):
         return attention_scores
 
     inv_norm_factor = 1.0 / math.sqrt(head_size)
+
     scaled_attention_scores = ttnn.mul(attention_scores, inv_norm_factor, memory_config=BLOOM_MEMORY_CONFIG)
     ttnn.deallocate(attention_scores)
 
@@ -207,7 +208,6 @@ def bloom_mlp(
         dtype=BLOOM_DTYPE,
     )
     ttnn.deallocate(hidden_states)
-
     ff2_output = ttnn.linear(
         ff1_output,
         parameters.dense_4h_to_h.weight,
@@ -286,7 +286,6 @@ def bloom(
         memory_config=BLOOM_MEMORY_CONFIG,
     )
     ttnn.deallocate(inputs_embeds)
-
     for layer_parameters in parameters.h:
         hidden_states = bloom_block(
             config,
@@ -306,7 +305,6 @@ def bloom(
 
 def bloom_for_causal_lm(config, input_ids, alibi, causal_mask, *, parameters):
     hidden_states = bloom(config, input_ids, alibi, causal_mask, parameters=parameters.transformer)
-
     # Unfortunately we do not have the ability to handle large tensors yet. So running final matmul ising torch as a workaround.
     hidden_states = ttnn.from_device(hidden_states)
     hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
@@ -325,6 +323,60 @@ def bloom_for_question_answering(config, input_ids, alibi, causal_mask, *, param
         memory_config=BLOOM_MEMORY_CONFIG,
     )
     return hidden_states
+
+
+def build_alibi_tensor(attention_mask: torch.Tensor, num_heads: int, dtype: torch.dtype) -> torch.Tensor:
+    """
+    Link to paper: https://arxiv.org/abs/2108.12409 Alibi tensor is not causal as the original paper mentions, it
+    relies on a translation invariance of softmax for quick implementation: with l being a tensor, and a fixed value
+    `softmax(l+a) = softmax(l)`. Based on
+    https://github.com/ofirpress/attention_with_linear_biases/blob/a35aaca144e0eb6b789dfcb46784c4b8e31b7983/fairseq/models/transformer.py#L742
+    TODO @thomasw21 this doesn't work as nicely due to the masking strategy, and so masking varies slightly.
+
+    Args:
+    Returns tensor shaped (batch_size, num_heads, 1, max_seq_len)
+        attention_mask (`torch.Tensor`):
+            Token-wise attention mask, this should be of shape (batch_size, max_seq_len).
+        num_heads (`int`, *required*):
+            number of heads
+        dtype (`torch.dtype`, *optional*, default=`torch.bfloat16`):
+            dtype of the output tensor
+    """
+    batch_size, seq_length = attention_mask.shape
+    closest_power_of_2 = 2 ** math.floor(math.log2(num_heads))
+    base = torch.tensor(
+        2 ** (-(2 ** -(math.log2(closest_power_of_2) - 3))),
+        device=attention_mask.device,
+        dtype=torch.float32,
+    )
+    powers = torch.arange(1, 1 + closest_power_of_2, device=attention_mask.device, dtype=torch.int32)
+    slopes = torch.pow(base, powers)
+
+    if closest_power_of_2 != num_heads:
+        extra_base = torch.tensor(
+            2 ** (-(2 ** -(math.log2(2 * closest_power_of_2) - 3))),
+            device=attention_mask.device,
+            dtype=torch.float32,
+        )
+        num_remaining_heads = min(closest_power_of_2, num_heads - closest_power_of_2)
+        extra_powers = torch.arange(
+            1,
+            1 + 2 * num_remaining_heads,
+            2,
+            device=attention_mask.device,
+            dtype=torch.int32,
+        )
+        slopes = torch.cat([slopes, torch.pow(extra_base, extra_powers)], dim=0)
+
+    # Note: alibi will added to the attention bias that will be applied to the query, key product of attention
+    # => therefore alibi will have to be of shape (batch_size, num_heads, query_length, key_length)
+    # => here we set (batch_size=1, num_heads=num_heads, query_length=1, key_length=max_length)
+    # => the query_length dimension will then be broadcasted correctly
+    # This is more or less identical to T5's relative position bias:
+    # https://github.com/huggingface/transformers/blob/f681437203baa7671de3174b0fa583c349d9d5e1/src/transformers/models/t5/modeling_t5.py#L527
+    arange_tensor = ((attention_mask.cumsum(dim=-1) - 1) * attention_mask)[:, None, :]
+    alibi = slopes[..., None] * arange_tensor
+    return alibi.reshape(batch_size, num_heads, 1, seq_length).to(dtype)
 
 
 def preprocess_inputs(
@@ -351,18 +403,71 @@ def preprocess_inputs(
     alibi = ttnn.to_device(alibi, device)
 
     batch_size, padded_seq_length = attention_mask.shape
-    mask = torch.empty((padded_seq_length, padded_seq_length), dtype=torch.bool)
-    seq_ids = torch.arange(padded_seq_length)
-    mask[:, 0:] = seq_ids[:, None] < seq_ids[None, :]
-    causal_mask = mask[None, None, :, :].expand(batch_size, num_heads, padded_seq_length, padded_seq_length)
-    causal_mask = causal_mask.float()
-    causal_mask *= -100
+    # mask = torch.empty((padded_seq_length, padded_seq_length), dtype=torch.bool)
+    # seq_ids = torch.arange(padded_seq_length)
+    # mask[:, 0:] = seq_ids[:, None] < seq_ids[None, :]
+    # causal_mask = mask[None, None, :, :].expand(batch_size, num_heads, padded_seq_length, padded_seq_length)
+    # causal_mask = causal_mask.float()
+    # causal_mask *= -100
+    input_shape = (batch_size, padded_seq_length)
+    past_key_values_length = 0
+
+    key_value_length = input_shape[-1] + past_key_values_length
+    input_shape = (attention_mask.shape[0], input_shape[-1])
+    past_key_values_length = key_value_length - input_shape[-1]
+    causal_4d_mask = _make_causal_mask(
+        input_shape,
+        torch.float32,
+        device=attention_mask.device,
+        past_key_values_length=past_key_values_length,
+    )
+    expanded_attn_mask = _expand_mask(attention_mask, torch.float32, tgt_len=input_shape[-1]).to(attention_mask.device)
+    if causal_4d_mask is not None:
+        causal_mask = causal_4d_mask.masked_fill(expanded_attn_mask.bool(), torch.finfo(torch.float32).min)
 
     causal_mask = ttnn.from_torch(causal_mask, dtype=ttnn.bfloat16)
     causal_mask = ttnn.to_layout(causal_mask, ttnn.TILE_LAYOUT)
     causal_mask = ttnn.to_device(causal_mask, device)
 
     return padded_input_ids, alibi, causal_mask
+
+
+def _expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] = None):
+    bsz, src_len = mask.size()
+    tgt_len = tgt_len if tgt_len is not None else src_len
+
+    expanded_mask = mask[:, None, None, :].expand(bsz, 1, tgt_len, src_len).to(dtype)
+
+    inverted_mask = 1.0 - expanded_mask
+
+    return inverted_mask.masked_fill(inverted_mask.to(torch.bool), torch.finfo(dtype).min)
+
+
+def _make_causal_mask(
+    input_ids_shape: torch.Size,
+    dtype: torch.dtype,
+    device: torch.device,
+    past_key_values_length: int = 0,
+    sliding_window: Optional[int] = None,
+):
+    bsz, tgt_len = input_ids_shape
+    mask = torch.full((tgt_len, tgt_len), torch.finfo(dtype).min, device=device)
+    mask_cond = torch.arange(mask.size(-1), device=device)
+    mask.masked_fill_(mask_cond < (mask_cond + 1).view(mask.size(-1), 1), 0)
+
+    mask = mask.to(dtype)
+
+    if past_key_values_length > 0:
+        mask = torch.cat([torch.zeros(tgt_len, past_key_values_length, dtype=dtype, device=device), mask], dim=-1)
+
+    # add lower triangular sliding window mask if necessary
+    if sliding_window is not None:
+        diagonal = past_key_values_length - sliding_window + 1
+
+        context_mask = 1 - torch.triu(torch.ones_like(mask, dtype=torch.int), diagonal=diagonal)
+        mask.masked_fill_(context_mask.bool(), torch.finfo(dtype).min)
+
+    return mask[None, None, :, :].expand(bsz, 1, tgt_len, tgt_len + past_key_values_length)
 
 
 def custom_preprocessor(torch_model, name):
