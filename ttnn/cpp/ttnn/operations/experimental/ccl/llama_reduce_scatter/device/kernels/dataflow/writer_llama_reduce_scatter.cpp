@@ -158,8 +158,9 @@ void kernel_main() {
         uint32_t base_receiver_l1_addr = get_read_ptr(fabric_receiver_cb_id);
 
         uint32_t curr_output_core = 0;
-        while (*(uint32_t*)receiver_semaphore_address < 1) {
-        }
+        noc_semaphore_wait((uint32_t*)receiver_semaphore_address, 1);
+        // while (*(uint32_t*)receiver_semaphore_address < 1) {
+        // }
 
         uint32_t output_tile_offset = receiver_for_device_id * tiles_per_core_width_output * page_size_bytes;
         uint32_t accumulator_l1_addr = get_read_ptr(accumulator_cb_id);
