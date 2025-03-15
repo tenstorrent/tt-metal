@@ -38,7 +38,7 @@ jobs:
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /mnt/MLPerf:/mnt/MLPerf
         - /sys:/sys:rw
-      options: "--device /dev/tenstorrent --cap-add=SYS_NICE"
+      options: "--device /dev/tenstorrent --cap-add=SYS_NICE --cap-add=SYS_ADMIN  --cap-add=SYS_RAWIO"
     defaults:
       run:
         shell: bash
@@ -71,7 +71,7 @@ jobs:
       - name: Enable Performance mode
         run: |
           sudo apt-get update
-          sudo apt-get -y install cpufrequtils
+          sudo apt-get -y install linux-tools-common linux-tools-generic linux-tools-$(uname -r) cpufrequtils
           sudo cpupower frequency-set -g performance
       - name: Run performance regressions
         timeout-minutes: 70
