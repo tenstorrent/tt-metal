@@ -65,6 +65,7 @@ void MeshWorkload::load_binaries(MeshCommandQueue& mesh_cq) {
                 .page_size = HostMemDeviceCommand::PROGRAM_PAGE_SIZE,
                 .buffer_type = BufferType::DRAM,
                 .buffer_layout = TensorMemoryLayout::INTERLEAVED,
+                .bottom_up = false,
             };
             ReplicatedBufferConfig global_kernel_bin_buf_config = {
                 .size = max_kernel_bin_buf_size,
