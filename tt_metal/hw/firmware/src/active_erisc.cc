@@ -41,10 +41,10 @@ uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used
 
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
-uint8_t my_logical_x __attribute__((used));
-uint8_t my_logical_y __attribute__((used));
-uint8_t my_relative_x __attribute__((used));
-uint8_t my_relative_y __attribute__((used));
+uint8_t my_logical_x_ __attribute__((used));
+uint8_t my_logical_y_ __attribute__((used));
+uint8_t my_relative_x_ __attribute__((used));
+uint8_t my_relative_y_ __attribute__((used));
 
 // These arrays are stored in local memory of FW, but primarily used by the kernel which shares
 // FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
