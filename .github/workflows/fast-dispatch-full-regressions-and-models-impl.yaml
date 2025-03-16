@@ -79,8 +79,6 @@ jobs:
           path: |
             generated/test_reports/
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
-        if: always()
   nightly-wh-models:
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
@@ -142,8 +140,6 @@ jobs:
           path: |
             generated/test_reports/
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
-        if: always()
   nightly-wh-unstable-models:
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
@@ -210,5 +206,3 @@ jobs:
           path: |
             generated/test_reports/
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
-        if: always()
