@@ -64,7 +64,7 @@ jobs:
             -e GTEST_OUTPUT=xml:generated/test_reports/
             -e GITHUB_ACTIONS=true
           install_wheel: true
-          run_args: ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type ${{ matrix.model-type }}_models_performance_${{ matrix.test-info.machine-type }}
+          run_args: ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.test-group.arch }} --pipeline-type ${{ matrix.model-type }}_models_performance_${{ matrix.test-info.machine-type }}
       # TODO: Fix the pipeline before enabling notifications.
       #- uses: ./.github/actions/slack-report
       #  if: ${{ failure() }}
