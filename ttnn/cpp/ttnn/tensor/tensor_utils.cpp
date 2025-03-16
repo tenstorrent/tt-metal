@@ -126,6 +126,7 @@ void insert_buffer_and_shape_for_device(
                 auto& shard_storage = std::get<DeviceStorage>(shard.tensor_attributes->storage);
                 if (shard_storage.mesh_buffer) {
                     s.mesh_buffer = shard_storage.mesh_buffer;
+                    s.specs = shard_storage.specs;
                 } else {
                     s.insert_buffer(shard_storage.buffer);
                 }
