@@ -61,30 +61,16 @@ Tensor tensor_reshape(
                 return Tensor(updated_storage, new_spec);
             }
             if constexpr (std::is_same_v<T, tt::tt_metal::DeviceStorage>) {
-                auto update_tensor_specs = [](const Tensor& tensor, const TensorSpec& new_spec) {
-                    auto device_storage = std::get<tt::tt_metal::DeviceStorage>(tensor.get_storage());
-                    if (device_storage.mesh_buffer != nullptr) {
-                        auto updated_storage = device_storage;
-                        for (auto& [_, spec] : updated_storage.specs) {
-                            spec = new_spec;
-                        }
-                        return Tensor(std::move(updated_storage), new_spec);
-                    } else {
-                        return tensor;
-                    }
-                };
-
+                auto device_storage = std::get<tt::tt_metal::DeviceStorage>(tensor.get_storage());
                 if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
-                    auto device_storage = std::get<tt::tt_metal::DeviceStorage>(tensor.get_storage());
                     if (tensor.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
-                        tt::tt_metal::DeviceStorage device_storage = std::get<T>(tensor.get_storage());
                         auto device_buffer = device_storage.get_buffer();
                         const auto& tensor_spec = tensor.tensor_spec();
                         auto page_size_bytes = tensor_spec.compute_page_size_bytes();
                         device_buffer->set_page_size(page_size_bytes);
-                        return update_tensor_specs(Tensor(device_storage, new_spec), new_spec);
+                        device_storage.update_uniform_specs(new_spec);
+                        return Tensor(std::move(device_storage), new_spec);
                     } else {
-                        tt::tt_metal::DeviceStorage device_storage = std::get<T>(tensor.get_storage());
                         auto device_buffer = device_storage.get_buffer();
                         tt::tt_metal::ShardSpecBuffer shard_spec_buffer = device_buffer->shard_spec();
 
@@ -121,10 +107,12 @@ Tensor tensor_reshape(
                                 new_logical_shape,
                                 new_padded_shape));
 
-                        return update_tensor_specs(Tensor(device_storage, upd_spec), upd_spec);
+                        device_storage.update_uniform_specs(upd_spec);
+                        return Tensor(std::move(device_storage), upd_spec);
                     }
                 } else {
-                    return update_tensor_specs(Tensor(tensor.get_storage(), new_spec), new_spec);
+                    device_storage.update_uniform_specs(new_spec);
+                    return Tensor(std::move(device_storage), new_spec);
                 }
             } else {
                 return Tensor(tensor.get_storage(), new_spec);

@@ -55,4 +55,10 @@ IDevice* DeviceStorage::get_device() const {
     return this->buffer->device();
 }
 
+void DeviceStorage::update_uniform_specs(const TensorSpec& new_spec) {
+    for (auto& [_, spec] : this->specs) {
+        spec = new_spec;
+    }
+}
+
 }  // namespace tt::tt_metal

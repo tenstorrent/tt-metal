@@ -66,6 +66,8 @@ struct DeviceStorage {
     bool is_allocated() const;
 
     IDevice* get_device() const;
+
+    void update_uniform_specs(const TensorSpec& new_spec);
 };
 
 using BorrowedBuffer = std::variant<

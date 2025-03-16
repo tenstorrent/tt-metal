@@ -84,22 +84,64 @@ tt::tt_metal::Tensor scatter(const tt::tt_metal::Tensor& tensor, int dim) {
     ttnn::SmallVector<uint32_t> end{tensor_shape[0], tensor_shape[1], tensor_shape[2], tensor_shape[3]};
     ttnn::SmallVector<uint32_t> stride{1U, 1U, 1U, 1U};
 
-    ttnn::SmallVector<uint32_t> shape{tensor_shape[0], tensor_shape[1], tensor_shape[2], tensor_shape[3]};
-    shape[dim] = split_size_per_device;
+    // ttnn::SmallVector<uint32_t> shape{tensor_shape[0], tensor_shape[1], tensor_shape[2], tensor_shape[3]};
+    // shape[dim] = split_size_per_device;
 
-    ttnn::Tensor scattered_tensor = tt::tt_metal::allocate_tensor_on_mesh(
-        ttnn::TensorSpec(ttnn::Shape(shape), tensor.get_tensor_spec().tensor_layout()), current_device);
-    std::vector<tt::tt_metal::Tensor> scattered_tensors = ttnn::distributed::get_device_tensors(scattered_tensor);
+    // ttnn::Tensor scattered_tensor = tt::tt_metal::allocate_tensor_on_mesh(
+    //     ttnn::TensorSpec(ttnn::Shape(shape), tensor.get_tensor_spec().tensor_layout()), current_device);
 
+
+    MeshContainer<ttnn::SmallVector<uint32_t>> start_args;
+    MeshContainer<ttnn::SmallVector<uint32_t>> end_args;
     size_t idx = 0;
-    for (const auto& tensor_shard : ttnn::distributed::get_device_tensors(tensor)) {
+    for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(device_grid_shape)) {
         start[dim] = split_size_per_device * idx;
         end[dim] = split_size_per_device * (idx + 1);
-
-        ttnn::slice(tensor_shard, start, end, stride, std::nullopt, scattered_tensors[idx]);
+        start_args.at(coord) = start;
+        end_args.at(coord) = end;
         ++idx;
-    }
-    return ttnn::distributed::aggregate_as_tensor(scattered_tensors, tt::tt_metal::AllGatherTensor{});
+    }    
+
+  auto  scattered_tensor = ttnn::slice(tensor, start_args, end_args, stride, std::nullopt);
+
+    // Brainstorming:
+    // 1. Append 'mesh' to the name - confusing to distinguish between slice and slice_mesh
+    // ttnn::slice_mesh(...)
+
+    // Existing version:
+    // Not ideal: 
+    // Need to specify `DropoutOp` and ttnn::prim::dropout twice,
+    // Need to work with `DrouputAttrs`,
+    // Need to specify `seed` that will be overridden anyways,
+    // Hard to know which args can be overridden and which cannot.
+    // 
+    // return ttnn::launch_mesh_workload<DropoutOp>(
+    //     [seed, prob, scale](const auto& coord, auto* device) -> DropoutAttrs {
+    //         auto seed_offset = device->get_device(coord)->id();
+    //         return DropoutAttrs{
+    //             .output_dtype = DataType::BFLOAT16,
+    //             .output_memory_config = MemoryConfig{},
+    //             .seed = seed + seed_offset,
+    //             .prob = prob,
+    //             .scale = scale};
+    //     },
+    //     ttnn::prim::dropout,
+    //     input_tensor,
+    //     prob,
+    //     scale,
+    //     seed,
+    //     DataType::BFLOAT16);
+
+
+    // size_t idx = 0;
+    // for (const auto& tensor_shard : ttnn::distributed::get_device_tensors(tensor)) {
+    //     start[dim] = split_size_per_device * idx;
+    //     end[dim] = split_size_per_device * (idx + 1);
+
+    //     ttnn::slice(tensor_shard, start, end, stride, std::nullopt, scattered_tensors[idx]);
+    //     ++idx;
+    // }
+    return scattered_tensor;
 }
 
 }  // namespace ttml::ttnn_fixed::distributed

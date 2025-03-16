@@ -69,7 +69,8 @@ bool is_cpu_tensor(const Tensor& tensor) {
 bool is_device_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::DEVICE; }
 
 Tensor transform(const Tensor& tensor, const std::function<Tensor(const Tensor&)>& transform_func) {
-    TT_FATAL(ttnn::distributed::is_multi_device_tensor(tensor), "transform only supports multi-device tensors");
+    TT_FATAL(
+        ttnn::distributed::is_multi_device_host_tensor(tensor), "transform only supports multi-device host tensors");
     auto input_tensors = ttnn::distributed::get_device_tensors(tensor);
     std::vector<Tensor> output_tensors;
     output_tensors.reserve(input_tensors.size());
@@ -82,7 +83,7 @@ Tensor transform(const Tensor& tensor, const std::function<Tensor(const Tensor&)
 }
 
 void apply(const Tensor& tensor, const std::function<void(const Tensor&)>& callable) {
-    TT_FATAL(ttnn::distributed::is_multi_device_tensor(tensor), "apply only supports multi-device tensors");
+    TT_FATAL(ttnn::distributed::is_multi_device_host_tensor(tensor), "apply only supports multi-device host tensors");
     auto input_tensors = ttnn::distributed::get_device_tensors(tensor);
     for (const auto& device_tensor : input_tensors) {
         callable(device_tensor);
