@@ -131,7 +131,6 @@ jobs:
             if [[ "${{ matrix.model }}" == *"llama3"* ]]; then
               pytest -n auto tests/nightly/single_card/llama3 -k ${{ matrix.model }}
             else
-              echo "arch: $WH_ARCH_YAML"
               pytest tests/nightly/single_card/${{ matrix.model }}
             fi
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
