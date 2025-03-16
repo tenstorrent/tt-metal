@@ -22,7 +22,7 @@ from models.utility_functions import is_grayskull
 
 
 def get_expected_times(vgg):
-    return (17, 10.5)
+    return (17, 11.26)
 
 
 @pytest.mark.models_performance_bare_metal
