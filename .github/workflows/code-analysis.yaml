@@ -1,6 +1,8 @@
 name: "Code analysis"
 
 on:
+  schedule:
+    - cron: "0 */3 * * *" # This cron schedule runs the workflow every 3 hours
   workflow_call:
     inputs:
       distro:

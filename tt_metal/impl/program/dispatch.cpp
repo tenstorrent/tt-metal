@@ -1923,9 +1923,11 @@ void reset_worker_dispatch_state_on_device(
     // go_signal. Clear the dispatch <--> worker semaphore, since trace starts at 0.
     for (uint32_t i = 0; i < num_sub_devices; ++i) {
         SubDeviceId sub_device_id(static_cast<uint8_t>(i));
-        uint32_t expected_num_workers = expected_num_workers_completed[i] +
-                                        device->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id) +
-                                        device->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
+        uint32_t expected_num_workers = expected_num_workers_completed[i];
+        if (reset_launch_msg_state) {
+            expected_num_workers += device->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id) +
+                                    device->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
+        }
         if (DispatchQueryManager::instance().distributed_dispatcher()) {
             command_sequence.add_dispatch_wait(
                 CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,

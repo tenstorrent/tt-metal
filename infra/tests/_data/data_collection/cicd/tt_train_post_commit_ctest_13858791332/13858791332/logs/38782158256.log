@@ -1,0 +1,180 @@
+﻿
+2025-03-14T14:49:24.6724652Z   prefix: test_reports_
+2025-03-14T14:49:24.6725081Z ##[endgroup]
+2025-03-14T14:49:24.6785252Z ##[group]Run uuid=$(uuidgen)
+2025-03-14T14:49:24.6785670Z [36;1muuid=$(uuidgen)[0m
+2025-03-14T14:49:24.6786063Z [36;1martifact_name="test_reports_$uuid"[0m
+2025-03-14T14:49:24.6786557Z [36;1mecho "[UPLOAD-ARTIFACT-UUID] $artifact_name"[0m
+2025-03-14T14:49:24.6787150Z [36;1mecho "artifact-name=$artifact_name" >> "$GITHUB_OUTPUT"[0m
+2025-03-14T14:49:24.6787830Z shell: bash --noprofile --norc -e -o pipefail {0}
+2025-03-14T14:49:24.6788289Z ##[endgroup]
+2025-03-14T14:49:24.7551536Z [UPLOAD-ARTIFACT-UUID] test_reports_5fbb453b-2959-4160-90c4-19a34f3b25a1
+2025-03-14T14:49:24.7675430Z ##[group]Run actions/upload-artifact@v4
+2025-03-14T14:49:24.7675874Z with:
+2025-03-14T14:49:24.7676367Z   name: test_reports_5fbb453b-2959-4160-90c4-19a34f3b25a1
+2025-03-14T14:49:24.7676932Z   path: /work/build/tt-train/generated/test_reports/
+
+2025-03-14T14:49:24.7677418Z   if-no-files-found: warn
+2025-03-14T14:49:24.7677778Z   compression-level: 6
+2025-03-14T14:49:24.7678133Z   overwrite: false
+2025-03-14T14:49:24.7678487Z   include-hidden-files: false
+2025-03-14T14:49:24.7678871Z ##[endgroup]
+2025-03-14T14:49:24.7683111Z ##[command]/usr/bin/docker exec  4491e54b5c690af2f62aba0597d9e54d833b01031a76b55ed07d73881ae131b0 sh -c "cat /etc/*release | grep ^ID"
+2025-03-14T14:49:25.2263070Z With the provided path, there will be 1 file uploaded
+2025-03-14T14:49:25.2271918Z Artifact name is valid!
+2025-03-14T14:49:25.2272604Z Root directory input is valid!
+2025-03-14T14:49:25.4309260Z Beginning upload of artifact content to blob storage
+2025-03-14T14:49:25.6983054Z Uploaded bytes 13741
+2025-03-14T14:49:25.7574333Z Finished uploading artifact content to blob storage!
+2025-03-14T14:49:25.7577335Z SHA256 hash of uploaded artifact zip is 7021aab4dfbd64e18027666687b60e28071413d50757067455c87db9d72d81b4
+2025-03-14T14:49:25.7578159Z Finalizing artifact upload
+2025-03-14T14:49:25.8707185Z Artifact test_reports_5fbb453b-2959-4160-90c4-19a34f3b25a1.zip successfully finalized. Artifact ID 2753400165
+2025-03-14T14:49:25.8708542Z Artifact test_reports_5fbb453b-2959-4160-90c4-19a34f3b25a1 has been successfully uploaded! Final size is 13741 bytes. Artifact ID is 2753400165
+2025-03-14T14:49:25.8716326Z Artifact download URL: https://github.com/tenstorrent/tt-metal/actions/runs/13858791332/artifacts/2753400165
+2025-03-14T14:49:25.8863637Z ##[group]Run # We are forced to checkout the repo into a subdir of the host's workdir; this pollutes the host
+2025-03-14T14:49:25.8864663Z [36;1m# We are forced to checkout the repo into a subdir of the host's workdir; this pollutes the host[0m
+2025-03-14T14:49:25.8865831Z [36;1m# with root-owned files.  Be sure to clean up after ourselves in case we're on a non-ephemeral runner.[0m
+2025-03-14T14:49:25.8866527Z [36;1mecho "pre rm"[0m
+2025-03-14T14:49:25.8866920Z [36;1mls -al /__w/tt-metal/tt-metal[0m
+2025-03-14T14:49:25.8867382Z [36;1mrm -rf /__w/tt-metal/tt-metal/docker-job[0m
+2025-03-14T14:49:25.8867836Z [36;1mecho "post rm"[0m
+2025-03-14T14:49:25.8868238Z [36;1mls -al /__w/tt-metal/tt-metal[0m
+2025-03-14T14:49:25.8868893Z shell: bash --noprofile --norc -e -o pipefail {0}
+2025-03-14T14:49:25.8869365Z ##[endgroup]
+2025-03-14T14:49:25.9736864Z pre rm
+2025-03-14T14:49:25.9759875Z total 723852
+2025-03-14T14:49:25.9760361Z drwxr-xr-x 26 1000 1000      4096 Mar 14 14:38 .
+2025-03-14T14:49:25.9760848Z drwxr-xr-x  3 1000 1000      4096 Mar  6 15:21 ..
+2025-03-14T14:49:25.9761388Z drwxr-xr-x  3 1000 1000      4096 Mar 14 14:36 .cache
+2025-03-14T14:49:25.9761905Z -rw-r--r--  1 1000 1000      3966 Mar  6 15:22 .clang-format
+2025-03-14T14:49:25.9762520Z -rw-r--r--  1 1000 1000      5870 Mar 14 00:19 .clang-format-ignore
+2025-03-14T14:49:25.9763064Z -rw-r--r--  1 1000 1000      6467 Mar 12 14:54 .clang-tidy
+2025-03-14T14:49:25.9763543Z -rw-r--r--  1 1000 1000        43 Mar  6 16:51 .clangd
+2025-03-14T14:49:25.9764019Z -rw-r--r--  1 1000 1000       222 Mar  6 15:22 .gersemirc
+2025-03-14T14:49:25.9764500Z drwxr-xr-x 10 1000 1000      4096 Mar 14 14:37 .git
+2025-03-14T14:49:25.9765035Z -rw-r--r--  1 1000 1000       239 Mar  6 15:22 .git-blame-ignore-revs
+2025-03-14T14:49:25.9765581Z -rw-r--r--  1 1000 1000        35 Mar  6 15:22 .gitattributes
+2025-03-14T14:49:25.9766163Z drwxr-xr-x  6 1000 1000      4096 Mar  6 15:22 .github
+2025-03-14T14:49:25.9766744Z -rw-r--r--  1 1000 1000      1730 Mar  6 15:22 .gitignore
+2025-03-14T14:49:25.9767263Z -rw-r--r--  1 1000 1000       661 Mar  6 15:22 .gitmodules
+2025-03-14T14:49:25.9767809Z drwxr-xr-x  6 1000 1000      4096 Mar 14 14:36 .local
+2025-03-14T14:49:25.9768407Z -rw-r--r--  1 1000 1000       932 Mar  6 15:22 .pre-commit-config.yaml
+2025-03-14T14:49:25.9768995Z -rw-r--r--  1 1000 1000  15813574 Mar  6 15:22 .test_durations
+2025-03-14T14:49:25.9769517Z -rw-r--r--  1 1000 1000       213 Mar  6 15:22 .yamllint
+2025-03-14T14:49:25.9770023Z -rw-r--r--  1 1000 1000     11832 Mar 14 08:18 CMakeLists.txt
+2025-03-14T14:49:25.9770564Z -rw-r--r--  1 1000 1000      2231 Mar  6 15:22 CMakePresets.json
+2025-03-14T14:49:25.9771076Z -rw-r--r--  1 1000 1000     12443 Mar 14 08:18 CODEOWNERS
+2025-03-14T14:49:25.9771570Z -rw-r--r--  1 1000 1000      5253 Mar  6 15:22 CODE_OF_CONDUCT.md
+2025-03-14T14:49:25.9772099Z -rw-r--r--  1 1000 1000     36550 Mar 14 00:19 CONTRIBUTING.md
+2025-03-14T14:49:25.9772593Z -rw-r--r--  1 1000 1000    126373 Mar 12 17:44 Doxyfile
+2025-03-14T14:49:25.9773080Z -rw-r--r--  1 1000 1000      8756 Mar  7 07:49 INSTALLING.md
+2025-03-14T14:49:25.9773568Z -rw-r--r--  1 1000 1000     11825 Mar  6 15:22 LICENSE
+2025-03-14T14:49:25.9774663Z -rw-r--r--  1 1000 1000       233 Mar  7 07:49 LICENSE_understanding.txt
+2025-03-14T14:49:25.9775205Z -rw-r--r--  1 1000 1000      1562 Mar  6 15:22 MANIFEST.in
+2025-03-14T14:49:25.9775714Z -rw-r--r--  1 1000 1000     18478 Mar  6 15:22 METALIUM_GUIDE.md
+2025-03-14T14:49:25.9776214Z -rw-r--r--  1 1000 1000     15279 Mar 14 12:12 README.md
+2025-03-14T14:49:25.9776683Z drwxr-xr-x  7 1000 1000      4096 Mar 14 14:35 build
+2025-03-14T14:49:25.9777172Z -rwxr-xr-x  1 1000 1000     13005 Mar 14 12:12 build_metal.sh
+2025-03-14T14:49:25.9777746Z -rw-r--r--  1 1000 1000      1438 Mar  6 15:22 check_copyright_config.yaml
+2025-03-14T14:49:25.9778293Z -rw-r--r--  1 1000 1000      1821 Mar  6 15:22 cloc.sh
+2025-03-14T14:49:25.9778759Z drwxr-xr-x  4 1000 1000      4096 Mar 13 13:53 cmake
+2025-03-14T14:49:25.9779549Z -rw-r--r--  1 1000 1000     24616 Mar 14 12:08 conftest.py
+2025-03-14T14:49:25.9780066Z drwxr-xr-x  2 1000 1000      4096 Mar  6 15:22 contributing
+2025-03-14T14:49:25.9780599Z -rwxr-xr-x  1 1000 1000      1420 Mar  6 15:22 create_venv.sh
+2025-03-14T14:49:25.9781112Z drwxr-xr-x  2 1000 1000      4096 Mar 14 14:22 data
+2025-03-14T14:49:25.9781604Z drwxr-xr-x  2 1000 1000      4096 Mar 14 00:19 dependencies
+2025-03-14T14:49:25.9782116Z drwxr-xr-x 22 root root      4096 Mar 14 14:39 docker-job
+2025-03-14T14:49:25.9782625Z drwxr-xr-x  2 1000 1000      4096 Mar 10 16:41 dockerfile
+2025-03-14T14:49:25.9783106Z drwxr-xr-x  3 1000 1000      4096 Mar 14 00:19 docs
+2025-03-14T14:49:25.9783582Z drwxr-xr-x  3 1000 1000      4096 Mar 14 14:37 generated
+2025-03-14T14:49:25.9784061Z drwxr-xr-x  4 1000 1000      4096 Mar 12 14:54 infra
+2025-03-14T14:49:25.9784595Z -rwxr-xr-x  1 1000 1000      6905 Mar 14 12:12 install_dependencies.sh
+2025-03-14T14:49:25.9785131Z drwxr-xr-x 10 1000 1000      4096 Mar 14 14:21 models
+2025-03-14T14:49:25.9785637Z -rw-r--r--  1 1000 1000      1042 Mar  6 15:22 pyproject.toml
+2025-03-14T14:49:25.9786141Z -rw-r--r--  1 1000 1000      1299 Mar 10 16:41 pytest.ini
+2025-03-14T14:49:25.9786629Z drwxr-xr-x  7 1000 1000      4096 Mar  6 17:41 python_env
+2025-03-14T14:49:25.9787126Z drwxr-xr-x  4 1000 1000      4096 Mar 14 14:22 runtime
+2025-03-14T14:49:25.9787607Z drwxr-xr-x  4 1000 1000      4096 Mar 13 13:53 scripts
+2025-03-14T14:49:25.9788124Z -rw-r--r--  1 1000 1000      7551 Mar  6 15:22 setup.py
+2025-03-14T14:49:25.9788615Z drwxr-xr-x 24 1000 1000      4096 Mar  6 18:33 tech_reports
+2025-03-14T14:49:25.9789119Z drwxr-xr-x 11 1000 1000      4096 Mar 14 00:19 tests
+2025-03-14T14:49:25.9789609Z drwxr-xr-x 11 1000 1000      4096 Mar 13 13:53 tt-train
+2025-03-14T14:49:25.9790263Z drwxr-xr-x 23 1000 1000      4096 Mar 14 00:19 tt_metal
+2025-03-14T14:49:25.9790743Z drwxr-xr-x  3 1000 1000      4096 Mar 14 00:19 tt_stl
+2025-03-14T14:49:25.9791226Z -rw-r--r--  1 1000 1000 724889600 Mar 14 14:35 ttm_any.tar
+2025-03-14T14:49:25.9791706Z drwxr-xr-x 10 1000 1000      4096 Mar 14 14:36 ttnn
+2025-03-14T14:49:26.4535347Z post rm
+2025-03-14T14:49:26.4552342Z total 723848
+2025-03-14T14:49:26.4552784Z drwxr-xr-x 25 1000 1000      4096 Mar 14 14:49 .
+2025-03-14T14:49:26.4553319Z drwxr-xr-x  3 1000 1000      4096 Mar  6 15:21 ..
+2025-03-14T14:49:26.4553796Z drwxr-xr-x  3 1000 1000      4096 Mar 14 14:36 .cache
+2025-03-14T14:49:26.4554314Z -rw-r--r--  1 1000 1000      3966 Mar  6 15:22 .clang-format
+2025-03-14T14:49:26.4555154Z -rw-r--r--  1 1000 1000      5870 Mar 14 00:19 .clang-format-ignore
+2025-03-14T14:49:26.4556148Z -rw-r--r--  1 1000 1000      6467 Mar 12 14:54 .clang-tidy
+2025-03-14T14:49:26.4556634Z -rw-r--r--  1 1000 1000        43 Mar  6 16:51 .clangd
+2025-03-14T14:49:26.4557119Z -rw-r--r--  1 1000 1000       222 Mar  6 15:22 .gersemirc
+2025-03-14T14:49:26.4557599Z drwxr-xr-x 10 1000 1000      4096 Mar 14 14:37 .git
+2025-03-14T14:49:26.4558119Z -rw-r--r--  1 1000 1000       239 Mar  6 15:22 .git-blame-ignore-revs
+2025-03-14T14:49:26.4560872Z -rw-r--r--  1 1000 1000        35 Mar  6 15:22 .gitattributes
+2025-03-14T14:49:26.4561405Z drwxr-xr-x  6 1000 1000      4096 Mar  6 15:22 .github
+2025-03-14T14:49:26.4561897Z -rw-r--r--  1 1000 1000      1730 Mar  6 15:22 .gitignore
+2025-03-14T14:49:26.4563322Z -rw-r--r--  1 1000 1000       661 Mar  6 15:22 .gitmodules
+2025-03-14T14:49:26.4563826Z drwxr-xr-x  6 1000 1000      4096 Mar 14 14:36 .local
+2025-03-14T14:49:26.4564350Z -rw-r--r--  1 1000 1000       932 Mar  6 15:22 .pre-commit-config.yaml
+2025-03-14T14:49:26.4564904Z -rw-r--r--  1 1000 1000  15813574 Mar  6 15:22 .test_durations
+2025-03-14T14:49:26.4565421Z -rw-r--r--  1 1000 1000       213 Mar  6 15:22 .yamllint
+2025-03-14T14:49:26.4569391Z -rw-r--r--  1 1000 1000     11832 Mar 14 08:18 CMakeLists.txt
+2025-03-14T14:49:26.4569971Z -rw-r--r--  1 1000 1000      2231 Mar  6 15:22 CMakePresets.json
+2025-03-14T14:49:26.4570488Z -rw-r--r--  1 1000 1000     12443 Mar 14 08:18 CODEOWNERS
+2025-03-14T14:49:26.4571395Z -rw-r--r--  1 1000 1000      5253 Mar  6 15:22 CODE_OF_CONDUCT.md
+2025-03-14T14:49:26.4572130Z -rw-r--r--  1 1000 1000     36550 Mar 14 00:19 CONTRIBUTING.md
+2025-03-14T14:49:26.4572656Z -rw-r--r--  1 1000 1000    126373 Mar 12 17:44 Doxyfile
+2025-03-14T14:49:26.4573162Z -rw-r--r--  1 1000 1000      8756 Mar  7 07:49 INSTALLING.md
+2025-03-14T14:49:26.4574004Z -rw-r--r--  1 1000 1000     11825 Mar  6 15:22 LICENSE
+2025-03-14T14:49:26.4576905Z -rw-r--r--  1 1000 1000       233 Mar  7 07:49 LICENSE_understanding.txt
+2025-03-14T14:49:26.4577705Z -rw-r--r--  1 1000 1000      1562 Mar  6 15:22 MANIFEST.in
+2025-03-14T14:49:26.4578243Z -rw-r--r--  1 1000 1000     18478 Mar  6 15:22 METALIUM_GUIDE.md
+2025-03-14T14:49:26.4578769Z -rw-r--r--  1 1000 1000     15279 Mar 14 12:12 README.md
+2025-03-14T14:49:26.4583615Z drwxr-xr-x  7 1000 1000      4096 Mar 14 14:35 build
+2025-03-14T14:49:26.4584325Z -rwxr-xr-x  1 1000 1000     13005 Mar 14 12:12 build_metal.sh
+2025-03-14T14:49:26.4584921Z -rw-r--r--  1 1000 1000      1438 Mar  6 15:22 check_copyright_config.yaml
+2025-03-14T14:49:26.4585463Z -rw-r--r--  1 1000 1000      1821 Mar  6 15:22 cloc.sh
+2025-03-14T14:49:26.4585937Z drwxr-xr-x  4 1000 1000      4096 Mar 13 13:53 cmake
+2025-03-14T14:49:26.4586616Z -rw-r--r--  1 1000 1000     24616 Mar 14 12:08 conftest.py
+2025-03-14T14:49:26.4587340Z drwxr-xr-x  2 1000 1000      4096 Mar  6 15:22 contributing
+2025-03-14T14:49:26.4588027Z -rwxr-xr-x  1 1000 1000      1420 Mar  6 15:22 create_venv.sh
+2025-03-14T14:49:26.4588543Z drwxr-xr-x  2 1000 1000      4096 Mar 14 14:22 data
+2025-03-14T14:49:26.4589044Z drwxr-xr-x  2 1000 1000      4096 Mar 14 00:19 dependencies
+2025-03-14T14:49:26.4589562Z drwxr-xr-x  2 1000 1000      4096 Mar 10 16:41 dockerfile
+2025-03-14T14:49:26.4590156Z drwxr-xr-x  3 1000 1000      4096 Mar 14 00:19 docs
+2025-03-14T14:49:26.4590638Z drwxr-xr-x  3 1000 1000      4096 Mar 14 14:37 generated
+2025-03-14T14:49:26.4591115Z drwxr-xr-x  4 1000 1000      4096 Mar 12 14:54 infra
+2025-03-14T14:49:26.4591657Z -rwxr-xr-x  1 1000 1000      6905 Mar 14 12:12 install_dependencies.sh
+2025-03-14T14:49:26.4592203Z drwxr-xr-x 10 1000 1000      4096 Mar 14 14:21 models
+2025-03-14T14:49:26.4592715Z -rw-r--r--  1 1000 1000      1042 Mar  6 15:22 pyproject.toml
+2025-03-14T14:49:26.4593246Z -rw-r--r--  1 1000 1000      1299 Mar 10 16:41 pytest.ini
+2025-03-14T14:49:26.4593762Z drwxr-xr-x  7 1000 1000      4096 Mar  6 17:41 python_env
+2025-03-14T14:49:26.4594261Z drwxr-xr-x  4 1000 1000      4096 Mar 14 14:22 runtime
+2025-03-14T14:49:26.4594761Z drwxr-xr-x  4 1000 1000      4096 Mar 13 13:53 scripts
+2025-03-14T14:49:26.4595258Z -rw-r--r--  1 1000 1000      7551 Mar  6 15:22 setup.py
+2025-03-14T14:49:26.4595749Z drwxr-xr-x 24 1000 1000      4096 Mar  6 18:33 tech_reports
+2025-03-14T14:49:26.4596264Z drwxr-xr-x 11 1000 1000      4096 Mar 14 00:19 tests
+2025-03-14T14:49:26.4596777Z drwxr-xr-x 11 1000 1000      4096 Mar 13 13:53 tt-train
+2025-03-14T14:49:26.4597281Z drwxr-xr-x 23 1000 1000      4096 Mar 14 00:19 tt_metal
+2025-03-14T14:49:26.4598056Z drwxr-xr-x  3 1000 1000      4096 Mar 14 00:19 tt_stl
+2025-03-14T14:49:26.4598601Z -rw-r--r--  1 1000 1000 724889600 Mar 14 14:35 ttm_any.tar
+2025-03-14T14:49:26.4600213Z drwxr-xr-x 10 1000 1000      4096 Mar 14 14:36 ttnn
+2025-03-14T14:49:26.4670432Z Post job cleanup.
+2025-03-14T14:49:26.4676535Z ##[command]/usr/bin/docker exec  4491e54b5c690af2f62aba0597d9e54d833b01031a76b55ed07d73881ae131b0 sh -c "cat /etc/*release | grep ^ID"
+2025-03-14T14:49:26.7647468Z Stop and remove container: ee4d30ec902147fb9b91459650b8f8ff_ghcriotenstorrentttmetalttmetaliumubuntu2204amd6407c52cb43140baa43b6815e5a0297613923e0061_d54631
+2025-03-14T14:49:26.7653160Z ##[command]/usr/bin/docker rm --force 4491e54b5c690af2f62aba0597d9e54d833b01031a76b55ed07d73881ae131b0
+2025-03-14T14:49:27.1102912Z 4491e54b5c690af2f62aba0597d9e54d833b01031a76b55ed07d73881ae131b0
+2025-03-14T14:49:27.1141663Z Remove container network: github_network_8be93585dc004491a8103a1395880b6e
+2025-03-14T14:49:27.1146567Z ##[command]/usr/bin/docker network rm github_network_8be93585dc004491a8103a1395880b6e
+2025-03-14T14:49:27.2459118Z github_network_8be93585dc004491a8103a1395880b6e
+2025-03-14T14:49:27.2500750Z A job completed hook has been configured by the self-hosted runner administrator
+2025-03-14T14:49:27.2535013Z ##[group]Run '/opt/tt_metal_infra/scripts/ci/wormhole_b0/cleanup.sh'
+2025-03-14T14:49:27.2549588Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2025-03-14T14:49:27.2550320Z ##[endgroup]
+2025-03-14T14:49:27.2603872Z Current date / time is Fri Mar 14 14:49:27 UTC 2025
+2025-03-14T14:49:27.4641350Z Cleaning up orphan processes
