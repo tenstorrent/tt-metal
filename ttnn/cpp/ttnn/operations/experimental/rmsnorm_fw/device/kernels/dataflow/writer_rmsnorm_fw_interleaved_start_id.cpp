@@ -4,7 +4,7 @@
 
 #include "dataflow_api.h"
 
-#include "debug/dprint.h"  // required in all kernels using DPRINT
+#include "debug/dprint.h"
 
 void kernel_main() {
     uint32_t runtime_args_counter = 0;
@@ -18,45 +18,38 @@ void kernel_main() {
 
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
 
-    // // single-tile ublocks
-    // constexpr uint32_t onetile = 1;
-    // const uint32_t tile_bytes = get_tile_size(cb_output_idx);
-    // const DataFormat data_format = get_dataformat(cb_output_idx);
+    // single-tile ublocks
+    constexpr uint32_t onetile = 1;
+    const uint32_t tile_bytes = get_tile_size(cb_output_idx);
+    const DataFormat data_format = get_dataformat(cb_output_idx);
 
-    // const InterleavedAddrGenFast</* is dram */ true> output_addr_generator = {
-    //     .bank_base_address = output_addr, .page_size = tile_bytes, .data_format = data_format};
+    const InterleavedAddrGenFast</* is dram */ true> output_addr_generator = {
+        .bank_base_address = output_addr, .page_size = tile_bytes, .data_format = data_format};
 
-    // #ifdef RETURN_RMS
-    //     const InterleavedAddrGenFast</* is dram */ true> rms_output_addr_generator = {
-    //         .bank_base_address = rms_output_addr, .page_size = tile_bytes, .data_format = data_format};
-    // #endif
+#ifdef RETURN_RMS
+    const InterleavedAddrGenFast</* is dram */ true> rms_output_addr_generator = {
+        .bank_base_address = rms_output_addr, .page_size = tile_bytes, .data_format = data_format};
+#endif
 
-    // DPRINT << "writer kernel start" << ENDL();
+    uint32_t end_row = start_row + num_rows_to_process;
 
-    // for (uint32_t r = 0; r < num_rows_to_process; ++r) {
-    //     uint32_t idx = (start_row + r) * Wt;
+    DPRINT << "start_row: " << start_row << " end_row: " << end_row << ENDL();
 
-    //     #ifdef RETURN_RMS
-    //         // write rms norm output
-    //         {
-    //             cb_wait_front(cb_rms_output_idx, onetile);
-    //             uint32_t l1_read_addr = get_read_ptr(cb_rms_output_idx);
-    //             noc_async_write_tile(idx, rms_output_addr_generator, l1_read_addr);
-    //             noc_async_write_barrier();
-    //             cb_pop_front(cb_rms_output_idx, onetile);
-    //         }
-    //     #endif
+    for (uint32_t r = start_row; r < end_row; ++r) {
+        for (uint32_t c = 0, idx = r * Wt; c < Wt; ++c, ++idx) {
+            cb_wait_front(cb_output_idx, onetile);
+            uint32_t l1_read_addr = get_read_ptr(cb_output_idx);
+            noc_async_write_tile(idx, output_addr_generator, l1_read_addr);
+            noc_async_write_barrier();
+            cb_pop_front(cb_output_idx, onetile);
+        }
 
-    //     // write output
-    //     for (uint32_t c = 0; c < Wt; ++c) {
-    //         cb_wait_front(cb_output_idx, onetile);
-    //         uint32_t l1_read_addr = get_read_ptr(cb_output_idx);
-    //         noc_async_write_tile(idx + c, output_addr_generator, l1_read_addr);
-    //         noc_async_write_barrier();
-    //         cb_pop_front(cb_output_idx, onetile);
-    //     }
-
-    // }
-
-    DPRINT << "writer kernel done" << ENDL();
+#ifdef RETURN_RMS
+        cb_wait_front(cb_rms_output_idx, onetile);
+        uint32_t l1_read_addr = get_read_ptr(cb_rms_output_idx);
+        noc_async_write_tile(r, rms_output_addr_generator, l1_read_addr);
+        noc_async_write_barrier();
+        cb_pop_front(cb_rms_output_idx, onetile);
+#endif
+    }
 }

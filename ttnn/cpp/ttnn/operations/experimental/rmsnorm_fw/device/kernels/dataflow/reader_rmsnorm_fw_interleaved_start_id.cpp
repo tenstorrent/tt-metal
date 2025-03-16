@@ -66,6 +66,7 @@ void kernel_main() {
 
     const InterleavedAddrGenFast</* is_dram */ true> input_address_generator = {
         .bank_base_address = input_address, .page_size = tile_bytes, .data_format = data_format};
+
     const InterleavedAddrGenFast</* is_dram */ true> gamma_address_generator = {
         .bank_base_address = gamma_address, .page_size = tile_bytes, .data_format = data_format};
 
@@ -86,7 +87,7 @@ void kernel_main() {
             for (uint32_t j = 0; j < Wt; ++j) {
                 cb_reserve_back(cb_gamma_idx, onetile);
                 uint32_t l1_write_addr = get_write_ptr(cb_gamma_idx);
-                noc_async_read_tile(idx + j, gamma_address_generator, l1_write_addr);
+                noc_async_read_tile(j, gamma_address_generator, l1_write_addr);
                 noc_async_read_barrier();
                 cb_push_back(cb_gamma_idx, onetile);
             }
@@ -103,7 +104,7 @@ void kernel_main() {
         for (uint32_t j = 0; j < Wt; ++j) {
             cb_reserve_back(cb_gamma_idx, onetile);
             uint32_t l1_write_addr = get_write_ptr(cb_gamma_idx);
-            noc_async_read_tile(idx + j, gamma_address_generator, l1_write_addr);
+            noc_async_read_tile(j, gamma_address_generator, l1_write_addr);
             noc_async_read_barrier();
             cb_push_back(cb_gamma_idx, onetile);
         }
@@ -125,7 +126,7 @@ void kernel_main() {
 
             cb_reserve_back(cb_gamma_idx, onetile);
             uint32_t l1_gamma_write_addr = get_write_ptr(cb_gamma_idx);
-            noc_async_read_tile(idx + j, gamma_address_generator, l1_gamma_write_addr);
+            noc_async_read_tile(j, gamma_address_generator, l1_gamma_write_addr);
             noc_async_read_barrier();
             cb_push_back(cb_gamma_idx, onetile);
         }

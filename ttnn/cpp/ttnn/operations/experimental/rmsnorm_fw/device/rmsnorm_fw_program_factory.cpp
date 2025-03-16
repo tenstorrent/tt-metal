@@ -15,14 +15,20 @@
 #include <tt-metalium/host_api.hpp>
 
 namespace {
+
 constexpr auto kWriterKernelPath =
     "ttnn/cpp/ttnn/operations/experimental/rmsnorm_fw/device/kernels/dataflow/"
     "writer_rmsnorm_fw_interleaved_start_id.cpp";
+
 constexpr auto kReaderKernelPath =
     "ttnn/cpp/ttnn/operations/experimental/rmsnorm_fw/device/kernels/dataflow/"
     "reader_rmsnorm_fw_interleaved_start_id.cpp";
+
 constexpr auto kComputeKernelPath =
     "ttnn/cpp/ttnn/operations/experimental/rmsnorm_fw/device/kernels/compute/rmsnorm_fw_kernel.cpp";
+
+// constexpr auto kComputeKernelPath =
+//     "ttnn/cpp/ttnn/operations/experimental/rmsnorm_fw/device/kernels/compute/debug.cpp";
 
 // reader runtime args
 constexpr auto kInputBufferIdx = 0;
@@ -39,15 +45,17 @@ constexpr auto kGammaCbIndex = tt::CBIndex::c_4;
 constexpr auto kRmsCbIndex = tt::CBIndex::c_5;
 constexpr auto kOutputCbIndex = tt::CBIndex::c_6;
 constexpr auto kRmsOutputCbIndex = tt::CBIndex::c_7;
+constexpr auto kOutputIntermediateCbIndex = tt::CBIndex::c_8;
 
 constexpr uint32_t kNumInputTiles = 2U;
 constexpr uint32_t kNumMaskTiles = 1U;
 constexpr uint32_t kNumScalerTiles = 1U;
-constexpr uint32_t kNumRmsTiles = 2U;
+constexpr uint32_t kNumRmsTiles = 3U;
 constexpr uint32_t kNumOutputTiles = 2U;
 constexpr uint32_t kNumRmsOutputTiles = 2U;
 constexpr uint32_t kNumGammaTiles = 2U;
 constexpr uint32_t kNumEpsTiles = 1U;
+constexpr uint32_t kNumOutputIntermediateTiles = 2U;
 
 const std::string kMaskWDefineKey = "DO_MASK_W";
 const std::string kReturnRMSDefineKey = "RETURN_RMS";
@@ -142,8 +150,8 @@ inline tt::tt_metal::KernelHandle create_compute_kernel(
         core_ranges,
         ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
-            // .fp32_dest_acc_en = true,
-            .fp32_dest_acc_en = false,
+            .fp32_dest_acc_en = true,
+            // .fp32_dest_acc_en = false,
             .math_approx_mode = false,
             .compile_args = compile_time_args,
             .defines = defines});
@@ -242,8 +250,6 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
 
-    fmt::println("num_cores: {}, num_cores_x: {}, num_cores_y: {}", num_cores, num_cores_x, num_cores_y);
-
     // -------------------------------------------------------------------------
     // 2) Create and configure circular buffers
     // -------------------------------------------------------------------------
@@ -285,18 +291,26 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
     auto cb_gamma = create_circular_buffer(
         program, all_cores, kGammaCbIndex, data_format, bfloat16_single_tile_size_bytes, num_gamma_tiles);
 
-    // auto cb_rms_intermediate =
-    //     create_circular_buffer(program, all_cores, kRmsCbIndex, precise_data_format, float32_single_tile_size_bytes,
-    //     kNumRmsTiles);
-
     auto cb_rms_intermediate = create_circular_buffer(
-        program, all_cores, kRmsCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumRmsTiles);
+        program, all_cores, kRmsCbIndex, precise_data_format, float32_single_tile_size_bytes, kNumRmsTiles);
+
+    // auto cb_rms_intermediate =
+    //     create_circular_buffer(
+    //         program, all_cores, kRmsCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumRmsTiles);
 
     auto cb_output = create_circular_buffer(
         program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumOutputTiles);
 
     auto cb_rms_output = create_circular_buffer(
         program, all_cores, kRmsOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumRmsOutputTiles);
+
+    auto cb_output_intermediate = create_circular_buffer(
+        program,
+        all_cores,
+        kOutputIntermediateCbIndex,
+        data_format,
+        bfloat16_single_tile_size_bytes,
+        kNumOutputIntermediateTiles);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
@@ -412,8 +426,6 @@ void RMSNormForwardProgramFactory::override_runtime_arguments(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     using namespace tt::tt_metal;
-
-    fmt::println("Override runtime arguments called!");
 
     auto& shared_vars = cached_program.shared_variables;
     auto& rmsnorm_fw_reader_kernel = shared_vars.rmsnorm_fw_reader_kernel_id;
