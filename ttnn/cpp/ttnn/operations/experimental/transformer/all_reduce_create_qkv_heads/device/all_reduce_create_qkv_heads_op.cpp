@@ -14,7 +14,7 @@ namespace ttnn {
 namespace ccl {
 namespace all_reduce_detail {
 
-AllReduceAsync create_all_reduce_async_struct(
+AllReduceCreateQkvHeads create_all_reduce_create_qkv_heads_struct(
     const Tensor& input_tensor,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
@@ -42,7 +42,7 @@ AllReduceAsync create_all_reduce_async_struct(
         }
     }
 
-    return ttnn::AllReduceAsync{
+    return ttnn::AllReduceCreateQkvHeads{
         forward_device,
         backward_device,
         num_links,
@@ -58,7 +58,7 @@ AllReduceAsync create_all_reduce_async_struct(
 }  // namespace all_reduce_detail
 }  // namespace ccl
 
-void AllReduceAsync::validate(const std::vector<Tensor>& input_tensors) const {
+void AllReduceCreateQkvHeads::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensors.size() == 2, "Error, Input tensor size should be 2 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
     const auto& buffer_tensor = input_tensors[1];
@@ -111,7 +111,8 @@ void AllReduceAsync::validate(const std::vector<Tensor>& input_tensors) const {
         buffer_shard_shape_volume);
 }
 
-std::vector<ttnn::TensorSpec> AllReduceAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
+std::vector<ttnn::TensorSpec> AllReduceCreateQkvHeads::compute_output_specs(
+    const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
     auto shape = input_tensor.get_logical_shape();
     auto output_tensor_layout =
@@ -119,7 +120,7 @@ std::vector<ttnn::TensorSpec> AllReduceAsync::compute_output_specs(const std::ve
     return {TensorSpec(shape, output_tensor_layout)};
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program(
+tt::tt_metal::operation::ProgramWithCallbacks AllReduceCreateQkvHeads::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     tt::log_debug(tt::LogOp, "DEBUG: create_program is called");
 
@@ -142,8 +143,8 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program(
     tt::log_debug(
         tt::LogOp, "output_tensor_memory_config.shard_spec->shape: {}", output_tensor_memory_config.shard_spec->shape);
 
-    tt::log_debug(tt::LogOp, "Running TG Llama specific all_reduce_async_minimal_multi_core_with_workers");
-    return all_reduce_async_minimal_multi_core_with_workers(
+    tt::log_debug(tt::LogOp, "Running TG Llama specific all_reduce_create_qkv_heads_minimal_multi_core_with_workers");
+    return all_reduce_create_qkv_heads_minimal_multi_core_with_workers(
         input_tensors[0],
         input_tensors[1],
         this->forward_device,
@@ -158,14 +159,14 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program(
         this->enable_persistent_fabric_mode);
 }
 
-const tt::tt_metal::operation::Hash AllReduceAsync::compute_program_hash(
+const tt::tt_metal::operation::Hash AllReduceCreateQkvHeads::compute_program_hash(
     const std::vector<Tensor>& input_tensors) const {
     auto input_shape = input_tensors[0].get_padded_shape();
     auto input_memory_layout = input_tensors[0].get_layout();
     auto input_dtype = input_tensors[0].get_dtype();
     auto input_memory_config = input_tensors[0].memory_config();
 
-    return tt::tt_metal::operation::hash_operation<AllReduceAsync>(
+    return tt::tt_metal::operation::hash_operation<AllReduceCreateQkvHeads>(
         this->num_links,
         this->ring_size,
         this->ring_index,
@@ -181,7 +182,7 @@ namespace operations {
 namespace experimental {
 namespace ccl {
 
-Tensor all_reduce_async(
+Tensor all_reduce_create_qkv_heads(
     const Tensor& input_tensor,
     Tensor& buffer_tensor,
     const uint32_t cluster_axis,
@@ -228,7 +229,7 @@ Tensor all_reduce_async(
             const auto& buffer_tensor = input_tensors.at(1);
 
             return tt::tt_metal::operation::run(
-                ttnn::ccl::all_reduce_detail::create_all_reduce_async_struct(
+                ttnn::ccl::all_reduce_create_qkv_heads_detail::create_all_reduce_create_qkv_heads_struct(
                     input_device_tensor,
                     num_preferred_links.has_value() ? num_preferred_links.value() : 1,
                     memory_config,
@@ -248,7 +249,7 @@ Tensor all_reduce_async(
 }  // namespace experimental
 }  // namespace operations
 
-std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
+std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores_fuse(
     size_t num_links,
     size_t num_workers_per_link,
     bool persistent_fabric_mode,

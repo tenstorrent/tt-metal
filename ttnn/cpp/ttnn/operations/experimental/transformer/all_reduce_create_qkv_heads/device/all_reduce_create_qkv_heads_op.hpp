@@ -25,7 +25,7 @@ namespace ttnn {
 
 using ccl::EriscDatamoverBuilder;
 
-struct AllReduceAsync {
+struct AllReduceCreateQkvHeads {
     std::optional<IDevice*> forward_device;
     std::optional<IDevice*> backward_device;
     const uint32_t num_links;
@@ -37,7 +37,7 @@ struct AllReduceAsync {
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     bool enable_persistent_fabric_mode;
 
-    AllReduceAsync(
+    AllReduceCreateQkvHeads(
         std::optional<IDevice*> forward_device,
         std::optional<IDevice*> backward_device,
         uint32_t num_links,
@@ -82,8 +82,8 @@ struct AllReduceAsync {
 };
 
 namespace ccl {
-namespace all_reduce_async_detail {
-AllReduceAsync create_all_reduce_async_struct(
+namespace all_reduce_create_qkv_heads_detail {
+AllReduceCreateQkvHeads create_all_reduce_create_qkv_heads_struct(
     const Tensor& input_tensor,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
@@ -93,10 +93,10 @@ AllReduceAsync create_all_reduce_async_struct(
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     bool enable_persistent_fabric_mode);
 
-}  // namespace all_reduce_async_detail
+}  // namespace all_reduce_create_qkv_heads_detail
 }  // namespace ccl
 
-std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
+std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores_fuse(
     size_t num_links,
     size_t num_workers_per_link,
     bool persistent_fabric_mode,
@@ -104,7 +104,7 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const std::optional<CoreRangeSet>& reserved_core_range = std::nullopt);
 
-tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers(
+tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minimal_multi_core_with_workers(
     const Tensor& input_tensor,
     const Tensor& buffer_tensor,
     std::optional<IDevice*> forward_device,
@@ -122,7 +122,7 @@ namespace operations {
 namespace experimental {
 namespace ccl {
 
-Tensor all_reduce_async(
+Tensor all_reduce_create_qkv_heads(
     const Tensor& input_tensor,
     Tensor& buffer_tensor,
     const uint32_t cluster_axis,

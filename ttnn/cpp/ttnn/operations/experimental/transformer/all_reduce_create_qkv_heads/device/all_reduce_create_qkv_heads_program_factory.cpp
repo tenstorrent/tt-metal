@@ -34,15 +34,9 @@ namespace ttnn {
 
 using namespace ccl;
 
-CoreRangeSet cores_to_corerangeset(const std::vector<CoreCoord>& cores) {
-    std::vector<CoreRange> core_ranges;
-    for (const auto& core : cores) {
-        core_ranges.push_back(CoreRange(core));
-    }
-    return CoreRangeSet(core_ranges);
-}
+CoreRangeSet cores_to_corerangeset(const std::vector<CoreCoord>& cores);
 
-tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers(
+tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minimal_multi_core_with_workers(
     const Tensor& input_tensor,
     const Tensor& buffer_tensor,
     std::optional<IDevice*> forward_device,
@@ -100,7 +94,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     // Get worker cores, assuming 1 worker per link
     std::optional<CoreRangeSet> reserved_cores = output_tensor_cores;
     uint32_t num_workers_per_link = 1;
-    const auto [sender_worker_core_range, sender_worker_cores] = choose_worker_cores(
+    const auto [sender_worker_core_range, sender_worker_cores] = choose_worker_cores_fuse(
         num_links, num_workers_per_link, enable_persistent_fabric_mode, device, sub_device_id, reserved_cores);
 
     tt::log_debug(tt::LogOp, "input_tensor_num_pages: {}", input_tensor_num_pages);
@@ -475,7 +469,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
             const auto& output = output_tensors[0];
             const auto& buffer_tensor = input_tensors[1];
 
-            auto semaphore = static_cast<const ttnn::AllReduceAsync*>(operation)->semaphore;
+            auto semaphore = static_cast<const ttnn::AllReduceCreateQkvHeads*>(operation)->semaphore;
 
             // update senders
             auto& worker_reader_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_reader_kernel_id);
