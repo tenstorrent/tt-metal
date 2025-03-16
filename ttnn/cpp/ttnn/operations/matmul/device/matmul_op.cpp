@@ -1458,9 +1458,9 @@ void Matmul::validate(
             "Mismatch between computed {} and provided {} mem config buffer type",
             output_tensor_spec.memory_config().buffer_type,
             this->output_mem_config.buffer_type);
-        // Needs to be an assert, there are too many existing models not specifying shard spec correctly.
-        TT_ASSERT(
-            output_tensor_spec.memory_config() == this->output_mem_config,
+        TT_FATAL(
+            !this->output_mem_config.shard_spec.has_value() ||
+                output_tensor_spec.memory_config() == this->output_mem_config,
             "Mismatch between computed {} and provided {} mem config",
             output_tensor_spec.memory_config(),
             this->output_mem_config);

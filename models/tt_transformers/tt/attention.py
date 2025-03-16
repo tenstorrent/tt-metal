@@ -336,12 +336,9 @@ class Attention(LightweightModule):
 
         if self.TG:
             # TODO: Slice the fused_query_key_value tensor get batch=8
-            xqkv_fused = ttnn.matmul(
-                self.slice_mat,
-                xqkv_fused,
-                dtype=ttnn.bfloat16,
-                memory_config=self.model_config["CREATE_HEAD_INPUT_MEMCFG"],
-            )
+            out_mem_config = self.model_config["CREATE_HEAD_INPUT_MEMCFG"]
+            out_mem_config.shard_spec = None
+            xqkv_fused = ttnn.matmul(self.slice_mat, xqkv_fused, dtype=ttnn.bfloat16, memory_config=out_mem_config)
         else:
             xqkv_fused = ttnn.sharded_to_interleaved(xqkv_fused_sharded, ttnn.L1_MEMORY_CONFIG)
 
@@ -486,12 +483,14 @@ class Attention(LightweightModule):
                 )
 
             # TODO: Fix this once self.TG supports dram-sharded matmuls
+            out_mem_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if self.TG else attn_output_cat.memory_config()
+            out_mem_config.shard_spec = None
             dense_out_sharded = ttnn.matmul(
                 attn_output,
                 self.wo,
                 core_grid=ttnn.CoreGrid(y=4, x=8) if self.TG else None,
                 program_config=self.model_config["ATTN_OUTPUT_PROGCFG"] if not self.TG else None,
-                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if self.TG else attn_output_cat.memory_config(),
+                memory_config=out_mem_config,
                 dtype=ttnn.bfloat8_b if self.TG else None,
                 compute_kernel_config=self.compute_kernel_config_hifi2,
             )
