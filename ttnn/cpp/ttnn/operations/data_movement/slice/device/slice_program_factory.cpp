@@ -227,10 +227,9 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     const auto num_sticks_per_core = output_shard_spec.shape[0];
     uint32_t num_sticks_per_core_read = 0, num_read_per_barrier = 0;
     if (num_sticks_per_core != 0) {
-        auto num_sticks_per_core_pad32 = num_sticks_per_core + (32 - num_sticks_per_core % 32) % 32;
-        num_sticks_per_core_read = tt::tt_metal::merge_num_sticks_to_read(
-            num_sticks_per_core_pad32, output_row_size_bytes_offset, max_read_size);
-        num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
+        num_sticks_per_core_read =
+            tt::tt_metal::merge_num_sticks_to_read(num_sticks_per_core, output_row_size_bytes_offset, max_read_size);
+        num_read_per_barrier = num_sticks_per_core / num_sticks_per_core_read;
     }
     tt::log_debug(
         "num_sticker_per_core: {}, num_sticker_per_core_read: {}, num_read_per_barrier: {}",
@@ -263,8 +262,8 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         }
         std::vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
         reader_kernel_args[0] += width_offset;
-        //
-        uint32_t addr_offset = 5;  // input buffer addr, input_row_size_bytes, output_row_size_bytes, num_dims
+
+        uint32_t addr_offset = 5;
         reader_kernel_args[addr_offset++] = start_id;
         reader_kernel_args[addr_offset++] = num_sticks_per_core;
         reader_kernel_args[addr_offset++] = num_sticks_per_core;
@@ -349,13 +348,6 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
 
     uint32_t num_input_pages = num_sticks_per_core_group_1 > num_sticks_per_core_group_2 ? num_sticks_per_core_group_1
                                                                                          : num_sticks_per_core_group_2;
-    uint32_t num_sticks_per_core_read = 0, num_read_per_barrier = 0;
-    if (num_input_pages != 0) {
-        auto num_sticks_per_core_pad32 = num_input_pages + (32 - num_input_pages % 32) % 32;
-        num_sticks_per_core_read =
-            tt::tt_metal::merge_num_sticks_to_read(num_sticks_per_core_pad32, cb_page_size, max_read_size);
-        num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
-    }
     CBHandle cb_src0;
     if (is_output_sharded) {
         uint32_t num_output_sticks_per_core = output_shard_spec.value().shape[0];
@@ -366,6 +358,13 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
                 .set_globally_allocated_address(*output.buffer());
         cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
     } else {
+        uint32_t num_sticks_per_core_read = 0, num_read_per_barrier = 0;
+        if (num_input_pages != 0) {
+            auto num_sticks_per_core_pad32 = num_input_pages + (32 - num_input_pages % 32) % 32;
+            num_sticks_per_core_read =
+                tt::tt_metal::merge_num_sticks_to_read(num_sticks_per_core_pad32, cb_page_size, max_read_size);
+            num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
+        }
         tt::tt_metal::CircularBufferConfig cb_src0_config =
             tt::tt_metal::CircularBufferConfig(
                 num_read_per_barrier * 2 * cb_page_size, {{src0_cb_index, cb_data_format}})
