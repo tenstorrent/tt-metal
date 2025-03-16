@@ -303,9 +303,19 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
 
-    // Remove during rebase
-    uint32_t padded_row_size_bytes = a.get_padded_shape()[-1] * a.element_size();
-    uint32_t unpadded_row_size_bytes = output_shape[-1] * a.element_size();
+    uint32_t input_row_size_bytes = a.get_logical_shape()[-1] * a.element_size();
+    uint32_t output_row_size_bytes = output_shape[-1] * a.element_size();
+    auto output_shard_spec = output.shard_spec();
+    bool is_output_sharded = output.is_sharded();
+    bool rm_orientation = true;
+    std::vector<CoreCoord> iter_cores;
+    if (is_output_sharded) {
+        output_row_size_bytes = output_shard_spec.value().shape[1] * output.element_size();
+        total_cores = output.shard_spec().value().grid;
+        rm_orientation = output_shard_spec.value().orientation == ShardOrientation::ROW_MAJOR;
+        iter_cores = corerange_to_cores(total_cores, std::nullopt, rm_orientation);
+        num_cores_total = total_cores.num_cores();
+    }
 
     uint32_t input_row_size_bytes = a.get_logical_shape()[-1] * a.element_size();
     uint32_t output_row_size_bytes = output_shape[-1] * a.element_size();
@@ -329,8 +339,8 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
     bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
 
-    uint32_t src_stick_size = padded_row_size_bytes;
-    uint32_t dst_stick_size = unpadded_row_size_bytes;
+    uint32_t src_stick_size = input_row_size_bytes;
+    uint32_t dst_stick_size = output_row_size_bytes;
 
     uint32_t src0_cb_index = 0;
     uint32_t max_read_size = 4096;
@@ -350,7 +360,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
     if (misalignment != 0) {
         alignment *= 2;
     }
-    uint32_t cb_page_size = tt::round_up(unpadded_row_size_bytes, alignment);
+    uint32_t cb_page_size = tt::round_up(output_row_size_bytes, alignment);
 
     uint32_t num_input_pages = num_sticks_per_core_group_1 > num_sticks_per_core_group_2 ? num_sticks_per_core_group_1
                                                                                          : num_sticks_per_core_group_2;
@@ -492,14 +502,8 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
 
             for (uint32_t i = 0, num_tiles_written = 0; i < num_cores_total; i++) {
                 CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-                {
-                    SetRuntimeArgs(program, unary_reader_kernel_id, core, all_runtime_args[i].first);
-                }
-
-                {
-                    SetRuntimeArgs(program, unary_writer_kernel_id, core, all_runtime_args[i].second);
-                }
+                SetRuntimeArgs(program, unary_reader_kernel_id, core, all_runtime_args[i].first);
+                SetRuntimeArgs(program, unary_writer_kernel_id, core, all_runtime_args[i].second);
             }
         }
     };
