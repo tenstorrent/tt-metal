@@ -282,6 +282,7 @@ def falcon_prefill_matmul(
 
     is_fp32_accumulate = compute_kernel_config.fp32_dest_acc_en
 
+    output_mem_config.shard_spec = None
     if use_2d_mm:
         # print("Selecting MM 2d")
         matmul_pgmcfg = matmul_2d_config(

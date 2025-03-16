@@ -70,6 +70,7 @@ class DistributedNorm(LightweightModule):
 
         # Distributed norm already performs a gather
         if self.args.is_multichip and not self.args.is_distributed_norm(mode):
+            input_mem_cfg.shard_spec = None
             x = ttnn.all_gather(x, dim=3, num_links=1, topology=self.args.ccl_topology(), memory_config=input_mem_cfg)
         else:
             x = ttnn.to_memory_config(x, input_mem_cfg)
