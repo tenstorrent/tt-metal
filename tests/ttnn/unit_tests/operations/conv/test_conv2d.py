@@ -120,8 +120,8 @@ SliceWidth = ttnn.Conv2dSliceWidth
     (
         (2, 512,  512,  128,   128,   SliceWidth,    4,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 32 * 8,  ttnn.MathFidelity.LoFi  ),
         (2, 64,   64,   384,   64,    SliceHeight,   6,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1), 0,       ttnn.MathFidelity.LoFi  ),
-        (1, 4,    32,   1024,  1024,  SliceWidth,    4,  ttnn.bfloat8_b, ttnn.bfloat16, (5, 5), (1, 1), (0, 0), (1, 1), 32,      ttnn.MathFidelity.LoFi  ),
-        (1, 64,   128,  992,   992,   SliceWidth,   64,  ttnn.bfloat8_b, ttnn.bfloat16, (2, 2), (1, 1), (0, 0), (1, 1), 32 * 4,  ttnn.MathFidelity.LoFi  ),
+        (1, 4,    32,   1024,  1024,  SliceWidth,    8,  ttnn.bfloat8_b, ttnn.bfloat16, (5, 5), (1, 1), (0, 0), (1, 1), 32,      ttnn.MathFidelity.LoFi  ),
+        (1, 64,   128,  992,   992,   SliceWidth,   64,  ttnn.bfloat8_b, ttnn.bfloat16, (2, 2), (1, 1), (0, 0), (1, 1), 32 * 2,  ttnn.MathFidelity.LoFi  ),
     )
     # fmt: on
 )

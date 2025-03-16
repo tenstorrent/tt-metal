@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-
+#include "debug/dprint.h"
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t stick_size = get_arg_val<uint32_t>(1);
@@ -13,6 +13,13 @@ void kernel_main() {
     uint32_t num_sticks_per_core_read = get_arg_val<uint32_t>(4);
     uint32_t num_read_per_barrier = get_arg_val<uint32_t>(5);
     uint32_t start_id = get_arg_val<uint32_t>(6);
+
+#ifdef DEBUG
+    DPRINT << "src_addr: " << src_addr << ", stick_size: " << stick_size << ", stick_size_offset: " << stick_size_offset
+           << ", num_sticks_per_core: " << num_sticks_per_core
+           << ", num_sticks_per_core_read: " << num_sticks_per_core_read
+           << ", num_read_per_barrier: " << num_read_per_barrier << ", start_id: " << start_id << ENDL();
+#endif
 
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
     constexpr bool dst0_is_dram = get_compile_time_arg_val(1) == 1;

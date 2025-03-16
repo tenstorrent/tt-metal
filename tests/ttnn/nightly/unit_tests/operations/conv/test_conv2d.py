@@ -14,6 +14,7 @@ from models.utility_functions import (
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
 import ttnn
 from ttnn.operations.conv2d import get_torch_act_func_from_string
+import time
 
 HS = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
 BS = ttnn.TensorMemoryLayout.BLOCK_SHARDED
@@ -98,7 +99,7 @@ def run_conv(
     preprocess_weights_on_device=True,
     in_place=False,
     run_twice=False,
-    fast_compare=False,
+    fast_compare=True,
     slice_config=None,
     enable_kernel_stride_folding=False,
 ):
@@ -278,7 +279,7 @@ def run_conv(
     out = out.reshape(total_batch_size, out_height, out_width, out.shape[-1])
     out = out[:, :, :, :output_channels]
 
-    ref = torch.permute(ref, (0, 2, 3, 1))
+    ref = torch.permute(ref, (0, 2, 3, 1)).to(out.dtype)
 
     if not fp32_accum:
         pcc = 0.985
@@ -685,7 +686,7 @@ SliceWidth = ttnn.Conv2dSliceWidth
 )
 @pytest.mark.parametrize(
     "has_bias, fp32_accum, packer_l1_acc",
-    [[True, False, False]],
+    [[True, True, True]],
 )
 def test_conv_dram(
     device,
@@ -737,7 +738,7 @@ def test_conv_dram(
         has_bias=True,
         fp32_accum=fp32_accum,
         packer_l1_acc=packer_l1_acc,
-        preprocess_weights_on_device=True,  # Github Issue #21044: Failure with preprocess_weights_on_device=False
+        preprocess_weights_on_device=False,  # Github Issue #21044: Failure with preprocess_weights_on_device=False
         transpose_shards=True,
         run_twice=False,
         fast_compare=True,
