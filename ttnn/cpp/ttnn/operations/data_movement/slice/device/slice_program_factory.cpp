@@ -11,7 +11,7 @@
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/hal_exp.hpp>
 #include <tt-metalium/host_api.hpp>
-
+#include <tt-metalium/hal_exp.hpp>
 #include "slice_op.hpp"
 using namespace tt::constants;
 using namespace tt::tt_metal;
