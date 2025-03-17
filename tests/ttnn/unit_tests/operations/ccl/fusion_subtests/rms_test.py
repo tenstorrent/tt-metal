@@ -16,7 +16,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
 )
 
 
-def rms_norm(x, dim, gamma, beta, eps):
+def get_torch_rms(x, dim, gamma, beta, eps):
     return x * torch.rsqrt(x.pow(2).mean([-i for i in range(1, len(dim) + 1)], keepdim=True) + eps) * gamma + beta
 
 
@@ -55,7 +55,7 @@ def run_rms_fuse_impl(
         wrap_fabric_around_mesh=True,
     )
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
-    torch.manual_seed(3487)
+    torch.manual_seed(1234)
     num_cores = input_shard_grid.num_cores()
     total_cores = num_cores * num_devices
     padded_dim_per_core = int(math.ceil(elements_per_batch / total_cores / 32) * 32)
@@ -172,14 +172,11 @@ def run_rms_fuse_impl(
         weight=gamma_tensor,
     )
 
-    print(tt_out)
-    print(tt_out2)
-
     tt_out_torch = ttnn.to_torch(
         tt_out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 3), mesh_shape=(1, num_devices))
     )[0].unsqueeze(0)
 
-    ref_lnorm = rms_norm(input_tensor_torch, [3], gamma_torch, torch.zeros_like(gamma_torch), epsilon)
+    ref_lnorm = get_torch_rms(input_tensor_torch, [3], gamma_torch, torch.zeros_like(gamma_torch), epsilon)
 
     passing, output = comp_pcc(tt_out_torch, ref_lnorm, 0.999)
     logger.info(output)

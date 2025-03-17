@@ -19,7 +19,6 @@ ttnn::Tensor ExecuteFusedRMSNorm::invoke(
     const std::optional<const ttnn::Tensor>& residual_input_tensor,
     float epsilon,
     const std::optional<const ttnn::Tensor>& weight,
-    const std::optional<const ttnn::Tensor>& bias,
     const std::optional<const ttnn::Tensor>& stats,
     bool is_pre) {
     auto arch = input_tensor.storage_type() == StorageType::DEVICE
@@ -38,7 +37,7 @@ ttnn::Tensor ExecuteFusedRMSNorm::invoke(
                    .topology = topology,
                    .is_pre = is_pre},
                {input_tensor},
-               {residual_input_tensor, weight, bias, stats})
+               {residual_input_tensor, weight, stats})
         .at(0);
 }
 

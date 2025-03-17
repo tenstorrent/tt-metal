@@ -24,8 +24,7 @@ void RMSAllGather::validate(
     auto& a = input_tensors.at(0);
     const auto& b = optional_input_tensors.at(0);
     const auto& gamma = optional_input_tensors.at(1);
-    const auto& beta = optional_input_tensors.at(2);
-    const auto& stats = optional_input_tensors.at(3);
+    const auto& stats = optional_input_tensors.at(2);
     TT_FATAL(
         this->output_mem_config.shard_spec.value().orientation == ShardOrientation::ROW_MAJOR,
         "Minimal version requires row major sharding orientation");
@@ -90,33 +89,8 @@ void RMSAllGather::validate(
                 gamma.value().get_dtype() == DataType::FLOAT32 or gamma.value().get_dtype() == DataType::BFLOAT16,
                 "Error");
         }
-        if (beta.has_value()) {
-            TT_FATAL(
-                gamma.value().get_layout() == beta.value().get_layout(), "Gamma and beta must have the same layout!");
-        }
     }
 
-    if (beta.has_value()) {
-        if (beta.value().get_layout() == Layout::TILE) {
-            TT_FATAL(a.get_padded_shape()[-1] == beta.value().get_padded_shape()[-1], "Error");
-            TT_FATAL(
-                beta.value().buffer() != nullptr, "Operands to frmsnorm need to be allocated in buffers on device!");
-            TT_FATAL(a.device() == beta.value().device(), "Error");
-            TT_FATAL(beta.value().get_padded_shape()[-2] == TILE_HEIGHT, "Error");
-        } else {
-            TT_FATAL(beta.value().get_layout() == Layout::ROW_MAJOR, "Error");
-            TT_FATAL(
-                (beta.value().get_padded_shape()[-1] == TILE_WIDTH &&
-                 beta.value().volume() / TILE_WIDTH == a.get_padded_shape()[-1] / TILE_WIDTH),
-                "Error");
-            TT_FATAL(
-                beta.value().buffer() != nullptr, "Operands to frmsnorm need to be allocated in buffers on device!");
-            TT_FATAL(a.device() == beta.value().device(), "Error");
-            TT_FATAL(
-                beta.value().get_dtype() == DataType::FLOAT32 or beta.value().get_dtype() == DataType::BFLOAT16,
-                "Error");
-        }
-    }
     if (a.is_sharded()) {
         // TODO: Add support for this (should be similar to interleaved)
         TT_FATAL(
@@ -279,8 +253,7 @@ operation::ProgramWithCallbacks RMSAllGather::create_program(
     const auto& a = input_tensors.at(0);
     const auto& b = optional_input_tensors.at(0);
     const auto& gamma = optional_input_tensors.at(1);
-    const auto& beta = optional_input_tensors.at(2);
-    const auto& stats = optional_input_tensors.at(3);
+    const auto& stats = optional_input_tensors.at(2);
     auto& output_tensor = output_tensors.at(0);
 
     return std::visit(
@@ -308,7 +281,6 @@ operation::ProgramWithCallbacks RMSAllGather::create_program(
                     return frmsnorm_post_multi_core_sharded(
                         a,
                         gamma,
-                        beta,
                         stats,
                         output_tensor,
                         this->eps,
