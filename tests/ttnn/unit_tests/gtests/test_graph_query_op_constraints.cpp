@@ -207,6 +207,7 @@ TEST_P(EltwiseUnaryOpIfTest, UnaryRelu) {
         EXPECT_EQ(query.resource_usage.cb_peak_size_per_core, expected_resource_usage.cb_peak_size_per_core);
         EXPECT_EQ(query.resource_usage.l1_buffers_peak_per_core, expected_resource_usage.l1_buffers_peak_per_core);
         EXPECT_EQ(query.resource_usage.l1_output_buffer_per_core, expected_resource_usage.l1_output_buffer_per_core);
+        EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
     }
 }
 
@@ -285,6 +286,7 @@ TEST_P(SoftmaxOpIfTest, Softmax) {
         EXPECT_EQ(query.resource_usage.cb_peak_size_per_core, expected_resource_usage.cb_peak_size_per_core);
         EXPECT_EQ(query.resource_usage.l1_buffers_peak_per_core, expected_resource_usage.l1_buffers_peak_per_core);
         EXPECT_EQ(query.resource_usage.l1_output_buffer_per_core, expected_resource_usage.l1_output_buffer_per_core);
+        EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
     }
 }
 
@@ -525,6 +527,7 @@ TEST_P(MatmulOpIfTest, Matmul) {
         EXPECT_EQ(query.resource_usage.cb_peak_size_per_core, expected_resource_usage.cb_peak_size_per_core);
         EXPECT_EQ(query.resource_usage.l1_buffers_peak_per_core, expected_resource_usage.l1_buffers_peak_per_core);
         EXPECT_EQ(query.resource_usage.l1_output_buffer_per_core, expected_resource_usage.l1_output_buffer_per_core);
+        EXPECT_EQ(query.output_tensor_spec.value(), output_spec);
     }
 }
 
