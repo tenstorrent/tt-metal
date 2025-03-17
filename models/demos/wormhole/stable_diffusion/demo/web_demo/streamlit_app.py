@@ -20,6 +20,7 @@ parser.add_argument("--port", type=int, default=7000, help="The port number the 
 args = parser.parse_args()
 
 # Add space below the title
+st.set_page_config(page_title="Stable-Diffusion-1.4")
 st.title("TT Stable Diffusion Playground")
 st.markdown("<br>", unsafe_allow_html=True)
 
