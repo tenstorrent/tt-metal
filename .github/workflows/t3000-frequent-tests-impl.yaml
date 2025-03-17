@@ -68,6 +68,7 @@ jobs:
 
       - name: ⬇️ Download Build
         uses: actions/download-artifact@v4
+        timeout-minutes: 10
         with:
           name: ${{ inputs.build-artifact-name }}
           path: docker-job
