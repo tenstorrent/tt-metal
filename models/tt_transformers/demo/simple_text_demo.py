@@ -405,9 +405,9 @@ def prepare_generator_args(
         "reasoning-1",  # reasoning
         "ci-1",  # CI batch 1
         "ci-32",  # CI batch 32
-        "batch-1-DP-4",  # DP 4 latency
-        "batch-1-DP-8",  # DP 8 latency
-        "batch-32-DP-4",  # DP 4 throughput
+        "DP-4-b1",  # DP 4 latency
+        "DP-8-b1",  # DP 8 latency
+        "DP-4-b32",  # DP 4 throughput
         "ci-b1-DP-4",  # CI DP 4 batch 1
         "ci-b1-DP-8",  # CI DP 8 batch 1
     ],

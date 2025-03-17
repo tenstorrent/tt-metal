@@ -34,6 +34,7 @@ def get_accuracy_thresholds(base_model_name: str, device_name: str, optimization
         lambda line: "|" in line
         and base_model_name.lower() in line.split("|")[1].strip().lower()
         and device_name.lower() in line.split("|")[2].strip().lower()
+        and not "(DP=".lower() in line.lower()  # ignore DP/HP report for now
     )
     rows = [
         line.split("|")[1:]  # Each row starts with a separator
