@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "tt-metalium/buffer_constants.hpp"
+#include "tt-metalium/logger.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/data_movement/slice_write/slice_write.hpp"
@@ -167,6 +168,7 @@ Result conv2d_DRAM(
         device);
     bool first_run = true;
     bool auto_shard = false;
+    std::optional<MemoryConfig> input_memory_config = std::nullopt;
     const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups, conv_config);
     if (dram_slice_config.slice_output_height) {
         for (int batch_index = 0; batch_index < batch_size; batch_index++) {
@@ -211,8 +213,24 @@ Result conv2d_DRAM(
                         groups,
                         bias_tensor.has_value(),
                         compute_config);
+                    input_memory_config = get_input_memory_config(
+                        conv_config,
+                        in_channels,
+                        out_channels,
+                        batch_size,
+                        input_slice_height,
+                        input_width,
+                        output_slice_height,
+                        output_width,
+                        compute_grid_size,
+                        Layout::ROW_MAJOR,
+                        mm_conv);
                     auto_shard = true;
-                    tt::log_info(tt::LogOp, "DRAM Height slicing using {} ", conv_config.shard_layout.value());
+                    tt::log_info(
+                        tt::LogOp,
+                        "DRAM Width slicing using {}, Input Memory Config = {} ",
+                        conv_config.shard_layout.value(),
+                        input_memory_config.value());
                 }
                 auto sliced_input_tensor = ttnn::slice(
                     queue_id,
@@ -225,10 +243,7 @@ Result conv2d_DRAM(
                         1,
                         1,
                     },  // Step,
-                    MemoryConfig{
-                        .memory_layout = TensorMemoryLayout::INTERLEAVED,
-                        .buffer_type = BufferType::DRAM,
-                    });
+                    input_memory_config);
                 log_debug(tt::LogOp, "Sliced input tensor shape: {}", sliced_input_tensor.get_logical_shape());
                 if (pad_top > 0 || pad_bottom > 0) {
                     auto pad_top_tensor = ttnn::pad(
@@ -331,16 +346,37 @@ Result conv2d_DRAM(
                     groups,
                     bias_tensor.has_value(),
                     compute_config);
+                input_memory_config = get_input_memory_config(
+                    conv_config,
+                    in_channels,
+                    out_channels,
+                    batch_size,
+                    input_height,
+                    input_slice_width,
+                    output_height,
+                    output_slice_width,
+                    compute_grid_size,
+                    Layout::ROW_MAJOR,
+                    mm_conv);
                 auto_shard = true;
-                tt::log_info(tt::LogOp, "DRAM Width slicing using {} ", conv_config.shard_layout.value());
+                tt::log_info(
+                    tt::LogOp,
+                    "DRAM Width slicing using {}, Input Memory Config = {} ",
+                    conv_config.shard_layout.value(),
+                    input_memory_config.value());
             }
             auto sliced_input_tensor = ttnn::slice(
                 queue_id,
                 input_tensor,
                 std::array<uint32_t, 4>{0, 0, input_slice_width_start, 0},  // Start
                 std::array<uint32_t, 4>{batch_size, input_height, input_slice_width_end, in_channels},
-                std::array<uint32_t, 4>{1, 1, 1, 1}  // Step
-            );
+                std::array<uint32_t, 4>{
+                    1,
+                    1,
+                    1,
+                    1,
+                },  // Step
+                input_memory_config);
             log_debug(tt::LogOp, "Sliced input tensor shape: {}", sliced_input_tensor.get_logical_shape());
             if (pad_left > 0 || pad_right > 0) {
                 auto pad_top_tensor = ttnn::pad(
@@ -377,6 +413,7 @@ Result conv2d_DRAM(
                     conv_config_l1,
                     compute_config_,
                     memory_config_);
+            tt::log_info(LogOp, "Output Memory Config: {}", sliced_output_tensor.memory_config());
             if (sliced_output_tensor.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED &&
                 sliced_output_tensor.memory_config().memory_layout != TensorMemoryLayout::BLOCK_SHARDED) {
                 sliced_output_tensor = ttnn::to_memory_config(
