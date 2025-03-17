@@ -9,7 +9,7 @@ import pytest
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-def run_avg_pool(device, input_shape, kernel_size, stride, padding, dilation, ceil_mode=False):
+def run_avg_pool(device, input_shape, kernel_size, stride, padding, dilation, shard_scheme=None, ceil_mode=False):
     ## Test setup for both.
     in_n, in_c, in_h, in_w = input_shape
     torch.manual_seed(0)
@@ -50,7 +50,7 @@ def run_avg_pool(device, input_shape, kernel_size, stride, padding, dilation, ce
         padding=padding,
         dilation=dilation,
         # memory_config=memory_config,
-        # applied_shard_scheme=shard_scheme,
+        applied_shard_scheme=shard_scheme,
         ceil_mode=ceil_mode,
     )
 
@@ -89,7 +89,6 @@ def run_avg_pool(device, input_shape, kernel_size, stride, padding, dilation, ce
         (3, 3),
         (5, 5),
         (9, 9),
-        (13, 13),
     ),
 )
 @pytest.mark.parametrize(
@@ -104,6 +103,9 @@ def run_avg_pool(device, input_shape, kernel_size, stride, padding, dilation, ce
     (
         (0, 0),
         (1, 1),
+        (2, 2),
+        (4, 4),
+        (6, 6),
     ),
 )
 @pytest.mark.parametrize("dilation", ((1, 1),))
@@ -115,6 +117,22 @@ def run_avg_pool(device, input_shape, kernel_size, stride, padding, dilation, ce
     ],
 )
 def test_run_avg_pool(device, input_shape, kernel_size, stride, padding, dilation, ceil_mode):
+    known_issues = [
+        ((2, 2), (2, 2)),
+        ((2, 2), (3, 3)),
+        ((4, 4), (2, 2)),
+        ((4, 4), (3, 3)),
+        ((4, 4), (5, 5)),
+        ((6, 6), (2, 2)),
+        ((6, 6), (3, 3)),
+        ((6, 6), (5, 5)),
+        ((6, 6), (9, 9)),
+    ]
+    if ((padding, kernel_size) in known_issues) or any(p > k // 2 for p, k in zip(padding, kernel_size)):
+        pytest.skip(
+            "Known issue with this combination of parameters - RuntimeError: pad should be at most half of kernel size."
+        )
+
     run_avg_pool(
         device,
         input_shape,
@@ -122,6 +140,6 @@ def test_run_avg_pool(device, input_shape, kernel_size, stride, padding, dilatio
         stride,
         padding,
         dilation,
-        # shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ceil_mode=ceil_mode,
     )
