@@ -35,6 +35,8 @@ from .param_config import (
     generate_params,
 )
 
+from .hardware_controller import HardwareController
+
 from .test_config import generate_make_command
 from .tilize_untilize import tilize, untilize
 from ttexalens import Verbosity

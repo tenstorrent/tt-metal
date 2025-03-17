@@ -3,9 +3,12 @@
 
 from ttexalens.tt_exalens_lib import (
     write_to_device,
+    write_words_to_device,
     read_words_from_device,
     read_word_from_device,
+    load_elf,
     run_elf,
+    check_context,
 )
 from helpers import *
 import inspect
@@ -27,21 +30,29 @@ def collect_results(
 
 
 def run_elf_files(testname, core_loc="0,0", run_brisc=True):
-
     ELF_LOCATION = "../build/elf/"
 
     if run_brisc:
         run_elf(f"{ELF_LOCATION}brisc.elf", core_loc, risc_id=0)
 
-    # for i in range(3):
-    #     run_elf(f"{ELF_LOCATION}{testname}_trisc{i}.elf", core_loc, risc_id=i + 1)
+    context = check_context()
+    device = context.devices[0]
+    RISC_DBG_SOFT_RESET0 = device.get_tensix_register_address(
+        "RISCV_DEBUG_REG_SOFT_RESET_0"
+    )
 
-    # Added because there was a race that caused failure in test_eltwise_unary_datacopy,
-    # and now cores are run in revese order PACK, MATH, UNOPACK
-    # Once that issue is reolved with tt-exalens code will be returned to normal for loop
+    # Perform soft reset
+    soft_reset = read_word_from_device(core_loc, RISC_DBG_SOFT_RESET0)
+    soft_reset |= 0x7800
+    write_words_to_device(core_loc, RISC_DBG_SOFT_RESET0, soft_reset)
 
-    for i in reversed(range(3)):
-        run_elf(f"{ELF_LOCATION}{testname}_trisc{i}.elf", core_loc, risc_id=i + 1)
+    # Load ELF files
+    for i in range(3):
+        load_elf(f"{ELF_LOCATION}{testname}_trisc{i}.elf", core_loc, risc_id=i + 1)
+
+    # Clear soft reset
+    soft_reset &= ~0x7800
+    write_words_to_device(core_loc, RISC_DBG_SOFT_RESET0, soft_reset)
 
 
 def write_stimuli_to_l1(buffer_A, buffer_B, stimuli_format, core_loc="0,0", tile_cnt=1):
