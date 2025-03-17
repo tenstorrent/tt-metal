@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.tt_transformers.tt.model_config import parse_optimizations
+from models.tt_transformers.tt.model_config import parse_optimizations, parse_decoder_json
 
 
 # These inputs override the default inputs used by simple_text_demo.py. Check the main demo to see the default values.
@@ -29,4 +29,11 @@ def pytest_addoption(parser):
         default=None,
         type=parse_optimizations,
         help="Precision and fidelity configuration diffs over default (i.e., accuracy)",
+    )
+    parser.addoption(
+        "--decoder_config_file",
+        action="store",
+        default=None,
+        type=str,
+        help="Provide a JSON file defining per-decoder precision and fidelity settings",
     )
