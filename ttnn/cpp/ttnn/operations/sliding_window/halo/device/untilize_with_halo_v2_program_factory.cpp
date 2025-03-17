@@ -94,10 +94,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     if (!skip_untilize) {
         input_to_writer_cb_id = untilize_out_cb_id;
 
-        // TODO: Use double buffering
         uint32_t output_ntiles = (clamped_block_size_height / TILE_HEIGHT) * ntiles_per_block;
-
-        // Output of untilize from compute kernel goes into this CB
+        // Output of untilize from compute kernel goes into this CB; TODO: Use double buffering
         auto untilize_out_cb_config =
             CircularBufferConfig(output_ntiles * out_tile_size, {{untilize_out_cb_id, out_df}})
                 .set_page_size(untilize_out_cb_id, out_tile_size);

@@ -112,7 +112,9 @@ static inline void run_halo_gather(
             DPRINT << "num_transfers=" << transfers_remaining << " src_offset=" << src_offset
                    << " dst_offset=" << dst_offset << " size=" << transfer_size << ENDL();
             if constexpr (EnableBlocking) {
-                if (src_offset >= block_boundary_offset) {
+                // Pop blocks until we have the right one - this works because transfers are ordered by ascending block
+                // IDs
+                while (src_offset >= block_boundary_offset) {
                     noc_async_write_barrier();
                     cb_pop_front(InputCBIndex, total_tiles_in_single_block);
                     cb_wait_front(InputCBIndex, total_tiles_in_single_block);

@@ -623,7 +623,6 @@ generate_halo_kernel_config_tensors(
         gather_configs[core_id].routes.push_back(GatherRoute{header, transfers});
     }
 
-    // std::vector<std::vector<std::pair<uint32_triplet_t, std::vector<uint32_triplet_t>>>> remote_config;
     for (int core_id = 0; core_id < remote_config.size(); core_id++) {
         for (const auto& destination : remote_config[core_id]) {
             const auto& [src_core_id, dst_core_id, num_copies] = destination.first;
@@ -642,10 +641,7 @@ generate_halo_kernel_config_tensors(
     const int block_size = 256;  // TODO: pass this in
     std::vector<GatherConfig> ordered_gather_configs;
     for (const auto& config : gather_configs) {
-        // We have to split first to guarantee proper ordering
-        const auto& split = split_into_blocks(config, block_size);
-        tt::log_info("config ={} \n split = {}", config, split);
-        ordered_gather_configs.push_back(reorder_transfers_globally(split));
+        ordered_gather_configs.push_back(reorder_transfers_globally(split_into_blocks(config, block_size)));
     }
     const auto serialized_gather_configs = serialize_gather_configs(ordered_gather_configs);
 
