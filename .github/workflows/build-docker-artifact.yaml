@@ -16,12 +16,15 @@ on:
         type: string
         default: "amd64"
     outputs:
-      dev-tag:
-        description: "Docker tag for the dev Docker image for developing TT-Metalium et al"
-        value: ${{ jobs.check-docker-images.outputs.dev-tag }}
+      ci-build-tag:
+        description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
+        value: ${{ jobs.check-docker-images.outputs.ci-build-tag }}
       #ci-test-tag:
       #  description: "Docker tag for the CI Test Docker image for testing TT-Metalium et al"
       #  value: ${{ jobs.check-docker-images.outputs.ci-test-tag }}
+      dev-tag:
+        description: "Docker tag for the Dev Docker image for developers working on TT-Metalium et al"
+        value: ${{ jobs.check-docker-images.outputs.dev-tag }}
   workflow_dispatch:
     inputs:
       distro:
@@ -45,19 +48,22 @@ on:
         options:
             - "amd64"
 
-env:
-  IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-dev-${{ inputs.architecture }}
+# Can rm this comment, but since the full image name will be different for each target,
+# we could make a separate composite action to compute this. Just a one-liner though
+# which only really would be used in this workflow, so perhaps low ROI
+# env:
+  # IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-dev-${{ inputs.architecture }}
 
 jobs:
   check-docker-images:
     runs-on: ubuntu-latest
     outputs:
-      # ci-build-exists: ${{ steps.images.outputs.ci-build-exists }}
-      # ci-build-tag: ${{ steps.tags.outputs.ci-build-tag }}
-      # ci-test-exists: ${{ steps.images.outputs.ci-test-exists }}
+      ci-build-tag: ${{ steps.tags.outputs.ci-build-tag }}
+      ci-build-exists: ${{ steps.images.outputs.ci-build-exists }}
       # ci-test-tag: ${{ steps.tags.outputs.ci-test-tag }}
-      dev-exists: ${{ steps.images.outputs.dev-exists }}
+      # ci-test-exists: ${{ steps.images.outputs.ci-test-exists }}
       dev-tag: ${{ steps.tags.outputs.dev-tag }}
+      dev-exists: ${{ steps.images.outputs.dev-exists }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
@@ -74,15 +80,31 @@ jobs:
             docs/requirements-docs.txt \
             tests/sweep_framework/requirements-sweeps.txt \
             | sha1sum | cut -d' ' -f1)
-          echo "dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.IMAGE_NAME }}:${DEV_TAG}" >> $GITHUB_OUTPUT
+          BUILD_IMAGE_NAME=${{ inputs.distro }}-${{ inputs.version }}-ci-build-${{ inputs.architecture }}
+          echo "ci-build-tag=ghcr.io/${{ github.repository }}/tt-metalium/${BUILD_IMAGE_NAME}:${BUILD_TAG}" >> $GITHUB_OUTPUT
 
           # TODO: When we have multiple Docker images, do something like this:
           # TEST_TAG=$(cat tt_metal/python_env/requirements-dev.txt pyproject.toml | sha1sum | cut -d' ' -f1)
-          # echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.IMAGE_NAME }}:${TEST_TAG}" >> $GITHUB_OUTPUT
+          # echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/${TEST_IMAGE_NAME}:${TEST_TAG}" >> $GITHUB_OUTPUT
+
+          # Any further dependencies that build on top of previous image would go in here
+          DEV_TAG=$(echo $BUILD_TAG \
+            Dockerfile.dev \
+            | sha1sum | cut -d' ' -f1)
+          DEV_IMAGE_NAME=${{ inputs.distro }}-${{ inputs.version }}-dev-${{ inputs.architecture }}
+          echo "dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${DEV_IMAGE_NAME}:${BUILD_TAG}" >> $GITHUB_OUTPUT
 
       - name: Query images exist
         id: images
         run: |
+          if docker manifest inspect ${{ steps.tags.outputs.ci-build-tag }} > /dev/null 2>&1; then
+            echo "${{ steps.tags.outputs.ci-build-tag }} exists"
+            echo "ci-build-exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "${{ steps.tags.outputs.ci-build-tag }} does not exist"
+            echo "ci-build-exists=false" >> $GITHUB_OUTPUT
+          fi
+
           if docker manifest inspect ${{ steps.tags.outputs.dev-tag }} > /dev/null 2>&1; then
             echo "${{ steps.tags.outputs.dev-tag }} exists"
             echo "dev-exists=true" >> $GITHUB_OUTPUT
@@ -91,11 +113,10 @@ jobs:
             echo "dev-exists=false" >> $GITHUB_OUTPUT
           fi
 
-
   build-docker-image:
     name: "🐳️ Build image"
     needs: check-docker-images
-    if: needs.check-docker-images.outputs.dev-exists != 'true'
+    if: needs.check-docker-images.outputs.ci-build-exists != 'true' || needs.check-docker-images.outputs.dev-exists != 'true'
     timeout-minutes: 30
     runs-on:
       - build-docker
@@ -111,17 +132,41 @@ jobs:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build Docker image and push to GHCR
+      - name: Build ci-test Docker image and push to GHCR
         uses: docker/build-push-action@v6
+        if: ${{ needs.check-docker-images.outputs.ci-build-exists != 'true' }}
         with:
           context: ${{ github.workspace }}
+          # HRMM better to be explicit so we keep this monolithic Dockerfile
+          # for now?
           file: dockerfile/Dockerfile
+          target: ci-test
+          push: true
+          tags: ${{ needs.check-docker-images.outputs.ci-build-tag }}
+          build-args: |
+            UBUNTU_VERSION=${{ inputs.version }}
+            IMAGE_ARCH=${{ inputs.architecture }}
+          cache-to: type=inline
+          pull: true
+      - name: Build dev Docker image and push to GHCR
+        uses: docker/build-push-action@v6
+        # I wonder if there should be some sort of sanity check using bash magic
+        # in the previous check-images job to ensure that the tree of dependencies
+        # actually makes sense... for ex. if ci-build-exists is false but
+        # dev-exists is true, something in previous computations went horribly
+        # wrong
+        if: ${{ needs.check-docker-images.outputs.dev-exists != 'true' }}
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.dev
           target: dev
           push: true
           tags: ${{ needs.check-docker-images.outputs.dev-tag }}
-          build-args: UBUNTU_VERSION=${{ inputs.version }}
-          cache-to: type=inline
-          pull: true
+          # BASE_VERSION here must eventually be ci-test-tag
+          build-args: |
+            UBUNTU_VERSION=${{ inputs.version }}
+            IMAGE_ARCH=${{ inputs.architecture }}
+            BASE_IMAGE=${{ needs.check-docker-images.outputs.ci-build-tag }}
 
   # Cannot use needs.build-docker-image to ensure this job runs sequentially after the build job because it would break when the build job is skipped
   # Instead, this setup causes the tag-latest job to lag one run behind the actual build.
@@ -130,7 +175,7 @@ jobs:
   tag-latest:
     name: "🔄 Update latest tag"
     needs: check-docker-images
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.check-docker-images.outputs.dev-exists == 'true'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.check-docker-images.outputs.dev-exists != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Login to GitHub Container Registry
@@ -140,8 +185,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Tag and push latest
+      - name: Tag and push latest dev
         run: |
+          echo "fix me rk, IMAGE_NAME" && exit 1
           IMAGE_REPO="ghcr.io/${{ github.repository }}/tt-metalium/${{ env.IMAGE_NAME }}"
           LATEST_TAG="${IMAGE_REPO}:latest"
           DEV_TAG="${{ needs.check-docker-images.outputs.dev-tag }}"

@@ -1,0 +1,40 @@
+
+#############################################################
+
+# Accept an argument to specify the Ubuntu version and host architecture
+ARG UBUNTU_VERSION=22.04
+ARG IMAGE_ARCH=amd64
+ARG BASE_IMAGE=ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-${UBUNTU_VERSION}-ci-test-${IMAGE_ARCH}:latest
+# Since release is a different workflow, we'll use the current image for now, but append -dev later in development
+# For now this relies on ci-build, but that same image will need to be called ci-test
+FROM ${BASE_IMAGE} AS dev
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+#############################################################
+
+# Need this to build GDB
+RUN apt-get -y update \
+    && apt-get install -y libmpfr-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install the gdb that is compatible with clang-17
+RUN apt-get remove -y gdb || true \
+    && mkdir -p /tmp/gdb-build && cd /tmp/gdb-build/ \
+    && wget -O /tmp/gdb-build/gdb.tar.gz https://ftp.gnu.org/gnu/gdb/gdb-14.2.tar.gz \
+    && tar -xvf /tmp/gdb-build/gdb.tar.gz -C /tmp/gdb-build --strip-components=1 \
+    && /tmp/gdb-build/configure --prefix=/usr/local \
+    && make -j$(nproc) \
+    && make install \
+    && rm -rf /tmp/gdb-build
+
+# Install dev deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    acl \
+    emacs \
+    less \
+    nano \
+    openssh-server \
+    vim \
+    libgl1-mesa-glx \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
