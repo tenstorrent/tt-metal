@@ -102,6 +102,8 @@ RunTimeOptions::RunTimeOptions() {
 
     null_kernels = (std::getenv("TT_METAL_NULL_KERNELS") != nullptr);
 
+    kernels_early_return = (std::getenv("TT_METAL_KERNELS_EARLY_RETURN") != nullptr);
+
     clear_l1 = false;
     const char* clear_l1_enabled_str = std::getenv("TT_METAL_CLEAR_L1");
     if (clear_l1_enabled_str != nullptr) {

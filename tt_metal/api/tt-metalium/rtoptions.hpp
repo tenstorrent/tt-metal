@@ -118,6 +118,9 @@ class RunTimeOptions {
     std::string profiler_noc_events_report_path;
 
     bool null_kernels = false;
+    // Kernels should return early, skipping the rest of the kernel. Kernels
+    // should remain the same size as normal, unlike with null_kernels.
+    bool kernels_early_return = false;
 
     bool clear_l1 = false;
 
@@ -302,6 +305,9 @@ public:
 
     inline void set_kernels_nullified(bool v) { null_kernels = v; }
     inline bool get_kernels_nullified() { return null_kernels; }
+
+    inline void set_kernels_early_return(bool v) { kernels_early_return = v; }
+    inline bool get_kernels_early_return() { return kernels_early_return; }
 
     inline bool get_clear_l1() { return clear_l1; }
     inline void set_clear_l1(bool clear) { clear_l1 = clear; }

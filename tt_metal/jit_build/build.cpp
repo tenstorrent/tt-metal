@@ -193,6 +193,10 @@ void JitBuildEnv::init(
         this->defines_ += "-DDEBUG_NULL_KERNELS ";
     }
 
+    if (tt::llrt::RunTimeOptions::get_instance().get_kernels_early_return()) {
+        this->defines_ += "-DDEBUG_EARLY_RETURN_KERNELS ";
+    }
+
     if (tt::llrt::RunTimeOptions::get_instance().get_watcher_debug_delay()) {
         this->defines_ +=
             "-DWATCHER_DEBUG_DELAY=" + to_string(tt::llrt::RunTimeOptions::get_instance().get_watcher_debug_delay()) +
