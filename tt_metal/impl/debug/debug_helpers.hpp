@@ -90,6 +90,7 @@ inline const std::string_view get_core_type_name(CoreType ct) {
         case CoreType::ACTIVE_ETH: return "active_eth";
         case CoreType::IDLE_ETH: return "idle_eth";
         case CoreType::TENSIX: return "tensix";
+        default: return "UNKNOWN";
     }
 }
 
