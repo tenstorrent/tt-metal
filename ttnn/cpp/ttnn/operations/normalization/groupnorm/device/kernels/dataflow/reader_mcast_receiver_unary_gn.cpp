@@ -107,7 +107,6 @@ void kernel_main() {
                 uint32_t l1_write_addr;
                 l1_write_addr = get_write_ptr(cb_in0);
                 cb_reserve_back(cb_in0, out_block_hw);
-
                 for (uint32_t mt = 0; mt < out_block_h; mt++) {
                     for (uint32_t nt = 0; nt < block_w; nt++) {
                         noc_async_read_tile(
@@ -118,7 +117,7 @@ void kernel_main() {
                         noc_async_read_barrier();
                     }
                 }
-                out_block_start_id_offset += block_h * num_channels_tiles;
+                out_block_start_id_offset += out_block_h * num_channels_tiles;
                 cb_push_back(cb_in0, out_block_hw);
 
 #endif
@@ -167,7 +166,7 @@ void kernel_main() {
                     noc_async_read_barrier();
                 }
             }
-            out_block_start_id_offset += block_h * num_channels_tiles;
+            out_block_start_id_offset += out_block_h * num_channels_tiles;
             cb_push_back(cb_reread_out, out_block_hw);
         }
 

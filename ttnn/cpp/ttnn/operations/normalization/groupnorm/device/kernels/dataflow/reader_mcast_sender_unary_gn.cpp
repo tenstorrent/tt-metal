@@ -241,7 +241,7 @@ void kernel_main() {
                             noc_async_read_barrier();
                         }
                     }
-                    out_block_start_id_offset += block_h * num_channels_tiles;
+                    out_block_start_id_offset += out_block_h * num_channels_tiles;
                     cb_push_back(cb_in0, out_block_hw);
 
 #endif
@@ -372,7 +372,7 @@ void kernel_main() {
                         noc_async_read_barrier();
                     }
                 }
-                out_block_start_id_offset += block_h * num_channels_tiles;
+                out_block_start_id_offset += out_block_h * num_channels_tiles;
                 cb_push_back(cb_reread_out, out_block_hw);
             }
 
