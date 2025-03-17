@@ -389,7 +389,9 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces):
                     ops_found += 1
                     ops[op_id]["NOC UTIL (%)"] = round(op_npe_stats.result.overall_avg_link_util, 1)
                     ops[op_id]["DRAM BW UTIL (%)"] = round(op_npe_stats.result.dram_bw_util, 1)
-            logger.info(f"Found {ops_found} operations with noc trace data")
+                else:
+                    logger.warning(f"No npe stats found for op ID {op_id}", op_id)
+            logger.info(f"Analyzed {ops_found} operations with tt-npe trace data.")
 
     return devicesOps, traceOps
 
@@ -780,14 +782,14 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
 
 def analyzeNoCTraces(logFolder):
     """Attempts to import tt-npe from $PYTHONPATH and process noc traces to
-    obtain per-operation dram and noc utilization statistics"""
+    obtain per-operation DRAM BW and NoC utilization statistics"""
     try:
         from npe_analyze_noc_trace_dir import analyze_noc_traces_in_dir
 
-        logger.info(f"tt-npe imported successfully; analyzing noc traces ... ")
+        logger.info(f"tt-npe module imported successfully; analyzing noc traces ... ")
         return analyze_noc_traces_in_dir(logFolder, False, True)
     except ImportError:
-        logger.warning("tt-npe is not available in this python environment. Try sourcing 'tt-npe/ENV_SETUP'")
+        logger.warning("Could not import tt-npe module. Ensure tt-npe is built, then source 'tt-npe/ENV_SETUP'")
         return None
     except Exception as e:
         logger.error("Unexpected error occured when analyzing noc traces, aborting ... ")
@@ -816,7 +818,7 @@ def process_ops(output_folder, name_append, date, device_only=False, analyze_noc
 @click.option("--date", default=False, is_flag=True, help="Append date to output files")
 @click.option("--device-only", default=False, is_flag=True, help="Only generate a device data report")
 @click.option(
-    "--analyze-noc-traces", is_flag=True, help="Attempt to use tt-npe to analyze profiler noc event trace files"
+    "--analyze-noc-traces", is_flag=True, help="Use tt-npe to analyze profiler noc event trace files (if available)"
 )
 def main(output_folder, name_append, date, device_only, analyze_noc_traces):
     if output_folder:

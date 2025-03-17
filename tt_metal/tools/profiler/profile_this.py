@@ -15,6 +15,7 @@ from tt_metal.tools.profiler.common import (
     PROFILER_SCRIPTS_ROOT,
     TT_METAL_HOME,
     PROFILER_OUTPUT_DIR,
+    generate_logs_folder,
 )
 
 
@@ -30,9 +31,10 @@ def profile_command(test_command, output_folder, name_append, collect_noc_traces
     if collect_noc_traces:
         options += f" --collect-noc-traces "
         currentEnvs["TT_METAL_DEVICE_PROFILER_NOC_EVENTS"] = "1"
-        currentEnvs["TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH"] = os.path.join(
-            os.path.abspath(output_folder), ".logs"
+        currentEnvs["TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH"] = generate_logs_folder(
+            os.path.abspath(output_folder)
         )
+
     opProfilerTestCommand = f"python3 -m tracy -v -r -p {options} -m {test_command}"
     subprocess.run([opProfilerTestCommand], shell=True, check=False, env=currentEnvs)
 
