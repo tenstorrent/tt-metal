@@ -659,8 +659,8 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
                 )
                 rowDict["HOST DURATION [ns]"] = int(opData["host_time"]["exec_time_ns"])
 
-                rowDict["NOC UTIL (%)"] = opData.get("NOC UTIL (%)", 0.0)
-                rowDict["DRAM BW UTIL (%)"] = opData.get("DRAM BW UTIL (%)", 0.0)
+                rowDict["NOC UTIL (%)"] = opData.get("NOC UTIL (%)", "")
+                rowDict["DRAM BW UTIL (%)"] = opData.get("DRAM BW UTIL (%)", "")
 
                 if "kernel_info" in opData.keys():
                     rowDict["COMPUTE KERNEL SOURCE"] = []
