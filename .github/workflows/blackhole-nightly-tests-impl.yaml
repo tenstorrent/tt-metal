@@ -2,6 +2,16 @@ name: "[internal] Blackhole nightly tests impl"
 
 on:
   workflow_call:
+    inputs:
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      docker-image:
+        required: true
+        type: string
 
 jobs:
   nightly-bh-models:
@@ -11,7 +21,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-            { model: whisper, card: BH, owner_id: U05RWH3QUPM},  #Salar Hosseini
+            { model: whisper, card: BH, owner_id: U05RWH3QUPM, arch: blackhole},  #Salar Hosseini
           ]
     name: Nightly ${{ matrix.test-group.card }} ${{ matrix.test-group.model }}
     env:
@@ -20,18 +30,37 @@ jobs:
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on: ["cloud-virtual-machine", "in-service", "${{ matrix.test-group.card }}"]
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
-      - name: Set up dyanmic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - uses: ./.github/actions/prepare-metal-run
-      - uses: ./.github/actions/install-python-deps
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: ⬇️ Download Build
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.build-artifact-name }}
+      - name: Extract files
+        run: tar -xvf ttm_any.tar
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.wheel-artifact-name }}
       - name: Run frequent reg tests scripts
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-group.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GITHUB_ACTIONS=true
+          install_wheel: true
         timeout-minutes: 30
         run: |
-          source ${{ github.workspace }}/python_env/bin/activate
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
           pytest tests/nightly/single_card/${{ matrix.test-group.model }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
