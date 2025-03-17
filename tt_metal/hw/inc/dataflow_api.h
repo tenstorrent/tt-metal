@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -32,6 +32,58 @@
 
 // clang-format off
 /**
+ * Returns the absolute logical X coordinate value that this kernel is running on. The absolute coordinate
+ * is the one relative to the origin of the physical grid.
+ *
+ * Return value: X coordinate value.
+ */
+// clang-format on
+inline uint8_t get_absolute_logical_x() {
+    extern uint8_t my_logical_x_;  // Set in FW
+    return my_logical_x_;
+}
+
+// clang-format off
+/**
+ * Returns the absolute logical Y coordinate value that this kernel is running on. The absolute coordinate
+ * is the one relative to the origin of the physical grid.
+ *
+ * Return value: Y coordinate value.
+ */
+// clang-format on
+inline uint8_t get_absolute_logical_y() {
+    extern uint8_t my_logical_y_;  // Set in FW
+    return my_logical_y_;
+}
+
+// clang-format off
+/**
+ * Returns the relative logical X coordinate value that this kernel is running on. The relative coordinate
+ * is with respect to the origin of the sub device for this core type.
+ *
+ * Return value: X coordinate value.
+ */
+// clang-format on
+inline uint8_t get_relative_logical_x() {
+    extern uint8_t my_relative_x_;  // Set in FW
+    return my_relative_x_;
+}
+
+// clang-format off
+/**
+ * Returns the relative logical Y coordinate value that this kernel is running on. The relative coordinate
+ * is with respect to the origin of the sub device for this core type.
+ *
+ * Return value: Y coordinate value.
+ */
+// clang-format on
+inline uint8_t get_relative_logical_y() {
+    extern uint8_t my_relative_y_;  // Set in FW
+    return my_relative_y_;
+}
+
+// clang-format off
+/**
  * Returns the address in L1 for a given runtime argument index for unique (per core) runtime arguments set via
  * SetRuntimeArgs() API.
  *
@@ -43,6 +95,7 @@
  */
 // clang-format on
 static FORCE_INLINE uint32_t get_arg_addr(int arg_idx) { return (uint32_t)&rta_l1_base[arg_idx]; }
+
 // clang-format off
 /**
  * Returns the address in L1 for a given runtime argument index for common (all cores) runtime arguments set via
