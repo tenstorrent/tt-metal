@@ -106,9 +106,10 @@ Tensor tensor_reshape(
                                                                              : (shard_shape[1] / new_logical_shape[-1]);
                         }
 
-                        shard_spec.shape[0] = new_logical_shape[-1] > shard_shape[1] ? shard_shape[0] / mul_div
-                                                                                     : shard_shape[0] * mul_div;
-                        shard_spec.shape[1] = new_logical_shape[-1];
+                        // workaround for segformer padding issues
+                        // shard_spec.shape[0] = new_logical_shape[-1] > shard_shape[1] ? shard_shape[0] / mul_div
+                        //                                                             : shard_shape[0] * mul_div;
+                        // shard_spec.shape[1] = new_logical_shape[-1];
 
                         shard_spec_buffer.page_shape = {1, new_logical_shape[-1]};
                         shard_spec_buffer.tensor2d_shape_in_pages = {shard_spec.shape[0], 1};
