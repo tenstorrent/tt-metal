@@ -622,7 +622,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     log_debug(LogOp, "CB for L1 Array CB: {}, npages: {}, pagesize: {}", cb_indices.cb_for_l1_array, 1, 32 * 2);
 
     cb_indices.sharded_act_cb = cb_indices.get_next_cb_index();
-    auto[_, cb_input] = std::tt::tt_metal::create_cb(
+    auto [_, cb_input] = tt::tt_metal::create_cb(
         cb_indices.sharded_act_cb,
         program,
         all_cores,
