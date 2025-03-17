@@ -49,12 +49,14 @@ jobs:
           submodules: recursive
       - name: ⬇️ Download Build
         uses: actions/download-artifact@v4
+        timeout-minutes: 10
         with:
           name: ${{ inputs.build-artifact-name }}
       - name: Extract files
         run: tar -xvf ttm_any.tar
       - name: ⬇️ Download Wheel
         uses: actions/download-artifact@v4
+        timeout-minutes: 10
         with:
           name: ${{ inputs.wheel-artifact-name }}
       - uses: ./.github/actions/ensure-active-weka-mount
@@ -99,12 +101,14 @@ jobs:
           submodules: recursive
       - name: ⬇️ Download Build
         uses: actions/download-artifact@v4
+        timeout-minutes: 10
         with:
           name: ${{ inputs.build-artifact-name }}
       - name: Extract files
         run: tar -xvf ttm_any.tar
       - name: ⬇️ Download Wheel
         uses: actions/download-artifact@v4
+        timeout-minutes: 10
         with:
           name: ${{ inputs.wheel-artifact-name }}
       - uses: ./.github/actions/ensure-active-weka-mount
@@ -175,12 +179,14 @@ jobs:
           submodules: recursive
       - name: ⬇️ Download Build
         uses: actions/download-artifact@v4
+        timeout-minutes: 10
         with:
           name: ${{ inputs.build-artifact-name }}
       - name: Extract files
         run: tar -xvf ttm_any.tar
       - name: ⬇️ Download Wheel
         uses: actions/download-artifact@v4
+        timeout-minutes: 10
         with:
           name: ${{ inputs.wheel-artifact-name }}
       - uses: ./.github/actions/ensure-active-weka-mount
