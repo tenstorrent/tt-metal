@@ -76,7 +76,7 @@ OUTPUT_ELFS = $(BUILD_DIR)/elf
 .PHONY: all clean
 
 all: $(BUILD_DIR) $(OUTPUT_ELFS) $(OUTPUT_ELFS)/$(testname)_trisc0.elf $(OUTPUT_ELFS)/$(testname)_trisc1.elf $(OUTPUT_ELFS)/$(testname)_trisc2.elf $(OUTPUT_ELFS)/brisc.elf
-dis: $(BUILD_DIR)/$(testname)_trisc0.dis $(BUILD_DIR)/$(testname)_trisc1.dis $(BUILD_DIR)/$(testname)_trisc2.dis
+dis: $(BUILD_DIR) $(OUTPUT_ELFS) $(BUILD_DIR)/$(testname)_trisc0.dis $(BUILD_DIR)/$(testname)_trisc1.dis $(BUILD_DIR)/$(testname)_trisc2.dis $(BUILD_DIR)/brisc.dis
 
 $(BUILD_DIR)/%.dis :  $(OUTPUT_ELFS)/%.elf
 	$(OBJDUMP) -xsD $< > $@

@@ -85,7 +85,7 @@ if [[ "$REUSE" == false ]]; then
 
     # **************** DOWNLOAD & INSTALL SFPI ****************************
     echo "Downloading SFPI release..."
-    wget https://github.com/tenstorrent/sfpi/releases/download/v6.4.0-sfpi/sfpi-release.tgz -O sfpi-release.tgz
+    wget https://github.com/tenstorrent/sfpi/releases/download/v6.5.0-sfpi/sfpi-release.tgz -O sfpi-release.tgz
     if [ ! -f "sfpi-release.tgz" ]; then
         echo "SFPI release not found!"
         exit 1
