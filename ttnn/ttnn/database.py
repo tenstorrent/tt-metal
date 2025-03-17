@@ -406,7 +406,7 @@ def insert_buffers(report_path, operation_id, devices):
     sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
     cursor = sqlite_connection.cursor()
 
-    for buffer in ttnn._ttnn.reports.get_buffers(devices):
+    for buffer in ttnn._ttnn.reports.get_buffers(list(devices)):
         cursor.execute(
             f"""INSERT INTO buffers VALUES (
                 {operation_id},
@@ -422,7 +422,7 @@ def insert_buffers(report_path, operation_id, devices):
 def insert_buffer_pages(report_path, operation_id, devices):
     sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
     cursor = sqlite_connection.cursor()
-    for buffer_page in ttnn._ttnn.reports.get_buffer_pages(devices):
+    for buffer_page in ttnn._ttnn.reports.get_buffer_pages(list(devices)):
         cursor.execute(
             f"""INSERT INTO buffer_pages VALUES (
                 {operation_id},
