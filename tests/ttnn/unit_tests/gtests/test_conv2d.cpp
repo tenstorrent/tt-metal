@@ -217,7 +217,6 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
         padding);
 
     float pcc_calculated = pcc(res, ref_res);
-    pcc(res, ref_res);
 
     bool pass = CloseDevice(device);
     std::cout << "PCC: " << pcc_calculated << std::endl;
