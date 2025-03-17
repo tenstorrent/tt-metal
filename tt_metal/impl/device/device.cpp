@@ -693,12 +693,6 @@ void Device::initialize_and_launch_firmware() {
             CoreCoord logical_core(x, y);
             if (!this->storage_only_cores_.count(logical_core)) {
                 CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
-                // Setup the absolute logical coordinates of this worker which are relative to true origin. not the sub
-                // device. When running the user kernel, which potentially is on a sub device, send that info using the
-                // launch message using dispatch.
-                core_info->absolute_logical_x = logical_core.x;
-                core_info->absolute_logical_y = logical_core.y;
-                // Must write to core before starting it
                 tt::llrt::write_hex_vec_to_core(
                     this->id(), worker_core, core_info_vec, this->get_dev_addr(worker_core, HalL1MemAddrType::CORE_INFO));
                 this->initialize_firmware(HalProgrammableCoreType::TENSIX, worker_core, &launch_msg, &go_msg);
@@ -722,8 +716,6 @@ void Device::initialize_and_launch_firmware() {
     std::unordered_set<CoreCoord> active_eth_cores;
     for (const auto &eth_core : this->get_active_ethernet_cores()) {
         CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
-        core_info->absolute_logical_x = eth_core.x;
-        core_info->absolute_logical_y = eth_core.y;
         tt::llrt::write_hex_vec_to_core(
             this->id(), phys_eth_core, core_info_vec, this->get_dev_addr(phys_eth_core, HalL1MemAddrType::CORE_INFO));
         this->initialize_firmware(HalProgrammableCoreType::ACTIVE_ETH, phys_eth_core, &launch_msg, &go_msg);
@@ -735,8 +727,6 @@ void Device::initialize_and_launch_firmware() {
 
     for (const auto &eth_core : this->get_inactive_ethernet_cores()) {
         CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
-        core_info->absolute_logical_x = eth_core.x;
-        core_info->absolute_logical_y = eth_core.y;
         tt::llrt::write_hex_vec_to_core(
             this->id(), phys_eth_core, core_info_vec, this->get_dev_addr(phys_eth_core, HalL1MemAddrType::CORE_INFO));
         this->initialize_firmware(HalProgrammableCoreType::IDLE_ETH, phys_eth_core, &launch_msg, &go_msg);

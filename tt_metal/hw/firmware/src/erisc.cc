@@ -21,13 +21,8 @@ namespace kernel_profiler {
 #endif
 
 uint8_t noc_index = 0;  // TODO: remove hardcoding
-
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
-uint8_t my_logical_x_ __attribute__((used));
-uint8_t my_logical_y_ __attribute__((used));
-uint8_t my_relative_x_ __attribute__((used));
-uint8_t my_relative_y_ __attribute__((used));
 
 uint32_t noc_reads_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
@@ -82,9 +77,6 @@ void __attribute__((noinline)) Application(void) {
 
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
-    my_logical_x_ = mailboxes->core_info.absolute_logical_x;
-    my_logical_y_ = mailboxes->core_info.absolute_logical_y;
-
     noc_bank_table_init(eth_l1_mem::address_map::ERISC_MEM_BANK_TO_NOC_SCRATCH);
 
     risc_init();
@@ -117,9 +109,8 @@ void __attribute__((noinline)) Application(void) {
             DeviceValidateProfiler(launch_msg_address->kernel_config.enables);
             DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
             // Note that a core may get "GO" w/ enable false to keep its launch_msg's in sync
-            enum dispatch_core_processor_masks enables = (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
-            my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
-            my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
+            enum dispatch_core_processor_masks enables =
+                (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
             if (enables & DISPATCH_CLASS_MASK_ETH_DM0) {
                 WAYPOINT("R");
                 firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, DISPATCH_CLASS_ETH_DM0);
