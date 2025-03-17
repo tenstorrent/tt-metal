@@ -13,6 +13,14 @@
 #include "compute_kernel_api/add_int32_sfpu.h"
 #include "compute_kernel_api/common.h"
 
+// DRAM -> SRAM -> REG: [SrcA SrcB DST]
+//  Matrix Engine [FPU]
+
+// Vector Engine [SFPU] //signle precission floating point unit
+
+ALWI void ACQ() { acquire_dst(); }
+ALWI void REL() { release_dst(); }
+
 namespace NAMESPACE {
 void MAIN {
     const auto num_tiles_to_cumsum = get_arg_val<uint32_t>(0);
@@ -32,12 +40,12 @@ void MAIN {
 
     for (uint32_t i = 0; i < num_output_tiles_per_core; i++) {
         // Initialize cb_intermed with cb_in1 (0)
-        tile_regs_acquire();
+        tile_regs_acquire();  // MATH ACQ
         copy_tile_to_dst_init_short(cb_in1);
         copy_tile(cb_in1, first_tile, dst0);
-        tile_regs_commit();
+        tile_regs_commit();  // MATH REL
 
-        tile_regs_wait();
+        tile_regs_wait();  // isto to PACK
         cb_reserve_back(cb_intermed, 1);
         pack_tile(dst0, cb_intermed);
         cb_push_back(cb_intermed, 1);
@@ -59,6 +67,7 @@ void MAIN {
             cb_pop_front(cb_in0, 1);
 
             // Add tiles in dst0 and dst1. Store result to dst0
+            // Add tiles in dst0 and dst1. Store result to dst0
             add_int32_tile_init();
             add_int32_tile(dst0, dst1);
             tile_regs_commit();
@@ -75,6 +84,7 @@ void MAIN {
             cb_push_back(cb_out0, 1);
             tile_regs_release();
         }
+        cb_pop_front(cb_intermed, 1);  // this solves blocking in cases where outer loop has multiple iterations
     }
     cb_pop_front(cb_in1, 1);
 }
