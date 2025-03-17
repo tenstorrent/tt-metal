@@ -687,39 +687,151 @@ GatherConfig regenerate_ordered(const GatherConfig& input) {
 }
 
 GatherConfig reorder_gather_config(const GatherConfig& input) {
+    // Step 1: Flatten transfers globally
     struct TransferInfo {
         uint16_t noc_x;
         uint16_t noc_y;
         GatherTransfer transfer;
     };
+
     std::vector<TransferInfo> global_transfers;
     for (const auto& route : input.routes) {
         for (const auto& transfer : route.transfers) {
             global_transfers.push_back({route.header.noc_x, route.header.noc_y, transfer});
         }
     }
-    TT_FATAL(!global_transfers.empty(), "Expected there to be at least one transfer");
 
+    TT_FATAL(!global_transfers.empty(), "Input transfers cannot be empty");
+
+    // Step 2: Build the globally ordered config
     GatherConfig output;
+
+    // Begin the first route using the first flattened transfer's destination
     GatherRoute current_route;
     current_route.header = {global_transfers[0].noc_x, global_transfers[0].noc_y, 0};
-    for (const auto& info : global_transfers) {
-        if (info.noc_x != current_route.header.noc_x || info.noc_y != current_route.header.noc_y) {
-            current_route.header.num_transfers = current_route.transfers.size();
-            TT_FATAL(current_route.header.num_transfers > 0, "Expected at least a single transfer");
 
+    for (const auto& info : global_transfers) {
+        // If the destination changes (noc_x or noc_y), start a new route
+        if (info.noc_x != current_route.header.noc_x || info.noc_y != current_route.header.noc_y) {
+            // Finalize the old route
+            current_route.header.num_transfers = current_route.transfers.size();
+            TT_FATAL(current_route.header.num_transfers > 0, "Route cannot have zero transfers");
             output.routes.push_back(current_route);
 
+            // Start a new route
             current_route = GatherRoute();
             current_route.header.noc_x = info.noc_x;
             current_route.header.noc_y = info.noc_y;
         }
         current_route.transfers.push_back(info.transfer);
     }
+
+    // Finalize the last route
     current_route.header.num_transfers = current_route.transfers.size();
-    TT_FATAL(current_route.header.num_transfers > 0, "Route should not have zero transfers");
+    TT_FATAL(current_route.header.num_transfers > 0, "Route cannot have zero transfers");
     output.routes.push_back(current_route);
 
+    return output;
+}
+
+GatherConfig reorder_gather_config_global(const GatherConfig& input) {
+    struct FlatTransfer {
+        uint16_t noc_x;
+        uint16_t noc_y;
+        uint16_t src_id;
+        uint16_t dst_id;
+        uint16_t size;
+    };
+
+    std::vector<FlatTransfer> all;
+    for (const auto& route : input.routes) {
+        for (const auto& t : route.transfers) {
+            FlatTransfer ft;
+            ft.noc_x = route.header.noc_x;
+            ft.noc_y = route.header.noc_y;
+            ft.src_id = t.src_id;
+            ft.dst_id = t.dst_id;
+            ft.size = t.size;
+            all.push_back(ft);
+        }
+    }
+
+    TT_FATAL(!all.empty(), "Expected to have at least one transfer during reorder");
+
+    // Sort by ascending src_id and tie-break by noc_x,noc_y
+    std::sort(all.begin(), all.end(), [](const FlatTransfer& a, const FlatTransfer& b) {
+        if (a.src_id != b.src_id) {
+            return a.src_id < b.src_id;
+        }
+        // If you also want stable grouping by (noc_x, noc_y) among same src_id:
+        if (a.noc_x != b.noc_x) {
+            return a.noc_x < b.noc_x;
+        }
+        return a.noc_y < b.noc_y;
+    });
+
+    // Rebuild a new GatherConfig by grouping consecutive transfers that share (noc_x, noc_y).
+    GatherConfig output;
+    {
+        GatherRoute current_route;
+        current_route.header.noc_x = all[0].noc_x;
+        current_route.header.noc_y = all[0].noc_y;
+
+        for (size_t i = 0; i < all.size(); i++) {
+            const auto& t = all[i];
+
+            bool same_core = (t.noc_x == current_route.header.noc_x) && (t.noc_y == current_route.header.noc_y);
+            if (!same_core) {
+                current_route.header.num_transfers = static_cast<uint16_t>(current_route.transfers.size());
+                TT_FATAL(current_route.header.num_transfers > 0, "Route cannot have zero transfers");
+                output.routes.push_back(current_route);
+
+                current_route = GatherRoute();
+                current_route.header.noc_x = t.noc_x;
+                current_route.header.noc_y = t.noc_y;
+            }
+
+            GatherTransfer gt;
+            gt.src_id = t.src_id;
+            gt.dst_id = t.dst_id;
+            gt.size = t.size;
+            current_route.transfers.push_back(gt);
+        }
+
+        current_route.header.num_transfers = static_cast<uint16_t>(current_route.transfers.size());
+        TT_FATAL(current_route.header.num_transfers > 0, "Route cannot have zero transfers");
+        output.routes.push_back(current_route);
+    }
+
+    return output;
+}
+
+GatherConfig split_into_blocks(const GatherConfig& input, uint32_t block_size) {
+    GatherConfig output;
+    for (const auto& route : input.routes) {
+        GatherRoute new_route;
+        new_route.header = route.header;
+
+        for (const auto& transfer : route.transfers) {
+            uint32_t src_offset = transfer.src_id;
+            uint32_t dst_offset = transfer.dst_id;
+            uint32_t length = transfer.size;
+            while (length > 0) {
+                const uint32_t block_id = src_offset / block_size;
+                const uint32_t offset_in_block = src_offset % block_size;
+                const uint32_t remaining_in_block = block_size - offset_in_block;
+                const uint32_t transfer_size = (length <= remaining_in_block) ? length : remaining_in_block;
+
+                new_route.transfers.push_back(GatherTransfer{src_offset, dst_offset, transfer_size});
+
+                src_offset += transfer_size;
+                dst_offset += transfer_size;
+                length -= transfer_size;
+            }
+        }
+        new_route.header.num_transfers = new_route.transfers.size();
+        output.routes.push_back(new_route);
+    }
     return output;
 }
 
@@ -781,7 +893,7 @@ generate_halo_kernel_config_tensors(
     const auto blocking_configs = generate_blocking_configs(blocked_gather_data, num_cores_nhw);
     const auto flattened_blocking_configs = flatten_blocking_config(blocking_configs, num_cores_nhw);
 
-    tt::log_info("gather data = {}", per_core_gather_data);
+    // tt::log_info("gather data = {}", per_core_gather_data);
 
     // construct the config tensors
     /**
@@ -862,23 +974,18 @@ generate_halo_kernel_config_tensors(
 
     std::vector<GatherConfig> ordered_gather_configs;
     for (const auto& config : gather_configs) {
-        ordered_gather_configs.push_back(reorder_gather_config(config));
+        // Must split first to ensure global ordering is correct
+        const auto& split = split_into_blocks(config, block_size);
+        ordered_gather_configs.push_back(reorder_gather_config_global(split));
     }
 
-    tt::log_info("gather config = {}", gather_configs);
-    tt::log_info("ordered gather config = {}", ordered_gather_configs);
+    // tt::log_info("gather config = {}", gather_configs);
+    // tt::log_info("ordered gather config = {}", ordered_gather_configs);
     const auto serialized_gather_configs = serialize_gather_configs(ordered_gather_configs);
     tt::log_info("serialized gather config = {}", serialized_gather_configs);
-
-    // Need to sort based using input offsets so that they are grouped by location
-    // for (auto& config : gather_configs) {
-    // for (auto& route : config.routes) {
-    // std::sort(
-    // route.transfers.begin(), route.transfers.end(), [](const GatherTransfer& a, const GatherTransfer& b) {
-    // return a.src_id < b.src_id;
-    // });
-    // }
-    // }
+    for (int core = 0; core < serialized_gather_configs.size(); core++) {
+        tt::log_info("core {} gather config = {}", core, serialized_gather_configs[core]);
+    }
 
     // flatten and uniformize the lengths of each config list
     auto flatten_pad_config = [](auto& config) -> std::vector<std::vector<uint16_t>> {
@@ -991,8 +1098,6 @@ generate_halo_kernel_config_tensors(
             }
         }
     };
-
-    tt::log_info("flattened local config = {} ", flattened_local_config);
 
     align_config(flattened_pad_config, 2);
     align_config(flattened_local_config, 2);

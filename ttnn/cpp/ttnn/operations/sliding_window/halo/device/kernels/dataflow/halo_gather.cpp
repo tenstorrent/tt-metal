@@ -14,7 +14,7 @@
 #include "debug/dprint_pages.h"
 #endif
 
-inline bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val) {
+static inline bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val) {
     volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(begin_addr);
     for (uint32_t i = 0; i < n; ++i) {
         ptr[i] = val;
@@ -35,16 +35,19 @@ static inline void execute_transfer(
     const uint32_t size = transfer_size * STICK_SIZE_BYTES;
     const uint32_t src_addr = in_base_l1_addr + src_offset;
     const uint64_t dst_addr = out_base_l1_addr + dst_offset;
+    DPRINT << "write: adj_src_offset=" << src_offset << " dst_offset=" << dst_offset << " size=" << size << ENDL();
     noc_async_write(src_addr, dst_addr, size);
 }
 
 template <
+    uint32_t cb_id,
     uint32_t stick_nbytes,
     uint32_t input_aligned_page_size,
+    uint32_t block_size_width_tiles,
     bool is_block_sharded,
     bool is_width_sharded,
     bool is_col_major>
-void execute_config(
+static inline void execute_config(
     const tt_l1_ptr uint16_t* config,
     uint32_t in_base_l1_addr,
     uint32_t out_base_l1_addr,
@@ -65,19 +68,20 @@ void execute_config(
 
     uint64_t out_l1_addr = 0;
 
+    const uint32_t block_height_sticks = 32;
     uint16_t block_id = 0;
+    uint16_t block_boundary_offset = block_height_sticks;
 
     // Wait for the first set of tiles from compute before beginning
-    const uint32_t block_width_tiles = 2;
-    const uint32_t block_height_sticks = 32;
-    cb_wait_front(16, block_width_tiles);
+    cb_wait_front(cb_id, block_size_width_tiles);
 
     while (number_of_segments_remaining) {
-        DPRINT << "start of segment =" << number_of_segments_remaining << ENDL();
         // Read header for to get destination for this route
         destination_noc_x = config[index++];
         destination_noc_y = config[index++];
         transfers_remaining = config[index++];
+        DPRINT << "start of segment =" << number_of_segments_remaining << " x=" << destination_noc_x
+               << " y=" << destination_noc_y << " transfers?=" << transfers_remaining << ENDL();
 
         const uint16_t noc_x = ((is_block_sharded && !is_col_major) || is_width_sharded) ? my_noc_x : destination_noc_x;
         const uint16_t noc_y = ((is_block_sharded && is_col_major) || is_width_sharded) ? my_noc_y : destination_noc_y;
@@ -85,24 +89,33 @@ void execute_config(
 
         // Perform all transfers in this route
         while (transfers_remaining > 0) {
-            DPRINT << "transfers rem " << transfers_remaining << ENDL();
             src_offset = config[index++];
             dst_offset = config[index++];
             transfer_size = config[index++];
+            DPRINT << "transfers rem " << transfers_remaining << " src_offset=" << src_offset
+                   << " dst_offset=" << dst_offset << " transfer_size=" << transfer_size << ENDL();
+            if (src_offset >= block_boundary_offset) {
+                DPRINT << "new block! current blockid=" << block_id << " src_offset=" << src_offset
+                       << " waiting for new tiles... " << ENDL();
 
-            if ((src_offset / block_height_sticks) > block_id) {
+                noc_async_read_barrier();
                 noc_async_write_barrier();
-                cb_pop_front(16, block_width_tiles);
-                cb_wait_front(16, block_width_tiles);
+                cb_pop_front(cb_id, block_size_width_tiles);
+
+                cb_wait_front(cb_id, block_size_width_tiles);
+                DPRINT << "got tiles for new block" << ENDL();
                 block_id++;
+                block_boundary_offset += block_height_sticks;
             }
 
             execute_transfer<stick_nbytes, input_aligned_page_size, block_height_sticks>(
                 in_base_l1_addr, out_l1_addr, src_offset, dst_offset, transfer_size);
+
             transfers_remaining--;
         }
         number_of_segments_remaining--;
     }
+    cb_pop_front(cb_id, block_size_width_tiles);
 }
 
 void kernel_main() {
@@ -118,11 +131,12 @@ void kernel_main() {
     constexpr uint32_t pad_val_u32 = get_compile_time_arg_val(9);
     constexpr uint32_t in_nsticks = get_compile_time_arg_val(10);
     constexpr uint32_t stick_nbytes = get_compile_time_arg_val(11);
-    constexpr uint32_t is_block_sharded = get_compile_time_arg_val(12);
-    constexpr uint32_t remote_read = get_compile_time_arg_val(13);
+    constexpr bool is_block_sharded = get_compile_time_arg_val(12) == 1;
+    constexpr bool remote_read = get_compile_time_arg_val(13) == 1;
     constexpr bool is_col_major = get_compile_time_arg_val(14) == 1;
-    constexpr uint32_t is_width_sharded = get_compile_time_arg_val(15);
+    constexpr bool is_width_sharded = get_compile_time_arg_val(15) == 1;
     constexpr uint32_t input_aligned_page_size = get_compile_time_arg_val(16);
+    constexpr uint32_t block_size_width_tiles = get_compile_time_arg_val(17);
 
     constexpr uint32_t elem_nbytes = sizeof(uint16_t);
 
@@ -132,14 +146,8 @@ void kernel_main() {
     const uint32_t in_base_l1_addr = get_read_ptr(in_cb_id);
     const uint32_t out_base_l1_addr = get_write_ptr(out_cb_id);
 
-    const uint32_t blocking_local_config_data_l1_addr = get_read_ptr(blocking_local_config_cb_id);
-    const tt_l1_ptr uint16_t* blocking_local_config_data =
-        reinterpret_cast<const tt_l1_ptr uint16_t*>(blocking_local_config_data_l1_addr);
-    const uint16_t num_blocks = blocking_local_config_data[0];
-
-    const uint32_t blocking_remote_config_data_l1_addr = get_read_ptr(blocking_remote_config_cb_id);
-    const tt_l1_ptr uint16_t* blocking_remote_config_data =
-        reinterpret_cast<const tt_l1_ptr uint16_t*>(blocking_remote_config_data_l1_addr);
+    cb_reserve_back(src_cb_id, in_nsticks);
+    cb_push_back(src_cb_id, in_nsticks);
 
     if constexpr (padding_config_cb_id) {
         cb_reserve_back(pad_cb_id, 1);
@@ -167,18 +175,18 @@ void kernel_main() {
         }
     }
 
-    if constexpr (local_config_cb_id) {
-        cb_reserve_back(src_cb_id, in_nsticks);
-        cb_push_back(src_cb_id, in_nsticks);
-    }
-
-    // #cb_wait_front(in_cb_id, in_nsticks);
-
     const uint32_t config_data_l1_addr = get_read_ptr(local_config_cb_id);
     const tt_l1_ptr uint16_t* config_data = reinterpret_cast<const tt_l1_ptr uint16_t*>(config_data_l1_addr);
-    execute_config<stick_nbytes, input_aligned_page_size, is_block_sharded, is_width_sharded, is_col_major>(
-        config_data, in_base_l1_addr, out_base_l1_addr, my_noc_x, my_noc_y);
+    execute_config<
+        in_cb_id,
+        stick_nbytes,
+        input_aligned_page_size,
+        block_size_width_tiles,
+        is_block_sharded,
+        is_width_sharded,
+        is_col_major>(config_data, in_base_l1_addr, out_base_l1_addr, my_noc_x, my_noc_y);
 
     noc_async_read_barrier();
     noc_async_write_barrier();
+    DPRINT << "done!" << ENDL();
 }
