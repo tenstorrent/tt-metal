@@ -21,6 +21,8 @@ on:
           - Release
           - Debug
           - RelWithDebInfo
+          - ASan
+          - TSan
       tracy:
         required: false
         type: boolean
