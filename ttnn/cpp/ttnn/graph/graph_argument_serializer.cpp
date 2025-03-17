@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "graph_argument_serializer.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::graph {
@@ -22,6 +24,31 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Tile& config) {
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Tensor& tensor) {
     tt::stl::reflection::operator<<(os, tensor);
+    return os;
+}
+
+std::ostream& operator<<(
+    std::ostream& os,
+    const std::variant<ttnn::GrayskullComputeKernelConfig, ttnn::WormholeComputeKernelConfig>& kernel_config) {
+    tt::stl::reflection::operator<<(os, kernel_config);
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const std::variant<float, int>& variant) {
+    tt::stl::reflection::operator<<(os, variant);
+    return os;
+}
+
+std::ostream& operator<<(
+    std::ostream& os,
+    const std::variant<
+        ttnn::operations::matmul::MatmulMultiCoreProgramConfig,
+        ttnn::operations::matmul::MatmulMultiCoreNonOptimizedReuseProgramConfig,
+        ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig,
+        ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig,
+        ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig,
+        ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>& program_config) {
+    tt::stl::reflection::operator<<(os, program_config);
     return os;
 }
 
@@ -71,12 +98,16 @@ void GraphArgumentSerializer::register_small_vector() {
 
 template <typename T>
 void GraphArgumentSerializer::register_special_type() {
-    registry()[typeid(std::reference_wrapper<T>)] = [](const std::any& value) -> std::string {
+    GraphArgumentSerializer::ConvertionFunction special_function = [](const std::any& value) -> std::string {
         std::ostringstream oss;
         auto referenced_value = std::any_cast<std::reference_wrapper<T>>(value);
         oss << referenced_value.get();
         return oss.str();
     };
+
+    registry()[typeid(std::reference_wrapper<T>)] = special_function;
+    registry()[typeid(std::reference_wrapper<const T>)] = special_function;
+    registry()[typeid(std::reference_wrapper<const T>)] = special_function;
 }
 
 template <typename OptionalT>
@@ -120,6 +151,7 @@ void GraphArgumentSerializer::register_type() {
     // Particular cases for optional
     register_optional_type<std::optional<T>>();
     register_optional_type<const std::optional<T>>();
+    register_optional_type<std::optional<const T>>();
 
     // Handle complex types (feel free to add more in the future)
     // Small vector
@@ -169,5 +201,16 @@ void GraphArgumentSerializer::initialize() {
     GraphArgumentSerializer::register_type<tt::tt_metal::Tensor>();
     GraphArgumentSerializer::register_type<tt::tt_metal::Tile>();
     GraphArgumentSerializer::register_special_type<tt::stl::StrongType<unsigned char, ttnn::QueueIdTag>>();
+    GraphArgumentSerializer::register_type<ttnn::types::CoreGrid>();
+    GraphArgumentSerializer::register_type<
+        std::variant<ttnn::GrayskullComputeKernelConfig, ttnn::WormholeComputeKernelConfig>>();
+    GraphArgumentSerializer::register_type<std::variant<
+        ttnn::operations::matmul::MatmulMultiCoreProgramConfig,
+        ttnn::operations::matmul::MatmulMultiCoreNonOptimizedReuseProgramConfig,
+        ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig,
+        ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig,
+        ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig,
+        ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>>();
+    GraphArgumentSerializer::register_type<std::variant<float, int>>();
 }
 }  // namespace ttnn::graph

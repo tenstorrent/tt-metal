@@ -60,7 +60,6 @@ def run_bert_question_and_answering_inference(
     input_path,
 ):
     disable_persistent_kernel_cache()
-
     model = str(model_location_generator(model_name, model_subdir="Bert"))
     hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model, torchscript=False)
     hugging_face_reference_model.eval()
@@ -153,7 +152,6 @@ def run_bert_question_and_answering_inference(
         model_answers[i] = tt_answer["answer"]
 
     profiler.end("post_processing_output_to_string")
-
     measurements = {
         "preprocessing_parameter": profiler.get("preprocessing_parameter"),
         "preprocessing_input": profiler.get("preprocessing_input"),
@@ -164,8 +162,6 @@ def run_bert_question_and_answering_inference(
     logger.info(f"preprocessing_input: {measurements['preprocessing_input']} s")
     logger.info(f"inference_time: {measurements['inference_time']} s")
     logger.info(f"post_processing : {measurements['post_processing']} s")
-
-    return measurements
 
 
 def run_bert_question_and_answering_inference_squad_v2(

@@ -140,10 +140,7 @@ def test_graph_capture_without_memory_config(device):
     assert node1[2] == "nullopt"
     assert node1[3] == "DataType::BFLOAT16"
     assert node1[4] == "nullopt"
-    assert (
-        node1[5]
-        == "[ unsupported type , std::__1::reference_wrapper<std::__1::optional<std::__1::variant<ttnn::GrayskullComputeKernelConfig, ttnn::WormholeComputeKernelConfig>> const>]"
-    )
+    assert node1[5] == "nullopt"
 
     # ttnn::prim::moreh_dot
     node6 = captured_graph[6]["arguments"]
@@ -158,10 +155,7 @@ def test_graph_capture_without_memory_config(device):
     assert node6[2] == "nullopt"
     assert node6[3] == "DataType::BFLOAT16"
     assert node6[4] == "nullopt"
-    assert (
-        node6[5]
-        == "[ unsupported type , std::__1::reference_wrapper<std::__1::optional<std::__1::variant<ttnn::GrayskullComputeKernelConfig, ttnn::WormholeComputeKernelConfig>> const>]"
-    )
+    assert node6[5] == "nullopt"
 
     # MorehDotOperation
     node9 = captured_graph[9]["arguments"]
@@ -199,7 +193,7 @@ def test_graph_capture_without_dtype(device):
         node1[0]
         == "Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt)),tensor_spec=TensorSpec(logical_shape=Shape([32, 32]),tensor_layout=TensorLayout(dtype=DataType::INT32,page_config=PageConfig(config=TilePageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt),alignment=Alignment([32, 32]))))"
     )
-    assert node1[1] == "[ unsupported type , std::__1::reference_wrapper<std::__1::variant<float, int>>]"
+    assert node1[1] == "3"
     assert node1[2] == "nullopt"
     assert node1[3] == "nullopt"
     assert node1[4] == "nullopt"
@@ -210,7 +204,7 @@ def test_graph_capture_without_dtype(device):
         node4[0]
         == "Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt)),tensor_spec=TensorSpec(logical_shape=Shape([32, 32]),tensor_layout=TensorLayout(dtype=DataType::INT32,page_config=PageConfig(config=TilePageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt),alignment=Alignment([32, 32]))))"
     )
-    assert node4[1] == "[ unsupported type , std::__1::reference_wrapper<std::__1::variant<float, int> const>]"
+    assert node4[1] == "3"
     assert node4[2] == "nullopt"
     assert node4[3] == "nullopt"
     assert node4[4] == "nullopt"
@@ -431,10 +425,7 @@ def test_graph_capture_without_memory_config_json_output(device):
     assert item0["arguments"][2]["arg2"] == "nullopt"
     assert item0["arguments"][3]["arg3"] == "DataType::BFLOAT16"
     assert item0["arguments"][4]["arg4"] == "nullopt"
-    assert (
-        item0["arguments"][5]["arg5"]
-        == "[ unsupported type , std::__1::reference_wrapper<std::__1::optional<std::__1::variant<ttnn::GrayskullComputeKernelConfig, ttnn::WormholeComputeKernelConfig>> const>]"
-    )
+    assert item0["arguments"][5]["arg5"] == "nullopt"
 
     # --- Content item 1 ---
     item1 = data["content"][1]
@@ -489,10 +480,7 @@ def test_graph_capture_without_memory_config_json_output(device):
     assert item1["arguments"][2]["arg2"] == "nullopt"
     assert item1["arguments"][3]["arg3"] == "DataType::BFLOAT16"
     assert item1["arguments"][4]["arg4"] == "nullopt"
-    assert (
-        item1["arguments"][5]["arg5"]
-        == "[ unsupported type , std::__1::reference_wrapper<std::__1::optional<std::__1::variant<ttnn::GrayskullComputeKernelConfig, ttnn::WormholeComputeKernelConfig>> const>]"
-    )
+    assert item1["arguments"][5]["arg5"] == "nullopt"
 
     # --- Content item 2 ---
     item2 = data["content"][2]
@@ -572,10 +560,7 @@ def test_graph_capture_without_dtype_json_output(device):
     assert tlayout0["alignment"] == [32, 32]
 
     # arg1 to arg4
-    assert (
-        item0["arguments"][1]["arg1"]
-        == "[ unsupported type , std::__1::reference_wrapper<std::__1::variant<float, int>>]"
-    )
+    assert item0["arguments"][1]["arg1"] == "3"
     assert item0["arguments"][2]["arg2"] == "nullopt"
     assert item0["arguments"][3]["arg3"] == "nullopt"
     assert item0["arguments"][4]["arg4"] == "nullopt"
@@ -611,10 +596,7 @@ def test_graph_capture_without_dtype_json_output(device):
     assert tlayout1["alignment"] == [32, 32]
 
     # arg1 to arg4 in item1
-    assert (
-        item1["arguments"][1]["arg1"]
-        == "[ unsupported type , std::__1::reference_wrapper<std::__1::variant<float, int> const>]"
-    )
+    assert item1["arguments"][1]["arg1"] == "3"
     assert item1["arguments"][2]["arg2"] == "nullopt"
     assert item1["arguments"][3]["arg3"] == "nullopt"
     assert item1["arguments"][4]["arg4"] == "nullopt"
