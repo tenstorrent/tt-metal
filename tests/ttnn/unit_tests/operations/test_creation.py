@@ -414,6 +414,6 @@ def test_empty_like_multi_device(mesh_device, input_shapes):
 
 
 @pytest.mark.parametrize("input_shape, dtype", [([32, 32], ttnn.bfloat8_b), ((5, 96, 64), ttnn.bfloat8_b)])
-def test_zeros(device, input_shape, dtype):
+def test_zeros_bfp8(device, input_shape, dtype):
     tensor = ttnn.zeros(input_shape, dtype=dtype, layout=ttnn.TILE_LAYOUT)
     assert tensor.dtype == ttnn.bfloat8_b, f"Expected dtype {dtype}, but got {tensor.dtype}"
