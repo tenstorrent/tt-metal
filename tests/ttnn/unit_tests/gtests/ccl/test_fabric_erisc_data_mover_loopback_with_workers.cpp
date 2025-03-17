@@ -790,6 +790,8 @@ TEST(
 }
 
 TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
+    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric "
+                    "(ttnn::operations::experimental::ccl::reduce_scatter)";
     const size_t dim = 3;
     const size_t num_links = 1;
     constexpr auto layout = Layout::TILE;
@@ -902,9 +904,11 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
 }
 
 TEST(CclAsyncOp, AllGather_PersistentFabric_Dim3_Links1_Shape1_1_32_128) {
+    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
     run_all_gather_with_persistent_fabric(3, 1, ttnn::Shape({1, 1, 32, 128}));
 }
 TEST(CclAsyncOp, AllGather_PersistentFabric_Dim3_Links1_Shape1_1_32_8192) {
+    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
     run_all_gather_with_persistent_fabric(3, 1, ttnn::Shape({1, 1, 32, 8192}));
 }
 // Mesh device setup seems to not provide the correct configuration for multi-link? To be investigated
@@ -914,6 +918,10 @@ TEST(CclAsyncOp, DISABLED_AllGather_PersistentFabric_Dim3_Links2_Shape1_1_32_128
 // Mesh device setup seems to not provide the correct configuration for multi-link? To be investigated
 TEST(CclAsyncOp, DISABLED_AllGather_PersistentFabric_Dim3_Links2_Shape1_1_32_8192) {
     run_all_gather_with_persistent_fabric(3, 2, ttnn::Shape({1, 1, 32, 8192}));
+}
+
+TEST(CclAsyncOp, RingAllGather_PersistentFabric_Dim3_Links1_Shape1_256_32_8192) {
+    run_ring_all_gather_with_persistent_fabric(3, 1, ttnn::Shape({1, 256, 32, 8192}));
 }
 
 TEST(EdmFabric, BasicMcastThroughputTest_SingleLink_LineSize2_SingleMcast) {
@@ -1457,4 +1465,17 @@ TEST(EdmFabric, BasicMcastThroughputTest_4_WithLineSync) {
     params.line_sync = line_sync;
     RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+
+TEST(EdmFabric, RingDeadlockStabilityTest) {
+    const size_t num_mcasts = 200000;
+    const size_t num_links = 1;
+    const size_t num_op_invocations = 5;
+    const bool line_sync = true;
+    log_trace(tt::LogTest, "Running RingDeadlockStabilityTest with forward mcast only");
+    RunRingDeadlockStabilityTestWithPersistentFabric(num_mcasts, num_links, num_op_invocations, true, false);
+    log_trace(tt::LogTest, "Running RingDeadlockStabilityTest with backward mcast only");
+    RunRingDeadlockStabilityTestWithPersistentFabric(num_mcasts, num_links, num_op_invocations, false, true);
+    log_trace(tt::LogTest, "Running RingDeadlockStabilityTest with forward and backward mcast");
+    RunRingDeadlockStabilityTestWithPersistentFabric(num_mcasts, num_links, num_op_invocations, true, true);
 }

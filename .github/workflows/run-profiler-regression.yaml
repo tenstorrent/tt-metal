@@ -123,13 +123,12 @@ jobs:
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: U06CXU895AP # Michael Chiou
-      - name: Cleanup
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          path: |
+            /work/generated/test_reports/
+          prefix: "test_reports_"
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
-        run: |
-          # We are forced to checkout the repo into a subdir of the host's workdir; this pollutes the host
-          # with root-owned files.  Be sure to clean up after ourselves in case we're on a non-ephemeral runner.
-          echo "pre rm"
-          ls -al /__w/tt-metal/tt-metal
-          rm -rf /__w/tt-metal/tt-metal/docker-job
-          echo "post rm"
-          ls -al /__w/tt-metal/tt-metal

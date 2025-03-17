@@ -2,10 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstddef>
 #include <cstdint>
 #include <array>
-#include <tuple>
 #include <vector>
 
 #include "gtest/gtest.h"
@@ -14,6 +12,8 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/event.hpp>
 #include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/allocator.hpp>
+
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "command_queue_fixture.hpp"
 
@@ -26,6 +26,12 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceAllocations) {
     CoreRangeSet sharded_cores_1 = CoreRange({0, 0}, {2, 2});
     CoreRangeSet sharded_cores_2 = CoreRange({4, 4}, {4, 4});
 
+    auto device = devices_[0];
+    auto sub_device_manager_1 = device->create_sub_device_manager({sub_device_1}, local_l1_size);
+    auto sub_device_manager_2 = device->create_sub_device_manager({sub_device_1, sub_device_2}, local_l1_size);
+    DeviceAddr l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    DeviceAddr max_addr = l1_unreserved_base + local_l1_size;
+
     auto sharded_cores_1_vec = corerange_to_cores(sharded_cores_1, std::nullopt, true);
     auto sharded_cores_2_vec = corerange_to_cores(sharded_cores_2, std::nullopt, true);
 
@@ -33,7 +39,7 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceAllocations) {
         ShardSpecBuffer(sharded_cores_1, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {sharded_cores_1.num_cores(), 1});
     uint32_t page_size_1 = 32;
     ShardedBufferConfig shard_config_1 = {
-        nullptr,
+        device,
         sharded_cores_1.num_cores() * page_size_1,
         page_size_1,
         BufferType::L1,
@@ -46,7 +52,7 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceAllocations) {
         ShardSpecBuffer(sharded_cores_2, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {sharded_cores_2.num_cores(), 1});
     uint32_t page_size_2 = 64;
     ShardedBufferConfig shard_config_2 = {
-        nullptr,
+        device,
         sharded_cores_2.num_cores() * page_size_2,
         page_size_2,
         BufferType::L1,
@@ -57,19 +63,9 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceAllocations) {
 
     uint32_t page_size_3 = 1024;
     InterleavedBufferConfig interleaved_config = {
-        nullptr, page_size_3, page_size_3, BufferType::L1, TensorMemoryLayout::INTERLEAVED};
+        device, page_size_3, page_size_3, BufferType::L1, TensorMemoryLayout::INTERLEAVED};
     auto input_3 =
         tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, interleaved_config.size / sizeof(uint32_t));
-
-    auto device = devices_[0];
-    auto sub_device_manager_1 = device->create_sub_device_manager({sub_device_1}, local_l1_size);
-    auto sub_device_manager_2 = device->create_sub_device_manager({sub_device_1, sub_device_2}, local_l1_size);
-    DeviceAddr l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
-    DeviceAddr max_addr = l1_unreserved_base + local_l1_size;
-
-    shard_config_1.device = device;
-    shard_config_2.device = device;
-    interleaved_config.device = device;
 
     std::vector<CoreCoord> physical_cores_1;
     physical_cores_1.reserve(sharded_cores_1_vec.size());

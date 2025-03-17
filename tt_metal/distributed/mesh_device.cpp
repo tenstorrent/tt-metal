@@ -19,8 +19,8 @@
 #include <device_impl.hpp>
 #include <sub_device.hpp>
 #include <sub_device_manager_tracker.hpp>
-#include <sub_device_manager.hpp>
-#include <sub_device_types.hpp>
+
+#include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "tt_metal/common/thread_pool.hpp"
 #include "tt_metal/api/tt-metalium/device_pool.hpp"
 

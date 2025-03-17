@@ -80,6 +80,8 @@ class resnetBlock2D:
         self.conv1s = []
         self.conv1s_weights = []
         self.conv1s_bias = []
+        # TODO: instead of hardcoding grid size in many components, configure it in a single place
+        self.grid_size = (8, 8)
 
         self.fallback_on_groupnorm = os.environ.get("FALLBACK_ON_GROUPNORM", "0") == "1"
         parameters.conv1.weight, parameters.conv1.bias = permute_conv_parameters(
@@ -126,10 +128,9 @@ class resnetBlock2D:
                 output_height=self.conv1_output_height,
                 output_width=self.conv1_output_width,
                 output_channels=self.conv1_out_channels,
-                compute_grid_size=self.device.compute_with_storage_grid_size(),
+                compute_grid_size=self.grid_size,
                 block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 enable_channels_padding=False,
-                is_out_tiled=True,
             ),
             tile_size=32,
         )
@@ -204,10 +205,9 @@ class resnetBlock2D:
                 output_height=self.conv2_input_height,
                 output_width=self.conv2_input_width,
                 output_channels=self.conv2_out_channels,
-                compute_grid_size=self.device.compute_with_storage_grid_size(),
+                compute_grid_size=self.grid_size,
                 block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 enable_channels_padding=False,
-                is_out_tiled=True,
             ),
             tile_size=32,
         )

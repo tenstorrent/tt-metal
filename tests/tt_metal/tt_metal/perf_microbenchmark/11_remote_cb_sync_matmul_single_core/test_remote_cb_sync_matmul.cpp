@@ -20,11 +20,13 @@
 #include <tt-metalium/global_circular_buffer_impl.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
+#include <tt-metalium/sub_device.hpp>
+
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-#include <tt-metalium/work_split.hpp>
-#include "tests/tt_metal/test_utils/tilization.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tt_metal/tt_metal/common/matmul_test_utils.hpp"
+
+#include "tests/tt_metal/test_utils/tilization.hpp"
 
 #include "test_common.hpp"
 
