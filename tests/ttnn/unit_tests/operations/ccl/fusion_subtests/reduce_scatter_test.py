@@ -205,12 +205,10 @@ def run_reduce_scatter_impl(
             tt_out_tensor = ttnn.experimental.llama_reduce_scatter(
                 input_tensor_mesh_list[i],
                 dim,
-                multi_device_global_semaphore=ccl_semaphore_handles[i],
-                num_links=num_links,
-                memory_config=output_mem_config,
-                topology=all_gather_topology,
-                subdevice_id=worker_sub_device_id,
-                enable_persistent_fabric_mode=enable_persistent_fabric,
+                ccl_semaphore_handles[i],
+                worker_sub_device_id,
+                cluster_axis=1,
+                num_links=1,
             )
             tt_out_tensor_list.append(tt_out_tensor)
 
@@ -333,6 +331,122 @@ def test_fabric_reduce_scatter(n300_mesh_device):
 
     n300_mesh_device.reset_sub_device_stall_group()
     teardown_fabric_interface(n300_mesh_device)
+    # Assuming tt_torch_tensor and output are your tensors
+    # Ensure they are on the same device and have the same shape
+
+    # Compute the absolute differences
+    differences = torch.abs(tt_torch_tensor - output)
+
+    # Find the maximum difference
+    max_difference = torch.max(differences)
+
+    # Find the first index where the maximum difference occurs
+    first_max_diff_index = None
+    for index in torch.nonzero(differences == max_difference, as_tuple=False):
+        first_max_diff_index = tuple(index.tolist())
+        break
+    print("Tenstorrent", tt_torch_tensor[first_max_diff_index])
+    print("Torch", output[first_max_diff_index])
+    if first_max_diff_index is not None:
+        print(f"First index with maximum difference: {first_max_diff_index}")
+        print(f"Index at tile: {first_max_diff_index[3]/32}")
+        print(f"Maximum difference: {max_difference.item()}")
+        print(f"tt_torch_tensor value: {tt_torch_tensor[first_max_diff_index]}")
+        print(f"output value: {output[first_max_diff_index]}")
+    else:
+        print("No mismatches found.")
+
+    print(f"Maximum difference: {max_difference.item()}")
+    assert eq, f"FAILED: {output_results}"
+
+
+def test_fabric_reduce_scatter_t3k(t3k_mesh_device):
+    torch.manual_seed(2005)
+    dim = 3
+    shard_height = 32
+    shard_width = 160
+    num_devices = 2
+    num_cores = 12
+    torch_input_tensors = []
+
+    for _ in range(num_devices):
+        for _ in range(num_cores):
+            for _ in range(shard_width // 32):
+                torch_input_tensors.append(torch.rand(1, 1, shard_height, 32))
+
+    input = torch.cat(torch_input_tensors, dim=3)
+    print("input.shape", input.shape)
+    intermediate_outputs = torch.chunk(input, chunks=num_devices, dim=3)
+    output = torch.zeros(intermediate_outputs[0].shape)
+    for i in range(0, len(intermediate_outputs)):
+        output += intermediate_outputs[i]
+
+    t3k_mesh_device.enable_async(True)
+    compute_grid_size = t3k_mesh_device.compute_with_storage_grid_size()
+    sharded_mem_config = ttnn.create_sharded_memory_config(
+        (32, 160),
+        core_grid=ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    tt_input_tensors = []
+    for i, t in enumerate(intermediate_outputs):
+        tt_input_tensors.append(
+            ttnn.Tensor(t, ttnn.bfloat8_b)
+            .to(ttnn.TILE_LAYOUT)
+            .to(t3k_mesh_device.get_devices()[i], memory_config=sharded_mem_config)
+        )
+
+    tt_input = ttnn.aggregate_as_tensor(tt_input_tensors)
+
+    enable_persistent_fabric = True
+    ccl_sub_device_crs = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
+    )
+    worker_sub_device = ttnn.SubDevice(
+        [
+            ccl_sub_device_crs,
+        ]
+    )
+    worker_sub_device_id = ttnn.SubDeviceId(0)
+    sub_device_stall_group = [worker_sub_device_id]
+    mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
+        t3k_mesh_device,
+        [worker_sub_device],
+        0,
+        0,
+        enable_persistent_fabric,
+        wrap_fabric_around_mesh=True,
+    )
+    t3k_mesh_device.set_sub_device_stall_group(sub_device_stall_group)
+
+    # create global semaphore handles
+    ccl_semaphore_handles = [
+        create_global_semaphore_with_same_address(t3k_mesh_device, ccl_sub_device_crs, 0) for _ in range(1)
+    ]
+    t3k_mesh_device.set_sub_device_stall_group(sub_device_stall_group)
+
+    # create global semaphore handles
+    ccl_semaphore_handles = [create_global_semaphore_with_same_address(t3k_mesh_device, ccl_sub_device_crs, 0)]
+    tt_out_tensor = ttnn.experimental.llama_reduce_scatter(
+        tt_input, dim, ccl_semaphore_handles[0], worker_sub_device_id, cluster_axis=1, num_links=1
+    )
+    ttnn.synchronize_device(t3k_mesh_device, sub_device_ids=sub_device_stall_group)
+    tt_torch_tensor = ttnn.to_torch(tt_out_tensor, mesh_composer=ttnn.ConcatMeshToTensor(t3k_mesh_device, dim))
+    torch.set_printoptions(threshold=10000)
+    print("TT tensor")
+    print(tt_torch_tensor[:, :, 0, 0::32])
+    print("Torch tensor")
+    print(output[:, :, 0, 0::32])
+
+    eq, output_results = comp_pcc(tt_torch_tensor, output)
+
+    print(f"PCC: {output_results}")
+
+    t3k_mesh_device.reset_sub_device_stall_group()
+    teardown_fabric_interface(t3k_mesh_device)
     # Assuming tt_torch_tensor and output are your tensors
     # Ensure they are on the same device and have the same shape
 
