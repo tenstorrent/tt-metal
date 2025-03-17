@@ -17,15 +17,14 @@ namespace {
 
 static ttnn::Tensor convert_tensor_to_4d(ttnn::Tensor input_tensor) {
     ttnn::Tensor input_tensor_4D;
-    if (input_tensor.get_shape().rank() < 4) {
+    if (input_tensor.get_logical_shape().rank() < 4) {
         input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
-    } else if (input_tensor.get_shape().rank() > 4) {
+    } else if (input_tensor.get_logical_shape().rank() > 4) {
         input_tensor_4D = squeeze_from_ND_to_4D(input_tensor);
     }
     return input_tensor_4D;
 }
 
-// TODO have to handle for all the cases.
 template <typename T>
 static std::vector<T> convert_span_to_4D(std::span<const T> span, int val) {
     std::vector<T> vec(span.begin(), span.end());  // Convert span to vector to modify it
@@ -35,10 +34,7 @@ static std::vector<T> convert_span_to_4D(std::span<const T> span, int val) {
     return vec;
 }
 
-template <typename ArrayType>
-bool eq_spans(const ArrayType& a, const ArrayType& b) {
-    return std::equal(a.begin(), a.end(), b.begin(), b.end());
-}
+pbool eq_spans(const auto a, const auto b) { return std::equal(a.begin(), a.end(), b.begin(), b.end()); }
 
 ttnn::Shape update_original_shape(const ttnn::Shape& padded_shape, const ttnn::Shape& input_shape) {
     ttnn::SmallVector<uint32_t> updated_shape;
@@ -60,7 +56,7 @@ static ttnn::Tensor pad_impl(
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg) {
     auto input_logical_shape = input_tensor.logical_shape().view();
-    const int original_rank = input_tensor.get_shape().rank();
+    const int original_rank = input_tensor.get_logical_shape().rank();
 
     // on host
     if (input_tensor.storage_type() != StorageType::DEVICE) {
@@ -81,7 +77,7 @@ static ttnn::Tensor pad_impl(
     ttnn:
         Tensor input_tensor_4D;
 
-        if (input_tensor.get_shape().rank() < 4) {
+        if (input_tensor.get_logical_shape().rank() < 4) {
             input_tensor_4D = convert_tensor_to_4d(input_tensor);
 
             output_padded_shape_vec = convert_span_to_4D<uint32_t>(output_padded_shape, 1);
@@ -95,7 +91,7 @@ static ttnn::Tensor pad_impl(
             input_tensor_4D = input_tensor;
         }
 
-        auto input_tensor_shape = input_tensor_4D.get_shape();
+        auto input_tensor_shape = input_tensor_4D.get_logical_shape();
         const auto rank = input_tensor_shape.rank();
 
         using ShardStrategy = ttnn::operations::data_movement::ShardStrategy;
@@ -197,25 +193,19 @@ static ttnn::Tensor pad_impl(
 
         if (original_rank <= 4) {
             auto to_vec = [](const auto& arr) { return ttnn::SmallVector<uint32_t>{arr.begin(), arr.end()}; };
-            auto output_shape = to_vec(output_tensor.get_shape().value);
-            auto padded_shape = to_vec(output_tensor.get_shape().with_tile_padding().value);
-
+            auto output_shape = to_vec(output_tensor.get_padded_shape().view());
+            auto padded_shape = to_vec(output_tensor.get_padded_shape().view());
             if (const auto rank_diff = output_shape.size() - original_rank; rank_diff) {
                 auto remove_prefix = [](auto& source, size_t n) { source.erase(source.begin(), source.begin() + n); };
                 remove_prefix(output_shape, rank_diff);
                 remove_prefix(padded_shape, rank_diff);
-                auto squeezedShape = ttnn::Shape(tt::tt_metal::LegacyShape(output_shape, padded_shape));
-                output_tensor = ttnn::reshape(output_tensor, squeezedShape);
+                output_tensor = ttnn::reshape(output_tensor, ttnn::Shape(output_shape), ttnn::Shape(padded_shape));
                 output_tensor = ttnn::reshape(output_tensor, ttnn::Shape(padded_shape));
             }
         } else {
-            auto to_vec = [](const auto& arr) { return ttnn::SmallVector<uint32_t>{arr.begin(), arr.end()}; };
-            auto output_shape = to_vec(output_tensor.get_shape().value);
-            auto padded_shape = to_vec(output_tensor.get_shape().with_tile_padding().value);
-
-            auto squeezedShape = ttnn::Shape(tt::tt_metal::LegacyShape(output_shape, padded_shape));
-            output_tensor =
-                ttnn::reshape(output_tensor, update_original_shape(squeezedShape, input_tensor.get_shape()));
+            output_tensor = ttnn::reshape(
+                output_tensor,
+                update_original_shape(output_tensor.get_padded_shape(), input_tensor.get_logical_shape()));
         }
         return output_tensor;
     }
