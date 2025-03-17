@@ -471,6 +471,7 @@ def test_moreh_sum_backward_fp32_dest_acc(input_shape, dim, compute_kernel_optio
     torch_output = torch.sum(torch_input, dim)
     torch_output.backward(torch_output_grad)
 
+    # test
     cpu_layout = ttnn.ROW_MAJOR_LAYOUT
     tt_input_grad_cpu = (
         ttnn.operations.moreh.sum_backward(
