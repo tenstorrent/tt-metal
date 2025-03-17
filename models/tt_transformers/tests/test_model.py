@@ -321,7 +321,7 @@ def test_model_inference(
             # Greedy decode (temperature = 0) the generated token and save it to print out later
             if run_ref_pt:
                 # Sample from reference model first
-                _, pt_out_tok = sample_host(ref_output, None, temperature=0, top_p=0.8)
+                _, pt_out_tok = sample_host(ref_output, temperature=0, top_p=0.8)
                 pt_decode_input = embd(pt_out_tok)
                 all_outputs_ref.append(pt_out_tok.squeeze(1).tolist()[0])
 
@@ -330,7 +330,7 @@ def test_model_inference(
                 all_outputs.append(pt_out_tok.squeeze(1).tolist()[0])
             else:
                 # If not running reference model, sample from TT model directly
-                _, tt_out_tok = sample_host(tt_output_torch, None, temperature=0, top_p=0.8)
+                _, tt_out_tok = sample_host(tt_output_torch, temperature=0, top_p=0.8)
                 tt_decode_input = embd(tt_out_tok)
                 all_outputs.append(tt_out_tok.squeeze(1).tolist()[0])
 

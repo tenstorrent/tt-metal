@@ -128,9 +128,7 @@ struct kernel_config_msg_t {
     volatile uint8_t min_remote_cb_start_index;
     volatile uint8_t exit_erisc_kernel;
     volatile uint8_t enables;
-    volatile uint8_t sub_device_origin_x;  // Logical X coordinate of the sub device origin
-    volatile uint8_t sub_device_origin_y;  // Logical Y coordinate of the sub device origin
-    volatile uint8_t pad2[6];
+    volatile uint8_t pad2[8];
     volatile uint8_t preload;  // Must be at end, so it's only written when all other data is written.
 } __attribute__((packed));
 
@@ -336,9 +334,7 @@ struct core_info_msg_t {
     volatile uint8_t noc_size_y;
     volatile uint8_t worker_grid_size_x;
     volatile uint8_t worker_grid_size_y;
-    volatile uint8_t absolute_logical_x;  // Logical X coordinate of this core
-    volatile uint8_t absolute_logical_y;  // Logical Y coordinate of this core
-    volatile uint8_t pad[23];
+    volatile uint8_t pad[25];
 };
 
 constexpr uint32_t launch_msg_buffer_num_entries = 8;

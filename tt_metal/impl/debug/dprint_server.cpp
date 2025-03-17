@@ -124,7 +124,7 @@ struct HartKeyComparator {
             return x_device_id < y_device_id;
         }
 
-        CoreDescriptorComparator core_desc_cmp;
+        tt::tt_metal::CoreDescriptorComparator core_desc_cmp;
         if (core_desc_cmp(x_core_desc, y_core_desc)) {
             return true;
         }
@@ -595,8 +595,8 @@ void DebugPrintServerContext::AttachDevice(IDevice* device) {
 
     // A set of all valid printable cores, used for checking the user input. Note that the coords
     // here are virtual.
-    CoreDescriptorSet all_cores = GetAllCores(device);
-    CoreDescriptorSet dispatch_cores = GetDispatchCores(device);
+    tt::tt_metal::CoreDescriptorSet all_cores = GetAllCores(device);
+    tt::tt_metal::CoreDescriptorSet dispatch_cores = GetDispatchCores(device);
 
     // Initialize all print buffers on all cores on the device to have print disabled magic. We
     // will then write print enabled magic for only the cores the user has specified to monitor.
@@ -635,7 +635,7 @@ void DebugPrintServerContext::AttachDevice(IDevice* device) {
                 tt::LogMetal,
                 "DPRINT enabled on device {}, all {} cores.",
                 device->id(),
-                tt::llrt::get_core_type_name(core_type));
+                tt::tt_metal::get_core_type_name(core_type));
         } else if (
             tt::llrt::RunTimeOptions::get_instance().get_feature_all_cores(
                 tt::llrt::RunTimeDebugFeatureDprint, core_type) == tt::llrt::RunTimeDebugClassDispatch) {
@@ -648,7 +648,7 @@ void DebugPrintServerContext::AttachDevice(IDevice* device) {
                 tt::LogMetal,
                 "DPRINT enabled on device {}, {} dispatch cores.",
                 device->id(),
-                tt::llrt::get_core_type_name(core_type));
+                tt::tt_metal::get_core_type_name(core_type));
         } else if (
             tt::llrt::RunTimeOptions::get_instance().get_feature_all_cores(
                 tt::llrt::RunTimeDebugFeatureDprint, core_type) == tt::llrt::RunTimeDebugClassWorker) {
@@ -664,7 +664,7 @@ void DebugPrintServerContext::AttachDevice(IDevice* device) {
                 tt::LogMetal,
                 "DPRINT enabled on device {}, {} worker cores.",
                 device->id(),
-                tt::llrt::get_core_type_name(core_type));
+                tt::tt_metal::get_core_type_name(core_type));
         } else {
             // No "all cores" option provided, which means print from the cores specified by the user
             std::vector<CoreCoord>& print_cores = tt::llrt::RunTimeOptions::get_instance().get_feature_cores(
@@ -687,7 +687,7 @@ void DebugPrintServerContext::AttachDevice(IDevice* device) {
                         tt::LogMetal,
                         "DPRINT enabled on device {}, {} core {} (virtual {}).",
                         device->id(),
-                        tt::llrt::get_core_type_name(core_type),
+                        tt::tt_metal::get_core_type_name(core_type),
                         logical_core.str(),
                         virtual_core.str());
                 } else {
@@ -695,7 +695,7 @@ void DebugPrintServerContext::AttachDevice(IDevice* device) {
                         tt::LogMetal,
                         "TT_METAL_DPRINT_CORES included {} core with logical coordinates {} (virtual coordinates {}), "
                         "which is not a valid core on device {}. This coordinate will be ignored by the dprint server.",
-                        tt::llrt::get_core_type_name(core_type),
+                        tt::tt_metal::get_core_type_name(core_type),
                         logical_core.str(),
                         valid_logical_core ? virtual_core.str() : "INVALID",
                         device->id());
@@ -813,7 +813,7 @@ void DebugPrintServerContext::DetachDevice(IDevice* device) {
     log_info(tt::LogMetal, "DPRINT Server dettached device {}", device->id());
 
     // When detaching a device, disable prints on it.
-    CoreDescriptorSet all_cores = GetAllCores(device);
+    tt::tt_metal::CoreDescriptorSet all_cores = GetAllCores(device);
     for (auto& logical_core : all_cores) {
         CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
         for (int risc_index = 0; risc_index < GetNumRiscs(device, logical_core); risc_index++) {
@@ -885,7 +885,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                 string core_str = fmt::format(
                     "Device {}, {} core {}, riscv {}",
                     chip_id,
-                    tt::llrt::get_core_type_name(logical_core.type),
+                    tt::tt_metal::get_core_type_name(logical_core.type),
                     logical_core.coord,
                     risc_id);
                 string error_str = fmt::format(
@@ -1269,7 +1269,7 @@ ostream* DebugPrintServerContext::GetOutputStream(const HartKey& risc_key) {
             filename += fmt::format(
                 "device-{}_{}-core-{}-{}_{}.txt",
                 chip_id,
-                tt::llrt::get_core_type_name(logical_core.type),
+                tt::tt_metal::get_core_type_name(logical_core.type),
                 logical_core.coord.x,
                 logical_core.coord.y,
                 GetRiscName(logical_core.type, risc_id));
