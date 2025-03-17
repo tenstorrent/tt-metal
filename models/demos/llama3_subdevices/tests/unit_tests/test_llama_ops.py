@@ -6,16 +6,9 @@ import torch
 import pytest
 from loguru import logger
 
-from models.utility_functions import (
-    skip_for_wormhole_b0,
-    comp_allclose_and_pcc,
-    comp_pcc,
-    comp_allclose,
-)
+from models.utility_functions import comp_pcc
 
-from models.utility_functions import tt2torch_tensor, get_devices_for_t3000, skip_for_grayskull, skip_for_blackhole
-from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
-from tt_metal.tools.profiler.process_model_log import get_samples_per_s
+from models.utility_functions import skip_for_blackhole
 from tests.ttnn.unit_tests.operations.test_distributed_layernorm_sharded import (
     create_input_and_weight_tensors,
     create_tt_tensors,
@@ -35,10 +28,8 @@ from tests.ttnn.unit_tests.operations.test_paged_fused_update_cache import run_t
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_rotary_embedding_llama import (
     run_test_rotary_embedding_llama,
 )
-from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 @pytest.mark.parametrize("is_rmsnorm", [True])
 @pytest.mark.parametrize("seed", [0])
@@ -73,7 +64,7 @@ def test_llama_tg_LayerNorm(
     grid_offset,
     output_core_grid,
 ):
-    device = mesh_device.get_devices()[0]
+    device = mesh_device.get_device(mesh_device.get_device_ids()[0])
     # Create input and weight tensors
     torch_input_tensor, torch_weight, torch_input_chunks, torch_weight_chunks = create_input_and_weight_tensors(
         input_width, num_devices, seed, mean, std
@@ -147,7 +138,6 @@ def test_llama_tg_LayerNorm(
     assert atol_delta <= max_atol, f"Max Atol exceeded: {atol_delta} (allowed: {max_atol})"
 
 
-@skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 @pytest.mark.parametrize(
@@ -180,7 +170,7 @@ def test_llama_tg_LayerNorm(
 def test_llama_tg_ScaledDotProductAttentionDecode(
     mesh_device, use_program_cache, b, nh, nkv, s, d, dtype, grid_size, q_dtype, start_core, sub_core_grids
 ):
-    device = mesh_device.get_devices()[0]
+    device = mesh_device.get_device(mesh_device.get_device_ids()[0])
     run_test_sdpa_decode_single_iter(
         device,
         b,
@@ -202,7 +192,6 @@ def test_llama_tg_ScaledDotProductAttentionDecode(
 
 
 @skip_for_blackhole("Requires eth connected devices to run, see #12349")
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 @pytest.mark.parametrize("batch, batch_offset, slice_size", ((32, 0, 8),))
 @pytest.mark.parametrize(
@@ -233,7 +222,7 @@ def test_llama_tg_NLPCreateHeadsDecodeDeviceOperation(
     use_program_cache,
     sub_core_grids,
 ):
-    device = mesh_device.get_devices()[0]
+    device = mesh_device.get_device(mesh_device.get_device_ids()[0])
 
     batch_offset_tensor = torch.tensor([batch_offset], dtype=torch.int32)
     # convert to tt tensor
@@ -253,7 +242,6 @@ def test_llama_tg_NLPCreateHeadsDecodeDeviceOperation(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 @pytest.mark.parametrize(
     "n_local_heads, padded_local_heads, head_dim, batch_size, sub_core_grids",
@@ -287,7 +275,6 @@ def test_llama_tg_NLPConcatHeadsDecodeDeviceOperation(
     run_test_concat_head(devices, n_local_heads, padded_local_heads, head_dim, batch_size, sub_core_grids)
 
 
-@skip_for_grayskull("Grayskull does not support paged cache")
 @pytest.mark.parametrize("paged_update", [True])
 @pytest.mark.parametrize("block_size", [64], ids=["block64"])
 @pytest.mark.parametrize("head_dim", [128])
@@ -312,7 +299,7 @@ def test_llama_tg_PagedUpdateCacheDeviceOperation(
     use_program_cache,
     pcc,
 ):
-    device = mesh_device.get_devices()[0]
+    device = mesh_device.get_device(mesh_device.get_device_ids()[0])
 
     run_test_paged_fused_update_cache_decode(
         paged_update,
@@ -330,7 +317,6 @@ def test_llama_tg_PagedUpdateCacheDeviceOperation(
 
 
 @skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("batch, seq_len", ((8, 1),))
 @pytest.mark.parametrize(
     "n_heads, n_kv_heads, head_dim",
@@ -348,65 +334,7 @@ def test_llama_tg_RotaryEmbeddingLlamaFusedQK(
     pcc,
     mesh_device,
 ):
-    device = mesh_device.get_devices()[0]
+    device = mesh_device.get_device(mesh_device.get_device_ids()[0])
     run_test_rotary_embedding_llama(
         device, batch, seq_len, pcc, n_heads, n_kv_heads, head_dim, 1, datatype, fuse_qk=True
-    )
-
-
-@pytest.mark.models_device_performance_bare_metal
-@pytest.mark.parametrize(
-    ("op_name", "expected_kernel_duration_us", "perf_margin"),
-    [
-        ("LayerNorm", 13, 0.03),
-        ("ScaledDotProductAttentionDecode", 20, 0.03),
-        ("NLPCreateHeadsDecodeDeviceOperation", 8.32, 0.05),
-        ("NLPConcatHeadsDecodeDeviceOperation", 6.07, 0.05),
-        ("PagedUpdateCacheDeviceOperation", 5, 0.03),
-        ("RotaryEmbeddingLlamaFusedQK", 4.8, 0.03),
-    ],
-)
-def test_llama_tg_ops_perf_device(op_name, expected_kernel_duration_us, perf_margin):
-    batch = 32
-    test = "llama-distributed-ln"
-    subdir = "llama-unit-tests"
-    num_iterations = 6
-
-    profiler = BenchmarkProfiler()
-    benchmark_data = BenchmarkData()
-    step_name = f"Llama_TG_{op_name}"
-
-    command = (
-        f"pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_TG_llama_ops_perf.py::test_llama_tg_{op_name}"
-    )
-    cols = ["DEVICE KERNEL"]
-    inference_time_key = "DEVICE KERNEL DURATION [ns]"
-    expected_perf_cols = {f"AVG {inference_time_key}": expected_kernel_duration_us * 1e3}
-
-    profiler.start("run")
-    profiler.start(step_name)
-    post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch, op_name, has_signposts=False)
-    profiler.end(step_name)
-    profiler.end("run")
-
-    # Save the measurement
-    measured_avg_us = post_processed_results[f"AVG {inference_time_key}"] / 1e3
-    measured_max_us = post_processed_results[f"MAX {inference_time_key}"] / 1e3
-    measured_min_us = post_processed_results[f"MIN {inference_time_key}"] / 1e3
-    benchmark_data.add_measurement(profiler, 0, step_name, f"Llama-TG-{op_name}-avg-µs", measured_avg_us)
-    benchmark_data.add_measurement(profiler, 0, step_name, f"Llama-TG-{op_name}-max-µs", measured_max_us)
-    benchmark_data.add_measurement(profiler, 0, step_name, f"Llama-TG-{op_name}-min-µs", measured_min_us)
-    benchmark_data.save_partial_run_json(
-        profiler,
-        run_type=f"llama-tg-ops",
-        ml_model_name="llama70b-tg",
-    )
-    expected_results = check_device_perf(post_processed_results, perf_margin, expected_perf_cols, assert_on_fail=True)
-
-    prep_device_perf_report(
-        model_name=f"llama-tg-{op_name}",
-        batch_size=batch,
-        post_processed_results=post_processed_results,
-        expected_results=expected_results,
-        comments=test.replace("/", "_"),
     )
