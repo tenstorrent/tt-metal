@@ -426,7 +426,7 @@ void launch_on_worker_thread(
         program.set_runtime_id(device_operation_id);
 
         tt::tt_metal::GraphTracker::instance().track_program(&program, device);
-        if(tt::tt_metal::GraphTracker::instance().hook_program(&program)) {
+        if (tt::tt_metal::GraphTracker::instance().hook_program(&program)) {
             return;
         }
 
@@ -442,20 +442,17 @@ void launch_on_worker_thread(
             tensor_return_value);
 
     } else {
-        auto program_factory = device_operation_t::select_program_factory(operation_attributes, tensor_args);
-
         auto program = std::visit(
-            [&](auto&& program_factory) {
-                using program_factory_t = std::decay_t<decltype(program_factory)>;
-                auto cached_program = program_factory_t::create(operation_attributes, tensor_args, tensor_return_value);
+            [&]<typename ProgramFactory>(const ProgramFactory&) {
+                auto cached_program = ProgramFactory::create(operation_attributes, tensor_args, tensor_return_value);
                 return std::make_shared<tt::tt_metal::Program>(std::move(cached_program.program));
             },
-            program_factory);
+            device_operation_t::select_program_factory(operation_attributes, tensor_args));
 
         program->set_runtime_id(device_operation_id);
 
         tt::tt_metal::GraphTracker::instance().track_program(program.get(), device);
-        if(tt::tt_metal::GraphTracker::instance().hook_program(program.get())) {
+        if (tt::tt_metal::GraphTracker::instance().hook_program(program.get())) {
             return;
         }
 
@@ -542,23 +539,24 @@ void launch_on_mesh_device(
             tensor_return_value);
 
     } else {
-        auto program_factory = device_operation_t::select_program_factory(operation_attributes, tensor_args);
+        auto make_program = [&]() {
+            return std::visit(
+                [&]<typename ProgramFactory>(const ProgramFactory&) {
+                    auto cached_program =
+                        ProgramFactory::create(operation_attributes, tensor_args, tensor_return_value);
+                    auto program = std::make_shared<tt::tt_metal::Program>(std::move(cached_program.program));
+                    program->set_runtime_id(device_operation_id);
+                    return program;
+                },
+                device_operation_t::select_program_factory(operation_attributes, tensor_args));
+        };
 
-        auto program = std::visit(
-            [&](auto&& program_factory) {
-                using program_factory_t = std::decay_t<decltype(program_factory)>;
-                auto cached_program = program_factory_t::create(operation_attributes, tensor_args, tensor_return_value);
-                return std::make_shared<tt::tt_metal::Program>(std::move(cached_program.program));
-            },
-            program_factory);
-
-        program->set_runtime_id(device_operation_id);
-
+        auto program = make_program();
         tt::tt_metal::GraphTracker::instance().track_program(program.get(), device);
         if (tt::tt_metal::GraphTracker::instance().hook_program(program.get())) {
             return;
         }
-        
+
         tt::tt_metal::distributed::MeshWorkload mesh_workload;
 
         // TODO: #19177 - Verify that all tensors target the same set of devices, and have the same tensor specs across
@@ -567,7 +565,7 @@ void launch_on_mesh_device(
         if (!first_tensor.device_storage().is_uniform_storage()) {
             // TODO: #19177 - Account for heterogeneous tensors.
             for (const auto& [coord, _] : first_tensor.device_storage().specs) {
-                mesh_workload.add_program(ttnn::MeshCoordinateRange(coord, coord), std::move(*program));
+                mesh_workload.add_program(ttnn::MeshCoordinateRange(coord, coord), std::move(*make_program()));
             }
         } else {
             mesh_workload.add_program(ttnn::MeshCoordinateRange(device->shape()), std::move(*program));
