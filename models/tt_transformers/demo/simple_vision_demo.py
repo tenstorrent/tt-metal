@@ -358,16 +358,16 @@ def test_multimodal_demo_text(
     )
     logger.info("")
 
-    tt_device_name = model_args.device_name
+    tt_device_name = model_args[0].device_name
     target_prefill_tok_s = {
         "N300_Llama3.2-11B": 9,
         "T3K_Llama3.2-11B": 4,
-    }[f"{tt_device_name}_{model_args.base_model_name}"]
+    }[f"{tt_device_name}_{model_args[0].base_model_name}"]
 
     target_decode_tok_s_u = {
         "N300_Llama3.2-11B": 19,
         "T3K_Llama3.2-11B": 27,
-    }[f"{tt_device_name}_{model_args.base_model_name}"]
+    }[f"{tt_device_name}_{model_args[0].base_model_name}"]
 
     target_decode_tok_s = target_decode_tok_s_u * max_batch_size
     targets = {
@@ -384,10 +384,10 @@ def test_multimodal_demo_text(
         benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, targets)
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type=f"{model_args.device_name}-demo",
-            ml_model_name=model_args.base_model_name,
+            run_type=f"{model_args[0].device_name}-demo",
+            ml_model_name=model_args[0].base_model_name,
             ml_model_type="vlm",
-            num_layers=model_args.n_layers,
+            num_layers=model_args[0].n_layers,
             batch_size=max_batch_size,
             input_sequence_length=max(prefill_lens).item(),
             output_sequence_length=max_gen_len,
