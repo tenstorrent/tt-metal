@@ -44,6 +44,7 @@ inline Tensor unary_impl(
         fp32_dest_acc_en,
         preserve_fp32_precision,
         bfp8_pack_precise,
+        false,  // Set to true to use RTA for compute kernel
         optional_output_tensor);
 }
 
