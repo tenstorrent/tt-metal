@@ -152,13 +152,4 @@ operation::ProgramWithCallbacks SliceDeviceOperation::create_program(
     return detail::slice_multi_core(input_tensor_a, output_tensor, this->slice_start, this->slice_end, this->step);
 }
 
-std::vector<Tensor> SliceDeviceOperation::create_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
-    if (output_tensors.size() == 1 && output_tensors[0].has_value()) {
-        return {output_tensors[0].value()};
-    }
-
-    return {create_device_tensor(compute_output_specs(input_tensors)[0], input_tensors.at(0).device())};
-}
-
 }  // namespace ttnn::operations::data_movement
