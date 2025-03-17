@@ -19,7 +19,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { name: "TG Llama3 frequent tests", arch: wormhole_b0, model: llama3, timeout: 90, owner_id: U06F3ER8X9A}, # Stuti Raizada
+          { name: "TG Llama3 frequent tests", arch: wormhole_b0, model: llama3, timeout: 90, owner_id: U044T8U8DEF}, # Johanna Rock
           { name: "TG resnet50 frequent tests", arch: wormhole_b0, model: resnet50, timeout: 90, owner_id: U055MU9S9CJ}, # Abhinav
           { name: "TG unit/distributed frequent tests", arch: wormhole_b0, model: unit, timeout: 90, owner_id: XXXXX}, # Add owner
         ]
@@ -85,9 +85,5 @@ jobs:
           path: |
             /work/generated/test_reports/
           prefix: "test_reports_"
-      - name: Cleanup
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
-        run: |
-          # We are forced to checkout the repo into a subdir of the host's workdir; this pollutes the host
-          # with root-owned files.  Be sure to clean up after ourselves in case we're on a non-ephemeral runner.
-          rm -rf /__w/tt-metal/tt-metal/docker-job

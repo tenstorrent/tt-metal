@@ -54,6 +54,7 @@ class TtLlamaAttention(LightweightModule):
 
         self.prefetcher_setup = prefetcher_setup
         self.tt_ccl = tt_ccl
+        self.worker_sub_device_id = prefetcher_setup.worker_sub_device_id
 
         # TODO: Fix this once all-gather supports < tile_size
         if self.TG:
@@ -271,6 +272,7 @@ class TtLlamaAttention(LightweightModule):
             compute_kernel_config=self.compute_kernel_config_hifi2,
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
             dtype=ttnn.bfloat16,
+            sub_device_id=self.worker_sub_device_id,
         )
         ttnn.deallocate(x)
         # print("done matmul")
@@ -405,6 +407,7 @@ class TtLlamaAttention(LightweightModule):
             compute_kernel_config=self.compute_kernel_config_hifi2,
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
             dtype=ttnn.bfloat8_b,
+            sub_device_id=self.worker_sub_device_id,
         )
         # [1, 1, 32, 2304]
         ttnn.deallocate(attn_output_cat)
