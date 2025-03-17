@@ -13,9 +13,11 @@ with ttnn.manage_device(device_id=0) as device:
         packer_l1_acc=False,
     )
 
-    dim = 1024
-    # x_torch = torch.randn((2, 4, 32, dim), dtype=torch.bfloat16) * 0.5
-    x_torch = torch.randn((64, 8, 1024, dim), dtype=torch.bfloat16)
+    # dim = 24 * 32
+    # dim = 2 ** 10 - 1
+    # dim = 16
+    # x_torch = torch.randn((64, 8, 1024, dim), dtype=torch.bfloat16)
+    x_torch = torch.randn((12, 1, 4096, dim), dtype=torch.bfloat16)
     expected_rms = torch.sqrt(torch.sum(x_torch**2, dim=-1, keepdim=True) / dim + 1e-5)
     gamma_torch = torch.randn((1, 1, 1, dim), dtype=torch.bfloat16)
     expected_result = x_torch / expected_rms * gamma_torch

@@ -27,9 +27,6 @@ constexpr auto kReaderKernelPath =
 constexpr auto kComputeKernelPath =
     "ttnn/cpp/ttnn/operations/experimental/rmsnorm_fw/device/kernels/compute/rmsnorm_fw_kernel.cpp";
 
-// constexpr auto kComputeKernelPath =
-//     "ttnn/cpp/ttnn/operations/experimental/rmsnorm_fw/device/kernels/compute/debug.cpp";
-
 // reader runtime args
 constexpr auto kInputBufferIdx = 0;
 constexpr auto kGammaBufferIdx = 1;
@@ -42,20 +39,20 @@ constexpr auto kMaskCbIndex = tt::CBIndex::c_1;
 constexpr auto kScalerCbIndex = tt::CBIndex::c_2;
 constexpr auto kEpsCbIndex = tt::CBIndex::c_3;
 constexpr auto kGammaCbIndex = tt::CBIndex::c_4;
-constexpr auto kRmsCbIndex = tt::CBIndex::c_5;
-constexpr auto kOutputCbIndex = tt::CBIndex::c_6;
-constexpr auto kRmsOutputCbIndex = tt::CBIndex::c_7;
-constexpr auto kOutputIntermediateCbIndex = tt::CBIndex::c_8;
+constexpr auto kRmsBeforeReductionCbIndex = tt::CBIndex::c_5;
+constexpr auto kRmsAfterReductionCbIndex = tt::CBIndex::c_6;
+constexpr auto kInverseRmsAfterReductionCbIndex = tt::CBIndex::c_7;
+constexpr auto kOutputCbIndex = tt::CBIndex::c_8;
+constexpr auto kRmsOutputCbIndex = tt::CBIndex::c_9;
+constexpr auto kOutputIntermediateCbIndex = tt::CBIndex::c_10;
 
-constexpr uint32_t kNumInputTiles = 2U;
 constexpr uint32_t kNumMaskTiles = 1U;
 constexpr uint32_t kNumScalerTiles = 1U;
-constexpr uint32_t kNumRmsTiles = 3U;
-constexpr uint32_t kNumOutputTiles = 2U;
+constexpr uint32_t kNumRmsBeforeReductionTiles = 2U;
+constexpr uint32_t kNumRmsAfterReductionTiles = 2U;
+constexpr uint32_t kNumInverseRmsAfterReductionTiles = 2U;
 constexpr uint32_t kNumRmsOutputTiles = 2U;
-constexpr uint32_t kNumGammaTiles = 2U;
 constexpr uint32_t kNumEpsTiles = 1U;
-constexpr uint32_t kNumOutputIntermediateTiles = 2U;
 
 const std::string kMaskWDefineKey = "DO_MASK_W";
 const std::string kReturnRMSDefineKey = "RETURN_RMS";
@@ -67,6 +64,16 @@ uint32_t pack_two_bfloat16_to_uint32(float value) {
     uint16_t uint16_data = uint32_data >> 16;
     uint32_t casted_uint16_data = static_cast<uint32_t>(uint16_data);
     return casted_uint16_data | (casted_uint16_data << 16);
+}
+
+uint32_t get_block_size(uint32_t num_inner) {
+    const uint32_t max_block_size = 4U;  // 4 is the maximum block size for enabled fp32 dest acc
+    for (uint32_t block_size = max_block_size; block_size > 1; block_size--) {
+        if (num_inner % block_size == 0) {
+            return block_size;
+        }
+    }
+    return 1U;
 }
 
 }  // namespace
@@ -151,7 +158,6 @@ inline tt::tt_metal::KernelHandle create_compute_kernel(
         ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
             .fp32_dest_acc_en = true,
-            // .fp32_dest_acc_en = false,
             .math_approx_mode = false,
             .compile_args = compile_time_args,
             .defines = defines});
@@ -178,8 +184,6 @@ inline void assign_per_core_runtime_args(
 
     for (uint32_t i = 0, num_rows_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-        fmt::print("Setting core {} {}\n", core.x, core.y);
 
         // Determine how many rows this core will process
         uint32_t num_rows_per_core = 0;
@@ -245,7 +249,8 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
     // compile arguments
     uint32_t packed_scaler = pack_two_bfloat16_to_uint32(1.F / static_cast<float>(num_inner));
     uint32_t packed_eps = pack_two_bfloat16_to_uint32(args.epsilon);
-    uint32_t mask_w = (tt::constants::TILE_WIDTH - num_inner % tt::constants::TILE_WIDTH) % tt::constants::TILE_WIDTH;
+    uint32_t mask_w = num_inner % tt::constants::TILE_WIDTH;
+    uint32_t block_size = get_block_size(Wt);
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
@@ -253,25 +258,32 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
     // -------------------------------------------------------------------------
     // 2) Create and configure circular buffers
     // -------------------------------------------------------------------------
-
+    uint32_t twice_block_size = 2U * block_size;
     const uint32_t available_L1_in_bytes =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
     const uint64_t required_L1_in_bytes =
         Wt * bfloat16_single_tile_size_bytes + kNumMaskTiles * bfloat16_single_tile_size_bytes +
         Wt * bfloat16_single_tile_size_bytes + kNumScalerTiles * bfloat16_single_tile_size_bytes +
-        kNumEpsTiles * bfloat16_single_tile_size_bytes + kNumRmsTiles * float32_single_tile_size_bytes +
-        kNumOutputTiles * bfloat16_single_tile_size_bytes + kNumRmsOutputTiles * bfloat16_single_tile_size_bytes;
+        kNumEpsTiles * bfloat16_single_tile_size_bytes +
+        (kNumRmsBeforeReductionTiles + kNumRmsAfterReductionTiles + kNumInverseRmsAfterReductionTiles) *
+            float32_single_tile_size_bytes +
+        twice_block_size * bfloat16_single_tile_size_bytes + kNumRmsOutputTiles * bfloat16_single_tile_size_bytes +
+        twice_block_size * bfloat16_single_tile_size_bytes;
     const bool everything_fits_in_l1 = required_L1_in_bytes <= available_L1_in_bytes;
 
     const uint64_t required_L1_in_bytes_except_gamma =
         Wt * bfloat16_single_tile_size_bytes + kNumMaskTiles * bfloat16_single_tile_size_bytes +
-        kNumScalerTiles * bfloat16_single_tile_size_bytes + kNumEpsTiles * bfloat16_single_tile_size_bytes +
-        kNumGammaTiles * bfloat16_single_tile_size_bytes + kNumRmsTiles * float32_single_tile_size_bytes +
-        kNumOutputTiles * bfloat16_single_tile_size_bytes + kNumRmsOutputTiles * bfloat16_single_tile_size_bytes;
+        twice_block_size * bfloat16_single_tile_size_bytes + kNumScalerTiles * bfloat16_single_tile_size_bytes +
+        kNumEpsTiles * bfloat16_single_tile_size_bytes +
+        (kNumRmsBeforeReductionTiles + kNumRmsAfterReductionTiles + kNumInverseRmsAfterReductionTiles) *
+            float32_single_tile_size_bytes +
+        twice_block_size * bfloat16_single_tile_size_bytes + kNumRmsOutputTiles * bfloat16_single_tile_size_bytes +
+        twice_block_size * bfloat16_single_tile_size_bytes;
     const bool everything_except_gamma_fits_in_l1 = required_L1_in_bytes <= available_L1_in_bytes;
 
-    const uint32_t num_input_tiles = (everything_fits_in_l1 | everything_except_gamma_fits_in_l1) ? Wt : kNumInputTiles;
-    const uint32_t num_gamma_tiles = everything_except_gamma_fits_in_l1 ? Wt : kNumGammaTiles;
+    const uint32_t num_input_tiles =
+        (everything_fits_in_l1 | everything_except_gamma_fits_in_l1) ? Wt : twice_block_size;
+    const uint32_t num_gamma_tiles = everything_except_gamma_fits_in_l1 ? Wt : twice_block_size;
 
     auto data_format = input_data_format;
     auto precise_data_format = tt::DataFormat::Float32;
@@ -291,26 +303,38 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
     auto cb_gamma = create_circular_buffer(
         program, all_cores, kGammaCbIndex, data_format, bfloat16_single_tile_size_bytes, num_gamma_tiles);
 
-    auto cb_rms_intermediate = create_circular_buffer(
-        program, all_cores, kRmsCbIndex, precise_data_format, float32_single_tile_size_bytes, kNumRmsTiles);
+    auto cb_rms_before_reduction_intermediate = create_circular_buffer(
+        program,
+        all_cores,
+        kRmsBeforeReductionCbIndex,
+        precise_data_format,
+        float32_single_tile_size_bytes,
+        kNumRmsBeforeReductionTiles);
 
-    // auto cb_rms_intermediate =
-    //     create_circular_buffer(
-    //         program, all_cores, kRmsCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumRmsTiles);
+    auto cb_rms_after_reduction_intermediate = create_circular_buffer(
+        program,
+        all_cores,
+        kRmsAfterReductionCbIndex,
+        precise_data_format,
+        float32_single_tile_size_bytes,
+        kNumRmsAfterReductionTiles);
+
+    auto cb_inverse_rms_after_reduction_intermediate = create_circular_buffer(
+        program,
+        all_cores,
+        kInverseRmsAfterReductionCbIndex,
+        precise_data_format,
+        float32_single_tile_size_bytes,
+        kNumInverseRmsAfterReductionTiles);
 
     auto cb_output = create_circular_buffer(
-        program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumOutputTiles);
+        program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
 
     auto cb_rms_output = create_circular_buffer(
         program, all_cores, kRmsOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumRmsOutputTiles);
 
     auto cb_output_intermediate = create_circular_buffer(
-        program,
-        all_cores,
-        kOutputIntermediateCbIndex,
-        data_format,
-        bfloat16_single_tile_size_bytes,
-        kNumOutputIntermediateTiles);
+        program, all_cores, kOutputIntermediateCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
@@ -356,11 +380,11 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
     kernels.reader = create_reader_kernel(
         program,
         all_cores,
-        /* reader_compile_args */ {packed_scaler, packed_eps, mask_w, Wt},
+        /* reader_compile_args */ {packed_scaler, packed_eps, mask_w, Wt, block_size},
         defines,
         kReaderKernelPath);
-    kernels.writer =
-        create_writer_kernel(program, all_cores, /* writer_compile_args */ {Wt}, defines, kWriterKernelPath);
+    kernels.writer = create_writer_kernel(
+        program, all_cores, /* writer_compile_args */ {Wt, block_size}, defines, kWriterKernelPath);
 
     // -------------------------------------------------------------------------
     // 4) Create compute kernels for rmsnorm_fw
@@ -369,7 +393,7 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
     // Group 1 compile-time arguments
     std::vector<uint32_t> compute_group_1_args = {
         num_rows_per_core_group_1,  // per_core_block_cnt
-        1U,                         // per_core_block_size
+        block_size,                 // per_core_block_size
         Wt                          // num_inner / TILE_W
     };
 
@@ -380,7 +404,7 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
     if (!core_group_2.ranges().empty()) {
         std::vector<uint32_t> compute_group_2_args = {
             num_rows_per_core_group_2,  // per_core_block_cnt
-            1U,                         // per_core_block_size
+            block_size,                 // per_core_block_size
             Wt                          // num_inner / TILE_W
         };
 
