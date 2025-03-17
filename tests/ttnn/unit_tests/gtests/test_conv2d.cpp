@@ -13,6 +13,7 @@
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
+#include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
@@ -59,11 +60,11 @@ float pcc(std::vector<float>& x, std::vector<float>& y) {
 /*
     Reference implementation of Conv2D
 
-    Takes in input tensor with original shape (1,Ci,H,W) that is flattened in row major order
+    Takes in input tensor with original shape (N,Ci,H,W) that is flattened in row major order
 
     and flattened kernel tensor with original shape (Co,Ci,KH,KW) that is also flattened in row major order.
 
-    Returns flattened tensor with original shape (1,Co,Xh,Xw) in row major order, where Xh and Xw are calculated based
+    Returns flattened tensor with original shape (N,Co,Xh,Xw) in row major order, where Xh and Xw are calculated based
     on input tensor,kernel tensor, stride and padding.
 
 
@@ -73,6 +74,7 @@ float pcc(std::vector<float>& x, std::vector<float>& y) {
     output_channels - Co
     input_height - H
     input_width - W
+    batch_size - N
     output_height - Xh
     output_width - Xw
     kernel_size - (KH,KW)
@@ -80,10 +82,11 @@ float pcc(std::vector<float>& x, std::vector<float>& y) {
     padding - (PH,PW)
 */
 std::vector<float> reference_implementation_conv2d(
-    const std::vector<float>& input,   // (1,Ci,H,W)
+    const std::vector<float>& input,   // (N,Ci,H,W)
     const std::vector<float>& kernel,  // (Co,Ci,H',W')
     const uint32_t input_channels,
     const uint32_t output_channels,
+    const uint32_t batch_size,
     const uint32_t input_height,
     const uint32_t input_width,
     const std::array<uint32_t, 2>& kernel_size,
@@ -100,29 +103,33 @@ std::vector<float> reference_implementation_conv2d(
     uint32_t Xh = (input_height - kernel_height + 2 * padding_height) / stride_height + 1;
     uint32_t Xw = (input_width - kernel_width + 2 * padding_width) / stride_width + 1;
 
-    std::vector<float> output = std::vector<float>(output_channels * Xh * Xw);
-    for (int co = 0, i = 0; co < output_channels; co++) {
-        for (int h = 0; h < input_height; h += stride_height) {
-            std::vector<float> row;
-            for (int w = 0; w < input_width; w += stride_width) {
-                float sum = 0;
-                for (int ci = 0; ci < input_channels; ci++) {
-                    for (int kh = 0; kh < kernel_height; kh++) {
-                        for (int kw = 0; kw < kernel_width; kw++) {
-                            if (h + kh - padding_height >= 0 && h + kh - padding_height < input_height &&
-                                w + kw - padding_width >= 0 && w + kw - padding_width < input_width) {
-                                sum += input
-                                           [ci * input_height * input_width + (h + kh - padding_height) * input_width +
-                                            w + kw - padding_width] *
-                                       kernel
-                                           [co * input_channels * kernel_height * kernel_width +
-                                            ci * kernel_height * kernel_width + kh * kernel_width + kw];
+    std::vector<float> output = std::vector<float>(batch_size * output_channels * Xh * Xw);
+    int i = 0;
+    for (int n = 0; n < batch_size; n++) {
+        for (int co = 0; co < output_channels; co++) {
+            for (int h = 0; h < input_height; h += stride_height) {
+                std::vector<float> row;
+                for (int w = 0; w < input_width; w += stride_width) {
+                    float sum = 0;
+                    for (int ci = 0; ci < input_channels; ci++) {
+                        for (int kh = 0; kh < kernel_height; kh++) {
+                            for (int kw = 0; kw < kernel_width; kw++) {
+                                if (h + kh - padding_height >= 0 && h + kh - padding_height < input_height &&
+                                    w + kw - padding_width >= 0 && w + kw - padding_width < input_width) {
+                                    sum += input
+                                               [n * input_channels * input_height * input_width +
+                                                ci * input_height * input_width +
+                                                (h + kh - padding_height) * input_width + w + kw - padding_width] *
+                                           kernel
+                                               [co * input_channels * kernel_height * kernel_width +
+                                                ci * kernel_height * kernel_width + kh * kernel_width + kw];
+                                }
                             }
                         }
                     }
+                    output[i] = sum;
+                    i++;
                 }
-                output[i] = sum;
-                i++;
             }
         }
     }
@@ -133,11 +140,11 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
     const chip_id_t device_id = 0;
     IDevice* device = CreateDevice(device_id, 1, 16384, 0, DispatchCoreConfig(DispatchCoreType::ETH));
 
-    const uint32_t input_channels = 32;   // in_channels
-    const uint32_t output_channels = 32;  // out_channels
-
+    const uint32_t input_channels = 32;                  // in_channels
+    const uint32_t output_channels = 32;                 // out_channels
+    const uint32_t batch_size = 2;                       // batch_size
     const uint32_t input_height = 256;                   // input_height
-    const uint32_t input_width = 512;                    // input_width
+    const uint32_t input_width = 256;                    // input_width
     const std::array<uint32_t, 2> kernel_size = {3, 3};  // kernel_size
     const std::array<uint32_t, 2> stride = {1, 1};       // stride
     const std::array<uint32_t, 2> padding = {1, 1};      // padding
@@ -146,7 +153,7 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
         MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::DRAM};
 
     // (N,Ci,H,W)
-    std::array<uint32_t, 4> dimensions = {1, input_channels, input_height, input_width};
+    std::array<uint32_t, 4> dimensions = {batch_size, input_channels, input_height, input_width};
     // (Co,Ci,KH,KW)
     std::array<uint32_t, 4> dimensions_weight = {output_channels, input_channels, kernel_size[0], kernel_size[1]};
 
@@ -173,7 +180,7 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
         device,
         input_channels,
         output_channels,
-        1,  // batch_size
+        batch_size,
         input_height,
         input_width,
         kernel_size,
@@ -185,13 +192,12 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
 
     // untilize output tensor because the default output tensor layout is TILE layout
     output_tensor = ttnn::untilize(output_tensor);
-
     // H'  - output_height
     // W'  - output_width
-    // (1,1,H'W',Co) -> (1,H',W',Co)
-    output_tensor = ttnn::reshape(output_tensor, Shape({1, output_height, output_width, output_channels}));
+    // (1,1,NH'W',Co) -> (N,H',W',Co)
+    output_tensor = ttnn::reshape(output_tensor, Shape({batch_size, output_height, output_width, output_channels}));
 
-    // (1,H',W',Co) -> (1,Co,H',W')
+    // (N,H',W',Co) -> (N,Co,H',W')
     output_tensor = ttnn::permute(output_tensor, SmallVector<int64_t>{0, 3, 1, 2});
 
     // Copy output tensor to host for comparison
@@ -203,6 +209,7 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
         weight_vector,
         input_channels,
         output_channels,
+        batch_size,
         input_height,
         input_width,
         kernel_size,
@@ -210,6 +217,7 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
         padding);
 
     float pcc_calculated = pcc(res, ref_res);
+    pcc(res, ref_res);
 
     bool pass = CloseDevice(device);
     std::cout << "PCC: " << pcc_calculated << std::endl;
