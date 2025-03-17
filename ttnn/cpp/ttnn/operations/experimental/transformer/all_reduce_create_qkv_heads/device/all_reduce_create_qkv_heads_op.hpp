@@ -90,7 +90,7 @@ AllReduceCreateQkvHeads create_all_reduce_create_qkv_heads_struct(
     const std::vector<IDevice*>& devices,
     const ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphores,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+    std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode);
 
 }  // namespace all_reduce_create_qkv_heads_detail
