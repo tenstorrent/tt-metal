@@ -137,6 +137,8 @@ ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/ @
 ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/ @tenstorrent/metallium-maintainers-llama-models
 ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/ @tenstorrent/metallium-maintainers-llama-models
 ttnn/ttnn/operations/eltwise @patrickroberts @sjameelTT @ntarafdar @dchenTT
+ttnn/tracy/ @mo-tenstorrent
+ttnn/tools/profiler/ @mo-tenstorrent
 tests/ttnn/ @ayerofieiev-tt @dmakoviichuk-tt @rfurko-tt @cfjchu @TT-BrianLiu @razorback3 @dongjin-na @bbradelTT @omilyutin-tt
 tests/ttnn/unit_tests/gtests/ccl/ @SeanNijjar @jvegaTT @cfjchu @tt-aho
 tests/ttnn/unit_tests/operations/ccl/ @SeanNijjar @jvegaTT @tt-aho
