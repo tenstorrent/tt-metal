@@ -1079,7 +1079,7 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
     }
     // reader compile time args
     std::vector<uint32_t> reader_mcast_sender_compile_time_args = {
-        (std::uint32_t)reduce_sender_semaphore_id, (std::uint32_t)num_blocks};
+        (std::uint32_t)reduce_sender_semaphore_id, (std::uint32_t)num_blocks, (std::uint32_t)single_tile_size};
     std::vector<uint32_t> reader_mcast_receiver_compile_time_args = {(std::uint32_t)reduce_sender_semaphore_id};
 
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());

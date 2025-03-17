@@ -125,6 +125,7 @@ def run_rms_fuse_impl(
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
+    print(tt_stats)
 
     tt_stats = ttnn.experimental.all_gather_async(
         tt_stats,
@@ -135,6 +136,7 @@ def run_rms_fuse_impl(
         enable_persistent_fabric_mode=True,
         memory_config=ag_memory_config,
     )
+    print(tt_stats)
     ttnn.synchronize_device(mesh_device)
     output_pad_width = math.ceil(padded_dim_per_core / num_devices / 32) * 32
     if output_shard_grid is None:
@@ -162,15 +164,8 @@ def run_rms_fuse_impl(
         stats=tt_stats,
         is_pre=False,
     )
-    tt_out2 = ttnn.rms_norm_post_all_gather(
-        input_tensor,
-        tt_stats,
-        program_config=layer_norm_config,
-        dtype=ttnn.bfloat8_b,
-        memory_config=output_memory_config,
-        epsilon=epsilon,
-        weight=gamma_tensor,
-    )
+
+    print(tt_out)
 
     tt_out_torch = ttnn.to_torch(
         tt_out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 3), mesh_shape=(1, num_devices))
