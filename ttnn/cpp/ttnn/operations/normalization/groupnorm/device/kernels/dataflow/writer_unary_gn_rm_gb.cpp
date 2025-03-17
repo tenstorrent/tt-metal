@@ -74,7 +74,6 @@ void kernel_main() {
     const DataFormat input_mask_data_format = get_dataformat(cb_input_mask);
 
     constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
-    constexpr uint32_t cb_reread_write_out = tt::CBIndex::c_22;
 #ifdef UNTILIZE_OUT
     constexpr uint32_t cb_out = tt::CBIndex::c_30;
 #else
@@ -178,8 +177,8 @@ void kernel_main() {
 
             uint32_t out_block_start_id_offset = 0;
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks; out_block_index++) {
-                cb_wait_front(cb_reread_write_out, out_block_hw);
-                uint32_t l1_read_addr = get_read_ptr(cb_reread_write_out);
+                cb_wait_front(cb_out, out_block_hw);
+                uint32_t l1_read_addr = get_read_ptr(cb_out);
                 for (uint32_t mt = 0; mt < out_block_h; mt++) {
                     for (uint32_t nt = 0; nt < block_w; nt++) {
                         noc_async_write_tile(
@@ -191,7 +190,7 @@ void kernel_main() {
                 }
                 out_block_start_id_offset += block_h * num_channels_tiles;
                 noc_async_write_barrier();
-                cb_pop_front(cb_reread_write_out, out_block_hw);
+                cb_pop_front(cb_out, out_block_hw);
             }
 
             if constexpr (GROUP_SIZE_IS_POWER_OF_2) {
