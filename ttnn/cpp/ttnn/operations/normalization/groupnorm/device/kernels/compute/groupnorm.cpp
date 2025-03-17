@@ -103,7 +103,8 @@ void MAIN {
 
     // interm cbs reuse
     constexpr uint32_t cb_fusion = cb_xmm;
-    constexpr uint32_t cb_xmm2 = cb_x;
+    constexpr uint32_t cb_reread_out = tt::CBIndex::c_23;
+    constexpr uint32_t cb_reread_write_out = tt::CBIndex::c_22;
 
     // output cb
     constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
@@ -492,33 +493,32 @@ void MAIN {
                 // add or copy with previous output results
                 uint32_t block_w_curr = index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
 
+                cb_wait_front(cb_reread_out, out_block_hw);
+                cb_reserve_back(cb_reread_write_out, out_block_hw);
                 for (uint32_t w = 0; w < block_w_curr; ++w) {
-                    index_h_offset = index_b_offset + index_g_offset;
-                    uint32_t index_h1_offset = 0;
+                    uint32_t index_h_offset = 0;
 
                     if (copy_or_add == true) {
                         copy_tile_init(cb_xmm);
                     } else {
-                        add_tiles_init(cb_out, cb_xmm);
+                        add_tiles_init(cb_reread_out, cb_xmm);
                     }
 
                     for (uint32_t i = 0; i < out_block_h; ++i) {
                         tile_regs_acquire();
-                        uint32_t index_xmm = w + index_h1_offset;
-                        uint32_t index = w + index_h_offset;
+                        uint32_t index_xmm = w + index_h_offset;
 
                         if (copy_or_add == true) {
                             copy_tile(cb_xmm, index_xmm, dst0);
                         } else {
-                            add_tiles(cb_out, cb_xmm, index, index_xmm, dst0);
+                            add_tiles(cb_reread_out, cb_xmm, index_xmm, index_xmm, dst0);
                         }
                         tile_regs_commit();
                         tile_regs_wait();
-                        pack_tile<true>(dst0, cb_out, index);
+                        pack_tile<true>(dst0, cb_reread_write_out, index_xmm);
                         tile_regs_release();
 
-                        index_h_offset += per_core_N;
-                        index_h1_offset += block_w;
+                        index_h_offset += block_w;
                     }
 
                     // update group tile offset
@@ -539,40 +539,9 @@ void MAIN {
                         index_block_w += 1;
                     }
                 }
-
-                if constexpr (GROUP_SIZE_IS_POWER_OF_2) {
-                    if (row_offset == TILE_WIDTH) {
-                        index_g_offset += block_w;
-                        row_offset = num_cols_per_group;
-
-                    } else {
-                        index_g_offset += block_w_minus_one;
-                        row_offset += num_cols_per_group;
-                    }
-                } else if constexpr (GROUP_SIZE_SMALLER_THAN_TILE_W) {
-                    if (row_offset == TILE_WIDTH) {
-                        index_g_offset += block_w_minus_one;
-                        row_offset = num_cols_per_group;
-
-                    } else if (row_offset > TILE_WIDTH) {
-                        index_g_offset += block_w_minus_one;
-                        row_offset = row_offset + group_row_offset;
-
-                    } else {
-                        row_offset += num_cols_per_group;
-                    }
-                } else {
-                    if (row_offset > TILE_WIDTH) {
-                        index_g_offset += block_w_minus_one;
-                        row_offset = row_offset - tile_w_minux_group_size;
-                    } else {
-                        row_offset += num_cols_per_group;
-                        index_g_offset += block_w_minus_two;
-                    }
-                }
-
                 cb_pop_front(cb_xmm, out_block_hw);
-                cb_push_back(cb_out, out_block_hw);
+                cb_pop_front(cb_reread_out, out_block_hw);
+                cb_push_back(cb_reread_write_out, out_block_hw);
 
                 // TODO GOT HERE
 
@@ -632,6 +601,36 @@ void MAIN {
                 }
                 untilize_uninit(cb_untilize_in);
 #endif
+            }
+            if constexpr (GROUP_SIZE_IS_POWER_OF_2) {
+                if (row_offset == TILE_WIDTH) {
+                    index_g_offset += block_w;
+                    row_offset = num_cols_per_group;
+
+                } else {
+                    index_g_offset += block_w_minus_one;
+                    row_offset += num_cols_per_group;
+                }
+            } else if constexpr (GROUP_SIZE_SMALLER_THAN_TILE_W) {
+                if (row_offset == TILE_WIDTH) {
+                    index_g_offset += block_w_minus_one;
+                    row_offset = num_cols_per_group;
+
+                } else if (row_offset > TILE_WIDTH) {
+                    index_g_offset += block_w_minus_one;
+                    row_offset = row_offset + group_row_offset;
+
+                } else {
+                    row_offset += num_cols_per_group;
+                }
+            } else {
+                if (row_offset > TILE_WIDTH) {
+                    index_g_offset += block_w_minus_one;
+                    row_offset = row_offset - tile_w_minux_group_size;
+                } else {
+                    row_offset += num_cols_per_group;
+                    index_g_offset += block_w_minus_two;
+                }
             }
 
             cb_pop_front(cb_ex_global, 1);

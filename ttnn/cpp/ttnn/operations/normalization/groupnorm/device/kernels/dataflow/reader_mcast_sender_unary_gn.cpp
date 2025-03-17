@@ -11,30 +11,31 @@
 // split REDUCE across cores
 void kernel_main() {
     constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
+    constexpr bool out_is_dram = get_compile_time_arg_val(1) == 1;
 
-    uint32_t reduce_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(1));
-    uint32_t reduce_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(2));
+    uint32_t reduce_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(2));
+    uint32_t reduce_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(3));
 
-    constexpr uint32_t num_mcast_cores = get_compile_time_arg_val(3);
-    constexpr uint32_t num_batch_group = get_compile_time_arg_val(4);
+    constexpr uint32_t num_mcast_cores = get_compile_time_arg_val(4);
+    constexpr uint32_t num_batch_group = get_compile_time_arg_val(5);
 
-    constexpr uint32_t per_core_N = get_compile_time_arg_val(5);
-    const uint32_t per_core_N_bytes = get_compile_time_arg_val(6);
-    const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(7);
-    constexpr uint32_t datum_size_bytes = get_compile_time_arg_val(8);
-    constexpr uint32_t per_core_M = get_compile_time_arg_val(9);
-    constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(10);
+    constexpr uint32_t per_core_N = get_compile_time_arg_val(6);
+    const uint32_t per_core_N_bytes = get_compile_time_arg_val(7);
+    const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(8);
+    constexpr uint32_t datum_size_bytes = get_compile_time_arg_val(9);
+    constexpr uint32_t per_core_M = get_compile_time_arg_val(10);
+    constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(11);
 
-    volatile uint32_t block_h = get_compile_time_arg_val(11);
-    constexpr uint32_t block_w = get_compile_time_arg_val(12);
-    constexpr uint32_t block_hw = get_compile_time_arg_val(13);
+    volatile uint32_t block_h = get_compile_time_arg_val(12);
+    constexpr uint32_t block_w = get_compile_time_arg_val(13);
+    constexpr uint32_t block_hw = get_compile_time_arg_val(14);
 
-    constexpr uint32_t num_cols_per_group = get_compile_time_arg_val(14);
+    constexpr uint32_t num_cols_per_group = get_compile_time_arg_val(15);
 
-    constexpr uint32_t block_w_last = get_compile_time_arg_val(15);
-    constexpr uint32_t GROUP_SIZE_IS_POWER_OF_2 = get_compile_time_arg_val(16);
-    constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_compile_time_arg_val(17);
-    constexpr uint32_t group_row_offset = get_compile_time_arg_val(18);
+    constexpr uint32_t block_w_last = get_compile_time_arg_val(16);
+    constexpr uint32_t GROUP_SIZE_IS_POWER_OF_2 = get_compile_time_arg_val(17);
+    constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_compile_time_arg_val(18);
+    constexpr uint32_t group_row_offset = get_compile_time_arg_val(19);
 
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
@@ -44,18 +45,20 @@ void kernel_main() {
     uint32_t index_g_offset = 0;
 
     uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t start_id = get_arg_val<uint32_t>(1);
-    uint32_t num_channels_tiles = get_arg_val<uint32_t>(2);
+    const uint32_t out_addr = get_arg_val<uint32_t>(1);
+    uint32_t start_id = get_arg_val<uint32_t>(2);
+    const uint32_t out_start_id = get_arg_val<uint32_t>(3);
+    uint32_t num_channels_tiles = get_arg_val<uint32_t>(4);
 
-    const bool has_mcast_first_group = get_arg_val<uint32_t>(3);
-    const bool has_mcast_last_group = get_arg_val<uint32_t>(4);
+    const bool has_mcast_first_group = get_arg_val<uint32_t>(5);
+    const bool has_mcast_last_group = get_arg_val<uint32_t>(6);
 
     // mid mcast group
-    const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(5);
-    const uint32_t mcast_dest_noc_start_y = get_arg_val<uint32_t>(6);
-    const uint32_t mcast_dest_noc_end_x = get_arg_val<uint32_t>(7);
-    const uint32_t mcast_dest_noc_end_y = get_arg_val<uint32_t>(8);
-    const uint32_t num_mcast_cores_mid_group = get_arg_val<uint32_t>(9);
+    const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(7);
+    const uint32_t mcast_dest_noc_start_y = get_arg_val<uint32_t>(8);
+    const uint32_t mcast_dest_noc_end_x = get_arg_val<uint32_t>(9);
+    const uint32_t mcast_dest_noc_end_y = get_arg_val<uint32_t>(10);
+    const uint32_t num_mcast_cores_mid_group = get_arg_val<uint32_t>(11);
 
     // first mcast group
     uint32_t mcast_first_group_dest_noc_start_x;
@@ -82,44 +85,44 @@ void kernel_main() {
     uint64_t multicast_last_group_data_noc;
 
     if (has_mcast_first_group and has_mcast_last_group) {
-        mcast_first_group_dest_noc_start_x = get_arg_val<uint32_t>(10);
-        mcast_first_group_dest_noc_start_y = get_arg_val<uint32_t>(11);
-        mcast_first_group_dest_noc_end_x = get_arg_val<uint32_t>(12);
-        mcast_first_group_dest_noc_end_y = get_arg_val<uint32_t>(13);
-        num_mcast_cores_first_group = get_arg_val<uint32_t>(14);
+        mcast_first_group_dest_noc_start_x = get_arg_val<uint32_t>(12);
+        mcast_first_group_dest_noc_start_y = get_arg_val<uint32_t>(13);
+        mcast_first_group_dest_noc_end_x = get_arg_val<uint32_t>(14);
+        mcast_first_group_dest_noc_end_y = get_arg_val<uint32_t>(15);
+        num_mcast_cores_first_group = get_arg_val<uint32_t>(16);
 
-        mcast_last_group_dest_noc_start_x = get_arg_val<uint32_t>(15);
-        mcast_last_group_dest_noc_start_y = get_arg_val<uint32_t>(16);
-        mcast_last_group_dest_noc_end_x = get_arg_val<uint32_t>(17);
-        mcast_last_group_dest_noc_end_y = get_arg_val<uint32_t>(18);
-        num_mcast_cores_last_group = get_arg_val<uint32_t>(19);
+        mcast_last_group_dest_noc_start_x = get_arg_val<uint32_t>(17);
+        mcast_last_group_dest_noc_start_y = get_arg_val<uint32_t>(18);
+        mcast_last_group_dest_noc_end_x = get_arg_val<uint32_t>(19);
+        mcast_last_group_dest_noc_end_y = get_arg_val<uint32_t>(20);
+        num_mcast_cores_last_group = get_arg_val<uint32_t>(21);
 
-        noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(20));
-        noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(20 + num_mcast_cores));
+        noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(22));
+        noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(22 + num_mcast_cores));
 
     } else if (has_mcast_first_group and not has_mcast_last_group) {
-        mcast_first_group_dest_noc_start_x = get_arg_val<uint32_t>(10);
-        mcast_first_group_dest_noc_start_y = get_arg_val<uint32_t>(11);
-        mcast_first_group_dest_noc_end_x = get_arg_val<uint32_t>(12);
-        mcast_first_group_dest_noc_end_y = get_arg_val<uint32_t>(13);
-        num_mcast_cores_first_group = get_arg_val<uint32_t>(14);
+        mcast_first_group_dest_noc_start_x = get_arg_val<uint32_t>(12);
+        mcast_first_group_dest_noc_start_y = get_arg_val<uint32_t>(13);
+        mcast_first_group_dest_noc_end_x = get_arg_val<uint32_t>(14);
+        mcast_first_group_dest_noc_end_y = get_arg_val<uint32_t>(15);
+        num_mcast_cores_first_group = get_arg_val<uint32_t>(16);
 
-        noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(15));
-        noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(15 + num_mcast_cores));
+        noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(17));
+        noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(17 + num_mcast_cores));
 
     } else if (not has_mcast_first_group and has_mcast_last_group) {
-        mcast_last_group_dest_noc_start_x = get_arg_val<uint32_t>(10);
-        mcast_last_group_dest_noc_start_y = get_arg_val<uint32_t>(11);
-        mcast_last_group_dest_noc_end_x = get_arg_val<uint32_t>(12);
-        mcast_last_group_dest_noc_end_y = get_arg_val<uint32_t>(13);
-        num_mcast_cores_last_group = get_arg_val<uint32_t>(14);
+        mcast_last_group_dest_noc_start_x = get_arg_val<uint32_t>(12);
+        mcast_last_group_dest_noc_start_y = get_arg_val<uint32_t>(13);
+        mcast_last_group_dest_noc_end_x = get_arg_val<uint32_t>(14);
+        mcast_last_group_dest_noc_end_y = get_arg_val<uint32_t>(15);
+        num_mcast_cores_last_group = get_arg_val<uint32_t>(16);
 
-        noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(15));
-        noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(15 + num_mcast_cores));
+        noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(17));
+        noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(17 + num_mcast_cores));
 
     } else {
-        noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(10));
-        noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(10 + num_mcast_cores));
+        noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(12));
+        noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(12 + num_mcast_cores));
     }
 
     const uint64_t reduce_sender_semaphore_noc_addr = get_noc_multicast_addr(
@@ -178,9 +181,11 @@ void kernel_main() {
     constexpr uint32_t cb_repack_out = tt::CBIndex::c_31;
     constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
     constexpr uint32_t cb_x = tt::CBIndex::c_24;
+    constexpr uint32_t cb_reread_out = tt::CBIndex::c_23;
 
     const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial);
     const DataFormat data_format = get_dataformat(cb_ex_partial);
+    const DataFormat out_data_format = get_dataformat(cb_out0);
     const uint32_t num_bytes_read = datum_size_bytes;
 
 #if defined(READER_REPACK) and defined(TILIZE_IN)
@@ -345,6 +350,30 @@ void kernel_main() {
                     noc_async_write_barrier();
                     cb_pop_front(cb_mcast, 1);
                 }
+            }
+
+            const InterleavedAddrGenFast<out_is_dram> dst_a = {
+                .bank_base_address = out_addr, .page_size = single_tile_size_bytes, .data_format = out_data_format};
+
+            uint32_t out_block_start_id_offset = 0;
+            for (uint32_t out_block_index = 0; out_block_index < num_out_blocks; out_block_index++) {
+                const uint32_t dst_tile_bytes = get_tile_size(cb_reread_out);
+                uint32_t l1_write_addr;
+                l1_write_addr = get_write_ptr(cb_reread_out);
+                cb_reserve_back(cb_reread_out, out_block_hw);
+
+                for (uint32_t mt = 0; mt < out_block_h; mt++) {
+                    for (uint32_t nt = 0; nt < block_w; nt++) {
+                        noc_async_read_tile(
+                            out_start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt + index_g_offset,
+                            dst_a,
+                            l1_write_addr);
+                        l1_write_addr += dst_tile_bytes;
+                        noc_async_read_barrier();
+                    }
+                }
+                out_block_start_id_offset += block_h * num_channels_tiles;
+                cb_push_back(cb_reread_out, out_block_hw);
             }
 
             if constexpr (GROUP_SIZE_IS_POWER_OF_2) {

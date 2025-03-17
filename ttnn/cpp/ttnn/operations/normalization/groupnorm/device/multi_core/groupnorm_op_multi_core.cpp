@@ -1255,6 +1255,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     uint32_t ex_global_CB_size = ex_partial_CB_size;  // the final result Ex
     uint32_t ex2_global_CB_size = ex_partial_CB_size;  // the final result Ex
     uint32_t xmm2_CB_size = interm_block_tiles * single_tile_size;
+    uint32_t xmm3_CB_size = interm_block_tiles * single_tile_size;
     uint32_t ex2pe_CB_size = ex_partial_CB_size;
     // output buffer size
     uint32_t out_CB_size = in0_block_tiles * out_single_tile_size;
@@ -1369,6 +1370,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     // reader compile time args
     std::vector<uint32_t> reader_mcast_sender_compile_time_args = {
         (std::uint32_t)1,
+        (std::uint32_t)1,
         (std::uint32_t)reduce_receiver_semaphore_id,
         (std::uint32_t)reduce_sender_semaphore_id,
         (std::uint32_t)num_cores_per_mcast_group,
@@ -1388,6 +1390,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
         (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH};
     std::vector<uint32_t> reader_mcast_receiver_compile_time_args = {
+        (std::uint32_t)1,
         (std::uint32_t)1,
         (std::uint32_t)reduce_receiver_semaphore_id,
         (std::uint32_t)reduce_sender_semaphore_id,
@@ -1450,6 +1453,11 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)per_core_Nt * TILE_WIDTH * datum_size_bytes,
         (std::uint32_t)num_groups_per_core,
         (std::uint32_t)num_batches_per_core,
+        (std::uint32_t)num_datum_row_per_group_mod_tile_w,
+        (std::uint32_t)block_wt_last,
+        (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0,
+        (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
+        (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH,
         (std::uint32_t)block_ht,
         (std::uint32_t)block_wt,
         (std::uint32_t)block_ht * block_wt};
@@ -1696,6 +1704,18 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         tt::tt_metal::CircularBufferConfig(xmm_CB_size, {{xmm_cb_index, cb_data_format}})
             .set_page_size(xmm_cb_index, single_tile_size);
     auto cb_xmm = tt::tt_metal::CreateCircularBuffer(program, all_cores, xmm_cb_config);
+    // xmm2
+    uint32_t xmm2_cb_index = tt::CBIndex::c_23;
+    tt::tt_metal::CircularBufferConfig xmm2_cb_config =
+        tt::tt_metal::CircularBufferConfig(xmm2_CB_size, {{xmm2_cb_index, cb_data_format}})
+            .set_page_size(xmm2_cb_index, single_tile_size);
+    auto cb_xmm2 = tt::tt_metal::CreateCircularBuffer(program, all_cores, xmm2_cb_config);
+    // xmm3
+    uint32_t xmm3_cb_index = tt::CBIndex::c_22;
+    tt::tt_metal::CircularBufferConfig xmm3_cb_config =
+        tt::tt_metal::CircularBufferConfig(xmm3_CB_size, {{xmm3_cb_index, cb_data_format}})
+            .set_page_size(xmm3_cb_index, single_tile_size);
+    auto cb_xmm3 = tt::tt_metal::CreateCircularBuffer(program, all_cores, xmm3_cb_config);
     // ex_partial
     uint32_t ex_cb_partial_index = tt::CBIndex::c_8;
     tt::tt_metal::CircularBufferConfig ex_cb_partial_config =
@@ -1762,6 +1782,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             CoreCoord core = group[j];
             CoreCoord core_physical = device->worker_core_from_logical_core(core);
             uint32_t in0_start_id = per_core_Mt * Wt * j + per_core_Nt * i;
+            uint32_t out_tile_start_id = per_core_Mt * Wt * j + per_core_Nt * i;
 
             if (j == 0) {  // mcast sender
                 // get the bounding box for the mcast
@@ -1780,7 +1801,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
                 }
                 std::vector<uint32_t> mcast_sender_args;
                 mcast_sender_args.push_back((std::uint32_t)in0_dram_addr);
+                mcast_sender_args.push_back((std::uint32_t)out_dram_addr);
                 mcast_sender_args.push_back(in0_start_id);
+                mcast_sender_args.push_back(out_tile_start_id);
                 mcast_sender_args.push_back(Wt);
                 mcast_sender_args.push_back(not mcast_group_first.empty());
                 mcast_sender_args.push_back(not mcast_group_last.empty());
@@ -1866,9 +1889,11 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
                 log_debug(tt::LogOp, "mcast receiver receive from coord: {} {}", group.front().x, group.front().y);
 
                 std::vector<uint32_t> mcast_receiver_args = {
-                    (std::uint32_t)in0_dram_addr,  // in0_tensor_addr
-                    (std::uint32_t)in0_start_id,   // in0_tensor_start_tile_id
-                    (std::uint32_t)Wt,             // num channel tiles
+                    (std::uint32_t)in0_dram_addr,      // in0_tensor_addr
+                    (std::uint32_t)out_dram_addr,      // out_dram_addr
+                    (std::uint32_t)in0_start_id,       // in0_tensor_start_tile_id
+                    (std::uint32_t)out_tile_start_id,  // out_tensor_start_tile_id
+                    (std::uint32_t)Wt,                 // num channel tiles
                     (std::uint32_t)(device->worker_core_from_logical_core(group.front()).x),
                     (std::uint32_t)(device->worker_core_from_logical_core(group.front()).y)};
                 tt::tt_metal::SetRuntimeArgs(program, reader_mcast_receiver_kernels_id, core, mcast_receiver_args);
@@ -1882,7 +1907,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     uint32_t input_mask_tile_start_id = 0;
     for (int i = 0; i < core_coords.size(); ++i) {
         auto core = core_coords[i];
-        uint32_t out_tile_start_id = in0_block_tiles * mcast_groups.size() * core.x + per_core_Nt * core.y;
+        uint32_t out_tile_start_id = per_core_Mt * Wt * core.x + per_core_Nt * core.y;
 
         std::vector<uint32_t> writer_mcast_sender_args;
         writer_mcast_sender_args.push_back(packed_cinv_value);

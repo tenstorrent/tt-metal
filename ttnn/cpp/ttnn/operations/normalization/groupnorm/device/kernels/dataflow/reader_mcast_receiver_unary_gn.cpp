@@ -11,28 +11,29 @@
 // split REDUCE across cores
 void kernel_main() {
     constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
+    constexpr bool out_is_dram = get_compile_time_arg_val(1) == 1;
 
-    uint32_t reduce_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(1));
-    uint32_t reduce_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(2));
+    uint32_t reduce_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(2));
+    uint32_t reduce_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(3));
 
-    constexpr uint32_t num_batch_group = get_compile_time_arg_val(3);
+    constexpr uint32_t num_batch_group = get_compile_time_arg_val(4);
 
-    constexpr uint32_t per_core_N = get_compile_time_arg_val(4);
-    const uint32_t per_core_N_bytes = get_compile_time_arg_val(5);
-    const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(6);
-    constexpr uint32_t per_core_M = get_compile_time_arg_val(7);
-    constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(8);
+    constexpr uint32_t per_core_N = get_compile_time_arg_val(5);
+    const uint32_t per_core_N_bytes = get_compile_time_arg_val(6);
+    const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(7);
+    constexpr uint32_t per_core_M = get_compile_time_arg_val(8);
+    constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(9);
 
-    volatile uint32_t block_h = get_compile_time_arg_val(9);
-    constexpr uint32_t block_w = get_compile_time_arg_val(10);
-    constexpr uint32_t block_hw = get_compile_time_arg_val(11);
+    volatile uint32_t block_h = get_compile_time_arg_val(10);
+    constexpr uint32_t block_w = get_compile_time_arg_val(11);
+    constexpr uint32_t block_hw = get_compile_time_arg_val(12);
 
-    constexpr uint32_t num_cols_per_group = get_compile_time_arg_val(12);
+    constexpr uint32_t num_cols_per_group = get_compile_time_arg_val(13);
 
-    constexpr uint32_t block_w_last = get_compile_time_arg_val(13);
-    constexpr uint32_t GROUP_SIZE_IS_POWER_OF_2 = get_compile_time_arg_val(14);
-    constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_compile_time_arg_val(15);
-    constexpr uint32_t group_row_offset = get_compile_time_arg_val(16);
+    constexpr uint32_t block_w_last = get_compile_time_arg_val(14);
+    constexpr uint32_t GROUP_SIZE_IS_POWER_OF_2 = get_compile_time_arg_val(15);
+    constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_compile_time_arg_val(16);
+    constexpr uint32_t group_row_offset = get_compile_time_arg_val(17);
 
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
@@ -42,10 +43,12 @@ void kernel_main() {
     uint32_t index_g_offset = 0;
 
     uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t start_id = get_arg_val<uint32_t>(1);
-    uint32_t num_channels_tiles = get_arg_val<uint32_t>(2);
-    const uint32_t mcast_sender_noc_x = get_arg_val<uint32_t>(3);
-    const uint32_t mcast_sender_noc_y = get_arg_val<uint32_t>(4);
+    const uint32_t out_addr = get_arg_val<uint32_t>(1);
+    uint32_t start_id = get_arg_val<uint32_t>(2);
+    const uint32_t out_start_id = get_arg_val<uint32_t>(3);
+    uint32_t num_channels_tiles = get_arg_val<uint32_t>(4);
+    const uint32_t mcast_sender_noc_x = get_arg_val<uint32_t>(5);
+    const uint32_t mcast_sender_noc_y = get_arg_val<uint32_t>(6);
 
     constexpr uint32_t cb_ex_partial = tt::CBIndex::c_8;  // E[x] partial reduce
     constexpr uint32_t cb_ex = tt::CBIndex::c_9;          // E[x] partial reduce
@@ -57,9 +60,11 @@ void kernel_main() {
     constexpr uint32_t cb_repack_out = tt::CBIndex::c_31;
     constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
     constexpr uint32_t cb_x = tt::CBIndex::c_24;
+    constexpr uint32_t cb_reread_out = tt::CBIndex::c_23;
 
     const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial);  // tile size
     const DataFormat data_format = get_dataformat(cb_ex_partial);          // data format
+    const DataFormat out_data_format = get_dataformat(cb_out0);
 
     volatile tt_l1_ptr uint32_t* reduce_receiver_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_receiver_semaphore_addr);
@@ -140,6 +145,30 @@ void kernel_main() {
                 noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
                 cb_push_back(cb_mcast_receive, 1);
             }
+        }
+
+        const InterleavedAddrGenFast<out_is_dram> dst_a = {
+            .bank_base_address = out_addr, .page_size = single_tile_size_bytes, .data_format = out_data_format};
+
+        uint32_t out_block_start_id_offset = 0;
+        for (uint32_t out_block_index = 0; out_block_index < num_out_blocks; out_block_index++) {
+            const uint32_t dst_tile_bytes = get_tile_size(cb_reread_out);
+            uint32_t l1_write_addr;
+            l1_write_addr = get_write_ptr(cb_reread_out);
+            cb_reserve_back(cb_reread_out, out_block_hw);
+
+            for (uint32_t mt = 0; mt < out_block_h; mt++) {
+                for (uint32_t nt = 0; nt < block_w; nt++) {
+                    noc_async_read_tile(
+                        out_start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt + index_g_offset,
+                        dst_a,
+                        l1_write_addr);
+                    l1_write_addr += dst_tile_bytes;
+                    noc_async_read_barrier();
+                }
+            }
+            out_block_start_id_offset += block_h * num_channels_tiles;
+            cb_push_back(cb_reread_out, out_block_hw);
         }
 
         if constexpr (GROUP_SIZE_IS_POWER_OF_2) {
