@@ -140,9 +140,9 @@ void bind_avg_pool2d_operation(py::module& module) {
             kernel_size (List of [int]): the (h, w) size of the kernel window.
             stride (List of [int]): the (h, w) stride of the kernel window.
             padding (List of [int]): the (h, w) padding of the input tensor.
-            ceil_mode (bool): When True, uses 'ceiling' function instead of 'floor' function in the formula to compute output shape. Default: False.
-            count_include_pad (bool): When True, includes zero-padding in the avg calculation. Default: True.
-            divisor_override (int): If specified, it will be used as a divisor, otherwise size of the pooling region will be used. Default: None. Not currently supported in ttnn.
+            TODO(jongbinlimTT): ceil_mode (bool): When True, uses 'ceiling' function instead of 'floor' function in the formula to compute output shape. Default: False.
+            TODO(jongbinlimTT): count_include_pad (bool): When True, includes zero-padding in the avg calculation. Default: True.
+            TODO(jongbinlimTT): divisor_override (int): If specified, it will be used as a divisor, otherwise size of the pooling region will be used. Default: None. Not currently supported in ttnn.
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): the memory configuration for the output tensor. Defaults to `None`.
