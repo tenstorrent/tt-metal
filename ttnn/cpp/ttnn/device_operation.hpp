@@ -452,8 +452,8 @@ typename device_operation_t::tensor_return_value_t launch_on_multi_device(
     std::vector<tensor_return_value_t> outputs;
     outputs.reserve(num_shards);
 
-    for (const auto &[shard_index, buffer] : storage.buffers ) {
-        auto device = buffer->device();
+    for (auto shard_index = 0; shard_index < num_shards; shard_index++) {
+        auto device = storage.get_buffer_for_device_id(shard_index)->device();
         auto shard_tensor_args = get_shard_tensor_args<device_operation_t>(shard_index, device, tensor_args);
         outputs.push_back(launch_on_single_device<device_operation_t>(cq_id, operation_attributes, shard_tensor_args));
     }
