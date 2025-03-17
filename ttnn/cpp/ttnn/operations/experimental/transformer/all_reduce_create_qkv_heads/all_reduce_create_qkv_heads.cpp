@@ -11,28 +11,7 @@
 
 namespace ttnn::operations::experimental::ccl::transformer {
 
-uint32_t find_scatter_dim(const ttnn::Shape& input_tensor_padded_shape, size_t num_workers) {
-    // iterate until we find a dimension that is divisible by num_workers
-    TT_FATAL(input_tensor_padded_shape.size() == 4, "Expected input tensor to have 4 dimensions");
-    ttnn::Shape input_tensor_shape_in_tiles{
-        input_tensor_padded_shape[0],
-        input_tensor_padded_shape[1],
-        input_tensor_padded_shape[2] / tt::constants::TILE_HEIGHT,
-        input_tensor_padded_shape[3] / tt::constants::TILE_WIDTH};
-    for (uint32_t dim = 0; dim < 4; ++dim) {
-        if (input_tensor_shape_in_tiles[dim] % num_workers == 0) {
-            tt::log_debug(
-                "Found scatter dimension {} for input tensor with padded shape {}", dim, input_tensor_padded_shape);
-            return dim;
-        }
-    }
-    TT_THROW(
-        "No scatter dimension found for input tensor with padded shape {} and num_workers {}",
-        input_tensor_padded_shape,
-        num_workers);
-}
-
-ttnn::Tensor ExecuteAllReduceCreateQkvHeads::invoke(
+std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteAllReduceCreateQkvHeads::invoke(
     const ttnn::Tensor& input_tensor,
     ttnn::Tensor& buffer_tensor,
     const uint32_t cluster_axis,

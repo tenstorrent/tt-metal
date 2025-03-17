@@ -182,7 +182,7 @@ namespace operations {
 namespace experimental {
 namespace ccl {
 
-Tensor all_reduce_create_qkv_heads(
+std::tuple<Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
     const Tensor& input_tensor,
     Tensor& buffer_tensor,
     const uint32_t cluster_axis,
@@ -242,7 +242,7 @@ Tensor all_reduce_create_qkv_heads(
         },
         {input_tensor, buffer_tensor},
         output_tensors);
-    return output_tensors.at(0);
+    return std::make_tuple(output_tensors.at(0), output_tensors.at(1), output_tensors.at(2));
 }
 
 }  // namespace ccl

@@ -34,7 +34,8 @@ void bind_all_reduce_create_qkv_heads(pybind11::module& module, const ccl_operat
                const ttnn::MemoryConfig& memory_config,
                ttnn::ccl::Topology topology,
                const std::optional<size_t> num_links,
-               std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) -> ttnn::Tensor {
+               std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt)
+                -> std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> {
                 return self(
                     input_tensor,
                     buffer_tensor,
