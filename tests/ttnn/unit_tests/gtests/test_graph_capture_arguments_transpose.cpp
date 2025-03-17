@@ -62,7 +62,7 @@ TEST_F(TestGraphCaptureArgumentsTranspose, Transpose) {
         operation1.arguments[2],
         "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::"
         "nullopt)");
-    EXPECT_EQ(operation1.arguments[3], "[ unsupported type , std::__1::reference_wrapper<std::__1::nullopt_t const>]");
+    EXPECT_EQ(operation1.arguments[3], "[ unsupported type , std::reference_wrapper<std::nullopt_t const>]");
     EXPECT_EQ(operation1.arguments[4], "0");
 
     auto operation2 = operations[2];
@@ -71,12 +71,12 @@ TEST_F(TestGraphCaptureArgumentsTranspose, Transpose) {
     EXPECT_EQ(
         operation2.arguments[0],
         "[ unsupported type , "
-        "std::__1::reference_wrapper<ttnn::operations::data_movement::PermuteDeviceOperation::operation_attributes_t "
+        "std::reference_wrapper<ttnn::operations::data_movement::PermuteDeviceOperation::operation_attributes_t "
         "const>]");
     EXPECT_EQ(
         operation2.arguments[1],
         "[ unsupported type , "
-        "std::__1::reference_wrapper<ttnn::operations::data_movement::PermuteDeviceOperation::tensor_args_t const>]");
+        "std::reference_wrapper<ttnn::operations::data_movement::PermuteDeviceOperation::tensor_args_t const>]");
 
     auto operation3 = operations[3];
     EXPECT_EQ(operation3.operation_name, "tt::tt_metal::create_device_tensor");
@@ -84,7 +84,7 @@ TEST_F(TestGraphCaptureArgumentsTranspose, Transpose) {
     EXPECT_EQ(operation3.arguments[0], "Shape([1, 2048, 1, 512])");
     EXPECT_EQ(operation3.arguments[1], "DataType::BFLOAT16");
     EXPECT_EQ(operation3.arguments[2], "Row Major");
-    EXPECT_EQ(operation3.arguments[3], "[ unsupported type , std::__1::reference_wrapper<tt::tt_metal::IDevice*>]");
+    EXPECT_EQ(operation3.arguments[3], "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]");
     EXPECT_EQ(
         operation3.arguments[4],
         "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::"

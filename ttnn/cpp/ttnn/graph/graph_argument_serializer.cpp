@@ -3,7 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "graph_argument_serializer.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/types.hpp"
+#include <boost/algorithm/string/replace.hpp>
 
 namespace ttnn::graph {
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Layout& layout) {
@@ -22,6 +25,32 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Tile& config) {
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Tensor& tensor) {
     tt::stl::reflection::operator<<(os, tensor);
+    return os;
+}
+
+std::ostream& operator<<(
+    std::ostream& os,
+    const std::variant<ttnn::GrayskullComputeKernelConfig, ttnn::WormholeComputeKernelConfig>& kernel_config) {
+    tt::stl::reflection::operator<<(os, kernel_config);
+    return os;
+}
+
+template <typename T, typename U>
+std::ostream& operator<<(std::ostream& os, const std::variant<T, U>& variant) {
+    tt::stl::reflection::operator<<(os, variant);
+    return os;
+}
+
+std::ostream& operator<<(
+    std::ostream& os,
+    const std::variant<
+        ttnn::operations::matmul::MatmulMultiCoreProgramConfig,
+        ttnn::operations::matmul::MatmulMultiCoreNonOptimizedReuseProgramConfig,
+        ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig,
+        ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig,
+        ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig,
+        ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>& program_config) {
+    tt::stl::reflection::operator<<(os, program_config);
     return os;
 }
 
@@ -69,16 +98,6 @@ void GraphArgumentSerializer::register_small_vector() {
     };
 }
 
-template <typename T>
-void GraphArgumentSerializer::register_special_type() {
-    registry()[typeid(std::reference_wrapper<T>)] = [](const std::any& value) -> std::string {
-        std::ostringstream oss;
-        auto referenced_value = std::any_cast<std::reference_wrapper<T>>(value);
-        oss << referenced_value.get();
-        return oss.str();
-    };
-}
-
 template <typename OptionalT>
 void GraphArgumentSerializer::register_optional_type() {
     registry()[typeid(std::reference_wrapper<OptionalT>)] = [](const std::any& value) -> std::string {
@@ -120,7 +139,8 @@ void GraphArgumentSerializer::register_type() {
     // Particular cases for optional
     register_optional_type<std::optional<T>>();
     register_optional_type<const std::optional<T>>();
-
+    register_optional_type<std::optional<const T>>();
+    register_optional_type<const std::optional<const T>>();
     // Handle complex types (feel free to add more in the future)
     // Small vector
     register_small_vector<T, 2>();
@@ -139,12 +159,15 @@ std::vector<std::string> GraphArgumentSerializer::to_list(const std::span<std::a
 
         auto it = registry().find(element.type());
         if (it != registry().end()) {
-            result.push_back(it->second(element));
+            auto str_result = it->second(element);
+            boost::algorithm::replace_all(str_result, "__1::", "");
+            result.push_back(str_result);
         } else {
             // for debugging reasons, I want to report the type that is not managed
             std::ostringstream oss;
             oss << "[ unsupported type" << " , ";
             auto demangled_name = graph_demangle(element.type().name());
+            boost::algorithm::replace_all(demangled_name, "__1::", "");
             oss << demangled_name;
             oss << "]";
             result.push_back(oss.str());
@@ -162,12 +185,27 @@ void GraphArgumentSerializer::initialize() {
     GraphArgumentSerializer::register_type<float>();
     GraphArgumentSerializer::register_type<uint8_t>();
     GraphArgumentSerializer::register_type<uint16_t>();
+    GraphArgumentSerializer::register_type<std::string>();
     GraphArgumentSerializer::register_type<tt::tt_metal::DataType>();
     GraphArgumentSerializer::register_type<tt::tt_metal::Layout>();
     GraphArgumentSerializer::register_type<tt::tt_metal::MemoryConfig>();
     GraphArgumentSerializer::register_type<tt::tt_metal::Shape>();
     GraphArgumentSerializer::register_type<tt::tt_metal::Tensor>();
     GraphArgumentSerializer::register_type<tt::tt_metal::Tile>();
-    GraphArgumentSerializer::register_special_type<tt::stl::StrongType<unsigned char, ttnn::QueueIdTag>>();
+    GraphArgumentSerializer::register_type<tt::stl::StrongType<unsigned char, ttnn::QueueIdTag>>();
+    GraphArgumentSerializer::register_type<ttnn::types::CoreGrid>();
+    GraphArgumentSerializer::register_type<
+        std::variant<ttnn::GrayskullComputeKernelConfig, ttnn::WormholeComputeKernelConfig>>();
+    GraphArgumentSerializer::register_type<std::variant<
+        ttnn::operations::matmul::MatmulMultiCoreProgramConfig,
+        ttnn::operations::matmul::MatmulMultiCoreNonOptimizedReuseProgramConfig,
+        ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig,
+        ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig,
+        ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig,
+        ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>>();
+    GraphArgumentSerializer::register_type<std::variant<float, int>>();
+    GraphArgumentSerializer::register_type<std::variant<int, float>>();
+    GraphArgumentSerializer::register_type<std::variant<unsigned int, float>>();
+    GraphArgumentSerializer::register_type<std::variant<float, unsigned int>>();
 }
 }  // namespace ttnn::graph
