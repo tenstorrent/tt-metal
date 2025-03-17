@@ -43,7 +43,7 @@ void kernel_main() {
     {
         cb_reserve_back(cb_mask_w_idx, onetile);
         uint16_t* ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_mask_w_idx));
-        constexpr uint16_t one = 0x00003F80;
+        constexpr uint16_t one = 0x00003F80;  // (bfloat16)1.0 -> uint16_t
         constexpr uint16_t zero = 0x0;
         for (uint32_t face = 0; face < 4; ++face) {
             uint32_t offset = (face & 1U) << 4U;

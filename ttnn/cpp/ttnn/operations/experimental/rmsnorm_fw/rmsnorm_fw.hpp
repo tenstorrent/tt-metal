@@ -8,8 +8,13 @@
 namespace ttnn::operations::experimental {
 
 struct RMSNormForwardOperation {
-    // static std::vector<Tensor> invoke(
-    static std::tuple<Tensor, Tensor> invoke(
+    static std::vector<std::optional<Tensor>> invoke(
+        const Tensor& input_tensor,
+        const Tensor& gamma_tensor,
+        bool return_intermediates = true,
+        float epsilon = 1e-6F);
+
+    static std::vector<std::optional<Tensor>> create_async_optional_output_tensors(
         const Tensor& input_tensor,
         const Tensor& gamma_tensor,
         bool return_intermediates = true,

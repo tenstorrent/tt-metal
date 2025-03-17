@@ -61,8 +61,7 @@ const std::string kEverythingExceptGammaFitsInL1DefineKey = "EVERYTHING_EXCEPT_G
 
 uint32_t pack_two_bfloat16_to_uint32(float value) {
     uint32_t uint32_data = std::bit_cast<uint32_t>(value);
-    uint16_t uint16_data = uint32_data >> 16;
-    uint32_t casted_uint16_data = static_cast<uint32_t>(uint16_data);
+    uint32_t casted_uint16_data = uint32_data >> 16U;
     return casted_uint16_data | (casted_uint16_data << 16);
 }
 
@@ -369,12 +368,9 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
     }
 
     // setup defines for reduce
+    // it does not compile without these defines
     defines["REDUCE_OP"] = "PoolType::SUM";
     defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
-
-    for (auto& [key, value] : defines) {
-        fmt::println("define: {} = {}", key, value);
-    }
 
     RMSNormForwardKernels kernels;
     kernels.reader = create_reader_kernel(

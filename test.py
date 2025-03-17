@@ -14,13 +14,14 @@ with ttnn.manage_device(device_id=0) as device:
     )
 
     # dim = 24 * 32
-    # dim = 2 ** 10 - 1
+    dim = 2**12
     # dim = 16
-    # x_torch = torch.randn((64, 8, 1024, dim), dtype=torch.bfloat16)
-    x_torch = torch.randn((12, 1, 4096, dim), dtype=torch.bfloat16)
+    x_torch = torch.randn((32, 1, 4096, dim), dtype=torch.bfloat16)
+    # x_torch = torch.randn((12, 1, 4096, dim), dtype=torch.bfloat16)
+    # x_torch = torch.randn((1, 1, 1, dim), dtype=torch.bfloat16)
     expected_rms = torch.sqrt(torch.sum(x_torch**2, dim=-1, keepdim=True) / dim + 1e-5)
     gamma_torch = torch.randn((1, 1, 1, dim), dtype=torch.bfloat16)
-    expected_result = x_torch / expected_rms * gamma_torch
+    expected_result = x_torch * gamma_torch / expected_rms
 
     x = ttnn.from_torch(x_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     gamma = ttnn.from_torch(gamma_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -43,6 +44,12 @@ with ttnn.manage_device(device_id=0) as device:
     x_new, rms = ttnn.experimental.rmsnorm_fw(x, gamma, True, 1e-5)
     ttnn.synchronize_device(device)
 
+    x_new, _ = ttnn.experimental.rmsnorm_fw(x, gamma, False, 1e-5)
+    ttnn.synchronize_device(device)
+
+    x_new, rms = ttnn.experimental.rmsnorm_fw(x, gamma, True, 1e-5)
+    ttnn.synchronize_device(device)
+
     from time import time
 
     start = time()
@@ -53,7 +60,7 @@ with ttnn.manage_device(device_id=0) as device:
 
     start = time()
     for _ in range(25):
-        e, _ = ttnn.experimental.rmsnorm_fw(x, gamma, True, 1e-5)
+        e, _ = ttnn.experimental.rmsnorm_fw(x, gamma, False, 1e-5)
         ttnn.synchronize_device(device)
     new_total = time() - start
 

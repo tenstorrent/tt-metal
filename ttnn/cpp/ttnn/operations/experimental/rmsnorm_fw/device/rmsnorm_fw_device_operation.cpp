@@ -94,9 +94,7 @@ spec_return_value_t RMSNormForwardDeviceOperation::compute_output_specs(
             output_specs.push_back(tensor_args.preallocated_rms->get_tensor_spec());
         } else {
             auto shape = tensor_args.input.get_logical_shape();
-            shape[-1] = 1U;
-
-            fmt::println("Compute output specs: {}", shape);
+            shape[-1] = 1U;  // RMS is a scalar per row
 
             output_specs.emplace_back(
                 shape, TensorLayout(tensor_args.input.get_dtype(), Layout::TILE, tensor_args.input.memory_config()));
@@ -120,15 +118,11 @@ tensor_return_value_t RMSNormForwardDeviceOperation::create_output_tensors(
     }
 
     if (args.return_intermediates) {
-        fmt::println("Returning intermediates...");
         if (tensor_args.preallocated_rms.has_value()) {
             output_tensors.push_back(tensor_args.preallocated_rms.value());
         } else {
             output_tensors.push_back(create_device_tensor(output_specs[1], tensor_args.input.device()));
         }
-
-        fmt::println("Intermediates output logical shape: {}", output_tensors.back().get_logical_shape());
-        fmt::println("Intermediates output padded shape: {}", output_tensors.back().get_padded_shape());
     }
 
     return output_tensors;
@@ -137,18 +131,10 @@ tensor_return_value_t RMSNormForwardDeviceOperation::create_output_tensors(
 tt::stl::hash::hash_t RMSNormForwardDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    // const auto& input_padded_shape = input_tensor.get_padded_shape();
     const auto& input_logical_shape = input_tensor.get_logical_shape();
     auto program_factory = select_program_factory(args, tensor_args);
     operation::Hash hash = operation::hash_operation<RMSNormForwardDeviceOperation>(
-        args,
-        program_factory.index(),
-        input_tensor.dtype(),
-        // input_padded_shape,
-        input_logical_shape[0],
-        input_logical_shape[1],
-        input_logical_shape[2],
-        input_logical_shape[3]);
+        args, program_factory.index(), input_tensor.dtype(), input_logical_shape);
 
     return hash;
 }
