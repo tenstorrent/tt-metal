@@ -122,7 +122,7 @@ static ttnn::Tensor pad_impl(
                 std::array<uint32_t, 4> output_shape_width_padded{
                     input_logical_shape[0], input_logical_shape[1], input_logical_shape[2], output_w};
                 auto width_pad_memory_config = create_sharded_memory_config(
-                    ttnn::SimpleShape{output_shape_width_padded},
+                    ttnn::Shape{output_shape_width_padded},
                     input_tensor_4D.shard_spec()->grid,  // reuse input cores for now: FIXME: can we do better?
                                                          // it's complicated because we need the input shards to be
                                                          // local to the core holding the output shard currently.
@@ -156,7 +156,7 @@ static ttnn::Tensor pad_impl(
                         "infinite recursion");
 
                     auto height_pad_memory_config = create_sharded_memory_config(
-                        ttnn::SimpleShape{output_padded_shape},
+                        ttnn::Shape{output_padded_shape},
                         input_tensor_4D.shard_spec()->grid,
                         ShardStrategy::HEIGHT,
                         ShardOrientation::ROW_MAJOR);
