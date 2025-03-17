@@ -59,9 +59,11 @@ void kernel_main() {
 
     constexpr uint32_t cb_scale_in = tt::CBIndex::c_4;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
+    constexpr uint32_t cb_col_identity = tt::CBIndex::c_7;
 
     generate_bcast_unary_scalar(cb_scale_in, scale_val);
     generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
+    generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
 
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
         const uint32_t q_batch_offset = nb * NQH * Sqt * DHt;

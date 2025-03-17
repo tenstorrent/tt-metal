@@ -494,6 +494,10 @@ operation::ProgramWithCallbacks sdpa_multi_core(
                             .set_page_size(tt::CBIndex::c_5, scalar_tile_size);
     auto cb_in5_id = CreateCircularBuffer(program, core_grid, c_in5_config);
 
+    auto c_in7_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_7, scalar_df}})
+                            .set_page_size(tt::CBIndex::c_7, scalar_tile_size);
+    auto cb_in7_id = CreateCircularBuffer(program, core_grid, c_in7_config);
+
     if (is_chunked) {
         auto c_in6_config = CircularBufferConfig(page_table_stick_size, {{tt::CBIndex::c_6, page_table_df}})
                                 .set_page_size(tt::CBIndex::c_6, page_table_stick_size);

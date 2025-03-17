@@ -64,6 +64,7 @@ void MAIN {
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
     constexpr uint32_t cb_scale_in = tt::CBIndex::c_4;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
+    constexpr uint32_t cb_col_identity = tt::CBIndex::c_7;
 
     constexpr uint32_t cb_qk_im = tt::CBIndex::c_24;
     constexpr uint32_t cb_out_im_A = tt::CBIndex::c_25;
@@ -183,6 +184,12 @@ void MAIN {
                     sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, Sk_chunk_t>(alias_cur_max);
 
                     /* cb_cur_sum = sum(cb_qk_im, dim=-1) */
+                    /**
+                     * DEBUG: Use matml_reduce instead of reduce_sum for 6µs speedup. Still experimental, not robust.
+                     * matmul_reduce has a hardcoded matmul config for the performance test case shapes.
+                     */
+                    // matmul_reduce(cb_qk_im, cb_col_identity, alias_cur_sum);
+
                     reduce_c<
                         PoolType::SUM,
                         ReduceDim::REDUCE_ROW,
