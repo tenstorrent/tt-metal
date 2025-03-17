@@ -28,6 +28,7 @@ enum class UnaryOpType {
     SIGN,
     SQUARE,
     EQZ,
+    EQZ_INT32,
     NEZ,
     GTZ,
     LTZ,
