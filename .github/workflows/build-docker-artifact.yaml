@@ -118,6 +118,10 @@ jobs:
           cache-to: type=inline
           pull: true
 
+  # Cannot use needs.build-docker-image to ensure this job runs sequentially after the build job because it would break when the build job is skipped
+  # Instead, this setup causes the tag-latest job to lag one run behind the actual build.
+  # However, this isn't a huge issue because the image should already have been built on a branch before merging, and if it wasn't (like in a push scenario),
+  # the problem would self-correct on the next merge to main, which happens frequently.
   tag-latest:
     name: "🔄 Update latest tag"
     needs: check-docker-images
