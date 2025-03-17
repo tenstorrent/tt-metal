@@ -338,185 +338,9 @@ std::vector<PixelMetadata> generate_tensor_metadata(
 
 const uint16_t PAD_LOCAL_SENTINAL = 0xFFFF;
 
-using GatherStep = std::tuple<uint32_t, uint32_t, uint32_t>;
-using PerCoreGatherData = std::map<std::pair<uint32_t, uint32_t>, std::vector<GatherStep>>;
-using ReblockedData = std::map<std::pair<uint32_t, uint32_t>, std::map<uint32_t, std::vector<GatherStep>>>;
 using uint32_triplet_t = std::tuple<uint32_t, uint32_t, uint32_t>;
-
-// Split gather data up by a specified block size
-// This information is needed to interleave input untilization with gather
-ReblockedData reblock_per_core_gather_data(const PerCoreGatherData& per_core_gather_data, uint32_t block_size) {
-    ReblockedData block_data;
-    for (const auto& [core_src_dst, step] : per_core_gather_data) {
-        for (const auto& [src_start, dst_start, len] : step) {
-            uint32_t src_offset = src_start;
-            uint32_t dst_offset = dst_start;
-            uint32_t length = len;
-            while (length > 0) {
-                const uint32_t block_id = src_offset / block_size;
-                const uint32_t offset_in_block = src_offset % block_size;
-                const uint32_t remaining_space_in_block = block_size - offset_in_block;
-                const uint32_t transfer_size = (length <= remaining_space_in_block ? length : remaining_space_in_block);
-
-                block_data[core_src_dst][block_id].push_back({offset_in_block, dst_offset, transfer_size});
-
-                src_offset += transfer_size;
-                dst_offset += transfer_size;
-                length -= transfer_size;
-            }
-        }
-    }
-    return block_data;
-}
-
-// Local and remote fields map nhw_core_id => block_id => num_copies
-struct BlockingConfig {
-    std::vector<std::map<uint32_t, uint32_t>> local;
-    std::vector<std::map<uint32_t, uint32_t>> remote;
-};
-
-// Determined the number of transfers needed for each block
-BlockingConfig generate_blocking_configs(const ReblockedData& reblocked_gather_data, uint32_t num_cores_nhw) {
-    std::vector<std::map<uint32_t, uint32_t>> local_block_config(num_cores_nhw);
-    std::vector<std::map<uint32_t, uint32_t>> remote_block_config(num_cores_nhw);
-
-    // Given each route (src_core->dst_core) we want to count up the amount of transfers from each block
-    for (auto [src_dst, reblocked_data] : reblocked_gather_data) {
-        auto [src_core_id, dst_core_id] = src_dst;
-        bool is_pad = src_core_id == PAD_LOCAL_SENTINAL;
-        bool is_local = src_core_id == dst_core_id;
-        bool is_remote = !is_local && !is_pad;
-        if (is_pad) {
-            continue;  // We don't need blocking information for padding because it is not dependant on input
-        }
-        // auto& config =
-        // is_local ? local_block_config[src_core_id] : remote_block_config[is_remote ? dst_core_id : src_core_id];
-        auto& config = is_local ? local_block_config[src_core_id] : remote_block_config[src_core_id];
-
-        for (const auto& [block_id, transfers] : reblocked_data) {
-            const auto transfers_in_block = transfers.size();
-            if (config.contains(block_id)) {
-                config[block_id] += transfers_in_block;
-            } else {
-                config[block_id] = transfers_in_block;
-            }
-        }
-    }
-    return {local_block_config, remote_block_config};
-}
-
-struct FlattenedBlockingConfig {
-    std::vector<std::vector<uint16_t>> local;
-    std::vector<std::vector<uint16_t>> remote;
-};
-
-FlattenedBlockingConfig flatten_blocking_config(const BlockingConfig& blocking, uint32_t num_cores_nhw) {
-    uint32_t max_block_id = 0;
-    for (const auto& core_map : blocking.local) {
-        if (!core_map.empty()) {
-            auto it = core_map.rbegin();  // last item = greatest block_id since map is ordered
-            if (it->first > max_block_id) {
-                max_block_id = it->first;
-            }
-        }
-    }
-    for (const auto& core_map : blocking.remote) {
-        if (!core_map.empty()) {
-            auto it = core_map.rbegin();
-            if (it->first > max_block_id) {
-                max_block_id = it->first;
-            }
-        }
-    }
-
-    // We want to return num_cores_nhw rows, each (max_block_id+1) columns
-    FlattenedBlockingConfig result;
-    result.local.resize(num_cores_nhw);
-    result.remote.resize(num_cores_nhw);
-
-    const uint32_t max_num_blocks = max_block_id + 1;
-
-    for (uint32_t core_id = 0; core_id < num_cores_nhw; ++core_id) {
-        // local
-        {
-            result.local[core_id].resize(max_num_blocks, 0);
-            const auto& core_map = blocking.local[core_id];
-            for (const auto& kv : core_map) {
-                auto block_id = kv.first;
-                auto transfers = kv.second;
-                if (block_id <= max_block_id) {
-                    result.local[core_id][block_id] = transfers;
-                }
-            }
-            result.local[core_id].insert(result.local[core_id].begin(), max_num_blocks);  // add a header
-        }
-        // remote
-        {
-            result.remote[core_id].resize(max_num_blocks, 0);  // include
-            const auto& core_map = blocking.remote[core_id];
-            for (const auto& kv : core_map) {
-                auto block_id = kv.first;
-                auto transfers = kv.second;
-                if (block_id <= max_block_id) {
-                    result.remote[core_id][block_id] = transfers;
-                }
-            }
-            result.remote[core_id].insert(result.remote[core_id].begin(), max_num_blocks);  // add a header
-        }
-    }
-
-    return result;
-}
-
-void validate_blocking_configs(
-    const BlockingConfig& blocking_configs,
-    const std::vector<std::pair<uint32_triplet_t, std::vector<uint32_triplet_t>>>& local_config,
-    const std::vector<std::vector<std::pair<uint32_triplet_t, std::vector<uint32_triplet_t>>>>& remote_config) {
-    // local
-    for (size_t core = 0; core < local_config.size(); ++core) {
-        const auto& gather_entry = local_config[core];
-        const auto& gather_steps = gather_entry.second;
-        uint32_t num_steps = gather_steps.size();
-
-        uint32_t sum = 0;
-        if (core < blocking_configs.local.size()) {
-            for (const auto& kv : blocking_configs.local[core]) {
-                sum += kv.second;
-            }
-        }
-        // If there are any gather steps there should be at least 1 blocking transfers
-        // We can't check equiality here because we can create multiple chunks from a single transfer
-        TT_FATAL(
-            (num_steps == 0 && sum == 0) || (num_steps > 0 && sum > 0),
-            "Local blocking config mismatch for core {}: found {} gather steps but blocking sum is {}",
-            core,
-            num_steps,
-            sum);
-    }
-
-    // remote
-    for (size_t core = 0; core < remote_config.size(); ++core) {
-        uint32_t num_steps = 0;
-        for (const auto& entry : remote_config[core]) {
-            num_steps += entry.second.size();
-        }
-
-        uint32_t sum = 0;
-        if (core < blocking_configs.remote.size()) {
-            for (const auto& kv : blocking_configs.remote[core]) {
-                sum += kv.second;
-            }
-        }
-        // If there are any gather steps there should be at least 1 blocking transfers
-        // We can't check equiality here because we can create multiple chunks from a single transfer
-        TT_FATAL(
-            (num_steps == 0 && sum == 0) || (num_steps > 0 && sum > 0),
-            "Remote blocking config mismatch for core {}: found {} gather steps but blocking sum is {}",
-            core,
-            num_steps,
-            sum);
-    }
-}
+using GatherStep = uint32_triplet_t;
+using PerCoreGatherData = std::map<std::pair<uint32_t, uint32_t>, std::vector<GatherStep>>;
 
 uint32_t generate_max_out_nsticks_per_core(const std::vector<ShardBoundary>& shard_boundaries) {
     // calculate max_out_nsticks_per_core
@@ -532,21 +356,12 @@ struct GatherHeader {
     uint16_t noc_x;
     uint16_t noc_y;
     uint16_t num_transfers;
-
-    bool operator<(const GatherHeader& other) const {
-        return std::tie(noc_x, noc_y) < std::tie(other.noc_x, other.noc_y);
-    }
 };
 
 struct GatherTransfer {
     uint16_t src_id;
     uint16_t dst_id;
     uint16_t size;
-
-    // Order based on position in input
-    bool operator<(const GatherTransfer& other) const {
-        return std::tie(src_id, dst_id, size) < std::tie(other.src_id, other.dst_id, other.size);
-    }
 };
 
 struct GatherRoute {
@@ -596,7 +411,6 @@ std::vector<std::vector<uint16_t>> serialize_gather_configs(const std::vector<Ga
     for (const auto& config : configs) {
         serialized_configs.push_back(serialize_gather_config(config));
     }
-
     // Pad each core's config to the same length so we can shard it
     size_t max_size = 0;
     for (const auto& config : serialized_configs) {
@@ -607,179 +421,44 @@ std::vector<std::vector<uint16_t>> serialize_gather_configs(const std::vector<Ga
         TT_ASSERT(config.size() <= max_size);
         config.resize(max_size, 0);
     }
-
     return serialized_configs;
 }
 
-void run(std::vector<uint16_t> config) {
-    const uint16_t total_number_of_segments = config[0];
-
-    uint16_t number_of_segments_remaining = total_number_of_segments;
-    uint16_t index = 1;
-
-    uint16_t current_noc_x = 0;
-    uint16_t current_noc_y = 0;
-    uint16_t transfers_remaining = 0;
-
-    uint16_t src_offset = 0;
-    uint16_t dst_offset = 0;
-    uint16_t transfer_size = 0;
-
-    while (number_of_segments_remaining) {
-        // read header
-        current_noc_x = config[index++];
-        current_noc_y = config[index++];
-        transfers_remaining = config[index++];
-
-        while (transfers_remaining > 0) {
-            src_offset = config[index++];
-            dst_offset = config[index++];
-            transfer_size = config[index++];
-            // do copy
-            tt::log_info(
-                "copy x={} y={} src={} dst={} size={}",
-                current_noc_x,
-                current_noc_y,
-                src_offset,
-                dst_offset,
-                transfer_size);
-
-            transfers_remaining--;
-        }
-        number_of_segments_remaining--;
-    }
-}
-
-GatherConfig regenerate_ordered(const GatherConfig& input) {
-    // Flatten all transfers with their headers
-    struct RouteTransferPair {
-        GatherHeader header;
-        GatherTransfer transfer;
-    };
-
-    std::vector<RouteTransferPair> all_transfers;
-    for (const auto& route : input.routes) {
-        for (const auto& transfer : route.transfers) {
-            all_transfers.push_back({route.header, transfer});
-        }
-    }
-
-    // Sort transfers globally
-    std::sort(all_transfers.begin(), all_transfers.end(), [](const RouteTransferPair& a, const RouteTransferPair& b) {
-        return a.transfer < b.transfer;
-    });
-
-    // Rebuild GatherConfig with ordered transfers
-    GatherConfig ordered_config;
-    std::map<GatherHeader, std::vector<GatherTransfer>> grouped;
-    for (const auto& rt : all_transfers) {
-        grouped[rt.header].push_back(rt.transfer);  // This works because std::map is ordered
-    }
-
-    for (const auto& [header, transfers] : grouped) {
-        GatherRoute route;
-        route.header = header;
-        route.header.num_transfers = transfers.size();
-        route.transfers = transfers;
-        ordered_config.routes.push_back(route);
-    }
-    return ordered_config;
-}
-
-GatherConfig reorder_gather_config(const GatherConfig& input) {
-    // Step 1: Flatten transfers globally
-    struct TransferInfo {
-        uint16_t noc_x;
-        uint16_t noc_y;
-        GatherTransfer transfer;
-    };
-
-    std::vector<TransferInfo> global_transfers;
-    for (const auto& route : input.routes) {
-        for (const auto& transfer : route.transfers) {
-            global_transfers.push_back({route.header.noc_x, route.header.noc_y, transfer});
-        }
-    }
-
-    TT_FATAL(!global_transfers.empty(), "Input transfers cannot be empty");
-
-    // Step 2: Build the globally ordered config
-    GatherConfig output;
-
-    // Begin the first route using the first flattened transfer's destination
-    GatherRoute current_route;
-    current_route.header = {global_transfers[0].noc_x, global_transfers[0].noc_y, 0};
-
-    for (const auto& info : global_transfers) {
-        // If the destination changes (noc_x or noc_y), start a new route
-        if (info.noc_x != current_route.header.noc_x || info.noc_y != current_route.header.noc_y) {
-            // Finalize the old route
-            current_route.header.num_transfers = current_route.transfers.size();
-            TT_FATAL(current_route.header.num_transfers > 0, "Route cannot have zero transfers");
-            output.routes.push_back(current_route);
-
-            // Start a new route
-            current_route = GatherRoute();
-            current_route.header.noc_x = info.noc_x;
-            current_route.header.noc_y = info.noc_y;
-        }
-        current_route.transfers.push_back(info.transfer);
-    }
-
-    // Finalize the last route
-    current_route.header.num_transfers = current_route.transfers.size();
-    TT_FATAL(current_route.header.num_transfers > 0, "Route cannot have zero transfers");
-    output.routes.push_back(current_route);
-
-    return output;
-}
-
-GatherConfig reorder_gather_config_global(const GatherConfig& input) {
-    struct FlatTransfer {
+GatherConfig reorder_transfers_globally(const GatherConfig& input) {
+    struct DestinationTransferPair {
         uint16_t noc_x;
         uint16_t noc_y;
         uint16_t src_id;
         uint16_t dst_id;
         uint16_t size;
     };
-
-    std::vector<FlatTransfer> all;
+    std::vector<DestinationTransferPair> all;
     for (const auto& route : input.routes) {
         for (const auto& t : route.transfers) {
-            FlatTransfer ft;
-            ft.noc_x = route.header.noc_x;
-            ft.noc_y = route.header.noc_y;
-            ft.src_id = t.src_id;
-            ft.dst_id = t.dst_id;
-            ft.size = t.size;
-            all.push_back(ft);
+            all.push_back({route.header.noc_x, route.header.noc_y, t.src_id, t.dst_id, t.size});
         }
     }
-
     TT_FATAL(!all.empty(), "Expected to have at least one transfer during reorder");
 
-    // Sort by ascending src_id and tie-break by noc_x,noc_y
-    std::sort(all.begin(), all.end(), [](const FlatTransfer& a, const FlatTransfer& b) {
+    // Sort by ascending src_id and tie-break with noc coords
+    std::sort(all.begin(), all.end(), [](const DestinationTransferPair& a, const DestinationTransferPair& b) {
         if (a.src_id != b.src_id) {
             return a.src_id < b.src_id;
         }
-        // If you also want stable grouping by (noc_x, noc_y) among same src_id:
         if (a.noc_x != b.noc_x) {
             return a.noc_x < b.noc_x;
         }
         return a.noc_y < b.noc_y;
     });
 
-    // Rebuild a new GatherConfig by grouping consecutive transfers that share (noc_x, noc_y).
+    // Rebuild config by grouping consecutive transfers that share (noc_x, noc_y)
     GatherConfig output;
     {
         GatherRoute current_route;
         current_route.header.noc_x = all[0].noc_x;
         current_route.header.noc_y = all[0].noc_y;
-
         for (size_t i = 0; i < all.size(); i++) {
             const auto& t = all[i];
-
             bool same_core = (t.noc_x == current_route.header.noc_x) && (t.noc_y == current_route.header.noc_y);
             if (!same_core) {
                 current_route.header.num_transfers = static_cast<uint16_t>(current_route.transfers.size());
@@ -791,13 +470,12 @@ GatherConfig reorder_gather_config_global(const GatherConfig& input) {
                 current_route.header.noc_y = t.noc_y;
             }
 
-            GatherTransfer gt;
-            gt.src_id = t.src_id;
-            gt.dst_id = t.dst_id;
-            gt.size = t.size;
-            current_route.transfers.push_back(gt);
+            GatherTransfer transfer;
+            transfer.src_id = t.src_id;
+            transfer.dst_id = t.dst_id;
+            transfer.size = t.size;
+            current_route.transfers.push_back(transfer);
         }
-
         current_route.header.num_transfers = static_cast<uint16_t>(current_route.transfers.size());
         TT_FATAL(current_route.header.num_transfers > 0, "Route cannot have zero transfers");
         output.routes.push_back(current_route);
@@ -855,12 +533,10 @@ generate_halo_kernel_config_tensors(
         return device->worker_core_from_logical_core(core_coord);
     };
 
+    uint32_t num_cores_nhw = shard_boundaries.size();
     PerCoreGatherData
         per_core_gather_data;  // This maps all routes (src_core->dst_core) onto a sequence of operations on the
                                // input sticks that can be padding, local copy/transfer, or remote copy/transfer
-
-    uint32_t num_cores_nhw = shard_boundaries.size();
-
     uint32_t core_id = 0;
     for (auto [output_boundary, input_boundary] : shard_boundaries) {
         auto [input_start, input_end] = input_boundary;
@@ -886,14 +562,6 @@ generate_halo_kernel_config_tensors(
         }
         ++core_id;
     }
-
-    const int block_size = 32;
-    const auto blocked_gather_data = reblock_per_core_gather_data(per_core_gather_data, block_size);
-
-    const auto blocking_configs = generate_blocking_configs(blocked_gather_data, num_cores_nhw);
-    const auto flattened_blocking_configs = flatten_blocking_config(blocking_configs, num_cores_nhw);
-
-    // tt::log_info("gather data = {}", per_core_gather_data);
 
     // construct the config tensors
     /**
@@ -939,8 +607,6 @@ generate_halo_kernel_config_tensors(
         }
     }
 
-    validate_blocking_configs(blocking_configs, local_config, remote_config);
-
     std::vector<GatherConfig> gather_configs(num_cores_nhw);
     for (int core_id = 0; core_id < local_config.size(); core_id++) {
         const auto& config = local_config[core_id];
@@ -972,20 +638,13 @@ generate_halo_kernel_config_tensors(
         }
     }
 
+    const int block_size = 32;  // TODO: pass this in
     std::vector<GatherConfig> ordered_gather_configs;
     for (const auto& config : gather_configs) {
-        // Must split first to ensure global ordering is correct
-        const auto& split = split_into_blocks(config, block_size);
-        ordered_gather_configs.push_back(reorder_gather_config_global(split));
+        // We have to split first to guarantee proper ordering
+        ordered_gather_configs.push_back(reorder_transfers_globally(split_into_blocks(config, block_size)));
     }
-
-    // tt::log_info("gather config = {}", gather_configs);
-    // tt::log_info("ordered gather config = {}", ordered_gather_configs);
     const auto serialized_gather_configs = serialize_gather_configs(ordered_gather_configs);
-    tt::log_info("serialized gather config = {}", serialized_gather_configs);
-    for (int core = 0; core < serialized_gather_configs.size(); core++) {
-        tt::log_info("core {} gather config = {}", core, serialized_gather_configs[core]);
-    }
 
     // flatten and uniformize the lengths of each config list
     auto flatten_pad_config = [](auto& config) -> std::vector<std::vector<uint16_t>> {
@@ -1107,8 +766,8 @@ generate_halo_kernel_config_tensors(
         flattened_pad_config,
         serialized_gather_configs,
         flattened_remote_config,
-        flattened_blocking_configs.local,
-        flattened_blocking_configs.remote);
+        flattened_remote_config,  // TODO: fix the interface here, we just want to return pad and gather configs
+        flattened_remote_config);
 }
 
 std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
