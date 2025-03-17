@@ -136,6 +136,10 @@
 #include "compute_kernel_api/eltwise_unary/fill.h"
 #endif
 
+#if SFPU_OP_COMP_INT_INCLUDE
+#include "compute_kernel_api/eltwise_unary/comp_int.h"
+#endif
+
 #if SFPU_OP_COMPUTE_KERNEL_API_INCLUDE
 #include "compute_kernel_api.h"
 #endif
