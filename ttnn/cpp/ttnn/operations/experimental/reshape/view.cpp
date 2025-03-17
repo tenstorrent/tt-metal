@@ -68,7 +68,7 @@ Tensor tensor_reshape(
                         const auto& tensor_spec = tensor.tensor_spec();
                         auto page_size_bytes = tensor_spec.compute_page_size_bytes();
                         device_buffer->set_page_size(page_size_bytes);
-                        device_storage.update_uniform_specs(new_spec);
+                        device_storage.update_specs(new_spec);
                         return Tensor(std::move(device_storage), new_spec);
                     } else {
                         auto device_buffer = device_storage.get_buffer();
@@ -107,11 +107,11 @@ Tensor tensor_reshape(
                                 new_logical_shape,
                                 new_padded_shape));
 
-                        device_storage.update_uniform_specs(upd_spec);
+                        device_storage.update_specs(upd_spec);
                         return Tensor(std::move(device_storage), upd_spec);
                     }
                 } else {
-                    device_storage.update_uniform_specs(new_spec);
+                    device_storage.update_specs(new_spec);
                     return Tensor(std::move(device_storage), new_spec);
                 }
             } else {

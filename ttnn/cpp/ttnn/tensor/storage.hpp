@@ -67,7 +67,10 @@ struct DeviceStorage {
 
     IDevice* get_device() const;
 
-    void update_uniform_specs(const TensorSpec& new_spec);
+    void update_specs(const TensorSpec& new_spec);
+
+    // Returns true if the tensor spans across all devices in a mesh, and all specs are the same.
+    bool is_uniform_storage() const;
 };
 
 using BorrowedBuffer = std::variant<

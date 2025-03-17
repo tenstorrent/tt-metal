@@ -19,6 +19,7 @@
 #include <tt-metalium/distributed.hpp>
 #include "tools/profiler/op_profiler.hpp"
 #include "ttnn/mesh_device_operation_adapter.hpp"
+#include "ttnn/distributed/types.hpp"
 
 namespace ttnn {
 
@@ -179,7 +180,7 @@ inline auto& create_or_get_meshworkload_from_cache(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args,
     typename device_operation_t::tensor_return_value_t& tensor_return_value,
-    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    ttnn::MeshDevice* mesh_device,
     uint64_t device_operation_id) {
     if (!program_cache_hit) {
         ZoneScopedN("Program Cache Miss");
@@ -206,17 +207,16 @@ inline auto& create_or_get_meshworkload_from_cache(
                 cached_program.program.set_runtime_id(device_operation_id);
 
                 // Create a new mesh workload
-                auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
+                // TODO: #19177 - support heterogeneous tensors.
+                tt::tt_metal::distributed::MeshWorkload mesh_workload;
 
                 // Move the program from the cached_program into the mesh workload
-                auto coordinate_range = tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape());
+                auto coordinate_range = ttnn::MeshCoordinateRange(mesh_device->shape());
                 tt::tt_metal::distributed::AddProgramToMeshWorkload(
-                    mesh_workload,
-                    std::move(cached_program.program),  // Move the program
-                    coordinate_range);
+                    mesh_workload, std::move(cached_program.program), coordinate_range);
 
                 // Create a cached mesh workload with the mesh workload and shared variables
-                std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, typename program_factory_t::shared_variables_t>
+                std::unordered_map<ttnn::MeshCoordinateRange, typename program_factory_t::shared_variables_t>
                     coordinate_range_to_shared_variables;
                 coordinate_range_to_shared_variables[coordinate_range] = std::move(cached_program.shared_variables);
 
@@ -479,7 +479,7 @@ void launch_on_mesh_device(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args,
     typename device_operation_t::tensor_return_value_t& tensor_return_value,
-    tt::tt_metal::distributed::MeshDevice* device) {
+    ttnn::MeshDevice* device) {
     ZoneScopedN("TT_DNN_DEVICE_OP");
 
     if constexpr (HasSkipLaunch<device_operation_t>) {
@@ -558,10 +558,20 @@ void launch_on_mesh_device(
         if (tt::tt_metal::GraphTracker::instance().hook_program(program.get())) {
             return;
         }
-        auto mesh_workload = tt::tt_metal::distributed::MeshWorkload();
-        mesh_workload.add_program(
-            tt::tt_metal::distributed::MeshCoordinateRange(device->shape()),
-            std::move(*program));
+        
+        tt::tt_metal::distributed::MeshWorkload mesh_workload;
+
+        // TODO: #19177 - Verify that all tensors target the same set of devices, and have the same tensor specs across
+        // shards.
+        const Tensor first_tensor = tt::stl::reflection::get_first_object_of_type<ttnn::Tensor>(tensor_args);
+        if (!first_tensor.device_storage().is_uniform_storage()) {
+            // TODO: #19177 - Account for heterogeneous tensors.
+            for (const auto& [coord, _] : first_tensor.device_storage().specs) {
+                mesh_workload.add_program(ttnn::MeshCoordinateRange(coord, coord), std::move(*program));
+            }
+        } else {
+            mesh_workload.add_program(ttnn::MeshCoordinateRange(device->shape()), std::move(*program));
+        }
 
         enqueue_mesh_workload(mesh_workload);
 
@@ -594,7 +604,7 @@ void handle_mesh_adapter_cache_hit(
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
     const typename mesh_device_operation_t::tensor_args_t& tensor_args,
     typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
-    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    ttnn::MeshDevice* mesh_device,
     tt::tt_metal::program_cache::detail::ProgramCache& program_cache,
     tt::stl::hash::hash_t program_hash) {
     ZoneScopedN("MeshDeviceAdapter Cache Hit");
@@ -656,7 +666,7 @@ void create_and_cache_mesh_workload(
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
     const typename mesh_device_operation_t::tensor_args_t& tensor_args,
     typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
-    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    ttnn::MeshDevice* mesh_device,
     tt::tt_metal::program_cache::detail::ProgramCache& program_cache,
     tt::stl::hash::hash_t program_hash) {
 
@@ -745,7 +755,7 @@ void launch_operation_with_adapter(
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
     const typename mesh_device_operation_t::tensor_args_t& tensor_args,
     typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
-    tt::tt_metal::distributed::MeshDevice* mesh_device) {
+    ttnn::MeshDevice* mesh_device) {
     ZoneScopedN("Launch With MeshDeviceAdapter");
 
     // Skip if operation should be skipped
@@ -838,16 +848,14 @@ typename device_operation_t::tensor_return_value_t invoke(
 
     tensor_return_value_t tensor_return_value;
 
-    if (std::holds_alternative<tt::tt_metal::DeviceStorage>(storage)) {
-        tensor_return_value = detail::launch_on_single_device<device_operation_t>(cq_id, operation_attributes, tensor_args);
-    } else {
-        TT_THROW("Unsupported storage type");
-    }
+    TT_FATAL(std::holds_alternative<tt::tt_metal::DeviceStorage>(storage), "Unsupported storage type");
+    tensor_return_value = detail::launch_on_single_device<device_operation_t>(cq_id, operation_attributes, tensor_args);
 
     // Should every output tensor be tracked?
     /*
     if (GraphTracker::instance().is_enabled()) {
-        tensor_return_value = tt::stl::reflection::transform_object_of_type<Tensor>(tt::tt_metal::set_tensor_id, tensor_return_value);
+        tensor_return_value = tt::stl::reflection::transform_object_of_type<Tensor>(tt::tt_metal::set_tensor_id,
+    tensor_return_value);
     }
     */
 

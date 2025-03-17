@@ -1281,7 +1281,7 @@ Tensor pad(
     float pad_value) {
     TT_FATAL(!is_device_tensor(tensor), "pad only supports host tensors");
 
-    // TODO: Treat multi-device host vs owned/borrowed tensors uniformly.
+    // TODO: #15840 - Treat multi-device host vs owned/borrowed tensors uniformly.
     if (ttnn::distributed::is_multi_device_host_tensor(tensor)) {
         return transform(tensor, [&](const Tensor& device_tensor) {
             return pad<T>(device_tensor, output_padded_shape, input_tensor_start, pad_value);
