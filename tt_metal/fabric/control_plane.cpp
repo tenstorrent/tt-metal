@@ -286,7 +286,12 @@ void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_
         // Main board
         this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back(
             this->get_mesh_physical_chip_ids(mesh_ns_size, mesh_ew_size, nw_chip_physical_id));
-    } else if (mesh_graph_desc_filename == "quanta_galaxy_mesh_graph_descriptor.yaml") {
+    } else if (
+        mesh_graph_desc_filename == "quanta_galaxy_mesh_graph_descriptor.yaml" ||
+        mesh_graph_desc_filename == "p100_mesh_graph_descriptor.yaml" ||
+        mesh_graph_desc_filename == "p150_mesh_graph_descriptor.yaml" ||
+        mesh_graph_desc_filename == "p150_x2_mesh_graph_descriptor.yaml" ||
+        mesh_graph_desc_filename == "p150_x4_mesh_graph_descriptor.yaml") {
         // TODO: update to pick out chip automatically
         nw_chip_physical_id = 0;
         mesh_ns_size = routing_table_generator_->get_mesh_ns_size(/*mesh_id=*/0);
@@ -294,11 +299,9 @@ void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_
         // Main board
         this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back(
             this->get_mesh_physical_chip_ids(mesh_ns_size, mesh_ew_size, nw_chip_physical_id));
-    } else if (mesh_graph_desc_filename == "t3k_mesh_graph_descriptor.yaml" ||
-             mesh_graph_desc_filename == "n300_mesh_graph_descriptor.yaml" ||
-             mesh_graph_desc_filename == "p100_mesh_graph_descriptor.yaml" ||
-             mesh_graph_desc_filename == "p150_x2_mesh_graph_descriptor.yaml" ||
-             mesh_graph_desc_filename == "p150_x4_mesh_graph_descriptor.yaml") {
+    } else if (
+        mesh_graph_desc_filename == "t3k_mesh_graph_descriptor.yaml" ||
+        mesh_graph_desc_filename == "n300_mesh_graph_descriptor.yaml") {
         nw_chip_physical_id = this->get_physical_chip_id_from_eth_coord({0, 0, 0, 0, 0});
         mesh_ns_size = routing_table_generator_->get_mesh_ns_size(/*mesh_id=*/0);
         mesh_ew_size = routing_table_generator_->get_mesh_ew_size(/*mesh_id=*/0);
