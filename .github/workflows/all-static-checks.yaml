@@ -109,37 +109,20 @@ jobs:
       with:
         submodules: recursive
     - name: Look for changed CMake files
-      id: changed-files-list
-      uses: jitterbit/get-changed-files@b17fbb00bdc0c0f63fcf166580804b4d2cdc2a42
-      with:
-        format: 'json'
-    - name: Check for changed CMake files
-      id: changed-cmake-files
-      run: |
-        # Parse the JSON and check for changes in .cmake or CMakeLists.txt
-        cmake_changed=false
-        # Loop through the files and check for CMake files
-        readarray -t changed_files <<<"$(jq -r '.[]' <<<'${{ steps.changed-files-list.outputs.all }}')"
-        for file in ${changed_files[@]}; do
-          if [[ "$file" == *.cmake || "$file" == *CMakeLists.txt ]]; then
-            cmake_changed=true
-            break
-          fi
-        done
-        # Set output for the next steps
-        echo "any_changed=$cmake_changed" >> $GITHUB_OUTPUT
+      id: find-changes
+      uses: tenstorrent/tt-metal/.github/actions/find-changed-files@main
     - uses: lukka/get-cmake@b516803a3c5fac40e2e922349d15cdebdba01e60
-      if: steps.changed-cmake-files.outputs.any_changed == 'true'
+      if: steps.find-changes.outputs.cmake-changed == 'true'
       with:
         cmakeVersion: "~3.24.0"
     - name: Check CMake version
-      if: steps.changed-cmake-files.outputs.any_changed == 'true'
+      if: steps.find-changes.outputs.cmake-changed == 'true'
       run: cmake --version
     - name: Install Build Dependencies
-      if: steps.changed-cmake-files.outputs.any_changed == 'true'
+      if: steps.find-changes.outputs.cmake-changed == 'true'
       run: sudo ./install_dependencies.sh --mode build
     - name: Check CMake compatibility
-      if: steps.changed-cmake-files.outputs.any_changed == 'true'
+      if: steps.find-changes.outputs.cmake-changed == 'true'
       env:
         ARCH_NAME: wormhole_b0
         CMAKE_GENERATOR: Ninja
