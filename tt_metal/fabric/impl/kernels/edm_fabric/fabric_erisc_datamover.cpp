@@ -19,6 +19,8 @@
 #include "noc_overlay_parameters.h"
 #include "tt_metal/hw/inc/utils/utils.h"
 
+#include "debug/dprint.h"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -309,18 +311,28 @@ struct WriteTransactionIdTracker {
     FORCE_INLINE bool transaction_flushed(tt::tt_fabric::BufferIndex buffer_index) const {
         if constexpr (BOTH_PARAMS_ARE_POW2) {
             auto trid = this->get_buffer_slot_trid(buffer_index);
-            return ncrisc_noc_nonposted_write_with_transaction_id_sent(noc_index, trid);
+            return ncrisc_noc_nonposted_write_with_transaction_id_sent(tt::tt_fabric::edm_to_local_chip_noc, trid);
+
+            // return ncrisc_noc_nonposted_write_with_transaction_id_sent(0, trid) &&
+            //        ncrisc_noc_nonposted_write_with_transaction_id_sent(1, trid);
         } else {
             // TODO: should be able to remove compare against INVALID_TRID
             auto trid = this->get_buffer_slot_trid(buffer_index);
-            return trid == INVALID_TRID || ncrisc_noc_nonposted_write_with_transaction_id_sent(noc_index, trid);
+            return trid == INVALID_TRID ||
+                   ncrisc_noc_nonposted_write_with_transaction_id_sent(tt::tt_fabric::edm_to_local_chip_noc, trid);
+
+            // return trid == INVALID_TRID || (ncrisc_noc_nonposted_write_with_transaction_id_sent(0, trid) &&
+            //                                 ncrisc_noc_nonposted_write_with_transaction_id_sent(1, trid));
         }
     }
     FORCE_INLINE void all_buffer_slot_transactions_acked() const {
         for (uint8_t i = 0; i < NUM_CHANNELS; ++i) {
             tt::tt_fabric::BufferIndex buffer_index(i);
             auto trid = this->get_buffer_slot_trid(buffer_index);
-            noc_async_write_barrier_with_trid(trid, noc_index);
+            noc_async_write_barrier_with_trid(trid, tt::tt_fabric::edm_to_local_chip_noc);
+
+            // noc_async_write_barrier_with_trid(trid, 0);
+            // noc_async_write_barrier_with_trid(trid, 1);
         }
     }
 
@@ -497,6 +509,7 @@ static constexpr uint32_t SWITCH_INTERVAL =
 #else
     0;
 #endif
+// static constexpr uint32_t SWITCH_INTERVAL = 100;
 
 static constexpr bool enable_first_level_ack = get_compile_time_arg_val(1);
 static constexpr bool fuse_receiver_flush_and_completion_ptr = get_compile_time_arg_val(2);
