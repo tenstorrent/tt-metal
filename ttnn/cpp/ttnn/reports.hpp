@@ -37,10 +37,10 @@ struct DeviceInfo {
 DeviceInfo get_device_info(tt::tt_metal::distributed::MeshDevice* device) {
     DeviceInfo info{};
     const auto& dispatch_core_config = tt::tt_metal::get_dispatch_core_config();
-    const auto descriptor = tt::get_core_descriptor_config(device.id(), device.num_hw_cqs(), dispatch_core_config);
-    const auto& device_allocator = device.allocator();
-    info.num_y_cores = device.logical_grid_size().y;
-    info.num_x_cores = device.logical_grid_size().x;
+    const auto descriptor = tt::get_core_descriptor_config(device->id(), device->num_hw_cqs(), dispatch_core_config);
+    const auto& device_allocator = device->allocator();
+    info.num_y_cores = device->logical_grid_size().y;
+    info.num_x_cores = device->logical_grid_size().x;
     info.num_y_compute_cores = descriptor.compute_grid_size.y;
     info.num_x_compute_cores = descriptor.compute_grid_size.x;
     info.worker_l1_size = device_allocator->get_config().worker_l1_size;
