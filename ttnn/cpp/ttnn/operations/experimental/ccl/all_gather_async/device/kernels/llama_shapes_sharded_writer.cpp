@@ -159,7 +159,7 @@ void kernel_main() {
         }
     }
 
-    ccl_barrier(
+    ccl_barrier<true>(
         fabric_connection,
         out_ready_sem_bank_addr_wait,
         out_ready_sem_bank_addr_release,

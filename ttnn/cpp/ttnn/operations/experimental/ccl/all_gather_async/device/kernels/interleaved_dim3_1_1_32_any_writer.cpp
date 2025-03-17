@@ -176,7 +176,7 @@ void kernel_main() {
         cb_pop_front(cb0_id, num_pages_to_read);
     }
 
-    ccl_barrier(
+    ccl_barrier<true>(
         fabric_connection,
         out_ready_sem_bank_addr_wait,
         out_ready_sem_bank_addr_release,

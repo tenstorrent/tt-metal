@@ -101,6 +101,7 @@ static inline void local_barrier(
 }
 
 // Two phase barrier
+template <bool byTwoPhase>
 inline void ccl_barrier(
     FabricConnectionManager& fabric_connection,
     const size_t semaphore_wait,
@@ -128,7 +129,7 @@ inline void ccl_barrier(
         reset_semaphore);
 
     // This "if" is for backward compatibility
-    if (semaphore_wait != semaphore_release) {
+    if constexpr (byTwoPhase) {
         // RELEASE phase: ensure all chip got N signals from other N chips
         DPRINT << "ccl_barrier: RELEASE phase\n";
         local_barrier(
