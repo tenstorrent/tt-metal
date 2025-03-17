@@ -67,7 +67,6 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ matrix.test-group.arch }}
         LOGURU_LEVEL: INFO
-        GITHUB_ACTIONS: true
         # We make extensive use of device profiler
         TT_METAL_DEVICE_PROFILER: 1
       volumes:
