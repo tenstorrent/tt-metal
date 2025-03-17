@@ -12,6 +12,7 @@
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
@@ -55,10 +56,32 @@ float pcc(std::vector<float>& x, std::vector<float>& y) {
     return numerator / denominator;
 }
 
-// returns flattened output for easier PCC calculation
-std::vector<float> conv2d(
-    const std::vector<float>& input,   // (1,input_channels,input_height,input_width)
-    const std::vector<float>& kernel,  // (output_channels,input_channels,kernel_height,kernel_width)
+/*
+    Reference implementation of Conv2D
+
+    Takes in input tensor with original shape (1,Ci,H,W) that is flattened in row major order
+
+    and flattened kernel tensor with original shape (Co,Ci,KH,KW) that is also flattened in row major order.
+
+    Returns flattened tensor with original shape (1,Co,Xh,Xw) in row major order, where Xh and Xw are calculated based
+    on input tensor,kernel tensor, stride and padding.
+
+
+    The output vector is flattened in row major order.
+
+    input_channels - Ci
+    output_channels - Co
+    input_height - H
+    input_width - W
+    output_height - Xh
+    output_width - Xw
+    kernel_size - (KH,KW)
+    stride - (SH,SW)
+    padding - (PH,PW)
+*/
+std::vector<float> reference_implementation_conv2d(
+    const std::vector<float>& input,   // (1,Ci,H,W)
+    const std::vector<float>& kernel,  // (Co,Ci,H',W')
     const uint32_t input_channels,
     const uint32_t output_channels,
     const uint32_t input_height,
@@ -66,13 +89,18 @@ std::vector<float> conv2d(
     const std::array<uint32_t, 2>& kernel_size,
     const std::array<uint32_t, 2>& stride,
     const std::array<uint32_t, 2>& padding) {
-    auto [kernel_height, kernel_width] = kernel_size;
-    auto [padding_height, padding_width] = padding;
-    auto [stride_height, stride_width] = stride;
-    auto Xk = (input_height - kernel_height + 2 * padding_height) / stride_height + 1;
-    auto Xw = (input_width - kernel_width + 2 * padding_width) / stride_width + 1;
+    uint32_t kernel_height = kernel_size[0];
+    uint32_t kernel_width = kernel_size[1];
+    uint32_t padding_height = padding[0];
+    uint32_t padding_width = padding[1];
+    uint32_t stride_height = stride[0];
+    uint32_t stride_width = stride[1];
 
-    std::vector<float> output = std::vector<float>(output_channels * Xk * Xw);
+    // Calculate output height and width
+    uint32_t Xh = (input_height - kernel_height + 2 * padding_height) / stride_height + 1;
+    uint32_t Xw = (input_width - kernel_width + 2 * padding_width) / stride_width + 1;
+
+    std::vector<float> output = std::vector<float>(output_channels * Xh * Xw);
     for (int co = 0, i = 0; co < output_channels; co++) {
         for (int h = 0; h < input_height; h += stride_height) {
             std::vector<float> row;
@@ -102,7 +130,7 @@ std::vector<float> conv2d(
 }
 
 TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
-    const auto device_id = 0;
+    const chip_id_t device_id = 0;
     IDevice* device = CreateDevice(device_id, 1, 16384, 0, DispatchCoreConfig(DispatchCoreType::ETH));
 
     const uint32_t input_channels = 32;   // in_channels
@@ -110,7 +138,6 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
 
     const uint32_t input_height = 256;                   // input_height
     const uint32_t input_width = 512;                    // input_width
-    const uint32_t batch_size = 1;                       // batch_size
     const std::array<uint32_t, 2> kernel_size = {3, 3};  // kernel_size
     const std::array<uint32_t, 2> stride = {1, 1};       // stride
     const std::array<uint32_t, 2> padding = {1, 1};      // padding
@@ -118,49 +145,60 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
     MemoryConfig dram_mem_config =
         MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::DRAM};
 
-    std::array<uint32_t, 4> dimensions = {batch_size, input_channels, input_height, input_width};
+    // (N,Ci,H,W)
+    std::array<uint32_t, 4> dimensions = {1, input_channels, input_height, input_width};
+    // (Co,Ci,KH,KW)
     std::array<uint32_t, 4> dimensions_weight = {output_channels, input_channels, kernel_size[0], kernel_size[1]};
 
     random::seed(42);
+    // Create input tensor on device
     Tensor input_tensor =
         ttnn::random::random(Shape(dimensions), tt::tt_metal::DataType::BFLOAT16).to_device(device, dram_mem_config);
+
+    // Create weight tensor on device (weight tensor on device would require to be tield if
+    // Conv2DConfig.always_preprocess_weights isn't used)
     Tensor weight_tensor = ttnn::random::random(Shape(dimensions_weight), tt::tt_metal::DataType::BFLOAT16);
+
+    // Copy input tensor and weight tensor to host for reference implementation
     std::vector<float> input_vector = input_tensor.to_vector<float>();
     std::vector<float> weight_vector = weight_tensor.to_vector<float>();
 
-    // (N,C,H,W) -> (N,H,W,C)
+    // (N,Ci,H,W) -> (N,H,W,Ci)
     input_tensor = ttnn::permute(input_tensor, SmallVector<int64_t>{0, 2, 3, 1});
 
-    Result r = conv2d::conv2d(
+    // Run Conv2D
+    auto [output_tensor, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device] = conv2d::conv2d(
         input_tensor,
         weight_tensor,
         device,
         input_channels,
         output_channels,
-        batch_size,  // ba
+        1,  // batch_size
         input_height,
         input_width,
         kernel_size,
         stride,
         padding,
         {1, 1},  // dilation
-        1,       // groups
-        std::nullopt,
-        conv2d::Conv2dConfig{
-            // because the default is TILE layout, row major layout is easier to compare with refference implementation
-            .output_layout = ROW_MAJOR_LAYOUT,
-        },
-        std::nullopt);
-    auto [output_tensor, output_height, output_width, r1, r2] = r;
+        1        // groups
+    );
 
-    // (1,1,HW,C) -> (1,H,W,C)
+    // untilize output tensor because the default output tensor layout is TILE layout
+    output_tensor = ttnn::untilize(output_tensor);
+
+    // H'  - output_height
+    // W'  - output_width
+    // (1,1,H'W',Co) -> (1,H',W',Co)
     output_tensor = ttnn::reshape(output_tensor, Shape({1, output_height, output_width, output_channels}));
-    // (1,H,W,C) -> (1,C,H,W)
+
+    // (1,H',W',Co) -> (1,Co,H',W')
     output_tensor = ttnn::permute(output_tensor, SmallVector<int64_t>{0, 3, 1, 2});
 
+    // Copy output tensor to host for comparison
     std::vector<float> res = output_tensor.to_vector<float>();
 
-    auto ref_res = conv2d(
+    // Run reference implementation of Conv2D
+    std::vector<float> ref_res = reference_implementation_conv2d(
         input_vector,
         weight_vector,
         input_channels,
@@ -171,9 +209,9 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
         stride,
         padding);
 
-    auto pcc_calculated = pcc(res, ref_res);
+    float pcc_calculated = pcc(res, ref_res);
 
-    auto pass = CloseDevice(device);
+    bool pass = CloseDevice(device);
     std::cout << "PCC: " << pcc_calculated << std::endl;
     TT_FATAL(pass, "Error");
     TT_FATAL(pcc_calculated > 0.99, "Failed pcc");
