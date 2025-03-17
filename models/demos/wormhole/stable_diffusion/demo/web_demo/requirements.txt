@@ -1,0 +1,2 @@
+gunicorn==21.2.0
+streamlit==1.40.1
