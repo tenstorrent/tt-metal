@@ -6,6 +6,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/types.hpp"
+#include <boost/algorithm/string/replace.hpp>
 
 namespace ttnn::graph {
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Layout& layout) {
@@ -74,18 +75,6 @@ std::string graph_demangle(const std::string_view name) {
     std::string ret_val(demangled_name);
     free(res);
     return ret_val;
-}
-
-void sanitize_string_values(std::string& str, const std::string& from, const std::string& to) {
-    if (from.empty()) {
-        return;  // Prevent infinite loop
-    }
-
-    size_t start_pos = 0;
-    while ((start_pos = str.find(from, start_pos)) != std::string::npos) {
-        str.replace(start_pos, from.length(), to);
-        start_pos += to.length();  // Move past the replaced part
-    }
 }
 
 GraphArgumentSerializer::GraphArgumentSerializer() { initialize(); }
@@ -171,14 +160,14 @@ std::vector<std::string> GraphArgumentSerializer::to_list(const std::span<std::a
         auto it = registry().find(element.type());
         if (it != registry().end()) {
             auto str_result = it->second(element);
-            sanitize_string_values(str_result, "__1::", "");
+            boost::algorithm::replace_all(str_result, "__1::", "");
             result.push_back(str_result);
         } else {
             // for debugging reasons, I want to report the type that is not managed
             std::ostringstream oss;
             oss << "[ unsupported type" << " , ";
             auto demangled_name = graph_demangle(element.type().name());
-            sanitize_string_values(demangled_name, "__1::", "");
+            boost::algorithm::replace_all(demangled_name, "__1::", "");
             oss << demangled_name;
             oss << "]";
             result.push_back(oss.str());
