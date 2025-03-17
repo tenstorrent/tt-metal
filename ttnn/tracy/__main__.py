@@ -97,6 +97,12 @@ def main():
     else:
         os.environ[opInfoCacheStr] = "1"
 
+    if options.collect_noc_traces:
+        os.environ["TT_METAL_DEVICE_PROFILER_NOC_EVENTS"] = "1"
+        os.environ["TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH"] = str(
+            generate_logs_folder(os.path.abspath(outputFolder))
+        )
+
     if len(args) > 0:
         doReport = False
         if options.report:

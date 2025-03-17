@@ -30,10 +30,6 @@ def profile_command(test_command, output_folder, name_append, collect_noc_traces
         options += f" -n {name_append}"
     if collect_noc_traces:
         options += f" --collect-noc-traces "
-        currentEnvs["TT_METAL_DEVICE_PROFILER_NOC_EVENTS"] = "1"
-        currentEnvs["TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH"] = generate_logs_folder(
-            os.path.abspath(output_folder)
-        )
 
     opProfilerTestCommand = f"python3 -m tracy -v -r -p {options} -m {test_command}"
     subprocess.run([opProfilerTestCommand], shell=True, check=False, env=currentEnvs)

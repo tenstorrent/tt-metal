@@ -389,8 +389,6 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces):
                     ops_found += 1
                     ops[op_id]["NOC UTIL (%)"] = round(op_npe_stats.result.overall_avg_link_util, 1)
                     ops[op_id]["DRAM BW UTIL (%)"] = round(op_npe_stats.result.dram_bw_util, 1)
-                else:
-                    logger.warning(f"No npe stats found for op ID {op_id}", op_id)
             logger.info(f"Analyzed {ops_found} operations with tt-npe trace data.")
 
     return devicesOps, traceOps
