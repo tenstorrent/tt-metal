@@ -14,6 +14,8 @@
 #include "debug/dprint_pages.h"
 #endif
 
+constexpr uint16_t TILE_SIZE = 32;
+
 static inline bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val) {
     volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(begin_addr);
     for (uint32_t i = 0; i < n; ++i) {
@@ -22,98 +24,107 @@ static inline bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val) 
     return true;
 }
 
-template <uint32_t STICK_SIZE_BYTES, uint32_t PAGE_SIZE, uint32_t BLOCK_HEIGHT_STICKS>
-static inline void execute_transfer(
+template <bool IsBlockSharded, bool IsWidthSharded, bool IsColumnMajor>
+static inline uint64_t get_remote_core_l1_noc_addr(
+    uint16_t destination_noc_x,
+    uint16_t destination_noc_y,
+    uint16_t my_noc_x,
+    uint16_t my_noc_y,
+    uint32_t out_base_l1_addr) {
+    static_assert(!(IsBlockSharded && IsWidthSharded), "Cannot be block and width sharding");
+    uint16_t noc_x;
+    if constexpr ((IsBlockSharded && !IsColumnMajor) || IsWidthSharded) {
+        noc_x = my_noc_x;
+    } else {
+        noc_x = destination_noc_x;
+    }
+    uint16_t noc_y;
+    if constexpr ((IsBlockSharded && IsColumnMajor) || IsWidthSharded) {
+        noc_y = my_noc_y;
+    } else {
+        noc_y = destination_noc_y;
+    }
+    return get_noc_addr(noc_x, noc_y, out_base_l1_addr);
+}
+
+template <uint32_t StickSizeBytes, uint32_t PageSize, uint32_t BlockHeightSticks>
+static inline void write_stick_async(
     uint32_t in_base_l1_addr,
     uint64_t out_base_l1_addr,
     uint16_t src_offset_id,
     uint16_t dst_offset_id,
     uint16_t transfer_size) {
-    const uint32_t src_offset = (src_offset_id % BLOCK_HEIGHT_STICKS) *
-                                PAGE_SIZE;  // Convert from global stick offset to local block stick offset
-    const uint32_t dst_offset = dst_offset_id * STICK_SIZE_BYTES;
-    const uint32_t size = transfer_size * STICK_SIZE_BYTES;
+    const uint32_t src_offset =
+        (src_offset_id % BlockHeightSticks) * PageSize;  // Convert from global stick offset to local block stick offset
+    const uint32_t dst_offset = dst_offset_id * StickSizeBytes;
+    const uint32_t size = transfer_size * StickSizeBytes;
     const uint32_t src_addr = in_base_l1_addr + src_offset;
     const uint64_t dst_addr = out_base_l1_addr + dst_offset;
-    DPRINT << "write: adj_src_offset=" << src_offset << " dst_offset=" << dst_offset << " size=" << size << ENDL();
     noc_async_write(src_addr, dst_addr, size);
 }
 
 template <
-    uint32_t cb_id,
-    uint32_t stick_nbytes,
-    uint32_t input_aligned_page_size,
-    uint32_t block_size_height,
-    uint32_t block_size_width_tiles,
-    bool enable_blocking,
-    bool is_block_sharded,
-    bool is_width_sharded,
-    bool is_col_major>
-static inline void execute_config(
+    uint32_t InputCBIndex,
+    uint32_t StickSizeBytes,
+    uint32_t InputPageSizeAligned,
+    uint32_t BlockSizeHeight,
+    uint32_t BlockSizeWidthTiles,
+    bool EnableBlocking,
+    bool IsBlockSharded,
+    bool IsWidthSharded,
+    bool IsColumnMajor>
+static inline void run_halo_gather(
     const tt_l1_ptr uint16_t* config,
     uint32_t in_base_l1_addr,
     uint32_t out_base_l1_addr,
     uint32_t my_noc_x,
     uint32_t my_noc_y) {
-    uint16_t index = 0;
-    const uint16_t total_number_of_segments = config[index++];
+    static_assert(BlockSizeHeight >= TILE_SIZE, "Blocks cannot be smaller than tile height");
 
-    uint16_t number_of_segments_remaining = total_number_of_segments;
+    uint16_t current_config_index = 0;
+    uint16_t number_of_segments_remaining = config[current_config_index++];
 
-    uint16_t destination_noc_x = 0;
-    uint16_t destination_noc_y = 0;
-    uint16_t transfers_remaining = 0;
-
-    uint16_t src_offset = 0;
-    uint16_t dst_offset = 0;
-    uint16_t transfer_size = 0;
+    // Assume input is already ready when !EnableBlocking (like when using RM)
+    if constexpr (EnableBlocking) {
+        cb_wait_front(InputCBIndex, BlockSizeWidthTiles);
+    }
 
     uint64_t out_l1_addr = 0;
-
-    const uint32_t block_height_sticks = block_size_height;
     uint16_t block_id = 0;
-    uint16_t block_boundary_offset = block_height_sticks;
-
-    // Wait for the first set of tiles from compute before beginning
-    cb_wait_front(cb_id, block_size_width_tiles);
-
+    uint16_t block_boundary_offset = BlockSizeHeight;
     while (number_of_segments_remaining) {
         // Read header for to get destination for this route
-        destination_noc_x = config[index++];
-        destination_noc_y = config[index++];
-        transfers_remaining = config[index++];
-        DPRINT << "start of segment =" << number_of_segments_remaining << " x=" << destination_noc_x
-               << " y=" << destination_noc_y << " transfers?=" << transfers_remaining << ENDL();
+        uint16_t destination_noc_x = config[current_config_index++];
+        uint16_t destination_noc_y = config[current_config_index++];
+        uint16_t transfers_remaining = config[current_config_index++];
 
-        const uint16_t noc_x = ((is_block_sharded && !is_col_major) || is_width_sharded) ? my_noc_x : destination_noc_x;
-        const uint16_t noc_y = ((is_block_sharded && is_col_major) || is_width_sharded) ? my_noc_y : destination_noc_y;
-        out_l1_addr = get_noc_addr(noc_x, noc_y, out_base_l1_addr);
+        out_l1_addr = get_remote_core_l1_noc_addr<IsBlockSharded, IsWidthSharded, IsColumnMajor>(
+            destination_noc_x, destination_noc_y, my_noc_x, my_noc_y, out_base_l1_addr);
 
         // Perform all transfers in this route
         while (transfers_remaining > 0) {
-            src_offset = config[index++];
-            dst_offset = config[index++];
-            transfer_size = config[index++];
-
-            // TODO: Dont do this if we are RM
-            if (enable_blocking) {
+            uint16_t src_offset = config[current_config_index++];
+            uint16_t dst_offset = config[current_config_index++];
+            uint16_t transfer_size = config[current_config_index++];
+            if constexpr (EnableBlocking) {
                 if (src_offset >= block_boundary_offset) {
                     noc_async_write_barrier();
-                    cb_pop_front(cb_id, block_size_width_tiles);
-                    cb_wait_front(cb_id, block_size_width_tiles);
+                    cb_pop_front(InputCBIndex, BlockSizeWidthTiles);
+                    cb_wait_front(InputCBIndex, BlockSizeWidthTiles);
+                    block_boundary_offset += BlockSizeHeight;
                     block_id++;
-                    block_boundary_offset += block_height_sticks;
                 }
             }
-
-            execute_transfer<stick_nbytes, input_aligned_page_size, block_height_sticks>(
+            write_stick_async<StickSizeBytes, InputPageSizeAligned, BlockSizeHeight>(
                 in_base_l1_addr, out_l1_addr, src_offset, dst_offset, transfer_size);
-
             transfers_remaining--;
         }
         number_of_segments_remaining--;
     }
-    cb_pop_front(cb_id, block_size_width_tiles);
+
+    if constexpr (EnableBlocking) {
+        cb_pop_front(InputCBIndex, BlockSizeWidthTiles);
+    }
 }
 
 void kernel_main() {
@@ -137,6 +148,8 @@ void kernel_main() {
     constexpr bool skip_untilize = get_compile_time_arg_val(17) == 1;
     constexpr uint32_t block_size_height = get_compile_time_arg_val(18);
     constexpr uint32_t block_size_width_tiles = get_compile_time_arg_val(19);
+
+    static_assert(!remote_read, "Remote read is not supported in this kernel");
 
     constexpr uint32_t elem_nbytes = sizeof(uint16_t);
     constexpr bool enable_blocking = !skip_untilize;
@@ -178,7 +191,7 @@ void kernel_main() {
 
     const uint32_t config_data_l1_addr = get_read_ptr(local_config_cb_id);
     const tt_l1_ptr uint16_t* config_data = reinterpret_cast<const tt_l1_ptr uint16_t*>(config_data_l1_addr);
-    execute_config<
+    run_halo_gather<
         in_cb_id,
         stick_nbytes,
         input_aligned_page_size,
@@ -191,5 +204,4 @@ void kernel_main() {
 
     noc_async_read_barrier();
     noc_async_write_barrier();
-    DPRINT << "done!" << ENDL();
 }
