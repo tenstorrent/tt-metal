@@ -34,7 +34,8 @@ std::ostream& operator<<(
     return os;
 }
 
-std::ostream& operator<<(std::ostream& os, const std::variant<float, int>& variant) {
+template <typename T, typename U>
+std::ostream& operator<<(std::ostream& os, const std::variant<T, U>& variant) {
     tt::stl::reflection::operator<<(os, variant);
     return os;
 }
@@ -214,5 +215,8 @@ void GraphArgumentSerializer::initialize() {
         ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig,
         ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>>();
     GraphArgumentSerializer::register_type<std::variant<float, int>>();
+    GraphArgumentSerializer::register_type<std::variant<int, float>>();
+    GraphArgumentSerializer::register_type<std::variant<unsigned int, float>>();
+    GraphArgumentSerializer::register_type<std::variant<float, unsigned int>>();
 }
 }  // namespace ttnn::graph
