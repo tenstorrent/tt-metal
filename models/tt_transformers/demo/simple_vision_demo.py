@@ -251,7 +251,7 @@ def test_multimodal_demo_text(
                     # Disable checking for eot until I have more robust code for batch > 1
                     # if text in ["<|eot_id|>", "<|eom_id|>"]:
                     #     break
-                _num_decode_tokens += (gen_idx + 1) * max_batch_size
+                _num_decode_tokens += gen_idx * max_batch_size # gen_idx is (num_tokens - 1) to avoid counting compile iter
 
             # Log full text output for each user in batch
             vision_tokens = [tokenizer.special_tokens["<|image|>"], 128256]
