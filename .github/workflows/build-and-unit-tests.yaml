@@ -99,7 +99,6 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf
       options: "--device /dev/tenstorrent"
     
     defaults:
@@ -133,7 +132,6 @@ jobs:
         run: |
           pip install --force-reinstall pip==21.2.4
           pip install -r tt_metal/python_env/requirements-dev.txt
-          pip install -e .
           mkdir -p generated/test_reports
           ${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/slack-report
