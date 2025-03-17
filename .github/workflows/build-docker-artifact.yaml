@@ -59,7 +59,7 @@ on:
             - "amd64"
 
 env:
-  IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-${{ inputs.target }}-${{ inputs.architecture }}
+  IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-dev-${{ inputs.architecture }}
 
 jobs:
   check-docker-images:
