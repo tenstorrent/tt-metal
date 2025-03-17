@@ -68,9 +68,7 @@ jobs:
             -e GITHUB_ACTIONS=true
           install_wheel: true
         timeout-minutes: 70
-        run: |
-          # source ${{ github.workspace }}/tests/scripts/single_card/run_single_card_demo_tests.sh
-          ${{ matrix.test-group.cmd }}
+        run_args: ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}

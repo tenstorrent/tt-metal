@@ -60,8 +60,7 @@ jobs:
             -e GITHUB_ACTIONS=true
           install_wheel: true
         timeout-minutes: 30
-        run: |
-          pytest tests/nightly/single_card/${{ matrix.test-group.model }}
+        run_args: pytest tests/nightly/single_card/${{ matrix.test-group.model }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
