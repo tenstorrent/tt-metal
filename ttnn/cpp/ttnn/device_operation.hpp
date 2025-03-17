@@ -19,6 +19,7 @@
 #include <tt-metalium/distributed.hpp>
 #include "tools/profiler/op_profiler.hpp"
 #include "ttnn/mesh_device_operation_adapter.hpp"
+#include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/distributed/types.hpp"
 
 namespace ttnn {
@@ -87,6 +88,7 @@ concept HasSkipLaunch = requires(
 };
 
 namespace detail {
+
 template <typename... Ts>
 [[nodiscard]] std::variant<Ts...> map_index_to_variant(std::size_t i, std::variant<Ts...>) {
     assert(i < sizeof...(Ts));
@@ -195,37 +197,39 @@ inline auto& create_or_get_meshworkload_from_cache(
              &tensor_args,
              &tensor_return_value,
              &device_operation_id,
-             &mesh_device](auto&& program_factory) -> auto& {
-                using program_factory_t = std::decay_t<decltype(program_factory)>;
-                using cached_program_t =
-                    decltype(program_factory_t::create(operation_attributes, tensor_args, tensor_return_value));
+             &mesh_device]<typename ProgramFactory>(const ProgramFactory&) -> auto& {
+                auto make_program = [&]() {
+                    auto cached_program = ProgramFactory::create(operation_attributes, tensor_args, tensor_return_value);
+                    cached_program.program.set_runtime_id(device_operation_id);
+                    return cached_program;
+                };
 
-                // Create a cached program (contains both program and shared variables)
-                auto cached_program = program_factory_t::create(operation_attributes, tensor_args, tensor_return_value);
-
-                // Set runtime ID here before moving the program
-                cached_program.program.set_runtime_id(device_operation_id);
-
-                // Create a new mesh workload
-                // TODO: #19177 - support heterogeneous tensors.
                 tt::tt_metal::distributed::MeshWorkload mesh_workload;
-
-                // Move the program from the cached_program into the mesh workload
-                auto coordinate_range = ttnn::MeshCoordinateRange(mesh_device->shape());
-                tt::tt_metal::distributed::AddProgramToMeshWorkload(
-                    mesh_workload, std::move(cached_program.program), coordinate_range);
-
-                // Create a cached mesh workload with the mesh workload and shared variables
-                std::unordered_map<ttnn::MeshCoordinateRange, typename program_factory_t::shared_variables_t>
+                std::unordered_map<ttnn::MeshCoordinateRange, typename ProgramFactory::shared_variables_t>
                     coordinate_range_to_shared_variables;
-                coordinate_range_to_shared_variables[coordinate_range] = std::move(cached_program.shared_variables);
+
+                const auto tensor_coordinates = mesh_device_operation_utils::extract_tensor_coordinates(tensor_args);
+                if (tensor_coordinates.has_value()) {
+                    for (const auto& coord : *tensor_coordinates) {
+                        auto cached_program = make_program();
+                        const ttnn::MeshCoordinateRange coordinate_range(coord, coord);
+                        mesh_workload.add_program(coordinate_range, std::move(cached_program.program));
+                        coordinate_range_to_shared_variables[coordinate_range] =
+                            std::move(cached_program.shared_variables);
+                    }
+                } else {
+                    auto cached_program = make_program();
+                    const ttnn::MeshCoordinateRange coordinate_range(mesh_device->shape());
+                    mesh_workload.add_program(coordinate_range, std::move(cached_program.program));
+                    coordinate_range_to_shared_variables[coordinate_range] = std::move(cached_program.shared_variables);
+                }
 
                 auto cached_mesh_workload = tt::tt_metal::program_cache::detail::CachedMeshWorkload<
-                    typename program_factory_t::shared_variables_t>(
+                    typename ProgramFactory::shared_variables_t>(
                     std::move(mesh_workload), std::move(coordinate_range_to_shared_variables));
 
                 // Create a program adapter to wrap the cached mesh workload
-                tt::tt_metal::program_cache::detail::ProgramAdapter<typename program_factory_t::shared_variables_t>
+                tt::tt_metal::program_cache::detail::ProgramAdapter<typename ProgramFactory::shared_variables_t>
                     adapter(std::move(cached_mesh_workload));
 
                 // Insert the cached program factory into the cache
@@ -239,7 +243,7 @@ inline auto& create_or_get_meshworkload_from_cache(
                 // Get the program adapter from the cached factory
                 auto& cached_adapter = cached_program_factory.cached_program
                                            .template get<tt::tt_metal::program_cache::detail::ProgramAdapter<
-                                               typename program_factory_t::shared_variables_t>>();
+                                               typename ProgramFactory::shared_variables_t>>();
                 return cached_adapter.get_cached_mesh_workload().workload;
             },
             program_factory);
@@ -559,12 +563,9 @@ void launch_on_mesh_device(
 
         tt::tt_metal::distributed::MeshWorkload mesh_workload;
 
-        // TODO: #19177 - Verify that all tensors target the same set of devices, and have the same tensor specs across
-        // shards.
-        const Tensor first_tensor = tt::stl::reflection::get_first_object_of_type<ttnn::Tensor>(tensor_args);
-        if (!first_tensor.device_storage().is_uniform_storage()) {
-            // TODO: #19177 - Account for heterogeneous tensors.
-            for (const auto& [coord, _] : first_tensor.device_storage().specs) {
+        const auto tensor_coordinates = mesh_device_operation_utils::extract_tensor_coordinates(tensor_args);
+        if (!tensor_coordinates.has_value()) {
+            for (const auto& coord : *tensor_coordinates) {
                 mesh_workload.add_program(ttnn::MeshCoordinateRange(coord, coord), std::move(*make_program()));
             }
         } else {
@@ -615,9 +616,8 @@ void handle_mesh_adapter_cache_hit(
         decltype(mesh_device_operation_t::select_program_factory(operation_attributes, tensor_args));
     auto program_factory = map_index_to_variant(program_factory_index, program_factory_variant_t{});
 
-    std::visit([&](auto&& concrete_factory) {
-        using concrete_factory_t = std::decay_t<decltype(concrete_factory)>;
-        using shared_variables_t = typename concrete_factory_t::shared_variables_t;
+    std::visit([&]<typename ProgramFactory>(const ProgramFactory&) {
+        using shared_variables_t = typename ProgramFactory::shared_variables_t;
 
         // Get the adapter from cache with the correct shared variables type
         auto& adapter = cached_program_factory.cached_program.template get<
@@ -688,9 +688,8 @@ void create_and_cache_mesh_workload(
         auto program_factory = mesh_device_operation_t::select_program_factory(operation_attributes, tensor_args);
         auto program_factory_index = program_factory.index();
 
-        std::visit([&](auto&& concrete_factory) {
-            using concrete_factory_t = std::decay_t<decltype(concrete_factory)>;
-            using concrete_shared_vars_t = typename concrete_factory_t::shared_variables_t;
+        std::visit([&]<typename ConcreteFactory>(const ConcreteFactory&) {
+            using concrete_shared_vars_t = typename ConcreteFactory::shared_variables_t;
 
             using namespace tt::tt_metal::program_cache::detail;
             auto cmw = CachedMeshWorkload<concrete_shared_vars_t>(
