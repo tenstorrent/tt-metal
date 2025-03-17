@@ -365,17 +365,21 @@ def test_fabric_reduce_scatter_t3k(t3k_mesh_device):
     dim = 3
     shard_height = 32
     shard_width = 160
-    num_devices = 2
-    num_cores = 12
+    num_devices = 4
+    num_cores = 4
     torch_input_tensors = []
 
+    factor = 0
     for _ in range(num_devices):
         for _ in range(num_cores):
             for _ in range(shard_width // 32):
-                torch_input_tensors.append(torch.rand(1, 1, shard_height, 32))
+                torch_input_tensors.append(torch.ones(1, 1, shard_height, 32) * factor)
+                factor += 1
 
     input = torch.cat(torch_input_tensors, dim=3)
+    print("Input")
     print("input.shape", input.shape)
+    print(input[:, :, 0, 0::32])
     intermediate_outputs = torch.chunk(input, chunks=num_devices, dim=3)
     output = torch.zeros(intermediate_outputs[0].shape)
     for i in range(0, len(intermediate_outputs)):
@@ -396,11 +400,12 @@ def test_fabric_reduce_scatter_t3k(t3k_mesh_device):
         tt_input_tensors.append(
             ttnn.Tensor(t, ttnn.bfloat8_b)
             .to(ttnn.TILE_LAYOUT)
-            .to(t3k_mesh_device.get_devices()[i], memory_config=sharded_mem_config)
+            .to(t3k_mesh_device.get_devices()[i], mem_config=sharded_mem_config)
         )
 
     tt_input = ttnn.aggregate_as_tensor(tt_input_tensors)
-
+    print("TT input")
+    print(tt_input)
     enable_persistent_fabric = True
     ccl_sub_device_crs = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}

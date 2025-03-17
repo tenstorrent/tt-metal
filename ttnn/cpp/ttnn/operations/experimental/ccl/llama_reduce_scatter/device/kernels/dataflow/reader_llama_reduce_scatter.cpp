@@ -85,9 +85,10 @@ void kernel_main() {
             if (target_device_id == chip_id) {
                 break;
             }
+
             uint32_t base_core = target_device_id * input_shard_cores_per_device;
             uint32_t curr_tile = 0;  // this is 0 to tiles_per_core_width - 1
-
+            DPRINT << "base_core " << base_core << " base_core " << base_core << ENDL();
             for (uint32_t curr_core = base_core; curr_core < base_core + input_shard_cores_per_device; ++curr_core) {
                 uint32_t x = input_core_xy[curr_core][x_index];
                 uint32_t y = input_core_xy[curr_core][y_index];

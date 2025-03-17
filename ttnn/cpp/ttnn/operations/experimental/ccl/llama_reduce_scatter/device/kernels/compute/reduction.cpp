@@ -36,7 +36,9 @@ void MAIN {
 
     UNPACK(DPRINT << "waiting on cb" << accumulator_cb_id << " num tiles:" << num_devices << ENDL());
     cb_wait_front(accumulator_cb_id, num_devices);
-
+    for (uint32_t i = 0; i < num_devices; i++) {
+        UNPACK(print_full_tile(accumulator_cb_id, i, true));
+    }
     cb_reserve_back(output_tensor_cb_id, tiles_per_core_width_output);
 
     tile_regs_acquire();
@@ -50,7 +52,6 @@ void MAIN {
     tile_regs_wait();
     pack_tile(0, output_tensor_cb_id);
     tile_regs_release();
-    PACK(print_full_tile(output_tensor_cb_id, 0, true));
     UNPACK(DPRINT << "popping front from cb " << accumulator_cb_id << " tiles: " << num_devices << ENDL());
     cb_pop_front(accumulator_cb_id, num_devices);
     cb_push_back(output_tensor_cb_id, tiles_per_core_width_output);
