@@ -223,6 +223,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         (uint32_t)(transpose_mcast ? 1 : 0),
         is_width_sharded,
         aligned_input_nstick_nbytes,
+        skip_untilize,
         skip_untilize ? input_npages : 32,
         ntiles_per_block};
 

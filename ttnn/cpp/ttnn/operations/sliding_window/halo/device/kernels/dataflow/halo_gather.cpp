@@ -45,6 +45,7 @@ template <
     uint32_t input_aligned_page_size,
     uint32_t block_size_height,
     uint32_t block_size_width_tiles,
+    bool enable_blocking,
     bool is_block_sharded,
     bool is_width_sharded,
     bool is_col_major>
@@ -93,20 +94,16 @@ static inline void execute_config(
             src_offset = config[index++];
             dst_offset = config[index++];
             transfer_size = config[index++];
-            DPRINT << "transfers rem " << transfers_remaining << " src_offset=" << src_offset
-                   << " dst_offset=" << dst_offset << " transfer_size=" << transfer_size << ENDL();
-            if (src_offset >= block_boundary_offset) {
-                DPRINT << "new block! current blockid=" << block_id << " src_offset=" << src_offset
-                       << " waiting for new tiles... " << ENDL();
 
-                noc_async_read_barrier();
-                noc_async_write_barrier();
-                cb_pop_front(cb_id, block_size_width_tiles);
-
-                cb_wait_front(cb_id, block_size_width_tiles);
-                DPRINT << "got tiles for new block" << ENDL();
-                block_id++;
-                block_boundary_offset += block_height_sticks;
+            // TODO: Dont do this if we are RM
+            if (enable_blocking) {
+                if (src_offset >= block_boundary_offset) {
+                    noc_async_write_barrier();
+                    cb_pop_front(cb_id, block_size_width_tiles);
+                    cb_wait_front(cb_id, block_size_width_tiles);
+                    block_id++;
+                    block_boundary_offset += block_height_sticks;
+                }
             }
 
             execute_transfer<stick_nbytes, input_aligned_page_size, block_height_sticks>(
@@ -137,10 +134,12 @@ void kernel_main() {
     constexpr bool is_col_major = get_compile_time_arg_val(14) == 1;
     constexpr bool is_width_sharded = get_compile_time_arg_val(15) == 1;
     constexpr uint32_t input_aligned_page_size = get_compile_time_arg_val(16);
-    constexpr uint32_t block_size_height = get_compile_time_arg_val(17);
-    constexpr uint32_t block_size_width_tiles = get_compile_time_arg_val(18);
+    constexpr bool skip_untilize = get_compile_time_arg_val(17) == 1;
+    constexpr uint32_t block_size_height = get_compile_time_arg_val(18);
+    constexpr uint32_t block_size_width_tiles = get_compile_time_arg_val(19);
 
     constexpr uint32_t elem_nbytes = sizeof(uint16_t);
+    constexpr bool enable_blocking = !skip_untilize;
 
     const uint16_t my_noc_x = NOC_X(my_x[noc_index]);
     const uint16_t my_noc_y = NOC_Y(my_y[noc_index]);
@@ -185,6 +184,7 @@ void kernel_main() {
         input_aligned_page_size,
         block_size_height,
         block_size_width_tiles,
+        enable_blocking,
         is_block_sharded,
         is_width_sharded,
         is_col_major>(config_data, in_base_l1_addr, out_base_l1_addr, my_noc_x, my_noc_y);
