@@ -16,25 +16,11 @@
 #include <vector>
 
 #include "core_coord.hpp"
-#include "dispatch_core_common.hpp"        // For DispatchCoreConfig
-#include "umd/device/tt_soc_descriptor.h"  // For CoreType
+#include "dispatch_core_common.hpp"  // For DispatchCoreConfig
 
 namespace tt {
 
 namespace llrt {
-
-static inline const char* get_core_type_name(CoreType ct) {
-    switch (ct) {
-        case CoreType::ARC: return "ARC";
-        case CoreType::DRAM: return "DRAM";
-        case CoreType::ETH: return "ethernet";
-        case CoreType::PCIE: return "PCIE";
-        case CoreType::WORKER: return "worker";
-        case CoreType::HARVESTED: return "harvested";
-        case CoreType::ROUTER_ONLY: return "router_only";
-        default: return "UNKNOWN";
-    }
-}
 
 // TODO: This should come from the HAL
 enum DebugHartFlags : unsigned int {

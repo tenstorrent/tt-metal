@@ -9,10 +9,8 @@
 #include <chrono>
 #include <ctime>
 #include <filesystem>
-#include <memory>
 #include <mutex>
 #include <thread>
-#include <unordered_map>
 
 #include <hal.hpp>
 #include <dev_msgs.h>
@@ -20,6 +18,7 @@
 #include <rtoptions.hpp>
 #include "debug/ring_buffer.h"
 #include "watcher_device_reader.hpp"
+#include "debug_helpers.hpp"
 
 using namespace tt::tt_metal;
 
@@ -304,7 +303,7 @@ void watcher_init(IDevice* device) {
                             "TT_METAL_{}_CORES included {} core with logical coordinates {} (virtual coordinates {}), "
                             "which is not a valid core on device {}. This coordinate will be ignored by {} feature.",
                             tt::llrt::RunTimeDebugFeatureNames[delay_feature],
-                            tt::llrt::get_core_type_name(core_type),
+                            tt::tt_metal::get_core_type_name(core_type),
                             logical_core.str(),
                             valid_logical_core ? virtual_core.str() : "INVALID",
                             device->id(),
