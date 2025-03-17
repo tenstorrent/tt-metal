@@ -5,15 +5,14 @@
 import os
 import shutil
 from pathlib import Path
+from loguru import logger
+import sys
 
 ENVS = dict(os.environ)
 TT_METAL_HOME = ""
 if "TT_METAL_HOME" in ENVS.keys():
     TT_METAL_HOME = Path(ENVS["TT_METAL_HOME"])
 else:
-    from loguru import logger
-    import sys
-
     logger.error("TT_METAL_HOME environment variable is not set up properly.")
     sys.exit(1)
 
