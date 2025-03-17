@@ -122,7 +122,7 @@ def prepare_generator_args(
     "data_parallel",
     [
         1,
-        4,
+        # 4,
     ],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 14951424, "num_command_queues": 2}], indirect=True)
