@@ -20,7 +20,8 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
     const std::optional<ttnn::DataType> dtype,
     std::optional<CoreGrid> core_grid,
     std::optional<bool> inplace,
-    std::optional<ttnn::Layout> output_layout) {
+    std::optional<ttnn::Layout> output_layout,
+    std::optional<int> num_out_blocks) {
     if (input_tensor.get_layout() == Layout::TILE and inplace.has_value()) {
         TT_FATAL(
             !inplace.value(),
@@ -100,7 +101,8 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
             .im_data_format = DataType::BFLOAT16,
             .out_data_format = DataType::BFLOAT16,
             .inplace = inplace.value_or(false),
-            .output_layout = output_layout.value_or(input_tensor.get_layout())};
+            .output_layout = output_layout.value_or(input_tensor.get_layout()),
+            .num_out_blocks = num_out_blocks.value_or(1)};
         return operation::run(
                    GroupNorm{
                        .eps = epsilon,

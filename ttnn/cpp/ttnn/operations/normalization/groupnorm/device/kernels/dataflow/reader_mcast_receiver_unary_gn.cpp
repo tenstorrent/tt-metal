@@ -34,6 +34,7 @@ void kernel_main() {
     constexpr uint32_t GROUP_SIZE_IS_POWER_OF_2 = get_compile_time_arg_val(15);
     constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_compile_time_arg_val(16);
     constexpr uint32_t group_row_offset = get_compile_time_arg_val(17);
+    constexpr uint32_t num_out_blocks = get_compile_time_arg_val(18);
 
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
@@ -90,9 +91,8 @@ void kernel_main() {
     }
 #endif
 
-    uint32_t out_block_h = block_h / 1;  // TODO READ THIS IN FROM USER
+    uint32_t out_block_h = block_h / num_out_blocks;
     uint32_t out_block_hw = out_block_h * block_w;
-    uint32_t num_out_blocks = block_h / out_block_h;
 
     index_g_offset = 0;
     for (uint32_t i = 0; i < num_batch_group; ++i) {

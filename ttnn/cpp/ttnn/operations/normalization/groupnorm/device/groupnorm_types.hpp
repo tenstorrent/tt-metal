@@ -17,6 +17,7 @@ struct GroupNormMultiCoreProgramConfig {
     DataType out_data_format;
     bool inplace;
     Layout output_layout;
+    int num_out_blocks;
 };
 struct GroupNormShardedMultiCoreProgramConfig {
     CoreCoord compute_with_storage_grid_size;

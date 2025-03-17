@@ -55,7 +55,8 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
             py::arg("dtype") = std::nullopt,
             py::arg("core_grid") = std::nullopt,
             py::arg("inplace") = true,
-            py::arg("output_layout") = std::nullopt});
+            py::arg("output_layout") = std::nullopt,
+            py::arg("num_out_blocks") = std::nullopt});
 }
 void bind_normalization_group_norm(py::module& module) { bind_normalization_group_norm_operation(module); }
 

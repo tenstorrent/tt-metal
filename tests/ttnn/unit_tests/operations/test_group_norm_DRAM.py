@@ -130,6 +130,7 @@ def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_group
         output_layout=ttnn.TILE_LAYOUT,
         core_grid=grid_size,
         inplace=False,
+        num_out_blocks=1,
     )
 
     # output tensor

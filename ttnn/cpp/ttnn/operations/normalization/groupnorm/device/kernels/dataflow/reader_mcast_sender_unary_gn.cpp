@@ -36,6 +36,7 @@ void kernel_main() {
     constexpr uint32_t GROUP_SIZE_IS_POWER_OF_2 = get_compile_time_arg_val(17);
     constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_compile_time_arg_val(18);
     constexpr uint32_t group_row_offset = get_compile_time_arg_val(19);
+    constexpr uint32_t num_out_blocks = get_compile_time_arg_val(20);
 
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
@@ -210,9 +211,8 @@ void kernel_main() {
     uint32_t l1_write_addr_external = get_write_ptr(cb_ex_external);
     volatile tt_l1_ptr uint16_t* wptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_external);
 
-    uint32_t out_block_h = block_h / 1;  // TODO READ THIS IN FROM USER
+    uint32_t out_block_h = block_h / num_out_blocks;
     uint32_t out_block_hw = out_block_h * block_w;
-    uint32_t num_out_blocks = block_h / out_block_h;
 
     if constexpr (num_mcast_cores > 1) {
         index_g_offset = 0;

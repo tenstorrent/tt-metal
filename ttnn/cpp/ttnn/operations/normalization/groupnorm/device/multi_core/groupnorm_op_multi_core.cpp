@@ -1040,7 +1040,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     MathFidelity fidelity,
     DataType im_data_format,
     CoreCoord grid_size,
-    bool inplace) {
+    bool inplace,
+    uint32_t num_out_blocks) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     if (gamma.has_value()) {
@@ -1388,7 +1389,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)block_wt_last,
         (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0,
         (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
-        (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH};
+        (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH,
+        (std::uint32_t)num_out_blocks};
     std::vector<uint32_t> reader_mcast_receiver_compile_time_args = {
         (std::uint32_t)1,
         (std::uint32_t)1,
@@ -1407,7 +1409,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)block_wt_last,
         (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0,
         (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
-        (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH};
+        (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH,
+        (std::uint32_t)num_out_blocks};
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
     // reader kernel
@@ -1458,6 +1461,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0,
         (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
         (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH,
+        (std::uint32_t)num_out_blocks,
         (std::uint32_t)block_ht,
         (std::uint32_t)block_wt,
         (std::uint32_t)block_ht * block_wt};
@@ -1543,6 +1547,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0,
         (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
         (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH,
+        (std::uint32_t)num_out_blocks,
     };
 
     std::vector<uint32_t> mcast_receiver_compute_compile_time_args = {
@@ -1573,7 +1578,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)block_wt_last,
         (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0,
         (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
-        (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH};
+        (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH,
+        (std::uint32_t)num_out_blocks,
+    };
     // compute kernel
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = true;

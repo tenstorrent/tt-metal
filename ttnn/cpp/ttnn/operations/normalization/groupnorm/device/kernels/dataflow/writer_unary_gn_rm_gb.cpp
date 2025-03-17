@@ -34,16 +34,17 @@ void kernel_main() {
     constexpr uint32_t GROUP_SIZE_IS_POWER_OF_2 = get_compile_time_arg_val(16);
     constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_compile_time_arg_val(17);
     constexpr uint32_t group_row_offset = get_compile_time_arg_val(18);
+    constexpr uint32_t num_out_blocks = get_compile_time_arg_val(19);
 
-    volatile uint32_t block_h = get_compile_time_arg_val(19);
-    constexpr uint32_t block_w = get_compile_time_arg_val(20);
-    constexpr uint32_t block_hw = get_compile_time_arg_val(21);
+    volatile uint32_t block_h = get_compile_time_arg_val(20);
+    constexpr uint32_t block_w = get_compile_time_arg_val(21);
+    constexpr uint32_t block_hw = get_compile_time_arg_val(22);
 
-#define stick_size_is_pow2 get_compile_time_arg_val(20) == 1
+#define stick_size_is_pow2 get_compile_time_arg_val(21) == 1
 #if (stick_size_is_pow2)
-    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(21);
+    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(22);
 #else
-    constexpr uint32_t page_size = get_compile_time_arg_val(22);
+    constexpr uint32_t page_size = get_compile_time_arg_val(23);
 #endif
 
     constexpr uint32_t block_w_minus_one = block_w - 1;
@@ -90,9 +91,8 @@ void kernel_main() {
         .page_size = input_mask_single_tile_size_bytes,
         .data_format = input_mask_data_format};
 
-    uint32_t out_block_h = block_h / 1;  // TODO READ THIS IN FROM USER
+    uint32_t out_block_h = block_h / num_out_blocks;
     uint32_t out_block_hw = out_block_h * block_w;
-    uint32_t num_out_blocks = block_h / out_block_h;
 
     for (uint32_t b = 0; b < num_batches_per_core; ++b) {
         uint32_t input_mask_tile_id = input_mask_tile_start_id;

@@ -39,7 +39,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     MathFidelity fidelity,
     DataType im_data_format,
     CoreCoord grid_size,
-    bool inplace);
+    bool inplace,
+    uint32_t num_out_blocks);
 operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     const Tensor& a,
     const std::optional<const Tensor>& gamma,
