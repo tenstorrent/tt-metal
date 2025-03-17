@@ -12,13 +12,13 @@ INPUT_SHAPES = [
     torch.Size([1, 1, 32, 32]),
     torch.Size([1, 3, 32, 32]),
     torch.Size([1, 3, 128, 128]),
-    # torch.Size([1, 3, 512, 512]),
-    # torch.Size([1, 3, 1024, 1024]),
-    # torch.Size([1, 3, 2048, 2048]),
-    # torch.Size([1, 3, 4096, 4096]),
-    # torch.Size([1, 3, 8192, 8192]),
-    # torch.Size([1, 3, 16384, 16384]),
-    # torch.Size([1, 3, 22912, 22912]),
+    torch.Size([1, 3, 512, 512]),
+    torch.Size([1, 3, 1024, 1024]),
+    torch.Size([1, 3, 2048, 2048]),
+    torch.Size([1, 3, 4096, 4096]),
+    torch.Size([1, 3, 8192, 8192]),
+    torch.Size([1, 3, 16384, 16384]),
+    torch.Size([1, 3, 22912, 22912]),
 ]
 
 BENCH_FUNCS = [
@@ -51,6 +51,7 @@ def benchmark_with_warmup(iterations):
                 start = time.time()
                 for _ in range(iterations):
                     _ = func(tt_tensor)
+                ttnn.synchronize_device(device)
                 end = time.time()
                 times.append(end - start)
                 avg_time = sum(times) / len(times)
