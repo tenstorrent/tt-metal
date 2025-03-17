@@ -50,6 +50,11 @@ class PrecisionSetting(Enum):
 
 
 class OpGroup(Enum):
+    """
+    LI_* are linear operator groups
+    SDPA_* are scaled_dot_product_attention operator groups
+    """
+
     LI_FF1_FF3 = "li_ff1_3"
     LI_FF2 = "li_ff2"
     LI_QKV_DECODE = "li_qkv_decode"
@@ -63,8 +68,8 @@ class OpGroup(Enum):
 class MathFidelitySetting(Enum):
     LOFI = "lofi"
     HIFI2 = "hifi2"
-    HIFI2_NA = "hifi2na"
-    HIFI2_FP16 = "hifi2fp16"
+    HIFI2_NA = "hifi2na"  # na specified `packer_l1_acc=False` and `fp32_dest_acc_en=False` in compute kernel config
+    HIFI2_FP16 = "hifi2fp16"  # fp16 specified `fp32_dest_acc_en=False` in compute kernel config
     HIFI4 = "hifi4"
 
 
