@@ -26,7 +26,6 @@ void LlamaReduceScatterDeviceOperation::validate_on_program_cache_hit(
 LlamaReduceScatterDeviceOperation::spec_return_value_t LlamaReduceScatterDeviceOperation::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     using namespace tt::tt_metal;
-    constexpr uint32_t num_devices = 2;  // distributed will give me an API here one day
 
     // sharding APIs are terrible
     auto input_tensor = tensor_args.input_tensor;
@@ -34,7 +33,7 @@ LlamaReduceScatterDeviceOperation::spec_return_value_t LlamaReduceScatterDeviceO
     auto input_spec = input_tensor.get_tensor_spec();
     auto input_shape = input_spec.logical_shape();
     auto input_shard_spec = input_tensor.shard_spec().value();
-    uint32_t final_width = input_shape[attributes.dim] / num_devices;
+    uint32_t final_width = input_shape[attributes.dim] / attributes.ring_devices;
 
     auto output_shape = input_shape;
     output_shape[attributes.dim] = final_width;
