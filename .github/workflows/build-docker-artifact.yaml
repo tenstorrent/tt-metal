@@ -11,10 +11,6 @@ on:
         required: false
         type: string
         default: "20.04"
-      target:
-        required: false
-        type: string
-        default: "dev"
       architecture:
         required: false
         type: string
@@ -42,15 +38,6 @@ on:
             - "20.04"
             - "22.04"
             - "24.04"
-      target:
-        required: false
-        type: choice
-        default: "dev"
-        options:
-            - "base"
-            - "ci-build"
-            - "ci-test"
-            - "dev"
       architecture:
         required: false
         type: choice
@@ -124,7 +111,7 @@ jobs:
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
-          target: ${{ inputs.target }}
+          target: dev
           push: true
           tags: ${{ needs.check-docker-images.outputs.ci-build-tag }}
           build-args: UBUNTU_VERSION=${{ inputs.version }}
