@@ -17,8 +17,6 @@
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/mask.h"
 
-#include "debug/dprint.h"  // required in all kernels using DPRINT
-
 namespace NAMESPACE {
 
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
@@ -52,7 +50,6 @@ ALWI void calculate_sum_x_squared() {
     tile_regs_acquire();
     for (uint32_t col = 0; col < num_inner; ++col) {
         auto working_register = col == 0 ? accum_register : tile_register;
-        // reconfig_data_format_srca(cb_input);
         copy_tile_init(cb_input);
         copy_tile(cb_input, /* tile_idx */ col, /* register_idx */ working_register);
 

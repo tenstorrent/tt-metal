@@ -4,8 +4,6 @@
 
 #include "dataflow_api.h"
 
-#include "debug/dprint.h"
-
 void kernel_main() {
     uint32_t runtime_args_counter = 0;
     uint32_t output_addr = get_arg_val<uint32_t>(runtime_args_counter++);

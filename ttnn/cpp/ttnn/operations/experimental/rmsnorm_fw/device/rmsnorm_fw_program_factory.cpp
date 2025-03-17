@@ -28,11 +28,11 @@ constexpr auto kComputeKernelPath =
     "ttnn/cpp/ttnn/operations/experimental/rmsnorm_fw/device/kernels/compute/rmsnorm_fw_kernel.cpp";
 
 // reader runtime args
-constexpr auto kInputBufferIdx = 0;
-constexpr auto kGammaBufferIdx = 1;
+constexpr uint32_t kInputBufferIdx = 0;
+constexpr uint32_t kGammaBufferIdx = 1U;
 // writer runtime args
-constexpr auto kOutputBufferIdx = 0;
-constexpr auto kRMSOutputBufferIdx = 1;
+constexpr uint32_t kOutputBufferIdx = 0;
+constexpr uint32_t kRMSOutputBufferIdx = 1U;
 
 constexpr auto kInputCbIndex = tt::CBIndex::c_0;
 constexpr auto kMaskCbIndex = tt::CBIndex::c_1;

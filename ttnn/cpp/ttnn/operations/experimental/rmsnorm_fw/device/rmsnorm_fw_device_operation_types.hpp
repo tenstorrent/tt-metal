@@ -5,7 +5,6 @@
 #pragma once
 
 #include "ttnn/tensor/tensor.hpp"
-
 namespace ttnn::operations::experimental::rmsnorm_fw {
 
 struct operation_attributes_t {

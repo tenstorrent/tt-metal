@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,7 @@ void generate_tile_with_value(uint32_t cb, uint32_t packed_value) {
     cb_reserve_back(cb, onetile);
     uint32_t* ptr = reinterpret_cast<uint32_t*>(get_write_ptr(cb));
     // 512 = 32x16
-    for (uint32_t i = 0; i < 512; ++i, ++ptr) {
+    for (uint32_t i = 0; i < 512U; ++i, ++ptr) {
         *ptr = packed_value;
     }
     cb_push_back(cb, onetile);

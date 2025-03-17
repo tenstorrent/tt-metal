@@ -1,18 +1,17 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <functional>
 #include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "rmsnorm_fw_program_factory.hpp"
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
 
+#include "rmsnorm_fw_program_factory.hpp"
 #include "rmsnorm_fw_device_operation_types.hpp"
 
 namespace ttnn::operations::experimental::rmsnorm_fw {
