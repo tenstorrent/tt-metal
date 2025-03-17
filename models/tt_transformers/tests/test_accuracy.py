@@ -34,6 +34,7 @@ def get_accuracy_thresholds(base_model_name: str, device_name: str, optimization
         lambda line: "|" in line
         and base_model_name.lower() in line.split("|")[1].strip().lower()
         and device_name.lower() in line.split("|")[2].strip().lower()
+        and not "(DP=".lower() in line.lower()  # ignore DP/HP report for now
     )
     rows = [
         line.split("|")[1:]  # Each row starts with a separator
@@ -221,7 +222,7 @@ def test_tt_model_acc(
         ) = preprocess_inputs_prefill(
             input_prompts,
             tokenizer,
-            model_args,
+            [model_args],
             instruct=False,
             max_generated_tokens=decode_len,
             max_prefill_len=prefill_len,
