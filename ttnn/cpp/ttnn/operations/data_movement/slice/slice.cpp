@@ -66,7 +66,8 @@ ttnn::Tensor SliceOperation::invoke(
 
             // TODO un/tilize LLKs don't work with various integer types so we have to do this hack
             // see https://github.com/tenstorrent/tt-metal/issues/16860
-            if (input_dtype == DataType::UINT16 || input_dtype == DataType::UINT32) {
+            if (input_tensor.get_layout() == Layout::TILE &&
+                (input_dtype == DataType::UINT16 || input_dtype == DataType::UINT32)) {
                 tensor = ttnn::typecast(tensor, input_dtype);
             }
 

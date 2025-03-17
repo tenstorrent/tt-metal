@@ -600,6 +600,63 @@ def test_ttnn_slice_mistral(input_shape, input_start, input_ends, memory_config,
     assert_with_pcc(torch_output, ttnn_output, 0.9999)
 
 
+#
+
+
+@pytest.mark.parametrize(
+    "input_shape, input_start, input_ends, input_steps",
+    (
+        ((1, 1, 1500, 2560), (0, 0, 0, 0), (1, 1, 1500, 1280), (1, 1, 1, 1)),
+        ((1, 1, 1500, 2560), (0, 0, 0, 1280), (1, 1, 1500, 2560), (1, 1, 1, 1)),
+        ((1, 32, 20, 64), (0, 0, 0, 0), (1, 1, 20, 64), (1, 1, 1, 1)),
+        ((1, 32, 1280), (0, 0, 0), (1, 1, 1280), (1, 1, 1)),
+        ((1, 1504, 1280), (0, 0, 0), (1, 1500, 1280), (1, 1, 1)),
+        ((448, 1280), (0, 0), (1, 1280), (1, 1)),
+    ),
+)
+@pytest.mark.parametrize(
+    "dtype",
+    (ttnn.bfloat16,),
+)
+@pytest.mark.parametrize(
+    "memory_config",
+    (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+)
+def test_ttnn_slice_whisper(
+    input_shape, input_start, input_ends, input_steps, memory_config, dtype, device, use_program_cache
+):
+    if input_shape[0] == 32 and memory_config == ttnn.L1_MEMORY_CONFIG:
+        pytest.skip("OoM")
+
+    for _ in range(3):
+        torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+        ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+
+        if len(input_shape) == 4:
+            torch_output = torch_input[
+                input_start[0] : input_ends[0] : input_steps[0],
+                input_start[1] : input_ends[1] : input_steps[1],
+                input_start[2] : input_ends[2] : input_steps[2],
+                input_start[3] : input_ends[3] : input_steps[3],
+            ]
+        if len(input_shape) == 3:
+            torch_output = torch_input[
+                input_start[0] : input_ends[0] : input_steps[0],
+                input_start[1] : input_ends[1] : input_steps[1],
+                input_start[2] : input_ends[2] : input_steps[2],
+            ]
+        if len(input_shape) == 2:
+            torch_output = torch_input[
+                input_start[0] : input_ends[0] : input_steps[0],
+                input_start[1] : input_ends[1] : input_steps[1],
+            ]
+
+        ttnn_output = ttnn.slice(ttnn_input, input_start, input_ends, input_steps, memory_config=memory_config)
+
+        ttnn_output = ttnn.to_torch(ttnn_output)
+        assert_with_pcc(torch_output, ttnn_output, 0.9999)
+
+
 def test_slice_output_tensor_rm(device):
     torch_input = torch.ones(1, 3, 640, 640)
     ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16)
