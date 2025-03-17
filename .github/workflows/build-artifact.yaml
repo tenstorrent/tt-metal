@@ -46,7 +46,7 @@ on:
         #        Fow now enabling an opt-out. But this should get removed.
         required: false
         type: boolean
-        default: false
+        default: true
       profile:
         required: false
         type: boolean
