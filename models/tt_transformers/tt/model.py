@@ -382,4 +382,9 @@ class Transformer(LightweightModule):
         if mode == "prefill" and self.model_config["LM_HEAD_INPUT_MEMCFG"].is_sharded():
             x = ttnn.interleaved_to_sharded(x, self.model_config["LM_HEAD_INPUT_MEMCFG"])
 
-        return self.lm_head(x)
+        x = self.lm_head(x)
+
+        if mode == "prefill":
+            x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
+            x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return x
