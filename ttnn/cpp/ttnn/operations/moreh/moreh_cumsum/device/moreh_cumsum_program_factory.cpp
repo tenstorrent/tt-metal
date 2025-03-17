@@ -7,6 +7,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include <iostream>
 
 namespace ttnn::operations::moreh::moreh_cumsum {
 
@@ -180,10 +181,15 @@ MorehCumsumDeviceOperation::ProgramFactory::cached_program_t MorehCumsumDeviceOp
              static_cast<uint32_t>(dim),
              flip});
 
+        std::cout << "num_cumsum_tiles: " << num_cumsum_tiles << std::endl;
+        std::cout << "num_toles_per_core: " << num_tiles_per_core << std::endl;
+
         if (core_group_1.contains(core)) {
+            std::cout << "Kernel1_setup" << std::endl;
             SetRuntimeArgs(program, compute_kernel_1_id, core, {num_cumsum_tiles, num_tiles_per_core});
         } else if (core_group_2.contains(core)) {
             TT_ASSERT(compute_kernel_2_id.has_value());
+            std::cout << "Kernel2_setup" << std::endl;
             SetRuntimeArgs(program, compute_kernel_2_id.value(), core, {num_cumsum_tiles, num_tiles_per_core});
         } else {
             TT_ASSERT(false, "Core not in specified core ranges.");

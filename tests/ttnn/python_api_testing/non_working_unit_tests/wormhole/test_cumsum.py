@@ -75,6 +75,7 @@ def run_moreh_cumsum_tests_2(
     device,
 ):
     x = (torch.rand(in_shape) * 10).to(torch_type)
+    # x = (torch.ones(in_shape)).to(torch_type)
 
     try:
         ref_value = aten.cumsum.default(
@@ -117,12 +118,7 @@ test_sweep_args_2 = [
     ((21, 27, 17, 14), torch.int32, ttnn.uint32, 1),
     ((3, 27, 33, 34), torch.int32, ttnn.uint32, 1),
     ((129, 27, 17, 14), torch.float32, ttnn.bfloat16, 1),
-    # (
-    #     (129, 27, 17, 14),
-    #     torch.int32,
-    #     ttnn.uint32,
-    #     1
-    # ),
+    ((129, 27, 17, 14), torch.int32, ttnn.uint32, 1),
 ]
 
 
