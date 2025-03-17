@@ -61,7 +61,7 @@ void dump_data(
         }
         // Watcher attach wthout watcher init - to avoid clearing mailboxes.
         if (dump_watcher) {
-            watcher_attach(device);
+            watcher_attach(device->id());
         }
     }
 

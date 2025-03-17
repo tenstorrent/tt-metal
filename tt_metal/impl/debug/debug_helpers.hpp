@@ -36,7 +36,7 @@ static CoreDescriptorSet GetAllCores(chip_id_t device_id) {
             all_cores.insert({{x, y}, CoreType::WORKER});
         }
     }
-    for (const auto& logical_core : tt::Cluster::instance().get_active_ethernet_cores(device_id, false)) {
+    for (const auto& logical_core : tt::Cluster::instance().get_active_ethernet_cores(device_id)) {
         all_cores.insert({logical_core, CoreType::ETH});
     }
     for (const auto& logical_core : tt::Cluster::instance().get_inactive_ethernet_cores(device_id)) {
@@ -60,15 +60,15 @@ static CoreDescriptorSet GetDispatchCores(chip_id_t device_id) {
     return dispatch_cores;
 }
 
-// Helper function to convert virtual core -> HalProgrammableCoreType
-inline tt::tt_metal::HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core, chip_id_t device_id) {
+// Helper function to convert virtual core -> HalProgrammableCoreType. TODO: Remove when we fix core types.
+static tt::tt_metal::HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core, chip_id_t device_id) {
     if (!tt::Cluster::instance().is_ethernet_core(virtual_core, device_id)) {
         return tt::tt_metal::HalProgrammableCoreType::TENSIX;
     }
 
     // Eth pcores have a different address, but only active ones.
     CoreCoord logical_core = tt::Cluster::instance().get_logical_ethernet_core_from_virtual(device_id, virtual_core);
-    auto active_ethernet_cores = tt::Cluster::instance().get_active_ethernet_cores(device_id, false);
+    auto active_ethernet_cores = tt::Cluster::instance().get_active_ethernet_cores(device_id);
     if (active_ethernet_cores.find(logical_core) != active_ethernet_cores.end()) {
         return tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
     }
