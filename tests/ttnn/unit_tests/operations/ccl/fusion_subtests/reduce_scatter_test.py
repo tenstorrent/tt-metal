@@ -366,15 +366,15 @@ def test_fabric_reduce_scatter_t3k(t3k_mesh_device):
     shard_height = 32
     shard_width = 160
     num_devices = 4
-    num_cores = 4
+    num_cores = 24
     torch_input_tensors = []
 
-    factor = 0
+    factor = 1
     for _ in range(num_devices):
         for _ in range(num_cores):
             for _ in range(shard_width // 32):
-                torch_input_tensors.append(torch.ones(1, 1, shard_height, 32) * factor)
-                factor += 1
+                torch_input_tensors.append(torch.rand(1, 1, shard_height, 32) * factor)
+                # factor += 1
 
     input = torch.cat(torch_input_tensors, dim=3)
     print("Input")
@@ -384,7 +384,9 @@ def test_fabric_reduce_scatter_t3k(t3k_mesh_device):
     output = torch.zeros(intermediate_outputs[0].shape)
     for i in range(0, len(intermediate_outputs)):
         output += intermediate_outputs[i]
-
+    print("Output")
+    print("output.shape", output.shape)
+    print(output[:, :, 0, 0::32])
     t3k_mesh_device.enable_async(True)
     compute_grid_size = t3k_mesh_device.compute_with_storage_grid_size()
     sharded_mem_config = ttnn.create_sharded_memory_config(

@@ -94,6 +94,7 @@ void kernel_main() {
             fabric_connection.open();
         }
         DPRINT << "Fabric connection opened " << ENDL();
+        DPRINT << "num_packets_total_per_device " << num_packets_total_per_device << ENDL();
         for (auto target_device_id : device_order) {
             if (target_device_id == chip_id) {
                 break;
@@ -113,9 +114,10 @@ void kernel_main() {
             for (uint32_t packet = 0; packet < num_packets_total_per_device; packet++) {
                 uint32_t curr_packet_num_pages =
                     packet == num_packets_total_per_device - 1 ? last_packet_num_pages : num_pages_per_packet;
+                DPRINT << "packet " << packet << " waiting on " << curr_packet_num_pages << ENDL();
                 cb_wait_front(fabric_sender_cb_id, curr_packet_num_pages);
                 auto sender_l1_addr = get_read_ptr(fabric_sender_cb_id);
-                print_tiles(fabric_sender_cb_id, 0, curr_packet_num_pages, true);
+                // print_tiles(fabric_sender_cb_id, 0, curr_packet_num_pages, true);
 
                 uint64_t noc0_dest_noc_addr =
                     get_noc_addr(receiver_core_x, receiver_core_y, base_receiver_l1_addr + packet_offset);
@@ -123,35 +125,43 @@ void kernel_main() {
                 unicast_packet_header->to_noc_unicast_write(
                     tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr},
                     curr_packet_num_pages * page_size_bytes);
-
+                DPRINT << "waiting for empty write slot" << ENDL();
                 fabric_conn.wait_for_empty_write_slot();
+                DPRINT << "sending payload without header non-blocking" << ENDL();
                 fabric_conn.send_payload_without_header_non_blocking_from_address(
                     sender_l1_addr, curr_packet_num_pages * page_size_bytes);
+                DPRINT << "sending payload flush blocking" << ENDL();
                 fabric_conn.send_payload_flush_blocking_from_address(
                     (uint32_t)unicast_packet_header, sizeof(PACKET_HEADER_TYPE));
+                DPRINT << "flushed because cross chip" << ENDL();
                 noc_async_writes_flushed();  // flushed because cross chip?
-
+                DPRINT << "popping front" << ENDL();
                 cb_pop_front(fabric_sender_cb_id, curr_packet_num_pages);
+                DPRINT << "packet_offset += curr_packet_num_pages * page_size_bytes" << ENDL();
                 packet_offset += curr_packet_num_pages * page_size_bytes;
             }
 
-            // 2. mcast to current core 6,6 for now
+            DPRINT << "sending mcast packet" << ENDL();
             uint64_t sem_noc_addr = get_noc_addr(receiver_core_x, receiver_core_y, receiver_semaphore_address);
             sem_inc_packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
                 sem_noc_addr,
                 static_cast<uint16_t>(1),  // increment 1
                 32});
             // Write the mcast packet (forward)
-
+            DPRINT << "sending mcast packet to chip " << target_device_id << ENDL();
             sem_inc_packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops));
             fabric_conn.wait_for_empty_write_slot();
+            DPRINT << "sending mcast packet flush blocking" << ENDL();
             fabric_conn.send_payload_flush_blocking_from_address(
                 (uint32_t)sem_inc_packet_header, sizeof(PACKET_HEADER_TYPE));
-            if (fabric_connection.is_logically_connected()) {
-                fabric_connection.close();
-            }
-            DPRINT << "Closing fabric connection" << ENDL();
+            DPRINT << "flushed because cross chip" << ENDL();
         }
+        if (fabric_connection.is_logically_connected()) {
+            DPRINT << "closing fabric connection" << ENDL();
+            fabric_connection.close();
+            DPRINT << "fabric connection closed" << ENDL();
+        }
+        DPRINT << "Closing fabric connection" << ENDL();
     } else if (receiver_core && receiver_for_device_id != chip_id) {
         DPRINT << "RECEIVER CORE WRITER" << ENDL();
         DPRINT << "Receiver for device id: " << receiver_for_device_id << " chip_id: " << chip_id << ENDL();
