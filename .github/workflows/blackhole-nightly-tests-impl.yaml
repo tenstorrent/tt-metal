@@ -24,52 +24,72 @@ jobs:
             { model: whisper, card: BH, owner_id: U05RWH3QUPM, arch: blackhole},  #Salar Hosseini
           ]
     name: Nightly ${{ matrix.test-group.card }} ${{ matrix.test-group.model }}
-    env:
-      ARCH_NAME: blackhole
-      LOGURU_LEVEL: INFO
-      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on: ["cloud-virtual-machine", "in-service", "${{ matrix.test-group.card }}"]
+    container:
+      image: ${{ inputs.docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ matrix.test-group.arch }}
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
+
       - name: ⬇️ Download Build
         uses: actions/download-artifact@v4
         timeout-minutes: 10
         with:
           name: ${{ inputs.build-artifact-name }}
+          path: docker-job
+
       - name: Extract files
         run: tar -xvf ttm_any.tar
+
       - name: ⬇️ Download Wheel
         uses: actions/download-artifact@v4
         timeout-minutes: 10
         with:
           name: ${{ inputs.wheel-artifact-name }}
+          path: docker-job
+
+      - name: Install Wheel
+        run: |
+          WHEEL_FILENAME=$(ls -1 *.whl)
+          pip3 install $WHEEL_FILENAME
+
       - name: Run frequent reg tests scripts
         uses: ./.github/actions/docker-run
         timeout-minutes: 30
-        env:
-          LOGURU_LEVEL: INFO
-        with:
-          docker_image: ${{ inputs.docker-image }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_opts: |
-            -e TT_METAL_HOME=${{ github.workspace }}
-            -e ARCH_NAME=${{ matrix.test-group.arch }}
-            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -e GITHUB_ACTIONS=true
-          install_wheel: true
-          run_args: pytest tests/nightly/single_card/${{ matrix.test-group.model }}
+        run: pytest tests/nightly/single_card/${{ matrix.test-group.model }}
+
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           path: |
-            generated/test_reports/
+            /work/generated/test_reports/
           prefix: "test_reports_"
+
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: ${{ matrix.test-group.owner_id }}
+
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
