@@ -88,8 +88,10 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     if (!skip_untilize) {
         input_to_writer_cb_id = untilize_out_cb_id;
 
-        // output of untilize from compute kernel goes into this CB
+        // TODO: Use double buffering
         uint32_t output_ntiles = ntiles_per_block;
+
+        // Output of untilize from compute kernel goes into this CB
         auto untilize_out_cb_config =
             CircularBufferConfig(output_ntiles * out_tile_size, {{untilize_out_cb_id, out_df}})
                 .set_page_size(untilize_out_cb_id, out_tile_size);
@@ -221,6 +223,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         (uint32_t)(transpose_mcast ? 1 : 0),
         is_width_sharded,
         aligned_input_nstick_nbytes,
+        skip_untilize ? input_npages : 32,
         ntiles_per_block};
 
     reader_ct_args[0] = padding_config_cb_id;

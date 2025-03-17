@@ -43,6 +43,7 @@ template <
     uint32_t cb_id,
     uint32_t stick_nbytes,
     uint32_t input_aligned_page_size,
+    uint32_t block_size_height,
     uint32_t block_size_width_tiles,
     bool is_block_sharded,
     bool is_width_sharded,
@@ -68,7 +69,7 @@ static inline void execute_config(
 
     uint64_t out_l1_addr = 0;
 
-    const uint32_t block_height_sticks = 32;
+    const uint32_t block_height_sticks = block_size_height;
     uint16_t block_id = 0;
     uint16_t block_boundary_offset = block_height_sticks;
 
@@ -136,7 +137,8 @@ void kernel_main() {
     constexpr bool is_col_major = get_compile_time_arg_val(14) == 1;
     constexpr bool is_width_sharded = get_compile_time_arg_val(15) == 1;
     constexpr uint32_t input_aligned_page_size = get_compile_time_arg_val(16);
-    constexpr uint32_t block_size_width_tiles = get_compile_time_arg_val(17);
+    constexpr uint32_t block_size_height = get_compile_time_arg_val(17);
+    constexpr uint32_t block_size_width_tiles = get_compile_time_arg_val(18);
 
     constexpr uint32_t elem_nbytes = sizeof(uint16_t);
 
@@ -181,6 +183,7 @@ void kernel_main() {
         in_cb_id,
         stick_nbytes,
         input_aligned_page_size,
+        block_size_height,
         block_size_width_tiles,
         is_block_sharded,
         is_width_sharded,
