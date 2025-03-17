@@ -11,9 +11,15 @@
 #include <vector>
 #include <random>
 #include "assert.hpp"
+#include "shape.hpp"
+#include "small_vector.hpp"
+#include "ttnn/device.hpp"
+#include "ttnn/operations/core/core.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "dispatch_core_common.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
+#include "ttnn/operations/data_movement/permute/permute.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/types.hpp"
@@ -26,7 +32,7 @@ namespace test {
 
 struct Conv2DParam {};
 
-class Conv2DFixture : public TTNNFixture, public testing::WithParamInterface<Conv2DParam> {};
+class Conv2DFixture : public ::testing::Test, public testing::WithParamInterface<Conv2DParam> {};
 
 float pcc(std::vector<float>& x, std::vector<float>& y) {
     if (x.size() != y.size()) {
@@ -60,8 +66,8 @@ float pcc(std::vector<float>& x, std::vector<float>& y) {
 
 // returns flattened output for easier PCC calculation
 std::vector<float> conv2d(
-    const std::vector<std::vector<std::vector<float>>>& input,
-    const std::vector<std::vector<std::vector<std::vector<float>>>>& kernel,
+    const std::vector<float>& input,   // (1,input_channels,input_height,input_width)
+    const std::vector<float>& kernel,  // (output_channels,input_channels,kernel_height,kernel_width)
     const uint32_t input_channels,
     const uint32_t output_channels,
     const uint32_t input_height,
@@ -86,8 +92,12 @@ std::vector<float> conv2d(
                         for (int kw = 0; kw < kernel_width; kw++) {
                             if (h + kh - padding_height >= 0 && h + kh - padding_height < input_height &&
                                 w + kw - padding_width >= 0 && w + kw - padding_width < input_width) {
-                                sum +=
-                                    input[ci][h + kh - padding_height][w + kw - padding_width] * kernel[co][ci][kh][kw];
+                                sum += input
+                                           [ci * input_height * input_width + (h + kh - padding_height) * input_width +
+                                            w + kw - padding_width] *
+                                       kernel
+                                           [co * input_channels * kernel_height * kernel_width +
+                                            ci * kernel_height * kernel_width + kh * kernel_width + kw];
                             }
                         }
                     }
@@ -96,77 +106,6 @@ std::vector<float> conv2d(
                 i++;
             }
         }
-    }
-    return output;
-}
-
-std::vector<float> flatten_result(
-    const std::vector<float>& result, uint32_t output_channels, uint32_t height, uint32_t width) {
-    std::vector<float> output = std::vector<float>(output_channels * height * width);
-    for (uint32_t h = 0; h < height; h++) {
-        for (uint32_t w = 0; w < width; w++) {
-            for (uint32_t co = 0; co < output_channels; co++) {
-                output[co * height * width + h * width + w] = result[co + (h * width + w) * output_channels];
-            }
-        }
-    }
-    return output;
-}
-
-std::vector<float> random_vector(const std::array<uint32_t, 4> shape) {
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_real_distribution<float> dis(0.0, 5.0);
-    std::vector<float> vec(Shape(shape).volume());
-    for (int i = 0; i < vec.size(); i++) {
-        vec[i] = dis(gen);
-    }
-    return vec;
-}
-
-std::vector<std::vector<std::vector<float>>> reorder_input(
-    const std::vector<float>& input, uint32_t input_channels, uint32_t image_height, uint32_t image_width) {
-    auto output = std::vector<std::vector<std::vector<float>>>(input_channels);
-    for (uint32_t ci = 0, i = 0; ci < input_channels; ci++) {
-        output[ci] = std::vector<std::vector<float>>(image_height);
-        for (uint32_t h = 0; h < image_height; h++) {
-            output[ci][h] = std::vector<float>(image_width);
-        }
-    }
-    uint32_t c, w, h;
-    for (uint32_t i = 0; i < input.size(); i++) {
-        c = i % (input_channels);
-        w = (i / input_channels) % image_width;
-        h = i / input_channels / image_width;
-
-        output[c][h][w] = input[i];
-    }
-    return output;
-}
-
-std::vector<std::vector<std::vector<std::vector<float>>>> reorder_weigths(
-    const std::vector<float>& weights,
-    uint32_t output_channels,
-    uint32_t input_channels,
-    uint32_t kernel_height,
-    uint32_t kernel_width) {
-    std::vector<std::vector<std::vector<std::vector<float>>>> output =
-        std::vector<std::vector<std::vector<std::vector<float>>>>(output_channels);
-    for (uint32_t co = 0; co < output_channels; co++) {
-        output[co] = std::vector<std::vector<std::vector<float>>>(input_channels);
-        for (uint32_t ci = 0; ci < input_channels; ci++) {
-            output[co][ci] = std::vector<std::vector<float>>(kernel_height);
-            for (uint32_t kh = 0; kh < kernel_height; kh++) {
-                output[co][ci][kh] = std::vector<float>(kernel_width);
-            }
-        }
-    }
-    for (uint32_t i = 0; i < weights.size(); i++) {
-        uint32_t co = i % output_channels;
-        uint32_t ci = (i / output_channels) % input_channels;
-        uint32_t kh = (i / output_channels) / input_channels / kernel_width;
-        uint32_t kw = ((i / output_channels) / input_channels) % kernel_width;
-        output[co][ci][kh][kw] = weights[i];
     }
     return output;
 }
@@ -180,7 +119,7 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
     const uint32_t output_channels = 32;  // out_channels
 
     const uint32_t input_height = 256;                   // input_height
-    const uint32_t input_width = 256;                    // input_width
+    const uint32_t input_width = 512;                    // input_width
     const std::array<uint32_t, 2> kernel_size = {3, 3};  // kernel_size
     const std::array<uint32_t, 2> stride = {1, 1};       // stride
     const std::array<uint32_t, 2> padding = {1, 1};      // padding
@@ -191,33 +130,22 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
     std::array<uint32_t, 4> dimensions = {1, input_channels, input_height, input_width};
     std::array<uint32_t, 4> dimensions_weight = {output_channels, input_channels, kernel_size[0], kernel_size[1]};
 
-    std::array<uint32_t, 4> tt_dimensions = {
-        1, input_height /* input_h */, input_width /* input_w*/, input_channels /* input_c */};
-    std::array<uint32_t, 4> tt_dimensions_weight = {
-        1, 1, input_channels * kernel_size[0] * kernel_size[1] /* Kh * Kw * input_c */, output_channels /* output_c */};
+    random::seed(42);
+    Tensor input_tensor =
+        ttnn::random::random(Shape(dimensions), tt::tt_metal::DataType::BFLOAT16).to_device(device, dram_mem_config);
+    Tensor weight_tensor = ttnn::random::random(Shape(dimensions_weight), tt::tt_metal::DataType::BFLOAT16)
+                               .to_device(device, dram_mem_config);
+    auto input_vector = input_tensor.to_vector<float>();
+    auto weight_vector = weight_tensor.to_vector<float>();
 
-    auto input_vector = random_vector(dimensions);
-    auto weight_vector = random_vector(dimensions_weight);
+    SmallVector<int64_t> dims{0, 2, 3, 1};
+    input_tensor = ttnn::permute(input_tensor, dims);
 
-    auto input_tensor_layout = tt::tt_metal::TensorLayout::fromPaddedShape(
-        DataType::BFLOAT16,
-        PageConfig(ttnn::ROW_MAJOR_LAYOUT),
-        dram_mem_config,
-        /* logical */ Shape(dimensions),
-        /* padded */ Shape(dimensions));
-    auto input_tensor =
-        Tensor::from_vector(input_vector, TensorSpec(Shape(tt_dimensions), input_tensor_layout), device);
-
-    auto weight_tensor_layout = tt::tt_metal::TensorLayout::fromPaddedShape(
-        DataType::BFLOAT16,
-        PageConfig(ttnn::ROW_MAJOR_LAYOUT),
-        dram_mem_config,
-        /* logical */ Shape(dimensions_weight),
-        /* padded */ Shape(dimensions_weight));
-    auto weight_tensor =
-        Tensor::from_vector(weight_vector, TensorSpec(Shape(tt_dimensions_weight), weight_tensor_layout))
-            .to_layout(TILE_LAYOUT)
-            .to_device(device, dram_mem_config);
+    SmallVector<int64_t> weight_dims{2, 3, 1, 0};
+    weight_tensor = ttnn::permute(weight_tensor, weight_dims);
+    weight_tensor =
+        ttnn::reshape(weight_tensor, Shape({1, 1, kernel_size[0] * kernel_size[1] * input_channels, output_channels}));
+    weight_tensor = ttnn::to_layout(weight_tensor, TILE_LAYOUT, std::nullopt, dram_mem_config, device);
 
     Result r = conv2d::conv2d(
         input_tensor,
@@ -234,24 +162,24 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
         {1, 1},        // dilation
         1,             // groups
         std::nullopt,
-        conv2d::Conv2dConfig({
+        conv2d::Conv2dConfig{
             .dtype = DataType::BFLOAT16,
             .weights_dtype = DataType::BFLOAT16,
             .input_channels_alignment = 16,
             .output_layout = ROW_MAJOR_LAYOUT,
-        }),
+        },
         std::nullopt);
     auto [output_tensor, output_height, output_width, r1, r2] = r;
-    // std::cout<<"output_tensor logical shape
-    // ("<<output_tensor.get_logical_shape()[0]<<","<<output_tensor.get_logical_shape()[1]<<","<<output_tensor.get_logical_shape()[2]<<","<<output_tensor.get_logical_shape()[3]<<")"<<std::endl;
-    // std::cout<<"output_height: "<<output_height<<std::endl;
-    // std::cout<<"output_width: "<<output_width<<std::endl;
 
-    auto res = flatten_result(output_tensor.to_vector<float>(), output_channels, output_height, output_width);
+    output_tensor = ttnn::reshape(output_tensor, Shape({1, output_height, output_width, output_channels}));
+    SmallVector<int64_t> output_dims{0, 3, 1, 2};
+    output_tensor = ttnn::permute(output_tensor, output_dims);
+
+    auto res = output_tensor.to_vector<float>();
 
     auto ref_res = conv2d(
-        reorder_input(input_vector, input_channels, input_height, input_width),
-        reorder_weigths(weight_vector, output_channels, input_channels, kernel_size[0], kernel_size[1]),
+        input_vector,
+        weight_vector,
         input_channels,
         output_channels,
         input_height,
@@ -265,7 +193,7 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
     auto pass = CloseDevice(device);
     std::cout << "PCC: " << pcc_calculated << std::endl;
     TT_FATAL(pass, "Error");
-    TT_FATAL(pcc_calculated > 0.95, "Failed pcc");
+    TT_FATAL(pcc_calculated > 0.99, "Failed pcc");
 }
 
 INSTANTIATE_TEST_SUITE_P(Conv2DTests, Conv2DFixture, ::testing::Values(Conv2DParam{}));
