@@ -143,26 +143,9 @@ class SegformerTestInfra:
             core_grid = ttnn.CoreGrid(y=8, x=8)
         else:
             exit("Unsupported device")
+
         num_devices = 1 if isinstance(device, ttnn.Device) else device.get_num_devices()
-        """
-        # torch tensor
-        torch_input_tensor_permuted = torch.permute(self.inputs.pixel_values, (0, 2, 3, 1))
-        N, H, W, C = torch_input_tensor_permuted.shape
-        shard_grid = ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(7, 7),
-                ),
-            }
-        )
-        n_cores = 64
-        shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR, False)
-        input_mem_config = ttnn.MemoryConfig(
-            ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
-        )
-        tt_inputs_host = ttnn.from_torch(torch_input_tensor_permuted, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-        """
+
         torch_input_tensor = self.inputs.pixel_values
         n, c, h, w = torch_input_tensor.shape
         # sharded mem config for fold input
@@ -171,7 +154,7 @@ class SegformerTestInfra:
         grid_size = core_grid
         grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
         shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-        shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, 16), ttnn.ShardOrientation.ROW_MAJOR, False)
+        shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, 32), ttnn.ShardOrientation.ROW_MAJOR)
         input_mem_config = ttnn.MemoryConfig(
             ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
         )
@@ -179,8 +162,8 @@ class SegformerTestInfra:
         # torch_input_tensor = torch_input_tensor.reshape(1, 1, h * w * n, c)
         tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
         # tt_inputs_host = ttnn.pad(tt_inputs_host, [1, 1, n * h * w, 16], [0, 0, 0, 0], 0)
-        tt_inputs_host = ttnn.pad(tt_inputs_host, [n, h, w, 16], [0, 0, 0, 0], 0)
-        return tt_inputs_host, input_mem_config
+        # tt_inputs_host_padded = ttnn.pad(tt_inputs_host, [n, h, w, 32], [0, 0, 0, 0], 0)
+        return tt_inputs_host, [n, h, w, 32], input_mem_config
 
     def setup_dram_sharded_input(self, device, torch_input_tensor=None, mesh_mapper=None, mesh_composer=None):
         tt_inputs_host, input_mem_config = self.setup_l1_sharded_input(device)
@@ -191,10 +174,9 @@ class SegformerTestInfra:
             ),
             [
                 divup(tt_inputs_host.volume() // tt_inputs_host.shape[-1], (dram_grid_size.x * dram_grid_size.y)),
-                16,  # 3
+                3,  # 3
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         )
         sharded_mem_config_DRAM = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec
