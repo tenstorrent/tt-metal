@@ -159,5 +159,5 @@ TEST_F(CommandQueueSingleCardFixture, TensixActiveEthTestSubDeviceBasicEthProgra
     }
     Synchronize(device);
     detail::DumpDeviceProfileResults(device);
-
+}
 }  // namespace tt::tt_metal
