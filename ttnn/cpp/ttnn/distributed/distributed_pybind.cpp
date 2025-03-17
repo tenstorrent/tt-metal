@@ -375,7 +375,6 @@ void py_module(py::module& module) {
             "sfpu_inf",
             [](MeshDevice* device) { return tt::tt_metal::experimental::hal::get_inf(); },
             R"doc(Returns Infinity value for current architecture.)doc");
-    ;
 
     module.def(
         "open_mesh_device",
