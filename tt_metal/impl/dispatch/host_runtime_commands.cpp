@@ -44,6 +44,8 @@
 #include <hal.hpp>
 #include "lightmetal/host_api_capture_helpers.hpp"
 
+#include "tracy/Tracy.hpp"
+
 using namespace tt::tt_metal;
 
 namespace tt::tt_metal {
@@ -116,10 +118,6 @@ EnqueueProgramCommand::EnqueueProgramCommand(
     this->device = device;
     this->dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type();
     this->packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(this->device);
-    this->dispatch_message_addr =
-        DispatchMemMap::get(this->dispatch_core_type)
-            .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE) +
-        DispatchMemMap::get(this->dispatch_core_type).get_dispatch_message_offset(*this->sub_device_id);
 }
 
 void EnqueueProgramCommand::process() {

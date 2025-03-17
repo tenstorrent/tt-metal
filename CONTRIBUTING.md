@@ -786,6 +786,11 @@ After that, the UI will usually delete your branch.
   our pipelines with unnecessary runs that developers may know will fail
   anyways.
 
+### A recommended development flow for model writers
+
+Please refer to documentation for [adding a model](./models/MODEL_ADD.md) and
+for [graduating](./models/MODEL_GRADUATION.md) it.
+
 ### New feature and design specifications
 
 - New or changing features require the following accompanying documentation:

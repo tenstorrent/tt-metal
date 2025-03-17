@@ -52,6 +52,7 @@ void kernel_launch(uint32_t kernel_base_addr) {
 #endif
     wait_for_go_message();
     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+    EARLY_RETURN_FOR_DEBUG
     kernel_main();
     if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
         WAYPOINT("NKFW");

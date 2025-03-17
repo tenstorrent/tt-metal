@@ -1,8 +1,7 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstddef>
 #include <cstdint>
 #include <array>
 #include <tuple>
@@ -14,16 +13,24 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/event.hpp>
 #include <tt-metalium/sub_device.hpp>
+#include "hal.hpp"
+#include "hal_exp.hpp"
+#include "host_api.hpp"
+#include "kernel_types.hpp"
+#include "sub_device_types.hpp"
+#include "tt_backend_api_types.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "command_queue_fixture.hpp"
+#include "multi_command_queue_fixture.hpp"
 #include "sub_device_test_utils.hpp"
 #include "dispatch_test_utils.hpp"
 
 namespace tt::tt_metal {
 
-TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceSynchronization) {
-    auto* device = devices_[0];
-    uint32_t local_l1_size = 3200;
+constexpr uint32_t k_local_l1_size = 3200;
+const std::string k_coordinates_kernel_path = "tests/tt_metal/tt_metal/test_kernels/misc/read_my_coordinates.cpp";
+
+void test_sub_device_synchronization(IDevice* device) {
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
     SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})})});
     CoreRangeSet sharded_cores_1 = CoreRange({0, 0}, {2, 2});
@@ -45,7 +52,7 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceSynchronization) {
 
     std::array sub_device_ids_to_block = {SubDeviceId{0}};
 
-    auto sub_device_manager = device->create_sub_device_manager({sub_device_1, sub_device_2}, local_l1_size);
+    auto sub_device_manager = device->create_sub_device_manager({sub_device_1, sub_device_2}, k_local_l1_size);
 
     shard_config_1.device = device;
 
@@ -93,18 +100,27 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceSynchronization) {
     Synchronize(device);
 }
 
+TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceSynchronization) {
+    auto* device = devices_[0];
+    test_sub_device_synchronization(device);
+}
+
+TEST_F(MultiCommandQueueSingleDeviceFixture, TensixTestMultiCQSubDeviceSynchronization) {
+    test_sub_device_synchronization(device_);
+}
+
 TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceBasicPrograms) {
+    constexpr uint32_t k_num_iters = 5;
     auto* device = devices_[0];
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
     SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})})});
-    uint32_t num_iters = 5;
-    auto sub_device_manager = device->create_sub_device_manager({sub_device_1, sub_device_2}, 3200);
+    auto sub_device_manager = device->create_sub_device_manager({sub_device_1, sub_device_2}, k_local_l1_size);
     device->load_sub_device_manager(sub_device_manager);
 
     auto [waiter_program, syncer_program, incrementer_program, global_sem] =
         create_basic_sync_program(device, sub_device_1, sub_device_2);
 
-    for (uint32_t i = 0; i < num_iters; i++) {
+    for (uint32_t i = 0; i < k_num_iters; i++) {
         EnqueueProgram(device->command_queue(), waiter_program, false);
         device->set_sub_device_stall_group({SubDeviceId{0}});
         // Test blocking on one sub-device
@@ -127,7 +143,7 @@ TEST_F(CommandQueueSingleCardFixture, TensixActiveEthTestSubDeviceBasicEthProgra
     SubDevice sub_device_2(std::array{
         CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})}),
         CoreRangeSet(CoreRange(eth_core, eth_core))});
-    auto sub_device_manager = device->create_sub_device_manager({sub_device_1, sub_device_2}, 3200);
+    auto sub_device_manager = device->create_sub_device_manager({sub_device_1, sub_device_2}, k_local_l1_size);
     device->load_sub_device_manager(sub_device_manager);
 
     auto [waiter_program, syncer_program, incrementer_program, global_sem] =
@@ -144,5 +160,4 @@ TEST_F(CommandQueueSingleCardFixture, TensixActiveEthTestSubDeviceBasicEthProgra
     Synchronize(device);
     detail::DumpDeviceProfileResults(device);
 }
-
 }  // namespace tt::tt_metal

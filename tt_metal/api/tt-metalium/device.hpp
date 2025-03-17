@@ -9,10 +9,10 @@
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"
+#include "hostdevcommon/kernel_structs.h"  // Not used here, but leaked to programming examples
 #include "work_executor_types.hpp"
 #include "data_types.hpp"
 #include "program_device_map.hpp"
-#include "build.hpp"
 #include "hal.hpp"
 #include "command_queue_interface.hpp"
 #include "sub_device_types.hpp"
@@ -77,17 +77,20 @@ public:
     // Given a coordinate in Virtual NOC0 Space, get the equivalent coordinate in Virtual noc_index space
     virtual CoreCoord virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const = 0;
 
-    virtual std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const = 0;
-    virtual std::vector<CoreCoord> ethernet_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const = 0;
+    virtual std::vector<CoreCoord> worker_cores_from_logical_cores(
+        const std::vector<CoreCoord>& logical_cores) const = 0;
+    virtual std::vector<CoreCoord> ethernet_cores_from_logical_cores(
+        const std::vector<CoreCoord>& logical_cores) const = 0;
     virtual std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment() = 0;
 
-    virtual CoreCoord virtual_core_from_logical_core(const CoreCoord &logical_coord, const CoreType& core_type) const = 0;
+    virtual CoreCoord virtual_core_from_logical_core(
+        const CoreCoord& logical_coord, const CoreType& core_type) const = 0;
     virtual CoreCoord worker_core_from_logical_core(const CoreCoord &logical_core) const = 0;
 
     // Ethernet API
-    virtual CoreCoord ethernet_core_from_logical_core(const CoreCoord &logical_core) const = 0;
-    virtual CoreCoord logical_core_from_ethernet_core(const CoreCoord &ethernet_core) const = 0;
-    virtual std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores=false) const = 0;
+    virtual CoreCoord ethernet_core_from_logical_core(const CoreCoord& logical_core) const = 0;
+    virtual CoreCoord logical_core_from_ethernet_core(const CoreCoord& ethernet_core) const = 0;
+    virtual std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores = false) const = 0;
     virtual std::unordered_set<CoreCoord> get_inactive_ethernet_cores() const = 0;
     virtual bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores=false) const = 0;
     virtual std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const = 0;

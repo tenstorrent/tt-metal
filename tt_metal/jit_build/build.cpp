@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <build.hpp>
+#include "build.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -191,6 +191,10 @@ void JitBuildEnv::init(
 
     if (tt::llrt::RunTimeOptions::get_instance().get_kernels_nullified()) {
         this->defines_ += "-DDEBUG_NULL_KERNELS ";
+    }
+
+    if (tt::llrt::RunTimeOptions::get_instance().get_kernels_early_return()) {
+        this->defines_ += "-DDEBUG_EARLY_RETURN_KERNELS ";
     }
 
     if (tt::llrt::RunTimeOptions::get_instance().get_watcher_debug_delay()) {

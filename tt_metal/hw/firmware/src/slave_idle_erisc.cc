@@ -78,7 +78,8 @@ int main(int argc, char *argv[]) {
 
         flush_erisc_icache();
 
-        uint32_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::IDLE_ETH, DISPATCH_CLASS_ETH_DM1);
+        uint32_t kernel_config_base =
+            firmware_config_init(mailboxes, ProgrammableCoreType::IDLE_ETH, DISPATCH_CLASS_ETH_DM1);
 
         WAYPOINT("R");
         int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM1);

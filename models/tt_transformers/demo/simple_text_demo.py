@@ -118,6 +118,7 @@ def create_tt_model(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
     )
+    logger.info(f"Optimizations: {tt_model_args.optimizations._full_name}")
     state_dict = tt_model_args.load_state_dict()
 
     page_table = None
@@ -327,6 +328,7 @@ def test_demo_text(
     paged_attention = request.config.getoption("--paged_attention") or paged_attention
     page_params = request.config.getoption("--page_params") or page_params
     sampling_params = request.config.getoption("--sampling_params") or sampling_params
+    optimizations = request.config.getoption("--optimizations") or optimizations
     if request.config.getoption("--stop_at_eos") in [
         0,
         1,
@@ -644,7 +646,7 @@ def test_demo_text(
 
     # Benchmark targets
     supported_models = ["Llama3.2-1B", "Llama3.2-3B", "Llama3.1-8B", "Llama3.2-11B", "Llama3.1-70B"]
-    supported_devices = ["N150", "N300", "T3K", "TG"]
+    supported_devices = ["N150", "P150", "P300", "N300", "P150x4", "T3K", "TG"]
 
     tt_device_name = model_args.device_name
 
@@ -664,7 +666,9 @@ def test_demo_text(
             "TG_Llama3.2-3B": 1050,  # TODO Update target
             #
             "N150_Llama3.1-8B": 1050,
+            "P150_Llama3.1-8B": 1050,
             "N300_Llama3.1-8B": 1050,
+            "P300_Llama3.1-8B": 1050,
             "T3K_Llama3.1-8B": 1050,
             "TG_Llama3.1-8B": 1050,
             #
@@ -692,7 +696,9 @@ def test_demo_text(
             "TG_Llama3.2-3B": 150,  # TODO Update target
             #
             "N150_Llama3.1-8B": 23,  # TODO Update target
+            "P150_Llama3.1-8B": 23,  # TODO Update target
             "N300_Llama3.1-8B": 38,
+            "P300_Llama3.1-8B": 38,
             "T3K_Llama3.1-8B": 45,
             "TG_Llama3.1-8B": 45,  # TODO Update target
             #

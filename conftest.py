@@ -83,12 +83,15 @@ def get_tt_cache_path():
         internal_cache_path = Path("/opt/tt-metal-models") / model_folder / model_version
         has_internal_cache = internal_cache_path.exists()
         if has_internal_weka:
+            logger.debug(f"Using internal weka path: {internal_weka_path}")
             return internal_weka_path
         elif has_internal_cache:
+            logger.debug(f"Using internal cache path: {internal_cache_path}")
             return internal_cache_path
         else:
             default_path = Path(default_dir) / model_folder / model_version
             default_path.mkdir(parents=True, exist_ok=True)
+            logger.debug(f"Using default cache path: {default_path}")
             return default_path
 
     return get_tt_cache_path_

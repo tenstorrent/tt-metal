@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <climits>
 #include <limits>
 
 namespace tt::tt_fabric {
@@ -273,7 +274,6 @@ struct PacketHeader : public PacketHeaderBase<PacketHeader> {
     // manage this complexity.
     uint8_t padding0[10];
 
-private:
     inline static uint32_t calculate_chip_unicast_routing_fields_value(uint8_t distance_in_hops) {
         return RoutingFields::LAST_CHIP_IN_MCAST_VAL | distance_in_hops;
     }
@@ -318,12 +318,14 @@ struct LowLatencyRoutingFields {
     static constexpr uint32_t WRITE_ONLY = 0b01;
     static constexpr uint32_t FORWARD_ONLY = 0b10;
     static constexpr uint32_t WRITE_AND_FORWARD = 0b11;
+    static constexpr uint32_t MAX_NUM_ENCODINGS = sizeof(uint32_t) * CHAR_BIT / FIELD_WIDTH;
     static constexpr uint32_t FWD_ONLY_FIELD = 0xAAAAAAAA;
-    static constexpr uint32_t WR_AND_FWD_FIELD = 0xFFFFFFFF;
+    static constexpr uint32_t WR_ONLY_FIELD = 0x55555555;
     uint32_t value;
 };
 
 struct LowLatencyPacketHeader : public PacketHeaderBase<LowLatencyPacketHeader> {
+    static constexpr uint8_t default_high_vc_distance = LowLatencyRoutingFields::MAX_NUM_ENCODINGS;
     LowLatencyRoutingFields routing_fields;
     uint8_t padding0[8];
 
@@ -345,17 +347,15 @@ private:
         // 0b110000. This means starting from the 3rd chip, we will write and forward once Last line will do 0b01 << 6 =
         // 0b01000000. This means that on the 5th chip, we will write only Together this means the final encoding is
         // 0b01111010
+        uint32_t distance_in_hops =
+            chip_multicast_command_header.start_distance_in_hops + chip_multicast_command_header.range_hops - 1;
         return (LowLatencyRoutingFields::FWD_ONLY_FIELD &
-                ((1 << (chip_multicast_command_header.start_distance_in_hops - 1) *
-                           LowLatencyRoutingFields::FIELD_WIDTH) -
-                 1)) |
-               (LowLatencyRoutingFields::WR_AND_FWD_FIELD &
-                ((1 << (chip_multicast_command_header.range_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH) - 1)
-                    << ((chip_multicast_command_header.start_distance_in_hops - 1) *
-                        LowLatencyRoutingFields::FIELD_WIDTH)) |
-               (LowLatencyRoutingFields::WRITE_ONLY << (chip_multicast_command_header.start_distance_in_hops +
-                                                        chip_multicast_command_header.range_hops - 2) *
-                                                           LowLatencyRoutingFields::FIELD_WIDTH);
+                ((1 << (distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH) - 1)) |
+               // TODO: We can skip the masking of the upper bits for improved performance on the workers, at the cost
+               // of readability of the packet header
+               ((LowLatencyRoutingFields::WR_ONLY_FIELD &
+                 ((1 << (chip_multicast_command_header.range_hops) * LowLatencyRoutingFields::FIELD_WIDTH) - 1))
+                << ((chip_multicast_command_header.start_distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH));
     }
 
 public:
@@ -389,6 +389,7 @@ static_assert(
 
 static constexpr size_t header_size_bytes = sizeof(PacketHeader);
 
+// TODO: Should be piped from host to determine which packet header to use
 #define FABRIC_LOW_LATENCY_MODE 1
 
 #if defined FABRIC_LOW_LATENCY_MODE and FABRIC_LOW_LATENCY_MODE == 1
