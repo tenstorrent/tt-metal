@@ -81,12 +81,15 @@ static inline void run_halo_gather(
     uint32_t my_noc_y) {
     static_assert(BlockSizeHeight >= TILE_SIZE, "Blocks cannot be smaller than tile height");
 
+    constexpr uint32_t block_size_height_tiles = BlockSizeHeight / TILE_SIZE;
+    constexpr uint32_t total_tiles_in_single_block = block_size_height_tiles * BlockSizeWidthTiles;
+
     uint16_t current_config_index = 0;
     uint16_t number_of_segments_remaining = config[current_config_index++];
 
     // Assume input is already ready when !EnableBlocking (like when using RM)
     if constexpr (EnableBlocking) {
-        cb_wait_front(InputCBIndex, BlockSizeWidthTiles);
+        cb_wait_front(InputCBIndex, total_tiles_in_single_block);
     }
 
     uint64_t out_l1_addr = 0;
@@ -106,11 +109,13 @@ static inline void run_halo_gather(
             uint16_t src_offset = config[current_config_index++];
             uint16_t dst_offset = config[current_config_index++];
             uint16_t transfer_size = config[current_config_index++];
+            DPRINT << "num_transfers=" << transfers_remaining << " src_offset=" << src_offset
+                   << " dst_offset=" << dst_offset << " size=" << transfer_size << ENDL();
             if constexpr (EnableBlocking) {
                 if (src_offset >= block_boundary_offset) {
                     noc_async_write_barrier();
-                    cb_pop_front(InputCBIndex, BlockSizeWidthTiles);
-                    cb_wait_front(InputCBIndex, BlockSizeWidthTiles);
+                    cb_pop_front(InputCBIndex, total_tiles_in_single_block);
+                    cb_wait_front(InputCBIndex, total_tiles_in_single_block);
                     block_boundary_offset += BlockSizeHeight;
                     block_id++;
                 }
@@ -123,7 +128,7 @@ static inline void run_halo_gather(
     }
 
     if constexpr (EnableBlocking) {
-        cb_pop_front(InputCBIndex, BlockSizeWidthTiles);
+        cb_pop_front(InputCBIndex, total_tiles_in_single_block);
     }
 }
 

@@ -58,6 +58,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     uint32_t input_nblocks_per_core = tt::div_up(remapped_input_shard_shape_for_output_grid, TILE_HEIGHT);
     uint32_t input_npages = ntiles_per_block * input_nblocks_per_core;
 
+    tt::log_info("input shape = {}, shard shape = {}", input_shape, remapped_input_shard_shape_for_output_grid);
+
     uint32_t out_stick_nbytes = output_shard_shape[1] * out_nbytes;
 
     uint32_t in_page_size = tt::tt_metal::detail::TileSize(in_df);
@@ -84,12 +86,13 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     auto src_cb = CreateCircularBuffer(program, all_cores, src_cb_config);
     log_debug(tt::LogOp, "CB {} :: npages = {}, pagesize = {}", src_cb_id, input_npages, in_page_size);
 
+    const uint32_t block_size_height = 64;  // TODO: Get this as an argument
     uint32_t input_to_writer_cb_id = src_cb_id;
     if (!skip_untilize) {
         input_to_writer_cb_id = untilize_out_cb_id;
 
         // TODO: Use double buffering
-        uint32_t output_ntiles = ntiles_per_block;
+        uint32_t output_ntiles = (block_size_height / TILE_HEIGHT) * ntiles_per_block;
 
         // Output of untilize from compute kernel goes into this CB
         auto untilize_out_cb_config =
@@ -224,7 +227,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         is_width_sharded,
         aligned_input_nstick_nbytes,
         skip_untilize,
-        skip_untilize ? input_npages : 32,
+        skip_untilize ? input_npages : block_size_height,
         ntiles_per_block};
 
     reader_ct_args[0] = padding_config_cb_id;
