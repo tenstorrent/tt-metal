@@ -161,6 +161,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         reader_kernel_config);
 
     // Writer
+    bool two_phase_release = semaphore.first.address() != semaphore.second.address();
     bool last_dim = dim == input_tensor_shape.rank() - 1;
     uint32_t tile_rows = input_tensor_shape[dim - 1] / input_tensor.get_tensor_spec().tile().get_height();
     uint32_t tile_cols_for_chip = input_tensor_shape[dim] / input_tensor.get_tensor_spec().tile().get_width();
@@ -175,6 +176,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         op_config.get_page_size(),                         // tensor0_page_size
         num_targets_forward,                               // num_targets_forward_direction
         num_targets_backward,                              // num_targets_backward_direction
+        two_phase_release,                                 // two_phase_release
         last_dim,                                          // dim
         tile_cols_for_chip                                 // tile_cols_for_chip
     };
@@ -409,6 +411,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
         reader_kernel_config);
 
     // Writer
+    bool two_phase_release = semaphore.first.address() != semaphore.second.address();
     auto writer_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
     writer_kernel_config.compile_args = {
         ring_index,                       // my_chip_id
@@ -419,6 +422,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
         op_config.get_page_size(),        // tensor0_page_size
         num_targets_forward,              // num_targets_forward_direction
         num_targets_backward,             // num_targets_backward_direction
+        two_phase_release,                // two_phase_release
     };
     log_trace(tt::LogOp, "Writer Compile Args:");
     for (const auto& arg : writer_kernel_config.compile_args) {

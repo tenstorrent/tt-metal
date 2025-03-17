@@ -24,6 +24,7 @@ constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(4);
 constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(5);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(6);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(7);
+constexpr bool two_phase_release = get_compile_time_arg_val(8);
 
 /*
  * CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time)
@@ -159,7 +160,7 @@ void kernel_main() {
         }
     }
 
-    ccl_barrier<true>(
+    ccl_barrier<two_phase_release>(
         fabric_connection,
         out_ready_sem_bank_addr_wait,
         out_ready_sem_bank_addr_release,

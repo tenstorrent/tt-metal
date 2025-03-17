@@ -727,7 +727,7 @@ def test_all_gather_huge_bf8_l1(
 )
 @pytest.mark.parametrize("num_iters", [8])
 @pytest.mark.parametrize("enable_async", [True])
-@pytest.mark.parametrize("dynamic_alloc_semaphore", [True])
+@pytest.mark.parametrize("dynamic_alloc_semaphore", [True, False])
 def test_all_gather_sharded(
     t3k_mesh_device,
     num_devices,
