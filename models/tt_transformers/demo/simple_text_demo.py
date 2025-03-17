@@ -118,6 +118,7 @@ def create_tt_model(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
     )
+    logger.info(f"Optimizations: {tt_model_args.optimizations._full_name}")
     state_dict = tt_model_args.load_state_dict()
 
     page_table = None
@@ -327,6 +328,7 @@ def test_demo_text(
     paged_attention = request.config.getoption("--paged_attention") or paged_attention
     page_params = request.config.getoption("--page_params") or page_params
     sampling_params = request.config.getoption("--sampling_params") or sampling_params
+    optimizations = request.config.getoption("--optimizations") or optimizations
     if request.config.getoption("--stop_at_eos") in [
         0,
         1,
