@@ -18,8 +18,8 @@ namespace experimental {
 namespace ccl {
 namespace transformer {
 
-struct ExecuteAllReduceAsync {
-    static ttnn::Tensor invoke(
+struct ExecuteAllReduceCreateQkvHeads {
+    static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(
         const ttnn::Tensor& input_tensor,
         ttnn::Tensor& buffer_tensor,
         const uint32_t cluster_axis,
@@ -40,7 +40,7 @@ namespace experimental {
 
 constexpr auto all_reduce_create_qkv_heads = ttnn::register_operation<
     "ttnn::experimental::all_reduce_create_qkv_heads",
-    ttnn::operations::experimental::ccl::transformer::ExecuteAllReduceAsync>();
+    ttnn::operations::experimental::ccl::transformer::ExecuteAllReduceCreateQkvHeads>();
 
 }  // namespace experimental
 }  // namespace ttnn

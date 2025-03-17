@@ -32,7 +32,7 @@ uint32_t find_scatter_dim(const ttnn::Shape& input_tensor_padded_shape, size_t n
         num_workers);
 }
 
-ttnn::Tensor ExecuteAllReduceAsync::invoke(
+ttnn::Tensor ExecuteAllReduceCreateQkvHeads::invoke(
     const ttnn::Tensor& input_tensor,
     ttnn::Tensor& buffer_tensor,
     const uint32_t cluster_axis,
