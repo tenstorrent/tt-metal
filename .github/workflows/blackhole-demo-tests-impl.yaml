@@ -56,6 +56,7 @@ jobs:
           sudo cpupower frequency-set -g performance
       - name: Run demo regression tests
         uses: ./.github/actions/docker-run
+        timeout-minutes: 70
         env:
           LOGURU_LEVEL: INFO
         with:
@@ -67,8 +68,7 @@ jobs:
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e GITHUB_ACTIONS=true
           install_wheel: true
-        timeout-minutes: 70
-        run_args: ${{ matrix.test-group.cmd }}
+          run_args: ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
