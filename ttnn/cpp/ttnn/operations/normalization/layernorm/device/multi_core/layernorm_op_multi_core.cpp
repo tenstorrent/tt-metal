@@ -393,9 +393,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     }
 
     uint32_t curr_row = 0;
-    const auto logical_shape = a.get_logical_shape();
-    uint32_t logical_W = shape[-1];
-    float winv = 1.0f / logical_W;  // bcast-w scaler
+    float winv = 1.0f / W;
     auto bfloat_winv_value = bfloat16(winv);
     uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});
     union {
