@@ -9,7 +9,9 @@ import pytest
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-def run_avg_pool(device, input_shape, kernel_size, stride, padding, dilation, shard_scheme=None, ceil_mode=False):
+def run_avg_pool(
+    device, input_shape, kernel_size, stride, padding, dilation, memory_config=None, shard_scheme=None, ceil_mode=False
+):
     ## Test setup for both.
     in_n, in_c, in_h, in_w = input_shape
     torch.manual_seed(0)
@@ -49,7 +51,7 @@ def run_avg_pool(device, input_shape, kernel_size, stride, padding, dilation, sh
         stride=stride,
         padding=padding,
         dilation=dilation,
-        # memory_config=memory_config,
+        memory_config=memory_config,
         applied_shard_scheme=shard_scheme,
         ceil_mode=ceil_mode,
     )
