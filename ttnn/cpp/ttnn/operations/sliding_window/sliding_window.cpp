@@ -639,7 +639,7 @@ generate_halo_kernel_config_tensors(
         }
     }
 
-    const int block_size = 64;  // TODO: pass this in
+    const int block_size = 256;  // TODO: pass this in
     std::vector<GatherConfig> ordered_gather_configs;
     for (const auto& config : gather_configs) {
         // We have to split first to guarantee proper ordering

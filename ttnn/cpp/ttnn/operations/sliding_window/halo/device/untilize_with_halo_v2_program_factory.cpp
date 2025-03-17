@@ -86,13 +86,16 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     auto src_cb = CreateCircularBuffer(program, all_cores, src_cb_config);
     log_debug(tt::LogOp, "CB {} :: npages = {}, pagesize = {}", src_cb_id, input_npages, in_page_size);
 
-    const uint32_t block_size_height = 64;  // TODO: Get this as an argument
+    const uint32_t block_size_height = 256;  // TODO: Get this from a parameter
+
+    // We need to clamp to avoid crashing in the case that the block size used was larger than the input
+    const uint32_t clamped_block_size_height = std::min(block_size_height, input_npages * TILE_HEIGHT);
     uint32_t input_to_writer_cb_id = src_cb_id;
     if (!skip_untilize) {
         input_to_writer_cb_id = untilize_out_cb_id;
 
         // TODO: Use double buffering
-        uint32_t output_ntiles = (block_size_height / TILE_HEIGHT) * ntiles_per_block;
+        uint32_t output_ntiles = (clamped_block_size_height / TILE_HEIGHT) * ntiles_per_block;
 
         // Output of untilize from compute kernel goes into this CB
         auto untilize_out_cb_config =
@@ -107,7 +110,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
             out_tile_size);
     }
 
-    // output shard, after inserting halo and padding, goes into this CB as input to next op.
+    // Iutput shard (after inserting halo and padding) goes into this CB as input to next op
     uint32_t out_cb_pagesize = out_stick_nbytes;
     uint32_t out_cb_npages = max_out_nsticks_per_core;
     auto out_cb_config = CircularBufferConfig(out_cb_npages * out_cb_pagesize, {{out_cb_id, out_df}})
@@ -227,7 +230,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         is_width_sharded,
         aligned_input_nstick_nbytes,
         skip_untilize,
-        skip_untilize ? input_npages : block_size_height,
+        skip_untilize ? input_npages : clamped_block_size_height,
         ntiles_per_block};
 
     reader_ct_args[0] = padding_config_cb_id;
