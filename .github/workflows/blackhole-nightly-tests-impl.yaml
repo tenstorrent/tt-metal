@@ -73,7 +73,6 @@ jobs:
           pip3 install $WHEEL_FILENAME
 
       - name: Run frequent reg tests scripts
-        uses: ./.github/actions/docker-run
         timeout-minutes: 30
         run: pytest tests/nightly/single_card/${{ matrix.test-group.model }}
 
