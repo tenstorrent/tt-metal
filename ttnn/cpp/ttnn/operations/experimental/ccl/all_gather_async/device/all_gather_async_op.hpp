@@ -126,7 +126,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_w
     const uint32_t ring_size,
     const uint32_t ring_index,
     ccl::Topology topology,
-    const std::pair<GlobalSemaphore, GlobalSemaphore>& semaphores,
+    const GlobalSemaphore semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode);
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32_any(

@@ -257,7 +257,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program(
                 this->ring_size,
                 this->ring_index,
                 this->topology,
-                this->semaphore,
+                this->semaphore.first,
                 this->sub_device_id,
                 this->enable_persistent_fabric_mode);
     }

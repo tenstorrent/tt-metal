@@ -136,7 +136,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_w
     const uint32_t ring_size,
     const uint32_t ring_index,
     ccl::Topology topology,
-    const std::pair<GlobalSemaphore, GlobalSemaphore>& semaphore,
+    const GlobalSemaphore semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode) {
     tt::tt_metal::Program program{};
@@ -344,21 +344,17 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_w
             output_worker_slice_v2, src0_cb_index, mcast_dest_args));
         // 2, mcast the semaphore to all dest for teardown
         writer_cmd_stream.push_back(ttnn::ccl::cmd::uops::fabric_multicast_semaphore_inc(
-            &semaphore.first,
-            ttnn::ccl::cmd::CclCommandAtomicInc{1},
-            drain_sync_core.x,
-            drain_sync_core.y,
-            mcast_dest_args));
+            &semaphore, ttnn::ccl::cmd::CclCommandAtomicInc{1}, drain_sync_core.x, drain_sync_core.y, mcast_dest_args));
         bool wait_for_semaphore = !enable_async_output_tensor && link == 0;
         if (wait_for_semaphore) {
             // 3, wait for n_chip*num_links number of semaphore at teardown semaphore address for first chip, and
             // n_chip*num_links+1 for other chips
             writer_cmd_stream.push_back(ttnn::ccl::cmd::uops::local_semaphore_wait(
-                &semaphore.first, is_first_chip ? ring_size * num_links : ring_size * num_links + 1));
+                &semaphore, is_first_chip ? ring_size * num_links : ring_size * num_links + 1));
             // 4, send semaphore unicast to forward device except for the last chip
             if (!is_last_chip) {
                 writer_cmd_stream.push_back(ttnn::ccl::cmd::uops::fabric_unicast_semaphore_inc(
-                    &semaphore.first,
+                    &semaphore,
                     ttnn::ccl::cmd::CclCommandAtomicInc{1},
                     drain_sync_core.x,
                     drain_sync_core.y,
@@ -380,7 +376,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_w
         bool reset_semaphore = generate_teardown_commands || (!enable_async_output_tensor && link == 0);
         if (reset_semaphore) {
             // 6. (drain sync core) reset semaphore to 0
-            writer_cmd_stream.push_back(ttnn::ccl::cmd::uops::local_core_semaphore_set(&semaphore.first, 0));
+            writer_cmd_stream.push_back(ttnn::ccl::cmd::uops::local_core_semaphore_set(&semaphore, 0));
         }
 
         if (lower_command_stream_to_noc_commands) {
