@@ -33,19 +33,13 @@ ttnn::Tensor ExecuteLlamaReduceScatter::invoke(
 
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
 
-    std::cout << fmt::format(
-                     "DEBUG: creating line_fabric with num devices: {}, num links: {}", devices.size(), num_links)
-              << std::endl;
-    std::cout << "DEBUG: line_fabric is created" << std::endl;
     std::vector<GlobalSemaphore> semaphores = cross_device_semaphore.global_semaphores;
-    std::cout << "Calling llama_reduce_scatter" << std::endl;
     operation::launch_op(
         [dim, semaphores, subdevice_id, cluster_axis, ring_devices, memory_config, devices, num_links](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             auto input_tensor = input_tensors.at(0);
-            std::cout << "input_tensor device id: " << input_tensor.device()->id() << std::endl;
             uint32_t ring_index = 0;  // Initialize device index
             std::optional<IDevice*> forward_device = std::nullopt;
             std::optional<IDevice*> backward_device = std::nullopt;
@@ -55,11 +49,9 @@ ttnn::Tensor ExecuteLlamaReduceScatter::invoke(
                     ring_index = i;
                     semaphore = semaphores.at(i);
                     if (i != 0) {
-                        std::cout << "ring_index: " << ring_index << " backward_device: " << i - 1 << std::endl;
                         backward_device = devices.at(i - 1);
                     }
                     if (i != ring_devices - 1) {
-                        std::cout << "ring_index: " << ring_index << " forward_device: " << i + 1 << std::endl;
                         forward_device = devices.at(i + 1);
                     }
                 }
