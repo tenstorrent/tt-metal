@@ -75,6 +75,18 @@ std::string graph_demangle(const std::string_view name) {
     return ret_val;
 }
 
+void sanitize_string_values(std::string& str, const std::string& from, const std::string& to) {
+    if (from.empty()) {
+        return;  // Prevent infinite loop
+    }
+
+    size_t start_pos = 0;
+    while ((start_pos = str.find(from, start_pos)) != std::string::npos) {
+        str.replace(start_pos, from.length(), to);
+        start_pos += to.length();  // Move past the replaced part
+    }
+}
+
 GraphArgumentSerializer::GraphArgumentSerializer() { initialize(); }
 
 GraphArgumentSerializer& GraphArgumentSerializer::instance() {
@@ -94,20 +106,6 @@ void GraphArgumentSerializer::register_small_vector() {
         oss << referenced_value.get();
         return oss.str();
     };
-}
-
-template <typename T>
-void GraphArgumentSerializer::register_special_type() {
-    GraphArgumentSerializer::ConvertionFunction special_function = [](const std::any& value) -> std::string {
-        std::ostringstream oss;
-        auto referenced_value = std::any_cast<std::reference_wrapper<T>>(value);
-        oss << referenced_value.get();
-        return oss.str();
-    };
-
-    registry()[typeid(std::reference_wrapper<T>)] = special_function;
-    registry()[typeid(std::reference_wrapper<const T>)] = special_function;
-    registry()[typeid(std::reference_wrapper<const T>)] = special_function;
 }
 
 template <typename OptionalT>
@@ -152,7 +150,7 @@ void GraphArgumentSerializer::register_type() {
     register_optional_type<std::optional<T>>();
     register_optional_type<const std::optional<T>>();
     register_optional_type<std::optional<const T>>();
-
+    register_optional_type<const std::optional<const T>>();
     // Handle complex types (feel free to add more in the future)
     // Small vector
     register_small_vector<T, 2>();
@@ -171,12 +169,15 @@ std::vector<std::string> GraphArgumentSerializer::to_list(const std::span<std::a
 
         auto it = registry().find(element.type());
         if (it != registry().end()) {
-            result.push_back(it->second(element));
+            auto str_result = it->second(element);
+            sanitize_string_values(str_result, "__1::", "");
+            result.push_back(str_result);
         } else {
             // for debugging reasons, I want to report the type that is not managed
             std::ostringstream oss;
             oss << "[ unsupported type" << " , ";
             auto demangled_name = graph_demangle(element.type().name());
+            sanitize_string_values(demangled_name, "__1::", "");
             oss << demangled_name;
             oss << "]";
             result.push_back(oss.str());
@@ -194,13 +195,14 @@ void GraphArgumentSerializer::initialize() {
     GraphArgumentSerializer::register_type<float>();
     GraphArgumentSerializer::register_type<uint8_t>();
     GraphArgumentSerializer::register_type<uint16_t>();
+    GraphArgumentSerializer::register_type<std::string>();
     GraphArgumentSerializer::register_type<tt::tt_metal::DataType>();
     GraphArgumentSerializer::register_type<tt::tt_metal::Layout>();
     GraphArgumentSerializer::register_type<tt::tt_metal::MemoryConfig>();
     GraphArgumentSerializer::register_type<tt::tt_metal::Shape>();
     GraphArgumentSerializer::register_type<tt::tt_metal::Tensor>();
     GraphArgumentSerializer::register_type<tt::tt_metal::Tile>();
-    GraphArgumentSerializer::register_special_type<tt::stl::StrongType<unsigned char, ttnn::QueueIdTag>>();
+    GraphArgumentSerializer::register_type<tt::stl::StrongType<unsigned char, ttnn::QueueIdTag>>();
     GraphArgumentSerializer::register_type<ttnn::types::CoreGrid>();
     GraphArgumentSerializer::register_type<
         std::variant<ttnn::GrayskullComputeKernelConfig, ttnn::WormholeComputeKernelConfig>>();

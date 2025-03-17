@@ -339,13 +339,14 @@ def run_bert_question_and_answering_inference(
 ```
 
 The output of this should like like this:
-https://gist.github.com/dgomezTT/639e96a38f4f9c0861bc4b8b763d7caf
+https://gist.github.com/dgomezTT/ad5af9cf42f245a9a220458f431919c4
 
 Please note that we have over 300.000 lines in the json file, so we just included a few in the gist.
 
 
 ### What is next for this tool?
-
+- Supporting more operations
+- Bringing more tooling to the output
 
 
 ## Python
