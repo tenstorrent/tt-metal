@@ -150,10 +150,10 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     uint32_t ring_index = operation_attributes.ring_index;
     std::string device_order = detail::device_order_array_string(ring_size, ring_index);
 
-    if (operation_attributes.ring_index == 3) {
-        std::cout << "ring_index: " << operation_attributes.ring_index << " device_order: " << device_order
-                  << std::endl;
-    }
+    // if (operation_attributes.ring_index == 3) {
+    //     std::cout << "ring_index: " << operation_attributes.ring_index << " device_order: " << device_order
+    //               << std::endl;
+    // }
 
     std::map<std::string, std::string> reader_defines = {{"DEVICE_ORDER", device_order}};
 
@@ -194,20 +194,20 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
 
     auto full_shard_grid = input_grid.merge(output_grid);
 
-    if (operation_attributes.ring_index == 3) {
-        std::cout << "input_grid: " << input_grid.str() << std::endl;
-    }
-    if (operation_attributes.ring_index == 3) {
-        std::cout << "output_grid: " << output_grid.str() << std::endl;
-    }
+    // if (operation_attributes.ring_index == 3) {
+    //     std::cout << "input_grid: " << input_grid.str() << std::endl;
+    // }
+    // if (operation_attributes.ring_index == 3) {
+    //     std::cout << "output_grid: " << output_grid.str() << std::endl;
+    // }
     auto receiver_grid = detail::next_core_range_set(
         output_grid.bounding_box(),
         device->compute_with_storage_grid_size(),
         num_devices,
         shard_spec.orientation == ShardOrientation::ROW_MAJOR);
-    if (operation_attributes.ring_index == 3) {
-        std::cout << "receiver_grid: " << receiver_grid.str() << std::endl;
-    }
+    // if (operation_attributes.ring_index == 3) {
+    //     std::cout << "receiver_grid: " << receiver_grid.str() << std::endl;
+    // }
 
     TT_FATAL(output_grid.intersects(receiver_grid) == false, "output_grid and receiver_grid must not intersect");
 
@@ -233,16 +233,16 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         device->compute_with_storage_grid_size(),
         num_workers_per_link * num_links,
         shard_spec.orientation == ShardOrientation::ROW_MAJOR);
-    if (operation_attributes.ring_index == 3) {
-        std::cout << "sender_core_grid: " << sender_core_grid.str() << std::endl;
-    }
+    // if (operation_attributes.ring_index == 3) {
+    //     std::cout << "sender_core_grid: " << sender_core_grid.str() << std::endl;
+    // }
     auto sender_core = sender_core_grid.bounding_box().start_coord;
     auto sender_worker_cores = corerange_to_cores(sender_core_grid, std::nullopt);
 
     auto all_cores_grid = full_shard_grid_with_receiver_grid.merge(sender_core);
-    if (operation_attributes.ring_index == 3) {
-        std::cout << "all_cores_grid: " << all_cores_grid.str() << std::endl;
-    }
+    // if (operation_attributes.ring_index == 3) {
+    //     std::cout << "all_cores_grid: " << all_cores_grid.str() << std::endl;
+    // }
 
     // input sharded buffer
     uint32_t input_tensor_cb_id = tt::CBIndex::c_0;
@@ -261,11 +261,11 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     TT_FATAL(ncores_input % num_devices == 0, "ncores_input must be divisible by num_devices");
     uint32_t input_shard_cores_per_device = ncores_input / num_devices;
     uint32_t ncores_output = output_grid.num_cores();
-    if (operation_attributes.ring_index == 3) {
-        std::cout << "ncores_input: " << ncores_input
-                  << " input_shard_cores_per_device: " << input_shard_cores_per_device
-                  << " ncores_output: " << ncores_output << std::endl;
-    }
+    // if (operation_attributes.ring_index == 3) {
+    //     std::cout << "ncores_input: " << ncores_input
+    //               << " input_shard_cores_per_device: " << input_shard_cores_per_device
+    //               << " ncores_output: " << ncores_output << std::endl;
+    // }
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
 
@@ -279,10 +279,10 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
             .set_page_size(input_tensor_cb_id, input_page_size)
             .set_globally_allocated_address(*src_buffer);
 
-    if (operation_attributes.ring_index == 3) {
-        std::cout << "CB src config total size: " << tiles_per_core_width * input_page_size
-                  << " page size: " << input_page_size << std::endl;
-    }
+    // if (operation_attributes.ring_index == 3) {
+    //     std::cout << "CB src config total size: " << tiles_per_core_width * input_page_size
+    //               << " page size: " << input_page_size << std::endl;
+    // }
 
     // CB to represent the output sharded buffer
     tt::tt_metal::CircularBufferConfig cb_dst_config =
@@ -291,10 +291,10 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
             .set_page_size(output_tensor_cb_id, input_page_size)
             .set_globally_allocated_address(*dst_buffer);
 
-    if (operation_attributes.ring_index == 3) {
-        std::cout << "CB dst config total size: " << tiles_per_core_width_output * input_page_size
-                  << " page size: " << input_page_size << std::endl;
-    }
+    // if (operation_attributes.ring_index == 3) {
+    //     std::cout << "CB dst config total size: " << tiles_per_core_width_output * input_page_size
+    //               << " page size: " << input_page_size << std::endl;
+    // }
 
     constexpr uint32_t buffering_factor = 2;
     // Allocate space for the client interface
@@ -306,11 +306,11 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
             {{packet_header_cb_index, DataFormat::RawUInt32}})
             .set_page_size(packet_header_cb_index, packet_header_size_bytes);
 
-    if (operation_attributes.ring_index == 3) {
-        std::cout << "CB packet header config total size: "
-                  << num_packet_headers_storable * packet_header_size_bytes * buffering_factor
-                  << " page size: " << packet_header_size_bytes << std::endl;
-    }
+    // if (operation_attributes.ring_index == 3) {
+    //     std::cout << "CB packet header config total size: "
+    //               << num_packet_headers_storable * packet_header_size_bytes * buffering_factor
+    //               << " page size: " << packet_header_size_bytes << std::endl;
+    // }
 
     // input shards are 5 tiles wide, and each goes to a different core on the next device
     // max packet size is 4 tiles wide, so we only send 4/5 of the tiles at once
@@ -323,12 +323,12 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         "num_pages_per_packet {} is less than tiles_per_core_width {}",
         num_pages_per_packet,
         tiles_per_core_width);
-    if (operation_attributes.ring_index == 3) {
-        std::cout << "num_pages_per_packet: " << num_pages_per_packet << std::endl;
-    }
-    if (operation_attributes.ring_index == 3) {
-        std::cout << "tiles_per_core_width: " << tiles_per_core_width << std::endl;
-    }
+    // if (operation_attributes.ring_index == 3) {
+    //     std::cout << "num_pages_per_packet: " << num_pages_per_packet << std::endl;
+    // }
+    // if (operation_attributes.ring_index == 3) {
+    //     std::cout << "tiles_per_core_width: " << tiles_per_core_width << std::endl;
+    // }
 
     tt::tt_metal::CircularBufferConfig fabric_sender_cb_config =
         tt::tt_metal::CircularBufferConfig(
@@ -338,12 +338,13 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
             {{fabric_sender_cb_index, cb_data_format}})
             .set_page_size(fabric_sender_cb_index, input_page_size);
 
-    if (operation_attributes.ring_index == 3) {
-        std::cout << "CB fabric sender config total size: "
-                  << buffering_factor * input_shard_cores_per_device * (tiles_per_core_width - num_pages_per_packet) *
-                         input_page_size
-                  << " page size: " << num_pages_per_packet * input_page_size << std::endl;
-    }
+    // if (operation_attributes.ring_index == 3) {
+    //     std::cout << "CB fabric sender config total size: "
+    //               << buffering_factor * input_shard_cores_per_device * (tiles_per_core_width - num_pages_per_packet)
+    //               *
+    //                      input_page_size
+    //               << " page size: " << num_pages_per_packet * input_page_size << std::endl;
+    // }
 
     // buffer for receiving shards from the another device. Each receiver core will take each device's shard. The
     // receiver core for the local device will do nothing.
@@ -353,11 +354,11 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
             {{fabric_receiver_cb_index, cb_data_format}})
             .set_page_size(fabric_receiver_cb_index, input_page_size);
 
-    if (operation_attributes.ring_index == 3) {
-        std::cout << "CB fabric receiver config total size: "
-                  << buffering_factor * input_shard_cores_per_device * tiles_per_core_width * input_page_size
-                  << " page size: " << input_page_size << std::endl;
-    }
+    // if (operation_attributes.ring_index == 3) {
+    //     std::cout << "CB fabric receiver config total size: "
+    //               << buffering_factor * input_shard_cores_per_device * tiles_per_core_width * input_page_size
+    //               << " page size: " << input_page_size << std::endl;
+    // }
 
     tt::tt_metal::CircularBufferConfig accumulator_cb_config =
         tt::tt_metal::CircularBufferConfig(
@@ -365,11 +366,11 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
             {{accumulator_cb_index, cb_data_format}})
             .set_page_size(accumulator_cb_index, input_page_size);
 
-    if (operation_attributes.ring_index == 3) {
-        std::cout << "CB accumulator config total size: "
-                  << buffering_factor * tiles_per_core_width_output * input_page_size * num_devices
-                  << " page size: " << tiles_per_core_width_output * input_page_size << std::endl;
-    }
+    // if (operation_attributes.ring_index == 3) {
+    //     std::cout << "CB accumulator config total size: "
+    //               << buffering_factor * tiles_per_core_width_output * input_page_size * num_devices
+    //               << " page size: " << tiles_per_core_width_output * input_page_size << std::endl;
+    // }
 
     auto cb_input_tensor_handle =
         tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, cb_src_config);  // input buffer
@@ -428,15 +429,15 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     reader_defines["OUTPUT_CORE_XY"] = detail::cores_to_string(to_worker_cores(output_cores));
     reader_defines["RECEIVER_CORE_XY"] = detail::cores_to_string(to_worker_cores(receiver_cores));
 
-    if (operation_attributes.ring_index == 3) {
-        std::cout << "input_cores: " << reader_defines["INPUT_CORE_XY"] << std::endl;
-    }
-    if (operation_attributes.ring_index == 3) {
-        std::cout << "output_cores: " << reader_defines["OUTPUT_CORE_XY"] << std::endl;
-    }
-    if (operation_attributes.ring_index == 3) {
-        std::cout << "receiver_cores: " << reader_defines["RECEIVER_CORE_XY"] << std::endl;
-    }
+    // if (operation_attributes.ring_index == 3) {
+    //     std::cout << "input_cores: " << reader_defines["INPUT_CORE_XY"] << std::endl;
+    // }
+    // if (operation_attributes.ring_index == 3) {
+    //     std::cout << "output_cores: " << reader_defines["OUTPUT_CORE_XY"] << std::endl;
+    // }
+    // if (operation_attributes.ring_index == 3) {
+    //     std::cout << "receiver_cores: " << reader_defines["RECEIVER_CORE_XY"] << std::endl;
+    // }
     // create local semaphore
     auto local_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores_grid, INVALID);
     // std::cout << "Program factory local_semaphore: " << local_semaphore << std::endl;
@@ -528,15 +529,15 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
                   local_fabric_handle->uniquely_connect_worker(device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
 
     detail::append_fabric_connection_rt_args(forward_fabric_connection, sender_core, program, writer_runtime_args);
-    if (operation_attributes.ring_index == 3) {
-        std::cout << "Writer runtime args after appending forward fabric connection: " << writer_runtime_args.size()
-                  << std::endl;
-    }
+    // if (operation_attributes.ring_index == 3) {
+    //     std::cout << "Writer runtime args after appending forward fabric connection: " << writer_runtime_args.size()
+    //               << std::endl;
+    // }
     detail::append_fabric_connection_rt_args(backward_fabric_connection, sender_core, program, writer_runtime_args);
-    if (operation_attributes.ring_index == 3) {
-        std::cout << "Writer runtime args after appending backward fabric connection: " << writer_runtime_args.size()
-                  << std::endl;
-    }
+    // if (operation_attributes.ring_index == 3) {
+    //     std::cout << "Writer runtime args after appending backward fabric connection: " << writer_runtime_args.size()
+    //               << std::endl;
+    // }
 
     // std::cout << "Sender core: " << sender_core.x << ", " << sender_core.y << std::endl;
 
