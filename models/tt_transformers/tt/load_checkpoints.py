@@ -133,7 +133,7 @@ def load_meta_state_dict(ckpt_dir, n_layers=None, start_layer_idx=0):
 def load_chunked_checkpoints(checkpoints, n_layers, start_layer_idx):
     checkpoint = {}
 
-    (f"Loading {len(checkpoints)} checkpoint files")
+    (f"Loading {len(checkpoints)} chunked checkpoint files")
     for ckpt in tqdm(checkpoints):
         if n_layers:
             # Layer range is in the file name, like layers_start-end.pth
@@ -149,15 +149,25 @@ def load_chunked_checkpoints(checkpoints, n_layers, start_layer_idx):
     return checkpoint
 
 
+def is_param_replicated_across_shards(key: str) -> bool:
+    """
+    Return `True` if the parameter is replicated (i.e., not sharded)
+    across checkpoint files and should not be concatenated.
+    """
+    if key.startswith("vision_model."):
+        return any(keyword in key for keyword in ("ln", "gate", "embed", "c_proj.bias"))
+    elif key.startswith("text_model."):
+        return any(keyword in key for keyword in ("norm", "gate"))
+    else:
+        raise ValueError(f"Unknown model parameter name: {key}")
+
+
 def load_sharded_checkpoints(checkpoints, n_layers):
     checkpoint = {}
-    logger.info(f"Loading {len(checkpoints)} checkpoint files")
+    logger.info(f"Loading {len(checkpoints)} sharded checkpoint files")
     for ckpt in tqdm(checkpoints):
         loaded_ckpt = torch.load(ckpt, map_location="cpu")
-        for (
-            key,
-            value,
-        ) in loaded_ckpt.items():
+        for key, value in loaded_ckpt.items():
             if "layers." in key:
                 layer_num = int(key.split("layers.")[1].split(".")[0])
                 if n_layers and layer_num >= n_layers:
@@ -170,10 +180,10 @@ def load_sharded_checkpoints(checkpoints, n_layers):
 
     # concat checkpoint values
     for key, value in checkpoint.items():
-        if len(value) == 1 or "norm" in key:
+        if len(value) == 1 or is_param_replicated_across_shards(key):
             checkpoint[key] = value[0]
         else:
-            if key == "tok_embeddings.weight" or key == "output.weight":
+            if key.endswith("tok_embeddings.weight") or key.endswith("output.weight"):
                 assert value[0].shape[1] == 8192  # FIXME: do we need this hardcoded shape?
                 # Concatenate along dimension 0 for llama3 token embeddings weight and lm head
                 checkpoint[key] = torch.cat(value, dim=0)
