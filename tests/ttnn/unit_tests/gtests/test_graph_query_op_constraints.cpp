@@ -26,6 +26,7 @@
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/graph/graph_query_op_constraints.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -602,6 +603,114 @@ INSTANTIATE_TEST_SUITE_P(
                      .cb_peak_size_per_core = 28736,
                      .l1_buffers_peak_per_core = 26624,
                      .l1_output_buffer_per_core = 26624}}})));
+
+class Conv2dOpIfTest : public TTNNFixtureWithDevice,
+                       public testing::WithParamInterface<std::tuple<
+                           ttnn::TensorSpec,         // input
+                           ttnn::TensorSpec,         // weight
+                           ttnn::TensorSpec,         // output
+                           uint32_t,                 // in_channels
+                           uint32_t,                 // out_channels
+                           uint32_t,                 // batch_size
+                           uint32_t,                 // input_height
+                           uint32_t,                 // input_width
+                           std::array<uint32_t, 2>,  // kernel_size
+                           std::array<uint32_t, 2>,  // stride
+                           std::array<uint32_t, 2>,  // padding
+                           std::array<uint32_t, 2>,  // dilation
+                           uint32_t,                 // groups
+                           ResourceUsageMap>> {};
+
+TEST_P(Conv2dOpIfTest, Conv2d) {
+    const auto& input_spec = std::get<0>(GetParam());
+    const auto& weight_spec = std::get<1>(GetParam());
+    const auto& output_spec = std::get<2>(GetParam());
+    const uint32_t in_channels = std::get<3>(GetParam());
+    const uint32_t out_channels = std::get<4>(GetParam());
+    const uint32_t batch_size = std::get<5>(GetParam());
+    const uint32_t input_height = std::get<6>(GetParam());
+    const uint32_t input_width = std::get<7>(GetParam());
+    const std::array<uint32_t, 2> kernel_size = std::get<8>(GetParam());
+    const std::array<uint32_t, 2> stride = std::get<9>(GetParam());
+    const std::array<uint32_t, 2> padding = std::get<10>(GetParam());
+    const std::array<uint32_t, 2> dilation = std::get<11>(GetParam());
+    const uint32_t groups = std::get<12>(GetParam());
+    const auto& expected_resource_usage_map = std::get<ResourceUsageMap>(GetParam());
+    const BoardType board_type = tt::Cluster::instance().get_board_type(0);
+    if (expected_resource_usage_map.count(board_type) == 0) {
+        GTEST_SKIP();
+    }
+    const auto& expected_resource_usage = expected_resource_usage_map.at(board_type);
+
+    // Run the test
+    {
+        tt::tt_metal::IDevice* device = device_;
+        const auto& output_spec = input_spec;
+        auto query = ttnn::graph::query_op_constraints(
+            ttnn::conv2d,
+            device,
+            input_spec,
+            weight_spec,
+            device,
+            in_channels,
+            out_channels,
+            batch_size,
+            input_height,
+            input_width,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            groups,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            output_spec.tensor_layout().get_memory_config());
+
+        EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Error);
+        std::cout << "Armin: " << query.error_message.value();
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    QueryOpConstraints,  // Prefix for the instantiated test suite
+    Conv2dOpIfTest,      // Test suite name
+    ::testing::Values(std::make_tuple(
+        ttnn::TensorSpec(
+            ttnn::Shape(tt::tt_metal::Array4D{1, 1, 50176, 3}),
+            tt::tt_metal::TensorLayout(
+                tt::tt_metal::DataType::BFLOAT16,
+                tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+                ttnn::DRAM_MEMORY_CONFIG)),
+        ttnn::TensorSpec(
+            ttnn::Shape(tt::tt_metal::Array4D{1, 1, 1568, 64}),
+            tt::tt_metal::TensorLayout(
+                tt::tt_metal::DataType::BFLOAT16,
+                tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+                ttnn::DRAM_MEMORY_CONFIG)),
+        ttnn::TensorSpec(
+            ttnn::Shape(tt::tt_metal::Array4D{1, 1, 12544, 64}),
+            tt::tt_metal::TensorLayout(
+                tt::tt_metal::DataType::BFLOAT16,
+                tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+                ttnn::DRAM_MEMORY_CONFIG)),
+        3,
+        64,
+        1,
+        224,
+        224,
+        std::array<uint32_t, 2>{7, 7},
+        std::array<uint32_t, 2>{2, 2},
+        std::array<uint32_t, 2>{3, 3},
+        std::array<uint32_t, 2>{1, 1},
+        1,
+        ResourceUsageMap{
+            {BoardType::N300,
+             ttnn::graph::ResourceUsage{
+                 .cb_peak_size_per_core = 0, .l1_buffers_peak_per_core = 0, .l1_output_buffer_per_core = 0}},
+            {BoardType::E150,
+             ttnn::graph::ResourceUsage{
+                 .cb_peak_size_per_core = 0, .l1_buffers_peak_per_core = 0, .l1_output_buffer_per_core = 0}}})));
 
 }  // namespace test
 }  // namespace binary
