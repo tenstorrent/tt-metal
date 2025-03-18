@@ -25,6 +25,8 @@
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 
+#include "rtoptions.hpp"
+
 namespace tt::tt_metal {
 namespace {
 
