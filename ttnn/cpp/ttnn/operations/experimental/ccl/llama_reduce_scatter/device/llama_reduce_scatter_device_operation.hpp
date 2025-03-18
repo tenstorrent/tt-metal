@@ -46,7 +46,7 @@ struct LlamaReduceScatterDeviceOperation {
             tt::tt_metal::KernelHandle quaternary_reduce_reader_kernel_id;
             tt::tt_metal::KernelHandle quaternary_reduce_writer_kernel_id;
             tt::tt_metal::KernelHandle compute_kernel_id;
-            std::vector<uint32_t> cb_ids;
+            std::vector<tt::tt_metal::CBHandle> cb_handles;
             CoreRangeSet core_range;
             CoreRangeSet sender_core_range;
         };
