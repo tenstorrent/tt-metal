@@ -437,7 +437,6 @@ def test_fabric_reduce_scatter_t3k(t3k_mesh_device):
         0,
         0,
         enable_persistent_fabric,
-        wrap_fabric_around_mesh=True,
     )
     t3k_mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
@@ -495,6 +494,7 @@ def test_fabric_reduce_scatter_t3k(t3k_mesh_device):
     assert eq, f"FAILED: {output_results}"
 
 
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 34816}], indirect=True)
 def test_fabric_reduce_scatter_t3k_complete(t3k_mesh_device):
     torch.manual_seed(2005)
     dim = 3
@@ -502,8 +502,8 @@ def test_fabric_reduce_scatter_t3k_complete(t3k_mesh_device):
     shard_width = 160
     num_devices = 4
     num_cores = 24
-    num_iters = 2
-    trace_mode = False
+    num_iters = 5
+    trace_mode = True
 
     t3k_mesh_device.enable_async(True)
     t3k_mesh_device.enable_program_cache()
@@ -556,7 +556,6 @@ def test_fabric_reduce_scatter_t3k_complete(t3k_mesh_device):
         0,
         0,
         enable_persistent_fabric,
-        wrap_fabric_around_mesh=True,
     )
     t3k_mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
@@ -589,8 +588,7 @@ def test_fabric_reduce_scatter_t3k_complete(t3k_mesh_device):
         ttnn.end_trace_capture(t3k_mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(t3k_mesh_device)
 
-        trace = ttnn.get_trace(t3k_mesh_device, trace_id)
-        ttnn.execute_trace(t3k_mesh_device, trace, cq_id=0)
+        ttnn.execute_trace(t3k_mesh_device, trace_id, blocking=False)
         ttnn.release_trace(t3k_mesh_device, trace_id)
         ttnn.synchronize_device(t3k_mesh_device)
     else:
