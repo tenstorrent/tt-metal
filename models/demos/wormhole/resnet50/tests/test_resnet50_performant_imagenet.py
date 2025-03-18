@@ -4,19 +4,16 @@
 
 import pytest
 import ttnn
-import time
 import torch
 from loguru import logger
 
 from models.utility_functions import run_for_wormhole_b0
 from models.demos.ttnn_resnet.tests.resnet50_performant_imagenet import ResNet50Trace2CQ
-from models.demos.ttnn_resnet.tests.demo_utils import get_data, get_data_loader, get_batch
+from models.demos.ttnn_resnet.tests.demo_utils import get_data_loader, get_batch
 from transformers import AutoImageProcessor
 from models.utility_functions import (
     profiler,
 )
-from models.perf.perf_utils import prep_perf_report
-from pdb import set_trace as bp
 
 
 @run_for_wormhole_b0()

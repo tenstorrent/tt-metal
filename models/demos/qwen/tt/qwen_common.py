@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import math
 import torch
 import ttnn
 from safetensors.torch import load_file as safetensors_load_file

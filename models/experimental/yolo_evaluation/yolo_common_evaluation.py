@@ -9,9 +9,6 @@ import torch
 import cv2
 from datetime import datetime
 import ttnn
-from functools import partial
-from loguru import logger
-import sys
 from models.utility_functions import disable_persistent_kernel_cache
 
 import pytest
@@ -19,7 +16,6 @@ from models.experimental.yolo_evaluation.yolo_evaluation_utils import LoadImages
 from torch import nn
 
 import numpy as np
-import shutil
 from sklearn.metrics import precision_recall_curve, average_precision_score
 
 
@@ -468,7 +464,6 @@ def test_yolov4(device, model_type, res, model_location_generator, reset_seeds):
     from models.demos.yolov4.reference.yolov4 import Yolov4
     from models.demos.yolov4.ttnn.yolov4 import TtYOLOv4
     from models.demos.yolov4.demo.demo import YoloLayer
-    from collections import OrderedDict
     import ttnn
 
     model_path = model_location_generator("models", model_subdir="Yolo")

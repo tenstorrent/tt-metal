@@ -5,9 +5,7 @@
 import transformers
 import ttnn
 import torch
-from pathlib import Path
-from loguru import logger
-from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask, AttentionMaskConverter
+from transformers.modeling_attn_mask_utils import AttentionMaskConverter
 
 
 def strip_state_dict_prefix(state_dict, prefix):

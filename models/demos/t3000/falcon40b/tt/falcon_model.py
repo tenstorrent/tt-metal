@@ -9,7 +9,7 @@ from tqdm import tqdm
 
 import ttnn
 
-from ttnn import ReplicateTensorToMesh, ShardTensorToMesh
+from ttnn import ReplicateTensorToMesh
 from models.demos.t3000.falcon40b.tt.falcon_decoder import TtFalconDecoderLayer
 from models.demos.t3000.falcon40b.tt.falcon_embeddings import TtFalconEmbeddings
 from models.demos.t3000.falcon40b.tt.falcon_attention import generate_cos_sin_cache

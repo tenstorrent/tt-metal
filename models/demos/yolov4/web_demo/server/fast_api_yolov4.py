@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import json
 import os
 import logging
 from fastapi import FastAPI, File, UploadFile
@@ -10,7 +9,6 @@ from PIL import Image
 from models.demos.yolov4.tests.yolov4_perfomant_webdemo import Yolov4Trace2CQ
 import ttnn
 
-import cv2
 import numpy as np
 import torch
 import time

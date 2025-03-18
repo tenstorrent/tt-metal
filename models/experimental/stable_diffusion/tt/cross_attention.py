@@ -4,9 +4,7 @@
 
 from typing import Optional
 
-import torch
 from torch import nn
-from torch.nn import functional as F
 
 import ttnn
 from tt_lib.fallback_ops import fallback_ops

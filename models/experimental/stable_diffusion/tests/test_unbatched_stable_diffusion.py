@@ -14,7 +14,6 @@ from diffusers import LMSDiscreteScheduler
 from models.utility_functions import (
     comp_pcc,
     comp_allclose_and_pcc,
-    enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
     torch_to_tt_tensor_rm,
     tt_to_torch_tensor,

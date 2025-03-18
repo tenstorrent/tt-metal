@@ -2,9 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from torch import autocast
 import torch
-import time
 from PIL import Image
 from tqdm.auto import tqdm
 from loguru import logger
@@ -14,20 +12,14 @@ from transformers import CLIPTextModel, CLIPTokenizer
 from diffusers import (
     AutoencoderKL,
     UNet2DConditionModel,
-    PNDMScheduler,
-    HeunDiscreteScheduler,
-    DPMSolverMultistepScheduler,
 )
 from diffusers import LMSDiscreteScheduler
 from tqdm.auto import tqdm
 
 from models.utility_functions import (
-    torch_to_tt_tensor,
     torch_to_tt_tensor_rm,
     tt_to_torch_tensor,
-    comp_pcc,
     comp_allclose_and_pcc,
-    Profiler,
 )
 from models.utility_functions import enable_persistent_kernel_cache, disable_persistent_kernel_cache
 

@@ -4,46 +4,28 @@
 
 import os
 import ttnn
-import json
 import torch
 import pytest
-import numpy as np
-from PIL import Image
 from loguru import logger
-from tqdm.auto import tqdm
-from datasets import load_dataset
-from scipy import integrate
 
-from transformers import CLIPTextModel, CLIPTokenizer
 from diffusers import (
-    AutoencoderKL,
-    UNet2DConditionModel,
     StableDiffusionPipeline,
-    LMSDiscreteScheduler,
 )
 from models.utility_functions import (
     skip_for_grayskull,
 )
-from models.utility_functions import (
-    enable_persistent_kernel_cache,
-    disable_persistent_kernel_cache,
-)
 from ttnn.model_preprocessing import preprocess_model_parameters
 from ttnn import unsqueeze_to_4D
 from models.demos.wormhole.stable_diffusion.sd_pndm_scheduler import TtPNDMScheduler
-from models.demos.wormhole.stable_diffusion.sd_helper_funcs import TtLMSDiscreteScheduler
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv import (
     UNet2DConditionModel as UNet2D,
 )
 
-from torchvision.transforms import ToTensor
-from torchmetrics.multimodal.clip_score import CLIPScore
-from torchmetrics.image.fid import FrechetInceptionDistance
 
 from models.perf.perf_utils import prep_perf_report
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
-from models.utility_functions import profiler, enable_persistent_kernel_cache, skip_for_grayskull
+from models.utility_functions import profiler, skip_for_grayskull
 
 
 def ttnn_to_torch(input):

@@ -1,18 +1,12 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import os
-import pytest
 from loguru import logger
 
 import ttnn
 
 from models.experimental.grok.tt.grok_model import TtTransformer
 from models.experimental.grok.tt.model_config import TtModelArgs
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
 
 
 def test_load_dummy_weights(t3k_mesh_device):

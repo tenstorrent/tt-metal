@@ -6,8 +6,6 @@
 from loguru import logger
 
 
-import numpy as np
-
 import ttnn
 from models.utility_functions import (
     comp_pcc,

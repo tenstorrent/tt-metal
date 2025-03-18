@@ -9,11 +9,8 @@ from loguru import logger
 import ttnn
 
 from models.experimental.yolov3.reference.models.common import (
-    autopad,
     DetectMultiBackend,
 )
-from models.experimental.yolov3.reference.utils.dataloaders import LoadImages
-from models.experimental.yolov3.reference.utils.general import check_img_size
 from models.experimental.yolov3.tt.yolov3_upsample import TtUpsample
 from models.utility_functions import (
     comp_allclose_and_pcc,

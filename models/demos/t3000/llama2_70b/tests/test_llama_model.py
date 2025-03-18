@@ -6,7 +6,7 @@ import pytest
 from loguru import logger
 import torch
 import ttnn
-from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
+from ttnn import ConcatMeshToTensor
 import os
 
 import scipy
@@ -21,10 +21,7 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     setup_llama_env,
     check_mesh_device,
     extract_pcc_from_log,
-    MAX_SEQ_LEN,
-    MAX_SEQ_LEN_LLAMA3,
     BASE_URL,
-    UNIT_TEST_START_POS,
     UNIT_TEST_GENERATION_LENGTH,
     comp_pcc,
     should_skip_model_load,
