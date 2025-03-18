@@ -500,7 +500,6 @@ GatherConfig split_into_blocks(const GatherConfig& input, uint32_t block_size) {
                 const uint32_t remaining_in_block = block_size - offset_in_block;
                 const uint32_t transfer_size = (length <= remaining_in_block) ? length : remaining_in_block;
 
-                tt::log_info("block_id = {}", block_id);
                 new_route.transfers.push_back(GatherTransfer{src_offset, dst_offset, transfer_size});
 
                 src_offset += transfer_size;
@@ -638,7 +637,7 @@ generate_halo_kernel_config_tensors(
         }
     }
 
-    const int block_size = 256;  // TODO: pass this in
+    const int block_size = 32;  // TODO: pass this in
     std::vector<GatherConfig> ordered_gather_configs;
     for (const auto& config : gather_configs) {
         ordered_gather_configs.push_back(reorder_transfers_globally(split_into_blocks(config, block_size)));

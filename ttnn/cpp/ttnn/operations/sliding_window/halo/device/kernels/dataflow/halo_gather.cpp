@@ -69,6 +69,7 @@ template <
     uint32_t InputPageSizeAligned,
     uint32_t BlockSizeHeight,
     uint32_t BlockSizeWidthTiles,
+    uint32_t BlockStride,
     bool EnableBlocking,
     bool IsBlockSharded,
     bool IsWidthSharded,
@@ -80,6 +81,7 @@ static inline void run_halo_gather(
     uint32_t my_noc_x,
     uint32_t my_noc_y) {
     static_assert(BlockSizeHeight >= TILE_SIZE, "Blocks cannot be smaller than tile height");
+    static_assert(BlockStride >= 1, "Blocks stride must be at least 1");
 
     constexpr uint32_t block_size_height_tiles = BlockSizeHeight / TILE_SIZE;
     constexpr uint32_t total_tiles_in_single_block = block_size_height_tiles * BlockSizeWidthTiles;
@@ -93,12 +95,12 @@ static inline void run_halo_gather(
     }
 
     uint64_t out_l1_addr = 0;
-    uint16_t block_id = 0;
+    uint16_t block_id = 0;  // TODO: Remove this, it probably isn't needed
     uint16_t block_boundary_offset = BlockSizeHeight;
     while (number_of_segments_remaining) {
         // Read header for to get destination for this route
-        uint16_t destination_noc_x = config[current_config_index++];
-        uint16_t destination_noc_y = config[current_config_index++];
+        const uint16_t destination_noc_x = config[current_config_index++];
+        const uint16_t destination_noc_y = config[current_config_index++];
         uint16_t transfers_remaining = config[current_config_index++];
 
         out_l1_addr = get_remote_core_l1_noc_addr<IsBlockSharded, IsWidthSharded, IsColumnMajor>(
@@ -106,20 +108,23 @@ static inline void run_halo_gather(
 
         // Perform all transfers in this route
         while (transfers_remaining > 0) {
-            uint16_t src_offset = config[current_config_index++];
-            uint16_t dst_offset = config[current_config_index++];
-            uint16_t transfer_size = config[current_config_index++];
-            DPRINT << "num_transfers=" << transfers_remaining << " src_offset=" << src_offset
-                   << " dst_offset=" << dst_offset << " size=" << transfer_size << ENDL();
+            const uint16_t src_offset = config[current_config_index++];
+            const uint16_t dst_offset = config[current_config_index++];
+            const uint16_t transfer_size = config[current_config_index++];
+            // DPRINT << "num_transfers=" << transfers_remaining << " src_offset=" << src_offset
+            //<< " dst_offset=" << dst_offset << " size=" << transfer_size << ENDL();
             if constexpr (EnableBlocking) {
-                // Pop blocks until we have the right one - this works because transfers are ordered by ascending block
-                // IDs
+                // Pop blocks until we have the right one - this works because transfers are globally ordered by
+                // ascending block IDs
                 while (src_offset >= block_boundary_offset) {
                     noc_async_write_barrier();
                     cb_pop_front(InputCBIndex, total_tiles_in_single_block);
                     cb_wait_front(InputCBIndex, total_tiles_in_single_block);
-                    block_boundary_offset += BlockSizeHeight;
-                    block_id++;
+                    block_boundary_offset +=
+                        BlockSizeHeight *
+                        BlockStride;  // When stride > 1 we are expecting the input CB to skip
+                                      // BlockStride number of blocks (like when splitting gather across cores)
+                    block_id += BlockStride;
                 }
             }
             write_stick_async<StickSizeBytes, InputPageSizeAligned, BlockSizeHeight>(
@@ -196,6 +201,8 @@ void kernel_main() {
         }
     }
 
+    const uint32_t block_stride = 1;
+
     const uint32_t config_data_l1_addr = get_read_ptr(local_config_cb_id);
     const tt_l1_ptr uint16_t* config_data = reinterpret_cast<const tt_l1_ptr uint16_t*>(config_data_l1_addr);
     run_halo_gather<
@@ -204,6 +211,7 @@ void kernel_main() {
         input_aligned_page_size,
         block_size_height,
         block_size_width_tiles,
+        block_stride,
         enable_blocking,
         is_block_sharded,
         is_width_sharded,
