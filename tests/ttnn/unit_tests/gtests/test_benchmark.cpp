@@ -319,11 +319,13 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
                 ttnn::operations::trace::end_trace_capture(device, tid, ttnn::DefaultQueueId);
 
                 auto start_time = std::chrono::high_resolution_clock::now();
-
-                ttnn::operations::trace::execute_trace(device, tid, ttnn::DefaultQueueId, false);
-                device->push_work(
-                    [device]() mutable { Synchronize(device, std::nullopt, std::vector<SubDeviceId>()); });
-                device->synchronize();
+                {
+                    ZoneScopedN("Matmul trace iterations");
+                    ttnn::operations::trace::execute_trace(device, tid, ttnn::DefaultQueueId, false);
+                    device->push_work(
+                        [device]() mutable { Synchronize(device, std::nullopt, std::vector<SubDeviceId>()); });
+                    device->synchronize();
+                }
 
                 auto end_time = std::chrono::high_resolution_clock::now();
 
@@ -331,16 +333,19 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
                 ttnn::operations::trace::release_trace(device, tid);
             } else {
                 auto start_time = std::chrono::high_resolution_clock::now();
-                for (int iter = 0; iter < num_measurement_iterations; ++iter) {
-                    output_tensor = ttnn::operations::matmul::matmul(
-                        in0_t,
-                        in1_t,
-                        /* bias */ std::nullopt,
-                        /* parameters */ matmul_params);
-                    device->push_work(
-                        [device]() mutable { Synchronize(device, std::nullopt, std::vector<SubDeviceId>()); });
-                    device->synchronize();
-                    output_tensor.deallocate();
+                {
+                    ZoneScopedN("Matmul iterations");
+                    for (int iter = 0; iter < num_measurement_iterations; ++iter) {
+                        output_tensor = ttnn::operations::matmul::matmul(
+                            in0_t,
+                            in1_t,
+                            /* bias */ std::nullopt,
+                            /* parameters */ matmul_params);
+                        device->push_work(
+                            [device]() mutable { Synchronize(device, std::nullopt, std::vector<SubDeviceId>()); });
+                        device->synchronize();
+                        output_tensor.deallocate();
+                    }
                 }
                 auto end_time = std::chrono::high_resolution_clock::now();
                 total_time = end_time - start_time;
