@@ -10,12 +10,12 @@
 
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
+
 namespace ttnn::distributed {
 
 using MeshShape = tt::tt_metal::distributed::MeshShape;
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
 using MeshCoordinateRange = tt::tt_metal::distributed::MeshCoordinateRange;
-using DeviceIds = tt::tt_metal::distributed::DeviceIds;
 using MeshDevice = tt::tt_metal::distributed::MeshDevice;
 using SystemMesh = tt::tt_metal::distributed::SystemMesh;
 using MeshDeviceView = tt::tt_metal::distributed::MeshDeviceView;
@@ -27,7 +27,6 @@ using MeshSubDeviceManagerId = tt::tt_metal::distributed::MeshSubDeviceManagerId
 namespace ttnn {
 
 // These types are exported to the ttnn namespace for convenience.
-using ttnn::distributed::DeviceIds;
 using ttnn::distributed::MeshCoordinate;
 using ttnn::distributed::MeshCoordinateRange;
 using ttnn::distributed::MeshDevice;
