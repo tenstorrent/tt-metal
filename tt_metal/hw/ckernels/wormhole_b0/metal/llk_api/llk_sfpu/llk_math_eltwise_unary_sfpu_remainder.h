@@ -13,9 +13,9 @@ namespace ckernel {
 // New LLK SFPU APIs
 
 template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_remainder_init(uint param0 = 1, uint param1 = 1) {
+inline void llk_math_eltwise_unary_sfpu_remainder_init(uint param0, uint param1) {
     llk_math_eltwise_unary_sfpu_init<SfpuType::remainder, APPROXIMATE>(
-        sfpu::_init_remainder_<APPROXIMATE>, param0, param1);
+        sfpu::init_remainder<APPROXIMATE>, param0, param1);
 }
 
 template <bool APPROXIMATE>

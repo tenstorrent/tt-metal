@@ -15,7 +15,7 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE>
-inline void _init_remainder_(const uint value, const uint recip) {
+inline void init_remainder(const uint value, const uint recip) {
     // load vConstFloatPrgm0 = value
     _sfpu_load_config32_(0xC, (value >> 16) & 0xFFFF, value & 0xFFFF);
     // load vConstFloatPrgm1 = recip

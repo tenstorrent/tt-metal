@@ -5,12 +5,11 @@
 import torch
 import pytest
 import ttnn
-from models.utility_functions import skip_for_grayskull, torch_random
+from models.utility_functions import torch_random
 from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 
-@skip_for_grayskull("Op not supported for Grayskull, supported for wormhole_b0")
 @pytest.mark.parametrize(
     "input_shapes",
     ((torch.Size([1, 1, 32, 32])),),
@@ -29,7 +28,6 @@ def test_broken_remainder(input_shapes, device):
     assert torch.allclose(result, golden, atol=0.01, rtol=0)
 
 
-@skip_for_grayskull("Op not supported for Grayskull, supported for wormhole_b0")
 @pytest.mark.parametrize(
     "input_shapes",
     ((torch.Size([1, 1, 32, 32])),),
@@ -54,27 +52,28 @@ def test_broken_remainder1(input_shapes, device):
 # This inconsistency is persistent due to some fp precision loss in both Torch and TT.
 # Eg: torch.remainder of (3, 1.5) = 0.0 and of (3, 0.003) = 0.003
 # Eg: ttnn.remainder of (4, 0.004) = 0.004 and of (3, 0.003) = 0.0
-@skip_for_grayskull("Op not supported for Grayskull, supported for wormhole_b0")
 @pytest.mark.parametrize(
     "input_shapes",
     (
-        (torch.Size([6, 5, 90, 112])),
-        (torch.Size([2, 1, 120, 11])),
+        (torch.Size([6, 5, 320, 320])),
+        (torch.Size([2, 1, 384, 320])),
         (torch.Size([3, 123, 115])),
         (torch.Size([69, 178])),
+        (torch.Size([1024])),
+        (torch.Size([])),
     ),
 )
-@pytest.mark.parametrize(
-    "scalar", [-0.002, -0.001, -0.0006, -0.0005, -0.0003, 0.0, 0.0003, 0.0005, 0.0006, 0.001, 0.002]
-)
+@pytest.mark.parametrize("scalar", [-0.002, -0.001, -0.0006, -0.0003, 0.0, 0.0005, 0.0007, 0.001, 0.002])
 def test_remainder_scalar(input_shapes, scalar, device):
     torch.manual_seed(0)
-    torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.bfloat16), ttnn.bfloat16
-    )(input_shapes)
-
-    input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a,
+    if len(input_shapes) == 0:
+        torch_input_tensor = torch.tensor(5.0, dtype=torch.bfloat16)
+    else:
+        torch_input_tensor = gen_func_with_cast_tt(
+            partial(torch_random, low=-100, high=100, dtype=torch.bfloat16), ttnn.bfloat16
+        )(input_shapes)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.TILE_LAYOUT,
@@ -82,9 +81,9 @@ def test_remainder_scalar(input_shapes, scalar, device):
     )
 
     golden_function = ttnn.get_golden_function(ttnn.remainder)
-    torch_output_tensor = golden_function(torch_input_tensor_a, scalar, device=device)
+    torch_output_tensor = golden_function(torch_input_tensor, scalar, device=device)
 
-    output_tensor = ttnn.remainder(input_tensor_a, scalar)
+    output_tensor = ttnn.remainder(input_tensor, scalar)
     output_tensor = ttnn.to_torch(output_tensor)
 
     if scalar == 0.0:
