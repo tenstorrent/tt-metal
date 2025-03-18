@@ -15,6 +15,12 @@ repos:
   hooks:
     - id: black
       language_version: python3
+- repo: https://github.com/PyCQA/autoflake
+  rev: v2.3.1
+  hooks:
+    -  id: autoflake
+       args: [--remove-all-unused-imports, --in-place, --recursive]
+       files: ^models/  # Run only on files in the models directory
 - repo: https://github.com/BlankSpruce/gersemi
   rev: 0.16.2
   hooks:
