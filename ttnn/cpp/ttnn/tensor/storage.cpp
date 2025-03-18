@@ -65,9 +65,6 @@ void DeviceStorage::update_specs(const TensorSpec& new_spec) {
 }
 
 bool DeviceStorage::is_uniform_storage() const {
-    if (mesh_buffer.get() != nullptr) {
-        return true;
-    }
     return specs.size() == mesh_buffer->device()->num_devices() &&
            std::all_of(specs.begin(), specs.end(), [this](const auto& spec) { return spec.second == specs[0].second; });
 }
