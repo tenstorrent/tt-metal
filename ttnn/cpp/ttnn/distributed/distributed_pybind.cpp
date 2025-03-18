@@ -3,36 +3,24 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/distributed/distributed_pybind.hpp"
-#include <ostream>
-#include <pybind11/cast.h>
-#include <cstddef>
-#include <memory>
-#include <ostream>
 #include <pybind11/cast.h>
 #include <cstddef>
 #include <memory>
 #include <pybind11/pytypes.h>
 #include "tt-metalium/mesh_coord.hpp"
-#include "tt-metalium/assert.hpp"
 #include "distributed_tensor.hpp"
-#include "tt-metalium/assert.hpp"
 #include "distributed_tensor.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
-#include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/distributed/types.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/command_queue.hpp>
-#include "ttnn/tensor/tensor_impl_wrapper.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
-#include <tt-metalium/command_queue.hpp>
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
 
 // This is required for automatic conversions, as in the creation of mesh devices
 // https://github.com/tenstorrent/tt-metal/issues/18082
 #include "pybind11/stl.h"
+#include "ttnn/tensor/types.hpp"
 
 using namespace tt::tt_metal;
 
@@ -81,6 +69,13 @@ void py_module_types(py::module& module) {
     py::class_<MeshCoordinateRange>(module, "MeshCoordinateRange", "Range of coordinates within a mesh device.");
     py::class_<MeshCoordinateRangeSet>(
         module, "MeshCoordinateRangeSet", "Set of coordinate ranges within a mesh device.");
+}
+
+static Tensor get_cpu_if_device(const Tensor& tensor) {
+    if (tensor.storage_type() == StorageType::MULTI_DEVICE_HOST || tensor.storage_type() == StorageType::MULTI_DEVICE) {
+        return tt::tt_metal::tensor_impl::to_host_mesh_tensor_wrapper(tensor, true);
+    }
+    return tensor;
 }
 
 void py_module(py::module& module) {
@@ -508,54 +503,6 @@ void py_module(py::module& module) {
                 "item": "field",
             }
         )doc");
-        Returns:
-            Tensor: The shard of the tensor corresponding to the device_id.
-    )doc");
-
-    auto py_replicate_tensor_config = static_cast<py::class_<ReplicateTensor>>(module.attr("ShardTensor"));
-    py_replicate_tensor_config.def(py::init<>())
-        .def(py::init<int>(), py::arg("replication_factor") = 1)
-        .def_readwrite("shard_dimension", &ReplicateTensor::replication_factor)
-        .def("__eq__", [](const ReplicateTensor& a, const ReplicateTensor& b) {
-            return a.replication_factor == b.replication_factor;
-        });
-
-    auto py_shard_tensor_config = static_cast<py::class_<ShardTensor>>(module.attr("ShardTensor"));
-    py_shard_tensor_config.def(py::init<int>(), py::arg("shard_dimension"))
-        .def_readwrite("shard_dimension", &ShardTensor::shard_dimension)
-        .def("__eq__", [](const ShardTensor& a, const ShardTensor& b) { return a == b; });
-    auto py_shard_mesh = static_cast<py::class_<ShardMesh>>(module.attr("ShardMesh"));
-    py_shard_mesh.def(py::init<>()).def_readwrite("y", &ShardMesh::y).def_readwrite("x", &ShardMesh::x);
-    auto py_shard_tensor2d = static_cast<py::class_<ShardTensor2D>>(module.attr("ShardTensor2d"));
-    py_shard_tensor2d.def(py::init<ShardMesh>(), py::arg("mesh"))
-        .def_readonly("shard_mesh", &ShardTensor2D::shard_mesh)
-        .def("__eq__", [](const ShardTensor2D& a, const ShardTensor2D& b) { return a == b; });
-    auto py_allgather_config =
-        static_cast<py::class_<AllGatherTensor>>(module.attr("AllGatherTensor"))
-            .def(py::init<>())
-            .def("__eq__", [](const AllGatherTensor& a, const AllGatherTensor& b) { return a == b; });
-
-    auto py_shard2d_config = static_cast<py::class_<Shard2dConfig>>(module.attr("Shard2dConfig"));
-    py_shard2d_config.def(py::init<int, int>(), py::arg("row_dim"), py::arg("col_dim"))
-        .def_readwrite("row_dim", &Shard2dConfig::row_dim)
-        .def_readwrite("col_dim", &Shard2dConfig::col_dim);
-    auto py_concat2d_config = static_cast<py::class_<Concat2dConfig>>(module.attr("Concat2dConfig"));
-    py_concat2d_config.def(py::init<int, int>(), py::arg("row_dim"), py::arg("col_dim"))
-        .def_readwrite("row_dim", &Concat2dConfig::row_dim)
-        .def_readwrite("col_dim", &Concat2dConfig::col_dim);
-
-    module.def(
-        "get_distributed_tensor_config",
-        &get_distributed_tensor_config,
-        py::arg("metadata"),
-        R"doc(
-            Returns a distributed_tensor_config object given a valid metadata object of the type
-
-            {
-                "item": "field",
-                "item": "field",
-            }
-        )doc");
     module.def(
         "get_device_tensor",
         py::overload_cast<const Tensor&, const IDevice*>(&ttnn::distributed::get_device_tensor),
@@ -650,12 +597,7 @@ void py_module(py::module& module) {
         [](const Tensor& tensor,
            const TensorToMesh& mapper,
            std::optional<std::reference_wrapper<MeshDevice>> mesh_device = std::nullopt) -> Tensor {
-            Tensor cpu_tensor;
-            if (tensor.storage_type() == StorageType::MULTI_DEVICE_HOST) {
-                cpu_tensor = tt::tt_metal::tensor_impl::to_host_mesh_tensor_wrapper(tensor, true);
-            } else {
-                cpu_tensor = from_device(tensor);
-            }
+            Tensor cpu_tensor = get_cpu_if_device(tensor);
             return distribute_tensor(cpu_tensor, mapper, mesh_device);
         },
         py::arg("tensor"),
@@ -664,12 +606,7 @@ void py_module(py::module& module) {
     module.def(
         "aggregate_tensor",
         [](const Tensor& tensor, const MeshToTensor& composer) -> Tensor {
-            Tensor cpu_tensor;
-            if (tensor.storage_type() == StorageType::MULTI_DEVICE_HOST) {
-                cpu_tensor = tt::tt_metal::tensor_impl::to_host_mesh_tensor_wrapper(tensor, true);
-            } else {
-                cpu_tensor = from_device(tensor);
-            }
+            Tensor cpu_tensor = get_cpu_if_device(tensor);
             return aggregate_tensor(cpu_tensor, composer);
         },
         py::arg("tensor"),
@@ -678,126 +615,7 @@ void py_module(py::module& module) {
         "aggregate_tensor",
         [](const std::vector<Tensor>& tensors, const MeshToTensor& composer) -> Tensor {
             Tensor aggregated_tensor = from_device(aggregate_as_tensor(tensors, AllGatherTensor{}));
-            Tensor cpu_tensor;
-            if (aggregated_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST) {
-                cpu_tensor = tt::tt_metal::tensor_impl::to_host_mesh_tensor_wrapper(aggregated_tensor, true);
-            } else {
-                cpu_tensor = from_device(aggregated_tensor);
-            }
-            return aggregate_tensor(cpu_tensor, composer);
-        },
-        py::arg("tensor"),
-        py::arg("composer"));
-    // TODO: Add rdocs
-    module.def(
-        "replicate_tensor_to_mesh_mapper",
-        [](MeshDevice& mesh_device) -> std::unique_ptr<TensorToMesh> {
-            return replicate_tensor_to_mesh_mapper(mesh_device);
-        },
-        py::arg("mesh_device"));
-    module.def(
-        "shard_tensor_to_mesh_mapper",
-        [](MeshDevice& mesh_device, int dim) -> std::unique_ptr<TensorToMesh> {
-            return shard_tensor_to_mesh_mapper(mesh_device, dim);
-        },
-        py::arg("mesh_device"),
-        py::arg("dim"));
-    module.def(
-        "shard_tensor_to_2d_mesh_mapper",
-        [](MeshDevice& mesh_device,
-           const MeshShape& mesh_shape,
-           const Shard2dConfig& config) -> std::unique_ptr<TensorToMesh> {
-            return shard_tensor_to_2d_mesh_mapper(mesh_device, mesh_shape, config);
-        },
-        py::arg("mesh_device"),
-        py::arg("mesh_shape"),
-        py::arg("config"));
-    module.def(
-        "shard_tensor_to_2d_mesh_mapper",
-        [](MeshDevice& mesh_device,
-           const std::tuple<int, int> mesh_shape,
-           const std::tuple<int, int> dims) -> std::unique_ptr<TensorToMesh> {
-            return shard_tensor_to_2d_mesh_mapper(
-                mesh_device,
-                MeshShape(std::get<0>(mesh_shape), std::get<1>(mesh_shape)),
-                Shard2dConfig{.row_dim = std::get<0>(dims), .col_dim = std::get<1>(dims)});
-        },
-        py::arg("mesh_device"),
-        py::arg("mesh_shape"),
-        py::arg("dims"),
-        R"doc(
-            Create a ShardTensorTo2dMesh mapper with the given mesh device, mesh shape, and dimensions.
-
-            Args:
-                mesh_device (MeshDevice): The mesh device to create the mapper for.
-                mesh_shape (MeshShape): The shape of the 2D mesh as (num_rows, num_cols).
-                dims (Tuple[int, int]): The dimensions to create the mapper for in (row, column) format.
-
-            Returns:
-                TensorToMesh: The created ShardTensorTo2dMesh mapper.
-   )doc");
-    module.def(
-        "concat_mesh_to_tensor_composer",
-        [](int dim) -> std::unique_ptr<MeshToTensor> { return concat_mesh_to_tensor_composer(dim); },
-        py::arg("dim"));
-    module.def(
-        "concat_2d_mesh_to_tensor_composer",
-        [](MeshDevice& mesh_device, const std::tuple<int, int> dims) -> std::unique_ptr<MeshToTensor> {
-            return concat_2d_mesh_to_tensor_composer(
-                mesh_device, Concat2dConfig{.row_dim = std::get<0>(dims), .col_dim = std::get<1>(dims)});
-        },
-        py::arg("mesh_device"),
-        py::arg("dims"),
-        R"doc(
-            Create a Concat2dMeshToTensor composer with the given mesh device and dimensions.
-
-            Args:
-                mesh_device (MeshDevice): The mesh device to create the composer for.
-                dims (Tuple[int, int]): The dimensions to create the composer for in (row, column) format.
-                mesh_shape (Tuple[int, int]): The shape of the 2D mesh as (num_rows, num_cols).
-
-            Returns:
-                TensorToMesh: The created Concat2dMeshToTensor composer.
-   )doc");
-    module.def(
-        "distribute_tensor",
-        [](const Tensor& tensor,
-           const TensorToMesh& mapper,
-           std::optional<std::reference_wrapper<MeshDevice>> mesh_device = std::nullopt) -> Tensor {
-            Tensor cpu_tensor;
-            if (tensor.storage_type() == StorageType::MULTI_DEVICE_HOST) {
-                cpu_tensor = tt::tt_metal::tensor_impl::to_host_mesh_tensor_wrapper(tensor, true);
-            } else {
-                cpu_tensor = from_device(tensor);
-            }
-            return distribute_tensor(cpu_tensor, mapper, mesh_device);
-        },
-        py::arg("tensor"),
-        py::arg("mapper"),
-        py::arg("mesh_device") = py::none());
-    module.def(
-        "aggregate_tensor",
-        [](const Tensor& tensor, const MeshToTensor& composer) -> Tensor {
-            Tensor cpu_tensor;
-            if (tensor.storage_type() == StorageType::MULTI_DEVICE_HOST) {
-                cpu_tensor = tt::tt_metal::tensor_impl::to_host_mesh_tensor_wrapper(tensor, true);
-            } else {
-                cpu_tensor = from_device(tensor);
-            }
-            return aggregate_tensor(cpu_tensor, composer);
-        },
-        py::arg("tensor"),
-        py::arg("composer"));
-    module.def(
-        "aggregate_tensor",
-        [](const std::vector<Tensor>& tensors, const MeshToTensor& composer) -> Tensor {
-            Tensor aggregated_tensor = from_device(aggregate_as_tensor(tensors, AllGatherTensor{}));
-            Tensor cpu_tensor;
-            if (aggregated_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST) {
-                cpu_tensor = tt::tt_metal::tensor_impl::to_host_mesh_tensor_wrapper(aggregated_tensor, true);
-            } else {
-                cpu_tensor = from_device(aggregated_tensor);
-            }
+            Tensor cpu_tensor = get_cpu_if_device(aggregated_tensor);
             return aggregate_tensor(cpu_tensor, composer);
         },
         py::arg("tensor"),
