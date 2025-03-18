@@ -3,6 +3,7 @@
 
 # Accept an argument to specify the Ubuntu version
 ARG UBUNTU_VERSION=20.04
+ARG IMAGE_ARCH=amd64
 FROM public.ecr.aws/ubuntu/ubuntu:${UBUNTU_VERSION} AS base
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -240,43 +241,3 @@ RUN python3 -m pip config set global.extra-index-url https://download.pytorch.or
 RUN apt-get update && apt-get install -y --no-install-recommends \
     uuid-runtime \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-#############################################################
-
-FROM ci-test AS dev
-
-# Need this to build GDB
-RUN apt-get -y update \
-    && apt-get install -y libmpfr-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install the gdb that is compatible with clang-17
-RUN apt-get remove -y gdb || true \
-    && mkdir -p /tmp/gdb-build && cd /tmp/gdb-build/ \
-    && wget -O /tmp/gdb-build/gdb.tar.gz https://ftp.gnu.org/gnu/gdb/gdb-14.2.tar.gz \
-    && tar -xvf /tmp/gdb-build/gdb.tar.gz -C /tmp/gdb-build --strip-components=1 \
-    && /tmp/gdb-build/configure --prefix=/usr/local \
-    && make -j$(nproc) \
-    && make install \
-    && rm -rf /tmp/gdb-build
-
-# Install dev deps
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    acl \
-    emacs \
-    less \
-    nano \
-    openssh-server \
-    vim \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-#############################################################
-
-FROM dev AS release
-
-RUN mkdir -p /etc && \
-    echo "[global]\nextra-index-url = https://download.pytorch.org/whl/cpu" > /etc/pip.conf
-
-ARG WHEEL_FILENAME
-ADD $WHEEL_FILENAME $WHEEL_FILENAME
-RUN pip3 install $WHEEL_FILENAME
