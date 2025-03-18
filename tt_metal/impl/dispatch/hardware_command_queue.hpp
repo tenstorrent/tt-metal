@@ -97,11 +97,11 @@ private:
     //  call
     DispatchArray<uint32_t> expected_num_workers_completed_;
 
-    volatile bool exit_condition_;
-    volatile uint32_t num_entries_in_completion_q_;  // issue queue writer thread increments this when an issued command
-                                                     // is expected back in the completion queue
-    volatile uint32_t num_completed_completion_q_reads_;  // completion queue reader thread increments this after
-                                                          // reading an entry out of the completion queue
+    std::atomic<bool> exit_condition_;
+    std::atomic<uint32_t> num_entries_in_completion_q_;  // issue queue writer thread increments this when an issued
+                                                         // command is expected back in the completion queue
+    std::atomic<uint32_t> num_completed_completion_q_reads_;  // completion queue reader thread increments this after
+                                                              // reading an entry out of the completion queue
 
     MultiProducerSingleConsumerQueue<CompletionReaderVariant> issued_completion_q_reads_;
     // These values are used to reset the host side launch message wptr after a trace is captured
