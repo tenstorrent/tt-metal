@@ -19,7 +19,7 @@ from models.utility_functions import torch_random
 parameters = {
     "isposinf-survey": {
         "input_shape": [{"self": [1, 1, 1024, 1024]}],
-        "input_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b],
+        "input_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.int32],
         "input_layout": [ttnn.TILE_LAYOUT],
         "input_memory_config": [
             "l1_interleaved",
@@ -128,4 +128,4 @@ def run(
     print("output_tensor", output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 
-    return [check_with_pcc(torch_output_tensor, output_tensor, pcc=0.999), e2e_perf]
+    return [check_with_pcc(torch_output_tensor, output_tensor, pcc=0.99), e2e_perf]

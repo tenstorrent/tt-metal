@@ -127,7 +127,7 @@ def run(test_module, input_queue, output_queue, suite_name=""):
                 "mem_config": test_vector["input_memory_config"],
                 "input_dtype": test_vector["input_dtype"],
                 "status": status,
-                # "message": message,
+                "message": message,
             }
 
             # Write to CSV
