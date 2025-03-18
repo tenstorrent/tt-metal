@@ -14,7 +14,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { name: "t3k_ccl_tests", arch: wormhole_b0, cmd: pytest tests/nightly/t3000/ccl, timeout: 600, owner_id: ULMEPM2MA}, # Sean Nijjar
+          { name: "t3k_ccl_tests", arch: wormhole_b0, cmd: pytest -n auto tests/nightly/t3000/ccl, timeout: 180, owner_id: ULMEPM2MA}, # Sean Nijjar
         ]
 
     name: ${{ matrix.test-group.name }}
@@ -46,7 +46,7 @@ jobs:
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
-          ${{ matrix.test-group.cmd }} --metal-timeout=$${{ matrix.test-group.timeout }}
+          ${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
