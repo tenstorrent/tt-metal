@@ -94,6 +94,8 @@ def run_conv(
     activation="",
     preprocess_weights_on_device=True,
     run_twice=False,
+    pad_bottom=None,
+    pad_right=None,
 ):
     if isinstance(device, ttnn.MeshDevice):
         assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when using device mesh"
@@ -116,6 +118,10 @@ def run_conv(
             "Untilize_out is not supported when out_c > 256 for Height Sharded. https://github.com/tenstorrent/tt-metal/issues/18633"
         )
 
+    pad_top = pad_h
+    pad_bottom = pad_h if pad_bottom is None else pad_bottom
+    pad_left = pad_w
+    pad_right = pad_w if pad_right is None else pad_right
     torch.manual_seed(0)
     conv_input_shape = (total_batch_size, input_channels, input_height, input_width)
     conv_weight_shape = (output_channels, input_channels // groups, filter_height, filter_width)
@@ -126,12 +132,18 @@ def run_conv(
     torch_weight_tensor = randomize_torch_tensor(torch_tensor_map, conv_weight_shape)
     torch_bias_tensor = randomize_torch_tensor(torch_tensor_map, conv_bias_shape) * 10 if has_bias else None
 
-    torch_out_golden_tensor = torch.nn.functional.conv2d(
+    torch_padded_input = torch.nn.functional.pad(
         torch_input_tensor_nchw,
+        (pad_left, pad_right, pad_top, pad_bottom),
+        mode="constant",
+        value=0,
+    )
+    torch_out_golden_tensor = torch.nn.functional.conv2d(
+        torch_padded_input,
         torch_weight_tensor,
         bias=torch_bias_tensor.reshape(-1) if has_bias else None,
         stride=(stride_h, stride_w),
-        padding=(pad_h, pad_w),
+        padding=(0, 0),
         dilation=(dilation, dilation),
         groups=groups,
     )
@@ -202,7 +214,7 @@ def run_conv(
         bias_tensor=tt_bias_tensor,
         kernel_size=(filter_height, filter_width),
         stride=(stride_h, stride_w),
-        padding=(pad_h, pad_w),
+        padding=(pad_top, pad_bottom, pad_left, pad_right),
         dilation=(dilation, dilation),
         batch_size=batch_size,
         input_height=input_height,
@@ -226,7 +238,7 @@ def run_conv(
             bias_tensor=tt_bias_tensor,
             kernel_size=(filter_height, filter_width),
             stride=(stride_h, stride_w),
-            padding=(pad_h, pad_w),
+            padding=(pad_top, pad_bottom, pad_left, pad_right),
             dilation=(dilation, dilation),
             batch_size=batch_size,
             input_height=input_height,
@@ -242,7 +254,6 @@ def run_conv(
         )
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     torch_output_tensor = ttnn.to_torch(tt_output_tensor, mesh_composer=output_mesh_composer)
-
     # torch_output_tensor is in row major layout and NHWC shape
     # NHWC to NCHW
     torch_output_tensor = torch_output_tensor.reshape(
@@ -251,6 +262,7 @@ def run_conv(
     torch_output_tensor = torch_output_tensor[:, :, :, :output_channels]
 
     torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
+    print("Output shape :", torch_output_tensor.shape)
     reader_patterns_cache.clear()
 
     if not fp32_accum:
@@ -431,6 +443,14 @@ def run_conv_with_split(
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi4])
 @pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize(
+    "pad_bottom, pad_right",
+    [
+        # (None, None),
+        (2, 5),
+        (3, 7),
+    ],
+)
 def test_conv_features(
     device,
     torch_tensor_map,
@@ -451,7 +471,16 @@ def test_conv_features(
     output_layout,
     fp32_accum,
     packer_l1_acc,
+    pad_bottom,
+    pad_right,
 ):
+    if (
+        (pad_bottom is not None or pad_right is not None)
+        and output_layout == ttnn.ROW_MAJOR_LAYOUT
+        and shard_layout == WS
+    ):
+        pytest.skip("Bug in Width Sharded Row Major Tensor Creation when height%32!=0")
+
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat8_b:
         pytest.skip("Row major layout not compatible with bfloat8_b")
 
@@ -483,6 +512,8 @@ def test_conv_features(
         packer_l1_acc=packer_l1_acc,
         preprocess_weights_on_device=True,
         run_twice=True,
+        pad_bottom=pad_bottom,
+        pad_right=pad_right,
     )
 
 

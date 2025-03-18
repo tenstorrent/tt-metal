@@ -13,6 +13,7 @@
 #include "conv2d_utils.hpp"
 #include "prepare_conv2d_weights.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
+#include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;
@@ -57,7 +58,7 @@ void py_bind_conv2d(py::module& module) {
                uint32_t input_width,
                std::array<uint32_t, 2> kernel_size,
                std::array<uint32_t, 2> stride,
-               std::array<uint32_t, 2> padding,
+               sliding_window::SlidingWindowPadding padding,
                std::array<uint32_t, 2> dilation,
                uint32_t groups,
                std::optional<const ttnn::Tensor> bias_tensor,
@@ -120,7 +121,7 @@ void py_bind_conv2d(py::module& module) {
                uint32_t input_width,
                std::array<uint32_t, 2> kernel_size,
                std::array<uint32_t, 2> stride,
-               std::array<uint32_t, 2> padding,
+               sliding_window::SlidingWindowPadding padding,
                std::array<uint32_t, 2> dilation,
                uint32_t groups,
                std::optional<const ttnn::Tensor> bias_tensor,

@@ -112,7 +112,7 @@ Result conv_transpose2d(
     uint32_t input_width,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> padding,
+    sliding_window::SlidingWindowPadding _padding,
     std::array<uint32_t, 2> output_padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
@@ -124,13 +124,14 @@ Result conv_transpose2d(
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
 
+    auto padding = sliding_window::get_pair_n4_padding(_padding);
     // Inverse of sliding_window.get_output_shape()
     SlidingWindowConfig sliding_window_config = SlidingWindowConfig{
         .batch_size = batch_size,
         .input_hw = {input_height, input_width},
         .window_hw = {kernel_size[0], kernel_size[1]},
         .stride_hw = {stride[0], stride[1]},
-        .pad_hw = {padding[0], padding[1]},
+        .padding = padding,
         .output_pad_hw = {output_padding[0], output_padding[1]},
         .dilation_hw = {dilation[0], dilation[1]},
         .is_transpose = true};
@@ -141,10 +142,10 @@ Result conv_transpose2d(
     // The Conv2d u_op is then called with stride = 1, padding = 0.
     // SlidingWindowConfig has a is_transpose flag that is set to true to indicate that the Conv2d u_op & Halo u_op is
     // being called for ConvTranspose2d.
-    uint32_t output_height =
-        (input_height - 1) * stride[0] - 2 * padding[0] + dilation[0] * (kernel_size[0] - 1) + output_padding[0] + 1;
-    uint32_t output_width =
-        (input_width - 1) * stride[1] - 2 * padding[1] + dilation[1] * (kernel_size[1] - 1) + output_padding[1] + 1;
+    uint32_t output_height = (input_height - 1) * stride[0] - (padding[0] + padding[1]) +
+                             dilation[0] * (kernel_size[0] - 1) + output_padding[0] + 1;
+    uint32_t output_width = (input_width - 1) * stride[1] - (padding[2] + padding[3]) +
+                            dilation[1] * (kernel_size[1] - 1) + output_padding[1] + 1;
 
     // Dimensions of Input to Conv u_op
     uint32_t full_input_height = output_height + dilation[0] * (kernel_size[0] - 1);
@@ -367,7 +368,7 @@ Result ConvTranpose2dOperation::invoke(
     uint32_t input_width,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> padding,
+    sliding_window::SlidingWindowPadding _padding,
     std::array<uint32_t, 2> output_padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
@@ -387,7 +388,7 @@ Result ConvTranpose2dOperation::invoke(
         input_width,
         kernel_size,
         stride,
-        padding,
+        _padding,
         output_padding,
         dilation,
         groups,
@@ -410,7 +411,7 @@ Result ConvTranpose2dOperation::invoke(
     uint32_t input_width,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> padding,
+    sliding_window::SlidingWindowPadding _padding,
     std::array<uint32_t, 2> output_padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
@@ -430,7 +431,7 @@ Result ConvTranpose2dOperation::invoke(
         input_width,
         kernel_size,
         stride,
-        padding,
+        _padding,
         output_padding,
         dilation,
         groups,

@@ -31,7 +31,7 @@ uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num1, uint32_t n
 bool use_matmul_for_1x1_conv(
     const std::array<uint32_t, 2>& kernel_size,
     const std::array<uint32_t, 2>& stride,
-    const std::array<uint32_t, 2>& padding,
+    const std::array<uint32_t, 4>& padding,
     const std::array<uint32_t, 2>& dilation,
     uint32_t groups,
     const Conv2dConfig& conv_config);

@@ -454,7 +454,7 @@ Result conv2d_L1(
     uint32_t input_width,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> padding,
+    sliding_window::SlidingWindowPadding _padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor,
@@ -462,11 +462,16 @@ Result conv2d_L1(
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config) {
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
+    auto padding = sliding_window::get_pair_n4_padding(_padding);
     const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups, conv_config);
     const uint32_t output_height =
-        ((input_height - kernel_size[0] - ((kernel_size[0] - 1) * (dilation[0] - 1)) + 2 * padding[0]) / stride[0]) + 1;
+        ((input_height - kernel_size[0] - ((kernel_size[0] - 1) * (dilation[0] - 1)) + (padding[0] + padding[1])) /
+         stride[0]) +
+        1;
     const uint32_t output_width =
-        ((input_width - kernel_size[1] - ((kernel_size[0] - 1) * (dilation[0] - 1)) + 2 * padding[1]) / stride[1]) + 1;
+        ((input_width - kernel_size[1] - ((kernel_size[0] - 1) * (dilation[0] - 1)) + (padding[2] + padding[3])) /
+         stride[1]) +
+        1;
 
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
 
@@ -580,7 +585,7 @@ Result conv2d_L1(
             .input_hw = {input_height, input_width},
             .window_hw = {kernel_size[0], kernel_size[1]},
             .stride_hw = {stride[0], stride[1]},
-            .pad_hw = {padding[0], padding[1]},
+            .padding = {{padding[0], padding[1], padding[2], padding[3]}},
             .dilation_hw = {dilation[0], dilation[1]},
             .num_cores_nhw = opt_conv_op_parallel_config.num_cores_nhw,
             .core_range_set = input_tensor_post_tm.memory_config().shard_spec.value().grid,
@@ -589,7 +594,7 @@ Result conv2d_L1(
 
         bool bypass_halo =
             (parallel_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED &&
-             sliding_window_config.pad_hw.first == 0 && sliding_window_config.pad_hw.second == 0);
+             sliding_window_config.get_pad_h() == 0 && sliding_window_config.get_pad_w() == 0);
 
         if (bypass_halo) {
             if (input_tensor_post_tm.layout() == Layout::TILE) {
@@ -692,7 +697,7 @@ Result Conv2dOperation::invoke(
     uint32_t input_width,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> padding,
+    sliding_window::SlidingWindowPadding _padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor,
@@ -712,7 +717,7 @@ Result Conv2dOperation::invoke(
         input_width,
         kernel_size,
         stride,
-        padding,
+        _padding,
         dilation,
         groups,
         std::move(bias_tensor),
@@ -734,7 +739,7 @@ Result Conv2dOperation::invoke(
     uint32_t input_width,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> padding,
+    sliding_window::SlidingWindowPadding _padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor,
@@ -754,7 +759,7 @@ Result Conv2dOperation::invoke(
         input_width,
         kernel_size,
         stride,
-        padding,
+        _padding,
         dilation,
         groups,
         std::move(bias_tensor),

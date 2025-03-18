@@ -5,9 +5,11 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 #include <string>
 #include <tuple>
 #include <fmt/core.h>
+#include "variant"
 
 #include "ttnn/tensor/host_buffer/functions.hpp"
 
@@ -32,6 +34,10 @@ struct ParallelConfig {
 
 using uint32_pair_t = std::pair<uint32_t, uint32_t>;
 
+using SlidingWindowPadding = std::
+    variant<uint32_pair_t, std::array<uint32_t, 2>, std::pair<uint32_pair_t, uint32_pair_t>, std::array<uint32_t, 4>>;
+
+std::array<uint32_t, 4> get_pair_n4_padding(const SlidingWindowPadding& padding);
 struct SlidingWindowConfig {
     // input tensor shape
     uint32_t batch_size = 0;
@@ -40,7 +46,7 @@ struct SlidingWindowConfig {
     // windowing parameters
     uint32_pair_t window_hw = {1, 1};
     uint32_pair_t stride_hw = {1, 1};
-    uint32_pair_t pad_hw = {0, 0};
+    std::array<uint32_t, 4> padding = {0, 0, 0, 0};
     uint32_pair_t output_pad_hw = {0, 0};
     uint32_pair_t dilation_hw = {1, 1};
 
@@ -72,6 +78,8 @@ struct SlidingWindowConfig {
      */
     ttnn::Shape get_output_shape() const;
 
+    uint32_t get_pad_h() const;
+    uint32_t get_pad_w() const;
     uint32_t get_ceil_pad_h() const;
     uint32_t get_ceil_pad_w() const;
 
