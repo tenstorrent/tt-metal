@@ -82,7 +82,6 @@ jobs:
           echo "should-create-release=$shouldCreateRelease" >> "$GITHUB_OUTPUT"
   create-tag:
     needs: get-params
-    if: ${{ fromJSON(needs.get-params.outputs.should-create-release) }}
     uses: ./.github/workflows/release-verify-or-create-tag.yaml
     with:
       fetch_depth: 0
