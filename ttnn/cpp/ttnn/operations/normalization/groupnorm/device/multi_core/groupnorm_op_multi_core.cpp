@@ -1793,8 +1793,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         for (int j = 0; j < group.size(); ++j) {
             CoreCoord core = group[j];
             CoreCoord core_physical = device->worker_core_from_logical_core(core);
-            uint32_t in0_start_id = per_core_Mt * Wt * j + per_core_Nt * i;
-            uint32_t out_tile_start_id = per_core_Mt * Wt * j + per_core_Nt * i;
+            uint32_t in0_start_id = per_core_Mt * Wt * core.x + per_core_Nt * core.y;
+            uint32_t out_tile_start_id = per_core_Mt * Wt * core.x + per_core_Nt * core.y;
 
             if (j == 0) {  // mcast sender
                 // get the bounding box for the mcast
