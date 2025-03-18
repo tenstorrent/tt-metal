@@ -50,7 +50,7 @@ Tensor Pool2DOp<pool_type>::invoke(
             .input_hw = {input_h, input_w},
             .window_hw = {kernel_size.at(0), kernel_size.at(1)},
             .stride_hw = {stride.at(0), stride.at(1)},
-            .pad_hw = {padding.at(0), padding.at(1)},
+            .padding = {padding.at(0), padding.at(0), padding.at(1), padding.at(1)},
             .dilation_hw = {dilation.at(0), dilation.at(1)},
             .ceil_mode = ceil_mode,
     };
@@ -121,7 +121,7 @@ Tensor Pool2DOp<pool_type>::invoke(
             .input_hw = {input_h, input_w},
             .window_hw = {kernel_size.at(0), kernel_size.at(1)},
             .stride_hw = {stride.at(0), stride.at(1)},
-            .pad_hw = {padding.at(0), padding.at(1)},
+            .padding = {padding.at(0), padding.at(0), padding.at(1), padding.at(1)},
             .dilation_hw = {dilation.at(0), dilation.at(1)},
             .num_cores_nhw = num_cores_nhw,
             .num_cores_c = num_cores_c,
