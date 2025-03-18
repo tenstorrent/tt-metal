@@ -20,24 +20,26 @@ AllGatherAsync create_all_gather_async_struct(
     const std::optional<MemoryConfig>& memory_config,
     const std::vector<IDevice*>& devices,
     const ttnn::ccl::Topology topology,
-    const std::vector<GlobalSemaphore>& semaphores,
+    const GlobalSemaphore& semaphore,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     bool enable_persistent_fabric_mode) {
     uint32_t num_devices = devices.size();
 
     std::optional<IDevice*> forward_device = std::nullopt;
     std::optional<IDevice*> backward_device = std::nullopt;
-    std::optional<GlobalSemaphore> semaphore = std::nullopt;
     uint32_t device_index = 0;  // Initialize device index
     for (uint32_t i = 0; i < num_devices; ++i) {
         if (devices.at(i) == input_tensor.device()) {
             device_index = i;
-            semaphore = semaphores.at(i);  // Get raw pointer
             if (i != 0) {
                 backward_device = devices.at(i - 1);
+            } else if (topology == ttnn::ccl::Topology::Ring) {
+                backward_device = devices.at(num_devices - 1);
             }
             if (i != num_devices - 1) {
                 forward_device = devices.at(i + 1);
+            } else if (topology == ttnn::ccl::Topology::Ring) {
+                forward_device = devices.at(0);
             }
         }
     }
@@ -51,7 +53,7 @@ AllGatherAsync create_all_gather_async_struct(
         device_index,
         memory_config.value_or(input_tensor.memory_config()),
         topology,
-        semaphore.value(),
+        semaphore,
         sub_device_id,
         enable_persistent_fabric_mode};
 }
@@ -305,7 +307,7 @@ namespace ccl {
 Tensor all_gather_async(
     const Tensor& input_tensor,
     const uint32_t dim,
-    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+    const GlobalSemaphore& multi_device_global_semaphore,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
@@ -332,8 +334,6 @@ Tensor all_gather_async(
     CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
 
-    std::vector<GlobalSemaphore> semaphores = multi_device_global_semaphore.global_semaphores;
-
     tt::tt_metal::operation::launch_op(
         [dim,
          num_links,
@@ -341,7 +341,7 @@ Tensor all_gather_async(
          memory_config,
          devices,
          ccl_topology,
-         semaphores,
+         multi_device_global_semaphore,
          sub_device_id,
          enable_persistent_fabric_mode](
             const std::vector<Tensor>& input_tensors,
@@ -357,7 +357,7 @@ Tensor all_gather_async(
                     memory_config,
                     devices,
                     ccl_topology,
-                    semaphores,
+                    multi_device_global_semaphore,
                     sub_device_id,
                     enable_persistent_fabric_mode),
                 {input_tensor});
@@ -373,7 +373,7 @@ Tensor all_gather_async(
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
-    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+    const GlobalSemaphore& multi_device_global_semaphore,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
@@ -399,7 +399,6 @@ Tensor all_gather_async(
     std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
     CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
-    std::vector<GlobalSemaphore> semaphores = multi_device_global_semaphore.global_semaphores;
 
     tt::tt_metal::operation::launch_op(
         [gather_dim,
@@ -409,7 +408,7 @@ Tensor all_gather_async(
          cluster_axis,
          num_devices,
          topology,
-         semaphores,
+         multi_device_global_semaphore,
          sub_device_id,
          enable_persistent_fabric_mode](
             const std::vector<Tensor>& input_tensors,
@@ -434,7 +433,7 @@ Tensor all_gather_async(
                     memory_config,
                     devices,
                     topology,
-                    semaphores,
+                    multi_device_global_semaphore,
                     sub_device_id,
                     enable_persistent_fabric_mode),
                 {input_tensor});

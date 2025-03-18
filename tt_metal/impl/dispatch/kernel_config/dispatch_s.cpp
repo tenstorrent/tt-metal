@@ -47,8 +47,7 @@ void DispatchSKernel::GenerateStaticConfigs() {
             ? hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG)
             : 0;
     static_config_.distributed_dispatcher = DispatchQueryManager::instance().distributed_dispatcher();
-    static_config_.worker_sem_base_addr =
-        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
+    static_config_.first_stream_used = my_dispatch_constants.get_dispatch_stream_index(0);
     static_config_.max_num_worker_sems = DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
     static_config_.max_num_go_signal_noc_data_entries = DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
 }
@@ -79,7 +78,7 @@ void DispatchSKernel::CreateKernel() {
         static_config_.mcast_go_signal_addr.value(),
         static_config_.unicast_go_signal_addr.value(),
         static_config_.distributed_dispatcher.value(),
-        static_config_.worker_sem_base_addr.value(),
+        static_config_.first_stream_used.value(),
         static_config_.max_num_worker_sems.value(),
         static_config_.max_num_go_signal_noc_data_entries.value(),
     };
@@ -122,14 +121,8 @@ void DispatchSKernel::ConfigureCore() {
     auto& my_dispatch_constants = DispatchMemMap::get(GetCoreType());
     uint32_t dispatch_s_sync_sem_base_addr =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM);
-    uint32_t dispatch_message_base_addr =
-        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
     for (uint32_t i = 0; i < DispatchSettings::DISPATCH_MESSAGE_ENTRIES; i++) {
-        uint32_t dispatch_s_sync_sem_addr =
-            dispatch_s_sync_sem_base_addr + my_dispatch_constants.get_dispatch_message_offset(i);
-        uint32_t dispatch_message_addr =
-            dispatch_message_base_addr + my_dispatch_constants.get_dispatch_message_offset(i);
+        uint32_t dispatch_s_sync_sem_addr = dispatch_s_sync_sem_base_addr + my_dispatch_constants.get_sync_offset(i);
         detail::WriteToDeviceL1(device_, logical_core_, dispatch_s_sync_sem_addr, zero, GetCoreType());
-        detail::WriteToDeviceL1(device_, logical_core_, dispatch_message_addr, zero, GetCoreType());
     }
 }

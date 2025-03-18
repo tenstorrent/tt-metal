@@ -105,6 +105,9 @@ TEST_F(MeshEventsTestT3000, ShardedAsyncIO) {
 }
 
 TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
+    if (mesh_device_->num_devices() == 1) {
+        GTEST_SKIP() << "Skipping test for a unit-size mesh device";
+    }
     uint32_t num_iters = 5;
     std::vector<std::shared_ptr<MeshBuffer>> src0_bufs = {};
     std::vector<std::shared_ptr<MeshBuffer>> src1_bufs = {};
@@ -114,9 +117,13 @@ TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
 
     auto programs = tt::tt_metal::distributed::test::utils::create_eltwise_bin_programs(
         mesh_device_, src0_bufs, src1_bufs, output_bufs);
+    uint32_t num_rows_in_workload = mesh_device_->num_rows() / 2;
     auto mesh_workload = CreateMeshWorkload();
-    MeshCoordinateRange devices_0(MeshCoordinate{0, 0}, MeshCoordinate{0, mesh_device_->num_cols() - 1});
-    MeshCoordinateRange devices_1(MeshCoordinate{1, 0}, MeshCoordinate{1, mesh_device_->num_cols() - 1});
+    MeshCoordinateRange devices_0(
+        MeshCoordinate{0, 0}, MeshCoordinate{num_rows_in_workload - 1, mesh_device_->num_cols() - 1});
+    MeshCoordinateRange devices_1(
+        MeshCoordinate{num_rows_in_workload, 0},
+        MeshCoordinate{mesh_device_->num_rows() - 1, mesh_device_->num_cols() - 1});
 
     AddProgramToMeshWorkload(mesh_workload, std::move(*programs[0]), devices_0);
     AddProgramToMeshWorkload(mesh_workload, std::move(*programs[1]), devices_1);
@@ -166,7 +173,7 @@ TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
                         dst_vec,
                         output_bufs[col_idx * worker_grid_size.y + row_idx],
                         device_coord);
-                    if (device_coord[0] == 0) {
+                    if (device_coord[0] <= num_rows_in_workload - 1) {
                         for (int i = 0; i < dst_vec.size(); i++) {
                             EXPECT_EQ(dst_vec[i].to_float(), (2 * iter + 5));
                         }
@@ -182,6 +189,9 @@ TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
 }
 
 TEST_F(MeshEventsTestSuite, CustomDeviceRanges) {
+    if (mesh_device_->num_devices() == 1) {
+        GTEST_SKIP() << "Skipping test for a unit-size mesh device";
+    }
     uint32_t NUM_TILES = 1000;
     uint32_t num_iterations = 20;
     int32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);

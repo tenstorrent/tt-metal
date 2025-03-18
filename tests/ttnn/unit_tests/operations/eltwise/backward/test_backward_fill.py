@@ -52,9 +52,9 @@ def test_bw_fill_opt_tensor(input_shapes, device):
     _, input_grad = data_gen_with_range(input_shapes, -1, 1, device)
     input_grad = ttnn.to_memory_config(input_grad, ttnn.L1_MEMORY_CONFIG)
     cq_id = 0
-    pages_before = ttnn._ttnn.reports.get_buffer_pages()
+    pages_before = ttnn._ttnn.reports.get_buffer_pages(device)
     ttnn.fill_bw(grad_tensor, input_tensor, input_grad=input_grad, queue_id=cq_id)
-    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())
+    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages(device))
 
     golden_function = ttnn.get_golden_function(ttnn.fill_bw)
     golden_tensor = golden_function(grad_data, in_data)

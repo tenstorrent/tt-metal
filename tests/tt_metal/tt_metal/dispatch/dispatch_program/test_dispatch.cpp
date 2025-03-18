@@ -7,6 +7,7 @@
 #include "dispatch_fixture.hpp"
 
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/allocator.hpp>
 
 namespace tt::tt_metal {
 
@@ -263,6 +264,32 @@ TEST_F(DispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
         bool num_pages_match_out = cb_config_vector.at(out_index + 2) == num_tiles;
         bool pass_out = (addr_match_out and size_match_out and num_pages_match_out);
         EXPECT_TRUE(pass_out);
+    }
+}
+
+class EarlyReturnFixture : public DispatchFixture {
+    void SetUp() override {
+        tt::llrt::RunTimeOptions::get_instance().set_kernels_early_return(true);
+        DispatchFixture::SetUp();
+    }
+    void TearDown() override {
+        DispatchFixture::TearDown();
+        tt::llrt::RunTimeOptions::get_instance().set_kernels_early_return(false);
+    }
+};
+
+TEST_F(EarlyReturnFixture, TensixKernelEarlyReturn) {
+    for (IDevice* device : devices_) {
+        CoreCoord worker{0, 0};
+        Program program;
+        // Kernel will block if it doesn't early return.
+        auto writer_kernel = CreateKernel(
+            program,
+            "tt_metal/kernels/dataflow/writer_unary.cpp",
+            worker,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+
+        this->RunProgram(device, program);
     }
 }
 

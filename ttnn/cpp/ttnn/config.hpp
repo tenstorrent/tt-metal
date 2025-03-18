@@ -12,7 +12,7 @@
 #include <tuple>
 
 #include <tt-metalium/logger.hpp>
-#include <tt-metalium/reflection.hpp>
+#include <tt_stl/reflection.hpp>
 
 namespace ttnn {
 

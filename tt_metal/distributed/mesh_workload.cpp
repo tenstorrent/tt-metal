@@ -12,6 +12,20 @@
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
 
 namespace tt::tt_metal::distributed {
+namespace {
+
+// Returns an intersecting range from `programs` if it exists, otherwise returns std::nullopt.
+std::optional<MeshCoordinateRange> find_intersection(
+    const std::unordered_map<MeshCoordinateRange, Program>& programs, const MeshCoordinateRange& range) {
+    for (const auto& [program_range, _] : programs) {
+        if (program_range.intersects(range)) {
+            return program_range;
+        }
+    }
+    return std::nullopt;
+}
+
+}  // namespace
 
 MeshWorkload::MeshWorkload() {
     // A MeshWorkload tracks maintains its own handles to kernels across all
@@ -21,6 +35,12 @@ MeshWorkload::MeshWorkload() {
 }
 
 void MeshWorkload::add_program(const MeshCoordinateRange& device_range, Program&& program) {
+    auto potential_intersection = find_intersection(programs_, device_range);
+    TT_FATAL(
+        !potential_intersection,
+        "Program range {} overlaps with the previously added range {}",
+        device_range,
+        *potential_intersection);
     programs_[device_range] = std::move(program);
 }
 
@@ -65,6 +85,7 @@ void MeshWorkload::load_binaries(MeshCommandQueue& mesh_cq) {
                 .page_size = HostMemDeviceCommand::PROGRAM_PAGE_SIZE,
                 .buffer_type = BufferType::DRAM,
                 .buffer_layout = TensorMemoryLayout::INTERLEAVED,
+                .bottom_up = false,
             };
             ReplicatedBufferConfig global_kernel_bin_buf_config = {
                 .size = max_kernel_bin_buf_size,

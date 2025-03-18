@@ -14,8 +14,6 @@
 
 namespace tt::tt_metal {
 
-inline namespace v0 {
-
 class GlobalSemaphore {
 public:
     GlobalSemaphore(
@@ -48,8 +46,6 @@ private:
     IDevice* device_;
     CoreRangeSet cores_;
 };
-
-}  // namespace v0
 
 }  // namespace tt::tt_metal
 

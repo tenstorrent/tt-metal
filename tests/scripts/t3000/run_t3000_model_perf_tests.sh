@@ -8,7 +8,7 @@ run_t3000_falcon7b_tests() {
 
   echo "LOG_METAL: Running run_t3000_falcon7b_tests"
 
-  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/falcon7b_common/tests -m "model_perf_t3000" ; fail+=$?
+  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/falcon7b_common/tests -m "model_perf_t3000" --timeout 5000 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

@@ -32,8 +32,6 @@ inline Tensor convert_to_cpp_supported_dtype(const Tensor& input_tensor) {
                 TT_THROW("Device input_tensor cannot be converted to torch");
             } else if constexpr (std::is_same_v<T, tt::tt_metal::BorrowedStorage>) {
                 return storage.buffer;
-            } else if constexpr (std::is_same_v<T, tt::tt_metal::MultiDeviceStorage>) {
-                TT_THROW("Tensor with MultiDeviceStorage cannot be converted to torch");
             } else if constexpr (std::is_same_v<T, tt::tt_metal::MultiDeviceHostStorage>) {
                 TT_THROW(
                     "Tensor MultiDeviceHostStorage cannot be converted to torch directly. Use composer(..) "

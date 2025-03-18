@@ -6,7 +6,7 @@
 #include <mesh_buffer.hpp>
 #include <mesh_coord.hpp>
 #include <mesh_device_view.hpp>
-#include <overloaded.hpp>
+#include <tt_stl/overloaded.hpp>
 #include <tt_metal.hpp>
 #include <host_api.hpp>
 
@@ -131,7 +131,15 @@ void MeshBuffer::initialize_device_buffers() {
     }
 }
 
-bool MeshBuffer::is_allocated() const { return not std::holds_alternative<DeallocatedState>(state_); }
+bool MeshBuffer::is_allocated() const {
+    if (std::holds_alternative<DeallocatedState>(state_)) {
+        return false;
+    }
+    if (mesh_device_.lock() == nullptr) {
+        return false;
+    }
+    return true;
+}
 
 MeshBuffer::~MeshBuffer() { deallocate(); }
 
@@ -156,11 +164,11 @@ MeshDevice* MeshBuffer::device() const {
     return device.get();
 }
 
-std::shared_ptr<Buffer> MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const {
-    return buffers_.at(device_coord);
+Buffer* MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const {
+    return buffers_.at(device_coord).get();
 }
 
-std::shared_ptr<Buffer> MeshBuffer::get_reference_buffer() const { return buffers_.values().front(); }
+Buffer* MeshBuffer::get_reference_buffer() const { return buffers_.values().front().get(); }
 
 DeviceAddr MeshBuffer::size() const {
     return std::visit(
@@ -206,7 +214,7 @@ std::pair<bool, bool> MeshBuffer::replicated_dims() const {
 
 AnyBuffer::AnyBuffer(std::shared_ptr<Buffer> buffer) : buffer_(buffer.get()), holder_(std::move(buffer)) {}
 AnyBuffer::AnyBuffer(std::shared_ptr<MeshBuffer> buffer) :
-    buffer_(buffer->get_reference_buffer().get()), holder_(std::move(buffer)) {}
+    buffer_(buffer->get_reference_buffer()), holder_(std::move(buffer)) {}
 
 AnyBuffer AnyBuffer::create(const tt::tt_metal::ShardedBufferConfig& config) {
     auto mesh_device = dynamic_cast<MeshDevice*>(config.device);

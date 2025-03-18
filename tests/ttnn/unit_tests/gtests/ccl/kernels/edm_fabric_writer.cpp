@@ -2,12 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/fabric_connection_manager.hpp"
+#include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 #include "dataflow_api.h"
-
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_transmission.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp"
 
 #include <cstdint>
 #include <cstddef>
@@ -24,7 +23,7 @@ FORCE_INLINE void line_sync(
     size_t sync_noc_x,
     size_t sync_noc_y,
     size_t sync_val) {
-    using namespace tt::fabric;
+    using namespace tt::tt_fabric;
 
     auto dest_noc_addr =
         safe_get_noc_addr(static_cast<uint8_t>(sync_noc_x), static_cast<uint8_t>(sync_noc_y), sync_bank_addr, 0);
@@ -50,7 +49,7 @@ FORCE_INLINE void line_sync(
 }
 
 void kernel_main() {
-    using namespace tt::fabric;
+    using namespace tt::tt_fabric;
     size_t arg_idx = 0;
 
     const size_t dest_bank_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -90,6 +89,7 @@ void kernel_main() {
 
     const size_t start_sync_val = total_workers_per_sync;
     const size_t finish_sync_val = 3 * total_workers_per_sync;
+    const size_t second_finish_sync_val = 4 * total_workers_per_sync;
 
     fabric_connection.open();
 
@@ -131,70 +131,86 @@ void kernel_main() {
     unicast_packet_header->to_chip_unicast(static_cast<uint8_t>(unicast_hops));
 
     {
-        DeviceZoneScopedN("MAIN-WRITE-MCAST-ZONE");
-        for (size_t i = 0; i < num_mcasts; i++) {
-            auto noc0_dest_addr = safe_get_noc_addr(
-                static_cast<uint8_t>(dest_noc_x), static_cast<uint8_t>(dest_noc_y), dest_bank_addr, 0);
-            auto dest_addr =
-                safe_get_noc_addr(static_cast<uint8_t>(dest_noc_x), static_cast<uint8_t>(dest_noc_y), dest_bank_addr);
-            noc_async_write(source_l1_buffer_address, dest_addr, packet_payload_size_bytes);
-            if (fabric_connection.has_forward_connection()) {
-                mcast_fwd_packet_header->to_noc_unicast_write(
-                    NocUnicastCommandHeader{noc0_dest_addr}, packet_payload_size_bytes);
-                fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-                print_pkt_header(mcast_fwd_packet_header);
-                fabric_connection.get_forward_connection().send_payload_without_header_non_blocking_from_address(
-                    source_l1_buffer_address, packet_payload_size_bytes);
-                fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
-                    (uint32_t)mcast_fwd_packet_header, sizeof(PACKET_HEADER_TYPE));
-            }
+        DeviceZoneScopedN("MAIN-TEST-BODY");
+        {
+            DeviceZoneScopedN("MAIN-WRITE-MCAST-ZONE");
+            for (size_t i = 0; i < num_mcasts; i++) {
+                auto noc0_dest_addr = safe_get_noc_addr(
+                    static_cast<uint8_t>(dest_noc_x), static_cast<uint8_t>(dest_noc_y), dest_bank_addr, 0);
+                auto dest_addr = safe_get_noc_addr(
+                    static_cast<uint8_t>(dest_noc_x), static_cast<uint8_t>(dest_noc_y), dest_bank_addr);
+                noc_async_write(source_l1_buffer_address, dest_addr, packet_payload_size_bytes);
+                if (fabric_connection.has_forward_connection()) {
+                    mcast_fwd_packet_header->to_noc_unicast_write(
+                        NocUnicastCommandHeader{noc0_dest_addr}, packet_payload_size_bytes);
+                    fabric_connection.get_forward_connection().wait_for_empty_write_slot();
+                    print_pkt_header(mcast_fwd_packet_header);
+                    fabric_connection.get_forward_connection().send_payload_without_header_non_blocking_from_address(
+                        source_l1_buffer_address, packet_payload_size_bytes);
+                    fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
+                        (uint32_t)mcast_fwd_packet_header, sizeof(PACKET_HEADER_TYPE));
+                }
 
-            if (fabric_connection.has_backward_connection()) {
-                mcast_bwd_packet_header->to_noc_unicast_write(
-                    NocUnicastCommandHeader{noc0_dest_addr}, packet_payload_size_bytes);
-                fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-                print_pkt_header(mcast_bwd_packet_header);
-                fabric_connection.get_backward_connection().send_payload_without_header_non_blocking_from_address(
-                    source_l1_buffer_address, packet_payload_size_bytes);
-                fabric_connection.get_backward_connection().send_payload_flush_non_blocking_from_address(
-                    (uint32_t)mcast_bwd_packet_header, sizeof(PACKET_HEADER_TYPE));
-            }
-            {
-                noc_async_writes_flushed();
+                if (fabric_connection.has_backward_connection()) {
+                    mcast_bwd_packet_header->to_noc_unicast_write(
+                        NocUnicastCommandHeader{noc0_dest_addr}, packet_payload_size_bytes);
+                    fabric_connection.get_backward_connection().wait_for_empty_write_slot();
+                    print_pkt_header(mcast_bwd_packet_header);
+                    fabric_connection.get_backward_connection().send_payload_without_header_non_blocking_from_address(
+                        source_l1_buffer_address, packet_payload_size_bytes);
+                    fabric_connection.get_backward_connection().send_payload_flush_non_blocking_from_address(
+                        (uint32_t)mcast_bwd_packet_header, sizeof(PACKET_HEADER_TYPE));
+                }
+                {
+                    noc_async_writes_flushed();
+                }
             }
         }
-    }
 
-    {
-        DeviceZoneScopedN("MAIN-WRITE-UNICAST-ZONE");
-        for (size_t i = 0; i < num_unicasts; i++) {
-            auto noc0_dest_addr =
-                safe_get_noc_addr(static_cast<uint8_t>(dest_noc_x), static_cast<uint8_t>(dest_noc_y), dest_bank_addr, 0);
-            auto& fabric_conn =
-                unicast_is_fwd ? fabric_connection.get_forward_connection() : fabric_connection.get_backward_connection();
-            unicast_packet_header->to_noc_unicast_write(NocUnicastCommandHeader{noc0_dest_addr}, packet_payload_size_bytes);
-            fabric_conn.wait_for_empty_write_slot();
-            fabric_conn.send_payload_without_header_non_blocking_from_address(
-                source_l1_buffer_address, packet_payload_size_bytes);
-            fabric_conn.send_payload_blocking_from_address((uint32_t)unicast_packet_header, sizeof(PACKET_HEADER_TYPE));
+        {
+            DeviceZoneScopedN("MAIN-WRITE-UNICAST-ZONE");
+            for (size_t i = 0; i < num_unicasts; i++) {
+                auto noc0_dest_addr = safe_get_noc_addr(
+                    static_cast<uint8_t>(dest_noc_x), static_cast<uint8_t>(dest_noc_y), dest_bank_addr, 0);
+                auto& fabric_conn = unicast_is_fwd ? fabric_connection.get_forward_connection()
+                                                   : fabric_connection.get_backward_connection();
+                unicast_packet_header->to_noc_unicast_write(
+                    NocUnicastCommandHeader{noc0_dest_addr}, packet_payload_size_bytes);
+                fabric_conn.wait_for_empty_write_slot();
+                fabric_conn.send_payload_without_header_non_blocking_from_address(
+                    source_l1_buffer_address, packet_payload_size_bytes);
+                fabric_conn.send_payload_blocking_from_address(
+                    (uint32_t)unicast_packet_header, sizeof(PACKET_HEADER_TYPE));
+            }
         }
-    }
 
-    if (enable_finish_synchronization) {
-        line_sync(
-            fabric_connection,
-            mcast_fwd_packet_header,
-            mcast_bwd_packet_header,
-            sync_bank_addr,
-            sync_noc_x,
-            sync_noc_y,
-            finish_sync_val);
+        if (enable_finish_synchronization) {
+            // Send a completion message
+            line_sync(
+                fabric_connection,
+                mcast_fwd_packet_header,
+                mcast_bwd_packet_header,
+                sync_bank_addr,
+                sync_noc_x,
+                sync_noc_y,
+                finish_sync_val);
+            // Ack the complation and wait for everyone to do the same. This guarantees
+            // all other workers have received all messages.
+            line_sync(
+                fabric_connection,
+                mcast_fwd_packet_header,
+                mcast_bwd_packet_header,
+                sync_bank_addr,
+                sync_noc_x,
+                sync_noc_y,
+                second_finish_sync_val);
 
-        if (sync_noc_x == my_x[0] && sync_noc_y == my_y[0]) {
-            // reset the global semaphore in case it is used in a op/kernel
-            // invocation
-            *reinterpret_cast<volatile uint32_t*>(sync_bank_addr) = 0;
-            ;
+            if (sync_noc_x == my_x[0] && sync_noc_y == my_y[0]) {
+                // reset the global semaphore in case it is used in a op/kernel
+                // invocation
+                *reinterpret_cast<volatile uint32_t*>(sync_bank_addr) = 0;
+                ;
+            }
         }
     }
 

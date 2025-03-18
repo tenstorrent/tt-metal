@@ -10,7 +10,8 @@ on:
           - Release
           - Debug
           - RelWithDebInfo
-          - CI
+          - ASan
+          - TSan
         default: "Release"
       build-with-tracy:
         required: false
@@ -30,6 +31,10 @@ on:
         type: boolean
         default: false
       single-card-nightly:
+        required: false
+        type: boolean
+        default: false
+      cpp-unit:
         required: false
         type: boolean
         default: false
@@ -66,3 +71,12 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/fast-dispatch-full-regressions-and-models-impl.yaml
     if: ${{ inputs.single-card-nightly }}
+  cpp-unit-tests:
+    if: ${{ inputs.cpp-unit }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/cpp-post-commit.yaml
+    with:
+      arch: wormhole_b0
+      runner-label: tt-beta-ubuntu-2204-n300-large-stable
+      os: ubuntu-22.04

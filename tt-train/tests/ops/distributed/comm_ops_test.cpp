@@ -18,7 +18,7 @@
 namespace {
 
 auto check_board_is_n300() {
-    return tt_ClusterDescriptor::create()->get_board_type(0) == BoardType::N300;
+    return tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0) == BoardType::N300;
 }
 
 }  // namespace
@@ -39,6 +39,7 @@ protected:
 };
 
 TEST_F(N300CommOpsTest, TestAllReduceNotFullyTiled) {
+    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_reduce)";
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
 
@@ -87,6 +88,7 @@ TEST_F(N300CommOpsTest, TestAllReduceNotFullyTiled) {
 }
 
 TEST_F(N300CommOpsTest, TestAllReduceNanoGPT) {
+    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_reduce)";
     auto* device = &ttml::autograd::ctx().get_device();
     device->enable_program_cache();
     auto mesh_shape = device->shape();
@@ -142,6 +144,7 @@ TEST_F(N300CommOpsTest, TestAllReduceNanoGPT) {
 }
 
 TEST_F(N300CommOpsTest, TestAllReduceFullyTiled) {
+    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_reduce)";
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
 
@@ -191,6 +194,7 @@ TEST_F(N300CommOpsTest, TestAllReduceFullyTiled) {
 }
 
 TEST_F(N300CommOpsTest, TestAllGatherNotFullyTiled) {
+    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
 
@@ -234,6 +238,7 @@ TEST_F(N300CommOpsTest, TestAllGatherNotFullyTiled) {
 }
 
 TEST_F(N300CommOpsTest, TestAllGatherFullyTiled) {
+    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
 

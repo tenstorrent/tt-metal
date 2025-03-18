@@ -27,4 +27,4 @@ def test_deallocate(device, h, w):
     with pytest.raises(RuntimeError) as exception:
         output_tensor_reference + output_tensor_reference
 
-    assert "Cannot get the device from a tensor without an allocated buffer" in str(exception.value)
+    assert "Buffer is not allocated" in str(exception.value)

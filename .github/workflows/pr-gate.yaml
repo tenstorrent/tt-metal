@@ -36,9 +36,27 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     with:
       version: "22.04"
+      build-type: Debug
+      publish-artifact: false
+
+  find-changed-files:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    outputs:
+      cmake-changed: ${{ steps.find-changes.outputs.cmake-changed }}
+      tt-metalium-changed: ${{ steps.find-changes.outputs.tt-metalium-changed }}
+      tt-metalium-or-tt-nn-tests-changed: ${{ steps.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed }}
+    steps:
+      - id: find-changes
+        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@main
 
   smoke-tests:
-    needs: build
+    needs: [ build, find-changed-files ]
+    if: ${{
+        needs.find-changed-files.outputs.cmake-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+      }}
     strategy:
       fail-fast: false
       matrix:

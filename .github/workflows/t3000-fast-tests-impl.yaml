@@ -23,7 +23,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { name: "t3k fabric tests", arch: wormhole_b0, cmd: run_t3000_ttfabric_tests, timeout: 30, label: pipeline-fabric, owner_id: UJ45FEC7M}, # Allan Liu
+          { name: "t3k fabric tests", arch: wormhole_b0, cmd: run_t3000_ttfabric_tests, timeout: 10, label: pipeline-functional, owner_id: UJ45FEC7M}, # Allan Liu
         ]
     name: ${{ matrix.test-group.name }}
     runs-on:
@@ -37,7 +37,7 @@ jobs:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
-        ARCH_NAME: ${{ matrix.test-info.arch }}
+        ARCH_NAME: ${{ matrix.test-group.arch }}
         LOGURU_LEVEL: INFO
         GITHUB_ACTIONS: true
       volumes:
@@ -81,7 +81,7 @@ jobs:
         run: |
           export GTEST_OUTPUT=xml:generated/test_reports/
           mkdir -p generated/test_reports
-          source ${{ github.workspace }}/tests/scripts/t3000/run_t3000_unit_tests.sh
+          source tests/scripts/t3000/run_t3000_unit_tests.sh
           ${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
@@ -101,3 +101,6 @@ jobs:
         with:
           path: |
             generated/test_reports/
+
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()

@@ -16,25 +16,11 @@
 #include <vector>
 
 #include "core_coord.hpp"
-#include "dispatch_core_manager.hpp"       // For DispatchCoreConfig
-#include "umd/device/tt_soc_descriptor.h"  // For CoreType
+#include "dispatch_core_common.hpp"  // For DispatchCoreConfig
 
 namespace tt {
 
 namespace llrt {
-
-static inline const char* get_core_type_name(CoreType ct) {
-    switch (ct) {
-        case CoreType::ARC: return "ARC";
-        case CoreType::DRAM: return "DRAM";
-        case CoreType::ETH: return "ethernet";
-        case CoreType::PCIE: return "PCIE";
-        case CoreType::WORKER: return "worker";
-        case CoreType::HARVESTED: return "harvested";
-        case CoreType::ROUTER_ONLY: return "router_only";
-        default: return "UNKNOWN";
-    }
-}
 
 // TODO: This should come from the HAL
 enum DebugHartFlags : unsigned int {
@@ -114,8 +100,13 @@ class RunTimeOptions {
     bool profile_dispatch_cores = false;
     bool profiler_sync_enabled = false;
     bool profiler_buffer_usage_enabled = false;
+    bool profiler_noc_events_enabled = false;
+    std::string profiler_noc_events_report_path;
 
     bool null_kernels = false;
+    // Kernels should return early, skipping the rest of the kernel. Kernels
+    // should remain the same size as normal, unlike with null_kernels.
+    bool kernels_early_return = false;
 
     bool clear_l1 = false;
 
@@ -295,9 +286,14 @@ public:
     inline bool get_profiler_do_dispatch_cores() { return profile_dispatch_cores; }
     inline bool get_profiler_sync_enabled() { return profiler_sync_enabled; }
     inline bool get_profiler_buffer_usage_enabled() { return profiler_buffer_usage_enabled; }
+    inline bool get_profiler_noc_events_enabled() { return profiler_noc_events_enabled; }
+    inline std::string get_profiler_noc_events_report_path() { return profiler_noc_events_report_path; }
 
     inline void set_kernels_nullified(bool v) { null_kernels = v; }
     inline bool get_kernels_nullified() { return null_kernels; }
+
+    inline void set_kernels_early_return(bool v) { kernels_early_return = v; }
+    inline bool get_kernels_early_return() { return kernels_early_return; }
 
     inline bool get_clear_l1() { return clear_l1; }
     inline void set_clear_l1(bool clear) { clear_l1 = clear; }

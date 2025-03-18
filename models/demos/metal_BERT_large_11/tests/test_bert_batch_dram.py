@@ -19,7 +19,6 @@ from models.demos.metal_BERT_large_11.tt.model_config import (
 
 from models.utility_functions import (
     enable_persistent_kernel_cache,
-    disable_compilation_reports,
     comp_pcc,
     comp_allclose,
     disable_persistent_kernel_cache,
@@ -300,7 +299,6 @@ def test_bert_batch_dram(
     PERF_CNT = 1
     assert PERF_CNT == 1, "Bert does not support internal perf count no more."
     disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     run_bert_question_and_answering_inference(
         model_version,
@@ -382,7 +380,6 @@ def test_bert_batch_dram_with_program_cache(
     PERF_CNT = 1
 
     disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     run_bert_question_and_answering_inference(
         model_version,

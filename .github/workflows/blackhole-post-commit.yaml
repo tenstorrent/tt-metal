@@ -23,7 +23,8 @@ on:
           - Release
           - Debug
           - RelWithDebInfo
-          - CI
+          - ASan
+          - TSan
   schedule:
     - cron: "0 */2 * * *"
   # Pause this since not enough runners to support every commit to main
@@ -56,7 +57,7 @@ jobs:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       tracy: true
-      version: "20.04"
+      version: "22.04"
   run-profiler-regression:
     needs: build-artifact-profiler
     uses: ./.github/workflows/run-profiler-regression.yaml

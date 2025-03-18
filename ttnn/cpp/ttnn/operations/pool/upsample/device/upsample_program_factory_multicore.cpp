@@ -14,7 +14,7 @@
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/math.hpp>
 
-#include <tt-metalium/reflection.hpp>
+#include <tt_stl/reflection.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
 
 using namespace tt::constants;
@@ -244,7 +244,8 @@ operation::ProgramWithCallbacks upsample_multi_core(
     auto config_tensor_device = config_tensor.to_device(device, memory_config);
 
     tt::DataFormat config_df = tt::DataFormat::RawUInt16;
-    auto config_buffer = config_tensor_device.device_buffer();
+    auto config_storage = config_tensor_device.device_storage();
+    auto config_buffer = config_storage.get_buffer();
     auto config_buffer_page_size = config_buffer->page_size();
     uint32_t config_cb_id = CBIndex::c_6;
     auto config_cb_config = CircularBufferConfig(config_buffer_page_size, {{config_cb_id, config_df}})
@@ -310,8 +311,8 @@ operation::ProgramWithCallbacks upsample_multi_core(
         TT_THROW("Unsupported memory layout");
     }
 
-    // Capture config_buffer to cache this with the program
-    auto override_runtime_args_callback = [writer_kernel, cb_src0, out_cb, config_cb, config_buffer](
+    // Capture config_storage to cache this with the program
+    auto override_runtime_args_callback = [writer_kernel, cb_src0, out_cb, config_cb, config_storage](
                                               const void* operation,
                                               Program& program,
                                               const std::vector<Tensor>& input_tensors,

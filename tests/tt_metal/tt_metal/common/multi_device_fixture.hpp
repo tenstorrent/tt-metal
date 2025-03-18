@@ -5,6 +5,7 @@
 #pragma once
 
 #include <gtest/gtest.h>
+#include <boost/algorithm/string.hpp>
 
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -12,6 +13,7 @@
 #include <tt-metalium/mesh_device.hpp>
 
 #include "dispatch_fixture.hpp"
+#include "umd/device/types/arch.h"
 #include "umd/device/types/cluster_descriptor_types.h"
 #include "tt_metal/test_utils/env_vars.hpp"
 
@@ -89,14 +91,20 @@ protected:
     using MeshShape = ::tt::tt_metal::distributed::MeshShape;
 
     enum class MeshDeviceType {
+        // N150/P150 devices opened as 1x1 meshes.
+        N150,
+        P150,
         N300,
+        P300,
         T3000,
+        TG,
     };
 
     struct Config {
-        // If unset, the mesh device type will be deduced automatically based on the connected devices.
-        // The associated test will be run if the connected cluster corresponds to a supported topology.
-        std::optional<MeshDeviceType> mesh_device_type;
+        // If empty, the mesh device type will be deduced automatically based on the connected devices.
+        // Otherwise, the associated tests will run only if the connected cluster corresponds to one of the
+        // specified mesh device types.
+        std::unordered_set<MeshDeviceType> mesh_device_types;
         int num_cqs = 1;
         uint32_t trace_region_size = 0;
     };
@@ -110,25 +118,31 @@ protected:
         }
 
         const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        if (arch != tt::ARCH::WORMHOLE_B0) {
-            GTEST_SKIP() << "Skipping MeshDevice test suite on a non-wormhole machine.";
-        }
 
         const auto num_devices = tt::tt_metal::GetNumAvailableDevices();
-        const auto mesh_device_type = derive_mesh_device_type(num_devices);
+        const auto mesh_device_type = derive_mesh_device_type(num_devices, arch);
         if (!mesh_device_type) {
             GTEST_SKIP() << fmt::format(
                 "Skipping MeshDevice test suite on a machine with an unsupported number of devices {}.", num_devices);
         }
 
-        if (config_.mesh_device_type.has_value() && *config_.mesh_device_type != *mesh_device_type) {
+        if (!config_.mesh_device_types.empty() &&
+            config_.mesh_device_types.find(*mesh_device_type) == config_.mesh_device_types.end()) {
+            std::vector<std::string> requested_device_types;
+            std::transform(
+                config_.mesh_device_types.begin(),
+                config_.mesh_device_types.end(),
+                std::back_inserter(requested_device_types),
+                [](const auto t) { return std::string(magic_enum::enum_name(t)); });
             GTEST_SKIP() << fmt::format(
-                "Skipping MeshDevice test suite on a {} machine that does not match the configured mesh device type {}",
+                "Skipping MeshDevice test suite on a {} machine that does not match any of the configured mesh device "
+                "types {}",
                 magic_enum::enum_name(*mesh_device_type),
-                magic_enum::enum_name(*config_.mesh_device_type));
+                boost::algorithm::join(requested_device_types, ", "));
         }
         // Use ethernet dispatch for more than 1 CQ on T3K/N300
-        auto core_type = (config_.num_cqs >= 2) ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
+        auto core_type = (config_.num_cqs >= 2 and *mesh_device_type != MeshDeviceType::TG) ? DispatchCoreType::ETH
+                                                                                            : DispatchCoreType::WORKER;
         mesh_device_ = MeshDevice::create(
             MeshDeviceConfig{.mesh_shape = get_mesh_shape(*mesh_device_type)},
             0,
@@ -151,17 +165,45 @@ private:
     // Returns the mesh shape for a given mesh device type.
     MeshShape get_mesh_shape(MeshDeviceType mesh_device_type) {
         switch (mesh_device_type) {
-            case MeshDeviceType::N300: return MeshShape(2, 1);
+            case MeshDeviceType::N150:
+            case MeshDeviceType::P150: return MeshShape(1, 1);
+            case MeshDeviceType::N300:
+            case MeshDeviceType::P300: return MeshShape(2, 1);
             case MeshDeviceType::T3000: return MeshShape(2, 4);
+            case MeshDeviceType::TG: return MeshShape(4, 8);
             default: TT_FATAL(false, "Querying shape for unspecified Mesh Type.");
         }
     }
 
     // Determines the mesh device type based on the number of devices.
-    std::optional<MeshDeviceType> derive_mesh_device_type(size_t num_devices) {
+    std::optional<MeshDeviceType> derive_mesh_device_type(size_t num_devices, tt::ARCH arch) {
         switch (num_devices) {
-            case 2: return MeshDeviceType::N300;
-            case 8: return MeshDeviceType::T3000;
+            case 1: {
+                switch (arch) {
+                    case tt::ARCH::WORMHOLE_B0: return MeshDeviceType::N150;
+                    case tt::ARCH::BLACKHOLE: return MeshDeviceType::P150;
+                    default: return std::nullopt;
+                }
+            }
+            case 2: {
+                switch (arch) {
+                    case tt::ARCH::WORMHOLE_B0: return MeshDeviceType::N300;
+                    case tt::ARCH::BLACKHOLE: return MeshDeviceType::P300;
+                    default: return std::nullopt;
+                }
+            }
+            case 8: {
+                switch (arch) {
+                    case tt::ARCH::WORMHOLE_B0: return MeshDeviceType::T3000;
+                    default: return std::nullopt;
+                }
+            }
+            case 32: {
+                switch (arch) {
+                    case tt::ARCH::WORMHOLE_B0: return MeshDeviceType::TG;
+                    default: return std::nullopt;
+                }
+            }
             default: return std::nullopt;
         }
     }
@@ -181,34 +223,29 @@ protected:
     GenericMultiCQMeshDeviceFixture() : MeshDeviceFixtureBase(Config{.num_cqs = 2}) {}
 };
 
-class GenericMeshDeviceTraceFixture : public MeshDeviceFixtureBase {
-protected:
-    GenericMeshDeviceTraceFixture() : MeshDeviceFixtureBase(Config{.num_cqs = 1, .trace_region_size = (64 << 20)}) {}
-};
-
 // Fixtures that specify the mesh device type explicitly.
 // The associated test will be run if the cluster topology matches
 // what is specified.
-class N300MeshDeviceFixture : public MeshDeviceFixtureBase {
-protected:
-    N300MeshDeviceFixture() : MeshDeviceFixtureBase(Config{.mesh_device_type = MeshDeviceType::N300}) {}
-};
-
 class T3000MeshDeviceFixture : public MeshDeviceFixtureBase {
 protected:
-    T3000MeshDeviceFixture() : MeshDeviceFixtureBase(Config{.mesh_device_type = MeshDeviceType::T3000}) {}
+    T3000MeshDeviceFixture() : MeshDeviceFixtureBase(Config{.mesh_device_types = {MeshDeviceType::T3000}}) {}
 };
 
-class N300MultiCQMeshDeviceFixture : public MeshDeviceFixtureBase {
+class TGMeshDeviceFixture : public MeshDeviceFixtureBase {
 protected:
-    N300MultiCQMeshDeviceFixture() :
-        MeshDeviceFixtureBase(Config{.mesh_device_type = MeshDeviceType::N300, .num_cqs = 2}) {}
+    TGMeshDeviceFixture() : MeshDeviceFixtureBase(Config{.mesh_device_types = {MeshDeviceType::TG}}) {}
 };
 
 class T3000MultiCQMeshDeviceFixture : public MeshDeviceFixtureBase {
 protected:
     T3000MultiCQMeshDeviceFixture() :
-        MeshDeviceFixtureBase(Config{.mesh_device_type = MeshDeviceType::T3000, .num_cqs = 2}) {}
+        MeshDeviceFixtureBase(Config{.mesh_device_types = {MeshDeviceType::T3000}, .num_cqs = 2}) {}
+};
+
+class TGMultiCQMeshDeviceFixture : public MeshDeviceFixtureBase {
+protected:
+    TGMultiCQMeshDeviceFixture() :
+        MeshDeviceFixtureBase(Config{.mesh_device_types = {MeshDeviceType::TG}, .num_cqs = 2}) {}
 };
 
 }  // namespace tt::tt_metal

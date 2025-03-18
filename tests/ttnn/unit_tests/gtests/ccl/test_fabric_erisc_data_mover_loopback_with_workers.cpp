@@ -790,6 +790,8 @@ TEST(
 }
 
 TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
+    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric "
+                    "(ttnn::operations::experimental::ccl::reduce_scatter)";
     const size_t dim = 3;
     const size_t num_links = 1;
     constexpr auto layout = Layout::TILE;
@@ -857,23 +859,19 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
         enable_persistent_fabric,
         num_links);
 
-    ttnn::global_semaphore::MultiDeviceGlobalSemaphore from_remote_multi_device_global_semaphore =
-        ttnn::global_semaphore::create_global_semaphore_with_same_address(
-            test_fixture.mesh_device_.get(),
-            devices[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
-            0,                             // initial value
-            tt::tt_metal::BufferType::L1,  // buffer type
-            10                             // attempts
-        );
+    GlobalSemaphore from_remote_multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore(
+        test_fixture.mesh_device_.get(),
+        test_fixture.mesh_device_.get()->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
+        0,                            // initial value
+        tt::tt_metal::BufferType::L1  // buffer type
+    );
 
-    ttnn::global_semaphore::MultiDeviceGlobalSemaphore to_remote_multi_device_global_semaphore =
-        ttnn::global_semaphore::create_global_semaphore_with_same_address(
-            test_fixture.mesh_device_.get(),
-            devices[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
-            0,                             // initial value
-            tt::tt_metal::BufferType::L1,  // buffer type
-            10                             // attempts
-        );
+    GlobalSemaphore to_remote_multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore(
+        test_fixture.mesh_device_.get(),
+        test_fixture.mesh_device_.get()->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
+        0,                            // initial value
+        tt::tt_metal::BufferType::L1  // buffer type
+    );
 
     auto output_tensor = ttnn::operations::experimental::ccl::reduce_scatter(
         input_mesh_tensor,
@@ -896,7 +894,7 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
 
     log_info(tt::LogTest, "Fabric teardown");
     persistent_fabric_teardown_sequence(
-        devices, subdevice_managers, fabric_handle.value(), tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE);
+        devices, subdevice_managers, fabric_handle.value(), tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE);
 
     log_info(tt::LogTest, "Waiting for teardown completion");
     for (auto d : devices) {
@@ -906,9 +904,11 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
 }
 
 TEST(CclAsyncOp, AllGather_PersistentFabric_Dim3_Links1_Shape1_1_32_128) {
+    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
     run_all_gather_with_persistent_fabric(3, 1, ttnn::Shape({1, 1, 32, 128}));
 }
 TEST(CclAsyncOp, AllGather_PersistentFabric_Dim3_Links1_Shape1_1_32_8192) {
+    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
     run_all_gather_with_persistent_fabric(3, 1, ttnn::Shape({1, 1, 32, 8192}));
 }
 // Mesh device setup seems to not provide the correct configuration for multi-link? To be investigated
@@ -918,6 +918,10 @@ TEST(CclAsyncOp, DISABLED_AllGather_PersistentFabric_Dim3_Links2_Shape1_1_32_128
 // Mesh device setup seems to not provide the correct configuration for multi-link? To be investigated
 TEST(CclAsyncOp, DISABLED_AllGather_PersistentFabric_Dim3_Links2_Shape1_1_32_8192) {
     run_all_gather_with_persistent_fabric(3, 2, ttnn::Shape({1, 1, 32, 8192}));
+}
+
+TEST(CclAsyncOp, RingAllGather_PersistentFabric_Dim3_Links1_Shape1_256_32_8192) {
+    run_ring_all_gather_with_persistent_fabric(3, 1, ttnn::Shape({1, 256, 32, 8192}));
 }
 
 TEST(EdmFabric, BasicMcastThroughputTest_SingleLink_LineSize2_SingleMcast) {
@@ -1461,4 +1465,17 @@ TEST(EdmFabric, BasicMcastThroughputTest_4_WithLineSync) {
     params.line_sync = line_sync;
     RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+
+TEST(EdmFabric, RingDeadlockStabilityTest) {
+    const size_t num_mcasts = 200000;
+    const size_t num_links = 1;
+    const size_t num_op_invocations = 5;
+    const bool line_sync = true;
+    log_trace(tt::LogTest, "Running RingDeadlockStabilityTest with forward mcast only");
+    RunRingDeadlockStabilityTestWithPersistentFabric(num_mcasts, num_links, num_op_invocations, true, false);
+    log_trace(tt::LogTest, "Running RingDeadlockStabilityTest with backward mcast only");
+    RunRingDeadlockStabilityTestWithPersistentFabric(num_mcasts, num_links, num_op_invocations, false, true);
+    log_trace(tt::LogTest, "Running RingDeadlockStabilityTest with forward and backward mcast");
+    RunRingDeadlockStabilityTestWithPersistentFabric(num_mcasts, num_links, num_op_invocations, true, true);
 }

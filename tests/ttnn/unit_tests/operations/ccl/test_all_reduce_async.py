@@ -12,7 +12,6 @@ from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
     create_and_load_sub_device_manager_with_fabric_interface,
     teardown_fabric_interface,
-    create_global_semaphore_with_same_address,
 )
 
 
@@ -63,9 +62,9 @@ def run_all_reduce_test(
         sub_device_stall_group = [worker_sub_device_id]
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
     # create global semaphore handles
-    from_remote_semaphore_handles = create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0)
-    to_remote_semaphore_handles = create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0)
-    gather_semaphore_handles = create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0)
+    from_remote_semaphore_handles = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+    to_remote_semaphore_handles = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+    gather_semaphore_handles = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
 
     debug = False
 
@@ -341,9 +340,9 @@ def run_all_reduce_with_mesh_tensor_along_row(
         sub_device_stall_group = [worker_sub_device_id]
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
     # create global semaphore handles
-    from_remote_semaphore_handles = create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0)
-    to_remote_semaphore_handles = create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0)
-    gather_semaphore_handles = create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0)
+    from_remote_semaphore_handles = create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+    to_remote_semaphore_handles = create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+    gather_semaphore_handles = create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
 
     try:
         debug = False

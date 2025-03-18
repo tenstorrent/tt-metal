@@ -2,9 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <overloaded.hpp>
+#include <tt_stl/overloaded.hpp>
 #include <circular_buffer_types.hpp>
 #include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/program_impl.hpp>
+
 #include <kernel_types.hpp>
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "command_generated.h"
@@ -99,7 +102,6 @@ void CaptureBufferCreate(
     const std::optional<ShardSpecBuffer>& shard_parameters,
     const std::optional<bool> bottom_up,
     const std::optional<SubDeviceId> sub_device_id) {
-    assert(device->id() == 0 && "multichip not supported yet");
     auto& ctx = LightMetalCaptureContext::get();
     auto& fbb = ctx.get_builder();
 

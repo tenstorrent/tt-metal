@@ -16,9 +16,7 @@
 namespace tt::tt_metal {
 
 // Forward decl to avoid including header
-inline namespace v0 {
 class Buffer;
-}
 
 struct TraceWorkerDescriptor {
     uint32_t num_completion_worker_cores = 0;

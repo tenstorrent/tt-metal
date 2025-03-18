@@ -81,43 +81,43 @@ public:
 
 private:
     uint32_t id_;
-    uint32_t size_B;
-    uint32_t completion_queue_reader_core = 0;
+    uint32_t size_B_;
+    uint32_t completion_queue_reader_core_ = 0;
     std::optional<uint32_t> tid_;
-    std::shared_ptr<TraceDescriptor> trace_ctx;
-    std::thread completion_queue_thread;
-    SystemMemoryManager& manager;
+    std::shared_ptr<TraceDescriptor> trace_ctx_;
+    std::thread completion_queue_thread_;
+    SystemMemoryManager& manager_;
 
     // Shared across all CommandQueue instances for a Device.
-    std::shared_ptr<DispatchArray<LaunchMessageRingBufferState>> worker_launch_message_buffer_state;
+    std::shared_ptr<DispatchArray<LaunchMessageRingBufferState>> worker_launch_message_buffer_state_;
 
-    DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr;
+    DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_;
     // Expected value of DISPATCH_MESSAGE_ADDR in dispatch core L1
     //  Value in L1 incremented by worker to signal completion to dispatch. Value on host is set on each enqueue program
     //  call
-    DispatchArray<uint32_t> expected_num_workers_completed;
+    DispatchArray<uint32_t> expected_num_workers_completed_;
 
-    volatile bool exit_condition;
-    volatile uint32_t num_entries_in_completion_q;  // issue queue writer thread increments this when an issued command
-                                                    // is expected back in the completion queue
-    volatile uint32_t num_completed_completion_q_reads;  // completion queue reader thread increments this after reading
-                                                         // an entry out of the completion queue
+    volatile bool exit_condition_;
+    volatile uint32_t num_entries_in_completion_q_;  // issue queue writer thread increments this when an issued command
+                                                     // is expected back in the completion queue
+    volatile uint32_t num_completed_completion_q_reads_;  // completion queue reader thread increments this after
+                                                          // reading an entry out of the completion queue
 
-    MultiProducerSingleConsumerQueue<CompletionReaderVariant> issued_completion_q_reads;
+    MultiProducerSingleConsumerQueue<CompletionReaderVariant> issued_completion_q_reads_;
     // These values are used to reset the host side launch message wptr after a trace is captured
     // Trace capture is a fully host side operation, but it modifies the state of the wptrs above
     // To ensure that host and device are not out of sync, we reset the wptrs to their original values
     // post trace capture.
-    DispatchArray<LaunchMessageRingBufferState> worker_launch_message_buffer_state_reset;
-    DispatchArray<uint32_t> expected_num_workers_completed_reset;
-    DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_reset;
+    DispatchArray<LaunchMessageRingBufferState> worker_launch_message_buffer_state_reset_;
+    DispatchArray<uint32_t> expected_num_workers_completed_reset_;
+    DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_reset_;
     IDevice* device_;
 
-    std::condition_variable reader_thread_cv;
-    std::mutex reader_thread_cv_mutex;
+    std::condition_variable reader_thread_cv_;
+    std::mutex reader_thread_cv_mutex_;
 
-    std::condition_variable reads_processed_cv;
-    std::mutex reads_processed_cv_mutex;
+    std::condition_variable reads_processed_cv_;
+    std::mutex reads_processed_cv_mutex_;
     CoreType get_dispatch_core_type();
 
     CoreCoord virtual_enqueue_program_dispatch_core_;

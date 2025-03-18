@@ -13,7 +13,7 @@
 #include <string>
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/program_impl.hpp>
-#include <tt-metalium/reflection.hpp>
+#include <tt_stl/reflection.hpp>
 #include <typeindex>
 #include <unordered_map>
 
@@ -260,7 +260,7 @@ int GraphProcessor::add_tensor(const Tensor& t) {
     std::vector<tt::tt_metal::Buffer*> buffers = std::visit(
         [&t](auto&& storage) -> std::vector<tt::tt_metal::Buffer*> {
             using T = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<T, DeviceStorage> || std::is_same_v<T, MultiDeviceStorage>) {
+            if constexpr (std::is_same_v<T, DeviceStorage>) {
                 return t.buffers();
             }
             return {};

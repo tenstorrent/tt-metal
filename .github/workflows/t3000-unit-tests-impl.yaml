@@ -3,6 +3,15 @@ name: "[internal] T3000 unit tests impl"
 on:
   workflow_call:
     inputs:
+      docker-image:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
       extra-tag:
         required: false
         type: string
@@ -15,7 +24,6 @@ jobs:
       matrix:
         test-group: [
           { name: "t3k ttmetal tests", arch: wormhole_b0, cmd: run_t3000_ttmetal_tests, timeout: 30, label: pipeline-functional, owner_id: ULMEPM2MA}, #Sean Nijjar
-          { name: "t3k fabric tests", arch: wormhole_b0, cmd: run_t3000_ttfabric_tests, timeout: 30, label: pipeline-fabric, owner_id: UJ45FEC7M}, # Allan Liu
           { name: "t3k ttnn tests", arch: wormhole_b0, cmd: run_t3000_ttnn_tests, timeout: 120, label: pipeline-fabric, owner_id: UBHPP2NDP}, #Joseph Chu
           { name: "t3k falcon7b tests", arch: wormhole_b0, cmd: run_t3000_falcon7b_tests, timeout: 30, label: pipeline-functional, owner_id: UBHPP2NDP}, #Joseph Chu
           { name: "t3k falcon40b tests", arch: wormhole_b0, cmd: run_t3000_falcon40b_tests, timeout: 30, label: pipeline-functional, owner_id: U053W15B6JF}, #Djordje Ivanovic
@@ -29,38 +37,63 @@ jobs:
           { name: "t3k unet shallow tests", arch: wormhole_b0, cmd: run_t3000_unet_shallow_tests, timeout: 30, label: pipeline-functional, owner_id: U06ECNVR0EN}, #Evan Smal
         ]
     name: ${{ matrix.test-group.name }}
-    env:
-      ARCH_NAME: ${{ matrix.test-group.arch }}
-      LOGURU_LEVEL: INFO
-      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on:
       - arch-wormhole_b0
       - config-t3000
       - ${{ matrix.test-group.label}}
       - ${{ inputs.extra-tag }}
+    container:
+      image: ${{ inputs.docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ matrix.test-group.arch }}
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
-      - name: Set up dynamic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - uses: ./.github/actions/ensure-active-weka-mount
-      - uses: actions/download-artifact@v4
-        timeout-minutes: 10
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
         with:
-          name: TTMetal_build_any
+          submodules: recursive
+          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
+
+      - name: ⬇️ Download Build
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.build-artifact-name }}
+          path: docker-job
+
       - name: Extract files
         run: tar -xvf ttm_any.tar
-      - uses: ./.github/actions/install-python-deps
+
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.wheel-artifact-name }}
+          path: docker-job
+
+      - name: Install Wheel
+        run: |
+          WHEEL_FILENAME=$(ls -1 *.whl)
+          pip3 install $WHEEL_FILENAME
+
       - name: Run unit regression tests
-        shell: bash {0}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          source ${{ github.workspace }}/python_env/bin/activate
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
+          ls -lart /mnt/MLPerf/tt_dnn-models/tt/Falcon/tiiuae/falcon-40b-instruct/
           export GTEST_OUTPUT=xml:generated/test_reports/
           mkdir -p generated/test_reports
-          source ${{ github.workspace }}/tests/scripts/t3000/run_t3000_unit_tests.sh
+          source tests/scripts/t3000/run_t3000_unit_tests.sh
           ${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
@@ -79,4 +112,7 @@ jobs:
         if: ${{ failure() }}
         with:
           path: |
-            generated/test_reports/
+            /work/generated/test_reports/
+
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()

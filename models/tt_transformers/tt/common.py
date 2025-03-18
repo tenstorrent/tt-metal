@@ -60,7 +60,10 @@ def preprocess_inputs_prefill(
     if max_prefill_len == 128 * 1024:
         max_prefill_len = 128 * 1024 - max_generated_tokens
 
-    encoded_prompts = [model_args.encode_prompt(prompt, instruct=instruct) for prompt in input_prompts]
+    encoded_prompts = [
+        model_args[idx % len(model_args)].encode_prompt(prompt, instruct=instruct)
+        for idx, prompt in enumerate(input_prompts)
+    ]
 
     # Print the length of encoded prompts
     logger.info("Encoded prompt lengths:" + ", ".join(str(len(prompt)) for prompt in encoded_prompts))
@@ -80,10 +83,19 @@ def preprocess_inputs_prefill(
             # 3. Shorten the tokenized clipped prompt by the overhead and convert back to text
             # 4. Tokenize the result with instruct tokenization
             # 5. Assert that the length of this is equal to the max_prefill_len
-            raw_prompts = [model_args.encode_prompt(prompt, instruct=False) for prompt in input_prompts]
+            raw_prompts = [
+                model_args[idx % len(model_args)].encode_prompt(prompt, instruct=False)
+                for idx, prompt in enumerate(input_prompts)
+            ]
             overhead = [len(e) - len(r) for e, r in zip(encoded_prompts, raw_prompts)]
-            shortened = [tokenizer.decode(e[-(max_prefill_len - o) :]) for e, o in zip(raw_prompts, overhead)]
-            encoded_prompts = [model_args.encode_prompt(prompt, instruct=instruct) for prompt in shortened]
+            shortened = [
+                tokenizer[idx % len(model_args)].decode(e[-(max_prefill_len - o) :])
+                for idx, e, o in enumerate(zip(raw_prompts, overhead))
+            ]
+            encoded_prompts = [
+                model_args[idx % len(model_args)].encode_prompt(prompt, instruct=instruct)
+                for idx, prompt in enumerate(shortened)
+            ]
             assert all(
                 len(e) == max_prefill_len for e in encoded_prompts
             ), f"Clipped prompts are not of the correct length, expected {max_prefill_len} but got {[len(e) for e in encoded_prompts]}"
@@ -94,10 +106,10 @@ def preprocess_inputs_prefill(
         prompt_lens = [len(x) for x in encoded_prompts]
         min_prompt_len = min(prompt_lens)
         max_prompt_len = max(prompt_lens)
-
-    assert (
-        max_prompt_len <= model_args.max_seq_len
-    ), f"Max prompt length {max_prompt_len} exceeds model max seq len {model_args.max_seq_len}"
+    for m in model_args:
+        assert (
+            max_prompt_len <= m.max_seq_len
+        ), f"Max prompt length {max_prompt_len} exceeds model max seq len {m.max_seq_len}"
     assert min_prompt_len > 0, "Minimum prompt length must be greater than 0"
     assert min_prompt_len <= max_prompt_len, f"Minimum prompt length {min_prompt_len} exceeds max len {max_prompt_len}"
 
@@ -370,53 +382,19 @@ def sample_top_p(probs: torch.Tensor, p: float):
     return torch.gather(probs_idx, -1, next_token)
 
 
-def sample_host(tt_input, mesh_device, temperature=0.6, top_p=0.08, on_host=True):
+def sample_host(tt_input, temperature=0.6, top_p=0.08, on_host=True):
     vocab_size = tt_input.shape[-1]
-    if mesh_device:
-        pt_input = ttnn.to_torch(
-            tt_input,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, -1), mesh_shape=list(mesh_device.shape)),
-        )[:, :1, :, :vocab_size]
-    else:  # input already on host
-        pt_input = tt_input[..., :vocab_size]
+    pt_input = tt_input[..., :vocab_size]
 
     if temperature > 0:
         probs = torch.softmax(pt_input / temperature, dim=-1)
         pt_out = sample_top_p(probs.squeeze(), top_p)
-        if mesh_device:
-            pt_out = pt_out.view(1, 1, 1, -1)
     else:
-        if mesh_device:
-            pt_out = torch.argmax(pt_input, dim=-1, keepdim=True).transpose(-1, -2)
-        else:
-            pt_out = torch.argmax(pt_input, dim=-1)
+        pt_out = torch.argmax(pt_input, dim=-1)
 
-    if mesh_device is None:
-        if pt_out.dim() == 1:  # if sampling a single token re-add the batch dim to the tensor
-            pt_out = pt_out.unsqueeze(0)
-        return None, pt_out
-    if on_host:
-        return (
-            ttnn.as_tensor(
-                pt_out,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                dtype=ttnn.uint32,
-                device=None,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if mesh_device.get_num_devices() > 1 else None,
-            ),
-            pt_out,
-        )
-    else:
-        return (
-            ttnn.from_torch(
-                pt_out,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                dtype=ttnn.uint32,
-                device=mesh_device,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            ),
-            pt_out,
-        )
+    if pt_out.dim() == 1:  # if sampling a single token re-add the batch dim to the tensor
+        pt_out = pt_out.unsqueeze(0)
+    return None, pt_out
 
 
 def get_padded_prefill_len(seq_len):

@@ -8,7 +8,7 @@
 #include "umd/device/types/cluster_descriptor_types.h"
 #include "tt_metal/distributed/coordinate_translation.hpp"
 
-#include "indestructible.hpp"
+#include <tt_stl/indestructible.hpp>
 #include "mesh_coord.hpp"
 #include "tt_cluster.hpp"
 

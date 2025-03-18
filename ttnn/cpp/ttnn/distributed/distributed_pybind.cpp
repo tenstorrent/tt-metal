@@ -8,7 +8,8 @@
 #include <ostream>
 
 #include <tt-metalium/command_queue.hpp>
-#include "tt-metalium/mesh_coord.hpp"
+#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -26,7 +27,6 @@ namespace py = pybind11;
 
 void py_module_types(py::module& module) {
     py::class_<MeshDevice, std::shared_ptr<MeshDevice>>(module, "MeshDevice");
-    py::class_<MeshSubDeviceManagerId>(module, "MeshSubDeviceManagerId");
     py::class_<MeshShape>(module, "MeshShape", "Shape of a mesh device.");
     py::class_<MeshCoordinate>(module, "MeshCoordinate", "Coordinate within a mesh device.");
     py::class_<MeshCoordinateRange>(module, "MeshCoordinateRange", "Range of coordinates within a mesh device.");
@@ -167,7 +167,7 @@ void py_module(py::module& module) {
             "create_submesh",
             &MeshDevice::create_submesh,
             py::arg("submesh_shape"),
-            py::arg("offset"),
+            py::arg("offset") = std::nullopt,
             py::keep_alive<1, 0>())  // Keep MeshDevice alive as long as SubmeshDevice is alive
         .def(
             "create_submeshes",
@@ -270,7 +270,7 @@ void py_module(py::module& module) {
         .def(
             "create_sub_device_manager",
             [](MeshDevice& self, const std::vector<SubDevice>& sub_devices, DeviceAddr local_l1_size) {
-                return self.mesh_create_sub_device_manager(sub_devices, local_l1_size);
+                return self.create_sub_device_manager(sub_devices, local_l1_size);
             },
             py::arg("sub_devices"),
             py::arg("local_l1_size"),
@@ -285,12 +285,12 @@ void py_module(py::module& module) {
 
 
                Returns:
-                   MeshSubDeviceManagerId: The ID of the created sub-device manager.
+                   SubDeviceManagerId: The ID of the created sub-device manager.
            )doc")
         .def(
             "create_sub_device_manager_with_fabric",
             [](MeshDevice& self, const std::vector<SubDevice>& sub_devices, DeviceAddr local_l1_size) {
-                return self.mesh_create_sub_device_manager_with_fabric(sub_devices, local_l1_size);
+                return self.create_sub_device_manager_with_fabric(sub_devices, local_l1_size);
             },
             py::arg("sub_devices"),
             py::arg("local_l1_size"),
@@ -306,41 +306,41 @@ void py_module(py::module& module) {
 
 
                Returns:
-                   MeshSubDeviceManagerId: The ID of the created sub-device manager.
+                   SubDeviceManagerId: The ID of the created sub-device manager.
                    SubDeviceId: The ID of the sub-device that will be used for fabric.
            )doc")
         .def(
             "load_sub_device_manager",
-            &MeshDevice::mesh_load_sub_device_manager,
-            py::arg("mesh_sub_device_manager_id"),
+            &MeshDevice::load_sub_device_manager,
+            py::arg("sub_device_manager_id"),
             R"doc(
                Loads the sub-device manager with the given ID.
 
 
                Args:
-                   mesh_sub_device_manager_id (MeshSubDeviceManagerId): The ID of the sub-device manager to load.
+                   sub_device_manager_id (SubDeviceManagerId): The ID of the sub-device manager to load.
            )doc")
         .def(
             "clear_loaded_sub_device_manager",
-            &MeshDevice::mesh_clear_loaded_sub_device_manager,
+            &MeshDevice::clear_loaded_sub_device_manager,
             R"doc(
                Clears the loaded sub-device manager for the given mesh device.
            )doc")
         .def(
             "remove_sub_device_manager",
-            &MeshDevice::mesh_remove_sub_device_manager,
-            py::arg("mesh_sub_device_manager_id"),
+            &MeshDevice::remove_sub_device_manager,
+            py::arg("sub_device_manager_id"),
             R"doc(
                Removes the sub-device manager with the given ID.
 
 
                Args:
-                   mesh_sub_device_manager_id (MeshSubDeviceManagerId): The ID of the sub-device manager to remove.
+                   sub_device_manager_id (SubDeviceManagerId): The ID of the sub-device manager to remove.
            )doc")
         .def(
             "set_sub_device_stall_group",
             [](MeshDevice& self, const std::vector<SubDeviceId>& sub_device_ids) {
-                self.mesh_set_sub_device_stall_group(sub_device_ids);
+                self.set_sub_device_stall_group(sub_device_ids);
             },
             py::arg("sub_device_ids"),
             R"doc(
@@ -354,11 +354,27 @@ void py_module(py::module& module) {
            )doc")
         .def(
             "reset_sub_device_stall_group",
-            &MeshDevice::mesh_reset_sub_device_stall_group,
+            &MeshDevice::reset_sub_device_stall_group,
             R"doc(
                Resets the sub_device_ids that will be stalled on by default for Fast Dispatch commands such as reading, writing, synchronizing
                back to all SubDevice IDs.
-           )doc");
+           )doc")
+        .def(
+            "num_program_cache_entries",
+            &MeshDevice::num_program_cache_entries,
+            "Number of entries in the program cache for this device")
+        .def(
+            "sfpu_eps",
+            [](MeshDevice* device) { return tt::tt_metal::experimental::hal::get_eps(); },
+            R"doc(Returns machine epsilon value for current architecture.)doc")
+        .def(
+            "sfpu_nan",
+            [](MeshDevice* device) { return tt::tt_metal::experimental::hal::get_nan(); },
+            R"doc(Returns NaN value for current architecture.)doc")
+        .def(
+            "sfpu_inf",
+            [](MeshDevice* device) { return tt::tt_metal::experimental::hal::get_inf(); },
+            R"doc(Returns Infinity value for current architecture.)doc");
 
     module.def(
         "open_mesh_device",
@@ -373,42 +389,6 @@ void py_module(py::module& module) {
         py::arg("dispatch_core_config"));
 
     module.def("close_mesh_device", &close_mesh_device, py::arg("mesh_device"), py::kw_only());
-    module.def(
-        "get_device_tensor",
-        py::overload_cast<const Tensor&, int>(&ttnn::distributed::get_device_tensor),
-        py::arg("tensor"),
-        py::arg("device_id"),
-        py::kw_only(),
-        R"doc(
-       Get the tensor shard corresponding to the device_id.
-
-
-       Args:
-           tensor (Tensor): The tensor to get the shard from.
-           device_id (int): The device id to get the shard for.
-
-
-       Returns:
-           Tensor: The shard of the tensor corresponding to the device_id.
-   )doc");
-    module.def(
-        "get_device_tensor",
-        py::overload_cast<const Tensor&, const IDevice*>(&ttnn::distributed::get_device_tensor),
-        py::arg("tensor"),
-        py::arg("device"),
-        py::kw_only(),
-        R"doc(
-       Get the tensor shard corresponding to the device.
-
-
-       Args:
-           tensor (Tensor): The tensor to get the shard from.
-           device (Device): The device to get the shard for.
-
-
-       Returns:
-           Tensor: The shard of the tensor corresponding to the device.
-   )doc");
     module.def("get_device_tensors", &get_device_tensors, py::arg("tensor"), py::kw_only());
     module.def(
         "aggregate_as_tensor",

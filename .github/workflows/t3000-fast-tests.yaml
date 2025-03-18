@@ -2,8 +2,8 @@ name: "(T3K) T3000 fast tests"
 
 on:
   workflow_dispatch:
-  #push:
-  #  branches: ["main"]
+  push:
+    branches: ["main"]
 
 jobs:
   build-artifact:
@@ -11,6 +11,7 @@ jobs:
     secrets: inherit
     with:
       build-wheel: true
+      version: 22.04
   t3000-fast-tests:
     needs: build-artifact
     secrets: inherit

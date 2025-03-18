@@ -9,7 +9,6 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/global_cb_utils.hpp"
 
 #include <tt-metalium/global_circular_buffer_impl.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
@@ -20,10 +19,10 @@ namespace ttnn::operations::dram_prefetcher {
 tt::tt_metal::operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     const std::vector<Tensor>& input_tensors,
     const uint32_t num_layers,
-    const tt::tt_metal::v1::experimental::GlobalCircularBuffer& global_cb);
+    const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb);
 
 struct DramPrefetcher {
-    const std::optional<const tt::tt_metal::DeviceGlobalCircularBuffer> global_cb;
+    const std::optional<const GlobalCircularBuffer> global_cb;
     const uint32_t num_layers;
 
     void validate(const std::vector<Tensor>& input_tensors) const;

@@ -79,17 +79,17 @@ static Tensor arange_impl(
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
     constexpr DataType data_type = tt::tt_metal::convert_to_data_type<T>();
-    // Current implementation restrictions
-    TT_ASSERT(step > 0, "Step must be greater than 0");
-    TT_ASSERT(start < stop, "Start must be less than step");
-    auto size = tt::div_up((stop - start), step);
-    if (size % 2 != 0) {
-        size++;
-    }
+
+    TT_FATAL(step != 0, "Step must be nonzero");
+    TT_FATAL(
+        !((step > 0 && start > stop) || (step < 0 && start < stop)),
+        "Invalid range: Step direction does not match range bounds");
+
+    auto size = std::max<int64_t>(0, tt::div_up(std::abs(stop - start), std::abs(step)));
     auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(size);
 
     auto index = 0;
-    for (auto value = start; value < stop; value += step) {
+    for (auto value = start; (step > 0) ? (value < stop) : (value > stop); value += step) {
         if constexpr (std::is_same_v<T, ::bfloat16>) {
             owned_buffer[index++] = T(static_cast<float>(value));
         } else {
@@ -97,10 +97,15 @@ static Tensor arange_impl(
         }
     }
     auto output =
-        Tensor(
-            OwnedStorage{owned_buffer}, ttnn::Shape{1, 1, 1, static_cast<uint32_t>(size)}, data_type, Layout::ROW_MAJOR)
+        Tensor(OwnedStorage{owned_buffer}, ttnn::Shape{static_cast<uint32_t>(size)}, data_type, Layout::ROW_MAJOR)
             .to_layout(layout);
     if (device.has_value()) {
+        auto devices = device->get_devices();
+        if (devices.size() == 1) {
+            if (auto mesh_device = dynamic_cast<MeshDevice*>(devices[0])) {
+                return output.to_device(mesh_device, output_mem_config);
+            }
+        }
         output = output.to_device(device->get_devices(), output_mem_config);
     }
     return output;
@@ -122,26 +127,19 @@ static Tensor full_impl(
     // TODO: 15061 - Generalize the header to support generic vector / view types.
     std::fill(std::begin(owned_buffer), std::end(owned_buffer), value);
 
-    if (!optional_output_tensor.has_value()) {
-        auto output = Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
-        if (!devices.empty()) {
-            output = output.to_device(devices, output_mem_config);
-        }
-        return output;
+    Tensor host_tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
+    if (optional_output_tensor.has_value()) {
+        tt::tt_metal::write_tensor(host_tensor, *optional_output_tensor, queue_id);
+        return *optional_output_tensor;
+    } else if (devices.empty()) {
+        return host_tensor;
     } else {
-        const auto buffers = optional_output_tensor->buffers();
-        const bool using_fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
-
-        for (auto* buffer : buffers) {
-            if (using_fast_dispatch) {
-                auto& cmd_queue = buffer->device()->command_queue(*queue_id);
-                tt::tt_metal::EnqueueWriteBuffer(cmd_queue, *buffer, owned_buffer.data(), /*blocking=*/false);
-            } else {
-                tt::tt_metal::detail::WriteToBuffer(*buffer, owned_buffer.get());
+        if (devices.size() == 1) {
+            if (auto mesh_device = dynamic_cast<MeshDevice*>(devices[0])) {
+                return host_tensor.to_device(mesh_device, output_mem_config);
             }
         }
-
-        return *optional_output_tensor;
+        return host_tensor.to_device(devices, output_mem_config);
     }
 }
 
@@ -324,6 +322,10 @@ struct Empty {
         const Layout& layout,
         ttnn::AnyDevice device,
         const MemoryConfig& memory_config) {
+        if (auto mesh_device = device.get_mesh_device()) {
+            return allocate_tensor_on_mesh(
+                TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), memory_config)), mesh_device);
+        }
         return allocate_tensor_on_devices(
             TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), memory_config)), device.get_devices());
     }
@@ -336,11 +338,22 @@ struct EmptyLike {
         const std::optional<Layout>& layout = std::nullopt,
         detail::OptionalAnyDevice device_arg = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        const std::vector<IDevice*>& devices =
-            device_arg.has_value() ? device_arg->get_devices() : tensor.get_workers(/*blocking=*/true);
         Layout layout_value = layout.value_or(tensor.get_layout());
         DataType dtype_value = dtype.value_or(tensor.get_dtype());
         MemoryConfig mem_cfg = memory_config.value_or(tensor.memory_config());
+        std::vector<IDevice*> devices;
+        if (device_arg.has_value()) {
+            devices = device_arg->get_devices();
+        } else {
+            auto tensor_device = tensor.device();
+            if (auto mesh_device = dynamic_cast<MeshDevice*>(tensor_device)) {
+                return allocate_tensor_on_mesh(
+                    TensorSpec(
+                        tensor.get_logical_shape(), TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg)),
+                    mesh_device);
+            }
+            devices = tensor.get_workers(/*blocking=*/true);
+        }
         return allocate_tensor_on_devices(
             TensorSpec(tensor.get_logical_shape(), TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg)),
             devices);

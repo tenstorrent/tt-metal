@@ -11,7 +11,8 @@ on:
           - Release
           - Debug
           - RelWithDebInfo
-          - CI
+          - ASan
+          - TSan
   schedule:
     - cron: "0 2,11 * * *"
 

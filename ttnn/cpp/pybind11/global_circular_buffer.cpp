@@ -12,7 +12,6 @@ namespace ttnn::global_circular_buffer {
 
 void py_module_types(py::module& module) {
     py::class_<GlobalCircularBuffer, std::shared_ptr<GlobalCircularBuffer>>(module, "global_circular_buffer");
-    py::class_<MultiDeviceGlobalCircularBuffer>(module, "multi_device_global_circular_buffer");
 }
 
 void py_module(py::module& module) {

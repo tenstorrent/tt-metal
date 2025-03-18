@@ -506,7 +506,7 @@ To set up pre-commit on your local machine, follow these steps:
   Next, you can navigate to any pipeline on the left side of the view. For
   example, you can run the entire post-commit CI suite by clicking on
   on the link to [all post-commit workflows](https://github.com/tenstorrent/tt-metal/actions/workflows/all-post-commit-workflows.yaml), clicking "Run workflow",
-  selecting your branch, and pressing "Run workflow".
+  selecting your branch, then selecting `build-type` as "Release" and pressing "Run workflow".
 
   ![Dropdown menu of all post-commit workflows and Run Workflow button](docs/source/common/_static/all-post-commit-workflows-button.png)
 
@@ -785,6 +785,11 @@ After that, the UI will usually delete your branch.
   review and start running pipelines. This is because we don't want to clog
   our pipelines with unnecessary runs that developers may know will fail
   anyways.
+
+### A recommended development flow for model writers
+
+Please refer to documentation for [adding a model](./models/MODEL_ADD.md) and
+for [graduating](./models/MODEL_GRADUATION.md) it.
 
 ### New feature and design specifications
 
