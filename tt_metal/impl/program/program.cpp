@@ -1328,7 +1328,6 @@ void Program::generate_dispatch_commands(IDevice* device) {
         ProgramCommandSequence program_command_sequence;
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
         program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id, device);
-        program_dispatch::assemble_runtime_args_commands(program_command_sequence, *this, device);
         program_dispatch::assemble_device_commands(program_command_sequence, *this, device, sub_device_id);
         cached_program_command_sequences.insert({command_hash, std::move(program_command_sequence)});
         pimpl_->set_cached();
