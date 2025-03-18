@@ -307,7 +307,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
         "worker_reader.cpp",
         worker_reducer_cores_all,
         tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = reader_noc,
             .compile_args = reader_compile_args});
 
@@ -330,7 +330,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
         "worker_writer.cpp",
         worker_reducer_cores_all,
         tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = writer_noc,
             .compile_args = writer_compile_args});
 
@@ -398,58 +398,44 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
                       device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
 
         // Set reader runtime args
-        bool worker_reducer_overlap = output_corerangeset_per_link[link].contains(core);
-        if (!worker_reducer_overlap) {
-            std::vector<uint32_t> worker_reader_rt_args = {
-                1,                                   // is_worker
-                0,                                   // is_reducer
-                input_tensor.buffer()->address(),    // tensor_address0
-                input_tensor_shard_num_pages,        // num_tiles_per_core
-                worker_num_tiles_to_read,            // num_tiles_to_read
-                input_first_core_tile_start_offset,  // first_core_tile_start_offset
-                input_tensor_cores_x.size(),         // num_cores
-            };
-            worker_reader_rt_args.insert(
-                worker_reader_rt_args.end(), input_tensor_cores_x.begin(), input_tensor_cores_x.end());
-            worker_reader_rt_args.insert(
-                worker_reader_rt_args.end(), input_tensor_cores_y.begin(), input_tensor_cores_y.end());
-            log_trace(tt::LogOp, "Reader Runtime Args:");
-            for (const auto& arg : worker_reader_rt_args) {
-                log_trace(tt::LogOp, "\t{}", arg);
+        bool worker_reducer_overlap = false;
+        auto overlap_reduction_semaphore_id = reduction_semaphore_ids[link];
+        for (uint32_t inner_link = 0; inner_link < num_links; inner_link++) {
+            worker_reducer_overlap = output_corerangeset_per_link[inner_link].contains(core);
+            if (worker_reducer_overlap) {
+                overlap_reduction_semaphore_id = reduction_semaphore_ids[inner_link];
+                break;
             }
-            tt::tt_metal::SetRuntimeArgs(program, worker_reducer_reader_kernel_id, {core}, worker_reader_rt_args);
-
-            // Set reduction worker runtime args
-            std::vector<uint32_t> reducer_reader_rt_args = {
-                0,                              // is_worker
-                1,                              // is_reducer
-                reduction_semaphore_ids[link],  // reduction_semaphore_id
-            };
-            tt::tt_metal::SetRuntimeArgs(
-                program, worker_reducer_reader_kernel_id, output_corerangeset_per_link[link], reducer_reader_rt_args);
-        } else {
-            std::vector<uint32_t> worker_reducer_reader_rt_args = {
-                1,                                   // is_worker
-                1,                                   // is_reducer
-                input_tensor.buffer()->address(),    // tensor_address0
-                input_tensor_shard_num_pages,        // num_tiles_per_core
-                worker_num_tiles_to_read,            // num_tiles_to_read
-                input_first_core_tile_start_offset,  // first_core_tile_start_offset
-                input_tensor_cores_x.size(),         // num_cores
-            };
-            worker_reducer_reader_rt_args.insert(
-                worker_reducer_reader_rt_args.end(), input_tensor_cores_x.begin(), input_tensor_cores_x.end());
-            worker_reducer_reader_rt_args.insert(
-                worker_reducer_reader_rt_args.end(), input_tensor_cores_y.begin(), input_tensor_cores_y.end());
-
-            worker_reducer_reader_rt_args.push_back(reduction_semaphore_ids[link]);  // Add reduction semaphore ID
-
-            tt::tt_metal::SetRuntimeArgs(
-                program,
-                worker_reducer_reader_kernel_id,
-                output_corerangeset_per_link[link],
-                worker_reducer_reader_rt_args);
         }
+        std::vector<uint32_t> worker_reader_rt_args = {
+            1,                                   // is_worker
+            worker_reducer_overlap ? 1 : 0,      // is_reducer
+            input_tensor.buffer()->address(),    // tensor_address0
+            input_tensor_shard_num_pages,        // num_tiles_per_core
+            worker_num_tiles_to_read,            // num_tiles_to_read
+            input_first_core_tile_start_offset,  // first_core_tile_start_offset
+            input_tensor_cores_x.size(),         // num_cores
+        };
+        worker_reader_rt_args.insert(
+            worker_reader_rt_args.end(), input_tensor_cores_x.begin(), input_tensor_cores_x.end());
+        worker_reader_rt_args.insert(
+            worker_reader_rt_args.end(), input_tensor_cores_y.begin(), input_tensor_cores_y.end());
+
+        if (worker_reducer_overlap) {
+            worker_reader_rt_args.push_back(overlap_reduction_semaphore_id);  // Add reduction semaphore ID
+        }
+        tt::tt_metal::SetRuntimeArgs(program, worker_reducer_reader_kernel_id, {core}, worker_reader_rt_args);
+
+        // Set reduction reader runtime args for remaining cores
+        auto non_overlapping_reducer_cores = output_corerangeset_per_link[link].subtract(sender_worker_core_range);
+        std::vector<uint32_t> reducer_reader_rt_args = {
+            0,                              // is_worker
+            1,                              // is_reducer
+            reduction_semaphore_ids[link],  // reduction_semaphore_id
+        };
+        tt::tt_metal::SetRuntimeArgs(
+            program, worker_reducer_reader_kernel_id, non_overlapping_reducer_cores, reducer_reader_rt_args);
+
         // Set writer runtime args
         std::vector<uint32_t> mcast_start_x;
         std::vector<uint32_t> mcast_start_y;
@@ -460,9 +446,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
         for (const auto& range : output_corerangeset_per_link[link].ranges()) {
             auto start_core = device->worker_core_from_logical_core(range.start_coord);
             auto end_core = device->worker_core_from_logical_core(range.end_coord);
-            num_mcast_cores += (end_core.x - start_core.x + 1) * (end_core.y - start_core.y + 1);
-            bool mcast_range_contains_self =
-                start_core.x <= core.x && core.x <= end_core.x && start_core.y <= core.y && core.y <= end_core.y;
+            num_mcast_cores += range.size();
+            bool mcast_range_contains_self = range.contains(core);
             if (mcast_range_contains_self) {
                 num_mcast_cores -= 1;
             }
@@ -478,7 +463,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
         uint32_t out_ready_sem_wait_value = dynamic_alternate ? (ring_size + 1) : ring_size;
         std::vector<uint32_t> writer_rt_args = {
             1,                                    // is_worker
-            0,                                    // is_reducer
+            worker_reducer_overlap ? 1 : 0,       // is_reducer
             reduction_cb_index,                   // tensor_address0
             semaphore.address(),                  // out_ready_sem_bank_addr (absolute address)
             output_tensor_shard_num_pages,        // num_tiles_per_core

@@ -9,6 +9,7 @@
 #include "cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_ccl_common.hpp"
 #include <cstdint>
 #include <utility>
+#include "debug/dprint.h"
 
 using address_t = uint32_t;
 
@@ -38,6 +39,7 @@ void kernel_main() {
     const uint32_t is_worker = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t is_reducer = get_arg_val<uint32_t>(arg_idx++);
     if (is_worker == 0) {
+        DPRINT << "non worker detected" << ENDL();
         return;
     }
     // Load the input tensor spec
@@ -184,7 +186,9 @@ void kernel_main() {
     }
 
     // 3. wait for mcast output ready semaphore
+    DPRINT << "worker waiting for global sem" << ENDL();
     while (*reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr) != out_ready_sem_wait_value);
+    DPRINT << "worker recieved all global sem" << ENDL();
 
     // Set up for mcasting to reduction workers
     volatile tt_l1_ptr uint32_t* reduction_semaphore_send_addr_ptr =
@@ -194,6 +198,9 @@ void kernel_main() {
     // loop over mcast ranges
     for (uint32_t i = 0; i < num_mcast_ranges; i++) {
         // Signal the reduction workers
+        DPRINT << "mcaster sending to " << i << " out of " << num_mcast_ranges << ENDL();
+        DPRINT << "mcast start: " << mcast_dest_noc_start_x[i] << ", " << mcast_dest_noc_start_y[i] << ENDL();
+        DPRINT << "mcast end: " << mcast_dest_noc_end_x[i] << ", " << mcast_dest_noc_end_y[i] << ENDL();
         const uint64_t reduction_semaphore_recv_noc_addr = get_noc_multicast_addr(
             mcast_dest_noc_start_x[i],
             mcast_dest_noc_start_y[i],
@@ -205,8 +212,13 @@ void kernel_main() {
             reduction_semaphore_send_addr,
             reduction_semaphore_recv_noc_addr,
             i == 0 ? num_mcast_cores : 0,
-            false,  // linked = false
-            true);  // multicast_path_reserve = true
+            false,   // linked = false
+            false);  // multicast_path_reserve = true
+        DPRINT << "mcasted " << i << " out of " << num_mcast_cores << ENDL();
+    }
+
+    if (is_worker == 1 && is_reducer == 1) {
+        noc_semaphore_set(reduction_semaphore_send_addr_ptr, 0);
     }
 
     // 4. global semaphore reset
@@ -218,5 +230,5 @@ void kernel_main() {
 
     noc_async_write_barrier();
 
-    // DPRINT << "writer done \n";
+    DPRINT << "writer done" << ENDL();
 }
