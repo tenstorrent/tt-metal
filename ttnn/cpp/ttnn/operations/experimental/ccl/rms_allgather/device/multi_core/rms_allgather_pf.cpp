@@ -357,6 +357,7 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
         (std::uint32_t)reduce_sender_semaphore_id,
         (std::uint32_t)num_blocks,
         (std::uint32_t)0,
+        (std::uint32_t)true,
         (std::uint32_t)1,
         (std::uint32_t)1,
         (std::uint32_t)0,
@@ -1285,7 +1286,7 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
         tt::tt_metal::CircularBufferConfig(stats_cb_size, {{cb_stats_index, cb_data_format}})
             .set_page_size(cb_stats_index, single_tile_size)
             .set_globally_allocated_address(*stats.value().buffer());
-    uint32_t cb_stats = tt::tt_metal::CreateCircularBuffer(program, sender_cores, stats_cb_config);
+    auto cb_stats = tt::tt_metal::CreateCircularBuffer(program, sender_cores, stats_cb_config);
 
     // in0 sharded
     uint32_t in0_cb_index = tt::CBIndex::c_3;
@@ -1578,6 +1579,7 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
          cb_in0,
          cb_stats,
          cb_output,
+         cb_output_reshard,
          cores](
             const void* operation,
             Program& program,
@@ -1585,18 +1587,25 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
             const auto src_buffer_a = input_tensors.at(0).buffer();
-            const auto b_tensor = optional_input_tensors.at(0);
             const auto gamma_tensor = optional_input_tensors.at(1);
             const auto stats_tensor = optional_input_tensors.at(2);
             const auto dst_buffer = output_tensors.at(0).buffer();
-
+            bool skip_write_back =
+                output_tensors.at(0).shard_spec().value() == input_tensors.at(0).shard_spec().value();
+            printf("Updating first CB\n");
             UpdateDynamicCircularBufferAddress(program, cb_in0, *src_buffer_a);
-
-            if (stats_tensor.has_value()) {
-                UpdateDynamicCircularBufferAddress(program, cb_stats, *stats_tensor.value().buffer());
+            printf("Updating second CB\n");
+            if (!skip_write_back) {
+                UpdateDynamicCircularBufferAddress(program, cb_output_reshard, *dst_buffer);
+            } else {
+                UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
             }
-
-            UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
+            printf("Updating third CB\n");
+            if (stats_tensor.has_value()) {
+                const auto stats_buffer = optional_input_tensors.at(2).value().buffer();
+                UpdateDynamicCircularBufferAddress(program, cb_stats, *stats_buffer);
+            }
+            printf("Updated all CBs\n");
 
             auto& writer_sender_args_by_core = GetRuntimeArgs(program, writer_mcast_sender_kernels_id);
             auto& writer_receiver_args_by_core = num_none_all_to_all_workers > 0

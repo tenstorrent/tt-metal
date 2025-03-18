@@ -277,7 +277,6 @@ operation::ProgramWithCallbacks RMSAllGather::create_program(
                         program_config.block_w,
                         this->compute_kernel_config);
                 } else {
-                    printf("Running Post \n");
                     return frmsnorm_post_multi_core_sharded(
                         a,
                         gamma,
