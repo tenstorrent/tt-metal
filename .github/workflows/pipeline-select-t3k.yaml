@@ -58,6 +58,7 @@ jobs:
     with:
       build-type: ${{ inputs.build-type }}
       tracy: ${{ inputs.build-with-tracy }}
+      build-wheel: true
     secrets: inherit
   t3000-unit-tests:
     needs: build-artifact
