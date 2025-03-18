@@ -127,11 +127,83 @@ void AllReduceCreateQkvHeads::validate(const std::vector<Tensor>& input_tensors)
 
 std::vector<ttnn::TensorSpec> AllReduceCreateQkvHeads::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors[0];
-    auto shape = input_tensor.get_logical_shape();
-    auto output_tensor_layout =
-        input_tensor.get_tensor_spec().tensor_layout().with_memory_config(this->all_reduce_mem_config);
-    return {TensorSpec(shape, output_tensor_layout)};
+    // const auto& input_tensor = input_tensors[0];
+    // auto shape = input_tensor.get_logical_shape();
+    // auto output_tensor_layout =
+    //     input_tensor.get_tensor_spec().tensor_layout().with_memory_config(this->all_reduce_mem_config);
+    // return {TensorSpec(shape, output_tensor_layout)};
+
+    // copied from qkv create heads compute_output_specs
+    using namespace tt::constants;
+    const auto& input_tensor = input_tensors.at(0);
+    const auto& input_shape = input_tensor.get_logical_shape();
+
+    auto batch = input_shape[2];
+    if (this->slice_size.has_value()) {
+        batch = this->slice_size.value();
+    }
+
+    auto head_dim = this->head_dim;
+
+    const Shape q_output_shape({input_shape[0], batch, this->num_heads, head_dim});
+    const Shape v_output_shape({input_shape[0], batch, this->num_kv_heads, head_dim});
+    const Shape k_output_shape = v_output_shape;
+
+    auto num_q_heads_padded = ((this->num_heads - 1) / TILE_HEIGHT + 1) * TILE_HEIGHT;
+    auto num_kv_heads_padded = ((this->num_heads - 1) / TILE_HEIGHT + 1) * TILE_HEIGHT;
+
+    MemoryConfig q_mem_config = this->final_mem_config;
+    MemoryConfig k_mem_config = this->final_mem_config;
+    MemoryConfig v_mem_config = this->final_mem_config;
+    CoreRangeSet q_shard_grid, k_shard_grid, v_shard_grid;
+    if (!this->input_on_subcoregrids) {
+        auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
+        q_shard_grid = tt::tt_metal::num_cores_to_corerangeset(batch, core_grid, true);
+        if (this->overlap_qk_coregrid) {
+            k_shard_grid = q_shard_grid;
+        } else {
+            k_shard_grid = tt::tt_metal::num_cores_to_corerangeset(
+                CoreCoord{batch % core_grid.x, batch / core_grid.x}, batch, core_grid, true);
+        }
+        v_shard_grid = q_shard_grid;
+    } else {
+        auto input_core_grid = input_tensor.shard_spec().value().grid;
+        auto start_core_coord = input_core_grid.bounding_box().start_coord;
+        q_shard_grid =
+            tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(start_core_coord, batch, input_core_grid, true);
+        if (this->overlap_qk_coregrid) {
+            k_shard_grid = q_shard_grid;
+        } else {
+            CoreRangeSet q_plus_one_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
+                start_core_coord, batch + 1, input_core_grid, true);
+            if (!q_plus_one_grid.ranges().empty()) {
+                start_core_coord = q_plus_one_grid.ranges().back().end_coord;
+            }
+            k_shard_grid =
+                tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(start_core_coord, batch, input_core_grid, true);
+        }
+        v_shard_grid = q_shard_grid;
+    }
+    tt::tt_metal::ShardSpec q_shard_spec{q_shard_grid, {num_q_heads_padded, this->head_dim}};
+    q_mem_config.shard_spec = q_shard_spec;
+    tt::tt_metal::ShardSpec k_shard_spec{k_shard_grid, {num_kv_heads_padded, this->head_dim}};
+    k_mem_config.shard_spec = k_shard_spec;
+    tt::tt_metal::ShardSpec v_shard_spec{v_shard_grid, {num_kv_heads_padded, this->head_dim}};
+    v_mem_config.shard_spec = v_shard_spec;
+
+    return {
+        TensorSpec(
+            q_output_shape,
+            tt::tt_metal::TensorLayout(
+                input_tensor.get_dtype(), tt::tt_metal::PageConfig(input_tensor.get_layout()), q_mem_config)),
+        TensorSpec(
+            k_output_shape,
+            tt::tt_metal::TensorLayout(
+                input_tensor.get_dtype(), tt::tt_metal::PageConfig(input_tensor.get_layout()), k_mem_config)),
+        TensorSpec(
+            v_output_shape,
+            tt::tt_metal::TensorLayout(
+                input_tensor.get_dtype(), tt::tt_metal::PageConfig(input_tensor.get_layout()), v_mem_config))};
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks AllReduceCreateQkvHeads::create_program(
