@@ -52,12 +52,16 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           push: true
+          # I think BASE_IMAGE here is unused... unless it's a special docker argument?
+          # We will want to BASE_IMAGE_TAG though, because "latest" won't necessarily
+          # be the one we want to target. We instead probably want to take it in from
+          # the top-level build-artifact's dev-tag output
           build-args: |
             WHEEL_FILENAME=${{ env.WHEEL_FILENAME }}
             BASE_IMAGE=${{ inputs.base-image }}
           tags: ${{ env.TAG_NAME }}
           context: .
-          file: dockerfile/Dockerfile
+          file: dockerfile/Dockerfile.release
           target: release
   smoke-test-docker-image:
     needs: create-docker-release-image
