@@ -19,7 +19,7 @@ repos:
   rev: v2.3.1
   hooks:
     -  id: autoflake
-       args: [--remove-all-unused-imports, --in-place, --recursive]
+       args: [--remove-all-unused-imports, --in-place, --recursive, --exclude=__init__.py]
        files: ^models/  # Run only on files in the models directory
 - repo: https://github.com/BlankSpruce/gersemi
   rev: 0.16.2
