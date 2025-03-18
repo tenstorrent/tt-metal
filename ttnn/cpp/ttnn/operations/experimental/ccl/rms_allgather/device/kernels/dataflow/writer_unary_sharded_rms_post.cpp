@@ -33,19 +33,19 @@ void kernel_main() {
     tt_l1_ptr uint32_t* segment_args = (tt_l1_ptr uint32_t*)(get_arg_addr(7));
 #endif
 
-    constexpr uint32_t cb_gamma = tt::CBIndex::c_5;
+    constexpr uint32_t cb_gamma = tt::CBIndex::c_8;
 
-    constexpr uint32_t cb_out = tt::CBIndex::c_16;
-    constexpr uint32_t cb_out_resharded = tt::CBIndex::c_17;
+    constexpr uint32_t cb_out = tt::CBIndex::c_1;
+    constexpr uint32_t cb_out_resharded = tt::CBIndex::c_0;
 
     const uint32_t out_single_tile_size_bytes = get_tile_size(cb_out);
 
     if constexpr (is_all_to_all_worker) {
-        constexpr uint32_t cb_in_4 = tt::CBIndex::c_4;
+        constexpr uint32_t cb_in_4 = tt::CBIndex::c_5;
         const uint32_t scalar_c = get_arg_val<uint32_t>(0);
         generate_reduce_scaler(cb_in_4, scalar_c);
     }
-    constexpr uint32_t eps_cb_id = 3;
+    constexpr uint32_t eps_cb_id = tt::CBIndex::c_4;
     const uint32_t eps = get_arg_val<uint32_t>(2);
     generate_bcast_col_scalar(eps_cb_id, eps);
 
