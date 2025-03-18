@@ -74,9 +74,6 @@ void insert_empty_program_dispatch_preamble_cmd(ProgramCommandSequence& program_
 
 void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDeviceId sub_device_id, IDevice* device);
 
-void assemble_runtime_args_commands(
-    ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device);
-
 void initialize_worker_config_buf_mgr(WorkerConfigBufferMgr& config_buffer_mgr);
 
 void reserve_space_in_kernel_config_buffer(
