@@ -53,10 +53,10 @@ def create_multimodal_model(
     # limit length or we'll run out of space
     tt_model_args.max_seq_len = max_seq_len
     if checkpoint is None:
-        checkpoint = torch.load(tt_model_args.consolidated_weights_path, map_location="cpu", weights_only=True)
+        checkpoint = tt_model_args.load_state_dict()
     model = CrossAttentionTransformer(
         mesh_device,
-        checkpoint,
+        state_dict=checkpoint,
         weight_cache_path=tt_model_args.weight_cache_path(dtype),
         dtype=dtype,
         configuration=tt_model_args,
