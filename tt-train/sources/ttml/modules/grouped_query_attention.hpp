@@ -6,6 +6,7 @@
 
 #include "autograd/module_base.hpp"
 #include "autograd/tensor.hpp"
+#include "ops/rope_op.hpp"
 
 namespace ttml::modules {
 
@@ -14,7 +15,7 @@ struct GQAConfig {
     uint32_t num_heads{};
     uint32_t num_groups{};
     float dropout_prob{};
-    std::shared_ptr<autograd::ModuleBase> embedding{};
+    ops::RotaryEmbeddingParams rope_params;
 };
 
 class GroupedQueryAttention : public ttml::autograd::ModuleBase {
