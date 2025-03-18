@@ -144,7 +144,7 @@ protected:
         auto core_type = (config_.num_cqs >= 2 and *mesh_device_type != MeshDeviceType::TG) ? DispatchCoreType::ETH
                                                                                             : DispatchCoreType::WORKER;
         mesh_device_ = MeshDevice::create(
-            MeshDeviceConfig{.mesh_shape = get_mesh_shape(*mesh_device_type)},
+            MeshDeviceConfig(get_mesh_shape(*mesh_device_type)),
             0,
             config_.trace_region_size,
             config_.num_cqs,
