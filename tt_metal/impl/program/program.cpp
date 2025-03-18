@@ -8,6 +8,7 @@
 #include <circular_buffer_types.hpp>
 #include "common/executor.hpp"
 #include <profiler.hpp>
+#include "jit_build/build.hpp"
 #include "tt_metal/detail/kernel_cache.hpp"
 #include <persistent_kernel_cache.hpp>
 #include <memory_reporter.hpp>
@@ -1423,7 +1424,8 @@ void detail::Program_::compile(IDevice* device, bool fd_bootloader_mode) {
                     kernel->set_full_name(kernel_path_suffix);
                     build_options.set_name(kernel_path_suffix);
                     bool cache_hit = true;
-                    bool path_exists = std::filesystem::exists(build_options.path);
+                    bool path_exists =
+                        std::filesystem::exists(build_options.path + "/" + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME);
                     if (enable_persistent_kernel_cache && path_exists) {
                         if (not detail::HashLookup::inst().exists(kernel_hash)) {
                             detail::HashLookup::inst().add(kernel_hash);

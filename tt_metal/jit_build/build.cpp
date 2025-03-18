@@ -12,6 +12,7 @@
 #include "common/executor.hpp"
 #include "jit_build/genfiles.hpp"
 #include "jit_build/kernel_args.hpp"
+#include "logger.hpp"
 #include "profiler_paths.hpp"
 #include "profiler_state.hpp"
 #include <command_queue_interface.hpp>
@@ -55,6 +56,13 @@ static void build_failure(const string& target_name, const string& op, const str
     } else {
         TT_THROW("Failed to open {} failure log file {}", op, log_file);
     }
+}
+
+static void write_successful_jit_build_marker(const JitBuildState& build, const JitBuildSettings* settings) {
+    const string out_dir = (settings == nullptr) ? build.get_out_path() + "/"
+                                                 : build.get_out_path() + settings->get_full_kernel_name() + "/";
+    log_info("path {}", out_dir);
+    std::ofstream file(out_dir + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME);
 }
 
 static void check_built_dir(const std::filesystem::path& dir_path, const std::filesystem::path& git_hash_path) {
@@ -818,6 +826,7 @@ void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
     // ZoneScoped;
 
     build.build(settings);
+    write_successful_jit_build_marker(build, settings);
 }
 
 void jit_build_set(const JitBuildStateSet& build_set, const JitBuildSettings* settings) {
@@ -830,6 +839,10 @@ void jit_build_set(const JitBuildStateSet& build_set, const JitBuildSettings* se
     }
 
     sync_events(events);
+    for (size_t i = 0; i < build_set.size(); ++i) {
+        auto& build = build_set[i];
+        write_successful_jit_build_marker(*build, settings);
+    }
 }
 
 void jit_build_subset(const JitBuildStateSubset& build_subset, const JitBuildSettings* settings) {
@@ -841,6 +854,10 @@ void jit_build_subset(const JitBuildStateSubset& build_subset, const JitBuildSet
     }
 
     sync_events(events);
+    for (size_t i = 0; i < build_subset.size; ++i) {
+        auto& build = build_subset.build_ptr[i];
+        write_successful_jit_build_marker(*build, settings);
+    }
 }
 
 void launch_build_step(const std::function<void()>& build_func, std::vector<std::shared_future<void>>& events) {
