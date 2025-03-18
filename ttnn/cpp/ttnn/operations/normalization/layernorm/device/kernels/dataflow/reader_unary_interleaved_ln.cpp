@@ -90,7 +90,6 @@ void kernel_main() {
     };
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         read_in0_and_in1();
-        read_in0_and_in1();
 #if defined FUSE_GAMMA || defined FUSE_BETA
         if (ncht == 0) {
             for (uint32_t wt = 0; wt < Wt; wt += blk) {
