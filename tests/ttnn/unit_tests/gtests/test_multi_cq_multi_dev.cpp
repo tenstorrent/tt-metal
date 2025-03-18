@@ -64,7 +64,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ1) {
                 }
                 TensorSpec tensor_spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg));
                 ASSERT_EQ(buf_size_datums * datum_size_bytes, tensor_spec.compute_packed_buffer_size_bytes());
-                auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, tensor_spec);
+                auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device.get(), tensor_spec);
                 auto input_storage = tt::tt_metal::DeviceStorage{input_buffer};
                 Tensor input_tensor = Tensor(input_storage, shape, DataType::BFLOAT16, Layout::TILE);
 
@@ -76,7 +76,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ1) {
                     {host_data, host_data, host_data, host_data, host_data, host_data, host_data, host_data});
                 ttnn::record_event(device->command_queue(0), write_event);
                 ttnn::wait_for_event(device->command_queue(1), write_event);
-                auto output_tensor = dispatch_ops_to_device(device, input_tensor, ttnn::QueueId(1));
+                auto output_tensor = dispatch_ops_to_device(device.get(), input_tensor, ttnn::QueueId(1));
                 ttnn::record_event(device->command_queue(1), workload_event);
                 ttnn::wait_for_event(device->command_queue(0), workload_event);
 
@@ -132,7 +132,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ0) {
                 for (int j = 0; j < buf_size_datums; j++) {
                     host_data[j] = bfloat16(static_cast<float>(i + dev_idx));
                 }
-                auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, tensor_spec);
+                auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device.get(), tensor_spec);
                 auto input_storage = tt::tt_metal::DeviceStorage{input_buffer};
                 Tensor input_tensor = Tensor(input_storage, shape, DataType::BFLOAT16, Layout::TILE);
 
@@ -144,7 +144,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ0) {
                     {host_data, host_data, host_data, host_data, host_data, host_data, host_data, host_data});
                 ttnn::record_event(device->command_queue(1), write_event);
                 ttnn::wait_for_event(device->command_queue(0), write_event);
-                auto output_tensor = dispatch_ops_to_device(device, input_tensor, ttnn::DefaultQueueId);
+                auto output_tensor = dispatch_ops_to_device(device.get(), input_tensor, ttnn::DefaultQueueId);
                 ttnn::record_event(device->command_queue(0), workload_event);
                 ttnn::wait_for_event(device->command_queue(1), workload_event);
                 // std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -200,7 +200,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceWithCQ1Only) {
                 }
 
                 TensorSpec tensor_spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg));
-                auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, tensor_spec);
+                auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device.get(), tensor_spec);
                 auto input_storage = tt::tt_metal::DeviceStorage{input_buffer};
                 Tensor input_tensor = Tensor(input_storage, shape, DataType::BFLOAT16, Layout::TILE);
 
@@ -213,7 +213,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceWithCQ1Only) {
                     {host_data, host_data, host_data, host_data, host_data, host_data, host_data, host_data});
                 ttnn::record_event(device->command_queue(1), write_event);
                 ttnn::wait_for_event(device->command_queue(1), write_event);
-                auto output_tensor = dispatch_ops_to_device(device, input_tensor, ttnn::QueueId(1));
+                auto output_tensor = dispatch_ops_to_device(device.get(), input_tensor, ttnn::QueueId(1));
                 ttnn::record_event(device->command_queue(1), workload_event);
                 ttnn::wait_for_event(device->command_queue(1), workload_event);
                 ttnn::read_buffer(

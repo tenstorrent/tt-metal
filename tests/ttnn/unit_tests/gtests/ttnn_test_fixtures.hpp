@@ -28,7 +28,8 @@ namespace ttnn {
 
 class TTNNFixtureWithDevice : public ::testing::Test {
 protected:
-    tt::tt_metal::IDevice* device_ = nullptr;
+    tt::tt_metal::distributed::MeshDevice* device_ = nullptr;
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device_holder_;
     tt::ARCH arch_ = tt::ARCH::Invalid;
     size_t num_devices_ = 0;
 
@@ -36,10 +37,11 @@ protected:
         std::srand(0);
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
-        device_ = tt::tt_metal::CreateDevice(/*device_id=*/0);
+        device_holder_ = ttnn::open_mesh_device(/*device_id=*/0);
+        device_ = device_holder_.get();
     }
 
-    void TearDown() override { tt::tt_metal::CloseDevice(device_); }
+    void TearDown() override { device_->close(); }
 };
 
 // TODO: deduplicate the code with `TTNNFixtureWithDevice`.
@@ -59,13 +61,15 @@ protected:
                 tt::LogTest, "Ethernet Dispatch not being explicitly used. Set this configuration in Setup()");
             dispatch_core_type = DispatchCoreType::ETH;
         }
-        device_ = tt::tt_metal::CreateDevice(
-            0, 2, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, DispatchCoreConfig{dispatch_core_type});
+        device_holder_ = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(
+            0, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 2, DispatchCoreConfig{dispatch_core_type});
+        device_ = device_holder_.get();
     }
 
-    void TearDown() override { tt::tt_metal::CloseDevice(device_); }
+    void TearDown() override { device_->close(); }
 
-    tt::tt_metal::IDevice* device_;
+    tt::tt_metal::distributed::MeshDevice* device_ = nullptr;
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device_holder_;
     tt::ARCH arch_;
     size_t num_devices_;
 };
@@ -85,17 +89,21 @@ protected:
         }
         // Enable Ethernet Dispatch for Multi-CQ tests.
 
-        devs = tt::tt_metal::detail::CreateDevices(
+        devs = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(
             {0, 1, 2, 3, 4, 5, 6, 7},
-            2,
             DEFAULT_L1_SMALL_SIZE,
             DEFAULT_TRACE_REGION_SIZE,
+            2,
             DispatchCoreConfig{DispatchCoreType::ETH});
     }
 
-    void TearDown() override { tt::tt_metal::detail::CloseDevices(devs); }
+    void TearDown() override {
+        for (auto& [_, dev] : devs) {
+            dev->close();
+        }
+    }
 
-    std::map<chip_id_t, tt::tt_metal::IDevice*> devs;
+    std::map<chip_id_t, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devs;
     tt::ARCH arch_;
     size_t num_devices_;
 };

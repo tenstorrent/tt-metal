@@ -14,7 +14,7 @@
 using namespace tt;
 using namespace constants;
 
-void run_fold(tt::tt_metal::IDevice* device, const ttnn::Shape& shape) {
+void run_fold(tt::tt_metal::distributed::MeshDevice* device, const ttnn::Shape& shape) {
     ttnn::Tensor input_tensor = ttnn::random::random(shape).to_layout(ttnn::Layout::ROW_MAJOR).to_device(device);
     uint32_t stride_h = 2;
     uint32_t stride_w = 2;
@@ -24,18 +24,11 @@ void run_fold(tt::tt_metal::IDevice* device, const ttnn::Shape& shape) {
 
 int main(int argc, char** argv) {
     int device_id = 0;
-    tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+    auto device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
 
-    run_fold(device, ttnn::Shape({1, 2, 2, 2}));
-    bool pass = CloseDevice(device);
+    run_fold(device.get(), ttnn::Shape({1, 2, 2, 2}));
+    device.reset();
 
-    if (pass) {
-        log_info(LogTest, "Test Passed");
-    } else {
-        TT_THROW("Test Failed");
-    }
-
-    TT_FATAL(pass, "Error");
-
+    log_info(LogTest, "Test Passed");
     return 0;
 }
