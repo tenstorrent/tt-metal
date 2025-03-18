@@ -8,8 +8,14 @@
 
 namespace tt::tt_metal {
 
-// Si KB Prefix
+// KiB Prefix literal
 constexpr auto operator""_KB(const unsigned long long v) -> uint32_t { return 1024 * v; }
+
+// MiB prefix literal
+constexpr auto operator""_MB(const unsigned long long v) -> uint32_t { return 1024 * 1024 * v; }
+
+// GiB prefix literal
+constexpr auto operator""_GB(const unsigned long long v) -> uint32_t { return 1024 * 1024 * 1024 * v; }
 
 // Returns the size rounded up to the given alignment
 inline uint32_t round_size(uint32_t sz, uint32_t alignment) {

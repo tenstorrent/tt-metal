@@ -23,15 +23,16 @@ namespace tt::tt_metal {
 
 class HWCommandQueue : public CommandQueue {
 public:
-    HWCommandQueue(IDevice* device, uint32_t id, NOC noc_index, uint32_t completion_queue_reader_core = 0);
+    HWCommandQueue(
+        IDevice* device,
+        std::shared_ptr<DispatchArray<LaunchMessageRingBufferState>>& worker_launch_message_buffer_state,
+        uint32_t id,
+        NOC noc_index,
+        uint32_t completion_queue_reader_core = 0);
 
     ~HWCommandQueue() override;
 
     const CoreCoord& virtual_enqueue_program_dispatch_core() const override;
-    const CoreCoord& completion_queue_writer_core() const override;
-
-    volatile bool is_dprint_server_hung() override;
-    volatile bool is_noc_hung() override;
 
     void record_begin(const uint32_t tid, const std::shared_ptr<TraceDescriptor>& ctx) override;
     void record_end() override;
@@ -51,21 +52,13 @@ public:
 
     void terminate() override;
 
-    // These functions are temporarily needed since MeshCommandQueue relies on the CommandQueue object
-    uint32_t get_expected_num_workers_completed_for_sub_device(uint32_t sub_device_index) const override;
-    void set_expected_num_workers_completed_for_sub_device(uint32_t sub_device_index, uint32_t num_workers) override;
+    // This function is temporarily needed since MeshCommandQueue relies on the CommandQueue object
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) override;
 
     void enqueue_trace(const uint32_t trace_id, bool blocking) override;
     void enqueue_program(Program& program, bool blocking) override;
     void enqueue_read_buffer(
-        std::shared_ptr<Buffer>& buffer,
-        void* dst,
-        const BufferRegion& region,
-        bool blocking,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
-    void enqueue_read_buffer(
-        Buffer& buffer,
+        const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
         void* dst,
         const BufferRegion& region,
         bool blocking,
@@ -78,12 +71,6 @@ public:
     void enqueue_write_buffer(
         const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
         HostDataType src,
-        const BufferRegion& region,
-        bool blocking,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
-    void enqueue_write_buffer(
-        Buffer& buffer,
-        const void* src,
         const BufferRegion& region,
         bool blocking,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
@@ -100,15 +87,17 @@ private:
     std::shared_ptr<TraceDescriptor> trace_ctx;
     std::thread completion_queue_thread;
     SystemMemoryManager& manager;
-    std::array<tt::tt_metal::WorkerConfigBufferMgr, DispatchSettings::DISPATCH_MESSAGE_ENTRIES> config_buffer_mgr;
+
+    // Shared across all CommandQueue instances for a Device.
+    std::shared_ptr<DispatchArray<LaunchMessageRingBufferState>> worker_launch_message_buffer_state;
+
+    DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr;
     // Expected value of DISPATCH_MESSAGE_ADDR in dispatch core L1
     //  Value in L1 incremented by worker to signal completion to dispatch. Value on host is set on each enqueue program
     //  call
-    std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES> expected_num_workers_completed;
+    DispatchArray<uint32_t> expected_num_workers_completed;
 
     volatile bool exit_condition;
-    volatile bool dprint_server_hang = false;
-    volatile bool illegal_noc_txn_hang = false;
     volatile uint32_t num_entries_in_completion_q;  // issue queue writer thread increments this when an issued command
                                                     // is expected back in the completion queue
     volatile uint32_t num_completed_completion_q_reads;  // completion queue reader thread increments this after reading
@@ -119,11 +108,9 @@ private:
     // Trace capture is a fully host side operation, but it modifies the state of the wptrs above
     // To ensure that host and device are not out of sync, we reset the wptrs to their original values
     // post trace capture.
-    std::array<LaunchMessageRingBufferState, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>
-        worker_launch_message_buffer_state_reset;
-    std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES> expected_num_workers_completed_reset;
-    std::array<tt::tt_metal::WorkerConfigBufferMgr, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>
-        config_buffer_mgr_reset;
+    DispatchArray<LaunchMessageRingBufferState> worker_launch_message_buffer_state_reset;
+    DispatchArray<uint32_t> expected_num_workers_completed_reset;
+    DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_reset;
     IDevice* device_;
 
     std::condition_variable reader_thread_cv;

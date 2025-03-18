@@ -10,7 +10,7 @@
 
 namespace ttnn::operations::transformer::detail {
 
-operation::ProgramWithCallbacks joint_sdpa(
+tt::tt_metal::operation::ProgramWithCallbacks joint_sdpa(
     const Tensor& input_tensor_q,
     const Tensor& input_tensor_k,
     const Tensor& input_tensor_v,

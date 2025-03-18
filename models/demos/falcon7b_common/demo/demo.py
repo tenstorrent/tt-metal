@@ -16,12 +16,10 @@ from models.demos.falcon7b_common.tt.model_config import get_model_config
 from models.demos.falcon7b_common.tests.test_utils import (
     initialize_kv_cache,
     load_hf_model,
-    synchronize_devices,
     get_num_devices,
 )
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf, check_tokens_match
 from models.utility_functions import (
-    disable_compilation_reports,
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
     nearest_32,
@@ -155,7 +153,6 @@ def run_falcon_demo_kv(
         N_warmup_iter = {}
 
     disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     num_devices = get_num_devices(mesh_device)
     global_batch = batch_size * num_devices
@@ -197,7 +194,7 @@ def run_falcon_demo_kv(
     logger.info("Loading weights finished!")
     profiler.end(f"loading_weights")
 
-    synchronize_devices(mesh_device)
+    ttnn.synchronize_device(mesh_device)
 
     logger.info("Moving weights (single layer) to device...")
     base_url = ""
@@ -215,7 +212,7 @@ def run_falcon_demo_kv(
     )  # single layer only used for compile
     logger.info("Moved weights (single layer) to device!")
 
-    synchronize_devices(mesh_device)
+    ttnn.synchronize_device(mesh_device)
 
     logger.info("Initializing KV cache...")
     profiler.start(f"initializing_KV_cache")
@@ -252,7 +249,7 @@ def run_falcon_demo_kv(
             layer_past_len=0,
             use_cache=use_cache,
         )
-        synchronize_devices(mesh_device)
+        ttnn.synchronize_device(mesh_device)
 
         tt_prefill_input_ids.deallocate()
         if tt_prefill_attention_mask is not None:
@@ -267,7 +264,7 @@ def run_falcon_demo_kv(
 
     profiler.end("compile_prefill")
 
-    synchronize_devices(mesh_device)
+    ttnn.synchronize_device(mesh_device)
     logger.info("Finished 1st run prefill stage with compile!")
 
     ### First run decode stage with compile ###
@@ -296,7 +293,7 @@ def run_falcon_demo_kv(
             layer_past_len=kv_cache_len,
             use_cache=use_cache,
         )
-        synchronize_devices(mesh_device)
+        ttnn.synchronize_device(mesh_device)
 
         tt_decode_input_ids.deallocate()
         if tt_decode_attention_mask is not None:
@@ -306,7 +303,7 @@ def run_falcon_demo_kv(
     profiler.end("compile_decode")
 
     logger.info("Finished 1st run decode stage with compile!")
-    synchronize_devices(mesh_device)
+    ttnn.synchronize_device(mesh_device)
 
     del tt_logits
     del tt_prefill_input_ids
@@ -367,7 +364,7 @@ def run_falcon_demo_kv(
             layer_past_len=0,
             use_cache=use_cache,
         )
-        synchronize_devices(mesh_device)
+        ttnn.synchronize_device(mesh_device)
 
         if tt_prefill_attention_mask is not None:
             if isinstance(tt_prefill_attention_mask, ttnn.Tensor):
@@ -439,7 +436,7 @@ def run_falcon_demo_kv(
             layer_past_len=kv_cache_len,
             use_cache=use_cache,
         )
-        synchronize_devices(mesh_device)
+        ttnn.synchronize_device(mesh_device)
 
         logits = tt_tensors_to_torch_tensors(tt_logits, mesh_device, concat_dim=2).squeeze(1)
 

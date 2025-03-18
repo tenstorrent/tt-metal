@@ -19,10 +19,10 @@ jobs:
       matrix:
         test-group: [
           { arch: wormhole_b0, runner-label: N150 },
-          # Disabled due to https://github.com/tenstorrent/tt-metal/issues/16012
-          # { arch: wormhole_b0, runner-label: N300 },
+          { arch: wormhole_b0, runner-label: N300 },
         ]
     uses: ./.github/workflows/tt-train-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch}}
       runner-label: ${{ matrix.test-group.runner-label}}
+      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}

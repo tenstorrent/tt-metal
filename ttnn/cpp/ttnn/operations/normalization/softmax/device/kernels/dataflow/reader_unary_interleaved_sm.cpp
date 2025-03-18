@@ -15,7 +15,7 @@ void kernel_main() {
     const uint32_t Wt = get_arg_val<uint32_t>(5);
 
     constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t cb_id_in0 = 0, cb_id_in1 = 1;
+    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0, cb_id_in1 = tt::CBIndex::c_1;
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
@@ -58,7 +58,7 @@ void kernel_main() {
 
     // TODO(AP): cleanup, probably with named args/param pack/reflection.
     {
-        constexpr uint32_t cb_in_2 = 2;
+        constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
         const uint32_t reduce_scaler = get_arg_val<uint32_t>(10);
         generate_reduce_scaler(cb_in_2, reduce_scaler);
     }

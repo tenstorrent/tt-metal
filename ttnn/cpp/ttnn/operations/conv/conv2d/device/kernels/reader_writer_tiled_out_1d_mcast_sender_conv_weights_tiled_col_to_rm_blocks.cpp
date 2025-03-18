@@ -11,48 +11,50 @@ void kernel_main() {
     constexpr bool out_in_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(1);
     constexpr uint32_t cb_id_weight = get_compile_time_arg_val(2);
-
-    constexpr uint32_t num_blocks_weight_h = get_compile_time_arg_val(5);
-    constexpr uint32_t weight_block_num_tiles = get_compile_time_arg_val(6);
-    constexpr uint32_t weight_block_height_num_outer = get_compile_time_arg_val(7);
-    constexpr uint32_t weight_block_height_ntiles = get_compile_time_arg_val(8);
-    constexpr uint32_t weight_block_width_ntiles = get_compile_time_arg_val(9);
-    constexpr uint32_t weight_stride_h = get_compile_time_arg_val(10);
-    constexpr uint32_t weight_next_block_stride_h = get_compile_time_arg_val(11);
-    constexpr uint32_t weight_next_block_stride_w = get_compile_time_arg_val(12);
+    constexpr uint32_t cb_id_act_second_reader = get_compile_time_arg_val(5);
+    constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(6);
+    constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(7);
+    constexpr uint32_t num_blocks_weight_h = get_compile_time_arg_val(8);
+    constexpr uint32_t weight_block_num_tiles = get_compile_time_arg_val(9);
+    constexpr uint32_t weight_block_height_num_outer = get_compile_time_arg_val(10);
+    constexpr uint32_t weight_block_height_ntiles = get_compile_time_arg_val(11);
+    constexpr uint32_t weight_block_width_ntiles = get_compile_time_arg_val(12);
+    constexpr uint32_t weight_stride_h = get_compile_time_arg_val(13);
+    constexpr uint32_t weight_next_block_stride_h = get_compile_time_arg_val(14);
+    constexpr uint32_t weight_next_block_stride_w = get_compile_time_arg_val(15);
 
     // Bias arg. Unused if bias fusion is not enabled.
-    constexpr uint32_t bias_ntiles = get_compile_time_arg_val(13);
+    constexpr uint32_t bias_ntiles = get_compile_time_arg_val(16);
 
-    constexpr uint32_t out_next_tile_stride_h = get_compile_time_arg_val(14);
-    constexpr uint32_t out_next_tile_stride_w = get_compile_time_arg_val(15);
-    constexpr uint32_t out_next_subblock_stride_h = get_compile_time_arg_val(16);
-    constexpr uint32_t out_next_subblock_stride_w = get_compile_time_arg_val(17);
-    constexpr uint32_t out_next_block_stride_h = get_compile_time_arg_val(18);
-    constexpr uint32_t out_next_block_stride_w = get_compile_time_arg_val(12);  // == weight_next_block_stride_w
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(19);
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(20);
-    constexpr uint32_t out_subblock_tile_count = get_compile_time_arg_val(21);
-    constexpr uint32_t out_num_subblocks_h = get_compile_time_arg_val(22);
-    constexpr uint32_t out_num_subblocks_w = get_compile_time_arg_val(23);
-    constexpr uint32_t out_num_blocks_h = get_compile_time_arg_val(24);
-    constexpr uint32_t out_num_blocks_w = get_compile_time_arg_val(25);
-    constexpr uint32_t out_block_height_num_tiles = get_compile_time_arg_val(26);
-    constexpr uint32_t out_height_num_tiles = get_compile_time_arg_val(27);
-    constexpr uint32_t out_width_num_tiles = get_compile_time_arg_val(28);
+    constexpr uint32_t out_next_tile_stride_h = get_compile_time_arg_val(17);
+    constexpr uint32_t out_next_tile_stride_w = get_compile_time_arg_val(18);
+    constexpr uint32_t out_next_subblock_stride_h = get_compile_time_arg_val(19);
+    constexpr uint32_t out_next_subblock_stride_w = get_compile_time_arg_val(20);
+    constexpr uint32_t out_next_block_stride_h = get_compile_time_arg_val(21);
+    constexpr uint32_t out_next_block_stride_w = get_compile_time_arg_val(15);  // == weight_next_block_stride_w
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(22);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(23);
+    constexpr uint32_t out_subblock_tile_count = get_compile_time_arg_val(24);
+    constexpr uint32_t out_num_subblocks_h = get_compile_time_arg_val(25);
+    constexpr uint32_t out_num_subblocks_w = get_compile_time_arg_val(26);
+    constexpr uint32_t out_num_blocks_h = get_compile_time_arg_val(27);
+    constexpr uint32_t out_num_blocks_w = get_compile_time_arg_val(28);
+    constexpr uint32_t out_block_height_num_tiles = get_compile_time_arg_val(29);
+    constexpr uint32_t out_height_num_tiles = get_compile_time_arg_val(30);
+    constexpr uint32_t out_width_num_tiles = get_compile_time_arg_val(31);
 
-    constexpr uint32_t out_addr = get_compile_time_arg_val(29);
-    constexpr uint32_t output_rows_tiles = get_compile_time_arg_val(32);
+    constexpr uint32_t out_addr = get_compile_time_arg_val(32);
+    constexpr uint32_t output_rows_tiles = get_compile_time_arg_val(35);
 
     // MCAST args
-    constexpr uint32_t act_block_h_datums = get_compile_time_arg_val(33);
-    constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(34);
-    constexpr uint32_t conv_act_size_c_bytes = get_compile_time_arg_val(35);
-    constexpr uint32_t coalesced_read_bytes = get_compile_time_arg_val(36);
-    constexpr uint32_t window_outer_offset = get_compile_time_arg_val(37);
-    constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(38);
-    constexpr uint32_t act_block_h_datums_first_reader = get_compile_time_arg_val(39);
-    constexpr uint32_t act_block_h_datums_last_block = get_compile_time_arg_val(40);
+    constexpr uint32_t act_block_h_datums = get_compile_time_arg_val(36);
+    constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(37);
+    constexpr uint32_t conv_act_size_c_bytes = get_compile_time_arg_val(38);
+    constexpr uint32_t coalesced_read_bytes = get_compile_time_arg_val(39);
+    constexpr uint32_t window_outer_offset = get_compile_time_arg_val(40);
+    constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(41);
+    constexpr uint32_t act_block_h_datums_first_reader = get_compile_time_arg_val(42);
+    constexpr uint32_t act_block_h_datums_last_block = get_compile_time_arg_val(43);
 
     constexpr uint32_t act_block_h_datums_read_last_block =
         act_block_h_datums_last_block > act_block_h_datums
@@ -104,12 +106,11 @@ void kernel_main() {
     uint32_t weights_mcast_receiver_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(i));
     i += 1;
 
-    constexpr uint32_t cb_id_act_second_reader = 7;
-    constexpr uint32_t cb_id_sharded_act = 3;
     constexpr uint32_t act_block_h_datums_read = act_block_h_datums / 2;  // Extra /2 because of packed uint16 reads
+    constexpr uint32_t act_block_h_datums_first_reader_read =
+        act_block_h_datums_first_reader / 2;  // Extra /2 because of packed uint16 reads
     constexpr uint32_t act_block_num_tiles_read = act_block_num_tiles;
 
-    constexpr uint32_t cb_reader_indices = tt::CBIndex::c_4;
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
     uint32_t reader_idx = 0;
@@ -401,8 +402,7 @@ void kernel_main() {
             out_block_h_start_tile_id += out_next_block_stride_h;
             out_block_h_start_tile_id_h += out_block_height_num_tiles;
 #endif
-
-            start_reader_idx = reader_idx + act_block_h_datums_read;
+            start_reader_idx = reader_idx + act_block_h_datums_first_reader_read;
         }  // out_num_blocks_h
         out_block_w_start_tile_id += out_next_block_stride_w;
         out_block_w_start_tile_id_w += weight_block_width_ntiles;

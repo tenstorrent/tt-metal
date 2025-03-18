@@ -13,7 +13,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
-#include <tt-metalium/test_tiles.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "ttnn/any_device.hpp"
 #include "ttnn/common/queue_id.hpp"
@@ -25,7 +25,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/reflection.hpp>
+#include <tt_stl/reflection.hpp>
 #include "types.hpp"
 
 namespace tt {
@@ -144,12 +144,29 @@ public:
     // elements have to match `spec`; block float formats such as BFLOAT8_B and BFLOAT4_B require `T` equal `float`.
     //
     // The data in the buffer is copied into a tensor with an owned storage.
-    //
-    // TODO: add support for returning a tensor with borrowed storage based off the buffer.
-    // TODO: handle tilization and padding in face of sharding.
     template <typename T>
     static Tensor from_span(
         tt::stl::Span<const T> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt);
+
+    // Creates a `Tensor` with storage "borrowed" from the buffer of elements of type `T`.
+    //
+    // The primary use case for this API is to interop with Python, where `on_creation_callback` and
+    // `on_destruction_callback` are specified to be called when the tensor storage is created and destroyed (when
+    // making copies of Tensor object):
+    //
+    // py::object py_tensor = ...;
+    // auto on_creation_callback = [t = py_tensor] { t.inc_ref(); };
+    // auto on_destruction_callback = [t = py_tensor] { t.dec_ref(); };
+    //
+    // When working in C++, prefer creating owned tensors, and retaining a reference to the internal buffer, if
+    // necessary.
+    template <typename T>
+    static Tensor from_borrowed_data(
+        tt::stl::Span<T> buffer,
+        const ttnn::Shape& shape,
+        const std::function<void()>& on_creation_callback,
+        const std::function<void()>& on_destruction_callback,
+        const std::optional<Tile>& tile = std::nullopt);
 
     // Same as `from_span`, but operates on a vector instead.
     template <typename T>
@@ -158,8 +175,8 @@ public:
         return from_span(tt::stl::Span<const T>(buffer), spec, device);
     }
 
-    // Same as `from_vector`, but takes in an rvalue. No copies will be made, if the target layout is row-major, and no
-    // type conversion is needed.
+    // Same as `from_vector`, but takes in an rvalue. No copies will be made, if the target layout is row-major,
+    // physical shape matches logical shape, and no type conversion is needed.
     template <typename T>
     static Tensor from_vector(
         std::vector<T>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt);
@@ -169,8 +186,6 @@ public:
     // the `Tensor`; block float formats such as BFLOAT8_B and BFLOAT4_B require `T` equal `float`.
     //
     // If the tensor resides on a device, it will be brough back to host.
-    //
-    // TODO: handle tilization and padding in face of sharding.
     template <typename T>
     std::vector<T> to_vector() const;
 
@@ -227,19 +242,19 @@ public:
     // ======================================================================================
     // Non-Blocking Getters. Query attributes directly, without waiting for worker completion
     // ======================================================================================
-    inline const Storage& storage() const { return this->tensor_attributes->storage; };
-    inline const ttnn::Shape& logical_shape() const { return this->tensor_attributes->tensor_spec.logical_shape(); };
-    inline const ttnn::Shape& padded_shape() const { return this->tensor_attributes->tensor_spec.padded_shape(); };
-    inline DataType dtype() const { return this->tensor_attributes->tensor_spec.tensor_layout().get_data_type(); };
-    inline Layout layout() const { return this->tensor_attributes->tensor_spec.tensor_layout().get_layout(); };
-    inline const TensorSpec& tensor_spec() const { return this->tensor_attributes->tensor_spec; }
+    const Storage& storage() const { return this->tensor_attributes->storage; };
+    const ttnn::Shape& logical_shape() const { return this->tensor_attributes->tensor_spec.logical_shape(); };
+    const ttnn::Shape& padded_shape() const { return this->tensor_attributes->tensor_spec.padded_shape(); };
+    DataType dtype() const { return this->tensor_attributes->tensor_spec.tensor_layout().get_data_type(); };
+    Layout layout() const { return this->tensor_attributes->tensor_spec.tensor_layout().get_layout(); };
+    const TensorSpec& tensor_spec() const { return this->tensor_attributes->tensor_spec; }
 
     // ======================================================================================
     //                                      Setters
     // ======================================================================================
-    inline void set_storage(const Storage& storage) { this->tensor_attributes->storage = storage; }
+    void set_storage(const Storage& storage) { this->tensor_attributes->storage = storage; }
     // We intend to remove this API once we migrate all ops to compute_output_specs, and provide TensorSpec at creation
-    inline void set_tensor_spec(const TensorSpec& tensor_spec) {
+    void set_tensor_spec(const TensorSpec& tensor_spec) {
         this->tensor_attributes->tensor_spec = tensor_spec;
         this->tensor_attributes->metadata_populated = true;
     }
@@ -247,6 +262,8 @@ public:
     //                                      Extra Helper Functions
     // ======================================================================================
     StorageType storage_type() const;
+    bool is_host_tensor() const;
+    bool is_device_tensor() const;
     const ttnn::Shape strides() const;
     uint32_t volume() const;
 
@@ -322,7 +339,7 @@ public:
     std::vector<uint32_t> host_page_ordering();
 
     // Main Thread - Wait for all workers in this tensor to populate the entire tensor
-    inline void wait_for_tensor_data_populated() const {
+    void wait_for_tensor_data_populated() const {
         // Stall until all the workers for this tensor
         // have populated the full tensor
         while (this->tensor_attributes->num_workers_completed < this->tensor_attributes->num_shards_to_be_populated) {
@@ -330,7 +347,7 @@ public:
     }
 
     // Main Thread - Wait for the first worker in this tensor to populate the global metadata fields
-    inline void wait_for_tensor_metadata_populated() const {
+    void wait_for_tensor_metadata_populated() const {
         // First worker is responsible for updating all metadata fields
         // Stall until this worker is done
         while (not this->tensor_attributes->metadata_populated) {

@@ -359,5 +359,8 @@ void kernel_main() {
         }
     }
 
+    for (uint32_t i = 0; i < eth_l1_mem::address_map::MAX_NUM_CONCURRENT_TRANSACTIONS; i++) {
+        ASSERT(erisc_info->channels[i].bytes_sent == 0);
+    }
     WAYPOINT("DONE");
 }

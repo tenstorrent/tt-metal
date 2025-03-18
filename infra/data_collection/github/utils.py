@@ -11,7 +11,7 @@ from typing import Optional, Union
 
 from loguru import logger
 
-from infra.data_collection.models import InfraErrorV1
+from infra.data_collection.models import InfraErrorV1, TestErrorV1
 from infra.data_collection.pydantic_models import CompleteBenchmarkRun
 
 
@@ -134,10 +134,24 @@ def get_failure_signature_and_description_from_annotations(github_job, github_jo
     if job_id in github_job_id_to_annotations:
         annotation_info = github_job_id_to_annotations[job_id]
 
-        # Iterate over list of job annotation's until first failure-level annotation message
-        failure_description = next((d["message"] for d in annotation_info if d["annotation_level"] == "failure"), None)
-        if failure_description:
-            failure_signature = get_job_failure_signature_(github_job, failure_description)
+        for _annot in annotation_info:
+            if _annot["annotation_level"] == "failure":
+                # Unit test failure: a failure exists where the annotation path is not .github
+                if _annot["path"] != ".github":
+                    failure_description = _annot["path"]
+                    if ".py" in failure_description:
+                        failure_signature = str(TestErrorV1.PY_TEST_FAILURE)
+                    elif ".cpp" in failure_description:
+                        failure_signature = str(TestErrorV1.CPP_TEST_FAILURE)
+                    else:
+                        failure_signature = str(TestErrorV1.UNKNOWN_TEST_FAILURE)
+                    return failure_signature, failure_description
+                else:
+                    # Infrastructure error
+                    failure_description = _annot.get("message")
+                    if failure_description:
+                        failure_signature = get_job_failure_signature_(github_job, failure_description)
+                        return failure_signature, failure_description
     return failure_signature, failure_description
 
 
@@ -178,7 +192,9 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations):
 
     name = github_job["name"]
 
-    assert github_job["status"] == "completed", f"{github_job_id} is not completed"
+    if github_job["status"] != "completed":
+        logger.warning(f"{github_job_id} is not completed, skipping this job")
+        return None
 
     # Best effort card type getting
 
@@ -232,7 +248,9 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations):
 
     job_end_ts = github_job["completed_at"]
 
-    job_success = github_job["conclusion"] == "success"
+    # skipped jobs are considered passing jobs (nothing was run)
+    job_success = github_job["conclusion"] in ["success", "skipped"]
+    job_status = github_job["conclusion"]
 
     is_build_job = "build" in name or "build" in labels
 
@@ -259,6 +277,7 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations):
         "job_start_ts": job_start_ts,
         "job_end_ts": job_end_ts,
         "job_success": job_success,
+        "job_status": job_status,
         "is_build_job": is_build_job,
         "job_matrix_config": job_matrix_config,
         "docker_image": docker_image,
@@ -269,9 +288,10 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations):
 
 
 def get_job_rows_from_github_info(github_pipeline_json, github_jobs_json, github_job_id_to_annotations):
-    return list(
+    job_rows = list(
         map(lambda job: get_job_row_from_github_job(job, github_job_id_to_annotations), github_jobs_json["jobs"])
     )
+    return [x for x in job_rows if x is not None]
 
 
 def get_github_partial_benchmark_json_filenames():

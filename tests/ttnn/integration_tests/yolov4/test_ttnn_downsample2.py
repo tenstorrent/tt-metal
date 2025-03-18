@@ -35,16 +35,10 @@ def test_down2(device, reset_seeds, model_location_generator):
     torch_input = torch.randn((1, 160, 160, 64), dtype=torch.bfloat16)
     ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16)
     torch_input = torch_input.permute(0, 3, 1, 2).float()
+
     torch_model = DownSample2()
-
-    new_state_dict = {}
     ds_state_dict = {k: v for k, v in ttnn_model.torch_model.items() if (k.startswith("down2."))}
-
-    keys = [name for name, parameter in torch_model.state_dict().items()]
-    values = [parameter for name, parameter in ds_state_dict.items()]
-    for i in range(len(keys)):
-        new_state_dict[keys[i]] = values[i]
-
+    new_state_dict = dict(zip(torch_model.state_dict().keys(), ds_state_dict.values()))
     torch_model.load_state_dict(new_state_dict)
     torch_model.eval()
 

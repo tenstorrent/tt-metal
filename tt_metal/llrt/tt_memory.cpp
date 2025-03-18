@@ -100,4 +100,10 @@ void memory::process_spans(
     }
 }
 
+void memory::update_spans(std::function<void(uint64_t& addr)>& callback) {
+    for (auto& span : link_spans_) {
+        callback(span.addr);
+    }
+}
+
 }  // namespace ll_api

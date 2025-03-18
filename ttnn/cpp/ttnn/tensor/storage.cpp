@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/tensor/storage.hpp"
+#include "tt-metalium/mesh_coord.hpp"
 
 namespace tt::tt_metal {
 
@@ -26,20 +27,19 @@ MultiDeviceStorage::MultiDeviceStorage(
     // tensor spec.
     //
     // For now, this code ensures MeshBuffer backed tensors are compatible with the rest of the ops infra.
-    const auto [num_rows, num_cols] = mesh_buffer->device()->shape();
+    const auto& mesh_shape = mesh_buffer->device()->shape();
+    distributed::MeshCoordinateRange range(mesh_shape);
 
-    ordered_device_ids.reserve(num_rows * num_cols);
-    buffers.reserve(num_rows * num_cols);
-    specs.reserve(num_rows * num_cols);
+    ordered_device_ids.reserve(mesh_shape.mesh_size());
+    buffers.reserve(mesh_shape.mesh_size());
+    specs.reserve(mesh_shape.mesh_size());
 
-    for (int row = 0; row < num_rows; ++row) {
-        for (int col = 0; col < num_cols; ++col) {
-            auto buffer = mesh_buffer->get_device_buffer(distributed::Coordinate{row, col});
-            const int device_id = buffer->device()->id();
-            ordered_device_ids.push_back(device_id);
-            buffers.emplace(device_id, std::move(buffer));
-            specs.emplace(device_id, tensor_spec);
-        }
+    for (const auto& coord : range) {
+        auto buffer = mesh_buffer->get_device_buffer(coord);
+        const int device_id = buffer->device()->id();
+        ordered_device_ids.push_back(device_id);
+        buffers.emplace(device_id, std::move(buffer));
+        specs.emplace(device_id, tensor_spec);
     }
 }
 

@@ -48,6 +48,18 @@ ttnn::Tensor ExecuteUntilize::invoke(
         input_tensor.get_dtype() ==
         DataType::UINT32;  // MT: Currently only uint32 is moved to DST directly, fp32 is converted to fp16b
 
+    auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t output_single_tile_size = input_single_tile_size;
+
+    uint32_t num_tiles_per_row = input_tensor.get_padded_shape()[-1] / tt::constants::TILE_WIDTH;
+    uint32_t num_tiles_per_col = input_tensor.get_padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+
+    bool enough_space_width =
+        is_enough_space(input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_col);
+    bool enough_space_height =
+        is_enough_space(input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
+
     auto base_untilize = [=](const ttnn::Tensor& input_tensor) {
         return operation::run(
             Untilize{
@@ -55,7 +67,9 @@ ttnn::Tensor ExecuteUntilize::invoke(
                 use_multicore,
                 use_pack_untilize,
                 fp32_dest_acc_en,
-                sub_core_grids},
+                sub_core_grids,
+                enough_space_width,
+                enough_space_height},
             {input_tensor},
             {},
             {},
@@ -63,15 +77,6 @@ ttnn::Tensor ExecuteUntilize::invoke(
     };
 
     return build_ndiml_untilize(base_untilize)(input_tensor);
-}
-
-ttnn::Tensor ExecuteUntilize::invoke(
-    const ttnn::Tensor& input_tensor,
-    const std::optional<MemoryConfig>& memory_config,
-    bool use_multicore,
-    bool use_pack_untilize,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    return invoke(DefaultQueueId, input_tensor, memory_config, use_multicore, use_pack_untilize, sub_core_grids);
 }
 
 }  // namespace ttnn::operations::data_movement

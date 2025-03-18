@@ -11,7 +11,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include <tt-metalium/device_impl.hpp>
-#include <tt-metalium/type_name.hpp>
+#include <tt_stl/type_name.hpp>
 
 namespace tt::tt_metal {
 
@@ -70,7 +70,6 @@ Tensors run_with_autoformat(
     const OptionalConstTensors& optional_input_tensors = {},
     const OptionalTensors& optional_output_tensors = {},
     const float pad_value = 0,
-    const bool pad_c = false,
     ttnn::QueueId cq_id = ttnn::DefaultQueueId);
 
 template <typename ConcreteOperation>
@@ -80,12 +79,11 @@ inline auto run_with_autoformat(
     const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
     const std::vector<std::optional<Tensor>>& optional_output_tensors = {},
     const float pad_value = 0,
-    const bool pad_c = false,
     ttnn::QueueId cq_id = ttnn::DefaultQueueId) -> Tensors {
     using OutputTensors = ProgramOutputTensors<ConcreteOperation>;
     auto operation = DeviceOperation<Tensors>(concrete_op);
     return run_with_autoformat(
-        std::move(operation), input_tensors, optional_input_tensors, optional_output_tensors, pad_value, pad_c, cq_id);
+        std::move(operation), input_tensors, optional_input_tensors, optional_output_tensors, pad_value, cq_id);
 }
 
 Tensors run_with_autoformat(
@@ -97,6 +95,7 @@ Tensors run_with_autoformat(
     const std::vector<std::optional<FormatParams>>& optional_input_formatting = {},
     const OptionalTensors& optional_output_tensors = {},
     ttnn::QueueId cq_id = ttnn::DefaultQueueId);
+
 template <typename ConcreteOperation>
 inline auto run_with_autoformat(
     ConcreteOperation&& concrete_op,
@@ -126,8 +125,7 @@ __attribute__((noinline)) void launch_op_func(
     const Tensors input_tensors,
     OutputType& output_tensors,
     const OptionalConstTensors optional_input_tensors = {},
-    const OptionalTensors optional_output_tensors = {},
-    bool enable_autoformat_device = true);
+    const OptionalTensors optional_output_tensors = {});
 
 /*
  */
@@ -137,16 +135,14 @@ void launch_op(
     const Tensors input_tensors,
     OutputType& output_tensors,
     const OptionalConstTensors optional_input_tensors = {},
-    const OptionalTensors optional_output_tensors = {},
-    bool enable_autoformat_device = true) {
+    const OptionalTensors optional_output_tensors = {}) {
     using FuncType = std::function<OutputType(const Tensors&, const OptionalConstTensors&, const OptionalTensors&)>;
     launch_op_func(
         FuncType(std::forward<F>(op_func)),
         input_tensors,
         output_tensors,
         optional_input_tensors,
-        optional_output_tensors,
-        enable_autoformat_device);
+        optional_output_tensors);
 }
 
 void launch_with_autoformat(
@@ -157,9 +153,7 @@ void launch_with_autoformat(
     const OptionalTensors& optional_output_tensors = {});
 
 std::vector<IDevice*> get_workers_for_op_output(
-    const std::vector<Tensor>& inputs,
-    const std::vector<std::optional<const Tensor>>& optional_inputs = {},
-    bool enable_autoformat_device = true);
+    const std::vector<Tensor>& inputs, const std::vector<std::optional<const Tensor>>& optional_inputs = {});
 
 namespace detail {
 IDevice* get_device(const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors = {});

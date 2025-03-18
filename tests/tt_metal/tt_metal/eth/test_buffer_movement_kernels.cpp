@@ -40,7 +40,7 @@ struct BankedConfig {
 namespace unit_tests::erisc::kernels {
 
 bool chip_to_chip_dram_buffer_transfer(
-    DispatchFixture* fixture,
+    tt_metal::DispatchFixture* fixture,
     tt_metal::IDevice* sender_device,
     tt_metal::IDevice* receiver_device,
     const CoreCoord& eth_sender_core,
@@ -171,7 +171,7 @@ bool chip_to_chip_dram_buffer_transfer(
 }
 
 bool chip_to_chip_interleaved_buffer_transfer(
-    DispatchFixture* fixture,
+    tt_metal::DispatchFixture* fixture,
     tt_metal::IDevice* sender_device,
     tt_metal::IDevice* receiver_device,
     const CoreCoord& eth_sender_core,
@@ -210,7 +210,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
         .page_size = cfg.page_size_bytes,
         .buffer_type = cfg.output_buffer_type};
     auto input_buffer = CreateBuffer(sender_config);
-    bool input_is_dram = cfg.input_buffer_type == BufferType::DRAM;
+    bool input_is_dram = cfg.input_buffer_type == tt_metal::BufferType::DRAM;
 
     fixture->WriteBuffer(sender_device, input_buffer, input_packed);
 
@@ -244,7 +244,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
     tt_metal::Program receiver_program = tt_metal::Program();
 
     auto output_buffer = CreateBuffer(receiver_config);
-    bool output_is_dram = cfg.output_buffer_type == BufferType::DRAM;
+    bool output_is_dram = cfg.output_buffer_type == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> all_zeros(cfg.size_bytes / sizeof(uint32_t), 0);
 
     tt_metal::detail::WriteToBuffer(output_buffer, all_zeros);
@@ -300,11 +300,19 @@ bool chip_to_chip_interleaved_buffer_transfer(
 
 }  // namespace unit_tests::erisc::kernels
 
-TEST_F(N300DeviceFixture, ActiveEthKernelsSendDramBufferChip0ToChip1) {
+namespace tt::tt_metal {
+
+TEST_F(TwoDeviceFixture, ActiveEthKernelsSendDramBufferChip0ToChip1) {
+    if (arch_ == ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "See GH Issue #18384";
+    }
     const auto& sender_device = devices_.at(0);
     const auto& receiver_device = devices_.at(1);
 
     for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
+        if (not tt::Cluster::instance().is_ethernet_link_up(sender_device->id(), sender_eth_core)) {
+            continue;
+        }
         CoreCoord receiver_eth_core = std::get<1>(sender_device->get_connected_ethernet_core(sender_eth_core));
 
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
@@ -338,11 +346,17 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsSendDramBufferChip0ToChip1) {
     }
 }
 
-TEST_F(N300DeviceFixture, ActiveEthKernelsSendDramBufferChip1ToChip0) {
+TEST_F(TwoDeviceFixture, ActiveEthKernelsSendDramBufferChip1ToChip0) {
+    if (arch_ == ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "See GH Issue #18384";
+    }
     const auto& sender_device = devices_.at(1);
     const auto& receiver_device = devices_.at(0);
 
     for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
+        if (not tt::Cluster::instance().is_ethernet_link_up(sender_device->id(), sender_eth_core)) {
+            continue;
+        }
         CoreCoord receiver_eth_core = std::get<1>(sender_device->get_connected_ethernet_core(sender_eth_core));
 
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
@@ -452,6 +466,9 @@ TEST_F(DeviceFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips) {
                 continue;
             }
             for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
+                if (not tt::Cluster::instance().is_ethernet_link_up(sender_device->id(), sender_eth_core)) {
+                    continue;
+                }
                 auto [device_id, receiver_eth_core] = sender_device->get_connected_ethernet_core(sender_eth_core);
                 if (receiver_device->id() != device_id) {
                     continue;
@@ -515,12 +532,18 @@ TEST_F(DeviceFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips) {
 }
 
 TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsSendDramBufferAllConnectedChips) {
+    if (arch_ == ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "See GH Issue #18384";
+    }
     for (const auto& sender_device : devices_) {
         for (const auto& receiver_device : devices_) {
             if (sender_device->id() >= receiver_device->id()) {
                 continue;
             }
             for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
+                if (not tt::Cluster::instance().is_ethernet_link_up(sender_device->id(), sender_eth_core)) {
+                    continue;
+                }
                 auto [device_id, receiver_eth_core] = sender_device->get_connected_ethernet_core(sender_eth_core);
                 if (receiver_device->id() != device_id) {
                     continue;
@@ -574,6 +597,9 @@ TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBuf
                 continue;
             }
             for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
+                if (not tt::Cluster::instance().is_ethernet_link_up(sender_device->id(), sender_eth_core)) {
+                    continue;
+                }
                 auto [device_id, receiver_eth_core] = sender_device->get_connected_ethernet_core(sender_eth_core);
                 if (receiver_device->id() != device_id) {
                     continue;
@@ -635,3 +661,5 @@ TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBuf
         }
     }
 }
+
+}  // namespace tt::tt_metal

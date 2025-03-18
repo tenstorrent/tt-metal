@@ -8,6 +8,8 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
 
+namespace tt::tt_metal {
+
 using std::vector;
 using namespace tt;
 
@@ -61,7 +63,8 @@ inline std::vector<uint32_t> gold_standard_flatten(std::vector<uint32_t> src_vec
     return expected_dst_vec;
 }
 
-bool flatten(DispatchFixture* fixture, tt_metal::IDevice* device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5) {
+bool flatten(
+    tt_metal::DispatchFixture* fixture, tt_metal::IDevice* device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5) {
     bool pass = true;
 
     tt_metal::Program program = tt_metal::CreateProgram();
@@ -173,11 +176,11 @@ bool flatten(DispatchFixture* fixture, tt_metal::IDevice* device, uint32_t num_t
     return pass;
 }
 
-bool flatten_stress(IDevice* device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5) {
+bool flatten_stress(tt_metal::IDevice* device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5) {
     // Test Simulating Program Caching with Async Command Queues
     bool pass = true;
     // Create a program used across all loops
-    Program program = CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram();
 
     CoreCoord core = {0, 0};
 
@@ -189,19 +192,23 @@ bool flatten_stress(IDevice* device, uint32_t num_tiles_r = 5, uint32_t num_tile
 
     uint32_t dram_buffer_size = single_tile_size * num_tiles * 32;
 
-    InterleavedBufferConfig dram_config{
-        .device = device, .size = dram_buffer_size, .page_size = dram_buffer_size, .buffer_type = BufferType::DRAM};
+    tt_metal::InterleavedBufferConfig dram_config{
+        .device = device,
+        .size = dram_buffer_size,
+        .page_size = dram_buffer_size,
+        .buffer_type = tt_metal::BufferType::DRAM};
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 8;
-    CircularBufferConfig cb_src0_config =
-        CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
+    tt_metal::CircularBufferConfig cb_src0_config =
+        tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, single_tile_size);
     auto cb_src0 = CreateCircularBuffer(program, core, cb_src0_config);
 
     uint32_t ouput_cb_index = 16;
     uint32_t num_output_tiles = 1;
-    CircularBufferConfig cb_output_config =
-        CircularBufferConfig(num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
+    tt_metal::CircularBufferConfig cb_output_config =
+        tt_metal::CircularBufferConfig(
+            num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(ouput_cb_index, single_tile_size);
     auto cb_output = CreateCircularBuffer(program, core, cb_output_config);
 
@@ -209,13 +216,15 @@ bool flatten_stress(IDevice* device, uint32_t num_tiles_r = 5, uint32_t num_tile
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/flatten.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto unary_writer_kernel = CreateKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     vector<uint32_t> compute_kernel_args = {num_tiles * 32};
 
@@ -223,7 +232,7 @@ bool flatten_stress(IDevice* device, uint32_t num_tiles_r = 5, uint32_t num_tile
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
         core,
-        ComputeConfig{.compile_args = compute_kernel_args});
+        tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
 
     // Inside the loop, run async runtime functions
     for (int i = 0; i < 1000; i++) {
@@ -238,15 +247,15 @@ bool flatten_stress(IDevice* device, uint32_t num_tiles_r = 5, uint32_t num_tile
 
         std::vector<uint32_t> golden = gold_standard_flatten(*src_vec, {num_tiles_r * 32, num_tiles_c * 32});
         // Set the runtime args asynchronously
-        std::shared_ptr<RuntimeArgs> writer_runtime_args = std::make_shared<RuntimeArgs>();
-        std::shared_ptr<RuntimeArgs> compute_runtime_args = std::make_shared<RuntimeArgs>();
+        std::shared_ptr<tt_metal::RuntimeArgs> writer_runtime_args = std::make_shared<tt_metal::RuntimeArgs>();
+        std::shared_ptr<tt_metal::RuntimeArgs> compute_runtime_args = std::make_shared<tt_metal::RuntimeArgs>();
         *compute_runtime_args = {
             src_dram_buffer.get(), (uint32_t)0, num_tiles_r, num_tiles_c, num_bytes_per_tensor_row};
         *writer_runtime_args = {dst_dram_buffer.get(), (uint32_t)0, num_tiles * 32};
 
-        SetRuntimeArgs(device, detail::GetKernel(program, flatten_kernel), core, compute_runtime_args);
+        SetRuntimeArgs(device, tt_metal::detail::GetKernel(program, flatten_kernel), core, compute_runtime_args);
 
-        SetRuntimeArgs(device, detail::GetKernel(program, unary_writer_kernel), core, writer_runtime_args);
+        SetRuntimeArgs(device, tt_metal::detail::GetKernel(program, unary_writer_kernel), core, writer_runtime_args);
         // Async write input
         EnqueueWriteBuffer(device->command_queue(), src_dram_buffer, src_vec, false);
         // Share ownership of buffer with program
@@ -299,3 +308,5 @@ TEST_F(DispatchFixture, TensixFlatten) {
         ASSERT_TRUE(test_flatten::flatten(this, this->devices_.at(id), num_tiles_r, num_tiles_c));
     }
 }
+
+}  // namespace tt::tt_metal

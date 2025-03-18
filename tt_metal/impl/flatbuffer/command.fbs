@@ -1,6 +1,7 @@
 // Define schema for tracing host API calls, called Commands in this context.
 include "flatbuffer/buffer_types.fbs";
 include "flatbuffer/program_types.fbs";
+include "flatbuffer/base_types.fbs";
 
 namespace tt.tt_metal.flatbuffer;
 
@@ -28,14 +29,25 @@ table ReleaseTraceCommand {
   tid: int; // Pointer to trace data.
 }
 
-table CreateBufferCommand {
+table BufferCreateCommand {
   global_id: uint32;
-  config: InterleavedBufferConfig; // Later grow to union for Sharded.
-  address: uint32; // Optional for pre-allocated buffers.
+  device_id: int; // Reference to IDevice *device;
+  address: Uint32Optional; // Optional for pre-allocated buffers.
+  size: int;
+  page_size: int;
+  buffer_type: BufferType;
+  buffer_layout: TensorMemoryLayout;
+  shard_parameters: ShardSpecBuffer;
+  bottom_up: BoolOptional;
+  sub_device_id: Uint8Optional;
 }
 
-table DeallocateBufferCommand {
+table BufferDeallocateCommand {
   global_id: uint32;   // Reference to Buffer to be deallocated
+}
+
+table BufferDeleteCommand {
+  global_id: uint32;   // Reference to Buffer to be deleted
 }
 
 table EnqueueWriteBufferCommand {
@@ -56,7 +68,7 @@ table FinishCommand {
   sub_device_ids: [ubyte];    // array of uint8 values representing SubDeviceId::Id
 }
 
-table CreateProgramCommand {
+table ProgramConstructorCommand {
   global_id: uint32;
 }
 
@@ -79,6 +91,13 @@ table SetRuntimeArgsUint32Command {
   kernel_global_id: uint32;   // Reference to Kernel
   core_spec: CoreSpec;
   args: [uint32];             // Arguments to be passed to kernel
+}
+
+table SetRuntimeArgsUint32VecPerCoreCommand {
+  program_global_id: uint32;  // Reference to Program
+  kernel_global_id: uint32;   // Reference to Kernel
+  core_spec: [CoreCoord];
+  args: [UInt32Vector];       // vector of vector of uint32_t
 }
 
 table SetRuntimeArgsCommand {
@@ -106,15 +125,17 @@ union CommandType {
   EnqueueTraceCommand,
   LoadTraceCommand,
   ReleaseTraceCommand,
-  CreateBufferCommand,
-  DeallocateBufferCommand,
+  BufferCreateCommand,
+  BufferDeallocateCommand,
+  BufferDeleteCommand,
   EnqueueWriteBufferCommand,
   EnqueueReadBufferCommand,
   FinishCommand,
-  CreateProgramCommand,
+  ProgramConstructorCommand,
   EnqueueProgramCommand,
   CreateKernelCommand,
   SetRuntimeArgsUint32Command,
+  SetRuntimeArgsUint32VecPerCoreCommand,
   SetRuntimeArgsCommand,
   CreateCircularBufferCommand,
   LightMetalCompareCommand,

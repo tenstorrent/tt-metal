@@ -13,9 +13,10 @@
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 
-using namespace tt;
 namespace ttnn {
 namespace operations::conv {
+
+using namespace tt;
 using sliding_window::ParallelConfig;
 using sliding_window::SlidingWindowConfig;
 
@@ -34,7 +35,7 @@ Tensor _transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor,
         auto kernel_height = in_w_shape[2];
         auto kernel_width = in_w_shape[3];
         ttnn::Shape output_shape{out_channels, in_channels, kernel_height, kernel_width};
-        auto output_buffer = owned_buffer::create<T>(output_shape.volume());
+        auto output_buffer = tt::tt_metal::owned_buffer::create<T>(output_shape.volume());
 
         for (auto out_channels_index = 0; out_channels_index < out_channels; out_channels_index++) {
             auto output_weight_out_channel_base_idx = out_channels_index * in_channels * kernel_height * kernel_width;
@@ -64,16 +65,17 @@ Tensor _transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor,
                 }
             }
         }
-        return Tensor(std::move(OwnedStorage{std::move(output_buffer)}), output_shape, dtype, Layout::ROW_MAJOR);
+        return Tensor(
+            std::move(tt::tt_metal::OwnedStorage{std::move(output_buffer)}), output_shape, dtype, Layout::ROW_MAJOR);
     };
     auto convert_tensor = [&compute](const auto& conv_weight_tensor) {
         return std::visit(
             [&compute](auto&& storage) -> Tensor {
                 using StorageType = std::decay_t<decltype(storage)>;
-                if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
-                    return compute(owned_buffer::get_as<T>(storage.buffer));
-                } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
-                    return compute(borrowed_buffer::get_as<T>(storage.buffer));
+                if constexpr (std::is_same_v<StorageType, tt::tt_metal::OwnedStorage>) {
+                    return compute(tt::tt_metal::owned_buffer::get_as<T>(storage.buffer));
+                } else if constexpr (std::is_same_v<StorageType, tt::tt_metal::BorrowedStorage>) {
+                    return compute(tt::tt_metal::borrowed_buffer::get_as<T>(storage.buffer));
                 } else {
                     TT_THROW("Unsupported storage type");
                 }
@@ -202,26 +204,25 @@ Result conv_transpose2d(
     }
 
     // Call Halo Transpose
-    auto [input_tensor_post_tm, parallel_config, output_parallel_config, use_non_tile_height] =
-        shard_or_reshard_tensor_if_required(
-            device,
-            input_tensor,
-            conv_config,
-            batch_size,
-            output_height,
-            output_width,
-            in_channels,
-            out_channels,
-            mm_conv,
-            auto_shard);
+    auto [input_tensor_post_tm, parallel_config, output_parallel_config] = shard_or_reshard_tensor_if_required(
+        device,
+        input_tensor,
+        conv_config,
+        batch_size,
+        output_height,
+        output_width,
+        in_channels,
+        out_channels,
+        mm_conv,
+        auto_shard);
 
-    uint32_t round_up_size = !use_non_tile_height ? tt::constants::TILE_HEIGHT : 1;
+    uint32_t round_up_size = tt::constants::TILE_HEIGHT;
 
     Tensor halo_output;
     if (!mm_conv) {
         sliding_window_config.num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
         sliding_window_config.core_range_set = input_tensor_post_tm.memory_config().shard_spec.value().grid;
-        sliding_window_config.snap_to_tile = !use_non_tile_height;
+        sliding_window_config.snap_to_tile = true;
 
         halo_output = ttnn::halo(
             DefaultQueueId,
@@ -337,7 +338,7 @@ Result conv_transpose2d(
         out_channels,
         groups,
         conv_config.output_layout == Layout::ROW_MAJOR,
-        conv_config.activation == "relu",
+        conv_config.activation,
         opt_conv_op_parallel_config,
         opt_conv_op_block_config,
         conv_out_memory_config,

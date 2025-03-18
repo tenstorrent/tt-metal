@@ -9,23 +9,9 @@ on:
       runner-label:
         required: true
         type: string
-      timeout:
-        required: false
-        type: number
-        default: 20
-  workflow_dispatch:
-    inputs:
-      arch:
+      docker-image:
         required: true
-        type: choice
-        options:
-          - wormhole_b0
-      runner-label:
-        required: true
-        type: choice
-        options:
-          - N150
-          - N300
+        type: string
       timeout:
         required: false
         type: number
@@ -42,39 +28,59 @@ jobs:
           {name: tt-train, cmd: ctest --no-tests=error --output-on-failure},
         ]
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
-    env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ inputs.arch }}
-      LOGURU_LEVEL: INFO
-      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-      TEST_DATA_DIR: ${{ github.workspace }}/data
-      ENABLE_CI_ONLY_TT_TRAIN_TESTS: 1
     runs-on:
       - ${{ inputs.runner-label }}
       - cloud-virtual-machine
       - in-service
+    container:
+      image: ${{ inputs.docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        TEST_DATA_DIR: /work/data
+        ENABLE_CI_ONLY_TT_TRAIN_TESTS: 1
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
-      - name: Set up dynamic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - uses: ./.github/actions/prepare-metal-run
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
+      - uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: TTMetal_build_any
+          path: docker-job
+      - name: Extract files
+        run: tar -xvf ttm_any.tar
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-          source ${{ github.workspace }}/python_env/bin/activate
-          export PYTHONPATH=$TT_METAL_HOME
-          cd $TT_METAL_HOME
           cp ./build/tt-train/3rd_party/wandb-cpp/libwandbcpp.so build/lib/
-          find ./build -type f -name "*.tcl" -o -name "*.cmake" -exec sed -i "s|/home/ubuntu/[^/]*/_work/tt-metal/tt-metal/build_Release|${TT_METAL_HOME}/build|g" {} +
-          cd $TT_METAL_HOME/build/tt-train
+          cd /work/build/tt-train
           ldd tests/ttml_tests || true
           ${{ matrix.test-group.cmd }}
+
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: U07ASPTGJTS # Denys
-      - name: Generate system logs on failure
-        uses: ./.github/actions/generate-system-logs
-        if: ${{ failure() }}
+
+      - name: Cleanup
+        if: always()
+        run: |
+          # We are forced to checkout the repo into a subdir of the host's workdir; this pollutes the host
+          # with root-owned files.  Be sure to clean up after ourselves in case we're on a non-ephemeral runner.
+          echo "pre rm"
+          ls -al /__w/tt-metal/tt-metal
+          rm -rf /__w/tt-metal/tt-metal/docker-job
+          echo "post rm"
+          ls -al /__w/tt-metal/tt-metal

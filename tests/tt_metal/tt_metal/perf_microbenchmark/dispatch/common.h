@@ -10,12 +10,14 @@
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/cq_commands.hpp>
 #include "noc/noc_parameters.h"
+#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 
 #include <tt-metalium/hal.hpp>
 #include "llrt.hpp"
 #include <tt-metalium/tt_align.hpp>
+
+using namespace tt::tt_metal;  // test only
 
 extern bool debug_g;
 extern bool use_coherent_data_g;
@@ -119,8 +121,9 @@ DeviceData::DeviceData(
     this->amt_written = 0;
 
     const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device->id());
-    const std::vector<CoreCoord>& pcie_cores = soc_d.get_pcie_cores();
-    for (CoreCoord core : pcie_cores) {
+    const std::vector<tt::umd::CoreCoord>& pcie_cores = soc_d.get_cores(CoreType::PCIE, soc_d.get_umd_coord_system());
+    for (const CoreCoord& core_coord : pcie_cores) {
+        CoreCoord core = {core_coord.x, core_coord.y};
         // TODO: make this all work w/ phys coords
         // this is really annoying
         // the PCIE phys core conflicts w/ worker logical cores
@@ -563,7 +566,8 @@ void configure_kernel_variant(
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = my_noc_index,
             .compile_args = compile_args,
-            .defines = defines});
+            .defines = defines,
+            .opt_level = KernelBuildOptLevel::Os});
 }
 
 // Specific to this test. This test doesn't use Buffers, and for Storage cores in L1 that have 2 banks, they are

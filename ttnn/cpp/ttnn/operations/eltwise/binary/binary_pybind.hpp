@@ -1631,7 +1631,11 @@ void py_module(py::module& module) {
         R"doc(Computes atan2 :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor}_i = \arctan\left(\frac{\mathrm{input\_tensor\_a}_i}{\mathrm{input\_tensor\_b}_i}\right)
         )doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B)doc",
+        R"doc(2, 3, 4)doc",
+        R"doc(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device))doc",
+        R"doc(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device))doc",
+        R"doc(Input arguments for the atan2 function are in the format (y, x))doc");
 
     detail::bind_binary_operation(
         module,
@@ -1825,7 +1829,9 @@ void py_module(py::module& module) {
         R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_power(
-        module, ttnn::pow, R"doc(When :attr:`exponent` is a Tensor, supported dtypes are: BFLOAT16, FLOAT32)doc");
+        module,
+        ttnn::pow,
+        R"doc(When :attr:`exponent` is a Tensor, supported dtypes are: BFLOAT16, FLOAT32. Both input tensors should be of same dtype.)doc");
 }
 
 }  // namespace binary

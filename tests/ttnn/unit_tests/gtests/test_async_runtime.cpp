@@ -5,7 +5,7 @@
 #include "ttnn/cpp/ttnn/operations/creation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
-#include "ttnn_multi_command_queue_fixture.hpp"
+#include "ttnn_test_fixtures.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
@@ -83,10 +83,6 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     EXPECT_EQ(ttnn::event_query(workload_event), true);
     // Read output back, once workload is complete
     ttnn::read_buffer(io_cq, output_tensor, {readback_data});
-    // Ensure that reference count book keeping is done correctly
-    // Tensors only have one reference in the main thread. Ensure this is true.
-    EXPECT_EQ(input_tensor.tensor_attributes->main_thread_ref_count, 1);
-    EXPECT_EQ(output_tensor.tensor_attributes->main_thread_ref_count, 1);
     // Buffers are currently jointly owned by the original buffer object, the storage object and the tensor (3).
     EXPECT_EQ(input_buffer.use_count(), 3);
     EXPECT_EQ(output_buffer.use_count(), 3);

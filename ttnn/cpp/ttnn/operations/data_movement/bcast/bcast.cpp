@@ -20,9 +20,9 @@ Tensor BcastOperation::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output_tensor) {
     auto output_memory_config = memory_config.value_or(input_tensor_a.memory_config());
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a}))};
+    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor_a}))};
 
-    operation::launch_with_autoformat(
+    tt::tt_metal::operation::launch_with_autoformat(
         [bcast_op, bcast_dim, output_memory_config, output_tensor, queue_id](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -69,13 +69,12 @@ Tensor BcastOperation::invoke(
                         "Error");
                 }
             }
-            return operation::run_with_autoformat(
+            return tt::tt_metal::operation::run_with_autoformat(
                 EltwiseBinaryBroadcast{bcast_op, bcast_dim, output_memory_config},
                 {input_tensor_a, input_tensor_b},
                 {},
                 {output_tensor},
-                0,     /* pad_value*/
-                false, /*pad_c*/
+                0, /* pad_value*/
                 queue_id);
         },
         {input_tensor_a, input_tensor_b},

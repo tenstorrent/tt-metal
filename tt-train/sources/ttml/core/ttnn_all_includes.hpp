@@ -38,6 +38,8 @@
 #include <ttnn/operations/data_movement/untilize/untilize.hpp>                                     // NOLINT
 #include <ttnn/operations/eltwise/binary/binary.hpp>                                               // NOLINT
 #include <ttnn/operations/eltwise/binary_backward/binary_backward.hpp>                             // NOLINT
+#include <ttnn/operations/eltwise/binary_ng/binary_ng.hpp>                                         // NOLINT
+#include <ttnn/operations/eltwise/quantization/quantization.hpp>                                   // NOLINT
 #include <ttnn/operations/eltwise/unary/unary.hpp>                                                 // NOLINT
 #include <ttnn/operations/eltwise/unary/unary_composite.hpp>                                       // NOLINT
 #include <ttnn/operations/eltwise/unary_backward/unary_backward.hpp>                               // NOLINT
@@ -70,4 +72,6 @@
 #include <ttnn/tensor/xtensor/partition.hpp>                                                       // NOLINT
 #include <ttnn/tensor/xtensor/xtensor_all_includes.hpp>                                            // NOLINT
 #include <ttnn/types.hpp>                                                                          // NOLINT
+
+#include "ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama.hpp"  // NOLINT
 #pragma GCC diagnostic pop

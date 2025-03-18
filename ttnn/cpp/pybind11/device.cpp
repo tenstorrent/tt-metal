@@ -10,10 +10,10 @@
 
 #include "small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
 #include <tt-metalium/persistent_kernel_cache.hpp>
-#include <tt-metalium/compilation_reporter.hpp>
 #include <tt-metalium/memory_reporter.hpp>
 #include <tt-metalium/device_impl.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/hal_exp.hpp>
 #include <tt-metalium/trace.hpp>
@@ -147,6 +147,9 @@ void device_module(py::module& m_device) {
             R"doc(
             Creates a SubDeviceId object with the given ID.
         )doc")
+        .def(
+            "__repr__",
+            [](const SubDeviceId& self) { return "SubDeviceId(" + std::to_string(static_cast<int>(*self)) + ")"; })
         .def(py::self == py::self)
         .def(py::self != py::self);
 
@@ -182,13 +185,14 @@ void device_module(py::module& m_device) {
                 [](IDevice* device,
                    const std::vector<SubDevice>& sub_devices,
                    DeviceAddr local_l1_size) -> SubDeviceManagerId {
-                    SubDeviceManagerId sub_device_manager_id;
+                    std::optional<SubDeviceManagerId> sub_device_manager_id;
                     device->push_work(
                         [device, sub_devices, local_l1_size, &sub_device_manager_id] {
                             sub_device_manager_id = device->create_sub_device_manager(sub_devices, local_l1_size);
                         },
                         /*blocking=*/true);
-                    return sub_device_manager_id;
+                    TT_FATAL(sub_device_manager_id.has_value(), "Failed to create sub-device manager");
+                    return *sub_device_manager_id;
                 },
                 py::arg("sub_devices"),
                 py::arg("local_l1_size"),
@@ -205,14 +209,15 @@ void device_module(py::module& m_device) {
             .def(
                 "create_sub_device_manager_with_fabric",
                 [](IDevice* device, const std::vector<SubDevice>& sub_devices, DeviceAddr local_l1_size) {
-                    std::tuple<SubDeviceManagerId, SubDeviceId> manager_and_sub_device_ids;
+                    std::optional<std::tuple<SubDeviceManagerId, SubDeviceId>> manager_and_sub_device_ids;
                     device->push_work(
                         [device, sub_devices, local_l1_size, &manager_and_sub_device_ids] {
                             manager_and_sub_device_ids =
                                 device->create_sub_device_manager_with_fabric(sub_devices, local_l1_size);
                         },
                         /*blocking=*/true);
-                    return manager_and_sub_device_ids;
+                    TT_FATAL(manager_and_sub_device_ids.has_value(), "Failed to create sub-device manager with fabric");
+                    return *manager_and_sub_device_ids;
                 },
                 py::arg("sub_devices"),
                 py::arg("local_l1_size"),
@@ -260,13 +265,13 @@ void device_module(py::module& m_device) {
                 Args:
                     sub_device_manager_id (SubDeviceManagerId): The ID of the sub-device manager to remove.
             )doc")
-        .def(
-            "set_sub_device_stall_group",
-            [](IDevice* device, const std::vector<SubDeviceId>& sub_device_ids) {
-                device->push_work([device, sub_device_ids] { device->set_sub_device_stall_group(sub_device_ids); });
-            },
-            py::arg("sub_device_ids"),
-            R"doc(
+            .def(
+                "set_sub_device_stall_group",
+                [](IDevice* device, const std::vector<SubDeviceId>& sub_device_ids) {
+                    device->push_work([device, sub_device_ids] { device->set_sub_device_stall_group(sub_device_ids); });
+                },
+                py::arg("sub_device_ids"),
+                R"doc(
                 Set the SubDevice IDs that will be stalled on by default for Fast Dispatch commands such as reading, writing, synchronizing.
                 Stalling here refers to the Fast Dispatch cores waiting for programs to complete execution on the specified SubDevices before proceeding with the specified instruction.
                 The default SubDevice IDs to stall on are set to all SubDevice IDs, and whenever a new SubDevice Manager is loaded.
@@ -274,25 +279,25 @@ void device_module(py::module& m_device) {
                 Args:
                     sub_device_ids (List[SubDeviceId]): The IDs of the SubDevices to stall on.
             )doc")
-        .def(
-            "reset_sub_device_stall_group",
-            [](IDevice* device) { device->push_work([device] { device->reset_sub_device_stall_group(); }); },
-            R"doc(
+            .def(
+                "reset_sub_device_stall_group",
+                [](IDevice* device) { device->push_work([device] { device->reset_sub_device_stall_group(); }); },
+                R"doc(
                 Resets the sub_device_ids that will be stalled on by default for Fast Dispatch commands such as reading, writing, synchronizing
                 back to all SubDevice IDs.
             )doc")
-        .def(
-            "sfpu_eps",
-            [](IDevice* device) { return tt::tt_metal::experimental::hal::get_eps(); },
-            R"doc(Returns machine epsilon value for current architecture.)doc")
-        .def(
-            "sfpu_nan",
-            [](IDevice* device) { return tt::tt_metal::experimental::hal::get_nan(); },
-            R"doc(Returns NaN value for current architecture.)doc")
-        .def(
-            "sfpu_inf",
-            [](IDevice* device) { return tt::tt_metal::experimental::hal::get_inf(); },
-            R"doc(Returns Infinity value for current architecture.)doc");
+            .def(
+                "sfpu_eps",
+                [](IDevice* device) { return tt::tt_metal::experimental::hal::get_eps(); },
+                R"doc(Returns machine epsilon value for current architecture.)doc")
+            .def(
+                "sfpu_nan",
+                [](IDevice* device) { return tt::tt_metal::experimental::hal::get_nan(); },
+                R"doc(Returns NaN value for current architecture.)doc")
+            .def(
+                "sfpu_inf",
+                [](IDevice* device) { return tt::tt_metal::experimental::hal::get_inf(); },
+                R"doc(Returns Infinity value for current architecture.)doc");
 
     auto pyDevice = static_cast<py::class_<tt::tt_metal::Device, IDevice, std::unique_ptr<tt::tt_metal::Device, py::nodelete>>>(m_device.attr("Device"));
     pyDevice
@@ -487,29 +492,17 @@ void device_module(py::module& m_device) {
 
     m_device.def(
         "pad_to_tile_shape",
-        [](const std::array<uint32_t, 4>& unpadded_shape,
-           bool pad_c = false,
-           bool pad_n = false,
-           bool pad_h = true,
-           bool pad_w = true) -> std::vector<uint32_t> {
-            auto result = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(
-                ttnn::Shape(unpadded_shape), pad_c, pad_n, pad_h, pad_w);
+        [](const std::array<uint32_t, 4>& unpadded_shape) -> std::vector<uint32_t> {
+            auto result =
+                ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(ttnn::Shape(unpadded_shape));
             return std::vector<uint32_t>(result.cbegin(), result.cend());
         },
         py::arg("unpadded_shape"),
-        py::arg("pad_c") = false,
-        py::arg("pad_n") = false,
-        py::arg("pad_h") = true,
-        py::arg("pad_w") = true,
         R"doc(
         Pads the given shape to tile shape based on specified padding options.
 
         Args:
             unpadded_shape (List of [int]): The original shape of the tensor to pad.
-            pad_c (bool, optional): Pad the channel dimension. Defaults to `False`.
-            pad_n (bool, optional): Pad the batch dimension. Defaults to `False`.
-            pad_h (bool, optional): Pad the height dimension. Defaults to `True`.
-            pad_w (bool, optional): Pad the width dimension. Defaults to `True`.
 
         Returns:
             List of [int]: The padded shape.
@@ -518,7 +511,7 @@ void device_module(py::module& m_device) {
             This functionality is planned for deprecation in the future.
 
         Example:
-            >>> padded_shape = ttnn.pad_to_tile_shape(unpadded_shape=[1, 2, 2, 2], pad_c=False, pad_n=False, pad_h=True, pad_w=True)
+            >>> padded_shape = ttnn.pad_to_tile_shape(unpadded_shape=[1, 2, 2, 2])
 
         )doc");
 
@@ -528,13 +521,6 @@ void device_module(py::module& m_device) {
     m_device.def("DisablePersistentKernelCache", &tt::tt_metal::detail::DisablePersistentKernelCache, R"doc(
         Disables kernel compilation cache from being persistent across runs
     )doc");
-    m_device.def("EnableCompilationReports", &tt::tt_metal::detail::EnableCompilationReports, R"doc(
-        Enables tt-metal to generate reports of compilation statistics
-    )doc");
-    m_device.def("DisableCompilationReports", &tt::tt_metal::detail::DisableCompilationReports, R"doc(
-        Disables generation of compilation statistics reports in tt-metal
-    )doc");
-
     m_device.def("EnableMemoryReports", &tt::tt_metal::detail::EnableMemoryReports, R"doc(
         Enables tt-metal to generate reports of memory allocation statistics
     )doc");
@@ -577,17 +563,7 @@ void device_module(py::module& m_device) {
         +------------------+----------------------------------+-----------------------+-------------+----------+
     )doc");
 
-    m_device.def(
-        "synchronize_device",
-        [](IDevice* device, const QueueId cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
-            // Send finish command to issue queue through worker thread
-            // Worker thread will stall until the device is flushed.
-            device->push_work(
-                [device, cq_id, &sub_device_ids]() mutable { Synchronize(device, *cq_id, sub_device_ids); });
-            // Main thread stalls until worker is complete (full device and worker queue flush).
-            device->synchronize();
-        },
-        R"doc(
+    constexpr std::string_view synchronize_device_doc = R"doc(
                 Synchronize the device with host by waiting for all operations to complete.
                 If cq_id is provided then only the operations associated with that cq_id are waited for,
                 otherwise operations for all command queues are waited on.
@@ -607,9 +583,46 @@ void device_module(py::module& m_device) {
                     >>> device = ttnn.open_device(device_id=device_id)
                     >>> # Assume some operations are queued on the device
                     >>> ttnn.synchronize_device(device)
-            )doc",
+            )doc";
+    m_device.def(
+        "synchronize_device",
+        [](IDevice* device, std::optional<QueueId> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
+            // Send finish command to issue queue through worker thread
+            // Worker thread will stall until the device is flushed.
+            device->push_work([device, cq_id, &sub_device_ids]() mutable {
+                Synchronize(device, cq_id.has_value() ? std::make_optional(**cq_id) : std::nullopt, sub_device_ids);
+            });
+            // Main thread stalls until worker is complete (full device and worker queue flush).
+            device->synchronize();
+        },
+        synchronize_device_doc.data(),
         py::arg("device"),
-        py::arg("cq_id") = DefaultQueueId,
+        py::arg("cq_id") = std::nullopt,
+        py::arg("sub_device_ids") = std::vector<SubDeviceId>());
+    // TODO: #18572 - Replace the implementation of this overload with the TT-distributed implementation.
+    m_device.def(
+        "synchronize_device",
+        [](MeshDevice* device, std::optional<QueueId> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
+            for (auto& d : device->get_devices()) {
+                d->push_work([d, cq_id, &sub_device_ids]() mutable {
+                    Synchronize(d, cq_id.has_value() ? std::make_optional(**cq_id) : std::nullopt, sub_device_ids);
+                });
+                d->synchronize();
+            }
+        },
+        synchronize_device_doc.data(),
+        py::arg("device"),
+        py::arg("cq_id") = std::nullopt,
+        py::arg("sub_device_ids") = std::vector<SubDeviceId>());
+    m_device.def(
+        "synchronize_mesh_device",
+        [](MeshDevice* device, std::optional<QueueId> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
+            tt::tt_metal::distributed::Synchronize(
+                device, cq_id.has_value() ? std::make_optional(**cq_id) : std::nullopt, sub_device_ids);
+        },
+        synchronize_device_doc.data(),
+        py::arg("device"),
+        py::arg("cq_id") = std::nullopt,
         py::arg("sub_device_ids") = std::vector<SubDeviceId>());
     m_device.def("DumpDeviceProfiler", DumpDeviceProfiler, py::arg("device"), R"doc(
         Dump device side profiling data.

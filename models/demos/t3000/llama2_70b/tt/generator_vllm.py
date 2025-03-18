@@ -42,9 +42,6 @@ class TtLlamaForCausalLM(TtLlamaModelForGeneration):
             llama_version=llama_version,
         )
 
-        mesh_rows = t3k_mesh_device.shape.num_rows
-        mesh_cols = t3k_mesh_device.shape.num_cols
-        assert mesh_rows == 2 and mesh_cols == 4, f"Invalid mesh device shape: {mesh_rows}x{mesh_cols}"
         check_mesh_device(t3k_mesh_device, model_config)
 
         # initialize arg classes

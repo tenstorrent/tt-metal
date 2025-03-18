@@ -638,10 +638,6 @@ void build_and_run_autonomous_stream_test(
     }
 }
 
-}  // namespace tt_metal
-
-}  // namespace tt
-
 TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAutonomousRelayStreams) {
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
@@ -962,3 +958,7 @@ TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAutonomousRelayStreamsSwee
 
     return;
 }
+
+}  // namespace tt_metal
+
+}  // namespace tt

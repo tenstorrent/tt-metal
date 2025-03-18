@@ -290,7 +290,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
                  num_units_per_row,
                  shard_height,
                  shard_width,
-                 (is_blackhole) ? shard_width : padded_offset_bytes,
+                 padded_offset_bytes,
                  static_cast<uint32_t>(aligned),
                  aligned_width_offset,
                  aligned_shard_width,

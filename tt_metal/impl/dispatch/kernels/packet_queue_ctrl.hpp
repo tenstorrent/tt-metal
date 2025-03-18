@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <string_view>
+
+namespace tt::packet_queue {
 
 constexpr uint32_t PACKET_WORD_SIZE_BYTES = 16;
 constexpr uint32_t MAX_SWITCH_FAN_IN = 4;
@@ -31,6 +34,16 @@ constexpr uint32_t PQ_TEST_CYCLES_INDEX = 4;
 constexpr uint32_t PQ_TEST_ITER_INDEX = 6;
 constexpr uint32_t PQ_TEST_MISC_INDEX = 16;
 
+
+inline std::string_view packet_queue_test_status_to_string(uint32_t status) {
+    switch (status) {
+        case PACKET_QUEUE_TEST_STARTED: return "STARTED";
+        case PACKET_QUEUE_TEST_PASS: return "DONE/OK";
+        case PACKET_QUEUE_TEST_TIMEOUT: return "TIMEOUT";
+        case PACKET_QUEUE_TEST_DATA_MISMATCH: return "DATA_MISMATCH";
+        default: return "UNKNOWN";
+    }
+}
 
 enum DispatchPacketFlag : uint32_t {
     PACKET_CMD_START = (0x1 << 1),
@@ -91,3 +104,5 @@ inline uint64_t packet_switch_dest_pack(uint32_t* dest_output_map_array, uint32_
     }
     return result;
 }
+
+} // namespace tt::packet_queue

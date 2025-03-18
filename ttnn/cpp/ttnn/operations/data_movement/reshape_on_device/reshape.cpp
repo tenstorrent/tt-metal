@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/common/queue_id.hpp"
+#include "ttnn/common/constants.hpp"
 #include "ttnn/run_operation.hpp"
 #include "reshape.hpp"
 #include <tt-metalium/constants.hpp>
@@ -29,18 +29,7 @@ static Tensor manual_insertion(
         "Required shape volume ({}) must match old shape volume ({})",
         logical_shape.volume(),
         input_tensor.get_logical_volume());
-    auto device_buffer = input_tensor.device_buffer();
-    uint32_t size_in_bytes = device_buffer->size();
-    std::vector<uint16_t> data_vec;
-    const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
-        data_vec.resize(size_in_bytes / sizeof(uint16_t));
-        tt::tt_metal::tensor_impl::read_data_from_device_buffer<uint16_t>(
-            input_tensor.device()->command_queue(), device_buffer, data_vec.data(), true);
-    } else {
-        tt::tt_metal::tensor_impl::read_data_from_device_buffer<uint16_t>(device_buffer, data_vec);
-    }
-    auto owned_buffer = owned_buffer::create<uint16_t>(std::move(data_vec));
+    auto owned_buffer = ttnn::detail::to_host_buffer<uint16_t>(input_tensor);
     auto output =
         Tensor(
             OwnedStorage{owned_buffer},
@@ -91,7 +80,7 @@ ttnn::Tensor ReshapeOperation::invoke(
             output_mem_config);
     }
     std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
-    return operation::run(
+    return tt::tt_metal::operation::run(
                ReshapeDeviceOperation{logical_output_shape, padded_output_shape, output_mem_config}, {input_tensor})
         .at(0);
 }
@@ -105,46 +94,11 @@ ttnn::Tensor ReshapeOperation::invoke(
 }
 
 ttnn::Tensor ReshapeOperation::invoke(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Shape& logical_shape,
-    const ttnn::Shape& padded_shape,
-    const std::optional<MemoryConfig>& memory_config) {
-    return invoke(DefaultQueueId, input_tensor, logical_shape, padded_shape, memory_config);
-}
-
-ttnn::Tensor ReshapeOperation::invoke(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Shape& logical_shape,
-    const std::optional<MemoryConfig>& memory_config) {
-    return invoke(input_tensor, logical_shape, logical_shape, memory_config);
-}
-
-ttnn::Tensor ReshapeOperation::invoke(
-    const ttnn::Tensor& input_tensor, const ttnn::Shape& logical_shape, const ttnn::Shape& padded_shape) {
-    return invoke(DefaultQueueId, input_tensor, logical_shape, padded_shape, std::nullopt);
-}
-
-ttnn::Tensor ReshapeOperation::invoke(const ttnn::Tensor& input_tensor, const ttnn::Shape& logical_shape) {
-    return invoke(input_tensor, logical_shape, logical_shape);
-}
-
-ttnn::Tensor ReshapeOperation::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     tt::stl::Span<const int32_t> shape_vector,
     const std::optional<MemoryConfig>& memory_config_arg) {
     return invoke(queue_id, input_tensor, infer_dims_for_reshape(input_tensor, shape_vector), memory_config_arg);
-}
-
-ttnn::Tensor ReshapeOperation::invoke(
-    const ttnn::Tensor& input_tensor,
-    tt::stl::Span<const int32_t> shape_vector,
-    const std::optional<MemoryConfig>& memory_config_arg) {
-    return invoke(DefaultQueueId, input_tensor, shape_vector, memory_config_arg);
-}
-
-ttnn::Tensor ReshapeOperation::invoke(const ttnn::Tensor& input_tensor, tt::stl::Span<const int32_t> shape_vector) {
-    return invoke(input_tensor, shape_vector, std::nullopt);
 }
 
 }  // namespace ttnn::operations::data_movement

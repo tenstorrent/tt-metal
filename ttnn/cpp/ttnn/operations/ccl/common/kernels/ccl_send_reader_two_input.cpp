@@ -14,10 +14,10 @@
 
 #include "cpp/ttnn/operations/ccl/common/kernels/command_processor.hpp"
 
-#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/edm_fabric_worker_adapters.hpp"
-#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 
-#include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/io_descriptors.hpp"
 #include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 #include "cpp/ttnn/tensor/enum_types.hpp"
@@ -437,49 +437,46 @@ void try_advance_inline_write_or_atomic_inc(command_context_t<Addrgen>& cmd_ctx)
         ASSERT(cmd_ctx.core_desc_type == ttnn::ccl::cmd::CclCommandCoreDescriptorType::NOC_XY);
 
         ASSERT(cmd_ctx.packet_header_buffer_addr != 0);
-        auto* pkt_hdr = reinterpret_cast<tt::fabric::PacketHeader*>(cmd_ctx.packet_header_buffer_addr);
-#ifdef DEBUG_PRINT_ENABLED
-        pkt_hdr->reserved2 = my_chip_id;
-#endif
+        auto* pkt_hdr = reinterpret_cast<PACKET_HEADER_TYPE *>(cmd_ctx.packet_header_buffer_addr);
+
         uint64_t dest_noc_addr_for_pkt = safe_get_noc_addr(dest_noc0_x, dest_noc0_y, dest_bank_addr, 0);
         if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC) {
             pkt_hdr->to_noc_unicast_atomic_inc(
-                tt::fabric::NocUnicastAtomicIncCommandHeader{dest_noc_addr_for_pkt, static_cast<uint16_t>(value), 32});
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{dest_noc_addr_for_pkt, static_cast<uint16_t>(value), 32});
         } else {
-            pkt_hdr->to_noc_unicast_write(
-                tt::fabric::NocUnicastCommandHeader{dest_noc_addr_for_pkt, static_cast<uint16_t>(value)});
+            pkt_hdr->to_noc_unicast_inline_write(
+                tt::tt_fabric::NocUnicastInlineWriteCommandHeader{dest_noc_addr_for_pkt, static_cast<uint16_t>(value)});
         }
 
         switch (cmd_ctx.current_cmd_header.dest_type) {
             case ttnn::ccl::cmd::CclCommandDestType::CHIP_UNICAST: {
-                pkt_hdr->to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{
-                    cmd_ctx.current_cmd_header.get_unicast_dest_args().distance_in_hops});
+                pkt_hdr->to_chip_unicast(cmd_ctx.current_cmd_header.get_unicast_dest_args().distance_in_hops);
 
                 auto& fabric_connection = cmd_ctx.current_cmd_header.get_unicast_dest_args().is_forward_direction
                                               ? cmd_ctx.fabric_connection.get_forward_connection()
                                               : cmd_ctx.fabric_connection.get_backward_connection();
                 fabric_connection.wait_for_empty_write_slot();
                 fabric_connection.send_payload_flush_blocking_from_address(
-                    cmd_ctx.packet_header_buffer_addr, sizeof(tt::fabric::PacketHeader));
+                    cmd_ctx.packet_header_buffer_addr, sizeof(PACKET_HEADER_TYPE));
             } break;
             case ttnn::ccl::cmd::CclCommandDestType::CHIP_MULTICAST: {
                 write_local = true;
                 const auto& mcast_args = cmd_ctx.current_cmd_header.get_multicast_dest_args();
                 if (cmd_ctx.fabric_connection.has_forward_connection()) {
-                    pkt_hdr->to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{
+                    pkt_hdr->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{
                         1, static_cast<uint8_t>(mcast_args.num_targets_forward_direction)});
                     cmd_ctx.fabric_connection.get_forward_connection().wait_for_empty_write_slot();
                     cmd_ctx.fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
-                        cmd_ctx.packet_header_buffer_addr, sizeof(tt::fabric::PacketHeader));
+                        cmd_ctx.packet_header_buffer_addr, sizeof(PACKET_HEADER_TYPE));
                 }
 
                 // Write the mcast packet (backward)
                 if (cmd_ctx.fabric_connection.has_backward_connection()) {
-                    pkt_hdr->to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{
+                    pkt_hdr->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{
                         1, static_cast<uint8_t>(mcast_args.num_targets_backward_direction)});
                     cmd_ctx.fabric_connection.get_backward_connection().wait_for_empty_write_slot();
                     cmd_ctx.fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
-                        cmd_ctx.packet_header_buffer_addr, sizeof(tt::fabric::PacketHeader));
+                        cmd_ctx.packet_header_buffer_addr, sizeof(PACKET_HEADER_TYPE));
                 }
 
             } break;
@@ -562,14 +559,9 @@ void write_and_advance_local_read_address_for_fabric_write(
     uint32_t payload_size_bytes) {
     const size_t payload_l1_address = l1_read_addr;
 
-    auto pkt_hdr = reinterpret_cast<volatile tt::fabric::PacketHeader*>(packet_header_buffer_addr);
-#ifdef DEBUG_PRINT_ENABLED
-    pkt_hdr->reserved2 = my_chip_id;
-#endif
+    auto pkt_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE *>(packet_header_buffer_addr);
 
-    size_t packet_send_size_bytes = payload_size_bytes + sizeof(tt::fabric::PacketHeader);
-    pkt_hdr->to_noc_unicast_write(tt::fabric::NocUnicastCommandHeader{
-        noc0_dest_noc_addr, packet_send_size_bytes});
+    pkt_hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, payload_size_bytes);
 
     switch (current_cmd_header.dest_type) {
         case ttnn::ccl::cmd::CclCommandDestType::CHIP_UNICAST: {
@@ -577,11 +569,11 @@ void write_and_advance_local_read_address_for_fabric_write(
             auto& fabric_conn = unicast_args.is_forward_direction ? fabric_connection.get_forward_connection()
                                                                   : fabric_connection.get_backward_connection();
 
-            pkt_hdr->to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{unicast_args.distance_in_hops});
+            pkt_hdr->to_chip_unicast(unicast_args.distance_in_hops);
 
             fabric_conn.wait_for_empty_write_slot();
             fabric_conn.send_payload_without_header_non_blocking_from_address(l1_read_addr, payload_size_bytes);
-            fabric_conn.send_payload_flush_blocking_from_address((uint32_t)pkt_hdr, sizeof(tt::fabric::PacketHeader));
+            fabric_conn.send_payload_flush_blocking_from_address((uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
         } break;
         case ttnn::ccl::cmd::CclCommandDestType::CHIP_MULTICAST: {
             const auto [dest_noc_xy, dest_addr] = get_noc_address_components(noc0_dest_noc_addr);
@@ -590,23 +582,23 @@ void write_and_advance_local_read_address_for_fabric_write(
                 payload_l1_address, dest_noc_addr, payload_size_bytes);
             const auto& mcast_args = current_cmd_header.get_multicast_dest_args();
             if (fabric_connection.has_forward_connection()) {
-                pkt_hdr->to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{
+                pkt_hdr->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{
                     1, static_cast<uint8_t>(mcast_args.num_targets_forward_direction)});
                 fabric_connection.get_forward_connection().wait_for_empty_write_slot();
                 fabric_connection.get_forward_connection().send_payload_without_header_non_blocking_from_address(
                     l1_read_addr, payload_size_bytes);
                 fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
-                    (uint32_t)pkt_hdr, sizeof(tt::fabric::PacketHeader));
+                    (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
             }
 
             if (fabric_connection.has_backward_connection()) {
-                pkt_hdr->to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{
+                pkt_hdr->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{
                     1, static_cast<uint8_t>(mcast_args.num_targets_backward_direction)});
                 fabric_connection.get_backward_connection().wait_for_empty_write_slot();
                 fabric_connection.get_backward_connection().send_payload_without_header_non_blocking_from_address(
                     l1_read_addr, payload_size_bytes);
                 fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
-                    (uint32_t)pkt_hdr, sizeof(tt::fabric::PacketHeader));
+                    (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
             }
         } break;
         default: {
@@ -626,8 +618,8 @@ FORCE_INLINE void write_payload_then_advance_read_address(
     size_t& l1_read_addr,
     size_t payload_size_bytes) {
     static_assert(
-        ((sizeof(tt::fabric::PacketHeader) - 1) & sizeof(tt::fabric::PacketHeader)) == 0,
-        "sizeof(sizeof(tt::fabric::PacketHeader)) is not a power of two which violates the below assertion");
+        is_power_of_2(sizeof(PACKET_HEADER_TYPE)),
+        "sizeof(PACKET_HEADER_TYPE) is not a power of two which violates the below assertion");
 
     switch (current_cmd_header.dest_type) {
         case ttnn::ccl::cmd::CclCommandDestType::CHIP_UNICAST: [[fallthrough]];
@@ -941,7 +933,7 @@ void kernel_main() {
     cb_reserve_back(reserved_packet_header_cb_id, num_packet_headers_storable);
     auto packet_header_buffer_addr0 = get_write_ptr(reserved_packet_header_cb_id);
     auto packet_header_buffer_addr1 =
-        packet_header_buffer_addr0 + (num_packet_headers_storable >> 2) * sizeof(tt::fabric::PacketHeader);
+        packet_header_buffer_addr0 + (num_packet_headers_storable >> 2) * sizeof(PACKET_HEADER_TYPE);
 
     auto operand_0_cmd_ctx = command_context_t(
         fabric_connection,

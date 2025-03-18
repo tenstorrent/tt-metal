@@ -27,6 +27,7 @@
 #include <type_traits>
 #include <ranges>
 #include <optional>
+
 using namespace tt::constants;
 
 namespace ttnn {
@@ -34,7 +35,7 @@ namespace ttnn {
 using namespace ccl;
 
 void append_fabric_connection_rt_args(
-    const std::optional<ttnn::ccl::SenderWorkerAdapterSpec>& connection,
+    const std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>& connection,
     const CoreCoord& core,
     tt::tt_metal::Program& program,
     std::vector<uint32_t>& writer_rt_args) {
@@ -52,7 +53,7 @@ void append_fabric_connection_rt_args(
     }
 }
 
-operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32_any(
+tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32_any(
     const Tensor& input_tensor,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
@@ -63,7 +64,7 @@ operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32
     const uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
-    const std::optional<SubDeviceId>& sub_device_id,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode) {
     tt::tt_metal::Program program{};
     const bool enable_async_output_tensor = false;
@@ -115,11 +116,11 @@ operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{src0_cb_index, df}})
             .set_page_size(src0_cb_index, l1_scratch_cb_page_size_bytes);
-    CBHandle cb_src0_workers = CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
+    tt::tt_metal::CBHandle cb_src0_workers = CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_CB_index = tt::CB::c_in1;
     static constexpr auto num_packet_headers_storable = 8;
-    static constexpr auto packet_header_size_bytes = sizeof(tt::fabric::PacketHeader);
+    static constexpr auto packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
     tt::tt_metal::CircularBufferConfig cb_reserved_packet_header_config =
         tt::tt_metal::CircularBufferConfig(
             num_packet_headers_storable * packet_header_size_bytes * 2,
@@ -191,15 +192,15 @@ operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32
             // drain sync core is the first worker core
             drain_sync_core = device->worker_core_from_logical_core(core);
         }
-        std::optional<ttnn::ccl::SenderWorkerAdapterSpec> forward_fabric_connection =
+        std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> forward_fabric_connection =
             line_topology.is_first_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD)
                 ? std::nullopt
-                : std::optional<ttnn::ccl::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
+                : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
                       device, ttnn::ccl::EdmLineFabricOpInterface::FORWARD));
-        std::optional<ttnn::ccl::SenderWorkerAdapterSpec> backward_fabric_connection =
+        std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> backward_fabric_connection =
             line_topology.is_last_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD)
                 ? std::nullopt
-                : std::optional<ttnn::ccl::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
+                : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
                       device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
 
         // Set reader runtime args
@@ -275,7 +276,7 @@ operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-operation::ProgramWithCallbacks all_gather_async_llama_post_binary_matmul(
+tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     const Tensor& input_tensor,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
@@ -286,13 +287,12 @@ operation::ProgramWithCallbacks all_gather_async_llama_post_binary_matmul(
     const uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
-    const std::optional<SubDeviceId>& sub_device_id,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode) {
     tt::tt_metal::Program program{};
     const bool enable_async_output_tensor = false;
     TT_FATAL(
-        enable_persistent_fabric_mode,
-        "only persistent fabric mode is supported for all_gather_async_llama_post_binary_matmul");
+        enable_persistent_fabric_mode, "only persistent fabric mode is supported for all_gather_async_llama_sharded");
 
     IDevice* device = input_tensor.device();
     bool is_first_chip = ring_index == 0;
@@ -357,11 +357,11 @@ operation::ProgramWithCallbacks all_gather_async_llama_post_binary_matmul(
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{src0_cb_index, df}})
             .set_page_size(src0_cb_index, l1_scratch_cb_page_size_bytes);
-    CBHandle cb_src0_workers = CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
+    tt::tt_metal::CBHandle cb_src0_workers = CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_CB_index = tt::CB::c_in1;
     static constexpr auto num_packet_headers_storable = 8;
-    static constexpr auto packet_header_size_bytes = sizeof(tt::fabric::PacketHeader);
+    static constexpr auto packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
     tt::tt_metal::CircularBufferConfig cb_reserved_packet_header_config =
         tt::tt_metal::CircularBufferConfig(
             num_packet_headers_storable * packet_header_size_bytes * 2,
@@ -385,7 +385,7 @@ operation::ProgramWithCallbacks all_gather_async_llama_post_binary_matmul(
     auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
-        "llama_post_binary_matmul_shape_reader.cpp",
+        "llama_shapes_sharded_reader.cpp",
         sender_worker_core_range,
         reader_kernel_config);
 
@@ -408,7 +408,7 @@ operation::ProgramWithCallbacks all_gather_async_llama_post_binary_matmul(
     auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
-        "llama_post_binary_matmul_shape_writer.cpp",
+        "llama_shapes_sharded_writer.cpp",
         sender_worker_core_range,
         writer_kernel_config);
 
@@ -417,14 +417,17 @@ operation::ProgramWithCallbacks all_gather_async_llama_post_binary_matmul(
                                 // semaphore
     auto input_cores_vec = corerange_to_cores(input_tensor_cores, std::nullopt, true);
     auto output_cores_vec = corerange_to_cores(output_tensor_cores, std::nullopt, true);
-    auto cores_per_device = output_cores_vec.size() / ring_size;
+    auto cores_per_device = output_cores_vec.size() + ring_size - 1 / ring_size;
+    uint32_t start_core_index_for_device = output_cores_vec.size() / ring_size * ring_index;
+    uint32_t end_core_index_for_device = start_core_index_for_device + cores_per_device;
     TT_FATAL(
-        output_cores_vec.size() % ring_size == 0,
-        "output sharded cores must be divisible by num_links for this work distribution scheme");
+        output_cores_vec.size() % ring_size == 0 || output_cores_vec.size() == 1,
+        "output sharded cores ( {} ) must be divisible by num_links ( {} ) or 1 for this work distribution scheme",
+        output_cores_vec.size(),
+        ring_size);
     auto output_cores_this_device = std::vector<CoreCoord>(
-        output_cores_vec.begin() + ring_index * cores_per_device,
-        output_cores_vec.begin() + (ring_index + 1) * cores_per_device);
-
+        output_cores_vec.begin() + start_core_index_for_device, output_cores_vec.begin() + end_core_index_for_device);
+    log_trace(tt::LogOp, "output_cores_this_device: {}", output_cores_this_device);
     for (uint32_t link = 0; link < num_links; link++) {
         CoreCoord core = sender_worker_cores[link];
 
@@ -472,15 +475,15 @@ operation::ProgramWithCallbacks all_gather_async_llama_post_binary_matmul(
             // drain sync core is the first worker core
             drain_sync_core = device->worker_core_from_logical_core(core);
         }
-        std::optional<ttnn::ccl::SenderWorkerAdapterSpec> forward_fabric_connection =
+        std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> forward_fabric_connection =
             line_topology.is_first_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD)
                 ? std::nullopt
-                : std::optional<ttnn::ccl::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
+                : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
                       device, ttnn::ccl::EdmLineFabricOpInterface::FORWARD));
-        std::optional<ttnn::ccl::SenderWorkerAdapterSpec> backward_fabric_connection =
+        std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> backward_fabric_connection =
             line_topology.is_last_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD)
                 ? std::nullopt
-                : std::optional<ttnn::ccl::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
+                : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
                       device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
 
         // Set reader runtime args

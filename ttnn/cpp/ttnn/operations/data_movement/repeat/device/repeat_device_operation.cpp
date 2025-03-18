@@ -12,12 +12,15 @@ namespace ttnn {
 void RepeatDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
     // Validate the input tensor
     const Tensor& input_tensor_a = input_tensors.at(0);
-    TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to reshape need to be on device!");
-    TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor_a.get_layout() == Layout::ROW_MAJOR, "This function is for RM->RM");
     TT_FATAL(
-        input_tensor_a.get_dtype() == DataType::BFLOAT16 or input_tensor_a.get_dtype() == DataType::UINT32 or
-            input_tensor_a.get_dtype() == DataType::FLOAT32,
+        input_tensor_a.storage_type() == tt::tt_metal::StorageType::DEVICE,
+        "Operands to reshape need to be on device!");
+    TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor_a.get_layout() == tt::tt_metal::Layout::ROW_MAJOR, "This function is for RM->RM");
+    TT_FATAL(
+        input_tensor_a.get_dtype() == tt::tt_metal::DataType::BFLOAT16 or
+            input_tensor_a.get_dtype() == tt::tt_metal::DataType::UINT32 or
+            input_tensor_a.get_dtype() == tt::tt_metal::DataType::FLOAT32,
         "Can only work with bfloat16/float32 or uint32 tensors");
     // is this relevant?
     TT_FATAL(
@@ -38,31 +41,11 @@ std::vector<TensorSpec> RepeatDeviceOperation::compute_output_specs(const std::v
     }
     return {TensorSpec(
         output_shape,
-        TensorLayout::fromPaddedShape(
-            input_tensor_a.get_dtype(),
-            PageConfig(input_tensor_a.get_layout()),
-            mem_config,
-            output_shape,
-            output_shape))};  // no padding requried because we are RM only right now
+        tt::tt_metal::TensorLayout(
+            input_tensor_a.get_dtype(), tt::tt_metal::PageConfig(input_tensor_a.get_layout()), mem_config))};
 }
 
-std::vector<Tensor> RepeatDeviceOperation::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    // Create the output tensor
-    const auto& input_tensor_a = input_tensors.at(0);
-    const auto output_shape = this->compute_output_specs(input_tensors).at(0).logical_shape();
-
-    // is this relevant?
-    auto mem_config = this->m_output_mem_config;
-    if (input_tensor_a.memory_config().is_sharded()) {
-        auto shard_spec = input_tensor_a.shard_spec().value();
-        shard_spec.shape[0] = output_shape[0];
-        mem_config.shard_spec = shard_spec;
-    }
-    return {create_device_tensor(
-        output_shape, input_tensor_a.get_dtype(), input_tensor_a.get_layout(), input_tensor_a.device(), mem_config)};
-}
-
-operation::ProgramWithCallbacks RepeatDeviceOperation::create_program(
+tt::tt_metal::operation::ProgramWithCallbacks RepeatDeviceOperation::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     return operations::data_movement::repeat::rm_repeat_program_factory(
         input_tensors.at(0), m_num_repeats, output_tensors.at(0), m_is_last_dim);

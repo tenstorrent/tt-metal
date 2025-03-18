@@ -23,7 +23,6 @@ on:
           - Release
           - Debug
           - RelWithDebInfo
-          - CI
   schedule:
     - cron: "0 */2 * * *"
   # Pause this since not enough runners to support every commit to main
@@ -54,6 +53,7 @@ jobs:
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
+      build-wheel: true
       tracy: true
       version: "20.04"
   run-profiler-regression:
@@ -63,6 +63,9 @@ jobs:
     with:
       arch: "blackhole"
       runner-label: ${{ inputs.runner-label || 'BH' }}
+      docker-image: ${{ needs.build-artifact-profiler.outputs.ci-build-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
   umd-unit-tests:
     secrets: inherit
     uses: ./.github/workflows/umd-unit-tests.yaml

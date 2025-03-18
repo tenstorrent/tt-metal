@@ -16,16 +16,17 @@
 #include <sub_device_types.hpp>
 #include <trace.hpp>
 #include <trace_buffer.hpp>
-#include <span.hpp>
+#include <tt_stl/span.hpp>
 #include <tt_align.hpp>
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 
+#include "tt_cluster.hpp"
+
 namespace tt::tt_metal {
 
-// assert here to avoid the need to include command_queue_interface.hpp in header
 static_assert(
-    SubDeviceManager::MAX_NUM_SUB_DEVICES <= DispatchSettings::DISPATCH_MESSAGE_ENTRIES,
-    "MAX_NUM_SUB_DEVICES must be less than or equal to DispatchSettings::DISPATCH_MESSAGE_ENTRIES");
+    DispatchSettings::DISPATCH_MESSAGE_ENTRIES <= std::numeric_limits<SubDeviceId::value_type>::max(),
+    "Max number of sub-devices must be less than or equal to the max value of SubDeviceId::Id");
 
 std::atomic<uint64_t> SubDeviceManager::next_sub_device_manager_id_ = 0;
 
@@ -152,9 +153,9 @@ void SubDeviceManager::set_sub_device_stall_group(tt::stl::Span<const SubDeviceI
     TT_FATAL(!sub_device_ids.empty(), "sub_device_ids to stall must not be empty");
     for (const auto& sub_device_id : sub_device_ids) {
         TT_FATAL(
-            sub_device_id.to_index() < sub_devices_.size(),
+            *sub_device_id < sub_devices_.size(),
             "SubDevice index {} out of bounds {}",
-            sub_device_id.to_index(),
+            *sub_device_id,
             sub_devices_.size());
     }
     sub_device_stall_group_ = std::vector<SubDeviceId>(sub_device_ids.begin(), sub_device_ids.end());
@@ -163,7 +164,7 @@ void SubDeviceManager::set_sub_device_stall_group(tt::stl::Span<const SubDeviceI
 void SubDeviceManager::reset_sub_device_stall_group() { this->set_sub_device_stall_group(sub_device_ids_); }
 
 uint8_t SubDeviceManager::get_sub_device_index(SubDeviceId sub_device_id) const {
-    auto sub_device_index = sub_device_id.to_index();
+    auto sub_device_index = *sub_device_id;
     TT_FATAL(
         sub_device_index < sub_devices_.size(),
         "SubDevice index {} out of bounds {}",
@@ -173,13 +174,17 @@ uint8_t SubDeviceManager::get_sub_device_index(SubDeviceId sub_device_id) const 
 }
 
 void SubDeviceManager::validate_sub_devices() const {
-    TT_FATAL(sub_devices_.size() <= SubDeviceManager::MAX_NUM_SUB_DEVICES, "Too many sub devices specified");
+    TT_FATAL(
+        sub_devices_.size() <= DispatchSettings::DISPATCH_MESSAGE_ENTRIES,
+        "Number of sub-devices specified {} is larger than the max number of sub-devices {}",
+        sub_devices_.size(),
+        DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
     // Validate sub device cores fit inside the device grid
     const auto& compute_grid_size = device_->compute_with_storage_grid_size();
     CoreRange device_worker_cores = CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1});
 
-    for (auto sub_device_id = SubDeviceId{0}; sub_device_id < this->num_sub_devices(); ++sub_device_id) {
-        const auto& sub_device = this->sub_device(sub_device_id);
+    for (uint8_t sub_device_id = 0; sub_device_id < this->num_sub_devices(); ++sub_device_id) {
+        const auto& sub_device = this->sub_device(SubDeviceId(sub_device_id));
         const auto& worker_cores = sub_device.cores(HalProgrammableCoreType::TENSIX);
         TT_FATAL(
             device_worker_cores.contains(worker_cores),
@@ -218,9 +223,9 @@ void SubDeviceManager::validate_sub_devices() const {
 }
 
 void SubDeviceManager::populate_sub_device_ids() {
-    sub_device_ids_.resize(this->num_sub_devices());
+    sub_device_ids_.reserve(this->num_sub_devices());
     for (uint8_t i = 0; i < this->num_sub_devices(); ++i) {
-        sub_device_ids_[i] = SubDeviceId{i};
+        sub_device_ids_.push_back(SubDeviceId{i});
     }
     this->reset_sub_device_stall_group();
 }

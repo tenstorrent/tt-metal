@@ -68,8 +68,6 @@ All contributions require:
 Furthermore, all PRs must follow the [contribution
 standards](#contribution-standards).
 
-## Machine setup
-
 ## Developing tt-metal
 
 Currently, the most convenient way to develop is to do so on our cloud
@@ -508,7 +506,7 @@ To set up pre-commit on your local machine, follow these steps:
   Next, you can navigate to any pipeline on the left side of the view. For
   example, you can run the entire post-commit CI suite by clicking on
   on the link to [all post-commit workflows](https://github.com/tenstorrent/tt-metal/actions/workflows/all-post-commit-workflows.yaml), clicking "Run workflow",
-  selecting your branch, and pressing "Run workflow".
+  selecting your branch, then selecting `build-type` as "Release" and pressing "Run workflow".
 
   ![Dropdown menu of all post-commit workflows and Run Workflow button](docs/source/common/_static/all-post-commit-workflows-button.png)
 

@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="30" failures="0" disabled="0" errors="0" time="3.503" timestamp="2025-02-13T20:04:07.344" name="AllTests">
+  <testsuite name="N300DeviceFixture" tests="5" failures="0" disabled="0" skipped="5" errors="0" time="0.001" timestamp="2025-02-13T20:04:07.344">
+    <testcase name="EthValidateEthernetConnectivity" file="/work/tests/tt_metal/tt_metal/device/test_device_cluster_api.cpp" line="21" status="run" result="skipped" time="0" timestamp="2025-02-13T20:04:07.344" classname="N300DeviceFixture">
+      <skipped message="/work/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:48&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:48
+]]></skipped>
+    </testcase>
+    <testcase name="EthInvalidLogicalEthernetCore" file="/work/tests/tt_metal/tt_metal/device/test_device_cluster_api.cpp" line="77" status="run" result="skipped" time="0" timestamp="2025-02-13T20:04:07.345" classname="N300DeviceFixture">
+      <skipped message="/work/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:48&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:48
+]]></skipped>
+    </testcase>
+    <testcase name="EthValidateAllEthernetCoreMapping" file="/work/tests/tt_metal/tt_metal/device/test_device_cluster_api.cpp" line="83" status="run" result="skipped" time="0" timestamp="2025-02-13T20:04:07.345" classname="N300DeviceFixture">
+      <skipped message="/work/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:48&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:48
+]]></skipped>
+    </testcase>
+    <testcase name="EthValidatePhysicalCoreConversion" file="/work/tests/tt_metal/tt_metal/device/test_device_cluster_api.cpp" line="110" status="run" result="skipped" time="0" timestamp="2025-02-13T20:04:07.345" classname="N300DeviceFixture">
+      <skipped message="/work/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:48&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:48
+]]></skipped>
+    </testcase>
+    <testcase name="EthValidatePhysicalCoreConversion" file="/work/tests/tt_metal/tt_metal/device/test_device_cluster_api.cpp" line="139" status="run" result="skipped" time="0" timestamp="2025-02-13T20:04:07.345" classname="N300DeviceFixture">
+      <skipped message="/work/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:48&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:48
+]]></skipped>
+    </testcase>
+  </testsuite>
+  <testsuite name="DevicePool" tests="4" failures="0" disabled="0" skipped="2" errors="0" time="0.491" timestamp="2025-02-13T20:04:07.346">
+    <testcase name="DevicePoolOpenClose" file="/work/tests/tt_metal/tt_metal/device/test_device_pool.cpp" line="12" status="run" result="completed" time="0.483" timestamp="2025-02-13T20:04:07.346" classname="DevicePool" />
+    <testcase name="DevicePoolReconfigDevices" file="/work/tests/tt_metal/tt_metal/device/test_device_pool.cpp" line="40" status="run" result="completed" time="0.008" timestamp="2025-02-13T20:04:07.829" classname="DevicePool" />
+    <testcase name="DevicePoolAddDevices" file="/work/tests/tt_metal/tt_metal/device/test_device_pool.cpp" line="69" status="run" result="skipped" time="0" timestamp="2025-02-13T20:04:07.837" classname="DevicePool">
+      <skipped message="/work/tests/tt_metal/tt_metal/device/test_device_pool.cpp:71&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/device/test_device_pool.cpp:71
+]]></skipped>
+    </testcase>
+    <testcase name="DevicePoolReduceDevices" file="/work/tests/tt_metal/tt_metal/device/test_device_pool.cpp" line="103" status="run" result="skipped" time="0" timestamp="2025-02-13T20:04:07.837" classname="DevicePool">
+      <skipped message="/work/tests/tt_metal/tt_metal/device/test_device_pool.cpp:105&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/device/test_device_pool.cpp:105
+]]></skipped>
+    </testcase>
+  </testsuite>
+  <testsuite name="DeviceFixture" tests="7" failures="0" disabled="0" skipped="0" errors="0" time="2.597" timestamp="2025-02-13T20:04:07.837">
+    <testcase name="PingAllLegalDramChannels" file="/work/tests/tt_metal/tt_metal/device/test_device.cpp" line="77" status="run" result="completed" time="0.268" timestamp="2025-02-13T20:04:07.837" classname="DeviceFixture" />
+    <testcase name="PingIllegalDramChannels" file="/work/tests/tt_metal/tt_metal/device/test_device.cpp" line="111" status="run" result="completed" time="0.005" timestamp="2025-02-13T20:04:08.105" classname="DeviceFixture" />
+    <testcase name="TensixPingAllLegalL1Cores" file="/work/tests/tt_metal/tt_metal/device/test_device.cpp" line="120" status="run" result="completed" time="1.733" timestamp="2025-02-13T20:04:08.111" classname="DeviceFixture" />
+    <testcase name="TensixPingIllegalL1Cores" file="/work/tests/tt_metal/tt_metal/device/test_device.cpp" line="155" status="run" result="completed" time="0.005" timestamp="2025-02-13T20:04:09.844" classname="DeviceFixture" />
+    <testcase name="TensixValidateKernelDoesNotTargetHarvestedCores" file="/work/tests/tt_metal/tt_metal/device/test_device.cpp" line="172" status="run" result="completed" time="0.306" timestamp="2025-02-13T20:04:09.849" classname="DeviceFixture" />
+    <testcase name="TestDeviceToHostMemChannelAssignment" file="/work/tests/tt_metal/tt_metal/device/test_device.cpp" line="220" status="run" result="completed" time="0.004" timestamp="2025-02-13T20:04:10.156" classname="DeviceFixture" />
+    <testcase name="TensixTestL1ToPCIeAt16BAlignedAddress" file="/work/tests/tt_metal/tt_metal/device/test_device.cpp" line="239" status="run" result="completed" time="0.274" timestamp="2025-02-13T20:04:10.160" classname="DeviceFixture" />
+  </testsuite>
+  <testsuite name="TGFixture" tests="4" failures="0" disabled="0" skipped="4" errors="0" time="0.017" timestamp="2025-02-13T20:04:10.435">
+    <testcase name="ActiveEthValidateNumLinksBetweenAdjacentGalaxyChips" file="/work/tests/tt_metal/tt_metal/device/test_galaxy_cluster_api.cpp" line="48" status="run" result="skipped" time="0.004" timestamp="2025-02-13T20:04:10.435" classname="TGFixture">
+      <skipped message="/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:19&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:19
+]]></skipped>
+      <skipped message="/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:57&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:57
+]]></skipped>
+    </testcase>
+    <testcase name="ValidateNumMMIOChips" file="/work/tests/tt_metal/tt_metal/device/test_galaxy_cluster_api.cpp" line="144" status="run" result="skipped" time="0.004" timestamp="2025-02-13T20:04:10.439" classname="TGFixture">
+      <skipped message="/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:19&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:19
+]]></skipped>
+      <skipped message="/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:57&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:57
+]]></skipped>
+    </testcase>
+    <testcase name="ValidateNumGalaxyChips" file="/work/tests/tt_metal/tt_metal/device/test_galaxy_cluster_api.cpp" line="149" status="run" result="skipped" time="0.004" timestamp="2025-02-13T20:04:10.444" classname="TGFixture">
+      <skipped message="/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:19&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:19
+]]></skipped>
+      <skipped message="/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:57&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:57
+]]></skipped>
+    </testcase>
+    <testcase name="ValidateChipBoardTypes" file="/work/tests/tt_metal/tt_metal/device/test_galaxy_cluster_api.cpp" line="155" status="run" result="skipped" time="0.004" timestamp="2025-02-13T20:04:10.448" classname="TGFixture">
+      <skipped message="/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:19&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:19
+]]></skipped>
+      <skipped message="/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:57&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:57
+]]></skipped>
+    </testcase>
+  </testsuite>
+  <testsuite name="GalaxyFixture" tests="3" failures="0" disabled="0" skipped="3" errors="0" time="0.014" timestamp="2025-02-13T20:04:10.453">
+    <testcase name="ActiveEthValidateLinksBetweenMMIOAndGalaxyChips" file="/work/tests/tt_metal/tt_metal/device/test_galaxy_cluster_api.cpp" line="79" status="run" result="skipped" time="0.004" timestamp="2025-02-13T20:04:10.453" classname="GalaxyFixture">
+      <skipped message="/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:19&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:19
+]]></skipped>
+    </testcase>
+    <testcase name="ValidateAllGalaxyChipsAreUnharvested" file="/work/tests/tt_metal/tt_metal/device/test_galaxy_cluster_api.cpp" line="114" status="run" result="skipped" time="0.004" timestamp="2025-02-13T20:04:10.458" classname="GalaxyFixture">
+      <skipped message="/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:19&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:19
+]]></skipped>
+    </testcase>
+    <testcase name="ValidateAllMMIOChipsHaveSingleRowHarvested" file="/work/tests/tt_metal/tt_metal/device/test_galaxy_cluster_api.cpp" line="126" status="run" result="skipped" time="0.004" timestamp="2025-02-13T20:04:10.462" classname="GalaxyFixture">
+      <skipped message="/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:19&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:19
+]]></skipped>
+    </testcase>
+  </testsuite>
+  <testsuite name="TGGFixture" tests="3" failures="0" disabled="0" skipped="3" errors="0" time="0.014" timestamp="2025-02-13T20:04:10.467">
+    <testcase name="ValidateNumMMIOChips" file="/work/tests/tt_metal/tt_metal/device/test_galaxy_cluster_api.cpp" line="170" status="run" result="skipped" time="0.004" timestamp="2025-02-13T20:04:10.467" classname="TGGFixture">
+      <skipped message="/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:19&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:19
+]]></skipped>
+      <skipped message="/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:76&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:76
+]]></skipped>
+    </testcase>
+    <testcase name="ValidateNumGalaxyChips" file="/work/tests/tt_metal/tt_metal/device/test_galaxy_cluster_api.cpp" line="175" status="run" result="skipped" time="0.004" timestamp="2025-02-13T20:04:10.471" classname="TGGFixture">
+      <skipped message="/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:19&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:19
+]]></skipped>
+      <skipped message="/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:76&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:76
+]]></skipped>
+    </testcase>
+    <testcase name="ValidateChipBoardTypes" file="/work/tests/tt_metal/tt_metal/device/test_galaxy_cluster_api.cpp" line="181" status="run" result="skipped" time="0.005" timestamp="2025-02-13T20:04:10.476" classname="TGGFixture">
+      <skipped message="/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:19&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:19
+]]></skipped>
+      <skipped message="/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:76&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:76
+]]></skipped>
+    </testcase>
+  </testsuite>
+  <testsuite name="DeviceInit/DeviceParamFixture" tests="4" failures="0" disabled="0" skipped="0" errors="0" time="0.366" timestamp="2025-02-13T20:04:10.481">
+    <testcase name="DeviceInitializeAndTeardown/0" value_param="1" file="/work/tests/tt_metal/tt_metal/device/test_device_init_and_teardown.cpp" line="64" status="run" result="completed" time="0.004" timestamp="2025-02-13T20:04:10.481" classname="DeviceInit/DeviceParamFixture" />
+    <testcase name="DeviceInitializeAndTeardown/1" value_param="1" file="/work/tests/tt_metal/tt_metal/device/test_device_init_and_teardown.cpp" line="64" status="run" result="completed" time="0.004" timestamp="2025-02-13T20:04:10.486" classname="DeviceInit/DeviceParamFixture" />
+    <testcase name="TensixDeviceLoadBlankKernels/0" value_param="1" file="/work/tests/tt_metal/tt_metal/device/test_device_init_and_teardown.cpp" line="83" status="run" result="completed" time="0.351" timestamp="2025-02-13T20:04:10.490" classname="DeviceInit/DeviceParamFixture" />
+    <testcase name="TensixDeviceLoadBlankKernels/1" value_param="1" file="/work/tests/tt_metal/tt_metal/device/test_device_init_and_teardown.cpp" line="83" status="run" result="completed" time="0.006" timestamp="2025-02-13T20:04:10.842" classname="DeviceInit/DeviceParamFixture" />
+  </testsuite>
+</testsuites>

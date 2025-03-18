@@ -76,7 +76,7 @@ void MAIN {
 
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
-    mm_init();
+    mm_init(cb_q_in, cb_k_in, cb_out);
 
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
         for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {

@@ -1,5 +1,7 @@
 #! /usr/bin/env bash
 
+set -x
+
 source scripts/tools_setup_common.sh
 
 set -eo pipefail
@@ -10,7 +12,6 @@ run_async_mode_T3000_test(){
     if [ "$ARCH_NAME" == "wormhole_b0" ]; then
         remove_default_log_locations
         mkdir -p $PROFILER_ARTIFACTS_DIR
-
         ./tt_metal/tools/profiler/profile_this.py -c "pytest -svv models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_causallm.py::test_falcon_causal_lm[wormhole_b0-True-True-20-2-BFLOAT16-L1-falcon_7b-layers_2-decode_batch32]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
 
         if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
@@ -86,7 +87,10 @@ run_profiling_test(){
 
     echo "Make sure this test runs in a build with cmake option ENABLE_TRACY=ON"
 
-    source python_env/bin/activate
+    if [[ -z "$DONT_USE_VIRTUAL_ENVIRONMENT" ]]; then
+      source python_env/bin/activate
+    fi
+
     export PYTHONPATH=$TT_METAL_HOME
 
     run_additional_T3000_test

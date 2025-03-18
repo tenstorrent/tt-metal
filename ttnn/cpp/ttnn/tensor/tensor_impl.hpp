@@ -13,6 +13,7 @@
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device_impl.hpp>
 #include <tt-metalium/mesh_device.hpp>
+
 #include <tracy/Tracy.hpp>
 
 #include "ttnn/tensor/host_buffer/functions.hpp"
@@ -102,7 +103,7 @@ inline std::vector<T> convert_layout_row_major_to_tile(
     auto transpose_of_faces = tile.get_transpose_of_faces();
 
     return convert_layout(
-        data_to_convert,
+        tt::stl::MakeConstSpan(data_to_convert),
         shape,
         tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
         tests::utils::TensorLayoutType::TILED_NFACES,
@@ -121,7 +122,7 @@ inline std::vector<T> convert_layout_tile_to_row_major(
     auto transpose_of_faces = tile.get_transpose_of_faces();
 
     return convert_layout(
-        data_to_convert,
+        tt::stl::MakeConstSpan(data_to_convert),
         shape,
         tests::utils::TensorLayoutType::TILED_NFACES,
         tests::utils::TensorLayoutType::LIN_ROW_MAJOR,

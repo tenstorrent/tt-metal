@@ -4,7 +4,7 @@
 
 #include "llrt.hpp"
 #include <tt_cluster.hpp>
-#include <span.hpp>
+#include <tt_stl/span.hpp>
 
 #include <unistd.h>
 
@@ -21,7 +21,7 @@ void memset_dram(std::vector<uint32_t> mem_vec, uint32_t chip_id, uint32_t start
     const metal_SocDescriptor& sdesc = tt::Cluster::instance().get_soc_desc(chip_id);
     for (uint32_t dram_view = 0; dram_view < sdesc.get_num_dram_views(); dram_view++) {
         for (uint32_t dram_src_subchannel_id = 0;
-             dram_src_subchannel_id < sdesc.dram_cores.at(sdesc.get_channel_for_dram_view(dram_view)).size();
+             dram_src_subchannel_id < sdesc.get_dram_cores().at(sdesc.get_channel_for_dram_view(dram_view)).size();
              dram_src_subchannel_id++) {
             tt::Cluster::instance().write_dram_vec(
                 mem_vec, tt_target_dram{chip_id, dram_view, dram_src_subchannel_id}, start_addr);

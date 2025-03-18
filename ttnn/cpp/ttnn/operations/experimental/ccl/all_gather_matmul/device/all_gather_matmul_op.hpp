@@ -44,7 +44,7 @@ struct AllGatherMatmul {
         const std::vector<std::optional<Tensor>>& optional_output_tensors = {std::nullopt}) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
-    operation::ProgramWithCallbacks create_program(
+    tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors) const;
@@ -54,7 +54,7 @@ struct AllGatherMatmul {
     }
 };
 
-operation::ProgramWithCallbacks all_gather_matmul_multi_core_with_workers(
+tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_multi_core_with_workers(
 
     /* General Params */
     const Tensor& input_tensor,

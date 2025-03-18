@@ -10,7 +10,7 @@
 #include <string>
 
 #include "ttnn/graph/graph_trace_utils.hpp"
-#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/trace.hpp"
 
 namespace ttnn::graph {
 
@@ -53,16 +53,16 @@ auto capture_op_trace(Op op, IDevice* device, Args&&... args) {
         std::apply(op, transformed_args);
     }
 
-    auto trace_id = ttnn::operations::core::begin_trace_capture(device, ttnn::DefaultQueueId);
+    auto trace_id = ttnn::operations::trace::begin_trace_capture(device, ttnn::DefaultQueueId);
     try {
         std::apply(op, transformed_args);
     } catch (const std::exception& e) {
         // Ensure trace capture is stopped and released before returning to avoid a memory leak
-        ttnn::operations::core::end_trace_capture(device, trace_id, ttnn::DefaultQueueId);
-        ttnn::operations::core::release_trace(device, trace_id);
+        ttnn::operations::trace::end_trace_capture(device, trace_id, ttnn::DefaultQueueId);
+        ttnn::operations::trace::release_trace(device, trace_id);
         throw e;
     }
-    ttnn::operations::core::end_trace_capture(device, trace_id, ttnn::DefaultQueueId);
+    ttnn::operations::trace::end_trace_capture(device, trace_id, ttnn::DefaultQueueId);
 
     return trace_id;
 }
@@ -84,17 +84,17 @@ uint64_t execute_time_and_release_trace(TraceID trace_id, IDevice* device) {
         uint64_t duration = 0;
         for (int i = 0; i < NUM_TRACE_EXECUTIONS; ++i) {
             auto start = std::chrono::high_resolution_clock::now();
-            ttnn::operations::core::execute_trace(device, trace_id, ttnn::DefaultQueueId, /* blocking = */ true);
+            ttnn::operations::trace::execute_trace(device, trace_id, ttnn::DefaultQueueId, /* blocking = */ true);
             auto end = std::chrono::high_resolution_clock::now();
             duration += std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
         }
 
-        ttnn::operations::core::release_trace(device, trace_id);
+        ttnn::operations::trace::release_trace(device, trace_id);
         return duration / NUM_TRACE_EXECUTIONS;
 
     } catch (const std::exception& e) {
         // Ensure captured trace is released before returning to avoid a memory leak
-        ttnn::operations::core::release_trace(device, trace_id);
+        ttnn::operations::trace::release_trace(device, trace_id);
         throw e;
     }
 }

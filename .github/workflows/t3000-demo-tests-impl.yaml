@@ -24,7 +24,6 @@ jobs:
 
     name: ${{ matrix.test-group.name }}
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.test-group.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
@@ -43,6 +42,7 @@ jobs:
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - uses: actions/download-artifact@v4
+        timeout-minutes: 10
         with:
           name: TTMetal_build_any
       - name: Extract files
@@ -58,14 +58,14 @@ jobs:
           source ${{ github.workspace }}/tests/scripts/t3000/run_t3000_demo_tests.sh
           ${{ matrix.test-group.cmd }}
       - name: Save environment data
-        if: ${{ (matrix.test-group.name == 't3k_falcon7b_tests' || matrix.test-group.name == 't3k_mixtral_tests' || matrix.test-group.name == 't3k_llama3_tests' || matrix.test-group.name == 't3k_llama3_70b_tests') && !cancelled() }}
+        if: ${{ (matrix.test-group.name == 't3k_falcon7b_tests' || matrix.test-group.name == 't3k_mixtral_tests' || matrix.test-group.name == 't3k_llama3_tests' || matrix.test-group.name == 't3k_llama3_70b_tests' || matrix.test-group.name == 't3k_llama3_vision_tests') && !cancelled() }}
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
           python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
       - name: Upload benchmark data
-        if: ${{ (matrix.test-group.name == 't3k_falcon7b_tests' || matrix.test-group.name == 't3k_mixtral_tests' || matrix.test-group.name == 't3k_llama3_tests' || matrix.test-group.name == 't3k_llama3_70b_tests') && !cancelled() }}
+        if: ${{ (matrix.test-group.name == 't3k_falcon7b_tests' || matrix.test-group.name == 't3k_mixtral_tests' || matrix.test-group.name == 't3k_llama3_tests' || matrix.test-group.name == 't3k_llama3_70b_tests' || matrix.test-group.name == 't3k_llama3_vision_tests') && !cancelled() }}
         uses: ./.github/actions/upload-data-via-sftp
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
@@ -77,6 +77,13 @@ jobs:
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: ${{ matrix.test-group.owner_id }}
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          path: |
+            generated/test_reports/
+          prefix: "test_reports_"
       - name: Disable performance mode
         if: always()
         run: |

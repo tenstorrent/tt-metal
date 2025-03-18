@@ -122,15 +122,14 @@ void MAIN {
     constexpr uint32_t out_block_w = in1_block_w;
 
     // CB indices
-    constexpr uint32_t in0_cb_id = tt::CBIndex::c_0;
-    constexpr uint32_t in1_cb_id = tt::CBIndex::c_1;
-    constexpr uint32_t in0_pretilize_cb_id = tt::CBIndex::c_6;
-    constexpr uint32_t in0_cb_second_reader_id = tt::CBIndex::c_7;
-    constexpr uint32_t eltwise_mul_partials_cb = tt::CBIndex::c_24;
-    constexpr uint32_t tilized_in0_cb_id = tt::CBIndex::c_25;
-    constexpr uint32_t temp_sum_cb = tt::CBIndex::c_27;
-    constexpr uint32_t prev_eltwise_cb = tt::CBIndex::c_29;
-    constexpr uint32_t out_cb_id = tt::CBIndex::c_16;
+    constexpr uint32_t in0_cb_id = get_compile_time_arg_val(18);
+    constexpr uint32_t in1_cb_id = get_compile_time_arg_val(19);
+    constexpr uint32_t in0_pretilize_cb_id = get_compile_time_arg_val(20);
+    constexpr uint32_t in0_cb_second_reader_id = get_compile_time_arg_val(21);
+    constexpr uint32_t eltwise_mul_partials_cb = get_compile_time_arg_val(22);
+    constexpr uint32_t tilized_in0_cb_id = get_compile_time_arg_val(23);
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(24);
+    constexpr uint32_t temp_sum_cb = get_compile_time_arg_val(25);
 
     constexpr uint32_t in0_num_subblocks_read = in0_num_subblocks;
 

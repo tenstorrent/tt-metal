@@ -53,7 +53,8 @@ MorehCumsumDeviceOperation::spec_return_value_t MorehCumsumDeviceOperation::comp
 
     const auto& input = tensor_args.input;
     return TensorSpec(
-        input.get_logical_shape(), TensorLayout(input.dtype(), PageConfig(input.layout()), MemoryConfig{}));
+        input.get_logical_shape(),
+        tt::tt_metal::TensorLayout(input.dtype(), tt::tt_metal::PageConfig(input.layout()), MemoryConfig{}));
 }
 
 MorehCumsumDeviceOperation::tensor_return_value_t MorehCumsumDeviceOperation::create_output_tensors(

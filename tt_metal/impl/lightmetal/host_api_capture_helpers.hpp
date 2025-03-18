@@ -7,7 +7,7 @@
 #include "flatbuffers/flatbuffers.h"
 #include "lightmetal/lightmetal_capture.hpp"
 #include <tt-metalium/logger.hpp>
-#include <tt-metalium/span.hpp>
+#include <tt_stl/span.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <kernel_types.hpp>
 
@@ -19,12 +19,10 @@ struct DataMovementConfig;
 struct ComputeConfig;
 struct EthernetConfig;
 
-inline namespace v0 {
 class IDevice;
 struct BufferConfig;
 struct CircularBufferConfig;
 using RuntimeArgs = std::vector<std::variant<Buffer*, uint32_t>>;
-}  // namespace v0
 
 //////////////////////////////////////////////////////////////
 // TRACE GUARD & LIGHT METAL TRACE MACRO                    //
@@ -79,9 +77,20 @@ void CaptureLoadTrace(IDevice* device, const uint8_t cq_id, const uint32_t tid);
 
 void CaptureReleaseTrace(IDevice* device, uint32_t tid);
 
-void CaptureCreateBuffer(const std::shared_ptr<Buffer>& buffer, const InterleavedBufferConfig& config);
+void CaptureBufferCreate(
+    const std::shared_ptr<Buffer>& buffer,
+    IDevice* device,
+    const std::optional<DeviceAddr> address,  // Made optional to share with 2 variants.
+    DeviceAddr size,
+    DeviceAddr page_size,
+    const BufferType buffer_type,
+    const TensorMemoryLayout buffer_layout,
+    const std::optional<ShardSpecBuffer>& shard_parameters,
+    const std::optional<bool> bottom_up,
+    const std::optional<SubDeviceId> sub_device_id);
 
-void CaptureDeallocateBuffer(Buffer& buffer);
+void CaptureBufferDeallocate(const Buffer& buffer);
+void CaptureBufferDelete(const Buffer& buffer);
 
 void CaptureEnqueueWriteBuffer(
     CommandQueue& cq,
@@ -96,7 +105,7 @@ void CaptureEnqueueReadBuffer(
     bool blocking);
 
 void CaptureFinish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids);
-void CaptureCreateProgram(Program& program);
+void CaptureProgramConstructor(Program& program);
 void CaptureEnqueueProgram(CommandQueue& cq, Program& program, bool blocking);
 
 void CaptureCreateKernel(
@@ -111,6 +120,12 @@ void CaptureSetRuntimeArgsUint32(
     KernelHandle kernel_id,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     tt::stl::Span<const uint32_t> runtime_args);
+
+void CaptureSetRuntimeArgsUint32VecPerCore(
+    const Program& program,
+    KernelHandle kernel_id,
+    const std::vector<CoreCoord>& core_spec,
+    const std::vector<std::vector<uint32_t>>& runtime_args);
 
 void CaptureSetRuntimeArgs(
     IDevice* device,

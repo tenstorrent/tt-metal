@@ -11,7 +11,7 @@
 #include <tt-metalium/program_cache.hpp>
 #include <tracy/Tracy.hpp>
 #include "tools/profiler/op_profiler.hpp"
-#include <tt-metalium/reflection.hpp>
+#include <tt_stl/reflection.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 #include "ttnn/core.hpp"
 #include "ttnn/distributed/api.hpp"
@@ -362,7 +362,7 @@ template <DeviceOperationConcept device_operation_t>
 typename device_operation_t::tensor_args_t get_shard_tensor_args(std::size_t index, auto device, const typename device_operation_t::tensor_args_t& tensor_args) {
     auto get_shard = [device](const auto& tensor) {
         auto& storage = std::get<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage());
-        return Tensor{DeviceStorage{storage.get_buffer_for_device(device)}, storage.get_tensor_spec_for_device(device)};
+        return Tensor{tt::tt_metal::DeviceStorage{storage.get_buffer_for_device(device)}, storage.get_tensor_spec_for_device(device)};
     };
     return tt::stl::reflection::transform_object_of_type<Tensor>(get_shard, tensor_args);
 }
@@ -432,8 +432,8 @@ typename device_operation_t::tensor_return_value_t launch_on_multi_device(
     std::vector<tensor_return_value_t> outputs;
     outputs.reserve(num_shards);
 
-    for (auto shard_index = 0; shard_index < num_shards; shard_index++) {
-        auto device = storage.get_buffer_for_device_id(shard_index)->device();
+    for (const auto &[shard_index, buffer] : storage.buffers ) {
+        auto device = buffer->device();
         auto shard_tensor_args = get_shard_tensor_args<device_operation_t>(shard_index, device, tensor_args);
         outputs.push_back(launch_on_single_device<device_operation_t>(cq_id, operation_attributes, shard_tensor_args));
     }

@@ -84,28 +84,42 @@ struct SlidingWindowConfig {
     uint32_t get_output_shard_y(bool snap_to_tile = false) const;
 };  // struct SlidingWindowConfig
 
+struct Range {
+    uint32_t start{0};
+    uint32_t end{0};
+};
+
+struct ShardBoundary {
+    Range output_range;
+    Range input_range;
+};
+
+struct PixelMetadata {
+    bool is_pad{false};
+    uint32_t src_core_id{0};
+    uint32_t src_local_idx{0};
+};
+
 std::vector<bool> generate_pad_metadata(const SlidingWindowConfig& config);
 std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& config);
-std::vector<std::pair<uint32_pair_t, uint32_pair_t>> generate_shard_boundaries(
+std::vector<ShardBoundary> generate_shard_boundaries(
     const SlidingWindowConfig& config, const std::vector<uint32_t>& op_trace_metadata);
-std::vector<std::pair<bool, uint32_pair_t>> generate_tensor_metadata(
+std::vector<PixelMetadata> generate_tensor_metadata(
     const std::vector<bool>& pad_metadata,
     const SlidingWindowConfig& config,
     uint32_t reshard_num_cores_nhw = 0,
     bool is_in_tiled = true);
-uint32_t generate_max_out_nsticks_per_core(
-    const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries);
-std::tuple<std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>>
-generate_halo_kernel_config_tensors(
-    const std::vector<std::pair<bool, uint32_pair_t>>& tensor_metadata,
-    const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries,
+uint32_t generate_max_out_nsticks_per_core(const std::vector<ShardBoundary>& shard_boundaries);
+std::vector<std::vector<std::vector<uint16_t>>> generate_halo_kernel_config_tensors(
+    const std::vector<PixelMetadata>& tensor_metadata,
+    const std::vector<ShardBoundary>& shard_boundaries,
     bool is_block_sharded,
     bool transpose_mcast,
     bool remote_read,
     tt::tt_metal::IDevice* device);
 std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
     const std::vector<uint32_t>& op_trace_metadata,
-    const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries,
+    const std::vector<ShardBoundary>& shard_boundaries,
     bool pad_tile = false,
     bool pad_cores = false);
 std::vector<uint16_t> flatten(const std::vector<std::vector<uint16_t>>& input);
@@ -143,5 +157,11 @@ struct fmt::formatter<ttnn::operations::sliding_window::SlidingWindowConfig> : f
 template <>
 struct fmt::formatter<ttnn::operations::sliding_window::ParallelConfig> : formatter<string_view> {
     auto format(const ttnn::operations::sliding_window::ParallelConfig& t, fmt::format_context& ctx) const
+        -> format_context::iterator;
+};
+
+template <>
+struct fmt::formatter<ttnn::operations::sliding_window::ShardBoundary> : formatter<string_view> {
+    auto format(const ttnn::operations::sliding_window::ShardBoundary& t, fmt::format_context& ctx) const
         -> format_context::iterator;
 };

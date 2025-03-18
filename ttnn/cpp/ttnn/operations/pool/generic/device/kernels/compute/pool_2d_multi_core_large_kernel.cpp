@@ -107,7 +107,6 @@ void MAIN {
     constexpr uint32_t in_scalar_cb_id = tt::CBIndex::c_4;
     constexpr uint32_t in_one_cb_id = tt::CBIndex::c_5;  // value of 1 to avoid double division.
 
-    constexpr uint32_t in_tiled_cb_id = tt::CBIndex::c_24;
     constexpr uint32_t out_cb_id = tt::CBIndex::c_16;
     constexpr uint32_t interm_cb_id = tt::CBIndex::c_25;
 

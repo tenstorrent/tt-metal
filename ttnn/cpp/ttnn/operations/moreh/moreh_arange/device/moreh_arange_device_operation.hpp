@@ -28,7 +28,7 @@ struct MorehArangeOperation {
 
     struct ProgramFactory {
         struct shared_variables_t {
-            KernelHandle kernel_id;
+            tt::tt_metal::KernelHandle kernel_id;
             std::size_t num_cores;
             std::size_t core_h;
         };

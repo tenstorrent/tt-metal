@@ -62,15 +62,6 @@ void deallocate(Tensor& tensor, bool force = true);
 
 Tensor reallocate(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config);
 
-// Trace APIs - Single Device
-uint32_t begin_trace_capture(IDevice* device, const QueueId cq_id);
-
-void end_trace_capture(IDevice* device, const uint32_t tid, const QueueId cq_id);
-
-void execute_trace(IDevice* device, const uint32_t tid, const QueueId cq_id, bool blocking);
-
-void release_trace(IDevice* device, const uint32_t tid);
-
 }  // namespace core
 }  // namespace operations
 

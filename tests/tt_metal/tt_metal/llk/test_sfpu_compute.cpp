@@ -17,12 +17,13 @@
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 
+namespace tt::tt_metal {
+
 using std::map;
 using std::vector;
 using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
-using namespace tt::tt_metal;
 
 namespace unit_tests::sfpu_util {
 
@@ -471,3 +472,5 @@ TEST_F(DeviceFixture, DISABLED_TensixAllCoreMultiTileSfpuApproxCompute) {
     test_config.sfpu_op = "tanh";
     EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
 }
+
+}  // namespace tt::tt_metal

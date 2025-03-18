@@ -44,17 +44,17 @@ void MAIN {
 #else
     constexpr uint32_t cb_xmm = tt::CBIndex::c_24;  // x minus mean
 #endif
-    constexpr auto cb_ex = tt::CBIndex::c_25;      // E[x]
-    constexpr auto cb_ex2 = tt::CBIndex::c_26;     // E[(x-E[x])^2]
-    constexpr auto cb_xmm2 = tt::CBIndex::c_27;    // xmm^2
-    constexpr auto cb_ex2pe = tt::CBIndex::c_28;   // E[(x-E[x])^2]+eps
-    constexpr auto cb_fusion = tt::CBIndex::c_29;  // stream gamma/beta
+    constexpr auto cb_ex = tt::CBIndex::c_18;      // E[x]
+    constexpr auto cb_ex2 = tt::CBIndex::c_19;     // E[(x-E[x])^2]
+    constexpr auto cb_xmm2 = tt::CBIndex::c_20;    // xmm^2
+    constexpr auto cb_ex2pe = tt::CBIndex::c_21;   // E[(x-E[x])^2]+eps
+    constexpr auto cb_fusion = tt::CBIndex::c_22;  // stream gamma/beta
     constexpr auto scaler0 = 0;
 #ifdef FUSE_PRE_ADD
 #ifdef RMSNORM
     constexpr uint32_t cb_x = cb_xmm;
 #else
-    constexpr uint32_t cb_x = tt::CBIndex::c_30;
+    constexpr uint32_t cb_x = tt::CBIndex::c_23;
 #endif
 #else
     constexpr uint32_t cb_x = cb_in;

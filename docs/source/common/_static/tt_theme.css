@@ -453,3 +453,11 @@ html.writer-html5
   background: var(--color-background-alt2) !important;
   color: var(--color-foreground) !important;
 }
+
+.rst-versions.shift-up {
+  overflow-y: auto;
+}
+
+.project-versions {
+  font-size: small;
+}

@@ -11,13 +11,11 @@ jobs:
       fail-fast: false
       matrix:
         test-info: [
-          {name: "GS", arch: grayskull, runs-on: ["E150", "pipeline-perf", "bare-metal", "in-service"], machine-type: "bare_metal"},
           {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"], machine-type: "bare_metal"},
         ]
         model-type: [llm_javelin, cnn_javelin, other]
     name: "${{ matrix.model-type }} ${{ matrix.test-info.name }}"
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.test-info.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
@@ -33,6 +31,7 @@ jobs:
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
           echo "PYTHONPATH=$(pwd)" >> $GITHUB_ENV
       - uses: actions/download-artifact@v4
+        timeout-minutes: 10
         with:
           name: TTMetal_build_any
       - name: Extract files
@@ -60,9 +59,17 @@ jobs:
       - name: Upload perf report
         if: ${{ !cancelled() && steps.check-perf-report.conclusion == 'success' }}
         uses: actions/upload-artifact@v4
+        timeout-minutes: 10
         with:
           name: perf-report-csv-${{ matrix.model-type }}-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}
           path: "${{ steps.check-perf-report.outputs.perf_report_filename }}"
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          path: |
+            generated/test_reports/
+          prefix: "test_reports_"
       - name: Disable Performance mode
         if: always()
         run: |

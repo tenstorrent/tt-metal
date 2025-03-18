@@ -200,9 +200,7 @@ def run_line_all_gather_instances(
 
     for loop in range(num_iters):
         ## Wait for completion
-        for i, devices in enumerate(t3000_device_rows):
-            for d in devices:
-                ttnn.synchronize_device(d)
+        ttnn.synchronize_device(t3k_mesh_device)
 
         for tt_out_tensor in result_mesh_tensors:
             for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):

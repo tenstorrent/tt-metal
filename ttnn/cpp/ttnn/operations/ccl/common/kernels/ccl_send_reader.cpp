@@ -14,7 +14,7 @@
 #include "cpp/ttnn/tensor/enum_types.hpp"
 #include "cpp/ttnn/operations/ccl/common/kernels/command_processor.hpp"
 #include "cpp/ttnn/operations/ccl/common/kernels/ccl_send_utils.hpp"
-#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_transmission.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp"
 
 #include <cstdint>
 
@@ -162,7 +162,7 @@ void kernel_main() {
             for (uint32_t p = 0; p < command_tensor.worker_pages_per_slice; p += packet_size_in_pages) {
                 cb_reserve_back(cb_id, packet_size_in_pages);
                 const uint32_t local_l1_scratch_buffer_address =
-                    get_write_ptr(cb_id) + sizeof(tt::fabric::PacketHeader);
+                    get_write_ptr(cb_id) + sizeof(PACKET_HEADER_TYPE);
 
                 uint32_t n_pages = std::min(packet_size_in_pages, command_tensor.worker_pages_per_slice - p);
                 ASSERT(command_tensor.worker_start_offset_in_slice.w == 0);

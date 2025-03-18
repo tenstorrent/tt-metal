@@ -16,32 +16,21 @@ ComputeConfig from_flatbuffer(const flatbuffer::ComputeConfig* fb_config);
 EthernetConfig from_flatbuffer(const flatbuffer::EthernetConfig* fb_config);
 std::vector<SubDeviceId> from_flatbuffer(const flatbuffers::Vector<uint8_t>* fb_sub_device_ids);
 
+std::vector<CoreCoord> from_flatbuffer(
+    const flatbuffers::Vector<flatbuffers::Offset<flatbuffer::CoreCoord>>* core_spec_fbs);
+std::vector<std::vector<uint32_t>> from_flatbuffer(
+    const flatbuffers::Vector<flatbuffers::Offset<flatbuffer::UInt32Vector>>* vec_of_vec_fbs);
+
+CoreCoord from_flatbuffer(const flatbuffer::CoreCoord* fb_core_coord);
+CoreRange from_flatbuffer(const flatbuffer::CoreRange* fb_core_range);
+CoreRangeSet from_flatbuffer(const flatbuffer::CoreRangeSet* fb_core_range_set);
+
 template <typename CommandType>
 std::variant<CoreCoord, CoreRange, CoreRangeSet> core_spec_from_flatbuffer(const CommandType* cmd) {
     switch (cmd->core_spec_type()) {
-        case flatbuffer::CoreSpec::CoreCoord: {
-            const auto* core_coord = cmd->core_spec_as_CoreCoord();
-            TT_FATAL(core_coord, "Invalid CoreCoord data from flatbuffer.");
-            return CoreCoord{core_coord->x(), core_coord->y()};
-        }
-        case flatbuffer::CoreSpec::CoreRange: {
-            const auto* core_range = cmd->core_spec_as_CoreRange();
-            TT_FATAL(core_range, "Invalid CoreRange data from flatbuffer.");
-            return CoreRange{
-                {core_range->start()->x(), core_range->start()->y()}, {core_range->end()->x(), core_range->end()->y()}};
-        }
-        case flatbuffer::CoreSpec::CoreRangeSet: {
-            const auto* core_range_set = cmd->core_spec_as_CoreRangeSet();
-            TT_FATAL(core_range_set, "Invalid CoreRangeSet data from flatbuffer.");
-
-            std::vector<CoreRange> ranges;
-            for (const auto* range : *core_range_set->ranges()) {
-                ranges.emplace_back(
-                    CoreCoord{range->start()->x(), range->start()->y()},
-                    CoreCoord{range->end()->x(), range->end()->y()});
-            }
-            return CoreRangeSet{ranges};
-        }
+        case flatbuffer::CoreSpec::CoreCoord: return from_flatbuffer(cmd->core_spec_as_CoreCoord());
+        case flatbuffer::CoreSpec::CoreRange: return from_flatbuffer(cmd->core_spec_as_CoreRange());
+        case flatbuffer::CoreSpec::CoreRangeSet: return from_flatbuffer(cmd->core_spec_as_CoreRangeSet());
         case flatbuffer::CoreSpec::NONE: TT_THROW("Invalid CoreSpec type. NONE cannot be processed.");
     }
     TT_THROW("Unhandled CoreSpec type in from_flatbuffer.");

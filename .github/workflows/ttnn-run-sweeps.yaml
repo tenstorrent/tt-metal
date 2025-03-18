@@ -175,6 +175,7 @@ on:
           - eltwise.unary.hardshrink.hardshrink_sharded
           - normalization.softmax.softmax
           - normalization.softmax.softmax_sharded
+          - normalization.batch_norm.batch_norm
           - eltwise.unary.identity.identity
           - eltwise.unary.identity.identity_sharded
           - eltwise.unary.neg.neg
@@ -550,7 +551,6 @@ jobs:
   ttnn-generate-sweeps:
     needs: build-artifact
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: wormhole_b0
       ELASTIC_USERNAME: ${{ secrets.SWEEPS_ELASTIC_USERNAME }}
       ELASTIC_PASSWORD: ${{ secrets.SWEEPS_ELASTIC_PASSWORD }}
@@ -588,12 +588,6 @@ jobs:
         test-group:
           [
             {
-              name: "Grayskull E150 Sweeps",
-              arch: grayskull,
-              runs-on: ["cloud-virtual-machine", "E150", "in-service"],
-              tt-smi-cmd: "tt-smi-metal -r 0"
-            },
-            {
               name: "Wormhole N150 Sweeps",
               arch: wormhole_b0,
               runs-on: ["cloud-virtual-machine", "N150", "in-service"],
@@ -607,7 +601,6 @@ jobs:
             }
           ]
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.test-group.arch }}
       ELASTIC_USERNAME: ${{ secrets.SWEEPS_ELASTIC_USERNAME }}
       ELASTIC_PASSWORD: ${{ secrets.SWEEPS_ELASTIC_PASSWORD }}

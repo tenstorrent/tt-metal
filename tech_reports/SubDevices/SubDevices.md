@@ -118,7 +118,7 @@ The following are some examples of the different python level APIs that take in 
 
   Resets the sub_device_ids that will be stalled on by default for Fast Dispatch commands such as reading, writing, synchronizing back to all SubDevice IDs.
 
-* `ttnn.synchronize_devices(..., sub_device_ids=[sub_device_id_0, sub_device_id_1])`
+* `ttnn.synchronize_device(..., sub_device_ids=[sub_device_id_0, sub_device_id_1])`
 
   This will stall the host waiting for completion of the specified sub-device's programs. Not specifying any sub-device ids means we will stall waiting for all sub-devices set by `set_sub_device_stall_group` to complete.
 
@@ -185,7 +185,7 @@ The following is an example of setting up a global circular buffer for use withi
   Note that the ranges of local and remote circular buffer indices cannot overlap, that is the max local index must be less than the minimum remote index.
   Local circular buffers can be in-placed with a remote circular buffer, as this is useful for using the remote circular buffer for synchronization with other cores, while the local circular buffer is used for feeding data to the compute kernel, as the compute functions/LLKs cannot use the remote config.
 
-* `tt_metal::v1::experimental::UpdateDynamicCircularBufferAddress(program, cb_handle, global_circular_buffer);`
+* `tt_metal::experimental::UpdateDynamicCircularBufferAddress(program, cb_handle, global_circular_buffer);`
 
   Updates an existing circular buffer specified by the handle that was associated with a global circular buffer to the address space of a different global circular buffer.
   The new global circular buffer is expected to contain all the cores used by the circular buffer config.

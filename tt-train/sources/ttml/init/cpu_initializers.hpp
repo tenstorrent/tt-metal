@@ -26,6 +26,7 @@ struct FanParams {
 };
 
 xt::xarray<float> uniform_init(const ttnn::Shape& shape, UniformRange range);
+xt::xarray<float> normal_init(const ttnn::Shape& shape, NormalParams params);
 
 void uniform_init(std::vector<float>& vec, UniformRange range);
 

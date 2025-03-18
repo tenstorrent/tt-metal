@@ -7,12 +7,13 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
+
 using namespace tt::constants;
 using namespace tt;
 
 namespace ttnn::operations::experimental::transformer {
 
-operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(
+tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(
     const Tensor& input_tensor,
     const uint32_t num_q_heads,
     const uint32_t num_kv_heads,
@@ -54,7 +55,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(
     }
 }
 
-operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_interleaved_input(
+tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_interleaved_input(
     const Tensor& input_tensor,
     const uint32_t num_q_heads,
     const uint32_t num_kv_heads,
@@ -211,7 +212,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_interleav
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_input(
+tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_input(
     const Tensor& input_tensor,
     const uint32_t num_q_heads,
     const uint32_t num_kv_heads,
@@ -229,8 +230,8 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_i
     // Create CBs for reader/writer for batch_offset
     uint32_t batch_offset_cb_index_reader = CBIndex::c_15;
     uint32_t batch_offset_cb_index_writer = CBIndex::c_14;
-    CBHandle cb_batch_offset_reader = 0;
-    CBHandle cb_batch_offset_writer = 0;
+    tt::tt_metal::CBHandle cb_batch_offset_reader = 0;
+    tt::tt_metal::CBHandle cb_batch_offset_writer = 0;
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
 
@@ -378,7 +379,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_i
             q_cores,
             tt_metal::WriterDataMovementConfig(q_writer_compile_time_args));
 
-        KernelHandle k_reader_kernel_id = 0, k_writer_kernel_id = 0;
+        tt::tt_metal::KernelHandle k_reader_kernel_id = 0, k_writer_kernel_id = 0;
         if (!overlap_qk_coregrid) {
             // Switch process_qv and process_k for k kernels
             process_qv = 0;
@@ -504,7 +505,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_i
 
 }  // namespace ttnn::operations::experimental::transformer
 
-operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_input_subcoregrid(
+tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_input_subcoregrid(
     const Tensor& input_tensor,
     const uint32_t num_q_heads,
     const uint32_t num_kv_heads,
@@ -522,8 +523,8 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_i
     // Create CBs for reader/writer for batch_offset
     uint32_t batch_offset_cb_index_reader = CBIndex::c_15;
     uint32_t batch_offset_cb_index_writer = CBIndex::c_14;
-    CBHandle cb_batch_offset_reader = 0;
-    CBHandle cb_batch_offset_writer = 0;
+    tt::tt_metal::CBHandle cb_batch_offset_reader = 0;
+    tt::tt_metal::CBHandle cb_batch_offset_writer = 0;
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
 
@@ -667,7 +668,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_i
         q_cores,
         tt_metal::WriterDataMovementConfig(q_writer_compile_time_args));
 
-    KernelHandle k_reader_kernel_id = 0, k_writer_kernel_id = 0;
+    tt::tt_metal::KernelHandle k_reader_kernel_id = 0, k_writer_kernel_id = 0;
     if (!overlap_qk_coregrid) {
         // Switch process_qv and process_k for k kernels
         process_qv = 0;

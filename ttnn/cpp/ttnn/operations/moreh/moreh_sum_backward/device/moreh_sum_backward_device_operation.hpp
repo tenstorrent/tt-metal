@@ -28,8 +28,8 @@ struct MorehSumBackwardOperation {
 
     struct ProgramFactory {
         struct shared_variables_t {
-            KernelHandle unary_reader_kernel_id;
-            KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::KernelHandle unary_reader_kernel_id;
+            tt::tt_metal::KernelHandle unary_writer_kernel_id;
             std::size_t num_cores;
             std::size_t num_cores_y;
         };

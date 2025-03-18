@@ -37,6 +37,9 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
         case BITWISE_XOR:
         case BITWISE_AND:
         case BITWISE_OR: return (a == INT32 && b == INT32);
+        case QUANT:
+        case REQUANT:
+        case DEQUANT:
         case POWER: return true;
         default: return false;
     }
@@ -103,11 +106,16 @@ SubtileBroadcastType get_subtile_broadcast_type(uint32_t a_h, uint32_t a_w, uint
 }
 
 tt::stl::hash::hash_t BinaryNgDeviceOperation::operation_attributes_t::to_hash() const {
+    // TODO: a more generalized way to skip the hashing of an UnaryWithParam?
+    // Don't hash the quantization scale, otherwise we build the kernel for each different scale
+    const bool is_quant_op = (binary_op_type == BinaryOpType::QUANT) or (binary_op_type == BinaryOpType::DEQUANT) or
+                             (binary_op_type == BinaryOpType::REQUANT);
+
     return tt::stl::hash::hash_objects_with_default_seed(
         binary_op_type,
         lhs_activations,
         rhs_activations,
-        post_activations,
+        is_quant_op ? ttnn::SmallVector<unary::UnaryWithParam>{} : post_activations,
         memory_config,
         get_dtype(),
         compute_kernel_config,
@@ -154,6 +162,23 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
     const auto& output_tensor = tensor_args.output_tensor;
+
+    auto nd_support = [](const auto& shape) {
+        bool valid = true;
+        for (int i = -5; i >= -shape.rank(); --i) {
+            if (shape[i] != 1) {
+                valid = false;
+                break;
+            }
+        }
+        return valid;
+    };
+
+    TT_FATAL(nd_support(input_tensor_a.get_logical_shape()), "Tensor a does not support 5D or more");
+
+    if (input_tensor_b.has_value()) {
+        TT_FATAL(nd_support(input_tensor_b->get_logical_shape()), "Tensor b does not support 5D or more");
+    }
 
     TT_FATAL(
         input_tensor_b.has_value() != attributes.scalar.has_value(), "Either the tensor b or scalar should be set");
@@ -246,6 +271,7 @@ void BinaryNgDeviceOperation::validate_on_program_cache_hit(
     const int rank_a = input_shape_a.rank();
     const int rank_b = input_shape_b.rank();
     const int larger_rank = std::max(rank_a, rank_b);
+
     for (int i = -1; i >= -larger_rank; --i) {
         auto a_dim = (i >= -rank_a) ? input_shape_a[i] : 1;
         auto b_dim = (i >= -rank_b) ? input_shape_b[i] : 1;
@@ -256,10 +282,20 @@ void BinaryNgDeviceOperation::validate_on_program_cache_hit(
             a_dim,
             b_dim);
 
+        if (i <= -5) {
+            TT_FATAL(
+                a_dim == 1 && b_dim == 1,
+                "Broadcasting rule violation for 5D {}, dim a: {}, dim b: {}",
+                i,
+                a_dim,
+                b_dim);
+        }
+
         if (has_shard_spec and i != -1) {
             TT_FATAL(
                 a_dim == b_dim,
-                "Cannot broadcast sharded tensors on dims other than W, violation for rank {}, dim a: {}, dim b: {}",
+                "Cannot broadcast sharded tensors on dims other than W, violation for rank {}, dim a: {}, dim b: "
+                "{}",
                 i,
                 a_dim,
                 b_dim);
@@ -389,10 +425,10 @@ BinaryNgDeviceOperation::invoke(
         input_tensor_b.get_logical_shape()[-2],
         input_tensor_b.get_logical_shape()[-1]);
 
-    DataType dtype1 = input_tensor_a.get_dtype();
-    DataType dtype2 = input_tensor_a.get_dtype();
+    DataType dtype_a = input_tensor_a.get_dtype();
+    DataType dtype_b = input_tensor_b.get_dtype();
     bool device_check = input_tensor_a.device()->arch() != tt::ARCH::GRAYSKULL;
-    bool is_sfpu_op = (utils::is_binary_sfpu_op(binary_op_type, dtype1, dtype2) && device_check);
+    bool is_sfpu_op = (utils::is_binary_sfpu_op(binary_op_type, dtype_a, dtype_b) && device_check);
 
     return {
         operation_attributes_t{
@@ -422,9 +458,9 @@ BinaryNgDeviceOperation::invoke(
     tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
     tt::stl::Span<const unary::UnaryWithParam> post_activations) {
-    DataType dtype1 = input_tensor_a.get_dtype();
+    DataType dtype_a = input_tensor_a.get_dtype();
     bool device_check = input_tensor_a.device()->arch() != tt::ARCH::GRAYSKULL;
-    bool is_sfpu_op = (utils::is_binary_sfpu_op(binary_op_type, dtype1, dtype1) && device_check);
+    bool is_sfpu_op = (utils::is_binary_sfpu_op(binary_op_type, dtype_a, dtype_a) && device_check);
     return {
         operation_attributes_t{
             binary_op_type,

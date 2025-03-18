@@ -65,6 +65,13 @@ void kernel_main() {
     constexpr uint32_t act_mcast_dest_noc_end_y = get_compile_time_arg_val(19);
     constexpr uint32_t act_mcast_sender_size_bytes = get_compile_time_arg_val(20);
     constexpr uint32_t num_output_cores = get_compile_time_arg_val(21);
+    constexpr uint32_t cb_id_act = get_compile_time_arg_val(22);
+    constexpr uint32_t cb_id_weight = get_compile_time_arg_val(23);
+    constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(24);
+    constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(25);
+    constexpr uint32_t cb_l1_array = get_compile_time_arg_val(26);
+    constexpr uint32_t cb_id_act_row_major_bfloat16 = get_compile_time_arg_val(27);
+    constexpr uint32_t tilized_in0_cb_id = get_compile_time_arg_val(28);
 
     constexpr uint32_t num_mcast_cores = MAX(num_input_cores, num_output_cores);
     uint32_t i = 0;  // Runtime arg index
@@ -88,19 +95,10 @@ void kernel_main() {
     // Equivalent to Core Index.
     uint32_t this_core_id = this_core_x + (num_cores_x * this_core_y);
 
-    constexpr uint32_t cb_id_act = tt::CBIndex::c_0;
-    constexpr uint32_t cb_id_weight = tt::CBIndex::c_1;
-
-    constexpr uint32_t tilized_in0_cb_id = tt::CBIndex::c_25;
-    constexpr uint32_t cb_id_sharded_act = tt::CBIndex::c_3;
-    constexpr uint32_t cb_id_act_row_major_bfloat16 = tt::CBIndex::c_6;
-
-    constexpr uint32_t cb_reader_indices = tt::CBIndex::c_4;
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
 
     // L1 array
-    constexpr uint32_t cb_l1_array = tt::CBIndex::c_5;
     volatile tt_l1_ptr uint32_t* act_mcast_sender_semaphore_valid_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_l1_array));
 

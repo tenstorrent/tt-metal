@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
+#include <string_view>
 #include <vector>
 #include <map>
 #include <variant>
@@ -14,17 +15,14 @@
 #include "base_types.hpp"
 #include "kernel_types.hpp"
 #include "tt_memory.h"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "runtime_args_data.hpp"
 
 namespace tt {
 
 namespace tt_metal {
-inline namespace v0 {
 
 class IDevice;
-
-}  // namespace v0
 
 constexpr uint32_t max_runtime_args = 256;
 
@@ -50,8 +48,6 @@ struct KernelSource {
         return name;
     }
 };
-
-inline namespace v0 {
 
 class Kernel : public JitBuildSettings {
    public:
@@ -176,7 +172,11 @@ class DataMovementKernel : public Kernel {
 
     void process_defines(const std::function<void (const string& define, const string &value)>) const override;
 
-   private:
+    std::string_view get_compiler_opt_level() const override;
+
+    std::string_view get_linker_opt_level() const override;
+
+private:
     const DataMovementConfig config_;
 
     uint8_t expected_num_binaries() const override;
@@ -204,7 +204,11 @@ class EthernetKernel : public Kernel {
 
     void process_defines(const std::function<void(const string &define, const string &value)>) const override;
 
-   private:
+    std::string_view get_compiler_opt_level() const override;
+
+    std::string_view get_linker_opt_level() const override;
+
+private:
     const EthernetConfig config_;
 
     uint8_t expected_num_binaries() const override;
@@ -233,15 +237,17 @@ class ComputeKernel : public Kernel {
 
     void process_defines(const std::function<void (const string& define, const string &value)>) const override;
 
-   private:
+    std::string_view get_compiler_opt_level() const override;
+
+    std::string_view get_linker_opt_level() const override;
+
+private:
     const ComputeConfig config_;
 
     uint8_t expected_num_binaries() const override;
 
     std::string config_hash() const override;
 };
-
-}  // namespace v0
 
 std::ostream& operator<<(std::ostream& os, const DataMovementProcessor& processor);
 

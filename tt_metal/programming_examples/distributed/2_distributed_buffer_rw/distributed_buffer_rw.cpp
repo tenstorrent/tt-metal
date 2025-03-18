@@ -16,17 +16,18 @@
 // 3. Enqueue a Read command to the MeshBuffer and read back the data to a local buffer
 // 4. Verify that the data read back matches the original data
 int main(int argc, char** argv) {
+    using namespace tt::tt_metal;
     using namespace tt::tt_metal::distributed;
     using tt::tt_metal::distributed::ShardedBufferConfig;
 
-    auto mesh_device = MeshDevice::create(MeshDeviceConfig{.mesh_shape{2, 4}});
+    auto mesh_device = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape(2, 4)});
     auto& cq = mesh_device->mesh_command_queue();
 
     // Define the shape of the shard and the distributed buffer.
     // We will create a distributed buffer with 8 shards of {32, 32} and distribute it across the devices in the mesh.
     auto shard_shape = Shape2D{32, 32};
     auto distributed_buffer_shape = Shape2D{32 * mesh_device->num_rows(), 32 * mesh_device->num_cols()};
-    uint32_t tile_size_bytes = detail::TileSize(tt::DataFormat::UInt32);
+    uint32_t tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::UInt32);
     uint32_t distributed_buffer_size_bytes = 64 * 128 * tile_size_bytes;
 
     auto local_buffer_config = DeviceLocalBufferConfig{

@@ -18,13 +18,13 @@ protected:
         }
 
         const chip_id_t device_id = 0;
-        this->device_ = CreateDevice(device_id);
-        this->program_ = CreateProgram();
+        this->device_ = tt::tt_metal::CreateDevice(device_id);
+        this->program_ = tt::tt_metal::CreateProgram();
     }
 
     void TearDown() override {
         if (!IsSkipped()) {
-            CloseDevice(this->device_);
+            tt::tt_metal::CloseDevice(this->device_);
         }
     }
 
@@ -34,7 +34,8 @@ protected:
             this->program_,
             kernel_file,
             core,
-            tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+            tt_metal::DataMovementConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = tt::tt_metal::NOC::RISCV_1_default});
     }
 
     void setup_kernel_dir(const string& orig_kernel_file, const string& new_kernel_file) {
@@ -55,8 +56,8 @@ protected:
         }
     }
 
-    IDevice* device_;
-    Program program_;
+    tt::tt_metal::IDevice* device_;
+    tt::tt_metal::Program program_;
 
 private:
     bool are_preconditions_satisfied() { return this->are_env_vars_set() && this->is_kernel_dir_valid(); }

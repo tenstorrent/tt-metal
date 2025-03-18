@@ -61,7 +61,7 @@ void initialize_program(tt_metal::IDevice* device, tt_metal::Program& program, c
 void create_and_read_max_num_semaphores(
     tt_metal::IDevice* device, tt_metal::Program& program, const CoreRange& core_range) {
     std::vector<uint32_t> golden;
-    for (uint32_t i = 0; i < NUM_SEMAPHORES; i++) {
+    for (uint32_t i = 0; i < tt::tt_metal::NUM_SEMAPHORES; i++) {
         uint32_t initial_value = i;
         auto semaphore_id = tt_metal::CreateSemaphore(program, core_range, initial_value);
         golden.push_back(initial_value);
@@ -69,7 +69,7 @@ void create_and_read_max_num_semaphores(
     }
 
     tt_metal::detail::CompileProgram(device, program);
-    program_dispatch::finalize_program_offsets(program, device);
+    tt::tt_metal::program_dispatch::finalize_program_offsets(program, device);
 
     ASSERT_TRUE(tt_metal::detail::ConfigureDeviceWithProgram(device, program));
 
@@ -77,10 +77,10 @@ void create_and_read_max_num_semaphores(
         for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
             auto logical_core = CoreCoord{x, y};
             std::vector<uint32_t> res;
-            for (uint32_t i = 0; i < NUM_SEMAPHORES; i++) {
+            for (uint32_t i = 0; i < tt::tt_metal::NUM_SEMAPHORES; i++) {
                 std::vector<uint32_t> single_val;
                 uint32_t semaphore_addr = program.get_sem_base_addr(device, logical_core, CoreType::WORKER) +
-                                          (hal.get_alignment(HalMemType::L1) * i);
+                                          (tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::L1) * i);
                 uint32_t semaphore_size = sizeof(uint32_t);
                 tt_metal::detail::ReadFromDeviceL1(device, logical_core, semaphore_addr, semaphore_size, single_val);
                 ASSERT_TRUE(single_val.size() == 1);
@@ -100,6 +100,8 @@ void try_creating_more_than_max_num_semaphores(
 }
 
 }  // namespace unit_tests::initialize_semaphores
+
+namespace tt::tt_metal {
 
 TEST_F(DeviceFixture, TensixInitializeLegalSemaphores) {
     for (unsigned int id = 0; id < num_devices_; id++) {
@@ -150,3 +152,5 @@ TEST_F(DeviceFixture, TensixCreateMultipleSemaphoresOnSameCore) {
     EXPECT_EQ(sem5_id, 3);
     EXPECT_EQ(sem6_id, 0);
 }
+
+}  // namespace tt::tt_metal

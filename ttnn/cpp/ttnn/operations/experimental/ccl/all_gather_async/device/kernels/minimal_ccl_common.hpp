@@ -4,27 +4,26 @@
 
 #include "dataflow_api.h"
 #include <tt-metalium/buffer_constants.hpp>
-#include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
-#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
+#include <tt-metalium/fabric_edm_packet_header.hpp>
 #include <cstdint>
 #include <utility>
 
 FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
     uint64_t noc0_dest_noc_addr,
-    volatile tt::fabric::PacketHeader* pkt_hdr_forward,
-    volatile tt::fabric::PacketHeader* pkt_hdr_backward,
+    volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
+    volatile PACKET_HEADER_TYPE* pkt_hdr_backward,
     FabricConnectionManager& fabric_connection,
     size_t& l1_read_addr,
     uint32_t payload_size_bytes) {
     const auto [dest_noc_xy, dest_addr] = get_noc_address_components(noc0_dest_noc_addr);
     const size_t payload_l1_address = l1_read_addr;
 
-    size_t packet_send_size_bytes = payload_size_bytes + sizeof(tt::fabric::PacketHeader);
     pkt_hdr_forward->to_noc_unicast_write(
-        tt::fabric::NocUnicastCommandHeader{noc0_dest_noc_addr, packet_send_size_bytes});
+        tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, payload_size_bytes);
     pkt_hdr_backward->to_noc_unicast_write(
-        tt::fabric::NocUnicastCommandHeader{noc0_dest_noc_addr, packet_send_size_bytes});
+        tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, payload_size_bytes);
 
     noc_async_write(payload_l1_address, safe_get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr), payload_size_bytes);
     if (fabric_connection.has_forward_connection()) {
@@ -32,7 +31,7 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
         fabric_connection.get_forward_connection().send_payload_without_header_non_blocking_from_address(
             l1_read_addr, payload_size_bytes);
         fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
-            (uint32_t)pkt_hdr_forward, sizeof(tt::fabric::PacketHeader));
+            (uint32_t)pkt_hdr_forward, sizeof(PACKET_HEADER_TYPE));
     }
 
     if (fabric_connection.has_backward_connection()) {
@@ -40,7 +39,7 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
         fabric_connection.get_backward_connection().send_payload_without_header_non_blocking_from_address(
             l1_read_addr, payload_size_bytes);
         fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
-            (uint32_t)pkt_hdr_backward, sizeof(tt::fabric::PacketHeader));
+            (uint32_t)pkt_hdr_backward, sizeof(PACKET_HEADER_TYPE));
     }
 
     noc_async_writes_flushed();

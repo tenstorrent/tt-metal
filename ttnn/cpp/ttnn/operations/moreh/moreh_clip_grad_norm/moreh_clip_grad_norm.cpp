@@ -80,8 +80,9 @@ Tensor MorehClipGradNorm::invoke(
         init_device_compute_kernel_config(inputs.at(0).device()->arch(), compute_kernel_config, MathFidelity::HiFi4));
 
     if (error_if_nonfinite) {
-        const auto fp32_total_norm =
-            tensor_impl::cast_vec<float>(owned_buffer::get_as<bfloat16>(output_total_norm.cpu())).at(0);
+        const auto fp32_total_norm = tt::tt_metal::tensor_impl::cast_vec<float>(
+                                         tt::tt_metal::owned_buffer::get_as<bfloat16>(output_total_norm.cpu()))
+                                         .at(0);
         TT_FATAL(
             std::isfinite(fp32_total_norm),
             "The total norm of order {} for gradients from `parameters` is non-finite, so it cannot be "
@@ -92,7 +93,8 @@ Tensor MorehClipGradNorm::invoke(
 
     // max_norm / (total_norm + 1e-6)
     Tensor max_norm_tensor = ttnn::full(Shape({1}), max_norm, inputs.at(0).get_dtype(), Layout::TILE, *device);
-    auto clip_coef = ttnn::div(max_norm_tensor, ttnn::add(output_total_norm, 1e-6f));
+    Tensor added = ttnn::add(output_total_norm, 1e-6f);
+    auto clip_coef = ttnn::div(max_norm_tensor, added);
     // min(clip_coef, 1.0f)
     Tensor scalar = ttnn::full(Shape({1}), 1.0f, inputs.at(0).get_dtype(), Layout::TILE, *device);
     auto clip_coef_clamped = ttnn::minimum(clip_coef, scalar);

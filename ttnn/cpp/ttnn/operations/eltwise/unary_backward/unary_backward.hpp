@@ -21,12 +21,6 @@ struct ExecuteUnaryBackwardNeg {
         const Tensor& input_tensor_arg,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> input_grad = std::nullopt);
-
-    static std::vector<std::optional<Tensor>> invoke(
-        const Tensor& grad_tensor_arg,
-        const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> input_grad = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardThreshold {
@@ -443,12 +437,6 @@ struct ExecuteUnaryBackwardRsqrt {
         const Tensor& input_tensor_arg,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> input_grad = std::nullopt);
-
-    static std::vector<std::optional<Tensor>> invoke(
-        const Tensor& grad_tensor_arg,
-        const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> input_grad = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardClamp {
@@ -508,24 +496,11 @@ struct ExecuteUnaryBackwardPow {
         float parameter,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> input_grad = std::nullopt);
-
-    static std::vector<std::optional<Tensor>> invoke(
-        const Tensor& grad_tensor_arg,
-        const Tensor& input_tensor_arg,
-        float parameter,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> input_grad = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardExp {
     static std::vector<std::optional<Tensor>> invoke(
         QueueId queue_id,
-        const Tensor& grad_tensor_arg,
-        const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> input_grad = std::nullopt);
-
-    static std::vector<std::optional<Tensor>> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -539,23 +514,11 @@ struct ExecuteUnaryBackwardTanh {
         const Tensor& input_tensor_arg,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> input_grad = std::nullopt);
-
-    static std::vector<std::optional<Tensor>> invoke(
-        const Tensor& grad_tensor_arg,
-        const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> input_grad = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardSqrt {
     static std::vector<std::optional<Tensor>> invoke(
         QueueId queue_id,
-        const Tensor& grad_tensor_arg,
-        const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> input_grad = std::nullopt);
-
-    static std::vector<std::optional<Tensor>> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -569,23 +532,11 @@ struct ExecuteUnaryBackwardSilu {
         const Tensor& input_tensor_arg,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> input_grad = std::nullopt);
-
-    static std::vector<std::optional<Tensor>> invoke(
-        const Tensor& grad_tensor_arg,
-        const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> input_grad = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardFill {
     static std::vector<std::optional<Tensor>> invoke(
         QueueId queue_id,
-        const Tensor& grad_tensor_arg,
-        const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> input_grad = std::nullopt);
-
-    static std::vector<std::optional<Tensor>> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -626,13 +577,6 @@ struct ExecuteUnaryBackwardAbs {
 struct ExecuteUnaryBackwardGelu {
     static std::vector<std::optional<ttnn::Tensor>> invoke(
         QueueId queue_id,
-        const Tensor& grad_tensor_arg,
-        const Tensor& input_tensor_arg,
-        const string& parameter_a,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> input_grad = std::nullopt);
-
-    static std::vector<std::optional<ttnn::Tensor>> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
         const string& parameter_a,

@@ -22,7 +22,7 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    constexpr auto cb_id_src = tt::CBIndex::c_1;
+    constexpr auto cb_id_src = get_compile_time_arg_val(6);
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
     const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
     const DataFormat src_data_format = get_dataformat(cb_id_src);
@@ -30,7 +30,7 @@ void kernel_main() {
     const InterleavedAddrGenFast<src_is_dram> src = {
         .bank_base_address = src_addr, .page_size = src_tile_bytes, .data_format = src_data_format};
 
-    constexpr auto cb_id_dst = tt::CBIndex::c_2;
+    constexpr auto cb_id_dst = get_compile_time_arg_val(7);
     constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
     const uint32_t dst_tile_bytes = get_tile_size(cb_id_dst);
     const DataFormat dst_data_format = get_dataformat(cb_id_dst);
@@ -39,7 +39,7 @@ void kernel_main() {
         .bank_base_address = dst_addr, .page_size = dst_tile_bytes, .data_format = dst_data_format};
 
     // old running mean
-    constexpr auto cb_id_old_running_mean = tt::CBIndex::c_3;
+    constexpr auto cb_id_old_running_mean = get_compile_time_arg_val(8);
     constexpr bool old_running_mean_is_dram = get_compile_time_arg_val(2) == 1;
     const uint32_t old_running_mean_tile_bytes = get_tile_size(cb_id_old_running_mean);
     const DataFormat old_running_mean_data_format = get_dataformat(cb_id_old_running_mean);
@@ -50,7 +50,7 @@ void kernel_main() {
         .data_format = old_running_mean_data_format};
 
     // old running var
-    constexpr auto cb_id_old_running_var = tt::CBIndex::c_4;
+    constexpr auto cb_id_old_running_var = get_compile_time_arg_val(9);
     constexpr bool old_running_var_is_dram = get_compile_time_arg_val(3) == 1;
     const uint32_t old_running_var_tile_bytes = get_tile_size(cb_id_old_running_var);
     const DataFormat old_running_var_data_format = get_dataformat(cb_id_old_running_var);
@@ -62,8 +62,8 @@ void kernel_main() {
 
     constexpr bool old_running_mean_has_value = get_compile_time_arg_val(4) == 1;
     constexpr bool old_running_var_has_value = get_compile_time_arg_val(5) == 1;
-    constexpr auto cb_id_updated_running_mean = tt::CBIndex::c_27;
-    constexpr auto cb_id_updated_running_var = tt::CBIndex::c_28;
+    constexpr auto cb_id_updated_running_mean = get_compile_time_arg_val(10);
+    constexpr auto cb_id_updated_running_var = get_compile_time_arg_val(11);
 
     uint32_t tiles_per_batch = HtWt * C;
     uint32_t start_n = start_tile_id / tiles_per_batch;
@@ -93,7 +93,7 @@ void kernel_main() {
                     uint32_t l1_old_running_mean_write_addr = get_write_ptr(cb_id_old_running_mean);
                     noc_async_read_tile(tile_offset, old_running_mean, l1_old_running_mean_write_addr);
                     noc_async_read_barrier();
-                    fill_tile_with_first_element_bfloat16(cb_id_old_running_mean);
+                    FILL_TILE_WITH_FIRST_ELEMENT(cb_id_old_running_mean);
                     cb_push_back(cb_id_old_running_mean, onetile);
 
                     // write data
@@ -110,7 +110,7 @@ void kernel_main() {
                     uint32_t l1_old_running_var_write_addr = get_write_ptr(cb_id_old_running_var);
                     noc_async_read_tile(tile_offset, old_running_var, l1_old_running_var_write_addr);
                     noc_async_read_barrier();
-                    fill_tile_with_first_element_bfloat16(cb_id_old_running_var);
+                    FILL_TILE_WITH_FIRST_ELEMENT(cb_id_old_running_var);
                     cb_push_back(cb_id_old_running_var, onetile);
 
                     // write data

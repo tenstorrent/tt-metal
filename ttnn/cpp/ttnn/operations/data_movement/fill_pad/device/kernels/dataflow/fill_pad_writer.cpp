@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
+#include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_id_0 = get_compile_time_arg_val(0);
@@ -22,17 +24,34 @@ void kernel_main() {
     constexpr uint32_t face_hw = face_size * face_size;
     constexpr uint32_t alignment_adjustor = 16;
 
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t cb_page_size = get_arg_val<uint32_t>(1);
-    uint32_t starting_tile_offset = get_arg_val<uint32_t>(2);
-    uint32_t num_2d_tensors = get_arg_val<uint32_t>(3);
+    uint32_t rt_arg_ind = 0;
+    uint32_t dst_addr = get_arg_val<uint32_t>(rt_arg_ind++);
+    uint32_t cb_page_size = get_arg_val<uint32_t>(rt_arg_ind++);
+    uint32_t starting_tile_offset = get_arg_val<uint32_t>(rt_arg_ind++);
+    uint32_t num_2d_tensors = get_arg_val<uint32_t>(rt_arg_ind++);
 
+#ifdef SHARDED
+    typedef ShardedInfo<
+        get_compile_time_arg_val(12),  // Memory layout
+        get_compile_time_arg_val(13),  // The number of sharding cores
+        get_compile_time_arg_val(14),  // The page size we offset each write to
+        get_compile_time_arg_val(15),  // The number of pages in each sharding row not including padding pages
+        get_compile_time_arg_val(16),  // This defines times when contiguous pages can't be calculated
+        get_compile_time_arg_val(17),  // pages_per_shard_x
+        get_compile_time_arg_val(18)>  // pages_per_shard_y
+        tensor_shard_info;
+
+    const auto [mapping_table, rt_increment] =
+        experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(rt_arg_ind));
+    experimental::ShardedAddrGen<tensor_shard_info> s0 = {.bank_base_address = dst_addr, .shard_array = mapping_table};
+#else
     const DataFormat data_format = get_dataformat(cb_id_0);
     const InterleavedAddrGenFast<tensor_in_dram> s0 = {
         .bank_base_address = dst_addr,
         .page_size = tile_hw * element_size_bytes,
         .data_format = data_format  // page_size needs to be tile_size_bytes
     };
+#endif
 
     // Reserve and push the fill value into the circular buffer
     cb_reserve_back(cb_id_0, 1);
@@ -82,4 +101,5 @@ void kernel_main() {
     for (uint32_t t = 0; t < num_2d_tensors; t++) {
         fill_pad_2d_tensor(t * tiles_per_2d_tensor + starting_tile_offset);
     }
+    noc_async_write_barrier();
 }

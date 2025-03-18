@@ -15,4 +15,12 @@ BufferType from_flatbuffer(flatbuffer::BufferType type);
 CircularBufferConfig from_flatbuffer(
     const flatbuffer::CircularBufferConfig* config_fb, const Buffer* shadow_global_buffer);
 
+BufferType from_flatbuffer(flatbuffer::BufferType type);
+TensorMemoryLayout from_flatbuffer(flatbuffer::TensorMemoryLayout layout);
+
+ShardOrientation from_flatbuffer(flatbuffer::ShardOrientation orientation);
+ShardMode from_flatbuffer(flatbuffer::ShardMode mode);
+ShardSpec from_flatbuffer(const flatbuffer::ShardSpec* spec);
+std::optional<ShardSpecBuffer> from_flatbuffer(const flatbuffer::ShardSpecBuffer* fb_shard_spec);
+
 }  // namespace tt::tt_metal

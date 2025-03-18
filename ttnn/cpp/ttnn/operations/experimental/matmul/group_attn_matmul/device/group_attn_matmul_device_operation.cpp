@@ -205,11 +205,11 @@ const operation::Hash GroupAttnMatmulDeviceOperation::compute_program_hash(
         std::get<DeviceStorage>(input_tensor_a.storage()).memory_config().memory_layout,
         std::get<DeviceStorage>(input_tensor_a.storage()).memory_config().buffer_type,
         input_tensor_a.dtype(),
-        std::get<DeviceStorage>(input_tensor_b.storage()).buffer->device()->id(),
+        input_tensor_a.device()->id(),
         std::get<DeviceStorage>(input_tensor_b.storage()).memory_config().memory_layout,
         std::get<DeviceStorage>(input_tensor_b.storage()).memory_config().buffer_type,
         input_tensor_b.dtype(),
-        std::get<DeviceStorage>(input_tensor_b.storage()).buffer->device()->id());
+        input_tensor_b.device()->id());
 }
 
 }  // namespace ttnn::operations::experimental::matmul

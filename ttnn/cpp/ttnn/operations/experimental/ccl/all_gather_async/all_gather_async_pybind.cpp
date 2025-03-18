@@ -33,7 +33,7 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
                const uint32_t num_links,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const ttnn::ccl::Topology topology,
-               std::optional<SubDeviceId> subdevice_id,
+               std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
                bool enable_persistent_fabric_mode) -> ttnn::Tensor {
                 return self(
                     input_tensor,
@@ -65,7 +65,7 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
                const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
                const std::optional<size_t> num_preferred_links,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<SubDeviceId> subdevice_id,
+               std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
                bool enable_persistent_fabric_mode) -> ttnn::Tensor {
                 return self(
                     input_tensor,

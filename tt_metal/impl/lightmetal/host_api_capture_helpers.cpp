@@ -2,9 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <overloaded.hpp>
+#include <tt_stl/overloaded.hpp>
 #include <circular_buffer_types.hpp>
 #include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/program_impl.hpp>
+
 #include <kernel_types.hpp>
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "command_generated.h"
@@ -88,34 +91,58 @@ void CaptureReleaseTrace(IDevice* device, uint32_t trace_id) {
     CaptureCommand(tt::tt_metal::flatbuffer::CommandType::ReleaseTraceCommand, cmd.Union());
 }
 
-void CaptureCreateBuffer(const std::shared_ptr<Buffer>& buffer, const InterleavedBufferConfig& config) {
+void CaptureBufferCreate(
+    const std::shared_ptr<Buffer>& buffer,
+    IDevice* device,
+    const std::optional<DeviceAddr> address,
+    DeviceAddr size,
+    DeviceAddr page_size,
+    const BufferType buffer_type,
+    const TensorMemoryLayout buffer_layout,
+    const std::optional<ShardSpecBuffer>& shard_parameters,
+    const std::optional<bool> bottom_up,
+    const std::optional<SubDeviceId> sub_device_id) {
+    assert(device->id() == 0 && "multichip not supported yet");
     auto& ctx = LightMetalCaptureContext::get();
+    auto& fbb = ctx.get_builder();
 
     uint32_t buffer_global_id = ctx.add_to_map(buffer.get());
+
     log_debug(
         tt::LogMetalTrace,
         "{}: size: {} page_size: {} buffer_type: {} buffer_layout: {} buffer_global_id: {}",
         __FUNCTION__,
-        config.size,
-        config.page_size,
-        config.buffer_type,
-        config.buffer_layout,
+        size,
+        page_size,
+        buffer_type,
+        buffer_layout,
         buffer_global_id);
 
-    assert(config.device->id() == 0 && "multichip not supported yet");
-    auto buffer_config_offset = tt::tt_metal::flatbuffer::CreateInterleavedBufferConfig(
-        ctx.get_builder(),
-        config.device->id(),
-        config.size,
-        config.page_size,
-        to_flatbuffer(config.buffer_type),
-        to_flatbuffer(config.buffer_layout));
-    auto cmd =
-        tt::tt_metal::flatbuffer::CreateCreateBufferCommand(ctx.get_builder(), buffer_global_id, buffer_config_offset);
-    CaptureCommand(tt::tt_metal::flatbuffer::CommandType::CreateBufferCommand, cmd.Union());
+    // Convert the optional fields to flatbuffer offsets.
+    // Address is not true optional for API, but Buffer::create() API has 2 flavors, one with address
+    // and one without, so commonize via single capture function and schema and treat it as optional.
+    auto address_offset = address.has_value() ? flatbuffer::CreateUint32Optional(fbb, address.value()) : 0;
+    auto bottom_up_offset = bottom_up.has_value() ? flatbuffer::CreateBoolOptional(fbb, bottom_up.value()) : 0;
+    auto sub_device_id_offset = sub_device_id.has_value() ? flatbuffer::CreateUint8Optional(fbb, **sub_device_id) : 0;
+    auto shard_parameters_offset = to_flatbuffer(shard_parameters, fbb);
+
+    auto cmd = tt::tt_metal::flatbuffer::CreateBufferCreateCommand(
+        fbb,
+        buffer_global_id,
+        device->id(),
+        address_offset,
+        size,
+        page_size,
+        to_flatbuffer(buffer_type),
+        to_flatbuffer(buffer_layout),
+        shard_parameters_offset,
+        bottom_up_offset,
+        sub_device_id_offset);
+
+    CaptureCommand(tt::tt_metal::flatbuffer::CommandType::BufferCreateCommand, cmd.Union());
 }
 
-void CaptureDeallocateBuffer(Buffer& buffer) {
+void CaptureBufferDeallocate(const Buffer& buffer) {
     auto& ctx = LightMetalCaptureContext::get();
 
     // Kind of a workaround, but Program Binaries buffer is created via Buffer::create() but can be
@@ -136,8 +163,36 @@ void CaptureDeallocateBuffer(Buffer& buffer) {
         buffer.size(),
         buffer.address());
 
-    auto cmd = tt::tt_metal::flatbuffer::CreateDeallocateBufferCommand(ctx.get_builder(), buffer_global_id);
-    CaptureCommand(tt::tt_metal::flatbuffer::CommandType::DeallocateBufferCommand, cmd.Union());
+    auto cmd = tt::tt_metal::flatbuffer::CreateBufferDeallocateCommand(ctx.get_builder(), buffer_global_id);
+    CaptureCommand(tt::tt_metal::flatbuffer::CommandType::BufferDeallocateCommand, cmd.Union());
+}
+
+void CaptureBufferDelete(const Buffer& buffer) {
+    auto& ctx = LightMetalCaptureContext::get();
+
+    // Kind of a workaround, but Program Binaries buffer is created via Buffer::create() but can be
+    // deallocated on Program destruction while capturing is still enabled depending on test structure (scope)
+    // so let's just not capture these DeallocateBuffer() calls since they will occur on playback naturally.
+    if (!ctx.is_in_map(&buffer)) {
+        log_debug(
+            tt::LogMetalTrace,
+            "Cannot capture Buffer Delete without CreateBuffer() - ignoring Buffer w/ addr: 0x{:x}",
+            buffer.address());
+        return;
+    }
+
+    auto buffer_global_id = ctx.get_global_id(&buffer);
+
+    log_debug(
+        tt::LogMetalTrace,
+        "{}: buffer_global_id: {} size: {} address: {}",
+        __FUNCTION__,
+        buffer_global_id,
+        buffer.size(),
+        buffer.address());
+
+    auto cmd = tt::tt_metal::flatbuffer::CreateBufferDeleteCommand(ctx.get_builder(), buffer_global_id);
+    CaptureCommand(tt::tt_metal::flatbuffer::CommandType::BufferDeleteCommand, cmd.Union());
 }
 
 void CaptureEnqueueWriteBuffer(
@@ -219,13 +274,13 @@ void CaptureFinish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device
     CaptureCommand(tt::tt_metal::flatbuffer::CommandType::FinishCommand, cmd.Union());
 }
 
-void CaptureCreateProgram(Program& program) {
+void CaptureProgramConstructor(Program& program) {
     auto& ctx = LightMetalCaptureContext::get();
     uint32_t program_global_id = ctx.add_to_map(&program);
     log_debug(tt::LogMetalTrace, "{}: program_global_id: {}", __FUNCTION__, program_global_id);
 
-    auto cmd = tt::tt_metal::flatbuffer::CreateCreateProgramCommand(ctx.get_builder(), program_global_id);
-    CaptureCommand(tt::tt_metal::flatbuffer::CommandType::CreateProgramCommand, cmd.Union());
+    auto cmd = tt::tt_metal::flatbuffer::CreateProgramConstructorCommand(ctx.get_builder(), program_global_id);
+    CaptureCommand(tt::tt_metal::flatbuffer::CommandType::ProgramConstructorCommand, cmd.Union());
 }
 
 void CaptureEnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
@@ -295,7 +350,7 @@ void CaptureSetRuntimeArgsUint32(
     uint32_t kernel_global_id = ctx.get_global_id(kernel.get());
     log_debug(
         tt::LogMetalTrace,
-        "{}(uint32): kernel_global_id: {} program_global_id: {} rt_args: {}",
+        "{}: kernel_global_id: {} program_global_id: {} rt_args: {}",
         __FUNCTION__,
         kernel_global_id,
         program_global_id,
@@ -310,6 +365,33 @@ void CaptureSetRuntimeArgsUint32(
     CaptureCommand(tt::tt_metal::flatbuffer::CommandType::SetRuntimeArgsUint32Command, cmd.Union());
 }
 
+void CaptureSetRuntimeArgsUint32VecPerCore(
+    const Program& program,
+    KernelHandle kernel_id,
+    const std::vector<CoreCoord>& core_spec,
+    const std::vector<std::vector<uint32_t>>& runtime_args) {
+    auto& ctx = LightMetalCaptureContext::get();
+
+    std::shared_ptr<Kernel> kernel = program.get_kernel(kernel_id);
+    uint32_t program_global_id = ctx.get_global_id(&program);
+    uint32_t kernel_global_id = ctx.get_global_id(kernel.get());
+    log_debug(
+        tt::LogMetalTrace,
+        "{}: kernel_global_id: {} program_global_id: {} num_cores: {}",
+        __FUNCTION__,
+        kernel_global_id,
+        program_global_id,
+        core_spec.size());
+
+    auto& fbb = ctx.get_builder();
+    auto core_spec_offset = to_flatbuffer(fbb, core_spec);
+    auto runtime_args_offset = to_flatbuffer(fbb, runtime_args);
+
+    auto cmd = tt::tt_metal::flatbuffer::CreateSetRuntimeArgsUint32VecPerCoreCommand(
+        fbb, program_global_id, kernel_global_id, core_spec_offset, runtime_args_offset);
+
+    CaptureCommand(tt::tt_metal::flatbuffer::CommandType::SetRuntimeArgsUint32VecPerCoreCommand, cmd.Union());
+}
 void CaptureSetRuntimeArgs(
     IDevice* device,
     const std::shared_ptr<Kernel>& kernel,
@@ -322,7 +404,7 @@ void CaptureSetRuntimeArgs(
     auto rt_args_offset = to_flatbuffer(fbb, runtime_args);
     log_debug(
         tt::LogMetalTrace,
-        "{}(RuntimeArgs): kernel_global_id: {} rt_args_size: {}",
+        "{}: kernel_global_id: {} rt_args_size: {}",
         __FUNCTION__,
         kernel_global_id,
         runtime_args->size());

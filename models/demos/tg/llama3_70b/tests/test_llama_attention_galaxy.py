@@ -337,7 +337,7 @@ def run_test_LlamaAttention_inference(
             attn_mask,
             mode=mode,
         )
-        # tt_out = ttnn.to_torch(tt_out, mesh_composer=ListMeshToTensor(mesh_device))[0]
+        # tt_out = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(tt_out.cpu())]
 
         tt_out = ttnn.to_torch(
             tt_out, mesh_composer=ConcatMesh2DToTensor(mesh_device, dims=(3, 1), cluster_shape=cluster_shape)

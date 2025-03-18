@@ -122,7 +122,7 @@ namespace adaptor {
 namespace {
 
 template <typename T>
-Tensor concat_impl(const std::vector<Tensor>& tensors, const TensorLayout& layout, int dim) {
+Tensor concat_impl(const std::vector<Tensor>& tensors, const tt::tt_metal::TensorLayout& layout, int dim) {
     std::vector<xt::xarray<T>> xtensors;
     for (const auto& tensor : tensors) {
         xtensors.push_back(to_xtensor<T>(tensor));
@@ -132,7 +132,8 @@ Tensor concat_impl(const std::vector<Tensor>& tensors, const TensorLayout& layou
 }
 
 template <typename T>
-std::vector<Tensor> chunk_impl(const Tensor& tensor, const TensorLayout& layout, int num_chunks, int dim) {
+std::vector<Tensor> chunk_impl(
+    const Tensor& tensor, const tt::tt_metal::TensorLayout& layout, int num_chunks, int dim) {
     xt::xarray<T> xtensor = to_xtensor<T>(tensor);
     auto xtensor_chunks = chunk<T>(xtensor, num_chunks, dim);
 
@@ -151,14 +152,19 @@ std::vector<Tensor> chunk_impl(const Tensor& tensor, const TensorLayout& layout,
 std::vector<Tensor> chunk(const Tensor& tensor, int num_chunks, int dim) {
     const auto& reference_layout = tensor.tensor_spec().tensor_layout();
     switch (reference_layout.get_data_type()) {
-        case DataType::BFLOAT4_B:
-        case DataType::BFLOAT8_B:
-        case DataType::BFLOAT16:
-        case DataType::FLOAT32: return adaptor::chunk_impl<float>(tensor, reference_layout, num_chunks, dim);
-        case DataType::INT32: return adaptor::chunk_impl<int32_t>(tensor, reference_layout, num_chunks, dim);
-        case DataType::UINT8: return adaptor::chunk_impl<uint8_t>(tensor, reference_layout, num_chunks, dim);
-        case DataType::UINT16: return adaptor::chunk_impl<uint16_t>(tensor, reference_layout, num_chunks, dim);
-        case DataType::UINT32: return adaptor::chunk_impl<uint32_t>(tensor, reference_layout, num_chunks, dim);
+        case tt::tt_metal::DataType::BFLOAT4_B:
+        case tt::tt_metal::DataType::BFLOAT8_B:
+        case tt::tt_metal::DataType::BFLOAT16:
+        case tt::tt_metal::DataType::FLOAT32:
+            return adaptor::chunk_impl<float>(tensor, reference_layout, num_chunks, dim);
+        case tt::tt_metal::DataType::INT32:
+            return adaptor::chunk_impl<int32_t>(tensor, reference_layout, num_chunks, dim);
+        case tt::tt_metal::DataType::UINT8:
+            return adaptor::chunk_impl<uint8_t>(tensor, reference_layout, num_chunks, dim);
+        case tt::tt_metal::DataType::UINT16:
+            return adaptor::chunk_impl<uint16_t>(tensor, reference_layout, num_chunks, dim);
+        case tt::tt_metal::DataType::UINT32:
+            return adaptor::chunk_impl<uint32_t>(tensor, reference_layout, num_chunks, dim);
         default: TT_THROW("Unsupported data type: {}", reference_layout.get_data_type());
     }
 }
@@ -167,14 +173,14 @@ Tensor concat(const std::vector<Tensor>& tensors, int dim) {
     TT_FATAL(tensors.size() > 0, "Cannot concatenate an empty list of tensors");
     const auto& reference_layout = tensors.front().tensor_spec().tensor_layout();
     switch (reference_layout.get_data_type()) {
-        case DataType::BFLOAT4_B:
-        case DataType::BFLOAT8_B:
-        case DataType::BFLOAT16:
-        case DataType::FLOAT32: return adaptor::concat_impl<float>(tensors, reference_layout, dim);
-        case DataType::INT32: return adaptor::concat_impl<int32_t>(tensors, reference_layout, dim);
-        case DataType::UINT8: return adaptor::concat_impl<uint8_t>(tensors, reference_layout, dim);
-        case DataType::UINT16: return adaptor::concat_impl<uint16_t>(tensors, reference_layout, dim);
-        case DataType::UINT32: return adaptor::concat_impl<uint32_t>(tensors, reference_layout, dim);
+        case tt::tt_metal::DataType::BFLOAT4_B:
+        case tt::tt_metal::DataType::BFLOAT8_B:
+        case tt::tt_metal::DataType::BFLOAT16:
+        case tt::tt_metal::DataType::FLOAT32: return adaptor::concat_impl<float>(tensors, reference_layout, dim);
+        case tt::tt_metal::DataType::INT32: return adaptor::concat_impl<int32_t>(tensors, reference_layout, dim);
+        case tt::tt_metal::DataType::UINT8: return adaptor::concat_impl<uint8_t>(tensors, reference_layout, dim);
+        case tt::tt_metal::DataType::UINT16: return adaptor::concat_impl<uint16_t>(tensors, reference_layout, dim);
+        case tt::tt_metal::DataType::UINT32: return adaptor::concat_impl<uint32_t>(tensors, reference_layout, dim);
         default: TT_THROW("Unsupported data type: {}", reference_layout.get_data_type());
     }
 }

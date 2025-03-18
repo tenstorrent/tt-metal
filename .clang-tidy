@@ -147,6 +147,7 @@ Checks: >
   -performance-no-int-to-ptr,
   -performance-noexcept-swap,
   -performance-unnecessary-copy-initialization,
+  -portability-simd-intrinsics,
   -readability-avoid-const-params-in-decls,
   -readability-avoid-unconditional-preprocessor-if,
   -readability-braces-around-statements,
@@ -184,6 +185,8 @@ Checks: >
 
 CheckOptions:
   - key: readability-function-cognitive-complexity.IgnoreMacros
+    value: true
+  - key: portability-simd-intrinsics.Suggest
     value: true
 
 FormatStyle: 'file'

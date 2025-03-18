@@ -5,10 +5,10 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 
-using namespace tt;
-using namespace tt::tt_metal;
-
 int main(int argc, char** argv) {
+    using namespace tt;
+    using namespace tt::tt_metal;
+
     // Initialize Program and Device
 
     constexpr CoreCoord core = {0, 0};

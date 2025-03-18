@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,21 +16,15 @@
 
 namespace tt::tt_metal {
 
-inline namespace v0 {
 class Event;
 class Program;
 class Kernel;
-}  // namespace v0
 
 class CommandQueue {
 public:
     virtual ~CommandQueue() = default;
 
     virtual const CoreCoord& virtual_enqueue_program_dispatch_core() const = 0;
-    virtual const CoreCoord& completion_queue_writer_core() const = 0;
-
-    virtual volatile bool is_dprint_server_hung() = 0;
-    virtual volatile bool is_noc_hung() = 0;
 
     virtual void record_begin(const uint32_t tid, const std::shared_ptr<TraceDescriptor>& ctx) = 0;
     virtual void record_end() = 0;
@@ -52,9 +46,7 @@ public:
 
     virtual IDevice* device() = 0;
 
-    // These functions are temporarily needed since MeshCommandQueue relies on the CommandQueue object
-    virtual uint32_t get_expected_num_workers_completed_for_sub_device(uint32_t sub_device_index) const = 0;
-    virtual void set_expected_num_workers_completed_for_sub_device(uint32_t sub_device_index, uint32_t num_workers) = 0;
+    // This function is temporarily needed since MeshCommandQueue relies on the CommandQueue object
     virtual WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) = 0;
 
     virtual void enqueue_trace(const uint32_t trace_id, bool blocking) = 0;
@@ -62,13 +54,7 @@ public:
     virtual void enqueue_program(Program& program, bool blocking) = 0;
 
     virtual void enqueue_read_buffer(
-        std::shared_ptr<Buffer>& buffer,
-        void* dst,
-        const BufferRegion& region,
-        bool blocking,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
-    virtual void enqueue_read_buffer(
-        Buffer& buffer,
+        const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
         void* dst,
         const BufferRegion& region,
         bool blocking,
@@ -85,14 +71,13 @@ public:
         const BufferRegion& region,
         bool blocking,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
-    virtual void enqueue_write_buffer(
-        Buffer& buffer,
-        const void* src,
-        const BufferRegion& region,
-        bool blocking,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
 
     virtual void finish(tt::stl::Span<const SubDeviceId> sub_device_ids) = 0;
 };
+
+struct ReadBufferDescriptor;
+struct ReadEventDescriptor;
+
+using CompletionReaderVariant = std::variant<std::monostate, ReadBufferDescriptor, ReadEventDescriptor>;
 
 }  // namespace tt::tt_metal

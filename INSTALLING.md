@@ -4,123 +4,168 @@ These instructions will guide you through the installation of Tenstorrent system
 
 > [!IMPORTANT]
 >
-> If you are using a release version of this software, please check the installation instructions packaged with that version. You can find them in either the release assets for that version, or in the source files for that version tag.
+> If you are using a release version of this software, check installation instructions packaged with it.
+> You can find them in either the release assets for that version, or in the source files for that [version tag](https://github.com/tenstorrent/tt-metal/tags).
+
+## Prerequisites:
+
+### 1: Set Up the Hardware
+- Follow the instructions for the Tenstorrent device you are using at: [Hardware Setup](https://docs.tenstorrent.com)
 
 ---
 
-## Installation Steps
+### 2: Install Driver & Firmware
 
-### Step 1. Driver & Firmware
-
-Follow the Software Setup instructions for your specific board or system provided on our [general docs](https://docs.tenstorrent.com).
-
-If you have purchased a Grayskull card, you will find the instructions [here](https://docs.tenstorrent.com/aibs/grayskull/installation.html).
-
-Note the current compatability matrix:
+Note the current compatibility matrix:
 
 | Device              | OS              | Python   | Driver (TT-KMD)    | Firmware (TT-Flash)                        | TT-SMI                | TT-Topology                    |
 |---------------------|-----------------|----------|--------------------|--------------------------------------------|-----------------------|--------------------------------|
-| Grayskull           | Ubuntu 20.04    | 3.8.10   | v1.29              | fw_pack-80.9.0.0 (v80.9.0.0)               | v2.2.0 or above       | N/A                            |
 | Wormhole            | Ubuntu 20.04    | 3.8.10   | v1.29              | fw_pack-80.13.0.0 (v80.13.0.0)             | v2.2.0 or above       | N/A                            |
 | T3000 (Wormhole)    | Ubuntu 20.04    | 3.8.10   | v1.29              | fw_pack-80.13.0.0 (v80.13.0.0)             | v2.2.0 or above       | v1.1.3 or above, `mesh` config |
+| Blackhole           | Ubuntu 20.04    | 3.10     | v1.31              | fw_pack-80.15.0.0 (v80.15.0.0)             | v3.0.5 or above       | v1.1.3 or above, 'mesh' config |
 
----
-
-### Step 2. System-level dependencies
-
-```sh
+#### Install System-level Dependencies
+```
+wget https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/install_dependencies.sh
+chmod a+x install_dependencies.sh
 sudo ./install_dependencies.sh
 ```
+
 ---
 
-### Step 3. Install and start using TT-NN and TT-Metalium!
+#### Install the Driver (TT-KMD)
+- DKMS must be installed:
 
-> [!NOTE]
->
-> You may choose to install from either source, a Python wheel, or Docker release image.
->
-> However, no matter your method, in order to use our pre-built models or to
-> follow along with the documentation and tutorials to get started, you will
-> still need the source code.
->
-> If you do not want to use the models or follow the tutorials and want to
-> immediately start using the API, you may install just the wheel or get the release Docker container.
+| OS              | Command                |
+|------------------------|----------------------------------------------------|
+| Ubuntu / Debian        | ```apt install dkms```                             |
+| Fedora                 | ```dnf install dkms```                             |
+| Enterprise Linux Based | ```dnf install epel-release && dnf install dkms``` |
 
-1. Clone the repo.
+- Install the latest TT-KMD version:
+```
+git clone https://github.com/tenstorrent/tt-kmd.git
+cd tt-kmd
+sudo dkms add .
+sudo dkms install "tenstorrent/$(./tools/current-version)"
+sudo modprobe tenstorrent
+cd ..
+```
+
+- For more information visit Tenstorrents [TT-KMD GitHub repository](https://github.com/tenstorrent/tt-kmd).
+
+---
+
+#### Update Device TT-Firmware with TT-Flash
+- Install TT-Flash:
+
+```
+pip install git+https://github.com/tenstorrent/tt-flash.git
+```
+
+- Reboot to load changes:
+```
+sudo reboot
+```
+
+- Check if TT-Flash is installed:
+```
+tt-flash --version
+```
+
+- Download and install the latest TT-Firmware version:
+```
+file_name=$(curl -s "https://raw.githubusercontent.com/tenstorrent/tt-firmware/main/latest.fwbundle")
+curl -L -o "$file_name" "https://github.com/tenstorrent/tt-firmware/raw/main/$file_name"
+tt-flash flash --fw-tar $file_name
+```
+
+- For more information visit Tenstorrent's [TT-Firmware GitHub Repository](https://github.com/tenstorrent/tt-firmware) and [TT-Flash Github Repository](https://github.com/tenstorrent/tt-flash).
+
+---
+
+#### Install System Management Interface (TT-SMI)
+- Install Tenstorrent Software Management Interface (TT-SMI):
+```
+pip install git+https://github.com/tenstorrent/tt-smi
+```
+
+- Verify System Configuration
+
+Once hardware and system software are installed, verify that the system has been configured correctly.
+
+  - Run the TT-SMI utility:
+  ```
+  tt-smi
+  ```
+  A display with device information, telemetry, and firmware will appear:<br>
+
+![image](https://docs.tenstorrent.com/_images/tt_smi.png)
+<br>
+  If the tool runs without error, your system has been configured correctly.
+
+- For more information, visit Tenstorrent's [TT-SMI GitHub repository](https://github.com/tenstorrent/tt-smi).
+
+---
+
+#### (Optional) Multi-Card Configuration (TT-Topology)
+- For TT-Loudbox or TT-QuietBox systems, visit Tenstorrent's [TT-Topology README](https://github.com/tenstorrent/tt-topology/blob/main/README.md).
+
+---
+
+### TT-NN / TT-Metalium Installation
+
+#### There are three options for installing TT-Metalium:
+
+- [Option 1: From Source](#option-1-from-source)
+
+  Installing from source gets developers closer to the metal and the source code.
+
+- [Option 2: From Docker Release Image](#option-2-from-docker-release-image)
+
+  Installing from Docker Release Image is the quickest way to access our APIs and to start running AI models.
+
+- [Option 3: From Wheel](#option-3-from-wheel)
+
+  Install from wheel as an alternative method to get quick access to our APIs and to running AI models.
+
+---
+
+### Option 1: From Source
+Install from source if you are a developer who wants to be close to the metal and the source code. Recommended for running the demo models.
+
+#### Step 1. Clone the Repository:
 
 ```sh
 git clone https://github.com/tenstorrent/tt-metal.git --recurse-submodules
 ```
 
-2. Install either from source, or from our release wheel. Note that if you are
-going to try using the model demos, we highly recommend you install from
-source.
+#### Step 2. Invoke our Build Scripts:
 
-#### Option 1: From source
-
-We use CMake for our build flows.
-
-Set up the environment variables and invoke our build scripts. Note that for
-source builds, you must set these environment variables every time.
-
-```sh
-export ARCH_NAME=<ARCH_NAME>
-export TT_METAL_HOME=$(pwd)
-export PYTHONPATH=$(pwd)
+```
 ./build_metal.sh
+```
 
-# If you would like an out-of-the-box virtual environment to use,
+- (recommended) For an out-of-the-box virtual environment to use, execute:
+```
 ./create_venv.sh
 source python_env/bin/activate
 ```
 
-where `ARCH_NAME` is one of `grayskull`, `wormhole_b0`, or `blackhole`,
-depending on your Tenstorrent card type.
+- (optional) Software dependencies for profiling use:
+  - Install dependencies:
+  ```sh
+  sudo apt install pandoc libtbb-dev libcapstone-dev pkg-config
+  ```
 
-> [!NOTE]
->
-> Note about Python environments: You do not have to use `create_venv.sh`. If you
-> are less familiar with Python and its various environment tools, just use
-> `create_venv.sh` as shown above and the pre-built environment. If you choose
-> to install in your custom environment, please note that you may run into
-> compatibility issues between dependencies. It is up to the user to ensure
-> that all the packages in their environment are compatible with each other.
->
-> If you do choose to manage your own environment, please note that you must
-> use Pip 20.1.1 or lower to install this project. This is the highest version
-> of Pip that supports editable installs in the way that we use it.
+  - Download and install [Doxygen](https://www.doxygen.nl/download.html), (v1.9 or higher, but less than v1.10)
 
-#### Option 2: From wheel
+- Continue to [You Are All Set!](#you-are-all-set)
 
-Download the latest wheel from our
-[releases](https://github.com/tenstorrent/tt-metal/releases/latest) page for
-the particular Tenstorrent card architecture that you have installed on your
-system. (ie. Grayskull, Wormhole, etc)
+---
 
-Install the wheel using your Python environment manager of choice. For example,
-to install with `pip`:
-
-```sh
-pip install <wheel_file.whl>
-```
-
-1. (For models users only) Set up environment for models
-
-If you are going to try our pre-built models in `models/`, then you must execute
-the following to:
-
-- install their required dependencies
-- set appropriate environment variables
-- set the CPU performance governor to ensure high performance on the host
-
-```sh
-export PYTHONPATH=$(pwd)
-pip install -r tt_metal/python_env/requirements-dev.txt
-sudo apt-get install cpufrequtils
-sudo cpupower frequency-set -g performance
-```
-
-#### Option 3: From Docker Release Image
+### Option 2: From Docker Release Image
+Installing from Docker Release Image is the quickest way to access our APIs and to start running AI models.
 
 Download the latest Docker release from our [Docker registry](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-20.04-amd64-release) page
 
@@ -134,26 +179,71 @@ When inside of the container,
 python3 -c "import ttnn"
 ```
 
-2. Start coding
+- For more information on the Docker Release Images, visit our [Docker registry page](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-20.04-amd64-release).
 
-To verify your installation, try the executing an example:
-
-```
-python3 -m ttnn.examples.usage.run_op_on_device
-```
-
-You are all set! Visit the [TT-NN Basic examples page](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) or get started with [simple kernels on TT-Metalium](https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tt_metal/examples/index.html).
+- Continue to [You Are All Set!](#you-are-all-set)
 
 ---
 
-### Step 5. (Optional) Software dependencies for codebase contributions
+### Option 3: From Wheel
+Install from wheel for quick access to our APIs and to get an AI model running
 
-Please follow the next additional steps if you want to contribute to the codebase.
+#### Step 1. Download and Install the Latest Wheel:
 
-1. Install dependencies
+- Navigate to our [releases page](https://github.com/tenstorrent/tt-metal/releases/latest) and download the latest wheel file for the Tenstorrent card architecture you have installed.
 
-```sh
-sudo apt install pandoc libtbb-dev libcapstone-dev pkg-config
-```
+- Install the wheel using your Python environment manager of choice. For example, to install with `pip`:
 
-2. Download and install [Doxygen](https://www.doxygen.nl/download.html), (v1.9 or higher, but less than v1.10)
+  ```sh
+  pip install <wheel_file.whl>
+  ```
+
+#### Step 2. (For models users only) Set Up Environment for Models:
+
+To try our pre-built models in `models/`, you must:
+
+  - Install their required dependencies
+  - Set appropriate environment variables
+  - Set the CPU performance governor to ensure high performance on the host
+
+- This is done by executing the following:
+  ```sh
+  export PYTHONPATH=$(pwd)
+  pip install -r tt_metal/python_env/requirements-dev.txt
+  sudo apt-get install cpufrequtils
+  sudo cpupower frequency-set -g performance
+  ```
+
+---
+
+### You are All Set!
+
+#### To verify your installation, try executing a programming example:
+
+- First, set the following environment variables:
+
+  - Run the appropriate command for the Tenstorrent card you have installed:
+
+  | Card             | Command                              |
+  |------------------|--------------------------------------|
+  | Grayskull        | ```export ARCH_NAME=grayskull```     |
+  | Wormhole         | ```export ARCH_NAME=wormhole_b0```   |
+  | Blackhole        | ```export ARCH_NAME=blackhole```     |
+
+  - Run:
+  ```
+  export TT_METAL_HOME=$(pwd)
+  export PYTHONPATH=$(pwd)
+  ```
+
+- Then, try running a programming example:
+  ```
+  python3 -m ttnn.examples.usage.run_op_on_device
+  ```
+
+- For more programming examples to try, visit Tenstorrent's [TT-NN Basic Examples Page](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) or get started with [Simple Kernels on TT-Metalium](https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tt_metal/examples/index.html)
+
+---
+
+### Interested in Contributing?
+- For more information on development and contributing, visit Tenstorrent's [CONTRIBUTING.md page](https://github.com/tenstorrent/tt-metal/blob/main/CONTRIBUTING.md).

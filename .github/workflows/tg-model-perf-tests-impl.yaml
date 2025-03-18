@@ -33,7 +33,6 @@ jobs:
         ]
     name: ${{ matrix.test-group.name }}
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.test-group.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
@@ -98,16 +97,25 @@ jobs:
       - name: Upload Models perf report
         if: ${{ !cancelled() && steps.check-perf-report.conclusion == 'success' && !matrix.test-group.tracy}}
         uses: actions/upload-artifact@v4
+        timeout-minutes: 10
         with:
           name: perf-report-csv-${{ matrix.test-group.model-type }}-${{ matrix.test-group.arch }}-${{ matrix.test-group.machine-type }}
           path: "${{ steps.check-perf-report.outputs.perf_report_filename }}"
       - name: Upload CCL perf report
         if: ${{ !cancelled() && steps.check-perf-report.conclusion == 'success' && matrix.test-group.tracy}}
         uses: actions/upload-artifact@v4
+        timeout-minutes: 10
         with:
           name: perf-report-csv-${{ matrix.test-group.model-type }}-${{ matrix.test-group.arch }}-${{ matrix.test-group.model }}-bare-metal
           path:
             ${{ steps.check-perf-report.outputs.perf_report_filename_all_gather }}
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          path: |
+            generated/test_reports/
+          prefix: "test_reports_"
       - name: Disable performance mode
         if: always()
         run: |

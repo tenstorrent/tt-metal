@@ -208,7 +208,34 @@ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_${ARCH_NAME} 
  build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_${ARCH_NAME} --custom -w 5000 -s 4096 -x $max_x -y $max_y -kg 8 $trace_option $eth_dispatch_option
  build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_${ARCH_NAME} --custom -w 5000 -s 8192 -x $max_x -y $max_y -kg 8 $trace_option $eth_dispatch_option
 
- # Same as above, but w/ 1 slow kernel and 4 fast "shadow kernels" (test worker RB queuing)
+ # Run kernels w/ a fixed runtime.  Diff between expected time and actual time is unhidden dispatch cost
+ echo "###" kernel groups w/ 4 shadow kernels
+ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_${ARCH_NAME} --custom -w 5000 -s 256 -rs 10000 $trace_option $eth_dispatch_option
+ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_${ARCH_NAME} --custom -w 5000 -s 512 -rs 10000 $trace_option $eth_dispatch_option
+ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_${ARCH_NAME} --custom -w 5000 -s 1024 -rs 10000 $trace_option $eth_dispatch_option
+ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_${ARCH_NAME} --custom -w 5000 -s 2048 -rs 10000 $trace_option $eth_dispatch_option
+ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_${ARCH_NAME} --custom -w 5000 -s 4096 -rs 10000 $trace_option $eth_dispatch_option
+ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_${ARCH_NAME} --custom -w 5000 -s 8192 -rs 10000 $trace_option $eth_dispatch_option
+
+ # Same as above but w/o ncrisc to measure ncrisc init cost
+ echo "###" kernel groups w/ 4 shadow kernels
+ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_${ARCH_NAME} --custom -w 5000 -s 256 -rs 10000 -n $trace_option $eth_dispatch_option
+ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_${ARCH_NAME} --custom -w 5000 -s 512 -rs 10000 -n $trace_option $eth_dispatch_option
+ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_${ARCH_NAME} --custom -w 5000 -s 1024 -rs 10000 -n $trace_option $eth_dispatch_option
+ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_${ARCH_NAME} --custom -w 5000 -s 2048 -rs 10000 -n $trace_option $eth_dispatch_option
+ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_${ARCH_NAME} --custom -w 5000 -s 4096 -rs 10000 -n $trace_option $eth_dispatch_option
+ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_${ARCH_NAME} --custom -w 5000 -s 8192 -rs 10000 -n $trace_option $eth_dispatch_option
+
+ # Same as above but with 32 CBs to measure CB init cost
+ echo "###" kernel groups w/ 4 shadow kernels
+ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_${ARCH_NAME} --custom -w 5000 -s 256 -rs 10000 -n -c 32 $trace_option $eth_dispatch_option
+ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_${ARCH_NAME} --custom -w 5000 -s 512 -rs 10000 -n -c 32 $trace_option $eth_dispatch_option
+ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_${ARCH_NAME} --custom -w 5000 -s 1024 -rs 10000 -n -c 32  $trace_option $eth_dispatch_option
+ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_${ARCH_NAME} --custom -w 5000 -s 2048 -rs 10000 -n -c 32  $trace_option $eth_dispatch_option
+ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_${ARCH_NAME} --custom -w 5000 -s 4096 -rs 10000 -n -c 32  $trace_option $eth_dispatch_option
+ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_${ARCH_NAME} --custom -w 5000 -s 8192 -rs 10000 -n -c 32  $trace_option $eth_dispatch_option
+
+ # Like earlier tests w/ kernel groups, but w/ 1 slow kernel and 4 fast "shadow kernels" (test worker RB queuing)
  echo "###" kernel groups w/ 4 shadow kernels
  build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_${ARCH_NAME} --custom -w 5000 -s 256 -x $max_x -y $max_y -kg $max_x -rs 40000 -nf 4 $trace_option $eth_dispatch_option
  build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_${ARCH_NAME} --custom -w 5000 -s 512 -x $max_x -y $max_y -kg $max_x -rs 40000 -nf 4 $trace_option $eth_dispatch_option

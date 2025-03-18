@@ -9,9 +9,10 @@
 namespace ttnn::operations::experimental::transformer::detail {
 
 using namespace tt::constants;
+using namespace tt::tt_metal;
 using namespace tt;
 
-operation::ProgramWithCallbacks concatenate_heads_multi_core(
+tt::tt_metal::operation::ProgramWithCallbacks concatenate_heads_multi_core(
     const Tensor& a, Tensor& output, CoreCoord compute_with_storage_grid_size) {
     const auto& ashape = a.get_padded_shape();
 

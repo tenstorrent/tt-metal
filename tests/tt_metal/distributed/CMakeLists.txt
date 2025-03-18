@@ -1,10 +1,13 @@
 set(UNIT_TESTS_DISTRIBUTED_SRC
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_distributed.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_coord.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_device.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_device_reshape.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_workload.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_sub_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_events.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_trace.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/utils.cpp
 )
 
@@ -41,7 +44,6 @@ endfunction()
 
 # Define the architectures for which to create test executables
 set(ARCHITECTURES
-    "grayskull"
     "wormhole"
     "blackhole"
 )

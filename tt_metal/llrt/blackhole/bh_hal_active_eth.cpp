@@ -17,8 +17,6 @@
 #include "hal_asserts.hpp"
 #include "blackhole/bh_hal.hpp"
 
-#include "hostdevcommon/common_runtime_address_map.h"  // L1_KERNEL_CONFIG_SIZE
-
 #include "umd/device/tt_soc_descriptor.h"  // CoreType
 
 #define GET_ETH_MAILBOX_ADDRESS_HOST(x) \
@@ -28,6 +26,7 @@ namespace tt::tt_metal::blackhole {
 
 HalCoreInfoType create_active_eth_mem_map() {
     std::vector<DeviceAddr> mem_map_bases;
+    constexpr std::uint32_t L1_KERNEL_CONFIG_SIZE = 69 * 1024;
 
     mem_map_bases.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT));
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BASE)] = 0x0;  // Anything better to use?
@@ -69,7 +68,8 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DPRINT)] = sizeof(dprint_buf_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::PROFILER)] = sizeof(profiler_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] =
-        L1_KERNEL_CONFIG_SIZE;  // TODO: this is wrong, need eth specific value. For now use same value as idle eth
+        L1_KERNEL_CONFIG_SIZE;  // TODO: this is wrong, need eth specific value. For now use same value as idle
+                                // eth
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)] =
         eth_l1_mem::address_map::MAX_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = sizeof(go_msg_t);

@@ -7,15 +7,15 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/rtoptions.hpp>
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
-#include "kernels/traffic_gen_test.hpp"
+#include "test_common.hpp"
+#include "routing_test_common.hpp"
 #include "utils.hpp"
 #include "llrt.hpp"
 
-using std::vector;
-using namespace tt;
-
-
 int main(int argc, char **argv) {
+    using std::vector;
+    using namespace tt;
+    using namespace tt::packet_queue;
 
     bool pass = true;
     try {

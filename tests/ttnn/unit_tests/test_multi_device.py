@@ -11,7 +11,7 @@ from loguru import logger
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor, ListMeshToTensor
+from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
 
 
 #######
@@ -183,7 +183,7 @@ def test_multi_device_check_per_device_shard(mesh_device, layout, memory_config,
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
 def test_multi_device_replicate(mesh_device, shape, layout, memory_config):
     """Test ReplicateTensorToMesh to broadcast a tensor across multiple devices"""
-    from ttnn import ReplicateTensorToMesh, ListMeshToTensor
+    from ttnn import ReplicateTensorToMesh
 
     full_tensor = torch.rand(shape, dtype=torch.bfloat16)
 
@@ -196,7 +196,9 @@ def test_multi_device_replicate(mesh_device, shape, layout, memory_config):
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
     ttnn_loop_back_tensor = ttnn.from_device(ttnn_tensor)
-    loopback_replicated_tensors = ttnn.to_torch(ttnn_loop_back_tensor, mesh_composer=ListMeshToTensor(mesh_device))
+    loopback_replicated_tensors = [
+        ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(ttnn_loop_back_tensor.cpu())
+    ]
     for loopback_replicated_tensor in loopback_replicated_tensors:
         assert torch.all(full_tensor == loopback_replicated_tensor)
 
@@ -679,6 +681,8 @@ def test_all_gather_multiple_submeshes(mesh_device):
         pytest.skip()
 
     def model(submesh):
+        # Reshape to a 1x4 mesh to enforce ring connected topological order.
+        submesh.reshape(ttnn.MeshShape(1, 4))
         full_tensor = torch.ones((1, 1, 32, 32 * submesh.get_num_devices()), dtype=torch.bfloat16)
         for i in range(submesh.get_num_devices()):
             full_tensor[..., i * 32 : (i + 1) * 32] = i
@@ -716,3 +720,14 @@ def test_line_all_gather_after_reshape(mesh_device):
         mesh_device=mesh_device,
         topology=ttnn.Topology.Linear,
     )
+
+
+def test_distribute_api(mesh_device):
+    torch_hidden_states = torch.rand((1, 1, 32, 32), dtype=torch.bfloat16)
+    with ttnn.distribute(ttnn.ReplicateTensorToMesh(mesh_device)):
+        hidden_states = ttnn.from_torch(
+            torch_hidden_states,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+        )

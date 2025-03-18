@@ -6,6 +6,7 @@ import torch
 import ttnn
 from models.demos.yolov4.reference.head import Head
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import skip_for_grayskull
 import pytest
 import time
 from models.demos.yolov4.ttnn.head import TtHead
@@ -13,6 +14,7 @@ from loguru import logger
 import os
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_head(device, reset_seeds, model_location_generator):
     torch.manual_seed(0)
@@ -56,15 +58,8 @@ def test_head(device, reset_seeds, model_location_generator):
     torch_input_tensor = [torch_input_tensor1, torch_input_tensor2, torch_input_tensor3]
 
     torch_model = Head()
-
-    new_state_dict = {}
     ds_state_dict = {k: v for k, v in ttnn_model.torch_model.items() if (k.startswith("head."))}
-
-    keys = [name for name, parameter in torch_model.state_dict().items()]
-    values = [parameter for name, parameter in ds_state_dict.items()]
-    for i in range(len(keys)):
-        new_state_dict[keys[i]] = values[i]
-
+    new_state_dict = dict(zip(torch_model.state_dict().keys(), ds_state_dict.values()))
     torch_model.load_state_dict(new_state_dict)
     torch_model.eval()
 
@@ -79,19 +74,22 @@ def test_head(device, reset_seeds, model_location_generator):
     result_3 = ttnn.to_torch(result_ttnn[2])
     ref1, ref2, ref3 = torch_model(torch_input_tensor[0], torch_input_tensor[1], torch_input_tensor[2])
 
-    result_1 = result_1.reshape(1, ref1.shape[2], ref1.shape[3], 255)
+    num_channels = ref1.shape[1]  # 255
+    num_channels_padded = num_channels + 1
+
+    result_1 = result_1.reshape(1, ref1.shape[2], ref1.shape[3], num_channels_padded)
     result_1 = result_1.permute(0, 3, 1, 2)
 
-    result_2 = result_2.reshape(1, ref2.shape[2], ref2.shape[3], 255)
+    result_2 = result_2.reshape(1, ref2.shape[2], ref2.shape[3], num_channels_padded)
     result_2 = result_2.permute(0, 3, 1, 2)
 
-    result_3 = result_3.reshape(1, ref3.shape[2], ref3.shape[3], 255)
+    result_3 = result_3.reshape(1, ref3.shape[2], ref3.shape[3], num_channels_padded)
     result_3 = result_3.permute(0, 3, 1, 2)
 
     # Output is sliced because ttnn.conv returns 256 channels instead of 255.
-    result_1 = result_1[:, :255, :, :]
-    result_2 = result_2[:, :255, :, :]
-    result_3 = result_3[:, :255, :, :]
+    result_1 = result_1[:, :num_channels, :, :]
+    result_2 = result_2[:, :num_channels, :, :]
+    result_3 = result_3[:, :num_channels, :, :]
 
     pcc_passed, pcc_message = assert_with_pcc(result_1, ref1, 0.99)
     logger.info(pcc_message)

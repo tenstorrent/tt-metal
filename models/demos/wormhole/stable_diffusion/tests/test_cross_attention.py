@@ -12,96 +12,58 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_cross_attention i
     cross_attention,
 )
 from ttnn.model_preprocessing import preprocess_model_parameters
-from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
+from tests.ttnn.utils_for_testing import comp_pcc
 from models.utility_functions import (
     skip_for_grayskull,
 )
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
+    preprocess_and_push_input_to_device,
+)
+from models.demos.wormhole.stable_diffusion.tests.parameterizations import TRANSFORMER_PARAMETERIZATIONS
 
 
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
+@pytest.mark.parametrize("has_encoder_hidden_states", (True, False))
 @pytest.mark.parametrize(
-    "N, C, H, W, index, has_encoder_hidden_states",
-    [
-        (
-            1,
-            2,
-            4096,
-            320,
-            3,
-            True,
-        ),
-        (
-            1,
-            2,
-            4096,
-            320,
-            3,
-            False,
-        ),
-        (
-            1,
-            2,
-            1024,
-            640,
-            2,
-            True,
-        ),
-        (
-            1,
-            2,
-            1024,
-            640,
-            2,
-            False,
-        ),
-        (
-            1,
-            2,
-            256,
-            1280,
-            1,
-            True,
-        ),
-        (
-            1,
-            2,
-            256,
-            1280,
-            1,
-            False,
-        ),
-        (
-            1,
-            2,
-            64,
-            1280,
-            1,
-            True,
-        ),
-        (
-            1,
-            2,
-            64,
-            1280,
-            1,
-            False,
-        ),
-    ],
+    "input_shape, shard_layout, shard_end_core, shard_shape, attention_head_dim, block, block_index, attention_index",
+    TRANSFORMER_PARAMETERIZATIONS,
 )
-def test_cross_attention_512x512(device, model_name, N, C, H, W, index, has_encoder_hidden_states):
+def test_cross_attention_512x512(
+    device,
+    model_name,
+    input_shape,
+    shard_layout,
+    shard_end_core,
+    shard_shape,
+    attention_head_dim,
+    has_encoder_hidden_states,
+    block,
+    block_index,
+    attention_index,
+):
     torch.manual_seed(0)
     device.enable_program_cache()
+
+    N, C, H, W = input_shape
 
     pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
     model = pipe.unet
     model.eval()
 
-    hidden_states_shape = torch.Size([N, C, H, W])
+    hidden_states_shape = torch.Size(input_shape)
     hidden_states = torch.rand(hidden_states_shape)
+
+    if block == "up":
+        basic_transformer = pipe.unet.up_blocks[block_index].attentions[attention_index].transformer_blocks[0]
+    elif block == "down":
+        basic_transformer = pipe.unet.down_blocks[block_index].attentions[attention_index].transformer_blocks[0]
+    elif block == "mid":
+        basic_transformer = pipe.unet.mid_block.attentions[0].transformer_blocks[0]
+
     if has_encoder_hidden_states:
-        cross_attn = pipe.unet.up_blocks[index].attentions[0].transformer_blocks[0].attn2
+        cross_attn = basic_transformer.attn2
 
         encoder_hidden_states_shape = torch.Size([1, 2, 77, 768])
         encoder_hidden_states = torch.rand(encoder_hidden_states_shape)
@@ -110,12 +72,14 @@ def test_cross_attention_512x512(device, model_name, N, C, H, W, index, has_enco
         ttnn_encoder_hidden_states = ttnn.from_torch(encoder_hidden_states, dtype=ttnn.bfloat16)
         ttnn_encoder_hidden_states = ttnn.to_device(ttnn_encoder_hidden_states, device)
     else:
-        cross_attn = pipe.unet.up_blocks[index].attentions[0].transformer_blocks[0].attn1
+        cross_attn = basic_transformer.attn1
         encoder_hidden_states = None
         ttnn_encoder_hidden_states = None
 
+    torch_hidden_states = torch.permute(hidden_states, [0, 2, 3, 1])
+    torch_hidden_states = torch.reshape(torch_hidden_states, [N, H * W, C])
     encoder_hidden_states = encoder_hidden_states.squeeze(0) if encoder_hidden_states is not None else None
-    torch_output = cross_attn(hidden_states.squeeze(0), encoder_hidden_states).unsqueeze(0)
+    torch_output = cross_attn(torch_hidden_states.squeeze(0), encoder_hidden_states).unsqueeze(0)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: cross_attn, custom_preprocessor=custom_preprocessor, device=device
@@ -129,16 +93,33 @@ def test_cross_attention_512x512(device, model_name, N, C, H, W, index, has_enco
     else:
         ttnn_encoder_hidden_states = None
 
-    hidden_states = hidden_states.reshape(1, 1, N * C * H, W)
-    ttnn_hidden_states = ttnn.from_torch(hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn_hidden_states = ttnn.to_device(ttnn_hidden_states, device)
+    ttnn_hidden_states = preprocess_and_push_input_to_device(
+        device,
+        hidden_states,
+        memory_config=ttnn.MemoryConfig(
+            shard_layout,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet(
+                    {
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0),
+                            ttnn.CoreCoord(shard_end_core[0], shard_end_core[1]),
+                        ),
+                    }
+                ),
+                shard_shape,
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        ),
+    )
 
-    model = cross_attention(device, parameters, seq_len=H)
+    model = cross_attention(device, parameters, seq_len=H * W)
     ttnn_output = model(
         ttnn_hidden_states,
         ttnn_encoder_hidden_states,
         attention_mask=None,
-        dim_head=W // 8,
+        dim_head=attention_head_dim,
     )
     ttnn_output = ttnn.to_torch(ttnn_output)
 

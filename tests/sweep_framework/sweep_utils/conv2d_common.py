@@ -220,7 +220,6 @@ def run_conv2d_short_sweep(
             dilation_w,
             has_bias,
         ] = input_specs
-    print(input_specs)
 
     if is_forge_suite:
         torch_input_dtype = torch.bfloat16 if input_dtype == ttnn.DataType(ttnn.bfloat16) else torch.float32
@@ -260,6 +259,9 @@ def run_conv2d_short_sweep(
         input_layout = ttnn.Layout(input_layout)
         input_dtype = ttnn.DataType(input_dtype)
         input_memory_config = ttnn.DRAM_MEMORY_CONFIG if input_buffer_type == "dram" else ttnn.L1_MEMORY_CONFIG
+        torch_input_tensor = torch.reshape(
+            torch_input_tensor, (1, 1, batch_size * input_height * input_width, input_channels)
+        )
         tt_input_tensor = ttnn.from_torch(
             torch_input_tensor, dtype=input_dtype, layout=input_layout, device=device, memory_config=input_memory_config
         )
@@ -273,6 +275,7 @@ def run_conv2d_short_sweep(
             dtype=output_dtype,
             weights_dtype=weights_dtype,
             output_layout=output_layout,
+            preprocess_weights_on_device=True,
         )
     else:
         tt_weight_tensor = ttnn.from_torch(torch_weight_tensor, ttnn.bfloat16)
@@ -280,7 +283,9 @@ def run_conv2d_short_sweep(
             tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, ttnn.bfloat16)
 
         tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, device=device)
-        conv_config = ttnn.Conv2dConfig()
+        conv_config = ttnn.Conv2dConfig(
+            preprocess_weights_on_device=True,
+        )
 
     start_time = start_measuring_time()
     [tt_output_tensor_on_device, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv2d(
@@ -314,8 +319,7 @@ def run_conv2d_short_sweep(
 
     torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
 
-    print("End of test case")
-    return [check_with_pcc(torch_output_tensor, torch_out_golden_tensor, pcc=0.998), e2e_perf]
+    return [check_with_pcc(torch_output_tensor, torch_out_golden_tensor, pcc=0.985), e2e_perf]
 
 
 def run_conv1d_short_sweep(

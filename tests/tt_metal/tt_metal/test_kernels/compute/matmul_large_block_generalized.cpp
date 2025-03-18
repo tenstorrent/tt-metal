@@ -132,7 +132,7 @@ void MAIN {
     uint32_t untilize_mode_final_matmul_partials_cb = tt::CBIndex::c_26;
     uint32_t untilize_mode_reblock_cb = tt::CBIndex::c_27;
     uint32_t out0_cb = tt::CBIndex::c_16;
-    mm_init();
+    mm_init(in0_cb, tt::CBIndex::c_1, out0_cb);
     for (uint32_t block_in0_h = 0; block_in0_h < num_blocks_in0_h; block_in0_h++) {
         for (uint32_t block_in1_w = 0; block_in1_w < num_blocks_in1_w; block_in1_w++) {
             enable_reload = false;
@@ -142,7 +142,7 @@ void MAIN {
                 if (tilize_in) {
                     tilize_activation(
                         in0_cb, in0_subblock_h, in0_block_w, in0_num_subblocks, tilize_mode_tilized_in0_cb);
-                    mm_init_short();
+                    mm_init_short(tilize_mode_tilized_in0_cb, tt::CBIndex::c_1);
                     cb_wait_front(tilize_mode_tilized_in0_cb, in0_block_num_tiles);
 
                 } else {
@@ -164,7 +164,7 @@ void MAIN {
                                 copy_tile(matmul_partials_cb, i, i);
                             }
                             cb_pop_front(matmul_partials_cb, out_subblock_num_tiles);
-                            mm_init_short();
+                            mm_init_short(tilize_in ? tilize_mode_tilized_in0_cb : in0_cb, tt::CBIndex::c_1);
                         }
 
                         // Compute output sub-block from in0_subblock x in1_subblock
@@ -224,7 +224,7 @@ void MAIN {
                                 untilize_mode_final_matmul_partials_cb,
                                 untilize_mode_reblock_cb,
                                 out0_cb);
-                            mm_init_short();
+                            mm_init_short(tilize_in ? tilize_mode_tilized_in0_cb : in0_cb, tt::CBIndex::c_1);
                         }
                     }
 

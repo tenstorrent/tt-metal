@@ -86,9 +86,9 @@ MorehFoldOperation::spec_return_value_t MorehFoldOperation::compute_output_specs
     }();
     return TensorSpec(
         output_shape,
-        TensorLayout(
+        tt::tt_metal::TensorLayout(
             tensor_args.input.get_dtype(),
-            PageConfig(tensor_args.input.get_layout()),
+            tt::tt_metal::PageConfig(tensor_args.input.get_layout()),
             operation_attributes.memory_config));
 };
 

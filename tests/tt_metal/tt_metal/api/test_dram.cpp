@@ -23,7 +23,7 @@ struct DRAMConfig {
     tt_metal::DataMovementConfig data_movement_cfg;
 };
 
-bool dram_single_core_db(DispatchFixture* fixture, tt_metal::IDevice* device) {
+bool dram_single_core_db(tt::tt_metal::DispatchFixture* fixture, tt_metal::IDevice* device) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
     CoreCoord core = {0, 0};
@@ -85,9 +85,12 @@ bool dram_single_core_db(DispatchFixture* fixture, tt_metal::IDevice* device) {
 }
 
 bool dram_single_core(
-    DispatchFixture* fixture, tt_metal::IDevice* device, const DRAMConfig& cfg, std::vector<uint32_t> src_vec) {
+    tt::tt_metal::DispatchFixture* fixture,
+    tt_metal::IDevice* device,
+    const DRAMConfig& cfg,
+    std::vector<uint32_t> src_vec) {
     // Create a program
-    tt_metal::Program program = CreateProgram();
+    tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt_metal::InterleavedBufferConfig dram_config{
         .device = device,
@@ -124,9 +127,12 @@ bool dram_single_core(
 }
 
 bool dram_single_core_pre_allocated(
-    DispatchFixture* fixture, tt_metal::IDevice* device, const DRAMConfig& cfg, std::vector<uint32_t> src_vec) {
+    tt::tt_metal::DispatchFixture* fixture,
+    tt_metal::IDevice* device,
+    const DRAMConfig& cfg,
+    std::vector<uint32_t> src_vec) {
     // Create a program
-    tt_metal::Program program = CreateProgram();
+    tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt_metal::InterleavedBufferConfig dram_config{
         .device = device,
@@ -171,6 +177,8 @@ bool dram_single_core_pre_allocated(
     return result_vec == src_vec;
 }
 }  // namespace unit_tests_common::dram::test_dram
+
+namespace tt::tt_metal {
 
 TEST_F(DispatchFixture, TensixDRAMLoopbackSingleCore) {
     uint32_t buffer_size = 2 * 1024 * 25;
@@ -217,3 +225,5 @@ TEST_F(DispatchFixture, TensixDRAMLoopbackSingleCoreDB) {
         ASSERT_TRUE(unit_tests_common::dram::test_dram::dram_single_core_db(this, devices_.at(id)));
     }
 }
+
+}  // namespace tt::tt_metal

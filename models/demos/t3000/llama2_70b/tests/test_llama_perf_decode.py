@@ -22,7 +22,6 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
 )
 from models.utility_functions import (
     profiler,
-    disable_compilation_reports,
     skip_for_grayskull,
     is_wormhole_b0,
 )
@@ -119,9 +118,7 @@ def run_test_LlamaModel_end_to_end(
         read_cache=True,
     )
 
-    for i in mesh_device.get_device_ids():
-        device = mesh_device.get_device(i)
-        ttnn.synchronize_device(device)
+    ttnn.synchronize_device(mesh_device)
 
     profiler.end("TT_llama_model_setup")
 
@@ -232,8 +229,6 @@ def test_Llama_perf_host(
 
     t3k_mesh_device.enable_async(True)
 
-    disable_compilation_reports()
-
     run_test_LlamaModel_end_to_end(
         t3k_mesh_device,
         llama_version,
@@ -312,9 +307,7 @@ def run_test_LlamaModel_end_to_end_hybrid_data_tensor_parallel(
             read_cache=True,
         )
 
-        for i in submesh.get_device_ids():
-            device = submesh.get_device(i)
-            ttnn.synchronize_device(device)
+        ttnn.synchronize_device(submesh)
 
         profiler.end("TT_llama_model_setup")
 
@@ -443,8 +436,6 @@ def test_Llama_perf_hybrid_data_tensor_parallel(
 
     check_mesh_device(mesh_device, model_config)
     mesh_device.enable_async(True)
-
-    disable_compilation_reports()
 
     run_test_LlamaModel_end_to_end_hybrid_data_tensor_parallel(
         mesh_device,

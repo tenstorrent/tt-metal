@@ -21,6 +21,8 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 
+#include "tt_cluster.hpp"
+
 // TODO: ARCH_NAME specific, must remove
 #include "eth_l1_address_map.h"
 
@@ -146,7 +148,7 @@ bool RunWriteBWTest(
         .input_buffer_type = source_is_dram ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1,
         .output_buffer_type = dest_is_dram ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1,
         .l1_data_format = tt::DataFormat::Float16_b};
-    auto input_buffer = CreateBuffer(InterleavedBufferConfig{
+    auto input_buffer = CreateBuffer(tt_metal::InterleavedBufferConfig{
         sender_device, test_config.size_bytes, test_config.page_size_bytes, test_config.input_buffer_type});
 
     bool input_is_dram = test_config.input_buffer_type == tt_metal::BufferType::DRAM;
@@ -160,7 +162,7 @@ bool RunWriteBWTest(
     // Clear expected value at ethernet L1 address
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
 
-    auto output_buffer = CreateBuffer(InterleavedBufferConfig{
+    auto output_buffer = CreateBuffer(tt_metal::InterleavedBufferConfig{
         receiver_device, test_config.size_bytes, test_config.page_size_bytes, test_config.output_buffer_type});
 
     bool output_is_dram = test_config.output_buffer_type == tt_metal::BufferType::DRAM;

@@ -23,13 +23,4 @@ ttnn::Tensor IndexedFillOperation::invoke(
         .at(0);
 }
 
-ttnn::Tensor IndexedFillOperation::invoke(
-    const ttnn::Tensor& batch_id,
-    const ttnn::Tensor& input_tensor_a,
-    const ttnn::Tensor& input_tensor_b,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
-    int64_t dim) {
-    return invoke(DefaultQueueId, batch_id, input_tensor_a, input_tensor_b, memory_config, dim);
-}
-
 }  // namespace ttnn::operations::data_movement

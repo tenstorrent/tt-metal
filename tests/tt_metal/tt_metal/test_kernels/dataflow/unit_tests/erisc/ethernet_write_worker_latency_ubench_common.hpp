@@ -9,16 +9,9 @@
 #include "ethernet/dataflow_api.h"
 #include "debug/assert.h"
 #include "debug/dprint.h"
+#include "eth_ubenchmark_types.hpp"
 
 // #define ENABLE_DEBUG 1
-
-struct eth_buffer_slot_sync_t {
-    volatile uint32_t bytes_sent;
-    volatile uint32_t receiver_ack;
-    volatile uint32_t src_id;
-
-    uint32_t reserved_2;
-};
 
 FORCE_INLINE void eth_setup_handshake(std::uint32_t handshake_register_address, bool is_sender) {
     if (is_sender) {
@@ -43,12 +36,15 @@ bool is_power_of_two(T val) {
 
 // ******************************* Common Ct Args ************************************************
 
-constexpr uint32_t NUM_BUFFER_SLOTS = get_compile_time_arg_val(0);
+constexpr BenchmarkType benchmark_type = static_cast<BenchmarkType>(get_compile_time_arg_val(0));
+constexpr MeasurementType measurement_type = static_cast<MeasurementType>(get_compile_time_arg_val(1));
+constexpr uint32_t NUM_BUFFER_SLOTS = get_compile_time_arg_val(2);
 constexpr uint32_t MAX_NUM_TRANSACTION_ID =
     NUM_BUFFER_SLOTS / 2;  // the algorithm only works for NUM_BUFFER_SLOTS divisible by MAX_NUM_TRANSACTION_ID
-constexpr uint32_t worker_noc_x = get_compile_time_arg_val(1);
-constexpr uint32_t worker_noc_y = get_compile_time_arg_val(2);
-constexpr uint32_t worker_buffer_addr = get_compile_time_arg_val(3);
+constexpr uint32_t worker_noc_x = get_compile_time_arg_val(3);
+constexpr uint32_t worker_noc_y = get_compile_time_arg_val(4);
+constexpr uint32_t worker_buffer_addr = get_compile_time_arg_val(5);
+constexpr uint32_t disable_trid = get_compile_time_arg_val(6);
 
 // ******************************* Sender APIs ***************************************************
 
@@ -176,20 +172,27 @@ FORCE_INLINE bool has_incoming_packet(volatile eth_buffer_slot_sync_t* buffer_sl
 }
 
 FORCE_INLINE bool write_worker_done(uint32_t trid) {
-    return ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, trid);
+    return ncrisc_noc_nonposted_write_with_transaction_id_sent(noc_index, trid);
 }
 
-FORCE_INLINE void ack_complete(volatile eth_buffer_slot_sync_t* buffer_slot_sync_addr) {
+FORCE_INLINE void ack_complete(
+    uint32_t buffer_slot_addr, volatile eth_buffer_slot_sync_t* buffer_slot_sync_addr, uint32_t full_payload_size) {
     buffer_slot_sync_addr->bytes_sent = 0;
 
     while (eth_txq_is_busy()) {
         switch_context_if_debug();
     }
 
-    eth_send_bytes_over_channel_payload_only_unsafe_one_packet(
-        reinterpret_cast<uint32_t>(buffer_slot_sync_addr),
-        reinterpret_cast<uint32_t>(buffer_slot_sync_addr),
-        sizeof(eth_buffer_slot_sync_t));
+    if constexpr (measurement_type == MeasurementType::Latency) {
+        // Send pack entire packet so measurement from sender -> receiver -> sender is symmetric
+        eth_send_bytes_over_channel_payload_only_unsafe_one_packet(
+            buffer_slot_addr, buffer_slot_addr, full_payload_size);
+    } else {
+        eth_send_bytes_over_channel_payload_only_unsafe_one_packet(
+            reinterpret_cast<uint32_t>(buffer_slot_sync_addr),
+            reinterpret_cast<uint32_t>(buffer_slot_sync_addr),
+            sizeof(eth_buffer_slot_sync_t));
+    }
 }
 
 FORCE_INLINE void write_worker(
@@ -210,7 +213,8 @@ FORCE_INLINE void write_worker(
     buffer_slot_sync_addr->bytes_sent = 0;
 }
 
-FORCE_INLINE void check_incomping_packet_and_write_worker(
+template <bool write_to_worker>
+FORCE_INLINE void check_incoming_packet_and_write_worker(
     const std::array<uint32_t, NUM_BUFFER_SLOTS>& buffer_slot_addrs,
     const std::array<volatile eth_buffer_slot_sync_t*, NUM_BUFFER_SLOTS>& buffer_slot_sync_addrs,
     uint32_t read_ptr,
@@ -221,48 +225,165 @@ FORCE_INLINE void check_incomping_packet_and_write_worker(
     bool buffer_not_full = next_write_ptr != read_ptr;
 
     if (buffer_not_full && has_incoming_packet(buffer_slot_sync_addrs[write_ptr])) {
-#ifdef ENABLE_WORKER
-        uint32_t curr_trid = get_buffer_slot_trid(write_ptr);
-        write_worker(
-            buffer_slot_addrs[write_ptr], buffer_slot_sync_addrs[write_ptr], worker_noc_addr, message_size, curr_trid);
-#endif
+        if constexpr (write_to_worker) {
+            uint32_t curr_trid = get_buffer_slot_trid(write_ptr);
+            write_worker(
+                buffer_slot_addrs[write_ptr],
+                buffer_slot_sync_addrs[write_ptr],
+                worker_noc_addr,
+                message_size,
+                curr_trid);
+        }
         write_ptr = next_write_ptr;
     }
 }
 
+template <bool write_to_worker>
 FORCE_INLINE void check_write_worker_done_and_send_ack(
+    const std::array<uint32_t, NUM_BUFFER_SLOTS>& buffer_slot_addrs,
     const std::array<volatile eth_buffer_slot_sync_t*, NUM_BUFFER_SLOTS>& buffer_slot_sync_addrs,
+    uint32_t full_payload_size,
     uint32_t& read_ptr,
     uint32_t write_ptr,
     uint32_t& num_messages_ack) {
     bool buffer_not_empty = read_ptr != write_ptr;
 
-#if defined(ENABLE_WORKER) and !defined(DISABLE_TRID)
-    uint32_t curr_trid = get_buffer_slot_trid(read_ptr);
-    if (buffer_not_empty && write_worker_done(curr_trid)) {
-#else
-    if (buffer_not_empty) {
-#endif
-        // DPRINT << "read_ptr " << read_ptr <<ENDL();
-        ack_complete(buffer_slot_sync_addrs[read_ptr]);
-
+    bool send_ack_condition = buffer_not_empty;
+    if constexpr (write_to_worker and !disable_trid) {
+        uint32_t curr_trid = get_buffer_slot_trid(read_ptr);
+        send_ack_condition = send_ack_condition && write_worker_done(curr_trid);
+    }
+    if (send_ack_condition) {
+        // DPRINT << "read_ptr " << read_ptr << ENDL();
+        ack_complete(buffer_slot_addrs[read_ptr], buffer_slot_sync_addrs[read_ptr], full_payload_size);
         read_ptr = advance_buffer_slot_ptr(read_ptr);
-
         num_messages_ack++;
     }
 }
 
+template <bool write_to_worker>
 FORCE_INLINE void update_receiver_state(
     const std::array<uint32_t, NUM_BUFFER_SLOTS>& buffer_slot_addrs,
     const std::array<volatile eth_buffer_slot_sync_t*, NUM_BUFFER_SLOTS>& buffer_slot_sync_addrs,
     uint64_t worker_noc_addr,
     uint32_t message_size,
+    uint32_t full_payload_size,
     uint32_t& num_messages_ack,
     uint32_t& buffer_read_ptr,
     uint32_t& buffer_write_ptr) {
     // Check if there's an incoming packet for current buffer slot and write to worker if there's new packet
-    check_incomping_packet_and_write_worker(
+    check_incoming_packet_and_write_worker<write_to_worker>(
         buffer_slot_addrs, buffer_slot_sync_addrs, buffer_read_ptr, buffer_write_ptr, worker_noc_addr, message_size);
     // Check if the write for trid is done, and ack sender if the current buffer slot is done
-    check_write_worker_done_and_send_ack(buffer_slot_sync_addrs, buffer_read_ptr, buffer_write_ptr, num_messages_ack);
+    check_write_worker_done_and_send_ack<write_to_worker>(
+        buffer_slot_addrs,
+        buffer_slot_sync_addrs,
+        full_payload_size,
+        buffer_read_ptr,
+        buffer_write_ptr,
+        num_messages_ack);
+}
+
+template <bool write_to_worker>
+FORCE_INLINE void receiver_uni_dir(
+    const std::array<uint32_t, NUM_BUFFER_SLOTS>& receiver_buffer_slot_addrs,
+    const std::array<volatile eth_buffer_slot_sync_t*, NUM_BUFFER_SLOTS>& receiver_buffer_slot_sync_addrs,
+    uint32_t message_size,
+    uint32_t full_payload_size,
+    uint32_t num_messages,
+    uint64_t worker_noc_addr) {
+    uint32_t total_msgs;
+    if constexpr (measurement_type == MeasurementType::Latency) {
+        total_msgs = num_messages;
+    } else {
+        total_msgs = num_messages * NUM_BUFFER_SLOTS;
+    }
+
+    DPRINT << "RECEIVER MAIN LOOP" << ENDL();
+
+    uint32_t receiver_buffer_read_ptr = 0;
+    uint32_t receiver_buffer_write_ptr = 0;
+    uint32_t receiver_num_messages_ack = 0;
+
+    if constexpr (write_to_worker) {
+        noc_async_write_one_packet_with_trid_set_state(worker_noc_addr);
+    }
+
+    while (receiver_num_messages_ack < total_msgs) {
+        update_receiver_state<write_to_worker>(
+            receiver_buffer_slot_addrs,
+            receiver_buffer_slot_sync_addrs,
+            worker_noc_addr,
+            message_size,
+            full_payload_size,
+            receiver_num_messages_ack,
+            receiver_buffer_read_ptr,
+            receiver_buffer_write_ptr);
+
+        // not called in normal execution mode
+        switch_context_if_debug();
+    }
+}
+
+// same as below so merge
+template <bool write_to_worker>
+FORCE_INLINE void send_receiver_bi_dir(
+    const std::array<uint32_t, NUM_BUFFER_SLOTS>& sender_buffer_slot_addrs,
+    const std::array<volatile eth_buffer_slot_sync_t*, NUM_BUFFER_SLOTS>& sender_buffer_slot_sync_addrs,
+    const std::array<uint32_t, NUM_BUFFER_SLOTS>& receiver_buffer_slot_addrs,
+    const std::array<volatile eth_buffer_slot_sync_t*, NUM_BUFFER_SLOTS>& receiver_buffer_slot_sync_addrs,
+    uint32_t full_payload_size,
+    uint32_t message_size,
+    uint32_t num_messages,
+    uint64_t worker_noc_addr) {
+    uint32_t total_msgs;
+    if constexpr (measurement_type == MeasurementType::Latency) {
+        total_msgs = num_messages * 2;
+    } else {
+        total_msgs = num_messages * NUM_BUFFER_SLOTS * 2;
+    }
+
+    DPRINT << "SENDER-RECEIVER MAIN LOOP" << ENDL();
+
+    uint32_t sender_buffer_read_ptr = 0;
+    uint32_t sender_buffer_write_ptr = 0;
+
+    uint32_t receiver_buffer_read_ptr = 0;
+    uint32_t receiver_buffer_write_ptr = 0;
+
+    uint32_t num_messages_ack = 0;
+    uint32_t sender_num_messages_send;
+    if constexpr (measurement_type == MeasurementType::Latency) {
+        sender_num_messages_send = num_messages;
+    } else {
+        sender_num_messages_send = num_messages * NUM_BUFFER_SLOTS;
+    }
+
+    if constexpr (write_to_worker) {
+        noc_async_write_one_packet_with_trid_set_state(worker_noc_addr);
+    }
+
+    while (num_messages_ack < total_msgs) {
+        update_sender_state(
+            sender_buffer_slot_addrs,
+            sender_buffer_slot_sync_addrs,
+            full_payload_size,
+            num_messages_ack,
+            sender_num_messages_send,
+            sender_buffer_read_ptr,
+            sender_buffer_write_ptr);
+
+        update_receiver_state<write_to_worker>(
+            receiver_buffer_slot_addrs,
+            receiver_buffer_slot_sync_addrs,
+            worker_noc_addr,
+            message_size,
+            full_payload_size,
+            num_messages_ack,
+            receiver_buffer_read_ptr,
+            receiver_buffer_write_ptr);
+
+        // not called in normal execution mode
+        switch_context_if_debug();
+    }
 }

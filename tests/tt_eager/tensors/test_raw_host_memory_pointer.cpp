@@ -8,6 +8,7 @@
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/constants.hpp>
+#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -56,6 +57,7 @@ struct NDArray {
 void test_raw_host_memory_pointer() {
     using tt::tt_metal::BorrowedStorage;
     using tt::tt_metal::DataType;
+    using tt::tt_metal::Layout;
     using tt::tt_metal::OwnedStorage;
     using tt::tt_metal::Tensor;
     using namespace tt::tt_metal::borrowed_buffer;
@@ -67,8 +69,11 @@ void test_raw_host_memory_pointer() {
     ttnn::Shape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
 
     // Host tensor to print the output
-    Tensor tensor_for_printing =
-        Tensor(OwnedStorage{owned_buffer::create<bfloat16>(shape.volume())}, shape, DataType::BFLOAT16, Layout::TILE);
+    Tensor tensor_for_printing = Tensor(
+        OwnedStorage{tt::tt_metal::owned_buffer::create<bfloat16>(shape.volume())},
+        shape,
+        DataType::BFLOAT16,
+        Layout::TILE);
 
     /* Borrow Data from Numpy Start */
     // Create some
@@ -78,7 +83,7 @@ void test_raw_host_memory_pointer() {
     auto on_destruction_callback = [] {};
     Tensor a_cpu = Tensor(
         BorrowedStorage{
-            borrowed_buffer::Buffer(static_cast<bfloat16*>(a_np_array_data), a_np_array.size()),
+            tt::tt_metal::borrowed_buffer::Buffer(static_cast<bfloat16*>(a_np_array_data), a_np_array.size()),
             on_creation_callback,
             on_destruction_callback},
         shape,
@@ -93,7 +98,7 @@ void test_raw_host_memory_pointer() {
     // Set every value of tt Tensor to the same non-zero number
     bfloat16 a_value = 4.0f;
 
-    for (auto& element : borrowed_buffer::get_as<bfloat16>(a_cpu)) {
+    for (auto& element : tt::tt_metal::borrowed_buffer::get_as<bfloat16>(a_cpu)) {
         element = a_value;
     }
 
@@ -113,7 +118,7 @@ void test_raw_host_memory_pointer() {
 
     // Check that cpu tensor has correct data
     bfloat16 output_value = 1.99219f;  // Not exactly 2.0f because of rounding errors
-    for (auto& element : owned_buffer::get_as<bfloat16>(tensor_for_printing)) {
+    for (auto& element : tt::tt_metal::owned_buffer::get_as<bfloat16>(tensor_for_printing)) {
         TT_ASSERT(element == output_value);
     }
 
@@ -128,7 +133,8 @@ void test_raw_host_memory_pointer() {
 
     Tensor alternative_tensor_for_printing = Tensor(
         BorrowedStorage{
-            borrowed_buffer::Buffer(static_cast<bfloat16*>(storage_of_alternative_tensor_for_printing), shape.volume()),
+            tt::tt_metal::borrowed_buffer::Buffer(
+                static_cast<bfloat16*>(storage_of_alternative_tensor_for_printing), shape.volume()),
             on_creation_callback,
             on_destruction_callback},
         shape,
@@ -136,7 +142,7 @@ void test_raw_host_memory_pointer() {
         Layout::TILE);
     alternative_tensor_for_printing.print();
 
-    for (auto& element : borrowed_buffer::get_as<bfloat16>(alternative_tensor_for_printing)) {
+    for (auto& element : tt::tt_metal::borrowed_buffer::get_as<bfloat16>(alternative_tensor_for_printing)) {
         TT_ASSERT(element == output_value);
     }
 
@@ -147,7 +153,7 @@ void test_raw_host_memory_pointer() {
     void* d_np_array_data = d_np_array.data;
     Tensor d_cpu = Tensor(
         BorrowedStorage{
-            borrowed_buffer::Buffer(static_cast<bfloat16*>(d_np_array_data), d_np_array.size()),
+            tt::tt_metal::borrowed_buffer::Buffer(static_cast<bfloat16*>(d_np_array_data), d_np_array.size()),
             on_creation_callback,
             on_destruction_callback},
         shape,
@@ -155,7 +161,7 @@ void test_raw_host_memory_pointer() {
         Layout::TILE);
 
     bfloat16 d_value = 8.0f;
-    for (auto& element : borrowed_buffer::get_as<bfloat16>(d_cpu)) {
+    for (auto& element : tt::tt_metal::borrowed_buffer::get_as<bfloat16>(d_cpu)) {
         element = d_value;
     }
 
@@ -166,7 +172,7 @@ void test_raw_host_memory_pointer() {
 
     tt::tt_metal::memcpy(tensor_for_printing, e_dev);
 
-    for (auto& element : owned_buffer::get_as<bfloat16>(tensor_for_printing)) {
+    for (auto& element : tt::tt_metal::owned_buffer::get_as<bfloat16>(tensor_for_printing)) {
         TT_ASSERT(element == bfloat16(10.0f));
     }
 

@@ -16,8 +16,8 @@
 #include "umd/device/tt_xy_pair.h"
 #include <assert.hpp>
 #include "tracy/Tracy.hpp"
-#include <reflection.hpp>
-#include <span.hpp>
+#include <tt_stl/reflection.hpp>
+#include <tt_stl/span.hpp>
 
 auto fmt::formatter<CoreCoord>::format(const CoreCoord& core_coord, format_context& ctx) const
     -> format_context::iterator {
@@ -427,6 +427,70 @@ void CoreRangeSet::validate_no_overlap() {
             }
         }
     }
+}
+
+CoreRangeSet CoreRangeSet::subtract(const CoreRangeSet& other) const {
+    const CoreRangeSet& this_merged = this->merge_ranges();
+    const CoreRangeSet& other_merged = other.merge_ranges();
+
+    // Early returns for empty sets and non-intersecting sets
+    if (other_merged.empty() || this_merged.empty() || !this_merged.intersects(other_merged)) {
+        return this_merged;
+    }
+
+    std::vector<CoreRange> result_ranges;
+
+    for (const auto& current_range : this_merged.ranges_) {
+        std::vector<CoreRange> current_remaining = {current_range};
+
+        for (const auto& subtract_range : other_merged.ranges_) {
+            std::vector<CoreRange> new_remaining;
+
+            for (const auto& remaining : current_remaining) {
+                auto intersection_opt = remaining.intersection(subtract_range);
+                if (!intersection_opt.has_value()) {
+                    new_remaining.push_back(remaining);
+                    continue;
+                }
+
+                const CoreRange& intersection = intersection_opt.value();
+
+                if (remaining.start_coord.x < intersection.start_coord.x) {
+                    CoreRange left{
+                        remaining.start_coord, CoreCoord{intersection.start_coord.x - 1, remaining.end_coord.y}};
+                    new_remaining.push_back(left);
+                }
+
+                if (remaining.end_coord.x > intersection.end_coord.x) {
+                    CoreRange right{
+                        CoreCoord{intersection.end_coord.x + 1, remaining.start_coord.y}, remaining.end_coord};
+                    new_remaining.push_back(right);
+                }
+
+                if (remaining.start_coord.y < intersection.start_coord.y) {
+                    CoreRange bottom{
+                        CoreCoord{
+                            std::max(remaining.start_coord.x, intersection.start_coord.x), remaining.start_coord.y},
+                        CoreCoord{
+                            std::min(remaining.end_coord.x, intersection.end_coord.x), intersection.start_coord.y - 1}};
+                    new_remaining.push_back(bottom);
+                }
+
+                if (remaining.end_coord.y > intersection.end_coord.y) {
+                    CoreRange top{
+                        CoreCoord{
+                            std::max(remaining.start_coord.x, intersection.start_coord.x),
+                            intersection.end_coord.y + 1},
+                        CoreCoord{std::min(remaining.end_coord.x, intersection.end_coord.x), remaining.end_coord.y}};
+                    new_remaining.push_back(top);
+                }
+            }
+            current_remaining = new_remaining;
+        }
+        result_ranges.insert(result_ranges.end(), current_remaining.begin(), current_remaining.end());
+    }
+
+    return CoreRangeSet(std::move(result_ranges));
 }
 
 bool operator==(const CoreRangeSet& a, const CoreRangeSet& b) {

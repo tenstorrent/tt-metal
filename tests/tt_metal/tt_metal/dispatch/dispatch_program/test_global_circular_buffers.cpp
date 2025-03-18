@@ -12,7 +12,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/global_circular_buffer_impl.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
-#include "tt_metal/include/tt_metal/program.hpp"
+
+namespace tt::tt_metal {
 
 TEST_F(DispatchFixture, TensixProgramGlobalCircularBuffers) {
     CoreCoord sender_core = CoreCoord(0, 0);
@@ -24,7 +25,7 @@ TEST_F(DispatchFixture, TensixProgramGlobalCircularBuffers) {
     auto all_cores = sender_cores.merge(receiver_cores);
     auto device = devices_[0];
     std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping = {{sender_core, receiver_cores}};
-    auto global_cb = tt::tt_metal::v1::experimental::CreateGlobalCircularBuffer(
+    auto global_cb = tt::tt_metal::experimental::CreateGlobalCircularBuffer(
         device, sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1);
 
     tt::tt_metal::Program program = CreateProgram();
@@ -33,8 +34,7 @@ TEST_F(DispatchFixture, TensixProgramGlobalCircularBuffers) {
     tt::tt_metal::CircularBufferConfig global_cb_config = tt::tt_metal::CircularBufferConfig(cb_page_size);
     global_cb_config.remote_index(remote_cb_index).set_page_size(cb_page_size).set_data_format(tile_format);
     global_cb_config.index(local_cb_index).set_page_size(cb_page_size).set_data_format(tile_format);
-    auto remote_cb =
-        tt::tt_metal::v1::experimental::CreateCircularBuffer(program, all_cores, global_cb_config, global_cb);
+    auto remote_cb = tt::tt_metal::experimental::CreateCircularBuffer(program, all_cores, global_cb_config, global_cb);
 
     std::vector<uint32_t> compile_args = {remote_cb_index};
     tt::tt_metal::KernelHandle dm0_sender_kernel = tt::tt_metal::CreateKernel(
@@ -119,3 +119,5 @@ TEST_F(DispatchFixture, TensixProgramGlobalCircularBuffers) {
     }
     this->RunProgram(device, program);
 }
+
+}  // namespace tt::tt_metal

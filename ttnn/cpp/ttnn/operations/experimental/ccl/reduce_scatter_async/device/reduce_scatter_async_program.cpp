@@ -13,8 +13,8 @@
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/device_impl.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/span.hpp>
-#include "cpp/ttnn/operations/ccl/erisc_datamover_builder.hpp"
+#include <tt_stl/span.hpp>
+#include <tt-metalium/erisc_datamover_builder.hpp>
 #include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operation.hpp"
@@ -30,7 +30,7 @@
 #include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 #include "cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 #include <tt-metalium/global_semaphore.hpp>
-#include <tt-metalium/overloaded.hpp>
+#include <tt_stl/overloaded.hpp>
 
 /*
  * This file contains the program factory for reduce scatter operation implemented on line (and soon, ring) topologies.
@@ -86,6 +86,8 @@
  *
  *
  */
+
+using namespace tt::tt_metal;
 
 namespace ttnn::ccl::reduce_scatter_detail {
 
@@ -1214,7 +1216,7 @@ static void populate_partial_reduce_rt_args(
 
     auto get_fabric_connection = [&device, &fabric](bool is_connected, Direction dir) {
         return is_connected
-                   ? std::make_optional<ttnn::ccl::SenderWorkerAdapterSpec>(fabric.uniquely_connect_worker(device, dir))
+                   ? std::make_optional<tt::tt_fabric::SenderWorkerAdapterSpec>(fabric.uniquely_connect_worker(device, dir))
                    : std::nullopt;
     };
 
@@ -1538,7 +1540,7 @@ static void create_end_of_line_worker_runtime_args(
 
     auto get_fabric_connection = [&device, &fabric](bool is_connected, Direction dir) {
         return is_connected
-                   ? std::make_optional<ttnn::ccl::SenderWorkerAdapterSpec>(fabric.uniquely_connect_worker(device, dir))
+                   ? std::make_optional<tt::tt_fabric::SenderWorkerAdapterSpec>(fabric.uniquely_connect_worker(device, dir))
                    : std::nullopt;
     };
 

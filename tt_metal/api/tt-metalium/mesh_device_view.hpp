@@ -13,41 +13,13 @@
 
 #include "device.hpp"
 #include "mesh_config.hpp"
+#include "mesh_coord.hpp"
+#include "shape2d.hpp"
 
 namespace tt::tt_metal::distributed {
 
 // Forward declaration of MeshDevice
 class MeshDevice;
-struct Coordinate {
-    size_t row = 0;
-    size_t col = 0;
-    auto operator<=>(const Coordinate&) const = default;
-
-    // Add support for structured bindings
-    template <size_t I>
-    decltype(auto) get() const {
-        if constexpr (I == 0) {
-            return row;
-        } else if constexpr (I == 1) {
-            return col;
-        } else {
-            static_assert(I < 2, "Index out of bounds for Coordinate");
-        }
-    }
-
-    friend std::ostream& operator<<(std::ostream& os, const Coordinate& coord) {
-        return os << "Coord(" << coord.row << ", " << coord.col << ")";
-    }
-};
-// TODO (Issue #17477): MeshWorkload and MeshEvent currently rely on the coordinate systems
-// exposed below. These must be uplifted to an ND coordinate system (DeviceCoord and DeviceRange),
-// keeping things more consistent  across the stack.
-// For now, since the LogicalDeviceRange concept is fundamentally identical to the CoreRange concept
-// on a 2D Mesh use this definition. CoreRange contains several utility functions required
-// in the MeshWorkload context.
-
-using DeviceCoord = CoreCoord;
-using LogicalDeviceRange = CoreRange;
 
 /**
  * @brief The MeshDeviceView class provides a view of a specific sub-region within the MeshDevice.
@@ -70,45 +42,49 @@ class MeshDeviceView {
 public:
     using DeviceView = std::vector<IDevice*>;
     using DeviceViews = std::vector<std::vector<IDevice*>>;
-    using CoordinateMapper = std::function<std::optional<Coordinate>(int device_id)>;
 
-    MeshDeviceView(const std::vector<IDevice*>& devices, const MeshShape& shape);
-    MeshDeviceView(const std::vector<IDevice*>& devices, Coordinate top_left, Coordinate bottom_right);
-    MeshDeviceView(const MeshDevice& mesh_device);
-    MeshDeviceView(const std::vector<IDevice*>& devices, const CoordinateMapper& mapper);
+    // Create a view of the entire mesh.
+    // MeshDeviceView(const MeshDevice& mesh_device);
 
-    [[nodiscard]] IDevice* get_device(size_t row, size_t col) const;
+    // // Create a view of a sub-region of the mesh defined by `range`.
+    // MeshDeviceView(const std::vector<IDevice*>& devices, const MeshCoordinateRange& range);
+    explicit MeshDeviceView(const MeshContainer<IDevice*>& devices);
+    explicit MeshDeviceView(const MeshDevice& mesh_device);
 
-    // Get devices spanning the rectangular region defined by the top-left and bottom-right coordinates
-    // devices are returned in row-major order with start/end coordinates inclusive
-    [[nodiscard]] DeviceView get_devices(const Coordinate& start, const Coordinate& end) const;
+    // Get devices spanning the region defined by `range` in row-major order with start/end coordinates inclusive
+    [[nodiscard]] DeviceView get_devices(const MeshCoordinateRange& range) const;
     [[nodiscard]] DeviceView get_devices(const MeshShape& submesh_shape) const;
     [[nodiscard]] DeviceView get_devices() const;
-
-    [[nodiscard]] DeviceView get_devices_on_row(size_t row) const;
-    [[nodiscard]] DeviceView get_devices_on_column(size_t col) const;
-
-    [[nodiscard]] DeviceViews get_row_views() const;
-    [[nodiscard]] DeviceViews get_column_views() const;
+    [[nodiscard]] size_t num_devices() const;
 
     [[nodiscard]] bool empty() const noexcept;
     [[nodiscard]] size_t size() const noexcept;
-    [[nodiscard]] MeshShape shape() const noexcept;
-    [[nodiscard]] bool contains(const Coordinate& coord) const noexcept;
-    [[nodiscard]] const IDevice* at(const Coordinate& coord) const noexcept;
+    [[nodiscard]] const MeshShape& shape() const noexcept;
+    [[nodiscard]] bool contains(const MeshCoordinate& coord) const noexcept;
+    [[nodiscard]] IDevice* get_device(const MeshCoordinate& coord) const;
+    [[nodiscard]] const IDevice* at(const MeshCoordinate& coord) const noexcept;
 
     bool operator==(const MeshDeviceView& other) const;
 
-    auto begin() const { return devices_.begin(); }
-    auto end() const { return devices_.end(); }
-
-    [[nodiscard]] size_t num_rows() const { return bottom_right_.row - top_left_.row + 1; }
-    [[nodiscard]] size_t num_cols() const { return bottom_right_.col - top_left_.col + 1; }
-    [[nodiscard]] size_t num_devices() const { return devices_.size(); }
+    auto begin() const { return devices_.values().begin(); }
+    auto end() const { return devices_.values().end(); }
 
     [[nodiscard]] bool contains_device(chip_id_t device_id) const;
-    [[nodiscard]] Coordinate find_device(chip_id_t device_id) const;
-    [[nodiscard]] chip_id_t find_device_id(const Coordinate& coord) const;
+
+    // Throws if no device corresponds to `device_id`.
+    [[nodiscard]] MeshCoordinate find_device(chip_id_t device_id) const;
+
+    // Throws if the `coord` is out of bounds of this view.
+    [[nodiscard]] chip_id_t find_device_id(const MeshCoordinate& coord) const;
+
+    // TODO: #17477 - Remove the methods that assume 2D mesh.
+    [[nodiscard]] bool is_mesh_2d() const;
+    [[nodiscard]] size_t num_rows() const;
+    [[nodiscard]] size_t num_cols() const;
+    [[nodiscard]] DeviceView get_devices_on_row(size_t row) const;
+    [[nodiscard]] DeviceView get_devices_on_column(size_t col) const;
+    [[nodiscard]] DeviceViews get_row_views() const;
+    [[nodiscard]] DeviceViews get_column_views() const;
 
     // These utility methods linearize the set of devices in a mesh into a line or ring.
     // Linearizing a mesh into a line asserts the condition that device[i-1] is connected to device[i].
@@ -117,47 +93,22 @@ public:
     //
     // Given a starting coordinate, get the coordinates of a line of devices where device[i-1] is connected to device[i]
     // The current support only provides left-to-right and right-to-left snaking of the line.
-    [[nodiscard]] static std::vector<Coordinate> get_line_coordinates(
-        size_t length, const Coordinate& offset, size_t num_rows, size_t num_cols);
-    [[nodiscard]] std::vector<Coordinate> get_ring_coordinates(
-        const MeshShape& ring_shape, const Coordinate& offset, size_t num_rows, size_t num_cols) const;
+    //
+    // Important: these utilities currently only support 2D meshes.
+    // TODO: #17477 - Remove the methods that assume 2D mesh.
+    [[nodiscard]] static std::vector<MeshCoordinate> get_line_coordinates(size_t length, const Shape2D& mesh_shape);
+    [[nodiscard]] static std::vector<MeshCoordinate> get_ring_coordinates(
+        const Shape2D& ring_shape, const Shape2D& mesh_shape);
     [[nodiscard]] std::vector<IDevice*> get_ring_devices() const;
     [[nodiscard]] std::vector<IDevice*> get_line_devices() const;
 
 private:
-    std::vector<IDevice*> devices_;
-    std::unordered_map<chip_id_t, Coordinate> device_coordinates_;
-    Coordinate top_left_;
-    Coordinate bottom_right_;
+    MeshContainer<IDevice*> devices_;
+    std::unordered_map<chip_id_t, MeshCoordinate> device_coordinates_;
 
-    void initialize_from_devices(const std::vector<IDevice*>& devices, const CoordinateMapper& mapper);
-    void validate_coordinates() const;
+    // Set if the view is 2D to enable row/col APIs, otherwise nullopt.
+    // TODO: #17477 - Remove this?
+    std::optional<Shape2D> shape_2d_;
 };
-
-// Helper function to create a MeshDeviceView
-inline MeshDeviceView make_mesh_device_view(std::vector<IDevice*> devices, MeshDeviceView::CoordinateMapper mapper) {
-    return MeshDeviceView(std::move(devices), std::move(mapper));
-}
 
 }  // namespace tt::tt_metal::distributed
-
-namespace std {
-// Specializations to enable structured bindings
-template <>
-struct tuple_size<tt::tt_metal::distributed::Coordinate> : std::integral_constant<size_t, 2> {};
-template <size_t I>
-struct tuple_element<I, tt::tt_metal::distributed::Coordinate> {
-    using type = size_t;
-};
-
-// Specialization to enable hashing of Coordinate
-template <>
-struct hash<tt::tt_metal::distributed::Coordinate> {
-    size_t operator()(const tt::tt_metal::distributed::Coordinate& coord) const noexcept {
-        size_t seed = 0;
-        tt::utils::hash_combine(seed, coord.row);
-        tt::utils::hash_combine(seed, coord.col);
-        return seed;
-    }
-};
-}  // namespace std

@@ -127,7 +127,7 @@ void MAIN {
         num_cores_to_wait = k_num_chunks - 1;
     }
 
-    mm_init();
+    mm_init(cb_q_in, cb_k_in, cb_out_final);
     cb_wait_front(cb_q_in, q_chunk_tiles);
 
     for (uint32_t cur_head_work = 0; cur_head_work < num_heads_per_core; ++cur_head_work) {

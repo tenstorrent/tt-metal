@@ -82,6 +82,18 @@ ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
         output_end = ttnn::Shape(std::move(output_end_vector));
     }
 
+    auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t output_single_tile_size = input_single_tile_size;
+
+    uint32_t num_tiles_per_row = input_tensor.get_padded_shape()[-1] / tt::constants::TILE_WIDTH;
+    uint32_t num_tiles_per_col = input_tensor.get_padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+
+    bool enough_space_width =
+        is_enough_space(input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_col);
+    bool enough_space_height =
+        is_enough_space(input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
+
     auto base_untilize = [=](const ttnn::Tensor& input_tensor) {
         return operation::run(
             UntilizeWithUnpadding{// output_end,
@@ -89,7 +101,9 @@ ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
                                   memory_config.value_or(input_tensor.memory_config()),
                                   use_multicore,
                                   use_pack_untilize,
-                                  fp32_dest_acc_en},
+                                  fp32_dest_acc_en,
+                                  enough_space_width,
+                                  enough_space_height},
             {input_tensor},
             {},
             {},
@@ -97,15 +111,6 @@ ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
     };
 
     return build_ndiml_untilize_val(base_untilize)(input_tensor);
-}
-
-ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Shape& output_tensor_end,
-    const std::optional<MemoryConfig>& memory_config,
-    bool use_multicore,
-    bool use_pack_untilize) {
-    return invoke(DefaultQueueId, input_tensor, output_tensor_end, memory_config, use_multicore, use_pack_untilize);
 }
 
 }  // namespace ttnn::operations::data_movement

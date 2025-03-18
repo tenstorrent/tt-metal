@@ -12,7 +12,7 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 
 using namespace ttnn::operations::normalization;
 
-std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_shape_dims(const Tensor& x) {
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_shape_dims(const tt::tt_metal::Tensor& x) {
     const auto& shape = x.padded_shape();
     const auto& tile = x.tensor_spec().tile();
     return {shape[-4], shape[-3], shape[-2] / tile.get_height(), shape[-1] / tile.get_width()};
@@ -20,10 +20,10 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_shape_dims(const Tens
 
 template <typename F>
 void set_or_update_runtime_arguments(
-    Program& program,
-    KernelHandle reader_kernel_id,
-    KernelHandle writer_kernel_id,
-    KernelHandle compute_kernel_id,
+    tt::tt_metal::Program& program,
+    tt::tt_metal::KernelHandle reader_kernel_id,
+    tt::tt_metal::KernelHandle writer_kernel_id,
+    tt::tt_metal::KernelHandle compute_kernel_id,
     CoreCoord compute_with_storage_grid_size,
     const BatchNormOperation::operation_attributes_t& operation_attributes,
     const BatchNormOperation::tensor_args_t& tensor_args,
@@ -73,8 +73,11 @@ void set_or_update_runtime_arguments(
         }
 
         uint32_t cHtWt = cHt * cWt;
-        class bfloat16 bfloat_scalar_eps(eps);
-        uint32_t packed_scalar_eps = pack_two_bfloat16_into_uint32({bfloat_scalar_eps, bfloat_scalar_eps});
+        const auto scalar = eps;
+        const auto packed_scalar_eps = input_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32
+                                           ? std::bit_cast<uint32_t>(scalar)
+                                           : pack_two_bfloat16_into_uint32({scalar, scalar});
+
         std::array reader_runtime_args = {
             packed_scalar_eps,
             input_tensor.buffer()->address(),
@@ -168,18 +171,18 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     uint32_t b_num_tiles_per_cb = num_tiles_per_cb;
 
     // Input buffers
-    auto [a_cb, a_cb_handle] = create_cb(
+    auto [input_tensor_cb, input_tensor_cb_handle] = create_cb(
         tt::CBIndex::c_0, program, all_device_cores, a_single_tile_size, num_tiles_per_cb, a_data_format);  // input
-    auto [b_cb, b_cb_handle] = create_cb(
+    auto [batch_mean_tensor_cb, batch_mean_tensor_cb_handle] = create_cb(
         tt::CBIndex::c_1,
         program,
         all_device_cores,
         b_single_tile_size,
         b_num_tiles_per_cb,
         b_data_format);  // batch_mean
-    auto [c_cb, c_cb_handle] = create_cb(
+    auto [output_tensor_cb, output_tensor_cb_handle] = create_cb(
         tt::CBIndex::c_2, program, all_device_cores, c_single_tile_size, num_tiles_per_cb, c_data_format);  // output
-    auto [d_cb, d_cb_handle] = create_cb(
+    auto [batch_var_tensor_cb, batch_var_tensor_cb_handle] = create_cb(
         tt::CBIndex::c_3,
         program,
         all_device_cores,
@@ -188,28 +191,21 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
         d_data_format);  // batch_var
     auto [eps_cb, eps_cb_handle] = create_cb(
         tt::CBIndex::c_4, program, all_device_cores, d_single_tile_size, b_num_tiles_per_cb, d_data_format);  // eps
-    auto [e_cb, e_cb_handle] = create_cb(
-        tt::CBIndex::c_16, program, all_device_cores, e_single_tile_size, b_num_tiles_per_cb, e_data_format);  // weight
-    auto [f_cb, f_cb_handle] = create_cb(
-        tt::CBIndex::c_18, program, all_device_cores, f_single_tile_size, b_num_tiles_per_cb, f_data_format);  // bias
+    auto [weight_tensor_cb, weight_tensor_cb_handle] = create_cb(
+        tt::CBIndex::c_5, program, all_device_cores, e_single_tile_size, b_num_tiles_per_cb, e_data_format);  // weight
+    auto [bias_tensor_cb, bias_tensor_cb_handle] = create_cb(
+        tt::CBIndex::c_6, program, all_device_cores, f_single_tile_size, b_num_tiles_per_cb, f_data_format);  // bias
 
     // Temporary buffers to store intermediate results
     auto [den_cb, den_cb_handle] = create_cb(
-        tt::CBIndex::c_5,
+        tt::CBIndex::c_7,
         program,
         all_device_cores,
         a_single_tile_size,
         num_tiles_per_cb,
         a_data_format);  // to store 1/(sqrt(batch_var + eps))
-    auto [num_cb, num_cb_handle] = create_cb(
-        tt::CBIndex::c_6,
-        program,
-        all_device_cores,
-        a_single_tile_size,
-        num_tiles_per_cb,
-        a_data_format);  // to store input - batch_mean
     auto [temp_1_cb, temp_1_cb_handle] =
-        create_cb(tt::CBIndex::c_17, program, all_device_cores, a_single_tile_size, num_tiles_per_cb, a_data_format);
+        create_cb(tt::CBIndex::c_8, program, all_device_cores, a_single_tile_size, num_tiles_per_cb, a_data_format);
 
     auto a_is_dram = static_cast<uint32_t>(input_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
     auto b_is_dram = static_cast<uint32_t>(batch_mean_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
@@ -218,38 +214,87 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     const auto e_is_dram = weight_has_value and weight_tensor->buffer()->buffer_type() == tt_metal::BufferType::DRAM;
     const auto f_is_dram = bias_has_value and bias_tensor->buffer()->buffer_type() == tt_metal::BufferType::DRAM;
 
+    std::map<std::string, std::string> dataflow_defines;  // Currently support only for fp32, bf16
+    if (input_tensor.get_dtype() == DataType::FLOAT32) {
+        dataflow_defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<float>";
+        dataflow_defines["FILL_WITH_VALUE_FLOAT"] = "fill_with_val<1024, float>";
+    } else {
+        dataflow_defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element_bfloat16";
+        dataflow_defines["FILL_WITH_VALUE"] = "fill_with_val_bfloat16";
+    }
+
     // READER KERNEL
+    auto reader_defines = dataflow_defines;
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/reader_batch_norm.cpp",
         all_device_cores,
-        tt_metal::ReaderDataMovementConfig({a_is_dram}));
+        tt_metal::ReaderDataMovementConfig({a_is_dram, input_tensor_cb, eps_cb}, std::move(reader_defines)));
 
     // WRITER KERNEL
+    auto writer_defines = dataflow_defines;
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/writer_batch_norm.cpp",
         all_device_cores,
-        tt_metal::WriterDataMovementConfig({
-            b_is_dram,
-            c_is_dram,
-            d_is_dram,
-            e_is_dram,
-            f_is_dram,
-            static_cast<uint32_t>(weight_has_value),
-            static_cast<uint32_t>(bias_has_value),
-        }));
+        tt_metal::WriterDataMovementConfig(
+            {
+                b_is_dram,
+                c_is_dram,
+                d_is_dram,
+                e_is_dram,
+                f_is_dram,
+                static_cast<uint32_t>(weight_has_value),
+                static_cast<uint32_t>(bias_has_value),
+                batch_mean_tensor_cb,
+                output_tensor_cb,
+                batch_var_tensor_cb,
+                weight_tensor_cb,
+                bias_tensor_cb,
+            },
+            std::move(writer_defines)));
 
     // COMPUTE KERNEL
     bool fp32_dest_acc_en = c_data_format == tt::DataFormat::UInt32 || c_data_format == tt::DataFormat::Int32 ||
                             c_data_format == tt::DataFormat::Float32;
+
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (fp32_dest_acc_en) {
+        for (const auto cb_index :
+             {input_tensor_cb,
+              batch_mean_tensor_cb,
+              batch_var_tensor_cb,
+              eps_cb,
+              den_cb,
+              weight_tensor_cb,
+              temp_1_cb,
+              bias_tensor_cb}) {
+            unpack_to_dest_mode[cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        }
+    }
+
     std::vector<uint32_t> compute_kernel_args = {
-        static_cast<uint32_t>(weight_has_value), static_cast<uint32_t>(bias_has_value)};
+        static_cast<uint32_t>(weight_has_value),
+        static_cast<uint32_t>(bias_has_value),
+        input_tensor_cb,
+        batch_mean_tensor_cb,
+        output_tensor_cb,
+        batch_var_tensor_cb,
+        eps_cb,
+        den_cb,
+        weight_tensor_cb,
+        temp_1_cb,
+        bias_tensor_cb};
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/compute/batch_norm_kernel.cpp",
+        fmt::format(
+            "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/compute/batch_norm_{}.cpp",
+            fp32_dest_acc_en ? "sfpu_kernel" : "kernel"),
         all_device_cores,
-        tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_kernel_args});
+        tt_metal::ComputeConfig{
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
+            .compile_args = compute_kernel_args});
 
     auto set_runtime_args = [](Program& program, KernelHandle kernel_id, CoreCoord core, auto&& args) {
         tt_metal::SetRuntimeArgs(program, kernel_id, core, args);
@@ -275,11 +320,12 @@ void BatchNormOperation::BatchNormFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
-    auto update_args = [](Program& program, KernelHandle kernel_id, CoreCoord core, auto&& args) {
-        auto& all_args = GetRuntimeArgs(program, kernel_id);
-        auto& core_args = all_args.at(core.x).at(core.y);
-        std::copy(args.begin(), args.end(), core_args.data());
-    };
+    auto update_args =
+        [](tt::tt_metal::Program& program, tt::tt_metal::KernelHandle kernel_id, CoreCoord core, auto&& args) {
+            auto& all_args = GetRuntimeArgs(program, kernel_id);
+            auto& core_args = all_args.at(core.x).at(core.y);
+            std::copy(args.begin(), args.end(), core_args.data());
+        };
 
     CMAKE_UNIQUE_NAMESPACE::set_or_update_runtime_arguments(
         cached_program.program,

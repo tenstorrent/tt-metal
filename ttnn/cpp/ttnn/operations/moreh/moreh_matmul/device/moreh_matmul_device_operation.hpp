@@ -34,14 +34,14 @@ struct MorehMatmulOperation {
     using tensor_return_value_t = Tensor;
 
     struct MultiCoreProgramFactory {
-        struct shared_variable_t {
-            KernelHandle reader_kernel_id;
-            KernelHandle writer_kernel_id;
+        struct shared_variables_t {
+            tt::tt_metal::KernelHandle reader_kernel_id;
+            tt::tt_metal::KernelHandle writer_kernel_id;
             std::size_t num_cores;
             std::size_t num_cores_y;
         };
 
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variable_t>;
+        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
         static cached_program_t create(
             const operation_attributes_t& operation_attributes,

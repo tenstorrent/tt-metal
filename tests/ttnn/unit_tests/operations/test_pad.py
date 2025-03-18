@@ -428,3 +428,26 @@ def test_pad_for_tensor_in_tile_layout(device, h, w, padding, value):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bfloat16", "float32"])
+@pytest.mark.parametrize("use_multicore", [True, False], ids=["multicore", "singlecore"])
+@pytest.mark.parametrize(
+    "shape, padded_shape",
+    [
+        [[1392, 1392, 3, 3], [1408, 1408, 3, 3]],
+        [[32, 32, 3, 3], [64, 64, 3, 3]],
+        [[3, 3, 1392, 1392], [3, 3, 1408, 1408]],
+    ],
+)
+def test_pad_conv2d_sweep(device, dtype, use_multicore, shape, padded_shape):
+    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+
+    in_torch = torch.randint(-5, 5, shape, dtype=torch_dtype).float()
+    in_ttnn = ttnn.from_torch(in_torch, memory_config=ttnn.DRAM_MEMORY_CONFIG, device=device, dtype=dtype)
+
+    out_ttnn = ttnn.pad(in_ttnn, padded_shape, [0, 0, 0, 0], 0, use_multicore=use_multicore)
+    out_torch = out_ttnn.cpu().to_torch().float()
+
+    out_torch = out_torch[: shape[0], : shape[1], : shape[2], : shape[3]]
+    assert_with_pcc(in_torch, out_torch, 0.9999)

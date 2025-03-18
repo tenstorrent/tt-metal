@@ -1,0 +1,105 @@
+name: Verify/create new release tag
+
+on:
+  workflow_call:
+    inputs:
+      fetch_depth:
+        description: "Commit depth to checkout to scan for previous release tags"
+        default: 0
+        type: number
+      bump_each_commit:
+        description: "Bump each commit as a patch version"
+        default: true
+        type: boolean
+      release_candidate_suffix:
+        description: "Attach -rc# suffix to version number"
+        default: false
+        type: boolean
+    outputs:
+      version:
+        description: "New version"
+        value: ${{ jobs.verify-create-new-tag.outputs.version }}
+
+jobs:
+  verify-create-new-tag:
+    permissions:
+      contents: write
+      packages: write
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get-version-number.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: ${{ inputs.fetch_depth }}
+      - uses: paulhatch/semantic-version@v5.4.0
+        id: get-next-semantic-base-version
+        with:
+          tag_prefix: "v"
+          version_format: "v${major}.${minor}.${patch}"
+          bump_each_commit: ${{ inputs.bump_each_commit }}
+      - name: Get release candidate version
+        id: get-release-candidate-version
+        run: |
+          baseVersion=${{ steps.get-next-semantic-base-version.outputs.version }}
+          currentNumberRCs=$(git tag | grep "$baseVersion"-rc | wc -l)
+          newNumber=$(($currentNumberRCs+1))
+          releaseCandidateVersion=$baseVersion-rc$newNumber
+          echo $releaseCandidateVersion
+          echo "release-candidate-version=$releaseCandidateVersion" >> "$GITHUB_OUTPUT"
+      - name: Get full version number
+        id: get-version-number
+        run: |
+          versionNumber=${{ inputs.release_candidate_suffix &&
+          steps.get-release-candidate-version.outputs.release-candidate-version ||
+          steps.get-next-semantic-base-version.outputs.version }}
+          echo "version=$versionNumber" >> "$GITHUB_OUTPUT"
+          echo "$versionNumber"
+      - name: Create tag
+        uses: actions/github-script@v7.0.1
+        with:
+          script: |
+            const owner = "${{ github.repository_owner }}";
+            const repo = "${{ github.repository }}".split('/')[1];
+            const version = "${{ steps.get-version-number.outputs.version }}";
+            const sha = "${{ github.sha }}";
+
+            try {
+              const { data: matchingTags } = await github.rest.git.getRef({
+                owner,
+                repo,
+                ref: `tags/${version}`,
+              });
+              console.log("Tag already exists");
+            } catch (e) {
+              console.log("Logging github API error");
+              console.log(e);
+              const { response: { status, data: { message } } } = e;
+
+              const isMissingTag = status === 404 && message == "Not Found";
+
+              if (isMissingTag) {
+                const tag = await github.rest.git.createTag({
+                  owner: owner,
+                  repo: repo,
+                  tag: version,
+                  message: `Release for ${version}`,
+                  object: sha,
+                  type: "commit",
+                  tagger: {
+                    name: "Tenstorrent Inc.",
+                    email: "info@tenstorrent.com",
+                  }
+                });
+                github.rest.git.createRef({
+                  owner: owner,
+                  repo: repo,
+                  ref: `refs/tags/${version}`,
+                  sha: tag.data.sha,
+                });
+              } else {
+                console.error(e);
+                console.error("Received an error that's not 404 Not Found for a tag");
+                throw e;
+              }
+            }

@@ -5,37 +5,69 @@
 #include "flatbuffer/base_types_to_flatbuffer.hpp"
 #include "flatbuffer/program_types_to_flatbuffer.hpp"
 #include "lightmetal/lightmetal_capture.hpp"  // For LightMetalCaptureContext
-#include <overloaded.hpp>
+#include <tt_stl/overloaded.hpp>
 
 namespace tt::tt_metal {
 
-// Original types defined in core_coord.hpp
+using RuntimeArgs = std::vector<std::variant<Buffer*, uint32_t>>;
+
+flatbuffers::Offset<flatbuffer::CoreCoord> to_flatbuffer(
+    flatbuffers::FlatBufferBuilder& builder, const CoreCoord& coord) {
+    return flatbuffer::CreateCoreCoord(builder, coord.x, coord.y);
+}
+
+flatbuffers::Offset<flatbuffer::CoreRange> to_flatbuffer(
+    flatbuffers::FlatBufferBuilder& builder, const CoreRange& range) {
+    auto start = to_flatbuffer(builder, range.start_coord);
+    auto end = to_flatbuffer(builder, range.end_coord);
+    return flatbuffer::CreateCoreRange(builder, start, end);
+}
+
+flatbuffers::Offset<flatbuffer::CoreRangeSet> to_flatbuffer(
+    flatbuffers::FlatBufferBuilder& builder, const CoreRangeSet& range_set) {
+    std::vector<flatbuffers::Offset<flatbuffer::CoreRange>> range_offsets;
+    for (const auto& range : range_set.ranges()) {
+        range_offsets.push_back(to_flatbuffer(builder, range));
+    }
+    auto ranges_vector = builder.CreateVector(range_offsets);
+    return flatbuffer::CreateCoreRangeSet(builder, ranges_vector);
+}
+
 std::pair<flatbuffer::CoreSpec, ::flatbuffers::Offset<void>> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec) {
     return std::visit(
         tt::stl::overloaded{
             [&](const CoreCoord& spec) -> std::pair<flatbuffer::CoreSpec, ::flatbuffers::Offset<void>> {
-                auto core_coord = flatbuffer::CreateCoreCoord(builder, spec.x, spec.y);
-                return {flatbuffer::CoreSpec::CoreCoord, core_coord.Union()};
+                return {flatbuffer::CoreSpec::CoreCoord, to_flatbuffer(builder, spec).Union()};
             },
             [&](const CoreRange& spec) -> std::pair<flatbuffer::CoreSpec, ::flatbuffers::Offset<void>> {
-                auto start = flatbuffer::CreateCoreCoord(builder, spec.start_coord.x, spec.start_coord.y);
-                auto end = flatbuffer::CreateCoreCoord(builder, spec.end_coord.x, spec.end_coord.y);
-                auto core_range = flatbuffer::CreateCoreRange(builder, start, end);
-                return {flatbuffer::CoreSpec::CoreRange, core_range.Union()};
+                return {flatbuffer::CoreSpec::CoreRange, to_flatbuffer(builder, spec).Union()};
             },
             [&](const CoreRangeSet& spec) -> std::pair<flatbuffer::CoreSpec, ::flatbuffers::Offset<void>> {
-                std::vector<flatbuffers::Offset<flatbuffer::CoreRange>> range_offsets;
-                for (const auto& range : spec.ranges()) {
-                    auto start = flatbuffer::CreateCoreCoord(builder, range.start_coord.x, range.start_coord.y);
-                    auto end = flatbuffer::CreateCoreCoord(builder, range.end_coord.x, range.end_coord.y);
-                    range_offsets.push_back(flatbuffer::CreateCoreRange(builder, start, end));
-                }
-                auto ranges_vector = builder.CreateVector(range_offsets);
-                auto core_range_set = flatbuffer::CreateCoreRangeSet(builder, ranges_vector);
-                return {flatbuffer::CoreSpec::CoreRangeSet, core_range_set.Union()};
+                return {flatbuffer::CoreSpec::CoreRangeSet, to_flatbuffer(builder, spec).Union()};
             }},
         core_spec);
+}
+
+FlatbufferCoreCoordVector to_flatbuffer(
+    flatbuffers::FlatBufferBuilder& builder, const std::vector<CoreCoord>& core_spec) {
+    std::vector<flatbuffers::Offset<flatbuffer::CoreCoord>> core_offsets;
+    for (const auto& coord : core_spec) {
+        core_offsets.push_back(flatbuffer::CreateCoreCoord(builder, coord.x, coord.y));
+    }
+    return builder.CreateVector(core_offsets);
+}
+
+FlatbufferUInt32VecOfVec to_flatbuffer(
+    flatbuffers::FlatBufferBuilder& builder, const std::vector<std::vector<uint32_t>>& vec_of_vec) {
+    std::vector<flatbuffers::Offset<flatbuffer::UInt32Vector>> vec_offsets;
+
+    for (const auto& sub_vector : vec_of_vec) {
+        auto values_offset = builder.CreateVector(sub_vector);
+        vec_offsets.push_back(flatbuffer::CreateUInt32Vector(builder, values_offset));
+    }
+
+    return builder.CreateVector(vec_offsets);
 }
 
 // Original types defined in kernel_types.hpp
@@ -182,7 +214,7 @@ flatbuffers::Offset<flatbuffers::Vector<uint8_t>> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     std::vector<uint8_t> fb_sub_device_ids(sub_device_ids.size());
     for (size_t i = 0; i < sub_device_ids.size(); ++i) {
-        fb_sub_device_ids[i] = sub_device_ids[i].id;
+        fb_sub_device_ids[i] = *sub_device_ids[i];
     }
     return builder.CreateVector(fb_sub_device_ids);
 }

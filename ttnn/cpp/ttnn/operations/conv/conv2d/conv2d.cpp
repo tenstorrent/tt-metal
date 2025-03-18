@@ -21,9 +21,9 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
 
-using namespace tt;
 namespace ttnn {
 namespace operations::conv {
+using namespace tt;
 using sliding_window::ParallelConfig;
 using sliding_window::SlidingWindowConfig;
 
@@ -90,21 +90,18 @@ Result conv2d(
 
     ShardOrientation shard_orientation =
         conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
-    bool is_non_tile_mul_width = check_non_tile_mul_width(compute_grid_size, conv_config, in_channels);
 
-    auto [input_tensor_post_tm, parallel_config, output_parallel_config, use_non_tile_height] =
-        shard_or_reshard_tensor_if_required(
-            device,
-            input_tensor,
-            conv_config,
-            batch_size,
-            output_height,
-            output_width,
-            in_channels,
-            out_channels,
-            mm_conv,
-            auto_shard,
-            is_non_tile_mul_width);
+    auto [input_tensor_post_tm, parallel_config, output_parallel_config] = shard_or_reshard_tensor_if_required(
+        device,
+        input_tensor,
+        conv_config,
+        batch_size,
+        output_height,
+        output_width,
+        in_channels,
+        out_channels,
+        mm_conv,
+        auto_shard);
 
     auto [opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config] = get_conv_configs(
         conv_config,
@@ -122,23 +119,41 @@ Result conv2d(
     bool weight_is_on_device = ttnn::is_tensor_on_device_or_multidevice(weight_tensor);
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
-    if (!weight_is_on_device) {
+    if (!weight_is_on_device || conv_config.always_preprocess_weights) {
         // prepare weights in desired layout and move to device
-        tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(
-            weight_tensor,
-            bias_tensor,
-            conv_config.input_channels_alignment,
-            conv_config.weights_dtype,
-            opt_conv_op_block_config.act_block_w_ntiles,
-            opt_conv_op_block_config.out_subblock_w_ntiles,
-            parallel_config,
-            output_parallel_config,
-            device,
-            groups,
-            opt_conv_op_block_config.act_block_h_ntiles,
-            input_width,
-            true,
-            is_non_tile_mul_width);
+
+        // TODO: Implement heuristic to decide if weights should be preprocessed on device.
+        if (conv_config.preprocess_weights_on_device == false) {
+            tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(
+                weight_tensor,
+                bias_tensor,
+                conv_config.input_channels_alignment,
+                conv_config.weights_dtype,
+                opt_conv_op_block_config.act_block_w_ntiles,
+                opt_conv_op_block_config.out_subblock_w_ntiles,
+                parallel_config,
+                output_parallel_config,
+                device,
+                groups,
+                opt_conv_op_block_config.act_block_h_ntiles,
+                input_width,
+                true);
+        } else {
+            tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_on_device(
+                weight_tensor,
+                bias_tensor,
+                conv_config.input_channels_alignment,
+                conv_config.weights_dtype,
+                opt_conv_op_block_config.act_block_w_ntiles,
+                opt_conv_op_block_config.out_subblock_w_ntiles,
+                parallel_config,
+                output_parallel_config,
+                device,
+                groups,
+                opt_conv_op_block_config.act_block_h_ntiles,
+                input_width,
+                true);
+        }
     }
     // if 1x1 conv w/ stride 1, convert input tensor to tile layout if required
     if (mm_conv) {
@@ -160,7 +175,7 @@ Result conv2d(
             .dilation_hw = {dilation[0], dilation[1]},
             .num_cores_nhw = opt_conv_op_parallel_config.num_cores_nhw,
             .core_range_set = input_tensor_post_tm.memory_config().shard_spec.value().grid,
-            .snap_to_tile = !use_non_tile_height,
+            .snap_to_tile = true,
         };
 
         bool bypass_halo =
@@ -185,7 +200,7 @@ Result conv2d(
                 parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
                 0,
                 input_tensor_post_tm.memory_config(),
-                !use_non_tile_height);
+                true);
 
             if (conv_config.deallocate_activation) {
                 input_tensor_post_tm.deallocate(/*force*/ true);
@@ -207,7 +222,7 @@ Result conv2d(
             out_channels,
             groups,
             conv_config.output_layout == Layout::ROW_MAJOR,
-            conv_config.activation == "relu",
+            conv_config.activation,
             opt_conv_op_parallel_config,
             opt_conv_op_block_config,
             conv_out_memory_config,
@@ -217,9 +232,7 @@ Result conv2d(
             compute_config,
             conv_config.enable_act_double_buffer,
             conv_config.enable_weights_double_buffer,
-            conv_config.enable_split_reader,
-            conv_config.enable_subblock_padding,
-            use_non_tile_height);
+            conv_config.enable_split_reader);
 
         if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
             conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);

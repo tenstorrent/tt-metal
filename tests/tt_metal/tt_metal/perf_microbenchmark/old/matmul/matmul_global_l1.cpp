@@ -9,9 +9,10 @@
 #include <thread>
 
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/test_tiles.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "test_common.hpp"
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "dprint_server.hpp"
@@ -872,6 +873,7 @@ tt_metal::Program create_program_mcast_in0_in1(
     return std::move(program);
 }
 
+namespace test {
 // Given a tensor that is row-major datums, make it tilized
 // so that its row major within a tile, and each tile's data
 // is contiguous
@@ -922,6 +924,7 @@ std::vector<T> untilize(std::vector<T> data, int rows, int cols) {
 
     return result;
 }
+}  // namespace test
 
 std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, int N) {
     if (N == K) {
@@ -1068,14 +1071,14 @@ int main(int argc, char** argv) {
             0,
             100,
             std::chrono::system_clock::now().time_since_epoch().count());
-        auto activations_tilized = tilize(tensor.get_values(), Mt * 32, Kt * 32);
-        auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
+        auto activations_tilized = test::tilize(tensor.get_values(), Mt * 32, Kt * 32);
+        auto activations_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(activations_tilized));
         auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
         tt_metal::detail::WriteToBuffer(in0_buffer, activations);
 
         auto identity = create_identity_matrix(Kt * 32, Nt * 32, std::min(Kt, Nt) * 32);
-        auto identity_tilized = tilize(identity, Kt * 32, Nt * 32);
-        auto weights_tile_layout = convert_to_tile_layout(identity_tilized);
+        auto identity_tilized = test::tilize(identity, Kt * 32, Nt * 32);
+        auto weights_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(identity_tilized));
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
         tt_metal::detail::WriteToBuffer(in1_buffer, weights);
 
@@ -1146,8 +1149,8 @@ int main(int argc, char** argv) {
         std::vector<uint32_t> result_vec;
         tt_metal::detail::ReadFromBuffer(out_buffer, result_vec);
         auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
-        auto result_flat_layout = convert_to_flat_layout(result_bfp16);
-        auto result_untilized = untilize(result_flat_layout, Mt * 32, Nt * 32);
+        auto result_flat_layout = convert_to_flat_layout(tt::stl::MakeConstSpan(result_bfp16));
+        auto result_untilized = test::untilize(result_flat_layout, Mt * 32, Nt * 32);
 
         auto golden = select_columns(tensor.get_values(), Mt, Kt, Nt);
         pass &= (golden == result_untilized);

@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 
+#include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/xtensor/conversion_utils.hpp"
@@ -22,7 +23,8 @@ using ::ttnn::experimental::xtensor::to_xtensor;
 using ::ttnn::experimental::xtensor::xtensor_to_span;
 
 TensorSpec get_tensor_spec(const ttnn::Shape& shape) {
-    return TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    return TensorSpec(
+        shape, TensorLayout(tt::tt_metal::DataType::FLOAT32, tt::tt_metal::Layout::ROW_MAJOR, MemoryConfig{}));
 }
 
 TEST(XtensorConversionTest, SpanToXtensor) {

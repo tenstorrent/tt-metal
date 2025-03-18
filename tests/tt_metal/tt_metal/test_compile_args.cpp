@@ -12,6 +12,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include "dprint_server.hpp"
 #include <tt-metalium/tt_metal.hpp>
+#include "tt_metal/jit_build/build_env_manager.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -67,7 +68,12 @@ int main(int argc, char** argv) {
         tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
         // Remove old compiled kernels
         static const std::string kernel_name = "test_compile_args";
-        auto binary_path_str = device->build_env().get_out_kernel_root_path() + kernel_name;
+        auto binary_path_str =
+            kernel
+                ->binaries(
+                    tt::tt_metal::BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env)
+                .get_out_kernel_root_path() +
+            kernel_name;
         std::filesystem::remove_all(binary_path_str);
 
         pass &= test_compile_args({0, 68, 0, 124}, device);

@@ -10,7 +10,6 @@
 
 using namespace tt;
 using namespace tt::constants;
-using namespace tt::tt_metal;
 
 namespace ttnn {
 
@@ -18,7 +17,8 @@ namespace operations {
 
 namespace matmul {
 
-operation::ProgramWithCallbacks matmul_multi_core(const Tensor& a, const Tensor& b, Tensor& output, bool bcast_batch) {
+tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
+    const Tensor& a, const Tensor& b, Tensor& output, bool bcast_batch) {
     tt_metal::Program program{};
 
     const auto &ashape = a.get_padded_shape(), bshape = b.get_padded_shape();

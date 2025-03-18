@@ -20,7 +20,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NLPCreateHeadsFalcon7bOpera
     } else {
         optional_outputs = {};
     }
-    auto outputs = operation::run(
+    auto outputs = tt::tt_metal::operation::run(
         NlpCreateHeadsFalcon7BDeviceOperation{output_mem_config}, {input_tensor_q}, {}, optional_outputs);
     return {outputs[0], outputs[1], outputs[2]};
 };

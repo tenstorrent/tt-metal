@@ -30,7 +30,6 @@ jobs:
         ]
     name: ${{ matrix.test-group.name }}
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.test-group.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
@@ -70,6 +69,13 @@ jobs:
           sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
           username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          path: |
+            generated/test_reports/
+          prefix: "test_reports_"
       - name: Disable Performance mode
         if: ${{ matrix.test-group.name == 'N300_performance' }}
         run: |

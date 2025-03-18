@@ -4,22 +4,22 @@
 
 #include <buffer.hpp>
 
-#include "tt_metal/buffer.hpp"
 #include <assert.hpp>
 #include <math.hpp>
 #include <tt_metal.hpp>
 #include <allocator.hpp>
 #include <device.hpp>
-#include <types.hpp>
 #include <graph_tracking.hpp>
 #include <algorithm>
 #include <atomic>
 #include <mutex>
 #include <utility>
 #include <buffer_constants.hpp>
+#include "hal.hpp"
 #include "umd/device/tt_soc_descriptor.h"
 #include "fmt/base.h"
-#include <reflection.hpp>
+#include <tt_stl/reflection.hpp>
+#include "lightmetal/host_api_capture_helpers.hpp"
 
 #include "tracy/Tracy.hpp"
 
@@ -47,8 +47,8 @@ bool is_l1_impl(BufferType buffer_type) { return buffer_type == BufferType::L1 o
 void validate_buffer_size_and_page_size(
     DeviceAddr size,
     DeviceAddr page_size,
-    const BufferType &buffer_type,
-    const TensorMemoryLayout &buffer_layout,
+    const BufferType& buffer_type,
+    const TensorMemoryLayout& buffer_layout,
     const std::optional<ShardSpecBuffer>& shard_parameters) {
     if (size == 0) {
         return;
@@ -83,7 +83,9 @@ std::tuple<std::vector<std::vector<uint32_t>>, std::vector<std::array<uint32_t, 
     const std::array<uint32_t, 2>& page_shape,
     const std::array<uint32_t, 2>& shard_shape,
     const std::array<uint32_t, 2>& tensor2d_size) {
-    std::array<uint32_t, 2> shard_in_pages = {page_shape[0] == 0 ? 0 : shard_shape[0] / page_shape[0], page_shape[1] == 0 ? 0 : shard_shape[1] / page_shape[1]};
+    std::array<uint32_t, 2> shard_in_pages = {
+        page_shape[0] == 0 ? 0 : shard_shape[0] / page_shape[0],
+        page_shape[1] == 0 ? 0 : shard_shape[1] / page_shape[1]};
     std::vector<std::vector<uint32_t>> ret_vec(num_shards);
     std::vector<std::array<uint32_t, 2>> ret_shard_shape(num_shards, shard_in_pages);
 
@@ -198,9 +200,13 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer& buffer) {
     uint32_t num_cores = buffer.num_cores().value();
 
     buffer_page_mapping.all_cores_ = corerange_to_cores(shard_spec.grid(), num_cores, row_major);
-    TT_FATAL(num_cores == buffer_page_mapping.all_cores_.size(), "Buffer has {} cores, but page mapping expects {} cores", num_cores, buffer_page_mapping.all_cores_.size());
+    TT_FATAL(
+        num_cores == buffer_page_mapping.all_cores_.size(),
+        "Buffer has {} cores, but page mapping expects {} cores",
+        num_cores,
+        buffer_page_mapping.all_cores_.size());
     uint32_t core_id = 0;
-    for (const auto &core : buffer_page_mapping.all_cores_) {
+    for (const auto& core : buffer_page_mapping.all_cores_) {
         buffer_page_mapping.core_to_core_id_.insert({core, core_id});
         core_id++;
     }
@@ -208,12 +214,12 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer& buffer) {
     uint32_t num_dev_pages = buffer.num_dev_pages();
     auto [core_host_page_indices, shard_shape] = core_to_host_pages(
         num_dev_pages,
-        shard_spec.size(),
+        shard_spec.num_pages(),
         num_cores,
         buffer.buffer_layout(),
         shard_spec.page_shape,
         shard_spec.shape(),
-        shard_spec.tensor2d_shape);
+        shard_spec.tensor2d_shape_in_pages);
 
     buffer_page_mapping.core_host_page_indices_ = std::vector<std::vector<uint32_t>>(num_cores);
 
@@ -229,7 +235,7 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer& buffer) {
     auto shape_in_pages = shard_spec.shape_in_pages();
     for (uint32_t core_index = 0; core_index < core_host_page_indices.size(); core_index++) {
         uint32_t valid_shard_page = 0;
-        buffer_page_mapping.core_host_page_indices_[core_index].reserve(shard_spec.size());
+        buffer_page_mapping.core_host_page_indices_[core_index].reserve(shard_spec.num_pages());
         uint32_t shard_page_id = 0;
         for (uint32_t shard_page_x = 0; shard_page_x < shape_in_pages[0]; shard_page_x++) {
             for (uint32_t shard_page_y = 0; shard_page_y < shape_in_pages[1]; shard_page_y++) {
@@ -296,6 +302,7 @@ std::shared_ptr<Buffer> Buffer::create(
     const std::optional<ShardSpecBuffer>& shard_parameters,
     const std::optional<bool> bottom_up,
     const std::optional<SubDeviceId> sub_device_id) {
+    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     auto* bufferPtr = new Buffer(
         device,
         size,
@@ -330,6 +337,19 @@ std::shared_ptr<Buffer> Buffer::create(
         }
     });
 
+    LIGHT_METAL_TRACE_FUNCTION_CALL(
+        CaptureBufferCreate,
+        buffer,
+        device,
+        std::nullopt,
+        size,
+        page_size,
+        buffer_type,
+        buffer_layout,
+        shard_parameters,
+        bottom_up,
+        sub_device_id);
+
     return buffer;
 }
 
@@ -343,6 +363,7 @@ std::shared_ptr<Buffer> Buffer::create(
     const std::optional<ShardSpecBuffer>& shard_parameters,
     const std::optional<bool> bottom_up,
     const std::optional<SubDeviceId> sub_device_id) {
+    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     // Not using a custom deleter, because it doesn't own any data to cleanup
     auto buffer = std::make_shared<Buffer>(
         device,
@@ -359,6 +380,19 @@ std::shared_ptr<Buffer> Buffer::create(
 
     buffer->address_ = address;
     buffer->allocation_status_.store(AllocationStatus::ALLOCATED, std::memory_order::relaxed);
+
+    LIGHT_METAL_TRACE_FUNCTION_CALL(
+        CaptureBufferCreate,
+        buffer,
+        device,
+        address,
+        size,
+        page_size,
+        buffer_type,
+        buffer_layout,
+        shard_parameters,
+        bottom_up,
+        sub_device_id);
 
     return buffer;
 }
@@ -396,12 +430,18 @@ void Buffer::deallocate() {
     if (!owns_data_) {
         return;
     }
-    device_->push_work([self = weak_self.lock()] {
-        self->deallocate_impl();
-    });
+    device_->push_work([self = weak_self.lock()] { self->deallocate_impl(); });
+}
+
+void Buffer::mark_as_deallocated() {
+    allocation_status_.store(AllocationStatus::DEALLOCATED, std::memory_order::relaxed);
 }
 
 void Buffer::deleter(Buffer* buffer) {
+    if (buffer->allocation_status_.load(std::memory_order::relaxed) == AllocationStatus::DEALLOCATED) {
+        delete buffer;
+        return;
+    }
     buffer->device_->push_work([buffer] {
         std::unique_ptr<Buffer> unique_buffer = std::unique_ptr<Buffer>(buffer);
         buffer->deallocate_impl();
@@ -426,18 +466,30 @@ void Buffer::deallocate_impl() {
             validate_sub_device_manager_id(sub_device_manager_id_, device_);
             allocator_->deallocate_buffer(this);
         }
+
+        // Capture deallocates here instead of higher levels.
+        LIGHT_METAL_TRACE_FUNCTION_ENTRY();
+        LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureBufferDeallocate, *this);
     }
 
     allocation_status_.store(AllocationStatus::DEALLOCATED, std::memory_order::relaxed);
+}
+
+Buffer::~Buffer() {
+    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
+    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureBufferDelete, *this);
 }
 
 bool Buffer::is_allocated() const {
     auto allocation_status = allocation_status_.load(std::memory_order::relaxed);
 
     // For calls from different threads we consider buffer to be allocated even if it's just ALLOCATION_REQUESTED,
-    // because once the caller will try to access it, the buffer will already be fully allocated. For the same reason we need to check deallocation_requested_ too.
+    // because once the caller will try to access it, the buffer will already be fully allocated. For the same reason we
+    // need to check deallocation_requested_ too.
     bool deallocation_requested = deallocation_requested_.load(std::memory_order::relaxed);
-    return (allocation_status == AllocationStatus::ALLOCATION_REQUESTED || allocation_status == AllocationStatus::ALLOCATED) && !deallocation_requested;
+    return (allocation_status == AllocationStatus::ALLOCATION_REQUESTED ||
+            allocation_status == AllocationStatus::ALLOCATED) &&
+           !deallocation_requested;
 }
 
 uint32_t Buffer::address() const {
@@ -446,13 +498,13 @@ uint32_t Buffer::address() const {
     }
 
     std::unique_lock lock(allocation_mutex_);
-    allocation_cv_.wait(lock, [this] { return this->allocation_status_.load(std::memory_order::relaxed) != AllocationStatus::ALLOCATION_REQUESTED; });
+    allocation_cv_.wait(lock, [this] {
+        return this->allocation_status_.load(std::memory_order::relaxed) != AllocationStatus::ALLOCATION_REQUESTED;
+    });
     return address_;
 }
 
-DeviceAddr Buffer::page_size() const {
-    return page_size_;
-}
+DeviceAddr Buffer::page_size() const { return page_size_; }
 
 void Buffer::set_page_size(DeviceAddr page_size) {
     TT_FATAL(page_size == 0 ? size_ == 0 : size_ % page_size == 0, "buffer size must be divisible by new page size");
@@ -460,53 +512,43 @@ void Buffer::set_page_size(DeviceAddr page_size) {
     this->buffer_page_mapping_ = nullptr;
 }
 
-uint32_t Buffer::num_pages() const {
-    return page_size() == 0 ? 0 : size() / page_size();
-}
+uint32_t Buffer::num_pages() const { return page_size() == 0 ? 0 : size() / page_size(); }
 
 uint32_t Buffer::num_dev_pages() const {
     if (!is_sharded(this->buffer_layout_)) {
         return this->num_pages();
     }
 
-    return this->shard_spec().size() * this->num_cores().value();
+    return this->shard_spec().num_pages() * this->num_cores().value();
+}
+
+HalMemType Buffer::memory_type() const {
+    if (this->is_dram()) {
+        return HalMemType::DRAM;
+    } else if (this->is_l1()) {
+        return HalMemType::L1;
+    } else {
+        TT_THROW("Unknown HAL memory type for {} buffer type", this->buffer_type());
+    }
 }
 
 CoreType Buffer::core_type() const {
     switch (this->buffer_type_) {
-        case BufferType::DRAM:
-            return CoreType::DRAM;
+        case BufferType::DRAM: return CoreType::DRAM;
         case BufferType::L1:
-        case BufferType::L1_SMALL:
-            return CoreType::WORKER;
-        default:
-            TT_THROW("Unknown CoreType {} for buffer", this->buffer_type_);
+        case BufferType::L1_SMALL: return CoreType::WORKER;
+        default: TT_THROW("Unknown CoreType {} for buffer", this->buffer_type_);
     }
 }
 
 bool Buffer::is_l1() const { return is_l1_impl(buffer_type()); }
-bool Buffer::is_dram() const {
-    return buffer_type() == BufferType::DRAM || buffer_type() == BufferType::TRACE;
-}
-bool Buffer::is_trace() const {
-    return buffer_type() == BufferType::TRACE;
-
-}
+bool Buffer::is_dram() const { return buffer_type() == BufferType::DRAM || buffer_type() == BufferType::TRACE; }
+bool Buffer::is_trace() const { return buffer_type() == BufferType::TRACE; }
 
 bool Buffer::is_valid_region(const BufferRegion& region) const { return region.offset + region.size <= this->size(); }
 
 bool Buffer::is_valid_partial_region(const BufferRegion& region) const {
     return this->is_valid_region(region) && (region.offset > 0 || region.size != this->size());
-}
-
-uint32_t Buffer::dram_channel_from_bank_id(uint32_t bank_id) const {
-    TT_FATAL(this->is_dram(), "Expected DRAM buffer!");
-    return allocator_->get_dram_channel_from_bank_id(bank_id);
-}
-
-CoreCoord Buffer::logical_core_from_bank_id(uint32_t bank_id) const {
-    TT_FATAL(this->is_l1(), "Expected L1 buffer!");
-    return allocator_->get_logical_core_from_bank_id(bank_id);
 }
 
 DeviceAddr Buffer::page_address(uint32_t bank_id, uint32_t page_index) const {
@@ -523,7 +565,7 @@ DeviceAddr Buffer::bank_local_page_address(uint32_t bank_id, uint32_t page_index
     uint32_t offset;
     if (is_sharded(this->buffer_layout())) {
         auto shard_spec = this->shard_spec();
-        uint32_t pages_offset_within_bank = page_index % shard_spec.size();
+        uint32_t pages_offset_within_bank = page_index % shard_spec.num_pages();
         offset = (round_up(this->page_size(), this->alignment()) * pages_offset_within_bank);
     } else {
         uint32_t pages_offset_within_bank = page_index / num_banks;
@@ -534,23 +576,20 @@ DeviceAddr Buffer::bank_local_page_address(uint32_t bank_id, uint32_t page_index
 
 uint32_t Buffer::alignment() const { return allocator_->get_alignment(this->buffer_type()); }
 
-DeviceAddr Buffer::aligned_page_size() const {
-    return align(page_size(), this->alignment());
-}
-DeviceAddr Buffer::aligned_size() const {
-    return this->num_dev_pages() * this->aligned_page_size();
-}
+DeviceAddr Buffer::aligned_page_size() const { return align(page_size(), this->alignment()); }
+DeviceAddr Buffer::aligned_size() const { return this->num_dev_pages() * this->aligned_page_size(); }
 
 DeviceAddr Buffer::aligned_size_per_bank() const {
     uint32_t num_banks =
         is_sharded(this->buffer_layout_) ? this->num_cores().value() : allocator_->get_num_banks(this->buffer_type());
-    return tt::tt_metal::detail::SizeBytesPerBank(this->aligned_size(), this->aligned_page_size(), num_banks, this->alignment());
+    return tt::tt_metal::detail::SizeBytesPerBank(
+        this->aligned_size(), this->aligned_page_size(), num_banks, this->alignment());
 }
 
 DeviceAddr Buffer::sharded_page_address(uint32_t bank_id, uint32_t page_index) const {
     TT_FATAL(is_sharded(this->buffer_layout()), "Buffer not sharded");
     auto shard_spec = this->shard_spec();
-    uint32_t pages_offset_within_bank = page_index % shard_spec.size();
+    uint32_t pages_offset_within_bank = page_index % shard_spec.num_pages();
     auto offset = (round_up(this->page_size(), this->alignment()) * pages_offset_within_bank);
     return translate_page_address(offset, bank_id);
 }
@@ -567,8 +606,9 @@ void Buffer::set_shard_spec(const ShardSpecBuffer& shard_spec) {
 }
 
 std::optional<uint32_t> Buffer::num_cores() const {
-    if (!is_sharded(this->buffer_layout_))
+    if (!is_sharded(this->buffer_layout_)) {
         return std::nullopt;
+    }
 
     return this->shard_spec().tensor_shard_spec.grid.num_cores();
 }
@@ -591,42 +631,27 @@ bool ShardSpec::operator==(const ShardSpec&) const = default;
 bool ShardSpec::operator!=(const ShardSpec&) const = default;
 
 std::array<uint32_t, 2> ShardSpecBuffer::shape_in_pages() const {
-    auto width_in_pages = page_shape[0] == 0 ? 0 : tensor_shard_spec.shape[0] / page_shape[0];
-    auto height_in_pages = page_shape[1] == 0 ? 0 : tensor_shard_spec.shape[1] / page_shape[1];
-    return {width_in_pages, height_in_pages};
+    auto height_in_pages = page_shape[0] == 0 ? 0 : tensor_shard_spec.shape[0] / page_shape[0];
+    auto width_in_pages = page_shape[1] == 0 ? 0 : tensor_shard_spec.shape[1] / page_shape[1];
+    return {height_in_pages, width_in_pages};
 }
 
-DeviceAddr ShardSpecBuffer::size() const {
+DeviceAddr ShardSpecBuffer::num_pages() const {
     auto shape_in_pages_ = this->shape_in_pages();
     return shape_in_pages_[0] * shape_in_pages_[1];
-}
-
-v1::BufferHandle v1::CreateBuffer(InterleavedBufferConfig config) { return v1::BufferHandle{v0::CreateBuffer(config)}; }
-
-void v1::DeallocateBuffer(const BufferHandle& buffer) { v0::DeallocateBuffer(*buffer); }
-
-std::size_t v1::GetId(const BufferHandle& buffer) { return buffer->unique_id(); }
-
-void v1::WriteToBuffer(const BufferHandle& buffer, stl::Span<const std::byte> host_buffer) {
-    detail::WriteToBuffer(*buffer, stl::Span<const uint8_t>{reinterpret_cast<const std::uint8_t *>(host_buffer.data()), host_buffer.size()});
-}
-
-void v1::ReadFromBuffer(const BufferHandle& buffer, stl::Span<std::byte> host_buffer, bool shard_order) {
-    detail::ReadFromBuffer(*buffer, reinterpret_cast<std::uint8_t *>(host_buffer.data()), shard_order);
-}
-
-void v1::ReadFromShard(const BufferHandle& buffer, stl::Span<std::byte> host_buffer, std::uint32_t core_id) {
-    detail::ReadShard(*buffer, reinterpret_cast<std::uint8_t *>(host_buffer.data()), core_id);
 }
 
 }  // namespace tt::tt_metal
 
 namespace tt::stl::json {
-tt_metal::ShardSpec from_json_t<tt_metal::ShardSpec>::operator()(const nlohmann::json &json_object) const {
+tt_metal::ShardSpec from_json_t<tt_metal::ShardSpec>::operator()(const nlohmann::json& json_object) const {
     const auto& shard_mode = from_json<tt_metal::ShardMode>(json_object.at("mode"));
-    const auto& physical_shard_shape = from_json<std::optional<std::array<uint32_t, 2>>>(json_object.at("physical_shard_shape"));
+    const auto& physical_shard_shape =
+        from_json<std::optional<std::array<uint32_t, 2>>>(json_object.at("physical_shard_shape"));
     if (physical_shard_shape.has_value()) {
-        TT_FATAL(shard_mode == tt::tt_metal::ShardMode::LOGICAL, "Physical shard shape can only be provided in logical sharding mode!");
+        TT_FATAL(
+            shard_mode == tt::tt_metal::ShardMode::LOGICAL,
+            "Physical shard shape can only be provided in logical sharding mode!");
         return tt_metal::ShardSpec{
             from_json<CoreRangeSet>(json_object.at("grid")),
             from_json<std::array<uint32_t, 2>>(json_object.at("shape")),
@@ -639,4 +664,4 @@ tt_metal::ShardSpec from_json_t<tt_metal::ShardSpec>::operator()(const nlohmann:
         from_json<tt_metal::ShardOrientation>(json_object.at("orientation")),
         shard_mode};
 }
-}
+}  // namespace tt::stl::json

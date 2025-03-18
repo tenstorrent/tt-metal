@@ -14,10 +14,7 @@ namespace ttnn::operations::data_movement {
 
 namespace {
 
-template <typename ArrayType>
-bool eq_spans(const ArrayType& a, const ArrayType& b) {
-    return std::equal(a.begin(), a.end(), b.begin(), b.end());
-}
+bool eq_spans(const auto a, const auto b) { return std::equal(a.begin(), a.end(), b.begin(), b.end()); }
 
 ttnn::Shape update_original_shape(const ttnn::Shape& padded_shape, const ttnn::Shape& input_shape) {
     ttnn::SmallVector<uint32_t> updated_shape;
@@ -54,7 +51,17 @@ static ttnn::Tensor pad_impl(
         const auto rank = input_tensor_shape.rank();
 
         TT_FATAL(rank == 4, "ttnn.pad: input tensor passed to pad_impl must have rank == 4, but got rank {}.", rank);
-
+        bool input_output_same = true;
+        for (size_t i = 0; i < rank; i++) {
+            if (input_tensor_shape[i] != output_padded_shape[i]) {
+                input_output_same = false;
+                break;
+            }
+        }
+        if (input_output_same) {
+            tt::log_debug("Pad Input and Output Shapes are the same. Skipping pad and returning input tensor.");
+            return input_tensor;
+        }
         using ShardStrategy = ttnn::operations::data_movement::ShardStrategy;
         using ShardOrientation = tt::tt_metal::ShardOrientation;
         using Layout = tt::tt_metal::Layout;
@@ -139,7 +146,7 @@ static ttnn::Tensor pad_impl(
             "output_w != output_memory_config.shard_spec().shape[1]");
 
         ttnn::Shape output_shape{output_padded_shape};
-        auto output_tensor = operation::run(
+        auto output_tensor = tt::tt_metal::operation::run(
                                  Pad{output_shape,
                                      output_shape,
                                      ttnn::Shape{input_tensor_start},

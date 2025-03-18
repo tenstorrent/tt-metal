@@ -107,7 +107,7 @@ def sharded_impl(
                 topology=all_gather_topology,
             )
         ## Wait for completion
-        ttnn.synchronize_devices(device)
+        ttnn.synchronize_device(device)
 
 
 def run_normal(
@@ -173,7 +173,7 @@ def run_with_trace(
         memory_config=output_mem_config,
         topology=all_gather_topology,
     )
-    ttnn.synchronize_devices(device)
+    ttnn.synchronize_device(device)
 
     # Capture trace
     logger.info("Capturing trace")
@@ -195,13 +195,13 @@ def run_with_trace(
             topology=all_gather_topology,
         )
     ttnn.end_trace_capture(device, trace_id, cq_id=0)
-    ttnn.synchronize_devices(device)
+    ttnn.synchronize_device(device)
 
     # Run the op
     logger.info("Starting Trace perf test...")
     ttnn.execute_trace(device, trace_id, blocking=False)
     ttnn.release_trace(device, trace_id)
-    ttnn.synchronize_devices(device)
+    ttnn.synchronize_device(device)
     return tt_out_tensor
 
 
@@ -347,7 +347,7 @@ def test_run_barrier_impl_pcie(
         # LLama
         (
             (1, 1, 32, 1024),
-            (32, 32),
+            (32, 256),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         ),
     ),

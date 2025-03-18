@@ -20,7 +20,7 @@ namespace ttnn::operations::normalization {
 struct Softmax {
     const std::optional<float> scale;
     const bool inplace;
-    const MemoryConfig output_mem_config;
+    const tt::tt_metal::MemoryConfig output_mem_config;
     const SoftmaxProgramConfig program_config;
     const bool is_causal_mask;
     const DeviceComputeKernelConfig compute_kernel_config;
@@ -32,17 +32,17 @@ struct Softmax {
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
-    operation::ProgramWithCallbacks create_program(
+    tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors) const;
 
-    const operation::Hash compute_program_hash(
+    const tt::tt_metal::operation::Hash compute_program_hash(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
 };
 
-operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
+tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     const Tensor& input_tensor,
     const Tensor& output_tensor,
     const std::optional<const Tensor>& mask,
@@ -53,7 +53,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
 
 // hw_dims_only_causal_mask - represents if the causal mask is of shape [1, 1, h, w]
 // valid only if causal_mask == true, and is interleaved
-operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
+tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     const Tensor& input_tensor,
     const Tensor& output_tensor,
     const std::optional<const Tensor>& mask,
@@ -70,7 +70,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
 // softmax
 Tensor softmax(
     const Tensor& input_tensor,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const tt::tt_metal::MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     const bool numeric_stable = false);
 // const ref prevents in-place
@@ -111,7 +111,7 @@ Tensor scale_mask_softmax(
     const Tensor& input_tensor,
     std::optional<float> scale,
     const std::optional<const Tensor>& mask,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const tt::tt_metal::MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     const bool is_causal_mask = false,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     const bool numeric_stable = false);

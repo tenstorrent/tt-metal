@@ -209,38 +209,30 @@ def test_sharded_concat(device, inputs, output_shard_shape, shard_grid, strategy
 
 @pytest.mark.parametrize("dim", [3])
 @pytest.mark.parametrize("groups", [1, 2, 4])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize(
-    "input_shapes, output_shape, core_grid",
+    "input_shapes, output_shape, core_grid, layout",
     (
-        (
-            ((1, 1, 1, 32), (1, 1, 1, 32)),
-            (1, 1, 1, 64),
-            ttnn.CoreGrid(x=1, y=1),
-        ),
-        (
-            ((1, 1, 1, 32), (1, 1, 1, 64)),
-            (1, 1, 1, 96),
-            ttnn.CoreGrid(x=1, y=1),
-        ),
-        (
-            ((1, 1, 1, 64), (1, 1, 1, 32)),
-            (1, 1, 1, 96),
-            ttnn.CoreGrid(x=1, y=1),
-        ),
-        (
-            ((1, 1, 1024, 64), (1, 1, 1024, 32)),
-            (1, 1, 1024, 96),
-            ttnn.CoreGrid(x=4, y=1),
-        ),
-        (
-            ((1, 1, 256, 64), (1, 1, 256, 128)),
-            (1, 1, 256, 192),
-            ttnn.CoreGrid(x=8, y=1),
-        ),
+        (((1, 1, 1, 32), (1, 1, 1, 32)), (1, 1, 1, 64), ttnn.CoreGrid(x=1, y=1), ttnn.ROW_MAJOR_LAYOUT),
+        (((1, 1, 1, 32), (1, 1, 1, 64)), (1, 1, 1, 96), ttnn.CoreGrid(x=1, y=1), ttnn.ROW_MAJOR_LAYOUT),
+        (((1, 1, 1, 64), (1, 1, 1, 32)), (1, 1, 1, 96), ttnn.CoreGrid(x=1, y=1), ttnn.ROW_MAJOR_LAYOUT),
+        (((1, 1, 1024, 64), (1, 1, 1024, 32)), (1, 1, 1024, 96), ttnn.CoreGrid(x=4, y=1), ttnn.ROW_MAJOR_LAYOUT),
+        (((1, 1, 256, 64), (1, 1, 256, 128)), (1, 1, 256, 192), ttnn.CoreGrid(x=8, y=1), ttnn.ROW_MAJOR_LAYOUT),
+        (((1, 1, 32, 32), (1, 1, 32, 32)), (1, 1, 32, 64), ttnn.CoreGrid(x=1, y=1), ttnn.TILE_LAYOUT),
+        (((1, 1, 32, 64), (1, 1, 32, 64)), (1, 1, 32, 128), ttnn.CoreGrid(x=1, y=1), ttnn.TILE_LAYOUT),
+        (((1, 1, 256, 64), (1, 1, 256, 128)), (1, 1, 256, 192), ttnn.CoreGrid(x=8, y=1), ttnn.TILE_LAYOUT),
+        (((1, 1, 512, 64), (1, 1, 512, 128)), (1, 1, 512, 192), ttnn.CoreGrid(x=8, y=1), ttnn.TILE_LAYOUT),
+        (((1, 1, 512, 128), (1, 1, 512, 64)), (1, 1, 512, 192), ttnn.CoreGrid(x=8, y=1), ttnn.TILE_LAYOUT),
     ),
 )
-def test_sharded_concat_with_groups(device, input_shapes, output_shape, dim, groups, core_grid):
-    torch_input_tensors = [torch.full(shapes, idx + 1, dtype=torch.bfloat16) for idx, shapes in enumerate(input_shapes)]
+def test_sharded_concat_with_groups(device, input_shapes, output_shape, dim, groups, dtype, core_grid, layout):
+    torch_input_tensors = [torch.rand(shapes, dtype=torch.bfloat16) for idx, shapes in enumerate(input_shapes)]
+
+    if dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("Cannot use bfloat8 with RM layout")
+
+    if layout == ttnn.TILE_LAYOUT and (input_shapes[0][-1] // groups < 16 or input_shapes[1][-1] // groups < 16):
+        pytest.xfail("Group size < 16 is currently not supported for tiled inputs")
 
     expected = ttnn.concat.golden_function(torch_input_tensors, dim, groups)
 
@@ -251,9 +243,7 @@ def test_sharded_concat_with_groups(device, input_shapes, output_shape, dim, gro
         for x in torch_input_tensors
     ]
     ttnn_input_tensors = [
-        ttnn.from_torch(
-            x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config
-        )
+        ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
         for x, memory_config in zip(torch_input_tensors, sharded_memory_configs)
     ]
 
@@ -263,7 +253,7 @@ def test_sharded_concat_with_groups(device, input_shapes, output_shape, dim, gro
     )
 
     actual = ttnn.to_torch(z)
-    assert_with_pcc(expected, actual, 1.0)
+    assert_with_pcc(expected, actual, 1.0 if dtype == ttnn.bfloat16 else 0.99995)
 
 
 @pytest.mark.parametrize("dim", [0, 1, 2, 3])

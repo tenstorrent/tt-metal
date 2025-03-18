@@ -9,23 +9,24 @@
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"
-#include "work_executor.hpp"
-#include "basic_allocator.hpp"
-#include "l1_banking_allocator.hpp"
+#include "impl/allocator/l1_banking_allocator.hpp"
+#include "work_executor_types.hpp"
 #include "data_types.hpp"
 #include "program_device_map.hpp"
 #include "build.hpp"
-#include "tt_cluster.hpp"
 #include "hal.hpp"
 #include "command_queue_interface.hpp"
 #include "sub_device_manager.hpp"
 #include "sub_device_types.hpp"
-#include "span.hpp"
-#include "program_cache.hpp"
+#include <tt_stl/span.hpp>
 
 namespace tt {
 
 namespace tt_metal {
+
+namespace program_cache::detail {
+class ProgramCache;
+}
 /*
 MemoryBlockTable is a list of memory blocks in the following format:
 [{"blockID": "0", "address": "0", "size": "0", "prevID": "0", "nextID": "0", "allocated": true}]
@@ -35,24 +36,13 @@ size: bytes
 using MemoryBlockTable = std::vector<std::unordered_map<std::string, std::string>>;
 enum class BufferType;
 
-inline namespace v0 {
-
 class Buffer;
 class Program;
 class SubDevice;
 
-}  // namespace v0
-
-class JitBuildEnv;
 class CommandQueue;
 class TraceBuffer;
 struct TraceDescriptor;
-
-namespace detail {
-struct TraceDescriptor;
-}
-
-inline namespace v0 {
 
 class IDevice {
 public:
@@ -68,8 +58,7 @@ public:
     virtual tt::ARCH arch() const = 0;
 
     virtual chip_id_t id() const = 0;
-
-    virtual uint32_t build_key() const = 0;
+    virtual chip_id_t build_id() const = 0;
 
     virtual uint8_t num_hw_cqs() const = 0;
 
@@ -128,20 +117,14 @@ public:
     virtual uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const = 0;
     virtual uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const = 0;
 
-    virtual const JitBuildEnv& build_env() const = 0;
-    virtual const string build_firmware_target_path(uint32_t programmable_core, uint32_t processor_class, int i) const = 0;
-    virtual const string build_kernel_target_path(uint32_t programmable_core, uint32_t processor_class, int i, const string& kernel_name) const = 0;
-    virtual const JitBuildState& build_firmware_state(uint32_t programmable_core, uint32_t processor_class, int i) const = 0;
-    virtual const JitBuildState& build_kernel_state(uint32_t programmable_core, uint32_t processor_class, int i) const = 0;
-    virtual const JitBuildStateSubset build_kernel_states(uint32_t programmable_core, uint32_t processor_class) const = 0;
-
     virtual SystemMemoryManager& sysmem_manager() = 0;
     virtual CommandQueue& command_queue(size_t cq_id = 0) = 0;
 
     // Metal trace device capture mode
     virtual void begin_trace(const uint8_t cq_id, const uint32_t tid) = 0;
     virtual void end_trace(const uint8_t cq_id, const uint32_t tid) = 0;
-    virtual void replay_trace(const uint8_t cq_id, const uint32_t tid, const bool blocking) = 0;
+    virtual void replay_trace(
+        const uint8_t cq_id, const uint32_t tid, const bool block_on_device, const bool block_on_worker_thread) = 0;
     virtual void release_trace(const uint32_t tid) = 0;
 
     virtual std::shared_ptr<TraceBuffer> get_trace(uint32_t tid) = 0;
@@ -155,13 +138,18 @@ public:
 
     // Checks that the given arch is on the given pci_slot and that it's responding
     // Puts device into reset
-    virtual bool initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap = {}, bool minimal = false) = 0;
-    virtual void build_firmware() = 0;
+    virtual bool initialize(
+        const uint8_t num_hw_cqs,
+        size_t l1_small_size,
+        size_t trace_region_size,
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        bool minimal = false) = 0;
     virtual void reset_cores() = 0;
     virtual void initialize_and_launch_firmware() = 0;
     virtual void init_command_queue_host() = 0;
     virtual void init_command_queue_device() = 0;
 
+    virtual void init_fabric() = 0;
     // Puts device into reset
     virtual bool close() = 0;
 
@@ -186,8 +174,6 @@ public:
 
     virtual std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const std::vector<CoreRange>& ranges, const CoreType core_type) = 0;
 
-    virtual size_t get_device_kernel_defines_hash() = 0;
-
     virtual uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const = 0;
     virtual uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const = 0;
     virtual uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data=true, bool unicast_data=true) const = 0;
@@ -210,12 +196,9 @@ public:
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) = 0;
 
     virtual bool is_mmio_capable() const = 0;
-    virtual std::vector<std::vector<chip_id_t>> get_tunnels_from_mmio() const = 0;
 
     static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
 };
-
-}  // namespace v0
 
 template <typename T>
 inline T IDevice::get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const {

@@ -5,7 +5,7 @@
 #pragma once
 
 #include "debug/dprint.h"
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen_test.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 
 #define is_power_of_2(x) (((x) > 0) && (((x) & ((x) - 1)) == 0))
 

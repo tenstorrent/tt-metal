@@ -18,7 +18,7 @@ std::shared_ptr<MeshDevice> open_mesh_device(
     size_t trace_region_size,
     size_t num_command_queues,
     const tt::tt_metal::DispatchCoreConfig& dispatch_core_config,
-    const MeshOffset& offset = MeshOffset(0, 0),
+    const std::optional<MeshCoordinate>& offset = std::nullopt,
     const std::vector<int>& physical_device_ids = {});
 
 void close_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device);
@@ -33,7 +33,7 @@ Tensor aggregate_as_tensor(
 std::vector<int> get_t3k_physical_device_ids_ring();
 
 // Maps a tensor to the set of devices in the device-mesh that the shards will be distributed across.
-std::vector<IDevice*> get_mapped_devices(const Tensor& tensor, MeshDevice& mesh_device);
+std::vector<tt::tt_metal::IDevice*> get_mapped_devices(const Tensor& tensor, MeshDevice& mesh_device);
 
 // Get the distributed tensor config from a tensor.
 tt::tt_metal::DistributedTensorConfig get_distributed_tensor_config_from_tensor(const Tensor& tensor);
@@ -43,6 +43,7 @@ Tensor get_device_tensor(const Tensor& multi_device_tensor, const tt::tt_metal::
 Tensor get_device_tensor(const Tensor& multi_device_tensor, const int device_id);
 
 // Returns true has MultiDeviceHost/MultiDevice Storage
+bool is_host_mesh_tensor(const Tensor& tensor);
 bool is_multi_device_tensor(const Tensor& tensor);
 
 // Returns true if tensor has MultiDevice storage type and is allocated on a mesh buffer.

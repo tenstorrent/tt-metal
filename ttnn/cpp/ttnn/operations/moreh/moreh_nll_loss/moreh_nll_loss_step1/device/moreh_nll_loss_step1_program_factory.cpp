@@ -27,13 +27,7 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
     auto target_shape = target.get_padded_shape();
-    auto N = target_shape[-3];
-
-    const auto target_shape_without_padding = target.get_logical_shape();
-    const auto origin_N = target_shape_without_padding[-3];
-
     const bool weight_has_value = weight.has_value();
-
     auto H = target_shape[-2];
     auto W = target_shape[-1];
     auto Ht = H / tt::constants::TILE_HEIGHT;
@@ -154,7 +148,6 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
             static_cast<uint32_t>(ignore_index),
             num_units_per_core,
             tile_offset,
-            origin_N,
             channel_size,
             weight_num_tile,
             element_size,

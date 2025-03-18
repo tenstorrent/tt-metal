@@ -7,6 +7,8 @@
 
 #include <tt-metalium/shape_base.hpp>
 
+namespace tt::tt_metal {
+
 TEST(TensorShapeBaseTests, General4D) {
     tt::tt_metal::ShapeBase vec({20, 30, 40, 50});
     EXPECT_EQ(vec.view().size(), vec.view().size());
@@ -79,3 +81,5 @@ TEST(TensorShapeBaseTests, TwoElements) {
     EXPECT_EQ(vec[-4], 1);
     EXPECT_THROW(vec[-5], std::exception);
 }
+
+}  // namespace tt::tt_metal

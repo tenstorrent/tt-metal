@@ -112,7 +112,7 @@ int main() {
     run_binary_ops();
 
     // Allocate a tensor to show that the addresses aren't cached
-    auto input_tensor = ttnn::random::uniform(bfloat16(0.0f), bfloat16(0.0f), Shape({1, 1, 32, 32}))
+    auto input_tensor = ttnn::random::uniform(bfloat16(0.0f), bfloat16(0.0f), ttnn::Shape({1, 1, 32, 32}))
                             .to_layout(Layout::TILE)
                             .to_device(device);
 

@@ -18,7 +18,6 @@
 
 using namespace tt;
 using namespace tt::constants;
-using namespace tt_metal;
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
@@ -28,7 +27,7 @@ uint32_t get_preferred_noc(
     const ttnn::CoreCoord src,
     const ttnn::CoreCoord dst,
     const tt_metal::IDevice* device,
-    const bool use_hop_cores = false) {
+    const bool use_dedicated_noc = false) {
     /*
         NOC0: Preferred +x -> +y
         NOC1: Preferred -y -> -x
@@ -56,12 +55,12 @@ uint32_t get_preferred_noc(
     // std::cout << "src: (" << src_x << ", " << src_y << "), dst: (" << dst_x << ", " << dst_y << "), noc: " << noc <<
     // std::endl;
 
-    return use_hop_cores ? 1 : noc;
+    return use_dedicated_noc ? 1 : noc;
 }
 
-operation::ProgramWithCallbacks create_program_mcast_in0(
+tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0(
     tt_metal::Program& program,
-    const Tensor& a,
+    const tt::tt_metal::Tensor& a,
     tt_metal::IDevice* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -99,6 +98,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     bool output_is_sharded,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
+    using tt::tt_metal::num_cores_to_corerangeset;
+
     // currently only support transpose of the full tile
     bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
 
@@ -454,8 +455,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = detail::GetPreferredNOCForDRAMWrite(device->arch());
-    tt_metal::NOC in1_noc = detail::GetPreferredNOCForDRAMRead(device->arch());
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
 
     if (fuse_op) {
         // Create semaphores
@@ -480,8 +481,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             .compile_args = in0_sender_compile_time_args,
             .defines = mm_kernel_in0_sender_writer_defines});
 
-    KernelHandle mm_kernel_in0_mcast_cores_without_work_and_in_receiver_grid_id = 0;
-    KernelHandle mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid_id = 0;
+    tt::tt_metal::KernelHandle mm_kernel_in0_mcast_cores_without_work_and_in_receiver_grid_id = 0;
+    tt::tt_metal::KernelHandle mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid_id = 0;
     if (in0_is_sharded) {
         if (in0_mcast_cores_without_work_and_in_receiver_grid.num_cores() > 0) {
             in0_sender_compile_time_args[0] = 0;  // core_has_output_block_work
@@ -513,7 +514,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         }
     }
 
-    KernelHandle mm_kernel_in0_receiver_id = 0;
+    tt::tt_metal::KernelHandle mm_kernel_in0_receiver_id = 0;
     if (!in0_is_sharded and in0_mcast_receivers.num_cores() > 0) {
         mm_kernel_in0_receiver_id = tt_metal::CreateKernel(
             program,
@@ -618,7 +619,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         in1_CB_size);
 
     uint32_t src2_cb_index = tt::CBIndex::c_2;
-    CBHandle cb_src2 = 0;
+    tt::tt_metal::CBHandle cb_src2 = 0;
     if (in0_is_sharded) {
         tt_metal::CircularBufferConfig src2_cb_config =
             tt_metal::CircularBufferConfig(in2_CB_size, {{src2_cb_index, in0_data_format}})
@@ -636,8 +637,9 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
 
         // Local L1 to store temp vars
         uint32_t l1_cb_index = tt::CBIndex::c_6;
-        CircularBufferConfig cb_for_l1_array_config =
-            CircularBufferConfig(32 * 2, {{l1_cb_index, tt::DataFormat::Float16_b}}).set_page_size(l1_cb_index, 32 * 2);
+        tt::tt_metal::CircularBufferConfig cb_for_l1_array_config =
+            tt::tt_metal::CircularBufferConfig(32 * 2, {{l1_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(l1_cb_index, 32 * 2);
         tt_metal::CreateCircularBuffer(program, all_cores, cb_for_l1_array_config);
     }
 
@@ -718,27 +720,21 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             in3_CB_size);
     }
 
-    // Parameters for last row, col, or block
-    uint32_t last_per_core_M = M % per_core_M == 0 ? per_core_M : M % per_core_M;
+    // Parameters for last row, col, or block, no need to re-calc h-dim since there's no split on height
     uint32_t last_per_core_N = N % per_core_N == 0 ? per_core_N : N % per_core_N;
-    uint32_t last_out_block_h = last_per_core_M % out_block_h == 0 ? out_block_h : last_per_core_M % out_block_h;
     uint32_t last_out_block_w = last_per_core_N % out_block_w == 0 ? out_block_w : last_per_core_N % out_block_w;
-    uint32_t last_block_num_nonzero_subblocks_h = (last_out_block_h - 1) / out_subblock_h + 1;
+    uint32_t last_out_num_blocks_w = (last_per_core_N - 1) / out_block_w + 1;
     uint32_t last_block_num_nonzero_subblocks_w = (last_out_block_w - 1) / out_subblock_w + 1;
-    uint32_t last_subblock_of_last_block_h =
-        last_out_block_h % out_subblock_h == 0 ? out_subblock_h : last_out_block_h % out_subblock_h;
     uint32_t last_subblock_of_last_block_w =
         last_out_block_w % out_subblock_w == 0 ? out_subblock_w : last_out_block_w % out_subblock_w;
     uint32_t last_block_padded_subblock_tiles_addr_skip =
         output_single_tile_size * (out_subblock_w - last_subblock_of_last_block_w);
     uint32_t last_block_padded_block_tiles_w_skip =
         (out_subblock_w * out_subblock_h) * (out_block_w / out_subblock_w - last_block_num_nonzero_subblocks_w);
-    uint32_t last_block_padded_block_tiles_h_skip =
-        (out_block_h / out_subblock_h - last_block_num_nonzero_subblocks_h) * (out_block_w * out_subblock_h);
 
     CoreCoord start_core_noc = top_left_core_physical;
     CoreCoord end_core_noc = bottom_right_core_physical;
-    if (in0_noc == NOC::NOC_1) {
+    if (in0_noc == tt::tt_metal::NOC::NOC_1) {
         std::swap(start_core_noc, end_core_noc);
     }
 
@@ -873,6 +869,13 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
                 mm_in1_sender_writer_args.push_back(0);
                 mm_in1_sender_writer_args.push_back(0);
             }
+            if (!output_is_sharded) {
+                if (output_idx_x == num_blocks_x - 1) {
+                    mm_in1_sender_writer_args.push_back(last_out_num_blocks_w);
+                } else {
+                    mm_in1_sender_writer_args.push_back(out_num_blocks_x);
+                }
+            }
 
             if (fuse_op) {
                 fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_sender_writer_args, true);
@@ -894,10 +897,10 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
          cores,
          num_cores_with_work](
             const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
+            tt::tt_metal::Program& program,
+            const std::vector<tt::tt_metal::Tensor>& input_tensors,
+            const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
+            const std::vector<tt::tt_metal::Tensor>& output_tensors) {
             TT_ASSERT(input_tensors.size() + optional_input_tensors.size() == 3);
             TT_ASSERT(output_tensors.size() == 1);
 
@@ -905,7 +908,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             auto src_buffer_b = input_tensors.at(1).buffer();
             auto bias_tensor = optional_input_tensors.at(0);
 
-            std::optional<Buffer*> bias_buffer;
+            std::optional<tt::tt_metal::Buffer*> bias_buffer;
             if (bias_tensor.has_value()) {
                 bias_buffer = bias_tensor.value().buffer();
             }
@@ -957,7 +960,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-operation::ProgramWithCallbacks create_program_mcast_in1(
+tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in1(
     tt_metal::IDevice* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -1085,7 +1088,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
 
     constexpr bool row_major = true;
     CoreRangeSet all_cores =
-        num_cores_to_corerangeset(start_core, num_cores, compute_with_storage_grid_size, row_major);
+        tt::tt_metal::num_cores_to_corerangeset(start_core, num_cores, compute_with_storage_grid_size, row_major);
     CoreRange in1_mcast_receiver_cores_bounding_box = all_cores.bounding_box();
     uint32_t in1_mcast_receiver_num_cores = in1_mcast_receiver_cores_bounding_box.size();  // always mcast to full grid
 
@@ -1095,8 +1098,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         auto receiver_start_core = start_core.x != (compute_with_storage_grid_size.x - 1)
                                        ? CoreCoord{start_core.x + 1, start_core.y}
                                        : CoreCoord{start_core.x, start_core.y + 1};
-        in1_mcast_receivers =
-            num_cores_to_corerangeset(receiver_start_core, num_cores - 1, compute_with_storage_grid_size, row_major);
+        in1_mcast_receivers = tt::tt_metal::num_cores_to_corerangeset(
+            receiver_start_core, num_cores - 1, compute_with_storage_grid_size, row_major);
     }
 
     // Mcast args
@@ -1282,8 +1285,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     }
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = detail::GetPreferredNOCForDRAMWrite(device->arch());
-    tt_metal::NOC in1_noc = detail::GetPreferredNOCForDRAMRead(device->arch());
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
 
     auto mm_kernel_in0_sender_id = tt_metal::CreateKernel(
         program,
@@ -1305,7 +1308,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
             .compile_args = in1_sender_writer_compile_time_args,
             .defines = mm_kernel_in1_sender_writer_defines});
 
-    KernelHandle mm_kernel_in1_receiver_writer_id = 0;
+    tt::tt_metal::KernelHandle mm_kernel_in1_receiver_writer_id = 0;
     if (in1_mcast_receivers.num_cores() > 0) {
         mm_kernel_in1_receiver_writer_id = tt_metal::CreateKernel(
             program,
@@ -1388,7 +1391,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         in0_CB_size);
 
     uint32_t src2_cb_index = tt::CBIndex::c_2;
-    CBHandle cb_src2 = 0;
+    tt::tt_metal::CBHandle cb_src2 = 0;
     if (in0_is_sharded and extract_shard_sub_blocks) {  // in0_is_sharded is technically redundant
         tt_metal::CircularBufferConfig src2_cb_config =
             tt_metal::CircularBufferConfig(in2_CB_size, {{src2_cb_index, in0_data_format}})
@@ -1492,25 +1495,17 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
 
     // Parameters for last row, col, or block
     uint32_t last_per_core_M = M % per_core_M == 0 ? per_core_M : M % per_core_M;
-    uint32_t last_per_core_N = N % per_core_N == 0 ? per_core_N : N % per_core_N;
     uint32_t last_out_block_h = last_per_core_M % out_block_h == 0 ? out_block_h : last_per_core_M % out_block_h;
-    uint32_t last_out_block_w = last_per_core_N % out_block_w == 0 ? out_block_w : last_per_core_N % out_block_w;
+    uint32_t last_out_num_blocks_h = (last_per_core_M - 1) / out_block_h + 1;
     uint32_t last_block_num_nonzero_subblocks_h = (last_out_block_h - 1) / out_subblock_h + 1;
-    uint32_t last_block_num_nonzero_subblocks_w = (last_out_block_w - 1) / out_subblock_w + 1;
     uint32_t last_subblock_of_last_block_h =
         last_out_block_h % out_subblock_h == 0 ? out_subblock_h : last_out_block_h % out_subblock_h;
-    uint32_t last_subblock_of_last_block_w =
-        last_out_block_w % out_subblock_w == 0 ? out_subblock_w : last_out_block_w % out_subblock_w;
-    uint32_t last_block_padded_subblock_tiles_addr_skip =
-        output_single_tile_size * (out_subblock_w - last_subblock_of_last_block_w);
-    uint32_t last_block_padded_block_tiles_w_skip =
-        (out_subblock_w * out_subblock_h) * (out_block_w / out_subblock_w - last_block_num_nonzero_subblocks_w);
     uint32_t last_block_padded_block_tiles_h_skip =
         (out_block_h / out_subblock_h - last_block_num_nonzero_subblocks_h) * (out_block_w * out_subblock_h);
 
     CoreCoord start_core_noc = bottom_right_core_physical;
     CoreCoord end_core_noc = top_left_core_physical;
-    if (in1_noc == NOC::NOC_0) {
+    if (in1_noc == tt::tt_metal::NOC::NOC_0) {
         std::swap(start_core_noc, end_core_noc);
     }
 
@@ -1554,6 +1549,12 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
                 mm_in1_sender_writer_args.push_back((std::uint32_t)bias_buffer->address());
                 mm_in1_sender_writer_args.push_back(
                     (std::uint32_t)per_core_N * output_idx_x);  // in3_tensor_start_tile_id
+            } else {
+                mm_in1_sender_writer_args.push_back(0);
+                mm_in1_sender_writer_args.push_back(0);
+            }
+            if (!output_is_sharded) {
+                mm_in1_sender_writer_args.push_back(out_num_blocks_x);
             }
 
             tt_metal::SetRuntimeArgs(
@@ -1596,6 +1597,15 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
                 mm_in1_receiver_writer_args.push_back(0);
                 mm_in1_receiver_writer_args.push_back(0);
             }
+            if (!output_is_sharded) {
+                if (output_idx_y == num_blocks_y - 1) {
+                    mm_in1_receiver_writer_args.push_back(last_out_num_blocks_h);
+                    mm_in1_receiver_writer_args.push_back(out_num_blocks_x);
+                } else {
+                    mm_in1_receiver_writer_args.push_back(out_num_blocks_y);
+                    mm_in1_receiver_writer_args.push_back(out_num_blocks_x);
+                }
+            }
 
             tt_metal::SetRuntimeArgs(
                 program,
@@ -1630,10 +1640,10 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
          start_core,
          cores](
             const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
+            tt::tt_metal::Program& program,
+            const std::vector<tt::tt_metal::Tensor>& input_tensors,
+            const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
+            const std::vector<tt::tt_metal::Tensor>& output_tensors) {
             TT_ASSERT(input_tensors.size() + optional_input_tensors.size() == 3);
             TT_ASSERT(output_tensors.size() == 1);
 
@@ -1641,7 +1651,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
             auto src_buffer_b = input_tensors.at(1).buffer();
             auto bias_tensor = optional_input_tensors.at(0);
 
-            std::optional<Buffer*> bias_buffer;
+            std::optional<tt::tt_metal::Buffer*> bias_buffer;
             if (bias_tensor.has_value()) {
                 bias_buffer = bias_tensor.value().buffer();
             }
@@ -1698,10 +1708,10 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-operation::ProgramWithCallbacks create_program_gather_in0(
+tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
     tt_metal::Program& program,
-    const Tensor& a,
-    const Tensor& b,
+    const tt::tt_metal::Tensor& a,
+    const tt::tt_metal::Tensor& b,
     tt_metal::IDevice* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -1731,7 +1741,7 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     tt::DataFormat in1_data_format,
     tt::DataFormat output_data_format,
     bool untilize_out,
-    const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     uint32_t num_global_cb_receivers) {
     const bool in1_is_dram_interleaved = in1_buffer->is_dram() && !b.is_sharded();
 
@@ -1892,18 +1902,32 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     bmm_op_utils::add_stagger_defines_if_needed(device->arch(), num_cores, mm_kernel_defines);
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = detail::GetPreferredNOCForDRAMWrite(device->arch());
-    tt_metal::NOC in1_noc = detail::GetPreferredNOCForDRAMRead(device->arch());
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
+
+    bool use_dedicated_noc = use_hop_cores || in1_is_dram_interleaved;
+    tt_metal::NOC_MODE noc_mode =
+        use_dedicated_noc ? tt_metal::NOC_MODE::DM_DEDICATED_NOC : tt_metal::NOC_MODE::DM_DYNAMIC_NOC;
 
     /* Create the kernels */
     auto mm_kernel_in0_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_ring_all_gather.cpp",
-        ring_cores,
+        all_cores,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = in0_noc,
-            .noc_mode = tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
+            .noc_mode = noc_mode,
+            .compile_args = in0_sender_compile_time_args});
+
+    auto mm_kernel_in0_hop_cores_id = tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_ring_all_gather.cpp",
+        hop_cores,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = in0_noc,
+            .noc_mode = noc_mode,
             .compile_args = in0_sender_compile_time_args});
 
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
@@ -1913,7 +1937,7 @@ operation::ProgramWithCallbacks create_program_gather_in0(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = in1_noc,
-            .noc_mode = tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
+            .noc_mode = noc_mode,
             .compile_args = in1_sender_writer_compile_time_args,
             .defines = mm_in1_kernel_defines});
 
@@ -1939,7 +1963,7 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, ring_cores, src0_cb_config);
 
     uint32_t src1_cb_index = tt::CBIndex::c_1;
-    CBHandle cb_src1;
+    tt::tt_metal::CBHandle cb_src1;
     if (use_global_cb) {
         uint32_t in1_block_size_bytes = in1_single_tile_size * in1_block_num_tiles;
         uint32_t remote_cb_index = tt::CBIndex::c_31;
@@ -1949,7 +1973,7 @@ operation::ProgramWithCallbacks create_program_gather_in0(
             .set_page_size(in1_block_size_bytes)
             .set_data_format(in1_data_format);
         remote_cb_config.index(src1_cb_index).set_page_size(in1_single_tile_size).set_data_format(in1_data_format);
-        cb_src1 = tt_metal::v1::experimental::CreateCircularBuffer(program, all_cores, remote_cb_config, *global_cb);
+        cb_src1 = tt_metal::experimental::CreateCircularBuffer(program, all_cores, remote_cb_config, *global_cb);
     } else {
         tt_metal::CircularBufferConfig src1_cb_config =
             tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
@@ -2038,7 +2062,7 @@ operation::ProgramWithCallbacks create_program_gather_in0(
             next_core = cores[next_i % num_cores];
         }
         const auto& next_core_noc = device->worker_core_from_logical_core(next_core);
-        uint32_t noc = get_preferred_noc(core_noc, next_core_noc, device, use_hop_cores);
+        uint32_t noc = get_preferred_noc(core_noc, next_core_noc, device, use_dedicated_noc);
 
         std::vector<uint32_t> mm_in0_args = {
             i,                // ring_index
@@ -2083,7 +2107,7 @@ operation::ProgramWithCallbacks create_program_gather_in0(
         /* in0 */
         CoreCoord next_core = end_of_hop ? cores[num_cores - 1] : hcores[i + 1];
         const auto& next_core_noc = device->worker_core_from_logical_core(next_core);
-        uint32_t noc = get_preferred_noc(core_noc, next_core_noc, device, use_hop_cores);
+        uint32_t noc = get_preferred_noc(core_noc, next_core_noc, device, use_dedicated_noc);
 
         std::vector<uint32_t> mm_in0_args = {
             0,                // ring_index
@@ -2093,18 +2117,27 @@ operation::ProgramWithCallbacks create_program_gather_in0(
             (std::uint32_t)true,        // is_hop_core
             (std::uint32_t)end_of_hop,  // end_of_hop
         };
-        tt_metal::SetRuntimeArgs(program, mm_kernel_in0_id, core, mm_in0_args);
+        tt_metal::SetRuntimeArgs(program, mm_kernel_in0_hop_cores_id, core, mm_in0_args);
     }
 
     auto override_runtime_arguments_callback =
-        [mm_kernel_in0_id, mm_kernel_in1_sender_writer_id, cb_src0, cb_src1, cb_output, num_cores, cores, global_cb](
+        [mm_kernel_in0_id,
+         mm_kernel_in0_hop_cores_id,
+         mm_kernel_in1_sender_writer_id,
+         cb_src0,
+         cb_src1,
+         cb_output,
+         num_cores,
+         cores](
             const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
+            tt::tt_metal::Program& program,
+            const std::vector<tt::tt_metal::Tensor>& input_tensors,
+            const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
+            const std::vector<tt::tt_metal::Tensor>& output_tensors) {
             TT_ASSERT(input_tensors.size() + optional_input_tensors.size() == 3);
             TT_ASSERT(output_tensors.size() == 1);
+
+            auto& global_cb = static_cast<const ttnn::operations::matmul::Matmul*>(operation)->global_cb;
 
             auto src_buffer_a = input_tensors[0].buffer();
             auto src_buffer_b = input_tensors[1].buffer();
@@ -2148,7 +2181,7 @@ namespace operations {
 
 namespace matmul {
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
+tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
     tt::tt_metal::Program& program,
     const Tensor& a,
     const Tensor& b,
@@ -2171,7 +2204,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
     const CoreRangeSet& hop_cores,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
-    const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     uint32_t num_global_cb_receivers) {
     const auto &ashape = a.get_padded_shape(), bshape = b.get_padded_shape();
     auto in0_tile = a.get_tensor_spec().tile();
@@ -2385,7 +2418,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
     }
 }
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
+tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
     const Tensor& a,
     const Tensor& b,
     const std::optional<const Tensor>& bias,
@@ -2406,7 +2439,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
     bool gather_in0,
     const CoreRangeSet& hop_cores,
     bool untilize_out,
-    const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     uint32_t num_global_cb_receivers) {
     tt_metal::Program program{}; /* Create a program */
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler;
@@ -2438,7 +2471,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
         num_global_cb_receivers);
 }
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
+tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
     tt::tt_metal::Program& program,
     const Tensor& a,
     const Tensor& b,
@@ -2449,7 +2482,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helpe
     const MatmulProgramConfig& program_config,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
-    const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb) {
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb) {
     MatmulMultiCoreReuseMultiCast1DProgramConfig config =
         std::get<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config);
 

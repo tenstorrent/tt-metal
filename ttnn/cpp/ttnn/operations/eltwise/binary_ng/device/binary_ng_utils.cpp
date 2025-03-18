@@ -244,6 +244,27 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>) : b
                 TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
             }
             break;
+        case BinaryOpType::QUANT:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::QUANT;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
+        case BinaryOpType::REQUANT:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::REQUANT;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
+        case BinaryOpType::DEQUANT:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::DEQUANT;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
         default: TT_THROW("Unsupported binary op {}", binary_op_type);
     }
 }
@@ -267,6 +288,11 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case BITWISE_AND: return {"binary_bitwise_tile_init();", "and_binary_tile"};
         case BITWISE_OR: return {"binary_bitwise_tile_init();", "or_binary_tile"};
         case BITWISE_XOR: return {"binary_bitwise_tile_init();", "xor_binary_tile"};
+        case QUANT: return {"quant_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));", "quant_tile"};
+        case REQUANT:
+            return {"requant_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));", "requant_tile"};
+        case DEQUANT:
+            return {"dequant_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));", "dequant_tile"};
         default: TT_THROW("Unsupported sfpu binary op {}", sfpu_binary_op);
     }
 }
@@ -306,6 +332,16 @@ void add_activation_defines(
 }
 
 bool OpConfig::is_sfpu_op() const { return std::holds_alternative<SfpuBinaryOp>(binary_op); }
+
+uint32_t pack_scalar_runtime_arg(const float scalar, const DataType dtype, const bool is_quant_op) {
+    if (dtype == DataType::FLOAT32) {
+        return std::bit_cast<uint32_t>(scalar);
+    } else if ((dtype != DataType::INT32) || is_quant_op) {
+        return pack_two_bfloat16_into_uint32({scalar, scalar});
+    } else {
+        return std::bit_cast<uint32_t>(static_cast<int32_t>(scalar));
+    }
+}
 
 template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<FpuBinaryOp>);
 template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<SfpuBinaryOp>);

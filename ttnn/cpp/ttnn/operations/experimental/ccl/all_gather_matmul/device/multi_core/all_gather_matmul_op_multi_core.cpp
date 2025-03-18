@@ -24,6 +24,7 @@
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 namespace ttnn {
 
@@ -322,21 +323,22 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
     }
 
     // All Gather
-    operation::ProgramWithCallbacks program_with_callbacks = ttnn::all_gather_multi_core_with_workers_helper(
-        matmul_program_with_callbacks->program,
-        input_tensor,
-        all_gather_output_tensor,
-        dim,
-        num_links,
-        ring_size,
-        ring_index,
-        receiver_device_id,
-        sender_device_id,
-        topology,
-        user_defined_num_workers,
-        user_defined_num_buffers_per_channel,
-        all_gather_fused_op_signaler,
-        core_grid_offset);
+    tt::tt_metal::operation::ProgramWithCallbacks program_with_callbacks =
+        ttnn::all_gather_multi_core_with_workers_helper(
+            matmul_program_with_callbacks->program,
+            input_tensor,
+            all_gather_output_tensor,
+            dim,
+            num_links,
+            ring_size,
+            ring_index,
+            receiver_device_id,
+            sender_device_id,
+            topology,
+            user_defined_num_workers,
+            user_defined_num_buffers_per_channel,
+            all_gather_fused_op_signaler,
+            core_grid_offset);
     const auto all_gather_override_runtime_arguments_callback =
         program_with_callbacks.override_runtime_arguments_callback;
 

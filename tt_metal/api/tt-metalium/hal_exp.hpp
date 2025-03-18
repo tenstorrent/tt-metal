@@ -6,8 +6,16 @@
 
 #include <cstdint>
 #include <string>
+#include <umd/device/types/arch.h>
 
 namespace tt::tt_metal::experimental::hal {
+
+/**
+ * @brief Uses the hardware abstraction layer to inform client of the architecture
+ *
+ * @return Architecture enum defined by UMD
+ */
+tt::ARCH get_arch();
 
 /**
  * @brief Uses the hardware abstraction layer to inform client of the architecture name
@@ -59,6 +67,22 @@ uint32_t get_erisc_l1_unreserved_base();
  * @return size in bytes
  */
 uint32_t get_erisc_l1_unreserved_size();
+
+/**
+ * @brief Uses the hardware abstraction layer to inform client of architecture specific address.
+ * this address corresponds to the beginning of free space in the TENSIX core's L1 SRAM
+ *
+ * @return address
+ */
+uint32_t get_tensix_l1_unreserved_base();
+
+/**
+ * @brief Uses the hardware abstraction layer to inform client of architecture specific size.
+ * this size corresponds to the total free space in the TENSIX core's L1 SRAM for host usage
+ *
+ * @return size in bytes
+ */
+uint32_t get_tensix_l1_unreserved_size();
 
 /**
  * @brief Uses the hardware abstraction layer to fetch the representable epsilon value.

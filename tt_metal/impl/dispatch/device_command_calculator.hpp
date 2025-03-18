@@ -4,6 +4,7 @@
 
 #include "hal.hpp"
 #include "tt_align.hpp"
+#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 
 namespace tt::tt_metal {
 class DeviceCommandCalculator {
@@ -171,6 +172,23 @@ public:
         this->cmd_write_offsetB += tt::align(payload_sizeB, this->l1_alignment);
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
+
+    template <typename PackedSubCmd>
+    uint32_t get_max_write_packed_sub_cmds(
+        uint32_t data_size,
+        uint32_t max_prefetch_cmd_size,
+        uint32_t packed_write_max_unicast_sub_cmds,
+        bool no_stride) const;
+
+    // Divide the sub commands into multiple dispatch commands if the number of sub commands exceeds the maximum number
+    // of sub commands that can be written in a single dispatch command.
+    template <typename PackedSubCmd>
+    void insert_write_packed_payloads(
+        const uint32_t num_sub_cmds,
+        const uint32_t sub_cmd_sizeB,
+        const uint32_t max_prefetch_command_size,
+        const uint32_t packed_write_max_unicast_sub_cmds,
+        std::vector<std::pair<uint32_t, uint32_t>>& packed_cmd_payloads);
 
 private:
     void add_prefetch_relay_inline() { this->cmd_write_offsetB += sizeof(CQPrefetchCmd); }

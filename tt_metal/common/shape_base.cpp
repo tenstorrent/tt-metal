@@ -4,7 +4,9 @@
 
 #include "assert.hpp"
 #include "shape_base.hpp"
+#include <iterator>
 #include <stdexcept>
+#include <type_traits>
 #include "fmt/color.h"
 
 namespace tt::tt_metal {
@@ -46,7 +48,14 @@ bool ShapeBase::empty() const { return original_size_ == 0; }
 
 size_t ShapeBase::size() const { return original_size_; }
 
-std::span<const uint32_t> ShapeBase::view() const { return std::span<const uint32_t>(cbegin(), cend()); }
+tt::stl::Span<const uint32_t> ShapeBase::view() const {
+    const auto begin = cbegin();
+    const auto end = cend();
+    // `Span` constructor requires a contiguous range of data.
+    static_assert(
+        std::is_base_of_v<std::random_access_iterator_tag, std::iterator_traits<decltype(begin)>::iterator_category>);
+    return tt::stl::Span(&*begin, std::distance(begin, end));
+}
 
 bool ShapeBase::operator==(const ShapeBase& other) const = default;
 

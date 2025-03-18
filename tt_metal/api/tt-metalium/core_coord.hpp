@@ -13,8 +13,8 @@
 
 #include <nlohmann/json.hpp>
 #include "umd/device/tt_xy_pair.h"
-#include "reflection.hpp"
-#include "span.hpp"
+#include <tt_stl/reflection.hpp>
+#include <tt_stl/span.hpp>
 
 using CoreCoord = tt_xy_pair;
 
@@ -174,6 +174,10 @@ public:
     // amount of redundant per-core-range processing and NOC transactions for
     // code that uses this CoreRangeSet.
     CoreRangeSet merge_ranges() const;
+
+    // Subtract the common CoreRanges between this CoreRangeSet.
+    // A - (A n B)
+    CoreRangeSet subtract(const CoreRangeSet& other) const;
 
 private:
     void validate_no_overlap();

@@ -8,6 +8,7 @@
 #include <pybind11/stl.h>
 
 #include "ttnn/operations/experimental/cnn/convert_to_chw/convert_to_chw_pybind.hpp"
+#include "ttnn/operations/experimental/conv3d/conv3d_pybind.hpp"
 #include "ttnn/operations/experimental/reduction/argmax/argmax_pybind.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_pybind.hpp"
 #include "ttnn/operations/experimental/ssm/hc_sum_reduce/hc_sum_reduce_pybind.hpp"
@@ -69,6 +70,8 @@ void py_module(py::module& module) {
     ssm::detail::bind_hc_sum_reduce(module);
 
     cnn::detail::bind_convert_to_chw(module);
+
+    ttnn::operations::experimental::conv3d::detail::py_bind_conv3d(module);
 
     copy::detail::py_bind_typecast(module);
 

@@ -15,6 +15,7 @@
 #include "c_tensix_core.h"
 #include "noc_nonblocking_api.h"
 #include "firmware_common.h"
+#include "dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include <kernel_includes.hpp>
 #if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS

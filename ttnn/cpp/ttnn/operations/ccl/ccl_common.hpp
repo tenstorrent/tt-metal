@@ -13,7 +13,8 @@
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <tt-metalium/program_impl.hpp>
 #include "ttnn/tensor/types.hpp"
-#include "ttnn/operations/ccl/erisc_datamover_builder.hpp"
+#include <tt-metalium/erisc_datamover_builder.hpp>
+#include "erisc_datamover_builder_helper.hpp"
 #include "cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
 namespace ttnn {
@@ -28,7 +29,6 @@ struct SyncModeSpec {
     void add_signal(uint32_t sem_id, uint32_t wait_count);
 };
 
-class FabricEriscDatamoverBuilder;
 class EriscDatamoverBuilder;
 
 std::tuple<uint32_t, std::optional<chip_id_t>, std::optional<chip_id_t>> get_device_index_and_sender_receiver_ids(
@@ -110,7 +110,7 @@ class CclOpTensorConfig {
     CclOpTensorConfig(Tensor const& tensor);
     uint32_t get_page_size() const;
     uint32_t get_tile_size() const;
-    Tile get_tile() const;
+    tt::tt_metal::Tile get_tile() const;
 
     uint32_t get_buffer_start_address() const;
 
@@ -119,7 +119,7 @@ class CclOpTensorConfig {
    protected:
     uint32_t page_size;
     uint32_t tile_size;
-    Tile tile;
+    tt::tt_metal::Tile tile;
     uint32_t buffer_start_address;
     tt::DataFormat df;
 };
@@ -540,16 +540,16 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
 tt::tt_metal::KernelHandle generate_edm_kernel(
    tt::tt_metal::Program& program,
     tt::tt_metal::IDevice const* device,
-    FabricEriscDatamoverBuilder const& edm_builder,
+    tt::tt_fabric::FabricEriscDatamoverBuilder const& edm_builder,
     CoreCoord const& eth_core,
-    NOC noc_id);
+    tt::tt_metal::NOC noc_id);
 
 tt::tt_metal::KernelHandle generate_edm_kernel(
    tt::tt_metal::Program& program,
     IDevice const* device,
     EriscDatamoverBuilder const& edm_builder,
     CoreCoord const& eth_core,
-    NOC noc_id);
+    tt::tt_metal:: NOC noc_id);
 
 void generate_edm_kernels_for_ring_or_linear_topology(
    tt::tt_metal::Program& program,

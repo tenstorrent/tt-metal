@@ -35,14 +35,10 @@ bool use_matmul_for_1x1_conv(
     uint32_t groups,
     const Conv2dConfig& conv_config);
 
+bool is_1d_conv(uint32_t kernel_width, uint32_t image_width);
+
 bool is_1d_deptwise_conv(
     uint32_t groups, uint32_t input_channels, uint32_t output_channels, uint32_t kernel_width, uint32_t image_width);
-
-bool check_non_tile_mul_width(
-    const CoreCoord& compute_grid, const Conv2dConfig& conv_config, const uint32_t in_channels);
-
-bool check_non_tile_height(const Conv2dConfig& conv_config, const uint32_t out_channels);
-
 sliding_window::ParallelConfig determine_parallel_config(
     const TensorMemoryLayout shard_layout,
     uint32_t batch_size,
@@ -51,17 +47,10 @@ sliding_window::ParallelConfig determine_parallel_config(
     uint32_t output_width,
     uint32_t output_channels,
     const CoreCoord& compute_grid_size,
-    ShardOrientation block_shard_orientation,
+    tt::tt_metal::ShardOrientation block_shard_orientation,
     bool enable_channels_padding,
     bool is_out_tiled = true,
-    bool is_non_tile_mul_shard_width = false,
     uint32_t act_block_h_override = 0);
-
-sliding_window::ParallelConfig determine_output_parallel_config(
-    const sliding_window::ParallelConfig& input_parallel_config,
-    const CoreCoord& compute_grid_size,
-    uint32_t out_channels,
-    bool is_mm_conv);
 
 sliding_window::ParallelConfig determine_output_parallel_config(
     const sliding_window::ParallelConfig& input_parallel_config,
@@ -113,7 +102,7 @@ std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryC
     const CoreCoord& compute_grid);
 
 template <typename T>
-static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_shape_and_mem_config(
+static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_and_mem_config(
     T* device,
     const ttnn::Tensor& input_tensor_,
     const Conv2dConfig& conv_config,
@@ -122,8 +111,7 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_i
     uint32_t width,
     uint32_t in_channels,
     uint32_t out_channels,
-    bool is_mm_conv,
-    bool is_non_tile_mul_width = false);
+    bool is_mm_conv);
 
 template <typename DeviceType>
 DeviceComputeKernelConfig get_conv_default_compute_kernel_config(DeviceType* device);
@@ -148,7 +136,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     const DeviceComputeKernelConfig& compute_config);
 
 template <typename T>
-std::tuple<ttnn::Tensor, sliding_window::ParallelConfig, sliding_window::ParallelConfig, bool>
+std::tuple<ttnn::Tensor, sliding_window::ParallelConfig, sliding_window::ParallelConfig>
 shard_or_reshard_tensor_if_required(
     T* device,
     const ttnn::Tensor& input_tensor_,
@@ -159,8 +147,7 @@ shard_or_reshard_tensor_if_required(
     uint32_t in_channels,
     uint32_t out_channels,
     bool is_mm_conv,
-    bool auto_shard,
-    bool is_non_tile_mul_width = false);
+    bool auto_shard);
 
 std::ostream& operator<<(std::ostream& os, const Conv2dConfig& config);
 

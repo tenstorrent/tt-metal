@@ -11,6 +11,8 @@
 #include <tt-metalium/device_pool.hpp>
 #include "multi_device_fixture.hpp"
 
+namespace tt::tt_metal {
+
 class GalaxyFixture : public MultiDeviceFixture {
 protected:
     void SkipTestSuiteIfNotGalaxyMotherboard() {
@@ -84,3 +86,5 @@ protected:
         this->InitializeDevices();
     }
 };
+
+}  // namespace tt::tt_metal

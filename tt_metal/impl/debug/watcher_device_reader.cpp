@@ -311,7 +311,7 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
     virtual_core.type = logical_core.type;
 
     // Print device id, core coords (logical)
-    string core_type = is_eth_core ? "ethnet" : "worker";
+    string core_type = is_eth_core ? (is_active_eth_core ? "active ethnet" : "idle ethnet") : "worker";
     string core_coord_str = fmt::format(
         "core(x={:2},y={:2}) virtual(x={:2},y={:2})",
         logical_core.coord.x,
@@ -343,6 +343,13 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
     // For more accurate reporting of launch messages and running kernel ids, dump data from the previous valid
     // program (one entry before), if the current program is invalid (enables == 0)
     uint32_t launch_msg_read_ptr = mbox_data->launch_msg_rd_ptr;
+    if (launch_msg_read_ptr > launch_msg_buffer_num_entries) {
+        TT_THROW(
+            "Watcher read invalid launch_msg_read_ptr on {}: read {}, max valid {}!",
+            core_str,
+            launch_msg_read_ptr,
+            launch_msg_buffer_num_entries);
+    }
     if (mbox_data->launch[launch_msg_read_ptr].kernel_config.enables == 0) {
         launch_msg_read_ptr = (launch_msg_read_ptr - 1 + launch_msg_buffer_num_entries) % launch_msg_buffer_num_entries;
     }
@@ -627,16 +634,24 @@ void WatcherDeviceReader::DumpRunState(CoreDescriptor& core, const launch_msg_t*
         code = 'D';
     } else if (state == RUN_MSG_RESET_READ_PTR) {
         code = 'R';
+    } else if (state == RUN_SYNC_MSG_LOAD) {
+        code = 'L';
+    } else if (state == RUN_SYNC_MSG_WAITING_FOR_RESET) {
+        code = 'W';
+    } else if (state == RUN_SYNC_MSG_INIT_SYNC_REGISTERS) {
+        code = 'S';
     }
     if (code == 'U') {
         LogRunningKernels(core, launch_msg);
         TT_THROW(
-            "Watcher data corruption, unexpected run state on core{}: {} (expected {} or {} or {})",
+            "Watcher data corruption, unexpected run state on core{}: {} (expected {}, {}, {}, {}, or {})",
             core.coord.str(),
             state,
             RUN_MSG_INIT,
             RUN_MSG_GO,
-            RUN_MSG_DONE);
+            RUN_MSG_DONE,
+            RUN_SYNC_MSG_LOAD,
+            RUN_SYNC_MSG_WAITING_FOR_RESET);
     } else {
         fprintf(f, "%c", code);
     }

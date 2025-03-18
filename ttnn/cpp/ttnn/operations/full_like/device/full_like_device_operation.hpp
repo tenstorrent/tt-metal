@@ -31,7 +31,7 @@ struct FullLikeOperation {
 
     struct ProgramFactory {
         struct shared_variables_t {
-            KernelHandle writer_kernel_id;
+            tt::tt_metal::KernelHandle writer_kernel_id;
             std::size_t num_cores;
             std::size_t num_cores_y;
         };

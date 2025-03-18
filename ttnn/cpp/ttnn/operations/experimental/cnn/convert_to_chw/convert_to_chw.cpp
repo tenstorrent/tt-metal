@@ -15,12 +15,7 @@ ttnn::Tensor ExecuteConvertToCHW::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DataType>& dtype) {
     auto program = ConvertToCHW{memory_config.value_or(a.memory_config()), dtype.value_or(a.dtype())};
-    return operation::run(program, {a}, {}, {}, queue_id).at(0);
-}
-
-ttnn::Tensor ExecuteConvertToCHW::invoke(
-    const Tensor& a, const std::optional<MemoryConfig>& memory_config, const std::optional<DataType>& dtype) {
-    return invoke(DefaultQueueId, a, memory_config, dtype);
+    return tt::tt_metal::operation::run(program, {a}, {}, {}, queue_id).at(0);
 }
 
 }  // namespace ttnn::operations::experimental::cnn

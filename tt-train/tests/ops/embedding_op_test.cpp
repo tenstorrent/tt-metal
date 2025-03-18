@@ -30,15 +30,15 @@ TEST_F(EmbeddingOpTest, EmbeddingForwardBackward) {
     auto* device = &autograd::ctx().get_device();
     uint32_t num_embeddings = 32;
     uint32_t embedding_dim = 32;
-    auto weight_tensor = core::zeros(core::create_shape({1, 1, num_embeddings, embedding_dim}), device);
+    auto weight_tensor = ttml::core::zeros(ttml::core::create_shape({1, 1, num_embeddings, embedding_dim}), device);
     autograd::TensorPtr weight = autograd::create_tensor(weight_tensor);
 
     uint32_t batch_size = 1;
     uint32_t sentence_size = 32;
     std::vector<uint32_t> input_data((size_t)batch_size * sentence_size);
     std::iota(input_data.begin(), input_data.end(), 0U);
-    auto input_tensor = core::from_vector<uint32_t, DataType::UINT32>(
-        input_data, core::create_shape({batch_size, 1, 1, sentence_size}), device, Layout::ROW_MAJOR);
+    auto input_tensor = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        input_data, ttml::core::create_shape({batch_size, 1, 1, sentence_size}), device, ttnn::Layout::ROW_MAJOR);
     autograd::TensorPtr input = autograd::create_tensor(input_tensor);
 
     autograd::TensorPtr embeddings = ops::embedding_op(input, weight);
@@ -49,13 +49,13 @@ TEST_F(EmbeddingOpTest, EmbeddingForwardBackward) {
             target_vector[embedding_dim * i + j] = static_cast<float>(i);
         }
     }
-    auto target_tensor = autograd::create_tensor(
-        core::from_vector(target_vector, core::create_shape({batch_size, 1, sentence_size, embedding_dim}), device));
+    auto target_tensor = autograd::create_tensor(ttml::core::from_vector(
+        target_vector, ttml::core::create_shape({batch_size, 1, sentence_size, embedding_dim}), device));
     auto result = ttml::ops::mse_loss(embeddings, target_tensor);
     result->backward();
 
     auto weight_grad_tensor = weight->get_grad();
-    auto weight_grad_data = core::to_vector(weight_grad_tensor);
+    auto weight_grad_data = ttml::core::to_vector(weight_grad_tensor);
     for (uint32_t i = 0; i < num_embeddings; i++) {
         for (uint32_t j = 0; j < embedding_dim; j++) {
             EXPECT_NEAR(
@@ -67,40 +67,42 @@ TEST_F(EmbeddingOpTest, EmbeddingForwardBackward) {
 }
 
 TEST_F(EmbeddingOpTest, EmbeddingNumEmbeddingsEmbeddingDimNotDivisibleBy32) {
+    using namespace ttnn;
     using namespace ttml;
 
     auto* device = &autograd::ctx().get_device();
     uint32_t num_embeddings = 13;
     uint32_t embedding_dim = 26;
-    auto weight_tensor = core::zeros(core::create_shape({1, 1, num_embeddings, embedding_dim}), device);
+    auto weight_tensor = ttml::core::zeros(ttml::core::create_shape({1, 1, num_embeddings, embedding_dim}), device);
     autograd::TensorPtr weight = autograd::create_tensor(weight_tensor);
 
     uint32_t batch_size = 1;
     uint32_t sentence_size = 32;
     std::vector<uint32_t> input_data((size_t)batch_size * sentence_size);
     std::iota(input_data.begin(), input_data.end(), 0U);
-    auto input_tensor = core::from_vector<uint32_t, DataType::UINT32>(
-        input_data, core::create_shape({batch_size, 1, 1, sentence_size}), device, Layout::ROW_MAJOR);
+    auto input_tensor = ttml::core::from_vector<uint32_t, DataType::UINT32>(
+        input_data, ttml::core::create_shape({batch_size, 1, 1, sentence_size}), device, Layout::ROW_MAJOR);
     autograd::TensorPtr input = autograd::create_tensor(input_tensor);
 
     EXPECT_NO_THROW(ops::embedding_op(input, weight));
 }
 
 TEST_F(EmbeddingOpTest, EmbeddingSentenceDimNotDivisibleBy32) {
+    using namespace ttnn;
     using namespace ttml;
 
     auto* device = &autograd::ctx().get_device();
     uint32_t num_embeddings = 32;
     uint32_t embedding_dim = 32;
-    auto weight_tensor = core::zeros(core::create_shape({1, 1, num_embeddings, embedding_dim}), device);
+    auto weight_tensor = ttml::core::zeros(ttml::core::create_shape({1, 1, num_embeddings, embedding_dim}), device);
     autograd::TensorPtr weight = autograd::create_tensor(weight_tensor);
 
     uint32_t batch_size = 1;
     uint32_t sentence_size = 13;
     std::vector<uint32_t> input_data((size_t)batch_size * sentence_size);
     std::iota(input_data.begin(), input_data.end(), 0U);
-    auto input_tensor = core::from_vector<uint32_t, DataType::UINT32>(
-        input_data, core::create_shape({batch_size, 1, 1, sentence_size}), device, Layout::ROW_MAJOR);
+    auto input_tensor = ttml::core::from_vector<uint32_t, DataType::UINT32>(
+        input_data, ttml::core::create_shape({batch_size, 1, 1, sentence_size}), device, Layout::ROW_MAJOR);
     autograd::TensorPtr input = autograd::create_tensor(input_tensor);
 
     EXPECT_NO_THROW(ops::embedding_op(input, weight));

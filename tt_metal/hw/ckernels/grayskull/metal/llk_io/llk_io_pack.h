@@ -9,7 +9,6 @@
 #include "ckernel_gpr_map.h"
 #include "stream_interface.h"
 #include "stream_io_map.h"
-#include "hostdevcommon/common_runtime_address_map.h"
 #include "llk_pack_common.h"
 #include "tools/profiler/kernel_profiler.hpp"
 

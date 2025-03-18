@@ -12,6 +12,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 
+namespace tt::tt_metal {
+
 TEST_F(DispatchFixture, InitializeGlobalSemaphores) {
     CoreRangeSet cores(CoreRange({0, 0}, {1, 1}));
 
@@ -117,3 +119,5 @@ TEST_F(DispatchFixture, ResetGlobalSemaphores) {
         }
     }
 }
+
+} // namespace tt::tt_metal

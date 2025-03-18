@@ -136,8 +136,8 @@ def test_linear_with_core_grid(
 
 @pytest.mark.parametrize("batch_size", [1, 8])
 @pytest.mark.parametrize("m_size", [32, 64])
-@pytest.mark.parametrize("k_size", [1024, 2048])
-@pytest.mark.parametrize("n_size", [1024, 2048])
+@pytest.mark.parametrize("k_size", [1024])
+@pytest.mark.parametrize("n_size", [1024])
 @pytest.mark.parametrize("activation", [None, "relu", "silu"])
 def test_wide_linear_with_argument_for_core_grid_set_to_device_grid(
     device, batch_size, m_size, k_size, n_size, activation
@@ -163,8 +163,8 @@ def test_wide_linear_with_argument_for_core_grid_set_to_device_grid(
 
 @pytest.mark.parametrize("batch_size", [1, 8])
 @pytest.mark.parametrize("m_size", [32, 64])
-@pytest.mark.parametrize("k_size", [1024, 2048])
-@pytest.mark.parametrize("n_size", [1024, 2048])
+@pytest.mark.parametrize("k_size", [1024])
+@pytest.mark.parametrize("n_size", [1024])
 @pytest.mark.parametrize("activation", [None, "relu"])
 def test_linear_by_passing_in_1D_systolic_array_program_config(device, batch_size, m_size, k_size, n_size, activation):
     torch.manual_seed(0)

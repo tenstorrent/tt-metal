@@ -4,10 +4,12 @@
 
 #pragma once
 
+#include <optional>
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 namespace ttnn {
 
@@ -16,8 +18,8 @@ namespace conv2d {
 
 constexpr uint32_t l1_scratchpad_CB_size = 64;
 struct Conv2dConfig {
-    DataType dtype = DataType::BFLOAT16;
-    DataType weights_dtype = DataType::BFLOAT16;
+    tt::tt_metal::DataType dtype = tt::tt_metal::DataType::BFLOAT16;
+    tt::tt_metal::DataType weights_dtype = tt::tt_metal::DataType::BFLOAT16;
 
     // Either "relu" or ""
     string activation = "";
@@ -49,7 +51,7 @@ struct Conv2dConfig {
     // if override_sharding_config is true, reshard_if_not_optimal should not be set to true
     bool override_sharding_config = false;
 
-    std::optional<TensorMemoryLayout> shard_layout;
+    std::optional<tt::tt_metal::TensorMemoryLayout> shard_layout;
 
     // used only if override_sharding_config is true
     std::optional<CoreRangeSet> core_grid = std::nullopt;
@@ -59,7 +61,14 @@ struct Conv2dConfig {
 
     // Useful when output is BFLOAT16.
     // BFLOAT8 is always Tile layout.
-    Layout output_layout = Layout::TILE;
+    tt::tt_metal::Layout output_layout = tt::tt_metal::Layout::TILE;
+
+    // Select between preprocessing weights on device or on host.
+    bool preprocess_weights_on_device = false;
+
+    // If false, only preprocess weights if they are originally located on host.
+    // If true, preprocess weights regarding of original location.
+    bool always_preprocess_weights = false;
 
     // Doubles the size of the CBs for activation.
     // Increased perf, but increased L1 usage.
@@ -73,6 +82,7 @@ struct Conv2dConfig {
     bool enable_split_reader = false;
 
     bool enable_subblock_padding = false;
+
     static constexpr auto attribute_names = std::make_tuple(
         "dtype",
         "weights_dtype",
@@ -88,6 +98,7 @@ struct Conv2dConfig {
         "core_grid",
         "transpose_shards",
         "output_layout",
+        "preprocess_weights_on_device",
         "enable_act_double_buffer",
         "enable_weights_double_buffer",
         "enable_split_reader",
@@ -108,6 +119,7 @@ struct Conv2dConfig {
             std::cref(this->core_grid),
             std::cref(this->transpose_shards),
             std::cref(this->output_layout),
+            std::cref(this->preprocess_weights_on_device),
             std::cref(this->enable_act_double_buffer),
             std::cref(this->enable_weights_double_buffer),
             std::cref(this->enable_split_reader),
@@ -122,13 +134,8 @@ struct OptimizedConvParallelizationConfig {
     CoreCoord grid_size;  // (x,y)
     uint32_t num_cores_nhw = 1;
     uint32_t num_cores_c = 1;
-    uint32_t per_core_out_matrix_height = 1;
-    uint32_t per_core_out_matrix_width = 1;
-    // std::size_t in0_block_w;
-    // std::size_t out_subblock_h;
-    // std::size_t out_subblock_w;
-    // std::size_t per_core_M;
-    // std::size_t per_core_N;
+    uint32_t per_core_out_matrix_height_ntile = 1;
+    uint32_t per_core_out_matrix_width_ntile = 1;
 
     CoreCoord get_grid_size() const { return this->grid_size; }
 };
@@ -148,7 +155,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     uint32_t output_channels,
     uint32_t groups,
     bool untilize_out,
-    bool fuse_relu,
+    const std::optional<unary::UnaryWithParam>& fused_activation,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
     tt::tt_metal::DataType dtype,
@@ -159,8 +166,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     bool enable_act_double_buffer,
     bool enable_weights_double_buffer,
     bool enable_split_reader,
-    bool enable_subblock_padding,
-    bool use_non_tile_height);
+    bool enable_subblock_padding);
 
 // new micro op
 struct OptimizedConvNew {
@@ -169,7 +175,8 @@ struct OptimizedConvNew {
     const sliding_window::SlidingWindowConfig& sliding_window_config;
     const uint32_t output_channels;
     const uint32_t groups;
-    bool untilize_out, has_bias, fuse_relu;
+    bool untilize_out, has_bias;
+    string activation = "";
     tt::tt_metal::MemoryConfig memory_config;
     const tt::tt_metal::DataType dtype;
     std::array<std::uint32_t, 4> input_tensor_shape;  // For sharded input, input tensor shape is nonsense
@@ -179,7 +186,6 @@ struct OptimizedConvNew {
     bool enable_weights_double_buffer;
     bool enable_split_reader;
     bool enable_subblock_padding;
-    bool use_non_tile_height;
     uint32_t pre_op_l1_allocation_size_bytes;
     OptimizedConvNew(
         const sliding_window::SlidingWindowConfig& sliding_window_config,
@@ -187,7 +193,7 @@ struct OptimizedConvNew {
         uint32_t groups,
         bool untile_out,
         bool has_bias,
-        bool fuse_relu,
+        string activation,
         const OptimizedConvParallelizationConfig& p_config,
         const OptimizedConvBlockConfig& b_config,
         tt::tt_metal::MemoryConfig memory_config,
@@ -198,14 +204,13 @@ struct OptimizedConvNew {
         bool enable_act_double_buffer,
         bool enable_weights_double_buffer,
         bool enable_split_reader,
-        bool enable_subblock_padding,
-        bool use_non_tile_height) :
+        bool enable_subblock_padding) :
         output_channels(output_channels),
         groups(groups),
         sliding_window_config(sliding_window_config),
         untilize_out(untile_out),
         has_bias(has_bias),
-        fuse_relu(fuse_relu),
+        activation(activation),
         parallelization_config(p_config),
         block_config(b_config),
         memory_config(memory_config),
@@ -216,8 +221,7 @@ struct OptimizedConvNew {
         enable_act_double_buffer(enable_act_double_buffer),
         enable_weights_double_buffer(enable_weights_double_buffer),
         enable_split_reader(enable_split_reader),
-        enable_subblock_padding(enable_subblock_padding),
-        use_non_tile_height(use_non_tile_height) {}
+        enable_subblock_padding(enable_subblock_padding) {}
 
     void validate(
         const std::vector<Tensor>& input_tensors,
@@ -242,7 +246,7 @@ struct OptimizedConvNew {
         "output_channels",
         "untilize_out",
         "has_bias",
-        "fuse_relu",
+        "activation",
         "dtype",
         "input_tensor_shape",
         "use_shallow_conv_variant",
@@ -260,7 +264,7 @@ struct OptimizedConvNew {
             std::cref(this->output_channels),
             std::cref(this->untilize_out),
             std::cref(this->has_bias),
-            std::cref(this->fuse_relu),
+            std::cref(this->activation),
             std::cref(this->dtype),
             std::cref(this->input_tensor_shape),
             std::cref(this->use_shallow_conv_variant),
@@ -279,7 +283,7 @@ Tensor optimized_conv_new(
     uint32_t output_channels,
     uint32_t groups,
     bool untilize_out,
-    bool fuse_relu,
+    const string& activation,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
     const tt::tt_metal::MemoryConfig& memory_config,
@@ -290,8 +294,7 @@ Tensor optimized_conv_new(
     bool enable_act_double_buffer = false,
     bool enable_weights_double_buffer = false,
     bool enable_split_reader = false,
-    bool enable_subblock_padding = false,
-    bool use_non_tile_height = false);
+    bool enable_subblock_padding = false);
 
 // Only enable packer l1 accumulation when there are in0_num_blocks_w > 2, otherwise
 // unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation
@@ -315,9 +318,8 @@ conv_op_l1_usage calculate_L1_usage(
     const ttnn::Shape& weights_shape,
     std::array<uint32_t, 2> kernel_size,
     const Conv2dConfig& conv_config,
-    const MemoryConfig& output_memory_config,
+    const tt::tt_metal::MemoryConfig& output_memory_config,
     bool enable_bias,
-    bool use_non_tile_height,
     bool is_1d_depthwise_conv);
 
 }  // namespace conv2d

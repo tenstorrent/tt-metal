@@ -59,8 +59,7 @@ def run_with_trace(
         topology=topology,
         subdevice_id=worker_sub_device_id,
     )
-    for device_id in t3k_mesh_device.get_device_ids():
-        ttnn.synchronize_device(t3k_mesh_device.get_device(device_id))
+    ttnn.synchronize_device(t3k_mesh_device)
 
     # Capture trace
     logger.info("Capturing trace")
@@ -80,15 +79,13 @@ def run_with_trace(
             subdevice_id=worker_sub_device_id,
         )
     ttnn.end_trace_capture(t3k_mesh_device, trace_id, cq_id=0)
-    for device_id in t3k_mesh_device.get_device_ids():
-        ttnn.synchronize_device(t3k_mesh_device.get_device(device_id))
+    ttnn.synchronize_device(t3k_mesh_device)
 
     # Run the op
     logger.info("Starting Trace perf test...")
     ttnn.execute_trace(t3k_mesh_device, trace_id, blocking=False)
     ttnn.release_trace(t3k_mesh_device, trace_id)
-    for device_id in t3k_mesh_device.get_device_ids():
-        ttnn.synchronize_device(t3k_mesh_device.get_device(device_id))
+    ttnn.synchronize_device(t3k_mesh_device)
 
     return output_tensor_mesh
 
@@ -249,7 +246,7 @@ def run_reduce_scatter_test(
             )
 
             logger.info(f"Waiting for op to finish all iterations")
-            ttnn.synchronize_devices(mesh_device, sub_device_ids=sub_device_stall_group)
+            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
             logger.info(f"Done iterations")
 
     # Compute golden

@@ -36,7 +36,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> CreateQKVHeadsOperation::in
     } else {
         optional_outputs = {};
     }
-    auto output_tensors = operation::run(
+    auto output_tensors = tt::tt_metal::operation::run(
         CreateQKVHeadsDeviceOperation{num_q_heads, num_kv_heads_val, head_dim, transpose_k_heads, output_mem_config},
         {input_tensor},
         {},

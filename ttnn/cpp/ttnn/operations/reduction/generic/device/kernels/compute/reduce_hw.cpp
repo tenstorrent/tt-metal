@@ -12,7 +12,7 @@ void MAIN {
     uint32_t Wt = get_compile_time_arg_val(1);
     uint32_t NC = get_compile_time_arg_val(2);
 
-    reduce_init<true>(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
+    reduce_init<true>(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);
 
     cb_wait_front(tt::CBIndex::c_2, 1);  // scaler tile from the reader
     for (uint32_t nc = 0; nc < NC; nc++) {
@@ -30,9 +30,9 @@ void MAIN {
                 cb_pop_front(tt::CBIndex::c_0, onetile);
             }
         }
-        cb_reserve_back(tt::CBIndex::c_16, onetile);
-        pack_tile(reduce_dst_idx, tt::CBIndex::c_16);
-        cb_push_back(tt::CBIndex::c_16, onetile);
+        cb_reserve_back(tt::CBIndex::c_3, onetile);
+        pack_tile(reduce_dst_idx, tt::CBIndex::c_3);
+        cb_push_back(tt::CBIndex::c_3, onetile);
         release_dst();
     }
 }

@@ -5,12 +5,7 @@
 #include <tt_metal.hpp>
 
 #include <algorithm>
-#include <filesystem>
-#include <mutex>
 #include <optional>
-#include <string>
-#include <unordered_set>
-#include <utility>
 
 #include <dev_msgs.h>
 #include <hal.hpp>
@@ -31,14 +26,12 @@
 #include <sub_device_types.hpp>
 #include <global_circular_buffer.hpp>
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
-#include "tt_metal/include/tt_metal/program.hpp"
 #include "tracy/Tracy.hpp"
 
 #include <graph_tracking.hpp>
 #include "lightmetal/host_api_capture_helpers.hpp"
 
 #include "llrt.hpp"
-
 namespace tt {
 
 namespace tt_metal {
@@ -293,8 +286,6 @@ inline void SetRuntimeArgsImpl(
 
 }  // namespace
 
-// #define DEBUG_PRINT_SHARD
-
 namespace detail {
 
 bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t address, std::vector<uint32_t>& host_buffer) {
@@ -338,10 +329,11 @@ bool ReadFromDeviceL1(
     const CoreCoord& logical_core,
     uint32_t address,
     uint32_t size,
-    std::vector<uint32_t>& host_buffer) {
+    std::vector<uint32_t>& host_buffer,
+    CoreType core_type) {
     tt::Cluster::instance().l1_barrier(device->id());
-    auto worker_core = device->worker_core_from_logical_core(logical_core);
-    host_buffer = llrt::read_hex_vec_from_core(device->id(), worker_core, address, size);
+    auto virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
+    host_buffer = llrt::read_hex_vec_from_core(device->id(), virtual_core, address, size);
     return true;
 }
 
@@ -350,6 +342,10 @@ bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t 
     auto worker_core = device->worker_core_from_logical_core(logical_core);
     tt::Cluster::instance().read_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
     return true;
+}
+
+void InitializeFabricConfig(FabricConfig fabric_config) {
+    tt::Cluster::instance().initialize_fabric_config(fabric_config);
 }
 
 std::map<chip_id_t, IDevice*> CreateDevices(
@@ -447,12 +443,25 @@ void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buff
         auto data_index = host_page_id * page_size;
         std::memcpy(page.data(), host_buffer.data() + data_index, page_size);
         if (buffer.is_l1()) {
-            auto core_coordinates = device->worker_core_from_logical_core(buffer.logical_core_from_bank_id(bank_id));
+            auto core_coordinates =
+                device->worker_core_from_logical_core(buffer.allocator()->get_logical_core_from_bank_id(bank_id));
             llrt::write_hex_vec_to_core(device->id(), core_coordinates, page, absolute_address);
         } else {
             WriteToDeviceDRAMChannel(device, bank_id, bank_local_address, page);
         }
     }
+}
+
+DeviceAddr CalculateAddressDeviceInterleavedContiguous(const Buffer& buffer, uint32_t bank_index, uint32_t page_index) {
+    DeviceAddr addr = 0;
+    if (buffer.is_dram()) {
+        addr = buffer.bank_local_page_address(bank_index, page_index);
+    } else {
+        TT_ASSERT(buffer.is_l1());
+        addr = buffer.page_address(bank_index, page_index);
+    }
+
+    return addr;
 }
 
 void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
@@ -473,19 +482,14 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
     std::vector<uint32_t> page;
     page.resize(page_size / sizeof(uint32_t));
     for (int page_index = 0; page_index < num_pages; page_index++) {
-        auto absolute_address = buffer.page_address(bank_index, page_index);
-        // Get address offset of buffer in bank. Required when writing to DRAM.
-        auto bank_local_address = buffer.bank_local_page_address(bank_index, page_index);
+        const DeviceAddr address = CalculateAddressDeviceInterleavedContiguous(buffer, bank_index, page_index);
         std::memcpy(page.data(), host_buffer.data() + data_index, page_size);
         switch (buffer.buffer_type()) {
-            case BufferType::DRAM:
-                WriteToDeviceDRAMChannel(device, bank_index, bank_local_address, page);
-                break;
+            case BufferType::DRAM: WriteToDeviceDRAMChannel(device, bank_index, address, page); break;
             case BufferType::L1:
             case BufferType::L1_SMALL: {
-                auto core_coordinates =
-                    device->worker_core_from_logical_core(buffer.logical_core_from_bank_id(bank_index));
-                llrt::write_hex_vec_to_core(device->id(), core_coordinates, page, absolute_address);
+                CoreCoord logical_core = buffer.allocator()->get_logical_core_from_bank_id(bank_index);
+                WriteToDeviceL1(device, logical_core, address, page, CoreType::WORKER);
             } break;
             default: TT_THROW("Unsupported buffer type to write to device!");
         }
@@ -527,26 +531,23 @@ void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buf
 
     auto device = buffer.device();
     auto num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
-    size_t host_idx = 0;
 
+    size_t host_idx = 0;
     uint32_t bank_index = 0;
     std::vector<uint32_t> page;
     page.resize(page_size / sizeof(uint32_t));
     for (int page_index = 0; page_index < num_pages; page_index++) {
-        auto absolute_address = buffer.page_address(bank_index, page_index);
-        // Get address offset of buffer in bank. Required when reading from DRAM.
-        auto bank_local_address = buffer.bank_local_page_address(bank_index, page_index);
+        const DeviceAddr address = CalculateAddressDeviceInterleavedContiguous(buffer, bank_index, page_index);
         page.clear();
         switch (buffer.buffer_type()) {
             case BufferType::DRAM:
-            case BufferType::TRACE:
-                ReadFromDeviceDRAMChannel(device, bank_index, bank_local_address, page_size, page);
-                break;
+            case BufferType::TRACE: ReadFromDeviceDRAMChannel(device, bank_index, address, page_size, page); break;
             case BufferType::L1:
             case BufferType::L1_SMALL: {
-                auto core_coordinates =
-                    device->worker_core_from_logical_core(buffer.logical_core_from_bank_id(bank_index));
-                tt::Cluster::instance().read_core(page.data(), page_size, tt_cxy_pair(device->id(), core_coordinates), absolute_address);
+                auto core_coordinates = device->worker_core_from_logical_core(
+                    buffer.allocator()->get_logical_core_from_bank_id(bank_index));
+                tt::Cluster::instance().read_core(
+                    page.data(), page_size, tt_cxy_pair(device->id(), core_coordinates), address);
             } break;
             default: TT_THROW("Unsupported buffer type to read from device!");
         }
@@ -570,7 +571,8 @@ void read_pages_to_host_helper(
     auto absolute_address = dev_buffer.sharded_page_address(bank_id, dev_page_id);
     uint32_t host_buffer_start = host_page_id * page_size;
     if (dev_buffer.is_l1()) {
-        auto core_coordinates = device->worker_core_from_logical_core(dev_buffer.logical_core_from_bank_id(bank_id));
+        auto core_coordinates =
+            device->worker_core_from_logical_core(dev_buffer.allocator()->get_logical_core_from_bank_id(bank_id));
         tt::Cluster::instance().read_core(
             host_buffer + host_buffer_start, page_size, tt_cxy_pair(device->id(), core_coordinates), absolute_address);
     } else {
@@ -586,9 +588,6 @@ void ReadFromDeviceSharded(Buffer& buffer, uint8_t* host_buffer, bool shard_orde
     TensorMemoryLayout buffer_layout = buffer.buffer_layout();
 
     auto device = buffer.device();
-#ifdef DEBUG_PRINT_SHARD
-    std::cout << "Reading From Device Height Sharded " << std::endl;
-#endif
 
     auto total_pages = buffer.num_dev_pages();
     uint32_t page_size = buffer.page_size();
@@ -803,10 +802,10 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool fd_bootl
     return pass;
 }
 
-void WriteRuntimeArgsToDevice(IDevice* device, Program& program) {
+void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool fd_bootloader_mode) {
     ZoneScoped;
     auto device_id = device->id();
-    detail::DispatchStateCheck(false);
+    detail::DispatchStateCheck(fd_bootloader_mode);
 
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         CoreType core_type = hal.get_core_type(index);
@@ -892,8 +891,6 @@ void SynchronizeWorkerThreads(const std::vector<IDevice*>& workers) {
 
 }  // namespace detail
 
-inline namespace v0 {
-
 size_t GetNumAvailableDevices() { return tt::Cluster::instance().number_of_user_devices(); }
 
 bool IsGalaxyCluster() { return tt::Cluster::instance().is_galaxy_cluster(); }
@@ -934,12 +931,7 @@ bool CloseDevice(IDevice* device) {
     return tt::DevicePool::instance().close_device(device_id);
 }
 
-Program CreateProgram() {
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    auto program = Program();
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureCreateProgram, program);
-    return program;
-}
+Program CreateProgram() { return Program(); }
 
 KernelHandle CreateDataMovementKernel(
     Program& program,
@@ -1154,8 +1146,7 @@ GlobalSemaphore CreateGlobalSemaphore(
 }
 
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config) {
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    auto buffer = Buffer::create(
+    return Buffer::create(
         config.device,
         config.size,
         config.page_size,
@@ -1164,9 +1155,6 @@ std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config) {
         std::nullopt,
         std::nullopt,
         std::nullopt);
-
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureCreateBuffer, buffer, config);
-    return buffer;
 }
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config, DeviceAddr address) {
     return Buffer::create(
@@ -1225,11 +1213,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, SubDevic
         sub_device_id);
 }
 
-void DeallocateBuffer(Buffer& buffer) {
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureDeallocateBuffer, buffer);
-    buffer.deallocate();
-}
+void DeallocateBuffer(Buffer& buffer) { buffer.deallocate(); }
 
 void AssignGlobalBufferToProgram(const std::shared_ptr<Buffer>& buffer, Program& program) {
     detail::DispatchStateCheck(not buffer->device()->using_slow_dispatch());
@@ -1253,6 +1237,8 @@ void SetRuntimeArgs(
     const std::vector<CoreCoord>& core_spec,
     const std::vector<std::vector<uint32_t>>& runtime_args) {
     ZoneScoped;
+    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
+    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureSetRuntimeArgsUint32VecPerCore, program, kernel, core_spec, runtime_args);
     TT_FATAL(
         core_spec.size() == runtime_args.size(),
         "Mistmatch between number of cores {} and number of runtime args {} getting updated",
@@ -1326,7 +1312,7 @@ void EndTraceCapture(IDevice* device, const uint8_t cq_id, const uint32_t tid) {
 void ReplayTrace(IDevice* device, const uint8_t cq_id, const uint32_t tid, const bool blocking) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureReplayTrace, device, cq_id, tid, blocking);
-    device->replay_trace(cq_id, tid, blocking);
+    device->replay_trace(cq_id, tid, blocking /* block_on_device */, blocking /* block_on_worker_thread */);
 }
 
 void ReleaseTrace(IDevice* device, const uint32_t tid) {
@@ -1377,10 +1363,6 @@ void Synchronize(IDevice* device, const std::optional<uint8_t> cq_id, tt::stl::S
     }
 }
 
-}  // namespace v0
-
-namespace v1 {
-
 namespace experimental {
 
 GlobalCircularBuffer CreateGlobalCircularBuffer(
@@ -1408,8 +1390,6 @@ void UpdateDynamicCircularBufferAddress(
 }
 
 }  // namespace experimental
-
-}  // namespace v1
 
 }  // namespace tt_metal
 

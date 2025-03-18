@@ -39,7 +39,7 @@ struct dispatch_core_placement_t {
     std::optional<tt_cxy_pair> dispatcher_s = std::nullopt;
     std::optional<tt_cxy_pair> mux_d = std::nullopt; // Mux
     std::optional<tt_cxy_pair> demux_d = std::nullopt; // Demux
-    std::optional<tt_cxy_pair> tunneler_d = std::nullopt; // ethernet tunneler
+    std::optional<tt_cxy_pair> tunneler_d = std::nullopt;  // ethernet tunneler
 };
 
 class dispatch_core_manager {
@@ -189,7 +189,8 @@ private:
 
     // {device ID : {channel (hugepage) : {cq_id : dispatch assignment}}}
     // Each device has an assigned hugepage at a specific channel that holds (up to 2) hardware command queues (represented by cq_id)
-    std::unordered_map<chip_id_t, std::unordered_map<uint16_t, std::unordered_map<uint8_t, dispatch_core_placement_t>>> dispatch_core_assignments;
+    std::unordered_map<chip_id_t, std::unordered_map<uint16_t, std::unordered_map<uint8_t, dispatch_core_placement_t>>>
+        dispatch_core_assignments;
     std::unordered_map<chip_id_t, std::list<CoreCoord>> available_dispatch_cores_by_device;
     std::unordered_map<chip_id_t, DispatchCoreConfig> dispatch_core_config_by_device;  //TODO: dispatch_core_type_by_device should probably be for all devices, not per device
     uint8_t num_hw_cqs;

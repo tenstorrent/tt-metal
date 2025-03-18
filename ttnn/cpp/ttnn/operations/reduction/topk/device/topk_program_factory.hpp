@@ -8,13 +8,15 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_log.h>
 
+using namespace tt::tt_metal;
 namespace ttnn::operations::reduction::detail {
 
 operation::ProgramWithCallbacks topk_single_core_interleaved(
     const Tensor& input_tensor,
-    const uint16_t k,
+    const uint32_t k,
     const int8_t dim,
     const bool largest,
+    const bool sorted,
     Tensor& value_tensor,
     Tensor& index_tensor) {
     using namespace tt::constants;
@@ -56,7 +58,7 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
     auto cb_input_tensor = tt::tt_metal::CreateCircularBuffer(program, core, input_cb_config);
 
     // Two tiles are loaded in for topk_local_sort at a time, and we double buffer to avoid stalls, so allocate four
-    // tiles of space This CB carries the indices that are created in the reader kernel
+    // tiles of space. This CB carries the indices that are created in the reader kernel
     uint32_t index_cb_index = tt::CBIndex::c_1;
     tt::tt_metal::CircularBufferConfig index_input_intermed0_config =
         tt::tt_metal::CircularBufferConfig(cb_in_units * index_tile_size, {{index_cb_index, index_cb_data_format}})
@@ -135,8 +137,10 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
         Wt,
         k,
         (std::uint32_t)std::log2(k),
-        (std::uint32_t)std::log2(Wt),
-        largest};
+        (std::uint32_t)std::log2(input_shape[3] / k),
+        (std::uint32_t)largest,
+        (std::uint32_t)sorted,
+    };
     tt::tt_metal::KernelHandle topk_compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk.cpp",
@@ -180,7 +184,7 @@ static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t> cores_utilized(
     uint16_t min_dim,
     uint16_t max_dim,
     CoreCoord grid,
-    uint16_t k,
+    uint32_t k,
     const uint32_t l1_size,
     const uint32_t value_tile_size,
     const uint32_t index_tile_size) {
@@ -196,8 +200,13 @@ static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t> cores_utilized(
             (split_size / tt::constants::TILE_WIDTH) *
             (value_tile_size + index_tile_size);  // we divide the width into split_size chunks and each chunk, as well
                                                   // as a matching set of indices, is processed by a core
-        if (num_cores <= max_cores && (memory_cost_gather + memory_cost_local) < l1_size && num_cores > 1) {
-            return {num_cores + 1, split_size, rem, num_cores * k};
+        if (num_cores <= max_cores && (memory_cost_gather + memory_cost_local * num_cores) < (l1_size * num_cores) &&
+            num_cores > 1) {
+            return {
+                num_cores + 1,
+                split_size,
+                rem,
+                num_cores * std::max(static_cast<uint32_t>(k), static_cast<uint32_t>(tt::constants::TILE_WIDTH))};
         }
     }
     return {max_cores + 1, width, 0, width * k};
@@ -209,9 +218,10 @@ static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t> cores_utilized(
  */
 operation::ProgramWithCallbacks topk_multicore_interleaved(
     const Tensor& input_tensor,
-    const uint16_t k,
+    const uint32_t k,
     const int8_t dim,
     const bool largest,
+    const bool sorted,
     Tensor& value_tensor,
     Tensor& index_tensor) {
     using namespace tt::constants;
@@ -411,7 +421,9 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
         Kt,
         (std::uint32_t)std::log2(k),
         (std::uint32_t)std::log2(Wt_local),
-        largest};
+        (std::uint32_t)largest,
+        (std::uint32_t)sorted,
+    };
     tt::tt_metal::KernelHandle topk_compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_local.cpp",
@@ -431,7 +443,9 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
         Kt,
         (std::uint32_t)std::log2(k),
         (std::uint32_t)std::log2(Wt_final),
-        largest};
+        (std::uint32_t)largest,
+        (std::uint32_t)sorted,
+    };
 
     tt::tt_metal::KernelHandle topk_final_compute_kernel_id = tt::tt_metal::CreateKernel(
         program,

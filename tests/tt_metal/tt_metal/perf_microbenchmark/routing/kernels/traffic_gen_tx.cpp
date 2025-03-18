@@ -5,7 +5,12 @@
 #include "dataflow_api.h"
 #include "debug/dprint.h"
 #include "tt_metal/impl/dispatch/kernels/packet_queue.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/traffic_gen.hpp"
+
+using tt::packet_queue::PACKET_WORD_SIZE_BYTES;
+using tt::packet_queue::dispatch_packet_header_t;
+using tt::packet_queue::DispatchRemoteNetworkType;
 
 constexpr uint32_t src_endpoint_id = get_compile_time_arg_val(0);
 constexpr uint32_t num_dest_endpoints = get_compile_time_arg_val(1);
@@ -60,16 +65,16 @@ constexpr uint32_t data_sent_per_iter_high = get_compile_time_arg_val(21);
 constexpr uint32_t input_queue_id = 0;
 constexpr uint32_t output_queue_id = 1;
 
-packet_input_queue_state_t input_queue;
-using input_queue_network_sequence = NetworkTypeSequence<DispatchRemoteNetworkType::NONE>;
-using input_queue_cb_mode_sequence = CBModeTypeSequence<false>;
+tt::packet_queue::packet_input_queue_state_t input_queue;
+using input_queue_network_sequence = tt::packet_queue::NetworkTypeSequence<DispatchRemoteNetworkType::NONE>;
+using input_queue_cb_mode_sequence = tt::packet_queue::CBModeTypeSequence<false>;
 
-packet_output_queue_state_t output_queue;
-using output_queue_network_sequence = NetworkTypeSequence<tx_network_type>;
-using output_queue_cb_mode_sequence = CBModeTypeSequence<false>;
+tt::packet_queue::packet_output_queue_state_t output_queue;
+using output_queue_network_sequence = tt::packet_queue::NetworkTypeSequence<tx_network_type>;
+using output_queue_cb_mode_sequence = tt::packet_queue::CBModeTypeSequence<false>;
 
-constexpr packet_input_queue_state_t* input_queue_ptr = &input_queue;
-constexpr packet_output_queue_state_t* output_queue_ptr = &output_queue;
+constexpr tt::packet_queue::packet_input_queue_state_t* input_queue_ptr = &input_queue;
+constexpr tt::packet_queue::packet_output_queue_state_t* output_queue_ptr = &output_queue;
 
 // input_queue_rnd_state_t input_queue_state;
 auto input_queue_state = select_input_queue<pkt_dest_size_choice>();
@@ -130,6 +135,8 @@ inline bool input_queue_handler() {
 }
 
 void kernel_main() {
+    using namespace tt::packet_queue;
+
     zero_l1_buf(test_results, test_results_size_bytes);
     test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_STARTED;
     test_results[PQ_TEST_MISC_INDEX] = 0xff000000;

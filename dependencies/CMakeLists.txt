@@ -8,6 +8,14 @@ set(CMAKE_CXX_CLANG_TIDY "")
 # Boost
 ############################################################################################################################
 
+function(ensureboosttarget boostTarget)
+    if(NOT TARGET Boost::${boostTarget})
+        add_library(Boost::${boostTarget} INTERFACE IMPORTED GLOBAL)
+        target_link_libraries(Boost::${boostTarget} INTERFACE Boost::headers)
+        message(STATUS "Defined Boost::${boostTarget} as an INTERFACE target.")
+    endif()
+endfunction()
+
 CPMAddPackage(
     NAME Boost
     VERSION 1.86.0
@@ -19,8 +27,17 @@ CPMAddPackage(
         "BOOST_ENABLE_CMAKE ON"
         "BOOST_SKIP_INSTALL_RULES ON"
         "BUILD_SHARED_LIBS OFF"
-        "BOOST_INCLUDE_LIBRARIES core\\\;container\\\;smart_ptr\\\;interprocess"
+        "BOOST_INCLUDE_LIBRARIES core\\\;container\\\;smart_ptr\\\;interprocess\\\;asio\\\;lockfree"
+    FIND_PACKAGE_ARGUMENTS "CONFIG REQUIRED"
 )
+
+ensureboosttarget(algorithm)
+ensureboosttarget(asio)
+ensureboosttarget(lockfree)
+ensureboosttarget(core)
+ensureboosttarget(container)
+ensureboosttarget(smart_ptr)
+ensureboosttarget(interprocess)
 
 add_library(span INTERFACE)
 target_link_libraries(span INTERFACE Boost::core)
@@ -44,15 +61,6 @@ CPMAddPackage(
         "YAML_BUILD_SHARED_LIBS OFF"
 )
 
-if(yaml-cpp_ADDED)
-    set_target_properties(
-        yaml-cpp
-        PROPERTIES
-            DEBUG_POSTFIX
-                ""
-    )
-endif()
-
 ############################################################################################################################
 # googletest
 ############################################################################################################################
@@ -64,6 +72,7 @@ CPMAddPackage(
     VERSION 1.13.0
     OPTIONS
         "INSTALL_GTEST OFF"
+        "BUILD_SHARED_LIBS OFF"
 )
 
 if(googletest_ADDED)
@@ -118,7 +127,13 @@ CPMAddPackage(NAME pybind11 GITHUB_REPOSITORY pybind/pybind11 GIT_TAG v2.13.6 OP
 # nlohmann/json : https://github.com/nlohmann/json
 ############################################################################################################################
 
-CPMAddPackage(NAME json GITHUB_REPOSITORY nlohmann/json GIT_TAG v3.11.3 OPTIONS "CMAKE_MESSAGE_LOG_LEVEL NOTICE")
+CPMAddPackage(
+    NAME nlohmann_json
+    GITHUB_REPOSITORY nlohmann/json
+    GIT_TAG v3.11.3
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+)
 
 ############################################################################################################################
 # xtensor : https://github.com/xtensor-stack/xtensor
@@ -177,13 +192,15 @@ endif()
 ############################################################################################################################
 
 CPMAddPackage(
-    NAME taskflow
+    NAME Taskflow
     GITHUB_REPOSITORY taskflow/taskflow
     GIT_TAG v3.7.0
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE" # Taskflow's CMakeLists.txt is super noisy
 )
-add_library(Taskflow::Taskflow ALIAS Taskflow)
+if(Taskflow_ADDED AND NOT TARGET Taskflow::Taskflow)
+    add_library(Taskflow::Taskflow ALIAS Taskflow)
+endif()
 
 ############################################################################################################################
 # flatbuffers : https://github.com/google/flatbuffers

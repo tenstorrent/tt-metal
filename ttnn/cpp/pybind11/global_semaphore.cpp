@@ -7,6 +7,7 @@
 #include <tt-metalium/global_semaphore.hpp>
 #include "cpp/ttnn/global_semaphore.hpp"
 #include "pybind11/pybind11.h"
+#include "pybind11/stl.h"
 
 namespace ttnn::global_semaphore {
 

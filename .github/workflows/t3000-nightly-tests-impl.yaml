@@ -14,12 +14,11 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { name: "t3k_ccl_tests", arch: wormhole_b0, cmd: run_t3000_ccl_tests, timeout: 180, owner_id: ULMEPM2MA}, # Sean Nijjar
+          { name: "t3k_ccl_tests", arch: wormhole_b0, cmd: pytest -n auto tests/nightly/t3000/ccl, timeout: 180, owner_id: ULMEPM2MA}, # Sean Nijjar
         ]
 
     name: ${{ matrix.test-group.name }}
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.test-group.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
@@ -34,6 +33,7 @@ jobs:
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - uses: actions/download-artifact@v4
+        timeout-minutes: 10
         with:
           name: TTMetal_build_any
       - name: Extract files
@@ -46,10 +46,16 @@ jobs:
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
-          source ${{ github.workspace }}/tests/scripts/t3000/run_t3000_nightly_tests.sh
           ${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: ${{ matrix.test-group.owner_id }}
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          path: |
+            generated/test_reports/
+          prefix: "test_reports_"

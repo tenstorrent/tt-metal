@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include "autograd/module_base.hpp"
 #include "autograd/tensor.hpp"
 
@@ -14,10 +16,10 @@ class Embedding : public autograd::ModuleBase {
 
 public:
     Embedding(uint32_t num_embeddings, uint32_t embedding_dim);
-    void set_weight(const autograd::TensorPtr& weight);
+    Embedding(const autograd::TensorPtr& weight);
     [[nodiscard]] autograd::TensorPtr get_weight() const;
 
-    [[nodiscard]] autograd::TensorPtr operator()(const autograd::TensorPtr& tensor);
+    [[nodiscard]] autograd::TensorPtr operator()(const autograd::TensorPtr& tensor) override;
 };
 
 }  // namespace ttml::modules

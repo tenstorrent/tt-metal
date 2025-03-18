@@ -42,8 +42,11 @@ constexpr uint32_t RUN_MSG_DONE = 0;
 // 0x80808000 is a micro-optimization, calculated with 1 riscv insn
 constexpr uint32_t RUN_SYNC_MSG_INIT = 0x40;
 constexpr uint32_t RUN_SYNC_MSG_GO = 0x80;
+// Trigger loading CBs (and IRAM) before actually running the kernel.
+constexpr uint32_t RUN_SYNC_MSG_LOAD = 0x1;
+constexpr uint32_t RUN_SYNC_MSG_WAITING_FOR_RESET = 0x2;
+constexpr uint32_t RUN_SYNC_MSG_INIT_SYNC_REGISTERS = 0x3;
 constexpr uint32_t RUN_SYNC_MSG_DONE = 0;
-constexpr uint32_t RUN_SYNC_MSG_ALL_TRISCS_GO = 0x80808000;
 constexpr uint32_t RUN_SYNC_MSG_ALL_GO = 0x80808080;
 constexpr uint32_t RUN_SYNC_MSG_ALL_SLAVES_DONE = 0;
 
@@ -308,9 +311,9 @@ struct addressable_core_t {
 // This is the number of Ethernet cores on WH (Ethernet cores can be queried through Virtual Coordinates).
 // All other Non Worker Cores are not accessible through virtual coordinates. Subject to change, depending on the arch.
 constexpr static std::uint32_t MAX_VIRTUAL_NON_WORKER_CORES = 18;
-// This is the total number of Non Worker Cores on WH (first term is Ethernet, second term is PCIe and last term is
+// This is the total number of Non Worker Cores on WH (first term is DRAM, second term is PCIe and last term is
 // DRAM).
-constexpr static std::uint32_t MAX_NON_WORKER_CORES = MAX_VIRTUAL_NON_WORKER_CORES + 1 + 16;
+constexpr static std::uint32_t MAX_NON_WORKER_CORES = 24 + 1 + 14;
 constexpr static std::uint32_t MAX_HARVESTED_ROWS = 2;
 constexpr static std::uint8_t CORE_COORD_INVALID = 0xFF;
 struct core_info_msg_t {
@@ -329,7 +332,7 @@ struct core_info_msg_t {
     volatile uint8_t pad[25];
 };
 
-constexpr uint32_t launch_msg_buffer_num_entries = 4;
+constexpr uint32_t launch_msg_buffer_num_entries = 8;
 struct mailboxes_t {
     struct ncrisc_halt_msg_t ncrisc_halt;
     struct slave_sync_msg_t slave_sync;

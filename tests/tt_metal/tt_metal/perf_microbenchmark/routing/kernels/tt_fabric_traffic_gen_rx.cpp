@@ -5,10 +5,10 @@
 // clang-format off
 #include "debug/dprint.h"
 #include "dataflow_api.h"
-#include "tt_fabric/hw/inc/tt_fabric.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen_test.hpp"
-#include "tt_fabric/hw/inc/tt_fabric_interface.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernel_utils.hpp"
 // clang-format on
 
@@ -61,8 +61,8 @@ void kernel_main() {
     rx_buf_size = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
 
     zero_l1_buf(test_results, test_results_size_bytes);
-    test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_STARTED;
-    test_results[PQ_TEST_MISC_INDEX] = 0xff000000;
+    test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_STARTED;
+    test_results[TT_FABRIC_MISC_INDEX] = 0xff000000;
 
     if constexpr (ASYNC_WR & test_command) {
         uint32_t packet_rnd_seed;
@@ -174,9 +174,9 @@ void kernel_main() {
                         read_addr, curr_payload_words, start_val, mismatch_addr, mismatch_val, expected_val);
                     if (!match) {
                         async_wr_check_failed = true;
-                        test_results[PQ_TEST_MISC_INDEX + 12] = mismatch_addr;
-                        test_results[PQ_TEST_MISC_INDEX + 13] = mismatch_val;
-                        test_results[PQ_TEST_MISC_INDEX + 14] = expected_val;
+                        test_results[TT_FABRIC_MISC_INDEX + 12] = mismatch_addr;
+                        test_results[TT_FABRIC_MISC_INDEX + 13] = mismatch_val;
+                        test_results[TT_FABRIC_MISC_INDEX + 14] = expected_val;
                         break;
                     }
                 }
@@ -200,13 +200,13 @@ void kernel_main() {
     }
 
     // write out results
-    set_64b_result(test_results, processed_packet_words, PQ_TEST_WORD_CNT_INDEX);
+    set_64b_result(test_results, processed_packet_words, TT_FABRIC_WORD_CNT_INDEX);
     set_64b_result(test_results, num_packets, TX_TEST_IDX_NPKT);
 
     if (async_wr_check_failed) {
-        test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_DATA_MISMATCH;
+        test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_DATA_MISMATCH;
     } else {
-        test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_PASS;
-        test_results[PQ_TEST_MISC_INDEX] = 0xff000005;
+        test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_PASS;
+        test_results[TT_FABRIC_MISC_INDEX] = 0xff000005;
     }
 }

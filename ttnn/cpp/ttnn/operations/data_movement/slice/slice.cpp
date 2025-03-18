@@ -187,7 +187,7 @@ ttnn::Tensor SliceOperation::invoke(
         }
 
         auto res =
-            operation::run(
+            tt::tt_metal::operation::run(
                 SliceDeviceOperation{
                     ttnn::Shape(modified_begins), ttnn::Shape(padded_ends), ttnn::Shape(modified_step), memory_config},
                 {input},
@@ -307,7 +307,7 @@ ttnn::Tensor SliceOperation::invoke<uint32_t, 4>(
             }
         }
 
-        input = operation::run(
+        input = tt::tt_metal::operation::run(
             SliceDeviceOperation{ttnn::Shape(begins), ttnn::Shape(padded_ends), ttnn::Shape(step), memory_config},
             {input},
             {},

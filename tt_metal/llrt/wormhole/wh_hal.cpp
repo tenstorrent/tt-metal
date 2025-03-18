@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <numeric>
 
 #include "core_config.h"  // ProgrammableCoreType
 #include "dev_mem_map.h"  // MEM_LOCAL_BASE
@@ -14,6 +15,7 @@
 
 #include "hal.hpp"
 #include "wormhole/wh_hal.hpp"
+#include "hw/inc/wormhole/eth_l1_address_map.h"
 
 // Reserved DRAM addresses
 // Host writes (4B value) to and reads from DRAM_BARRIER_BASE across all channels to ensure previous writes have been
@@ -56,6 +58,13 @@ void Hal::initialize_wh() {
     this->mem_alignments_[static_cast<std::size_t>(HalMemType::DRAM)] = DRAM_ALIGNMENT;
     this->mem_alignments_[static_cast<std::size_t>(HalMemType::HOST)] = PCIE_ALIGNMENT;
 
+    this->mem_alignments_with_pcie_.resize(static_cast<std::size_t>(HalMemType::COUNT));
+    this->mem_alignments_with_pcie_[static_cast<std::size_t>(HalMemType::L1)] = std::lcm(L1_ALIGNMENT, PCIE_ALIGNMENT);
+    this->mem_alignments_with_pcie_[static_cast<std::size_t>(HalMemType::DRAM)] =
+        std::lcm(DRAM_ALIGNMENT, PCIE_ALIGNMENT);
+    this->mem_alignments_with_pcie_[static_cast<std::size_t>(HalMemType::HOST)] =
+        std::lcm(PCIE_ALIGNMENT, PCIE_ALIGNMENT);
+
     this->relocate_func_ = [](uint64_t addr, uint64_t local_init_addr) {
         if ((addr & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
             // Move addresses in the local memory range to l1 (copied by kernel)
@@ -66,6 +75,15 @@ void Hal::initialize_wh() {
         }
 
         // No relocation needed
+        return addr;
+    };
+
+    this->erisc_iram_relocate_func_ = [](uint64_t addr) {
+        if (addr == static_cast<uint32_t>(eth_iram_mem::address_map::ERISC_IRAM_BASE)) {
+            // IRAM enabled program starts from ERISC_IRAM_BASE. This relocation is for where to put the program.
+            // At first the program is placed on ERISC_IRAM_BASE, then erisc.cc copies to local IRAM.
+            return (uint64_t)eth_l1_mem::address_map::KERNEL_BASE;
+        }
         return addr;
     };
 
@@ -114,6 +132,7 @@ void Hal::initialize_wh() {
     this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
+    this->eth_fw_is_cooperative_ = true;
 
     this->eps_ = EPS_WHB0;
     this->nan_ = NAN_WHB0;

@@ -30,7 +30,8 @@ void ConvertToCHW::validate(const std::vector<Tensor>& input_tensors) const {
         input_shard_spec.shape[0] % TILE_HEIGHT == 0,
         "Shard height must be divisible by tile size");  // input shards can be padded so HW may not match shard height
     TT_FATAL(
-        this->memory_config.is_sharded() && this->memory_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+        this->memory_config.is_sharded() &&
+            this->memory_config.memory_layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED,
         "Output tensor must be width sharded");
 }
 
@@ -39,10 +40,12 @@ std::vector<ttnn::TensorSpec> ConvertToCHW::compute_output_specs(const std::vect
     const auto B = shape[0];
     const auto HW = shape[2];
     const auto C = shape[3];
-    return {TensorSpec(Shape({B, 1, C, HW}), TensorLayout(dtype, PageConfig(Layout::ROW_MAJOR), memory_config))};
+    return {TensorSpec(
+        Shape({B, 1, C, HW}),
+        tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR), memory_config))};
 }
 
-operation::ProgramWithCallbacks ConvertToCHW::create_program(
+tt::tt_metal::operation::ProgramWithCallbacks ConvertToCHW::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& a = input_tensors.at(0);
     auto& output = output_tensors.at(0);

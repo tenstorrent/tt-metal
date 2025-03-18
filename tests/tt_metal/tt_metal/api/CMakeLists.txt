@@ -14,6 +14,7 @@ set(UNIT_TESTS_API_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/core_coord/test_CoreRangeSet_contains.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_coord/test_CoreRangeSet_intersects.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_coord/test_CoreRangeSet_merge.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/distribution_spec/test_distribution_spec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_banked.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_bit_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_buffer_region.cpp
@@ -80,7 +81,6 @@ endfunction()
 
 # Define the architectures for which to create test executables
 set(ARCHITECTURES
-    "grayskull"
     "wormhole"
     "blackhole"
 )

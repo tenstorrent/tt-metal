@@ -13,7 +13,8 @@
 namespace ttnn::distributed {
 
 using MeshShape = tt::tt_metal::distributed::MeshShape;
-using MeshOffset = tt::tt_metal::distributed::MeshOffset;
+using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
+using MeshCoordinateRange = tt::tt_metal::distributed::MeshCoordinateRange;
 using DeviceIds = tt::tt_metal::distributed::DeviceIds;
 using MeshDevice = tt::tt_metal::distributed::MeshDevice;
 using SystemMesh = tt::tt_metal::distributed::SystemMesh;
@@ -27,10 +28,11 @@ namespace ttnn {
 
 // These types are exported to the ttnn namespace for convenience.
 using ttnn::distributed::DeviceIds;
+using ttnn::distributed::MeshCoordinate;
+using ttnn::distributed::MeshCoordinateRange;
 using ttnn::distributed::MeshDevice;
 using ttnn::distributed::MeshDeviceConfig;
 using ttnn::distributed::MeshDeviceView;
-using ttnn::distributed::MeshOffset;
 using ttnn::distributed::MeshShape;
 using ttnn::distributed::MeshSubDeviceManagerId;
 using ttnn::distributed::SystemMesh;

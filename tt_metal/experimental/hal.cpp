@@ -17,6 +17,8 @@ using tt::tt_metal::HalSingleton;
 
 namespace tt::tt_metal::experimental::hal {
 
+tt::ARCH get_arch() { return HalSingleton::getInstance().get_arch(); }
+
 std::string get_arch_name() {
     auto arch_enum = HalSingleton::getInstance().get_arch();
     return tt::get_string_lowercase(arch_enum);
@@ -44,6 +46,22 @@ uint32_t get_erisc_l1_unreserved_size() {
     auto& hal = HalSingleton::getInstance();
     if (hal.get_arch() != tt::ARCH::GRAYSKULL) {
         return hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+    }
+    return 0;
+}
+
+uint32_t get_tensix_l1_unreserved_base() {
+    auto& hal = HalSingleton::getInstance();
+    if (hal.get_arch() != tt::ARCH::GRAYSKULL) {
+        return hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
+    }
+    return 0;
+}
+
+uint32_t get_tensix_l1_unreserved_size() {
+    auto& hal = HalSingleton::getInstance();
+    if (hal.get_arch() != tt::ARCH::GRAYSKULL) {
+        return hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
     }
     return 0;
 }

@@ -7,12 +7,12 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/test_tiles.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/command_queue.hpp>
 #include "llrt.hpp"
 
-using namespace tt;
+namespace tt::tt_metal {
 
 inline std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, int N) {
     if (N == K) {
@@ -154,3 +154,5 @@ inline bool move_tiles_to_dram(
     EnqueueWriteBuffer(cq, buffer, tiles, false);
     return pass;
 }
+
+}  // namespace tt::tt_metal

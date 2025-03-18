@@ -11,14 +11,14 @@ namespace ttnn::operations::experimental::transformer {
 enum class RotateHalfOpParallelizationStrategy { SINGLE_CORE };
 
 struct RotateHalf {
-    const MemoryConfig output_mem_config;
+    const tt::tt_metal::MemoryConfig output_mem_config;
 
     RotateHalfOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor>& input_tensors) const;
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
 
-    operation::ProgramWithCallbacks create_program(
+    tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
 };
 

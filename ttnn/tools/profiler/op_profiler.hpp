@@ -14,7 +14,6 @@
 #include "ttnn/tensor/tensor.hpp"
 #include <nlohmann/json.hpp>
 #include <magic_enum/magic_enum.hpp>
-#include <tt-metalium/profiler.hpp>
 #include <tt-metalium/kernel.hpp>
 #include "ttnn/operation.hpp"
 #include <tt-metalium/tt_metal.hpp>
@@ -391,7 +390,7 @@ inline std::string op_meta_data_serialized_json(
                 return device_operation_t::create_op_performance_model(
                     operation_attributes, tensor_args, tensor_return_value);
             } else {
-                return operation::OpPerformanceModel{};
+                return tt::tt_metal::operation::OpPerformanceModel{};
             }
         }();
         j["performance_model"]["compute_ns"] = perfModel.get_compute_ns();
@@ -418,16 +417,16 @@ inline std::string op_meta_data_serialized_json(
 
 #define TracyOpTTNNDevice(                                                                                    \
     operation, operation_id, device_id, program, operation_attributes, tensor_args, tensor_return_value)      \
-    std::string op_message = op_profiler::op_meta_data_serialized_json(                                       \
+    std::string op_message = tt::tt_metal::op_profiler::op_meta_data_serialized_json(                         \
         operation, operation_id, device_id, program, operation_attributes, tensor_args, tensor_return_value); \
     std::string op_text = fmt::format("id:{}", operation_id);                                                 \
     ZoneText(op_text.c_str(), op_text.size());                                                                \
     TracyMessage(op_message.c_str(), op_message.size());
 
-#define TracyOpTTNNExternal(op_id, op, input_tensors)                                             \
-    std::string op_message = op_profiler::op_meta_data_serialized_json(op_id, op, input_tensors); \
-    std::string op_text = fmt::format("id:{}", op_id);                                            \
-    ZoneText(op_text.c_str(), op_text.size());                                                    \
+#define TracyOpTTNNExternal(op_id, op, input_tensors)                                                           \
+    std::string op_message = tt::tt_metal::op_profiler::op_meta_data_serialized_json(op_id, op, input_tensors); \
+    std::string op_text = fmt::format("id:{}", op_id);                                                          \
+    ZoneText(op_text.c_str(), op_text.size());                                                                  \
     TracyMessage(op_message.c_str(), op_message.size());
 
 #else

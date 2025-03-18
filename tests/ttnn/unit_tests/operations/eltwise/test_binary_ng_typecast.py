@@ -9,6 +9,7 @@ import ttnn
 from models.utility_functions import skip_for_grayskull, torch_random
 from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 binary_fns = {
@@ -51,8 +52,12 @@ binary_fns = {
     "dtype",
     ([ttnn.bfloat16]),
 )
+@pytest.mark.parametrize(
+    "layout",
+    ([ttnn.TILE_LAYOUT]),
+)
 # No typecast on inputs and optional output
-def test_opt_output_no_typecast(input_shapes, dtype, ttnn_fn, device):
+def test_opt_output_no_typecast(input_shapes, dtype, layout, ttnn_fn, device):
     torch.manual_seed(0)
     a_shape, b_shape, out_shape = input_shapes
     ttnn_op = getattr(ttnn.experimental, ttnn_fn)
@@ -66,14 +71,12 @@ def test_opt_output_no_typecast(input_shapes, dtype, ttnn_fn, device):
     out = gen_func_with_cast_tt(partial(torch_random, low=0, high=1, dtype=torch.bfloat16), dtype)(out_shape)
 
     input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        torch_input_tensor_a, dtype=dtype, device=device, layout=layout, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     input_tensor_b = ttnn.from_torch(
-        torch_input_tensor_b, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        torch_input_tensor_b, dtype=dtype, device=device, layout=layout, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
-    out_tt = ttnn.from_torch(
-        out, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
+    out_tt = ttnn.from_torch(out, dtype=dtype, device=device, layout=layout, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     cq_id = 0
     ttnn_op(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt)
     output_tensor = ttnn.to_torch(out_tt)
@@ -660,3 +663,275 @@ def test_opt_output_scalar(input_shapes, ttnn_fn, scalar, device):
 
     status = ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor)
     assert status >= 0.999
+
+
+@skip_for_grayskull("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("input_shape", [(1, 1, 1, 1), (3, 3, 15, 15), (3, 3, 17, 17), (3, 3, 33, 33)])
+@pytest.mark.parametrize(
+    "memory_config",
+    ([ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG]),
+)
+@pytest.mark.parametrize("scalar", [-0.25, -16.5, 0.0, 0.05, 1.7, 19.0])
+@pytest.mark.parametrize(
+    "ttnn_fn",
+    [
+        "add",
+        "sub",
+        "mul",
+        "div",
+        "rsub",
+        "squared_difference",
+    ],
+)
+@pytest.mark.parametrize(
+    "layout",
+    ([ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT]),
+)
+def test_edgecase_dims_eltwise_scalar_matrix_math(input_shape, scalar, ttnn_fn, memory_config, layout, device):
+    torch.manual_seed(0)
+    a_shape = input_shape
+
+    ttnn_op = getattr(ttnn.experimental, ttnn_fn)
+    torch_input_tensor_a = torch.randn(a_shape, dtype=torch.bfloat16)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=layout,
+        memory_config=memory_config,
+    )
+
+    output = ttnn_op(input_tensor_a, scalar)
+    tt_output_tensor = ttnn.to_torch(output)
+
+    golden_fn = ttnn.get_golden_function(ttnn_op)
+    torch_output_tensor = golden_fn(torch_input_tensor_a, scalar)
+
+    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.999)
+
+
+@skip_for_grayskull("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("input_shape", [(1, 1, 1, 1), (3, 3, 15, 15), (3, 3, 17, 17), (3, 3, 33, 33)])
+@pytest.mark.parametrize(
+    "memory_config",
+    ([ttnn.DRAM_MEMORY_CONFIG]),
+)
+@pytest.mark.parametrize("scalar", [-1.0, -2.0, 0.0, 1.0, 2.0, 19.0])
+@pytest.mark.parametrize(
+    "ttnn_fn",
+    [
+        "gt",
+        "lt",
+        "lte",
+        "gte",
+        "eq",
+        "ne",
+    ],
+)
+@pytest.mark.parametrize(
+    "layout",
+    ([ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT]),
+)
+def test_edgecase_dims_eltwise_scalar_logical(input_shape, scalar, ttnn_fn, memory_config, layout, device):
+    torch.manual_seed(0)
+    a_shape = input_shape
+
+    ttnn_op = getattr(ttnn.experimental, ttnn_fn)
+    torch_input_tensor_a = torch.randint(low=-50, high=50, size=a_shape, dtype=torch.bfloat16)
+    # guarantee a few equal values
+    if (ttnn_fn == "eq" or ttnn_fn == "ne" or ttnn_fn == "gte" or ttnn_fn == "lte") and input_shape != (1, 1, 1, 1):
+        torch_input_tensor_a[0, 0, 0, 0] = scalar
+        torch_input_tensor_a[-1, -1, -1, -1] = scalar
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=layout,
+        memory_config=memory_config,
+    )
+
+    output = ttnn_op(input_tensor_a, scalar, dtype=ttnn.uint32)
+    tt_output_tensor = ttnn.to_torch(output)
+
+    golden_fn = ttnn.get_golden_function(ttnn_op)
+    torch_output_tensor = golden_fn(torch_input_tensor_a, scalar)
+
+    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.999)
+
+
+@skip_for_grayskull("Requires wormhole_b0 to run")
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        ((1, 7, 1, 1), (7, 7, 33, 33)),
+        ((7, 1, 1, 1), (7, 7, 49, 49)),
+        ((7, 7, 65, 65), (7, 7, 65, 65)),
+        ((2, 2, 10, 1), (2, 2, 10, 2)),
+    ],
+)
+@pytest.mark.parametrize(
+    "memory_config",
+    ([ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG]),
+)
+@pytest.mark.parametrize(
+    "ttnn_fn",
+    [
+        "add",
+        "sub",
+        "mul",
+        "div",
+        "rsub",
+        "squared_difference",
+    ],
+)
+@pytest.mark.parametrize(
+    "layout",
+    ([ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT]),
+)
+def test_edgecase_dims_eltwise_broadcast_matrix_math(input_shapes, ttnn_fn, memory_config, layout, device):
+    torch.manual_seed(0)
+    a_shape, b_shape = input_shapes
+
+    ttnn_op = getattr(ttnn.experimental, ttnn_fn)
+    torch_input_tensor_a = torch.randn(a_shape, dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.randn(b_shape, dtype=torch.bfloat16)
+
+    if ttnn_fn == "div":
+        torch_input_tensor_b[torch_input_tensor_b.abs() < 0.001] = 0.001
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=layout,
+        memory_config=memory_config,
+    )
+
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=layout,
+        memory_config=memory_config,
+    )
+
+    output = ttnn_op(input_tensor_a, input_tensor_b, dtype=ttnn.float32)
+    tt_output_tensor = ttnn.to_torch(output)
+
+    golden_fn = ttnn.get_golden_function(ttnn_op)
+    torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
+
+    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.999)
+
+
+@skip_for_grayskull("Requires wormhole_b0 to run")
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        ((1, 7, 1, 1), (7, 7, 33, 33)),
+        ((7, 1, 1, 1), (7, 7, 49, 49)),
+        ((7, 7, 65, 65), (7, 7, 65, 65)),
+    ],
+)
+@pytest.mark.parametrize(
+    "memory_config",
+    ([ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG]),
+)
+@pytest.mark.parametrize(
+    "ttnn_fn",
+    [
+        "gt",
+        "lt",
+        "lte",
+        "gte",
+        "eq",
+        "ne",
+    ],
+)
+@pytest.mark.parametrize(
+    "layout",
+    ([ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT]),
+)
+def test_edgecase_dims_eltwise_broadcast_logical(input_shapes, ttnn_fn, memory_config, layout, device):
+    torch.manual_seed(0)
+    a_shape, b_shape = input_shapes
+
+    ttnn_op = getattr(ttnn.experimental, ttnn_fn)
+    torch_input_tensor_a = torch.randn(a_shape, dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.randn(b_shape, dtype=torch.bfloat16)
+    # guarantee at least one equal value
+    if ttnn_fn == "eq" or ttnn_fn == "ne" or ttnn_fn == "gte" or ttnn_fn == "lte":
+        torch_input_tensor_a[0, 0, 0, 0] = torch_input_tensor_b[0, 0, 0, 0]
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=layout,
+        memory_config=memory_config,
+    )
+
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=layout,
+        memory_config=memory_config,
+    )
+
+    output = ttnn_op(input_tensor_a, input_tensor_b, dtype=ttnn.float32)
+    tt_output_tensor = ttnn.to_torch(output)
+
+    golden_fn = ttnn.get_golden_function(ttnn_op)
+    torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
+
+    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.999)
+
+
+@skip_for_grayskull("Requires wormhole_b0 to run")
+@pytest.mark.parametrize(
+    "input_shape, input_layout, input_shard_grid, input_shard_orientation, input_sharding_scheme",
+    [
+        (
+            [1, 1, 64, 64],
+            ttnn.TILE_LAYOUT,
+            ttnn.CoreGrid(y=1, x=2),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardStrategy.WIDTH,
+        ),
+    ],
+)
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("output_dtype", [ttnn.float32, ttnn.bfloat16])
+def test_binary_div(
+    device,
+    input_shape,
+    input_layout,
+    input_shard_grid,
+    input_shard_orientation,
+    input_sharding_scheme,
+    input_dtype,
+    output_dtype,
+):
+    memory_config = ttnn.create_sharded_memory_config(
+        input_shape,
+        core_grid=input_shard_grid,
+        strategy=input_sharding_scheme,
+        orientation=input_shard_orientation,
+        use_height_and_width_as_shard_shape=False,
+    )
+
+    torch_input_a = torch.rand(input_shape, dtype=torch.bfloat16) + 1
+    torch_input_b = torch.rand(input_shape, dtype=torch.bfloat16) + 1
+    torch_output = torch_input_a / torch_input_b
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_a, layout=input_layout, memory_config=memory_config, dtype=input_dtype, device=device
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_b, layout=input_layout, memory_config=memory_config, dtype=input_dtype, device=device
+    )
+    output_tensor = ttnn.experimental.div(input_tensor_a, input_tensor_b, dtype=output_dtype)
+    assert_with_pcc(torch_output, ttnn.to_torch(output_tensor), 0.999)

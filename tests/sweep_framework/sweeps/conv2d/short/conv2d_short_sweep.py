@@ -1608,10 +1608,11 @@ import pytest
 @pytest.mark.parametrize("input_spec", parameters["short_sweep_suite_conv2d"]["input_specs"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_conv2d_localrun(device, input_spec):
-    run_conv2d_short_sweep(
+    pcc, messsage = run_conv2d_short_sweep(
         input_spec,
         device,
-    )
+    )[0]
+    assert pcc, messsage
 
 
 failing_parameters = [
@@ -1622,8 +1623,6 @@ failing_parameters = [
     [1, 768, 3, 224, 224, 32, 32, 32, 32, 0, 0, 1, 1, 1, False],  # 1460
     [1, 768, 3, 224, 224, 32, 32, 32, 32, 0, 0, 1, 1, 1, True],  # 1461
     [1, 768, 3, 384, 512, 32, 32, 32, 32, 0, 0, 1, 1, 1, True],  # 1464
-    [1, 64, 3, 720, 1280, 7, 7, 2, 2, 3, 3, 1, 1, 1, False],  # 1471
-    [1, 64, 3, 800, 1088, 7, 7, 2, 2, 3, 3, 1, 1, 1, False],  # 1472
     [1, 1, 64, 480, 640, 3, 3, 1, 1, 1, 1, 1, 1, 1, True],  # 1495
     [1, 64, 64, 480, 640, 3, 3, 1, 1, 1, 1, 1, 1, 1, True],  # 1496
 ]
@@ -1632,7 +1631,24 @@ failing_parameters = [
 @pytest.mark.parametrize("input_spec", failing_parameters)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_conv2d_localrun_fail_only(device, input_spec):
-    run_conv2d_short_sweep(
+    pcc, messsage = run_conv2d_short_sweep(
         input_spec,
         device,
-    )
+    )[0]
+    assert pcc, messsage
+
+
+@pytest.mark.parametrize("input_spec", parameters["short_sweep_suite_conv1d"]["input_specs"])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_conv2d_localrun_conv1d(device, input_spec):
+    pcc, messsage = run_conv1d_short_sweep(
+        input_spec,
+        device,
+    )[0]
+    assert pcc, messsage
+
+
+failing_parameters_conv1d = [
+    # [batch_size, output_channels, input_channels, input_length, kernel_size, stride, pad, groups, dilation, bias]
+    [1, 768, 768, 3000, 3, 2, 1, 1, 1, True],
+]

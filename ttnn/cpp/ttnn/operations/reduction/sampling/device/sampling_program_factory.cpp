@@ -13,7 +13,7 @@
 
 namespace ttnn::operations::reduction::detail {
 
-operation::ProgramWithCallbacks sampling_multicore_interleaved(
+tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
     const Tensor& input_values_tensor,
     const Tensor& input_indices_tensor,
     const std::vector<uint16_t>& k,
@@ -54,7 +54,7 @@ operation::ProgramWithCallbacks sampling_multicore_interleaved(
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    CoreRangeSet core_grid = num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size, true);
+    CoreRangeSet core_grid = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size, true);
 
     if (sub_core_grids.has_value()) {
         core_grid = sub_core_grids.value();
@@ -149,8 +149,8 @@ operation::ProgramWithCallbacks sampling_multicore_interleaved(
     // random number
     const uint32_t rand_tile_size = tile_size(tt::DataFormat::Float16_b);
     constexpr uint32_t rand_tile_index = tt::CBIndex::c_11;
-    CircularBufferConfig cb_rand_config =
-        CircularBufferConfig(rand_tile_size, {{rand_tile_index, tt::DataFormat::Float16_b}})
+    tt::tt_metal::CircularBufferConfig cb_rand_config =
+        tt::tt_metal::CircularBufferConfig(rand_tile_size, {{rand_tile_index, tt::DataFormat::Float16_b}})
             .set_page_size(rand_tile_index, rand_tile_size);
     auto cb_rand = tt::tt_metal::CreateCircularBuffer(program, core_grid, cb_rand_config);
 
@@ -269,9 +269,9 @@ operation::ProgramWithCallbacks sampling_multicore_interleaved(
     }
 
     auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_ids, cores](
-                                              const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
+                                              const tt::tt_metal::Program& program,
+                                              const std::vector<tt::tt_metal::Buffer*>& input_buffers,
+                                              const std::vector<tt::tt_metal::Buffer*>& output_buffers) {
         auto input_values_buffer = input_buffers.at(0);
         auto input_indices_buffer = input_buffers.at(1);
         auto output_buffer = output_buffers.at(0);

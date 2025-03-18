@@ -8,10 +8,12 @@ import itertools
 import functools
 import operator
 
+import pytest
 import torch
 
 import ttnn
 
+from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args
 from tests.ttnn.utils_for_testing import (
     check_with_pcc,
     get_per_core_size_and_num_cores,
@@ -64,7 +66,8 @@ parameters = {
 }
 
 
-def run(
+def run_matmul(
+    device,
     height_sharded_specs,
     k_size,
     n_size,
@@ -77,8 +80,6 @@ def run(
     output_dtype,
     input_layout,
     compute_kernel_config,
-    *,
-    device,
 ) -> list:
     batch_sizes, m_size, per_core_height, num_cores_height = height_sharded_specs
 
@@ -133,3 +134,69 @@ def run(
 
     expected_pcc = 0.99
     return [check_with_pcc(torch_output_tensor, output_tensor, expected_pcc), e2e_perf]
+
+
+@pytest.mark.parametrize(**gen_pytest_parametrize_args(parameters))
+def test_matmul(
+    device,
+    height_sharded_specs,
+    k_size,
+    n_size,
+    batch_matrix_multiply,
+    input_a_memory_config,
+    input_b_memory_config,
+    output_memory_config,
+    input_a_dtype,
+    input_b_dtype,
+    output_dtype,
+    input_layout,
+    compute_kernel_config,
+):
+    run_matmul(
+        device,
+        height_sharded_specs,
+        k_size,
+        n_size,
+        batch_matrix_multiply,
+        input_a_memory_config,
+        input_b_memory_config,
+        output_memory_config,
+        input_a_dtype,
+        input_b_dtype,
+        output_dtype,
+        input_layout,
+        compute_kernel_config,
+    )
+
+
+def run(
+    height_sharded_specs,
+    k_size,
+    n_size,
+    batch_matrix_multiply,
+    input_a_memory_config,
+    input_b_memory_config,
+    output_memory_config,
+    input_a_dtype,
+    input_b_dtype,
+    output_dtype,
+    input_layout,
+    compute_kernel_config,
+    *,
+    device,
+) -> list:
+    return run_matmul(
+        device,
+        height_sharded_specs,
+        k_size,
+        n_size,
+        batch_matrix_multiply,
+        input_a_memory_config,
+        input_b_memory_config,
+        output_memory_config,
+        input_a_dtype,
+        input_b_dtype,
+        output_dtype,
+        input_layout,
+        compute_kernel_config,
+    )

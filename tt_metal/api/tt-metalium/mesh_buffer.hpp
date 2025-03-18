@@ -6,6 +6,7 @@
 
 #include "buffer.hpp"
 #include "buffer_constants.hpp"
+#include "mesh_coord.hpp"
 #include "mesh_device.hpp"
 #include "mesh_device_view.hpp"
 #include "shape2d.hpp"
@@ -26,7 +27,7 @@ struct DeviceLocalBufferConfig {
     std::optional<ShardSpecBuffer> shard_parameters;
 
     // The direction in which memory for this buffer is allocated.
-    bool bottom_up = false;
+    std::optional<bool> bottom_up;
 };
 
 // Specifies MeshBuffer that is replicated across the virtual mesh.
@@ -74,6 +75,7 @@ public:
         const DeviceLocalBufferConfig& device_local_layout,
         MeshDevice* mesh_device,
         std::optional<DeviceAddr> address = std::nullopt);
+    ~MeshBuffer();
 
     // Returns true if the MeshBuffer is allocated. Note that MeshBuffer is created in the allocated state; either the
     // destructor or the `deallocate` method deallocate the MeshBuffer.
@@ -84,7 +86,8 @@ public:
     // resources.
     void deallocate();
 
-    MeshDevice* device() const { return mesh_device_; }
+    // Throws an exception if the corresponding MeshDevice is already deallocated
+    MeshDevice* device() const;
     DeviceAddr size() const;
     DeviceAddr device_local_size() const { return device_local_size_; }
     DeviceAddr address() const { return address_; };
@@ -95,10 +98,12 @@ public:
     const ShardedBufferConfig& global_shard_spec() const;
     const DeviceLocalBufferConfig& device_local_config() const { return device_local_config_; }
 
-    std::shared_ptr<Buffer> get_device_buffer(const Coordinate& device_coord) const;
+    std::shared_ptr<Buffer> get_device_buffer(const MeshCoordinate& device_coord) const;
     uint32_t datum_size_bytes() const;
     Shape2D physical_shard_shape() const;
     std::pair<bool, bool> replicated_dims() const;
+    uint32_t page_size() const { return device_local_config_.page_size; }
+    uint32_t num_pages() const { return page_size() == 0 ? 0 : device_local_size_ / page_size(); }
 
 private:
     // Creates an owning `MeshBuffer`, backed by an allocation made through `backing_buffer`.
@@ -108,9 +113,10 @@ private:
         DeviceAddr device_local_size,
         MeshDevice* mesh_device,
         std::shared_ptr<Buffer> backing_buffer) :
+        buffers_(MeshShape(mesh_device->shape()), nullptr),
         config_(config),
         device_local_config_(device_local_config),
-        mesh_device_(mesh_device),
+        mesh_device_(mesh_device->shared_from_this()),
         address_(backing_buffer->address()),
         device_local_size_(device_local_size),
         state_(OwnedBufferState{std::move(backing_buffer)}) {}
@@ -122,9 +128,10 @@ private:
         DeviceAddr address,
         DeviceAddr device_local_size,
         MeshDevice* mesh_device) :
+        buffers_(MeshShape(mesh_device->shape()), /*fill_value=*/nullptr),
         config_(config),
         device_local_config_(device_local_config),
-        mesh_device_(mesh_device),
+        mesh_device_(mesh_device->shared_from_this()),
         address_(address),
         device_local_size_(device_local_size),
         state_(ExternallyOwnedState{}) {}
@@ -132,12 +139,11 @@ private:
     void initialize_device_buffers();
     MeshBufferConfig config_;
     DeviceLocalBufferConfig device_local_config_;
-    MeshDevice* mesh_device_ = nullptr;
+    std::weak_ptr<MeshDevice> mesh_device_;
     DeviceAddr address_ = 0;
     DeviceAddr device_local_size_ = 0;
 
-    // TODO: Consider optimizing with SmallVector.
-    std::vector<std::vector<std::shared_ptr<Buffer>>> buffers_;
+    MeshContainer<std::shared_ptr<Buffer>> buffers_;
 
     // `MeshBufferState` specifies the state of the MeshBuffer. It can either be:
     // 1. Owned - a single device buffer is responsible for providing the address for the entire mesh buffer.

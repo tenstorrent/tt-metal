@@ -9,7 +9,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
-#include "ttnn_multi_command_queue_fixture.hpp"
+#include "ttnn_test_fixtures.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include "ttnn/async_runtime.hpp"
@@ -18,6 +18,7 @@
 namespace tt::tt_metal {
 namespace {
 
+using ::testing::Eq;
 using ::testing::FloatEq;
 using ::testing::Pointwise;
 using ::tt::tt_metal::is_tensor_on_device;
@@ -52,8 +53,9 @@ TEST_F(MultiProducerCommandQueueTest, Stress) {
     const Tensor t0_host_tensor = Tensor::from_vector(t0_host_data, tensor_spec);
     const Tensor t1_host_tensor = Tensor::from_vector(t1_host_data, tensor_spec);
 
+    constexpr int kNumIterations = 100;
     std::thread t0([&]() {
-        for (int j = 0; j < 100; j++) {
+        for (int j = 0; j < kNumIterations; j++) {
             Tensor t0_tensor = t0_host_tensor.to_device(device, mem_cfg, t0_io_cq);
             EXPECT_TRUE(is_tensor_on_device(t0_tensor));
             EXPECT_THAT(t0_tensor.to_vector<float>(), Pointwise(FloatEq(), t0_host_data));
@@ -61,7 +63,7 @@ TEST_F(MultiProducerCommandQueueTest, Stress) {
     });
 
     std::thread t1([&]() {
-        for (int j = 0; j < 100; j++) {
+        for (int j = 0; j < kNumIterations; j++) {
             Tensor t1_tensor = t1_host_tensor.to_device(device, mem_cfg, t1_io_cq);
             EXPECT_TRUE(is_tensor_on_device(t1_tensor));
             EXPECT_THAT(t1_tensor.to_vector<float>(), Pointwise(FloatEq(), t1_host_data));
@@ -88,7 +90,7 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
         .buffer_type = BufferType::DRAM,
         .shard_spec = std::nullopt};
-    const TensorLayout tensor_layout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), mem_cfg);
+    const TensorLayout tensor_layout(DataType::UINT32, PageConfig(Layout::ROW_MAJOR), mem_cfg);
     const TensorSpec tensor_spec(tensor_shape, tensor_layout);
 
     const ttnn::QueueId write_cq = ttnn::DefaultQueueId;
@@ -97,18 +99,19 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
     std::shared_ptr<Event> write_event = std::make_shared<Event>();
     std::shared_ptr<Event> read_event = std::make_shared<Event>();
 
-    std::vector<float> host_data(tensor_shape.volume());
-    std::iota(host_data.begin(), host_data.end(), 0);
     Tensor device_tensor = create_device_tensor(tensor_spec, device);
 
+    constexpr int kNumIterations = 100;
     std::thread t0([&]() {
-        for (int j = 0; j < 1000; j++) {
+        std::vector<uint32_t> host_data(tensor_shape.volume());
+        for (int j = 0; j < kNumIterations; j++) {
             if (j != 0) {
                 ttnn::event_synchronize(read_event);
             }
             read_event = std::make_shared<Event>();
 
             // Create tensor and transfer to device
+            std::iota(host_data.begin(), host_data.end(), j);
             const Tensor host_tensor = Tensor::from_vector(host_data, tensor_spec);
             memcpy(device->command_queue(*write_cq), device_tensor, host_tensor);
             EXPECT_TRUE(is_tensor_on_device(device_tensor));
@@ -118,14 +121,17 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
     });
 
     std::thread t1([&]() {
-        for (int j = 0; j < 1000; j++) {
+        std::vector<uint32_t> expected_readback_data(tensor_shape.volume());
+        for (int j = 0; j < kNumIterations; j++) {
             ttnn::event_synchronize(write_event);
             write_event = std::make_shared<Event>();
 
             // Read back from device and verify
-            const Tensor readback_tensor = device_tensor.cpu(/*blocking=*/false, read_cq);
+            const Tensor readback_tensor = device_tensor.cpu(/*blocking=*/true, read_cq);
             EXPECT_FALSE(is_tensor_on_device(readback_tensor));
-            EXPECT_THAT(readback_tensor.to_vector<float>(), Pointwise(FloatEq(), host_data));
+            std::iota(expected_readback_data.begin(), expected_readback_data.end(), j);
+            EXPECT_THAT(readback_tensor.to_vector<uint32_t>(), Pointwise(Eq(), expected_readback_data))
+                << "At iteration " << j;
 
             ttnn::record_event(device->command_queue(*read_cq), read_event);
         }

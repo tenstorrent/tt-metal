@@ -107,6 +107,9 @@ void kernel_main() {
 #else
     rt_args_idx += 2;  // Skip over placeholders
 #endif
+#ifndef OUT_SHARDED
+    const uint32_t last_num_blocks_w_dim = get_arg_val<uint32_t>(rt_args_idx++);
+#endif
 
     constexpr bool fuse_op = (bool)get_compile_time_arg_val(31);
 
@@ -420,9 +423,10 @@ void kernel_main() {
 
 #ifndef OUT_SHARDED
                 // WRITER
+                uint32_t num_blocks_w_dim_ = bw >= last_num_blocks_w_dim - 1 ? last_num_blocks_w_dim : num_blocks_w_dim;
                 uint32_t out_num_nonzero_subblocks_h_ = out_num_nonzero_subblocks_h;
                 uint32_t out_num_nonzero_subblocks_w_ = out_num_nonzero_subblocks_w;
-                if (bw == num_blocks_w_dim - 1) {
+                if (bw == num_blocks_w_dim_ - 1) {
                     out_num_nonzero_subblocks_w_ = out_last_num_nonzero_subblocks_w;
                 }
                 uint32_t out_tensor_sbh_start_tile_id = out_tensor_current_w_dim_block_tile_id;
@@ -437,7 +441,7 @@ void kernel_main() {
                         if (bh == num_blocks_h_dim - 1 && sbh == out_num_nonzero_subblocks_h - 1) {
                             out_subblock_h_ = out_last_subblock_h;
                         }
-                        if (bw == num_blocks_w_dim - 1 && sbw == out_num_nonzero_subblocks_w - 1) {
+                        if (bw == num_blocks_w_dim_ - 1 && sbw == out_num_nonzero_subblocks_w_ - 1) {
                             out_subblock_w_ = out_last_subblock_w;
                             subblock_tiles_addr_skip = padded_subblock_tiles_addr_skip;
                         }
@@ -448,7 +452,9 @@ void kernel_main() {
                         for (uint32_t h = 0; h < out_subblock_h_; ++h) {
                             uint32_t out_tensor_tile_id = out_tensor_sb_row_start_tile_id;
                             for (uint32_t w = 0; w < out_subblock_w_; ++w) {
-                                noc_async_write_tile(out_tensor_tile_id, s, l1_read_addr);
+                                if (bw < num_blocks_w_dim_) {
+                                    noc_async_write_tile(out_tensor_tile_id, s, l1_read_addr);
+                                }
 
                                 l1_read_addr += output_single_tile_size_bytes;
 
@@ -464,7 +470,7 @@ void kernel_main() {
                         out_tensor_sbw_start_tile_id += out_tensor_next_subblock_stride_w;
                     }
                     // Pop fully padded subblocks along the row
-                    if (bw == num_blocks_w_dim - 1) {
+                    if (bw == num_blocks_w_dim_ - 1) {
                         cb_wait_front(cb_id_out0, padded_block_tiles_w_skip);
                         cb_pop_front(cb_id_out0, padded_block_tiles_w_skip);
                     }

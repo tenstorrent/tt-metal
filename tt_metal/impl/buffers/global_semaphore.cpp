@@ -18,6 +18,8 @@
 #include <device.hpp>
 #include <hal.hpp>
 
+#include "tt_cluster.hpp"
+
 namespace tt::tt_metal {
 
 GlobalSemaphore::GlobalSemaphore(

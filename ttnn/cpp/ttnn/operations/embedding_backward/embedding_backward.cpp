@@ -29,7 +29,7 @@ Tensor EmbeddingBackwardOperation::invoke(
     auto input_tensor = ttnn::reshape(input_tensor_arg, ttnn::Shape({batch_size, 1, 1, sentence_size}));
 
     auto input_gradient =
-        operation::run(
+        tt::tt_metal::operation::run(
             EmbeddingBackward{
                 .output_mem_config = memory_config.value_or(output_gradient_tensor_arg.memory_config()),
                 .output_dtype = dtype.value_or(output_gradient_tensor_arg.get_dtype()),

@@ -9,25 +9,20 @@
 
 #include "device.hpp"
 #include "hostdevcommon/common_values.hpp"
-#include "work_executor.hpp"
-#include "basic_allocator.hpp"
-#include "l1_banking_allocator.hpp"
+#include "work_executor_types.hpp"
 #include "data_types.hpp"
 #include "program_device_map.hpp"
 #include "build.hpp"
-#include "tt_cluster.hpp"
 #include "hal.hpp"
 #include "command_queue_interface.hpp"
 #include "command_queue.hpp"
 #include "sub_device_manager_tracker.hpp"
 #include "sub_device_types.hpp"
 #include "trace_buffer.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "program_cache.hpp"
 
 namespace tt::tt_metal {
-
-inline namespace v0 {
 
 // A physical PCIexpress Tenstorrent device
 class Device : public IDevice {
@@ -50,14 +45,14 @@ public:
     Device(const Device &other) = delete;
     Device& operator=(const Device &other) = delete;
 
-    Device(Device &&other) = default;
-    Device& operator=(Device &&other) = default;
+    Device(Device&& other);
+    Device& operator=(Device&& other);
 
     tt::ARCH arch() const override;
 
     chip_id_t id() const override { return id_; }
-
-    uint32_t build_key() const override { return build_key_; }
+    // For a single device, build id is the same as device id
+    chip_id_t build_id() const override { return id_; }
 
     uint8_t num_hw_cqs() const override { return num_hw_cqs_; }
 
@@ -86,8 +81,12 @@ public:
     // Ethernet API
     CoreCoord ethernet_core_from_logical_core(const CoreCoord &logical_core) const override;
     CoreCoord logical_core_from_ethernet_core(const CoreCoord &ethernet_core) const override;
+    // `skip_reserved_tunnel_cores` is ignored on BH because there are no ethernet cores used for Fast Dispatch
+    // tunneling
     std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores=false) const override;
     std::unordered_set<CoreCoord> get_inactive_ethernet_cores() const override;
+    // `skip_reserved_tunnel_cores` is ignored on BH because there are no ethernet cores used for Fast Dispatch
+    // tunneling
     bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores=false) const override;
     std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const override;
     std::vector<CoreCoord> get_ethernet_sockets(chip_id_t connected_chip_id) const override;
@@ -117,20 +116,17 @@ public:
     uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const override;
     uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const override;
 
-    const JitBuildEnv& build_env() const override { return this->build_env_; }
-    const string build_firmware_target_path(uint32_t programmable_core, uint32_t processor_class, int i) const override;
-    const string build_kernel_target_path(uint32_t programmable_core, uint32_t processor_class, int i, const string& kernel_name) const override;
-    const JitBuildState& build_firmware_state(uint32_t programmable_core, uint32_t processor_class, int i) const override;
-    const JitBuildState& build_kernel_state(uint32_t programmable_core, uint32_t processor_class, int i) const override;
-    const JitBuildStateSubset build_kernel_states(uint32_t programmable_core, uint32_t processor_class) const override;
-
     SystemMemoryManager& sysmem_manager() override { return *sysmem_manager_; }
     CommandQueue& command_queue(size_t cq_id = 0) override;
 
     // Metal trace device capture mode
     void begin_trace(const uint8_t cq_id, const uint32_t tid) override;
     void end_trace(const uint8_t cq_id, const uint32_t tid) override;
-    void replay_trace(const uint8_t cq_id, const uint32_t tid, const bool blocking) override;
+    void replay_trace(
+        const uint8_t cq_id,
+        const uint32_t tid,
+        const bool block_on_device,
+        const bool block_on_worker_thread) override;
     void release_trace(const uint32_t tid) override;
     std::shared_ptr<TraceBuffer> get_trace(uint32_t tid) override;
     uint32_t get_trace_buffers_size() const override { return trace_buffers_size_; }
@@ -143,20 +139,29 @@ public:
 
     // Checks that the given arch is on the given pci_slot and that it's responding
     // Puts device into reset
-    bool initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap = {}, bool minimal = false) override;
-    void build_firmware() override;
+    bool initialize(
+        const uint8_t num_hw_cqs,
+        size_t l1_small_size,
+        size_t trace_region_size,
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        bool minimal = false) override;
     void reset_cores() override;
     void initialize_and_launch_firmware() override;
     void init_command_queue_host() override;
     void init_command_queue_device() override;
 
+    void init_fabric() override;
+
     // Puts device into reset
     bool close() override;
 
+    // Calls to enable_async are ignored in effort to forcefully disable async for single device use-cases
+    // MeshDevice calls force_enable_async directly avoiding enable_async call for multi-device use-case
     void enable_async(bool enable) override;
+    void force_enable_async(bool enable);
     void synchronize() override;
-    WorkExecutorMode get_worker_mode() override { return work_executor_.get_worker_mode(); }
-    bool is_worker_queue_empty() const override { return work_executor_.worker_queue.empty(); }
+    WorkExecutorMode get_worker_mode() override;
+    bool is_worker_queue_empty() const override;
 
     void push_work(std::function<void()> work, bool blocking) override;
 
@@ -170,8 +175,6 @@ public:
     HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const override;
 
     std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const std::vector<CoreRange>& ranges, const CoreType core_type) override;
-
-    size_t get_device_kernel_defines_hash() override;
 
     uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const override;
     uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;
@@ -195,7 +198,6 @@ public:
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
 
     bool is_mmio_capable() const override;
-    std::vector<std::vector<chip_id_t>> get_tunnels_from_mmio() const override { return tunnels_from_mmio_; }
 
 private:
     static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;
@@ -203,8 +205,6 @@ private:
     void initialize_cluster();
     std::unique_ptr<Allocator> initialize_allocator(
         size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap = {});
-    void initialize_build();
-    void initialize_device_kernel_defines();
     void initialize_device_bank_to_noc_tables(const HalProgrammableCoreType &core_type, CoreCoord virtual_core);
     void initialize_firmware(const HalProgrammableCoreType &core_type, CoreCoord virtual_core, launch_msg_t *launch_msg, go_msg_t* go_msg);
 
@@ -216,9 +216,8 @@ private:
     void configure_command_queue_programs();
     void clear_l1_state();
     void get_associated_dispatch_virtual_cores(
-        std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> &my_dispatch_cores,
-        std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> &other_dispatch_cores);
-    std::pair<int, int> build_processor_type_to_index(uint32_t programmable_core, uint32_t processor_class) const;
+        std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>>& my_dispatch_cores,
+        std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>>& other_dispatch_cores);
 
     void set_worker_mode(const WorkExecutorMode& mode);
 
@@ -233,7 +232,6 @@ private:
     CoreCoord virtual_core_from_physical_core(const CoreCoord& physical_coord) const;
 
     chip_id_t id_;
-    uint32_t build_key_ = 0;
     std::vector<std::vector<chip_id_t>> tunnels_from_mmio_;
 
     std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
@@ -243,9 +241,12 @@ private:
     std::vector<std::unique_ptr<Program>> command_queue_programs_;
     bool using_fast_dispatch_ = false;
 
+    // Fabric program includes ethernet router kernel
+    std::unique_ptr<Program> fabric_program_;
+
     // Work Executor for this device - can asynchronously process host side work for
     // all tasks scheduled on this device
-    WorkExecutor work_executor_;
+    std::unique_ptr<WorkExecutor> work_executor_;
     uint32_t worker_thread_core_ = 0;
     uint32_t completion_queue_reader_core_ = 0;
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
@@ -254,17 +255,10 @@ private:
     // SystemMemoryManager is the interface to the hardware command queue
     std::vector<std::unique_ptr<CommandQueue>> command_queues_;
 
-    JitBuildEnv build_env_;
-    JitBuildStateSet firmware_build_states_;
-    JitBuildStateSet kernel_build_states_;
-    std::vector<std::vector<std::pair<int, int>>> build_state_indices_;
-
     std::set<CoreCoord> compute_cores_;
     std::set<CoreCoord> storage_only_cores_;
     std::set<CoreCoord> ethernet_cores_;
     std::vector<CoreCoord> optimal_dram_bank_to_logical_worker_assignment_;
-
-    std::map<std::string, std::string> device_kernel_defines_;
 
     std::vector<int32_t> dram_bank_offset_map_;
     std::vector<int32_t> l1_bank_offset_map_;
@@ -274,7 +268,8 @@ private:
     program_cache::detail::ProgramCache program_cache_;
 
     uint32_t trace_buffers_size_ = 0;
+    bool uninitialized_error_fired_ =
+        false;  // To avoid spam with warnings about calling Device methods when it's not initialized.
 };
 
-}  // namespace v0
 }  // namespace tt::tt_metal

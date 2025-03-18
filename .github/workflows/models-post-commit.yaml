@@ -19,14 +19,12 @@ on:
         required: true
         type: choice
         options:
-          - grayskull
           - wormhole_b0
           - blackhole
       runner-label:
         required: true
         type: choice
         options:
-          - E150
           - N150
           - N300
           - BH
@@ -62,6 +60,7 @@ jobs:
           backoff-seconds: 60
           command: ./.github/scripts/cloud_utils/mount_weka.sh
       - uses: actions/download-artifact@v4
+        timeout-minutes: 10
         with:
           name: eager-dist-${{ matrix.os }}-any
       - name: ${{ matrix.test-group.name }} tests
@@ -72,6 +71,7 @@ jobs:
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e ARCH_NAME=${{ inputs.arch }}
+            -e GITHUB_ACTIONS=true
           run_args: |
             source tests/scripts/run_python_model_tests.sh && run_python_model_tests_${{ inputs.arch }}
       - uses: ./.github/actions/slack-report
@@ -79,7 +79,8 @@ jobs:
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: U06CXU895AP # Michael Chiou
-      - uses: ./.github/actions/upload-artifact-with-job-uuid
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           path: |
@@ -111,6 +112,7 @@ jobs:
           backoff-seconds: 60
           command: ./.github/scripts/cloud_utils/mount_weka.sh
       - uses: actions/download-artifact@v4
+        timeout-minutes: 10
         with:
           name: eager-dist-${{ matrix.os }}-any
       - name: ${{ matrix.test-group.name }} slow runtime mode tests
@@ -129,7 +131,8 @@ jobs:
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: U06CXU895AP # Michael Chiou
-      - uses: ./.github/actions/upload-artifact-with-job-uuid
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           path: |

@@ -8,7 +8,8 @@
 #include "ops/dropout_op.hpp"
 namespace ttml::modules {
 
-DropoutLayer::DropoutLayer(float probability) : m_prob(probability) {
+DropoutLayer::DropoutLayer(float probability, bool use_per_device_seed) :
+    m_prob(probability), m_use_per_device_seed(use_per_device_seed) {
     create_name("dropout");
 }
 
@@ -17,7 +18,7 @@ DropoutLayer::DropoutLayer(float probability) : m_prob(probability) {
         return tensor;
     }
 
-    return ttml::ops::dropout(tensor, m_prob);
+    return ttml::ops::dropout(tensor, m_prob, m_use_per_device_seed);
 }
 
 }  // namespace ttml::modules

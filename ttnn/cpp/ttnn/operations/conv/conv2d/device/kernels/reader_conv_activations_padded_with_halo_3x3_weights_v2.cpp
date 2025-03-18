@@ -31,6 +31,12 @@ void kernel_main() {
 
     constexpr uint32_t act_block_h_datums_read_last_block =
         act_block_h_datums_last_block > act_block_h_datums ? act_block_h_datums / 2 : act_block_h_datums_last_block / 2;
+    constexpr uint32_t act_block_h_datums_second_reader = get_compile_time_arg_val(26);
+    constexpr uint32_t act_block_h_datums_second_reader_read = act_block_h_datums_second_reader / 2;
+
+    constexpr uint32_t cb_id_act = get_compile_time_arg_val(27);
+    constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(28);
+    constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(29);
 
     uint32_t i = 0;
     uint32_t noop = get_arg_val<uint32_t>(i);
@@ -39,9 +45,6 @@ void kernel_main() {
     if (noop) {
         return;
     }
-
-    constexpr uint32_t cb_id_act = 0;
-    constexpr uint32_t cb_id_sharded_act = 3;
 
     // LOOP TO FILL READER OFFSETS
     /* We can add another loop to read chunks of a stick as well.
@@ -67,7 +70,6 @@ void kernel_main() {
     constexpr uint32_t act_block_num_tiles_read = act_block_num_tiles;
 
     // LOOP TO FILL READER INDICES
-    constexpr uint32_t cb_reader_indices = tt::CBIndex::c_4;
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
 
@@ -150,7 +152,8 @@ void kernel_main() {
 
         start_reader_idx = reader_idx;
 #ifdef SPLIT_READER
-        start_reader_idx += act_block_h_datums_read;
+        start_reader_idx += act_block_h_datums_second_reader_read;
 #endif
     }
+    noc_async_write_barrier();
 }

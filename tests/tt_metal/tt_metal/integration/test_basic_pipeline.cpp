@@ -19,11 +19,12 @@
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device.hpp>
 
+namespace tt::tt_metal {
+
 using std::map;
 using std::vector;
 using namespace tt;
 using namespace tt::test_utils;
-using namespace tt::tt_metal;
 
 namespace unit_tests::create_pipeline {
 
@@ -320,3 +321,5 @@ TEST_F(CommandQueueProgramFixture, TensixTestPipelineAcrossRows) {
     test_config.num_repetitions = 128;
     unit_tests::create_pipeline::create_and_run_row_pipeline(this->device_, test_config);
 }
+
+}  // namespace tt::tt_metal

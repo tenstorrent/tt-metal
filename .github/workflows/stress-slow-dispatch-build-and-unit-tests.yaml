@@ -19,15 +19,12 @@ jobs:
       fail-fast: false
       matrix:
         runner-info: [
-          # E150
-          {arch: grayskull, runs-on: ["cloud-virtual-machine", "E150", "in-service"], machine-type: "virtual_machine", name: "E150"},
           # N150
           {arch: wormhole_b0, runs-on: ["cloud-virtual-machine", "N150", "in-service"], machine-type: "virtual_machine", name: "N150"},
           # N300
           {arch: wormhole_b0, runs-on: ["cloud-virtual-machine", "N300", "in-service"], machine-type: "virtual_machine", name: "N300"},
         ]
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.runner-info.arch }}
       TT_METAL_SLOW_DISPATCH_MODE: 1
       TT_METAL_WATCHER: 60
@@ -39,6 +36,7 @@ jobs:
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - uses: actions/download-artifact@v4
+        timeout-minutes: 10
         with:
           name: TTMetal_build_any
       - name: Extract files
@@ -51,6 +49,7 @@ jobs:
       - name: Upload watcher log
         if: always()
         uses: actions/upload-artifact@v4
+        timeout-minutes: 10
         with:
           name: watcher-log-${{ matrix.runner-info.arch }}-${{ matrix.runner-info.machine-type }}
           path: generated/watcher/watcher.log

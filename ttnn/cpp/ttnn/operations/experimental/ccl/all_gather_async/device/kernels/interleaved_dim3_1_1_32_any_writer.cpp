@@ -4,7 +4,7 @@
 
 #include "dataflow_api.h"
 #include <tt-metalium/buffer_constants.hpp>
-#include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 #include "minimal_ccl_common.hpp"
 #include <cstdint>
@@ -94,14 +94,14 @@ void kernel_main() {
     DPRINT << "packet_header_buffer_seminc: " << (uint32_t)packet_header_buffer_seminc << "\n";
 
     // pre-populate packet headers
-    volatile tt::fabric::PacketHeader* pkt_hdr_forward =
-        reinterpret_cast<volatile tt::fabric::PacketHeader*>(packet_header_buffer_addr_forward);
-    volatile tt::fabric::PacketHeader* pkt_hdr_backward =
-        reinterpret_cast<volatile tt::fabric::PacketHeader*>(packet_header_buffer_addr_backward);
+    volatile PACKET_HEADER_TYPE* pkt_hdr_forward =
+        reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr_forward);
+    volatile PACKET_HEADER_TYPE* pkt_hdr_backward =
+        reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr_backward);
     pkt_hdr_forward->to_chip_multicast(
-        tt::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_forward_direction)});
+        tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_forward_direction)});
     pkt_hdr_backward->to_chip_multicast(
-        tt::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
+        tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
 
     // interleaved addrgen
     constexpr bool is_dram = buffer0_type == tt::tt_metal::BufferType::DRAM;
@@ -152,8 +152,8 @@ void kernel_main() {
     // 2. mcast output ready semaphore
     uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr, 0);
-    auto* pkt_hdr = reinterpret_cast<tt::fabric::PacketHeader*>(packet_header_buffer_seminc);
-    pkt_hdr->to_noc_unicast_atomic_inc(tt::fabric::NocUnicastAtomicIncCommandHeader{
+    auto* pkt_hdr = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
+    pkt_hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
         out_ready_sem_noc_addr_in_pkt,
         static_cast<uint16_t>(1),  // increment 1
         32});
@@ -161,17 +161,17 @@ void kernel_main() {
     if (fabric_connection.has_forward_connection()) {
         fabric_connection.get_forward_connection().wait_for_empty_write_slot();
         pkt_hdr->to_chip_multicast(
-            tt::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_forward_direction)});
+            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_forward_direction)});
         fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
-            packet_header_buffer_seminc, sizeof(tt::fabric::PacketHeader));
+            packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
     // Write the mcast packet (backward)
     if (fabric_connection.has_backward_connection()) {
         pkt_hdr->to_chip_multicast(
-            tt::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
+            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
         fabric_connection.get_backward_connection().wait_for_empty_write_slot();
         fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
-            packet_header_buffer_seminc, sizeof(tt::fabric::PacketHeader));
+            packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
     // increment locally
     uint64_t out_ready_sem_noc_addr =

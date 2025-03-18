@@ -19,7 +19,7 @@ struct HaloOperation {
         bool remote_read = false,
         bool transpose_mcast = true,
         uint32_t reshard_num_cores_nhw = 0,
-        const MemoryConfig& output_memory_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        const MemoryConfig& output_memory_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         bool is_out_tiled = true);
 
     // invoke can be overloaded as many times as needed to provide all desired APIs

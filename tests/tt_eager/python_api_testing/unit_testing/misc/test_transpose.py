@@ -11,7 +11,7 @@ import ttnn
 from loguru import logger
 from models.utility_functions import is_grayskull, is_blackhole, torch_random
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
-from models.utility_functions import skip_for_grayskull, skip_for_blackhole
+from models.utility_functions import skip_for_grayskull, skip_for_blackhole, run_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -54,6 +54,29 @@ def transpose(
 
     if expected_program_cache_size != None:
         assert device.num_program_cache_entries() == expected_program_cache_size
+
+
+@run_for_blackhole()
+def test_fold_transpose(device, use_program_cache):
+    N = 32
+    C = 4
+    H = 256
+    W = 224
+    input_shape = (N, C, H, W)
+    ## 128
+    grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(12, 8)),
+            ttnn.CoreRange(ttnn.CoreCoord(0, 9), ttnn.CoreCoord(10, 9)),
+        }
+    )
+    sharded_config = ttnn.create_sharded_memory_config_(
+        input_shape,
+        grid,
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    transpose(input_shape, device, dim0=2, dim1=3, input_mem_config=sharded_config, output_mem_config=sharded_config)
 
 
 @pytest.mark.parametrize(
@@ -1168,3 +1191,39 @@ def test_transpose_high_rank(*, device: ttnn.Device, rank: int, indices, layout)
 
     assert torch.allclose(a, output_a)
     assert torch.allclose(b, output_b)
+
+
+@pytest.mark.parametrize(
+    "n, c, h, w, dim0, dim1",
+    [(16, 128, 128, 16, 1, 2)],
+)
+def test_resnet50_fold(device, n, c, h, w, dim0, dim1):
+    core_grid = ttnn.CoreGrid(y=8, x=8)
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if core_grid.x > compute_grid_size.x or core_grid.y > compute_grid_size.y:
+        pytest.skip(f"Need {core_grid} grid size to run this test but core grid is {compute_grid_size}")
+
+    torch.manual_seed(0)
+    input_shape = (n, c, h, w)
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+
+    ## WH -> HW
+    torch_output = torch_input.transpose(dim0, dim1)
+
+    mem_config = ttnn.create_sharded_memory_config(
+        input_shape,
+        core_grid=core_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=mem_config,
+    )
+    tt_output = ttnn.transpose(tt_input, dim0, dim1)
+    tt_output = ttnn.to_torch(tt_output.cpu())
+
+    assert_with_pcc(torch_output, tt_output, 0.9999)

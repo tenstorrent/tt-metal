@@ -10,6 +10,7 @@
 
 namespace ttnn::operations::experimental::transformer::detail {
 
-operation::ProgramWithCallbacks rotate_half_single_core(const Tensor& input_tensor, Tensor& output_tensor);
+tt::tt_metal::operation::ProgramWithCallbacks rotate_half_single_core(
+    const Tensor& input_tensor, Tensor& output_tensor);
 
 }  // namespace ttnn::operations::experimental::transformer::detail

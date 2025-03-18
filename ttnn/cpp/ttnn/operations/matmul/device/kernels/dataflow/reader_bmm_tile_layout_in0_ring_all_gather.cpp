@@ -78,4 +78,5 @@ void kernel_main() {
             }
         }
     }
+    noc_async_atomic_barrier();
 }

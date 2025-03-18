@@ -9,8 +9,10 @@
 //    double buffered ScratchBuf for out of band data (e.g., from DRAM)
 //  - syncs w/ dispatcher via 2 semaphores, page_ready, page_done
 
-#include <cq_commands.hpp>
+#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
 #include "debug/dprint.h"
 #include "noc/noc_parameters.h"  // PCIE_ALIGNMENT
 
@@ -46,7 +48,7 @@ constexpr uint32_t cmddat_q_size = get_compile_time_arg_val(12);
 // unused for prefetch_h
 constexpr uint32_t scratch_db_base = get_compile_time_arg_val(13);
 constexpr uint32_t scratch_db_size = get_compile_time_arg_val(14);
-constexpr uint32_t downstream_sync_sem_id = get_compile_time_arg_val(15);
+constexpr uint32_t my_downstream_sync_sem_id = get_compile_time_arg_val(15);
 
 // prefetch_d specific
 constexpr uint32_t cmddat_q_pages = get_compile_time_arg_val(16);
@@ -61,8 +63,39 @@ constexpr uint32_t my_dispatch_s_cb_sem_id = get_compile_time_arg_val(22);
 constexpr uint32_t downstream_dispatch_s_cb_sem_id = get_compile_time_arg_val(23);
 constexpr uint32_t dispatch_s_buffer_size = get_compile_time_arg_val(24);
 constexpr uint32_t dispatch_s_cb_log_page_size = get_compile_time_arg_val(25);
-constexpr uint32_t is_d_variant = get_compile_time_arg_val(26);
-constexpr uint32_t is_h_variant = get_compile_time_arg_val(27);
+
+// used for fd on fabric
+constexpr uint32_t downstream_mesh_id = get_compile_time_arg_val(26);
+constexpr uint32_t downstream_chip_id = get_compile_time_arg_val(27);
+constexpr uint32_t upstream_mesh_id = get_compile_time_arg_val(28);
+constexpr uint32_t upstream_chip_id = get_compile_time_arg_val(29);
+constexpr uint32_t fabric_router_noc_xy = get_compile_time_arg_val(30);
+constexpr uint32_t client_interface_addr = get_compile_time_arg_val(31);
+
+constexpr uint32_t is_d_variant = get_compile_time_arg_val(32);
+constexpr uint32_t is_h_variant = get_compile_time_arg_val(33);
+
+constexpr uint32_t prefetch_q_end = prefetch_q_base + prefetch_q_size;
+constexpr uint32_t cmddat_q_end = cmddat_q_base + cmddat_q_size;
+constexpr uint32_t scratch_db_end = scratch_db_base + scratch_db_size;
+
+// hd and h: fetch_q, cmddat_q, scratch_db
+static_assert(
+    !(is_h_variant) || (prefetch_q_base >= cmddat_q_end || cmddat_q_base >= prefetch_q_end),
+    "prefetch_q and cmddat_q overlap");
+
+static_assert(
+    !(is_h_variant) || (prefetch_q_base >= scratch_db_end || scratch_db_base >= prefetch_q_end),
+    "prefetch_q and scratch_db overlap");
+
+static_assert(
+    !(is_h_variant) || (scratch_db_base >= cmddat_q_end || cmddat_q_base >= scratch_db_end),
+    "cmddat_q and scratch_db overlap");
+
+// d: cmddat_q, scratch_db
+static_assert(
+    !(is_d_variant && !is_h_variant) || (scratch_db_base >= cmddat_q_end || cmddat_q_base >= scratch_db_end),
+    "cmddat_q and scratch_db overlap");
 
 constexpr uint8_t my_noc_index = NOC_INDEX;
 constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
@@ -75,9 +108,7 @@ constexpr uint32_t downstream_cb_page_size = 1 << downstream_cb_log_page_size;
 constexpr uint32_t dispatch_s_cb_page_size = 1 << dispatch_s_cb_log_page_size;
 constexpr uint32_t downstream_cb_end = downstream_cb_base + (1 << downstream_cb_log_page_size) * downstream_cb_pages;
 constexpr uint32_t dispatch_s_buffer_end = dispatch_s_buffer_base + dispatch_s_buffer_size;
-constexpr uint32_t prefetch_q_end = prefetch_q_base + prefetch_q_size;
 constexpr uint32_t cmddat_q_page_size = 1 << cmddat_q_log_page_size;
-constexpr uint32_t cmddat_q_end = cmddat_q_base + cmddat_q_size;
 
 constexpr uint32_t scratch_db_half_size = scratch_db_size / 2;
 constexpr uint32_t scratch_db_base0 = scratch_db_base;
@@ -136,6 +167,9 @@ static uint32_t downstream_data_ptr_s = dispatch_s_buffer_base;
 static uint32_t block_next_start_addr[cmddat_q_blocks];
 static uint32_t rd_block_idx = 0;
 static uint32_t upstream_total_acquired_page_count = 0;
+static auto client_interface =
+    reinterpret_cast<volatile tt_l1_ptr fabric_pull_client_interface_t*>(client_interface_addr);
+
 // Feature to stall the prefetcher, mainly for ExecBuf impl which reuses CmdDataQ
 static enum StallState { STALL_NEXT = 2, STALLED = 1, NOT_STALLED = 0 } stall_state = NOT_STALLED;
 
@@ -902,7 +936,7 @@ uint32_t process_stall(uint32_t cmd_ptr) {
 
     WAYPOINT("PSW");
     volatile tt_l1_ptr uint32_t* sem_addr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(downstream_sync_sem_id));
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_downstream_sync_sem_id));
     uint32_t heartbeat = 0;
     do {
         invalidate_l1_cache();

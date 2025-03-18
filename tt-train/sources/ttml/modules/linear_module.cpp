@@ -6,28 +6,35 @@
 
 #include <core/ttnn_all_includes.hpp>
 
+#include "autograd/auto_context.hpp"
+#include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "init/cpu_initializers.hpp"
 #include "init/tensor_initializers.hpp"
+#include "ops/linear_op.hpp"
 
 namespace ttml::modules {
 
-void LinearLayer::initialize_tensors(uint32_t in_features, uint32_t out_features, bool has_bias) {
+namespace {
+ttml::autograd::TensorPtr create_weight(uint32_t in_features, uint32_t out_features) {
     auto* device = &autograd::ctx().get_device();
     auto weight_shape = core::create_shape({1, 1, out_features, in_features});
-    m_weight = ttml::autograd::create_tensor();
+    auto weight = ttml::autograd::create_tensor();
     const float init_k = std::sqrtf(1.F / static_cast<float>(in_features));
-    init::uniform_init(m_weight, weight_shape, init::UniformRange{-init_k, init_k});
-    if (has_bias) {
-        auto bias_shape = core::create_shape({1, 1, 1, out_features});
-        m_bias = ttml::autograd::create_tensor();
-        init::uniform_init(m_bias, bias_shape, init::UniformRange{-init_k, init_k});
-    }
+    init::uniform_init(weight, weight_shape, init::UniformRange{-init_k, init_k});
+    return weight;
 }
+ttml::autograd::TensorPtr create_bias(uint32_t in_features, uint32_t out_features) {
+    const float init_k = std::sqrtf(1.F / static_cast<float>(in_features));
+    auto* device = &ttml::autograd::ctx().get_device();
+    auto bias_shape = ttml::core::create_shape({1, 1, 1, out_features});
+    auto bias = ttml::autograd::create_tensor();
+    ttml::init::uniform_init(bias, bias_shape, ttml::init::UniformRange{-init_k, init_k});
+    return bias;
+}
+}  // namespace
 
-LinearLayer::LinearLayer(uint32_t in_features, uint32_t out_features, bool has_bias) {
-    initialize_tensors(in_features, out_features, has_bias);
-
+void LinearLayer::register_tensors() {
     create_name("linear");
     register_tensor(m_weight, "weight");
     if (m_bias != nullptr) {
@@ -35,13 +42,31 @@ LinearLayer::LinearLayer(uint32_t in_features, uint32_t out_features, bool has_b
     }
 }
 
-autograd::TensorPtr LinearLayer::get_weight() const {
-    return m_weight;
+LinearLayer::LinearLayer(uint32_t in_features, uint32_t out_features, bool has_bias) {
+    m_weight = create_weight(in_features, out_features);
+    if (has_bias) {
+        m_bias = create_bias(in_features, out_features);
+    }
+    register_tensors();
 }
 
-void LinearLayer::set_weight(const autograd::TensorPtr& weight) {
-    m_weight = weight;
-    override_tensor(m_weight, "weight");
+LinearLayer::LinearLayer(const autograd::TensorPtr& weight, bool has_bias) : m_weight(weight) {
+    if (has_bias) {
+        auto weight_shape = m_weight->get_value().get_logical_shape();
+        uint32_t in_features = weight_shape[3];
+        uint32_t out_features = weight_shape[2];
+        m_bias = create_bias(in_features, out_features);
+    }
+    register_tensors();
+}
+
+LinearLayer::LinearLayer(const autograd::TensorPtr& weight, const autograd::TensorPtr& bias) :
+    m_weight(weight), m_bias(bias) {
+    register_tensors();
+}
+
+autograd::TensorPtr LinearLayer::get_weight() const {
+    return m_weight;
 }
 
 autograd::TensorPtr LinearLayer::operator()(const autograd::TensorPtr& tensor) {

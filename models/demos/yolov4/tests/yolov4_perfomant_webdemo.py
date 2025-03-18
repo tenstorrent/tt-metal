@@ -9,8 +9,6 @@ from models.utility_functions import (
     is_wormhole_b0,
 )
 from models.demos.yolov4.tests.yolov4_test_infra import create_test_infra
-from models.demos.yolov4.demo.demo import YoloLayer
-
 
 try:
     from tracy import signpost
@@ -29,175 +27,6 @@ def buffer_address(tensor):
 
 # TODO: Create ttnn apis for this
 ttnn.buffer_address = buffer_address
-
-
-def run_yolov4_inference(
-    device,
-    device_batch_size,
-    act_dtype,
-    weight_dtype,
-    model_location_generator,
-):
-    test_infra = create_test_infra(
-        device,
-        device_batch_size,
-        act_dtype,
-        weight_dtype,
-        model_location_generator=model_location_generator,
-    )
-
-    tt_inputs_host, self.input_mem_config = test_infra.setup_l1_sharded_input(device)
-
-    # # First run configures convs JIT
-    test_infra.input_tensor = tt_inputs_host.to(device, self.input_mem_config)
-    test_infra.run()
-    test_infra.validate()
-    test_infra.dealloc_output()
-
-    # Optimized run
-    test_infra.input_tensor = tt_inputs_host.to(device, self.input_mem_config)
-    test_infra.run()
-    test_infra.validate()
-    test_infra.dealloc_output()
-
-    # More optimized run with caching
-    if use_signpost:
-        signpost(header="start")
-    test_infra.input_tensor = tt_inputs_host.to(device, self.input_mem_config)
-    test_infra.run()
-    if use_signpost:
-        signpost(header="stop")
-    test_infra.validate()
-    test_infra.dealloc_output()
-
-
-def run_yolov4_trace_inference(
-    device,
-    device_batch_size,
-    act_dtype,
-    weight_dtype,
-    model_location_generator,
-):
-    test_infra = create_test_infra(
-        device,
-        device_batch_size,
-        act_dtype,
-        weight_dtype,
-        model_location_generator=model_location_generator,
-    )
-    tt_inputs_host, self.input_mem_config = test_infra.setup_l1_sharded_input(device)
-
-    # First run configures convs JIT
-    test_infra.input_tensor = tt_inputs_host.to(device, self.input_mem_config)
-    spec = test_infra.input_tensor.spec
-    test_infra.run()
-    test_infra.validate()
-    test_infra.dealloc_output()
-
-    # Optimized run
-    test_infra.input_tensor = tt_inputs_host.to(device, self.input_mem_config)
-    test_infra.run()
-    test_infra.validate()
-
-    # Capture
-    test_infra.input_tensor = tt_inputs_host.to(device, self.input_mem_config)
-    test_infra.dealloc_output()
-    trace_input_addr = ttnn.buffer_address(test_infra.input_tensor)
-    self.tid = ttnn.begin_trace_capture(device, cq_id=0)
-    test_infra.run()
-    tt_image_res = ttnn.allocate_tensor_on_device(spec, device)
-    ttnn.end_trace_capture(device, self.tid, cq_id=0)
-    assert trace_input_addr == ttnn.buffer_address(tt_image_res)
-
-    # More optimized run with caching
-    if use_signpost:
-        signpost(header="start")
-    ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 0)
-    ttnn.execute_trace(device, self.tid, cq_id=0, blocking=True)
-    if use_signpost:
-        signpost(header="stop")
-    test_infra.validate()
-
-    ttnn.release_trace(device, self.tid)
-    test_infra.dealloc_output()
-
-
-def run_yolov4_trace_2cqs_inference(
-    device,
-    device_batch_size,
-    act_dtype,
-    weight_dtype,
-    model_location_generator,
-):
-    test_infra = create_test_infra(
-        device,
-        device_batch_size,
-        act_dtype,
-        weight_dtype,
-        model_location_generator=model_location_generator,
-    )
-    tt_inputs_host, sharded_mem_config_DRAM, self.input_mem_config = test_infra.setup_dram_sharded_input(device)
-    tt_image_res = tt_inputs_host.to(device, sharded_mem_config_DRAM)
-    op_event = ttnn.create_event(device)
-    write_event = ttnn.create_event(device)
-    # Initialize the op event so we can write
-    ttnn.record_event(0, op_event)
-
-    # First run configures convs JIT
-    ttnn.wait_for_event(1, op_event)
-    ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-    ttnn.record_event(1, write_event)
-    ttnn.wait_for_event(0, write_event)
-    test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, self.input_mem_config)
-    spec = test_infra.input_tensor.spec
-    ttnn.record_event(0, op_event)
-    test_infra.run()
-    test_infra.validate()
-    test_infra.dealloc_output()
-
-    # Optimized run
-    ttnn.wait_for_event(1, op_event)
-    ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-    ttnn.record_event(1, write_event)
-    ttnn.wait_for_event(0, write_event)
-    test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, self.input_mem_config)
-    ttnn.record_event(0, op_event)
-    test_infra.run()
-    test_infra.validate()
-
-    # Capture
-    ttnn.wait_for_event(1, op_event)
-    ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-    ttnn.record_event(1, write_event)
-    ttnn.wait_for_event(0, write_event)
-    test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, self.input_mem_config)
-    ttnn.record_event(0, op_event)
-    test_infra.dealloc_output()
-    trace_input_addr = ttnn.buffer_address(test_infra.input_tensor)
-    self.tid = ttnn.begin_trace_capture(device, cq_id=0)
-    test_infra.run()
-    self.input_tensor = ttnn.allocate_tensor_on_device(spec, device)
-    ttnn.end_trace_capture(device, self.tid, cq_id=0)
-    assert trace_input_addr == ttnn.buffer_address(self.input_tensor)
-
-    # More optimized run with caching
-    if use_signpost:
-        signpost(header="start")
-    for iter in range(0, 2):
-        ttnn.wait_for_event(1, op_event)
-        ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-        ttnn.record_event(1, write_event)
-        ttnn.wait_for_event(0, write_event)
-        # TODO: Add in place support to ttnn to_memory_config
-        self.input_tensor = ttnn.reshard(tt_image_res, self.input_mem_config, self.input_tensor)
-        ttnn.record_event(0, op_event)
-        ttnn.execute_trace(device, self.tid, cq_id=0, blocking=False)
-    ttnn.synchronize_devices(device)
-
-    if use_signpost:
-        signpost(header="stop")
-
-    ttnn.release_trace(device, self.tid)
 
 
 class Yolov4Trace2CQ:
@@ -223,19 +52,18 @@ class Yolov4Trace2CQ:
             device
         )
         self.tt_image_res = self.tt_inputs_host.to(device, sharded_mem_config_DRAM)
-        self.op_event = ttnn.create_event(device)
-        self.write_event = ttnn.create_event(device)
+
         # Initialize the op event so we can write
-        ttnn.record_event(0, self.op_event)
+        self.op_event = ttnn.record_event(device, 0)
 
         # First run configures convs JIT
         ttnn.wait_for_event(1, self.op_event)
         ttnn.copy_host_to_device_tensor(self.tt_inputs_host, self.tt_image_res, 1)
-        ttnn.record_event(1, self.write_event)
+        self.write_event = ttnn.record_event(device, 1)
         ttnn.wait_for_event(0, self.write_event)
         self.test_infra.input_tensor = ttnn.to_memory_config(self.tt_image_res, self.input_mem_config)
         spec = self.test_infra.input_tensor.spec
-        ttnn.record_event(0, self.op_event)
+        self.op_event = ttnn.record_event(device, 0)
         self.test_infra.run()
         self.test_infra.validate()
         self.test_infra.dealloc_output()
@@ -243,20 +71,20 @@ class Yolov4Trace2CQ:
         # Optimized run
         ttnn.wait_for_event(1, self.op_event)
         ttnn.copy_host_to_device_tensor(self.tt_inputs_host, self.tt_image_res, 1)
-        ttnn.record_event(1, self.write_event)
+        self.write_event = ttnn.record_event(device, 1)
         ttnn.wait_for_event(0, self.write_event)
         self.test_infra.input_tensor = ttnn.to_memory_config(self.tt_image_res, self.input_mem_config)
-        ttnn.record_event(0, self.op_event)
+        self.op_event = ttnn.record_event(device, 0)
         self.test_infra.run()
         self.test_infra.validate()
 
         # Capture
         ttnn.wait_for_event(1, self.op_event)
         ttnn.copy_host_to_device_tensor(self.tt_inputs_host, self.tt_image_res, 1)
-        ttnn.record_event(1, self.write_event)
+        self.write_event = ttnn.record_event(device, 1)
         ttnn.wait_for_event(0, self.write_event)
         self.test_infra.input_tensor = ttnn.to_memory_config(self.tt_image_res, self.input_mem_config)
-        ttnn.record_event(0, self.op_event)
+        self.op_event = ttnn.record_event(device, 0)
         self.test_infra.dealloc_output()
         trace_input_addr = ttnn.buffer_address(self.test_infra.input_tensor)
         self.tid = ttnn.begin_trace_capture(device, cq_id=0)
@@ -267,12 +95,7 @@ class Yolov4Trace2CQ:
 
         self.device = device
 
-        # More optimized run with caching
-        # if use_signpost:
-        #    signpost(header="start")
-
     def get_region_boxes(self, boxes_and_confs):
-        print("Getting boxes from boxes and confs ...")
         boxes_list = []
         confs_list = []
 
@@ -280,8 +103,6 @@ class Yolov4Trace2CQ:
             boxes_list.append(item[0])
             confs_list.append(item[1])
 
-        # boxes: [batch, num1 + num2 + num3, 1, 4]
-        # confs: [batch, num1 + num2 + num3, num_classes]
         boxes = torch.cat(boxes_list, dim=1)
         confs = torch.cat(confs_list, dim=1)
 
@@ -291,64 +112,36 @@ class Yolov4Trace2CQ:
         tt_inputs_host = self.tt_inputs_host if tt_inputs_host is None else tt_inputs_host
         ttnn.wait_for_event(1, self.op_event)
         ttnn.copy_host_to_device_tensor(tt_inputs_host, self.tt_image_res, 1)
-        ttnn.record_event(1, self.write_event)
+        self.write_event = ttnn.record_event(self.device, 1)
         ttnn.wait_for_event(0, self.write_event)
         # TODO: Add in place support to ttnn to_memory_config
         self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
-        ttnn.record_event(0, self.op_event)
+        self.op_event = ttnn.record_event(self.device, 0)
         ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)
-        ttnn.synchronize_devices(self.device)
-        output = self.test_infra.output_tensor
+        ttnn.synchronize_device(self.device)
 
-        output_tensor1 = ttnn.to_torch(output[0])
-        output_tensor1 = output_tensor1.reshape(1, 40, 40, 255)
-        output_tensor1 = torch.permute(output_tensor1, (0, 3, 1, 2))
+        ttnn_output_tensor = self.test_infra.output_tensor
 
-        output_tensor2 = ttnn.to_torch(output[1])
-        output_tensor2 = output_tensor2.reshape(1, 20, 20, 255)
-        output_tensor2 = torch.permute(output_tensor2, (0, 3, 1, 2))
+        result_boxes_padded = ttnn.to_torch(ttnn_output_tensor[0])
+        result_confs = ttnn.to_torch(ttnn_output_tensor[1])
 
-        output_tensor3 = ttnn.to_torch(output[2])
-        output_tensor3 = output_tensor3.reshape(1, 10, 10, 255)
-        output_tensor3 = torch.permute(output_tensor3, (0, 3, 1, 2))
+        result_boxes_padded = result_boxes_padded.permute(0, 2, 1, 3)
+        result_boxes_list = []
+        # That ttnn tensor is the concat output of 3 padded tensors
+        # As a perf workaround I'm doing the unpadding on the torch output here.
+        # TODO: cleaner ttnn code when ttnn.untilize() is fully optimized
+        box_1_start_i = 0
+        box_1_end_i = 6100
+        box_2_start_i = 6128
+        box_2_end_i = 6228
+        box_3_start_i = 6256
+        box_3_end_i = 6356
+        result_boxes_list.append(result_boxes_padded[:, box_1_start_i:box_1_end_i])
+        result_boxes_list.append(result_boxes_padded[:, box_2_start_i:box_2_end_i])
+        result_boxes_list.append(result_boxes_padded[:, box_3_start_i:box_3_end_i])
+        result_boxes = torch.cat(result_boxes_list, dim=1)
 
-        n_classes = 80
-
-        yolo1 = YoloLayer(
-            anchor_mask=[0, 1, 2],
-            num_classes=n_classes,
-            anchors=[12, 16, 19, 36, 40, 28, 36, 75, 76, 55, 72, 146, 142, 110, 192, 243, 459, 401],
-            num_anchors=9,
-            stride=8,
-        )
-
-        yolo2 = YoloLayer(
-            anchor_mask=[3, 4, 5],
-            num_classes=n_classes,
-            anchors=[12, 16, 19, 36, 40, 28, 36, 75, 76, 55, 72, 146, 142, 110, 192, 243, 459, 401],
-            num_anchors=9,
-            stride=16,
-        )
-
-        yolo3 = YoloLayer(
-            anchor_mask=[6, 7, 8],
-            num_classes=n_classes,
-            anchors=[12, 16, 19, 36, 40, 28, 36, 75, 76, 55, 72, 146, 142, 110, 192, 243, 459, 401],
-            num_anchors=9,
-            stride=32,
-        )
-
-        y1 = yolo1(output_tensor1)
-        y2 = yolo2(output_tensor2)
-        y3 = yolo3(output_tensor3)
-
-        output = self.get_region_boxes([y1, y2, y3])
-
-        return output
-        # return self.test_infra.output_tensor
-
-        # if use_signpost:
-        #    signpost(header="stop")
+        return [result_boxes, result_confs]
 
     def release_yolov4_trace_2cqs_inference(self):
         ttnn.release_trace(self.device, self.tid)

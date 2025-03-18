@@ -3,36 +3,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "graph_processor.hpp"
+#include "graph_argument_serializer.hpp"
 #include "graph_consts.hpp"
-#include <tt-metalium/reflection.hpp>
 #include "ttnn/types.hpp"
-#include <tt-metalium/circular_buffer.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include "ttnn/core.hpp"
 #include "ttnn/graph/graph_consts.hpp"
 #include <cxxabi.h>
 #include <memory>
 #include <string>
+#include <tt-metalium/circular_buffer.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt_stl/reflection.hpp>
 #include <typeindex>
 #include <unordered_map>
-#include "ttnn/core.hpp"
 
 using namespace tt::tt_metal;
 
 namespace {
-std::string demangle(const char* name) {
-    int status = -4;
-
-    char* res = abi::__cxa_demangle(name, NULL, NULL, &status);
-
-    const char* const demangled_name = (status == 0) ? res : name;
-
-    std::string ret_val(demangled_name);
-
-    free(res);
-
-    return ret_val;
-}
-
 std::string tensorMemoryLayoutToString(TensorMemoryLayout layout) {
     switch (layout) {
         case TensorMemoryLayout::INTERLEAVED: return "INTERLEAVED";
@@ -54,6 +41,7 @@ nlohmann::json to_json(const ttnn::graph::GraphProcessor::Vertex& data) {
     j[ttnn::graph::kCounter] = data.counter;
     j[ttnn::graph::kNodeType] = data.node_type;
     j[ttnn::graph::kParams] = data.params;
+    j[ttnn::graph::kArguments] = data.arguments;
     j[ttnn::graph::kConnections] = data.connections;
     return j;
 }
@@ -101,6 +89,7 @@ GraphProcessor::GraphProcessor(RunMode mode) : run_mode(mode) {
         ptr->end_function_process_tensor(val);
     };
 }
+
 void GraphProcessor::track_allocate(const tt::tt_metal::Buffer* buffer) {
     const std::lock_guard<std::mutex> lock(mutex);
     auto buffer_id = add_buffer(buffer);
@@ -198,12 +187,17 @@ void GraphProcessor::track_function_start(std::string_view function_name, std::s
         {kInputs, std::to_string(input_parameters.size())},
         {kName, std::string(function_name)},
     };
+
+    std::vector<std::string> serialized_arguments;
+    serialized_arguments = GraphArgumentSerializer::instance().to_list(input_parameters);
+
     auto counter = graph.size();
     {
-        graph.push_back(Vertex{
+            graph.push_back(Vertex{
             .counter = counter,
             .node_type = kNodeFunctionStart,
             .params = params,
+            .arguments = serialized_arguments,
             .connections = {/*current_op_id.top()*/}});
         if (last_finished_op_id != -1) {
             graph[last_finished_op_id].connections.push_back(counter);
@@ -220,7 +214,7 @@ void GraphProcessor::track_function_start(std::string_view function_name, std::s
         if (it != begin_function_any_map.end()) {
             it->second(any);
         } else {
-            tt::log_info("input any type name ignored: {}", demangle(any.type().name()));
+            tt::log_info("input any type name ignored: {}", graph_demangle(any.type().name()));
         }
     }
 }
@@ -255,7 +249,7 @@ void GraphProcessor::track_function_end(const std::any& output_tensors) {
     if (it != end_function_any_map.end()) {
         it->second(output_tensors);
     } else {
-        tt::log_info("output any type name ignored: {}", demangle(output_tensors.type().name()));
+        tt::log_info("output any type name ignored: {}", graph_demangle(output_tensors.type().name()));
     }
     TT_ASSERT(current_op_id.size() > 0);  // we should always have capture_start on top
     current_op_id.pop();
@@ -297,7 +291,7 @@ int GraphProcessor::add_tensor(const Tensor& t) {
 
     if (buffers.empty()) {
         tt::log_info(
-            "Tensor doesn't have buffer, but storage is {}", demangle(get_type_in_var(t.get_storage()).name()));
+            "Tensor doesn't have buffer, but storage is {}", graph_demangle(get_type_in_var(t.get_storage()).name()));
     }
 
     for (auto& buffer : buffers) {

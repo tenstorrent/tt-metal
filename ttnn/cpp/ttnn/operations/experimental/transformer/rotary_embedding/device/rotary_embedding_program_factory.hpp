@@ -15,7 +15,7 @@
 namespace tt {
 namespace tt_metal {
 
-operation::ProgramWithCallbacks rotary_embedding_multi_core(
+tt::tt_metal::operation::ProgramWithCallbacks rotary_embedding_multi_core(
     const Tensor& input,
     const Tensor& cos,
     const Tensor& sin,

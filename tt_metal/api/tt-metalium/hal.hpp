@@ -137,6 +137,7 @@ inline const HalJitBuildConfig &HalCoreInfoType::get_jit_build_config(uint32_t p
 class Hal {
 public:
     using RelocateFunc = std::function<uint64_t(uint64_t, uint64_t)>;
+    using IramRelocateFunc = std::function<uint64_t(uint64_t)>;
     using ValidRegAddrFunc = std::function<bool(uint32_t)>;
     using NOCXYEncodingFunc = std::function<uint32_t(uint32_t, uint32_t)>;
     using NOCMulticastEncodingFunc = std::function<uint32_t(uint32_t, uint32_t, uint32_t, uint32_t)>;
@@ -149,6 +150,7 @@ private:
     std::vector<DeviceAddr> dram_bases_;
     std::vector<uint32_t> dram_sizes_;
     std::vector<uint32_t> mem_alignments_;
+    std::vector<uint32_t> mem_alignments_with_pcie_;
     uint32_t num_nocs_;
     uint32_t noc_addr_node_id_bits_;
     uint32_t noc_coord_reg_offset_;
@@ -159,17 +161,18 @@ private:
     bool coordinate_virtualization_enabled_;
     uint32_t virtual_worker_start_x_;
     uint32_t virtual_worker_start_y_;
+    bool eth_fw_is_cooperative_ = false;  // set when eth riscs have to context switch
 
     float eps_ = 0.0f;
     float nan_ = 0.0f;
     float inf_ = 0.0f;
 
-    void initialize_gs();
     void initialize_wh();
     void initialize_bh();
 
     // Functions where implementation varies by architecture
     RelocateFunc relocate_func_;
+    IramRelocateFunc erisc_iram_relocate_func_;
     ValidRegAddrFunc valid_reg_addr_func_;
     NOCXYEncodingFunc noc_xy_encoding_func_;
     NOCMulticastEncodingFunc noc_multicast_encoding_func_;
@@ -226,6 +229,7 @@ public:
     bool is_coordinate_virtualization_enabled() const { return this->coordinate_virtualization_enabled_; };
     std::uint32_t get_virtual_worker_start_x() const { return this->virtual_worker_start_x_; }
     std::uint32_t get_virtual_worker_start_y() const { return this->virtual_worker_start_y_; }
+    bool get_eth_fw_is_cooperative() const { return this->eth_fw_is_cooperative_; }
     uint32_t get_programmable_core_type_count() const;
     HalProgrammableCoreType get_programmable_core_type(uint32_t core_type_index) const;
     uint32_t get_programmable_core_type_index(HalProgrammableCoreType programmable_core_type_index) const;
@@ -247,6 +251,8 @@ public:
     uint32_t get_dev_size(HalDramMemAddrType addr_type) const;
 
     uint32_t get_alignment(HalMemType memory_type) const;
+    // Returns an alignment that is aligned with PCIE and the given memory type
+    uint32_t get_common_alignment_with_pcie(HalMemType memory_type) const;
 
     bool get_supports_cbs(uint32_t programmable_core_type_index) const;
 
@@ -258,6 +264,8 @@ public:
     uint64_t relocate_dev_addr(uint64_t addr, uint64_t local_init_addr = 0) {
         return relocate_func_(addr, local_init_addr);
     }
+
+    uint64_t erisc_iram_relocate_dev_addr(uint64_t addr) { return erisc_iram_relocate_func_(addr); }
 
     uint32_t valid_reg_addr(uint32_t addr) { return valid_reg_addr_func_(addr); }
 
@@ -342,6 +350,12 @@ inline uint32_t Hal::get_alignment(HalMemType memory_type) const {
     uint32_t index = utils::underlying_type<HalMemType>(memory_type);
     TT_ASSERT(index < this->mem_alignments_.size());
     return this->mem_alignments_[index];
+}
+
+inline uint32_t Hal::get_common_alignment_with_pcie(HalMemType memory_type) const {
+    uint32_t index = utils::underlying_type<HalMemType>(memory_type);
+    TT_ASSERT(index < this->mem_alignments_with_pcie_.size());
+    return this->mem_alignments_with_pcie_[index];
 }
 
 inline bool Hal::get_supports_cbs(uint32_t programmable_core_type_index) const {
