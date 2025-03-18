@@ -177,10 +177,9 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
         std::move(scoped_devices), std::make_unique<MeshDeviceView>(devices), std::shared_ptr<MeshDevice>());
 
     mesh_device->initialize(num_command_queues, l1_small_size, trace_region_size, l1_bank_remap);
-    // Temporary commented out, until we merge MeshDevice integration PR
-    // for (auto device : root_devices) {
-    //     dynamic_cast<Device*>(device)->mesh_device = mesh_device;
-    // }
+    for (auto device : root_devices) {
+        dynamic_cast<Device*>(device)->mesh_device = mesh_device;
+    }
     DevicePool::instance().init_profiler();
     return mesh_device;
 }
@@ -207,10 +206,9 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
     std::map<int, std::shared_ptr<MeshDevice>> result;
     for (size_t i = 0; i < device_ids.size(); i++) {
         submeshes[i]->initialize(num_command_queues, l1_small_size, trace_region_size, l1_bank_remap);
-        // Temporary commented out, until we merge MeshDevice integration PR
-        // for (auto device : submeshes[i]->get_devices()) {
-        //     dynamic_cast<Device*>(device)->mesh_device = mesh_device;
-        // }
+        for (auto device : submeshes[i]->get_devices()) {
+            dynamic_cast<Device*>(device)->mesh_device = mesh_device;
+        }
         result[device_ids[i]] = submeshes[i];
     }
     DevicePool::instance().init_profiler();
