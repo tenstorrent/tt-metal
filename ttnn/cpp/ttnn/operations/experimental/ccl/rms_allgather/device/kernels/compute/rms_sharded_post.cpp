@@ -32,17 +32,17 @@ void MAIN {
     constexpr uint32_t dst1 = 1;
     constexpr uint32_t scaler0 = 0;
 
-    constexpr uint32_t cb_xmm = tt::CBIndex::c_3;
+    constexpr uint32_t cb_out = tt::CBIndex::c_1;    // non reshard output or CB to resharder
+    constexpr uint32_t cb_stats = tt::CBIndex::c_2;  // Input Stats Tensor
+    constexpr uint32_t cb_xmm = tt::CBIndex::c_3;    // Input Tensor
     constexpr uint32_t cb_eps = tt::CBIndex::c_4;
     constexpr uint32_t cb_scaler_global = tt::CBIndex::c_5;
-    constexpr uint32_t cb_gamma = tt::CBIndex::c_8;
-
-    constexpr uint32_t cb_stats = tt::CBIndex::c_2;       // E[(x-E[x])^2] global reduce
-    constexpr uint32_t cb_ex_global = tt::CBIndex::c_10;  // E[x] global reduce
-    constexpr uint32_t cb_out = tt::CBIndex::c_1;
     constexpr uint32_t cb_var = tt::CBIndex::c_6;
-    constexpr uint32_t cb_stats_reduced = tt::CBIndex::c_9;  // E[(x-E[x])^2] global reduce
-    constexpr uint32_t cb_im = tt::CBIndex::c_7;             // E[x]^2
+    constexpr uint32_t cb_im = tt::CBIndex::c_7;
+    constexpr uint32_t cb_gamma = tt::CBIndex::c_8;
+    constexpr uint32_t cb_stats_reduced = tt::CBIndex::c_9;
+    constexpr uint32_t cb_ex_global = tt::CBIndex::c_10;
+    // E[x]^2
 
     binary_op_init_common(cb_stats, cb_scaler_global, cb_var);
 
