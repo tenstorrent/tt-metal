@@ -49,11 +49,13 @@ ttnn::Tensor ExecuteRepeatInterleave::invoke(
 
     auto unsqueezed_tensor = ttnn::unsqueeze(rm_input, normalized_dim + 1);
     std::vector<Tensor> combined_tensors_batch;
+    constexpr uint32_t repeats_batched = 32;
+    combined_tensors_batch.reserve(std::min(repeat, repeats_batched));
     for (uint32_t i = 0; i < repeat; i++) {
         combined_tensors_batch.push_back(unsqueezed_tensor);
 
         // Concatenate every 32 tensors or at the end of the loop
-        if (combined_tensors_batch.size() == 32 || i == repeat - 1) {
+        if (combined_tensors_batch.size() == repeats_batched || i == repeat - 1) {
             auto batch_concat = ttnn::concat(combined_tensors_batch, normalized_dim + 1);
             combined_tensors.push_back(batch_concat);
             combined_tensors_batch.clear();
