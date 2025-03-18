@@ -829,7 +829,6 @@ def test_slice_former_pytorch2_failures(input_shape, dim, start, end, step, layo
     (
         [0, 0, 0, slice(0, 33, 1), slice(0, 33, 1)],
         [1, -1, 2, slice(0, 33, 1), slice(0, 33, 1)],
-        # [slice(0, 8, 1), slice(0, 8, 1), slice(0, 8, 1), 2, 2],
     ),
 )
 def test_slice_index(device, input_shape, layout, input_memory_config, indices):
