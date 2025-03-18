@@ -125,8 +125,9 @@ void kernel_main() {
 
         noc_async_read(tile_addr, dest_addr, page_size_bytes);
         noc_async_read_barrier();
+        // DPRINT << "waiting for semaphore" << ENDL();
         noc_semaphore_wait((uint32_t*)local_semaphore_address, num_devices - 1);
-
+        // DPRINT << "semaphore received" << ENDL();
         // Push all accumulated data at once
         cb_push_back(accumulator_cb_id, tiles_per_core_width_output * num_devices);
         *(uint32_t*)local_semaphore_address = 0;

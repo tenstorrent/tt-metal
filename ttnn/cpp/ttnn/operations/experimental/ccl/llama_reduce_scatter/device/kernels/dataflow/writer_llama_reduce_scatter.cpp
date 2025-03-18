@@ -220,15 +220,28 @@ void kernel_main() {
             // noc_semaphore_inc(local_receiver_semaphore_noc_addr, 1);  // mcast inc is needed, this will tank latency
         }
         noc_async_write_barrier();
-        for (uint32_t tile = 0; tile < total_tiles; tile++) {
-            // one tile to each core
-            uint32_t output_core = tile;
-            uint32_t output_core_x = output_core_xy[output_core][x_index];
-            uint32_t output_core_y = output_core_xy[output_core][y_index];
-            uint64_t local_receiver_semaphore_noc_addr =
-                get_noc_addr(output_core_x, output_core_y, local_semaphore_address);
-            noc_semaphore_inc(local_receiver_semaphore_noc_addr, 1);  // mcast inc is needed, this will tank latency
-        }
+        // Now we have the block in the CB address, we can mcast to dests!
+        uint64_t multicast_semaphore_addr = get_noc_multicast_addr(
+            25,  // remove hardcoding
+            21,  // remove hardcoding
+            output_core_xy[0][x_index],
+            output_core_xy[0][y_index],
+            local_semaphore_address);
+        // DPRINT << "multicast_semaphore_addr: " << multicast_semaphore_addr << ENDL();
+        noc_multicast_semaphore_inc(multicast_semaphore_addr, 1, output_cores_per_device + 2, 0);
+        noc_async_atomic_barrier();
+        // DPRINT << "semaphore_inc_done" << ENDL();
+
+        // for (uint32_t tile = 0; tile < total_tiles; tile++) {
+        //     // one tile to each core
+        //     uint32_t output_core = tile;
+        //     uint32_t output_core_x = output_core_xy[output_core][x_index];
+        //     uint32_t output_core_y = output_core_xy[output_core][y_index];
+        //     uint64_t local_receiver_semaphore_noc_addr =
+        //         get_noc_addr(output_core_x, output_core_y, local_semaphore_address);
+        //     noc_semaphore_inc(local_receiver_semaphore_noc_addr, 1);  // mcast inc is needed, this will tank latency
+        // }
+        // noc_async_atomic_barrier();
 
         // Reset semaphore
         *(uint32_t*)receiver_semaphore_address = 0;

@@ -197,9 +197,9 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     // if (operation_attributes.ring_index == 3) {
     //     std::cout << "input_grid: " << input_grid.str() << std::endl;
     // }
-    // if (operation_attributes.ring_index == 3) {
-    //     std::cout << "output_grid: " << output_grid.str() << std::endl;
-    // }
+    if (operation_attributes.ring_index == 3) {
+        std::cout << "output_grid: " << output_grid.str() << std::endl;
+    }
     auto receiver_grid = detail::next_core_range_set(
         output_grid.bounding_box(),
         device->compute_with_storage_grid_size(),
@@ -432,9 +432,9 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     // if (operation_attributes.ring_index == 3) {
     //     std::cout << "input_cores: " << reader_defines["INPUT_CORE_XY"] << std::endl;
     // }
-    // if (operation_attributes.ring_index == 3) {
-    //     std::cout << "output_cores: " << reader_defines["OUTPUT_CORE_XY"] << std::endl;
-    // }
+    if (operation_attributes.ring_index == 3) {
+        std::cout << "output_cores: " << reader_defines["OUTPUT_CORE_XY"] << std::endl;
+    }
     // if (operation_attributes.ring_index == 3) {
     //     std::cout << "receiver_cores: " << reader_defines["RECEIVER_CORE_XY"] << std::endl;
     // }
