@@ -14,7 +14,6 @@
 #include "hal.hpp"
 #include "dispatch_settings.hpp"
 #include "buffer.hpp"
-#include "rtoptions.hpp"
 #include "umd/device/tt_core_coordinates.h"
 
 #include "command_queue_common.hpp"

@@ -5,8 +5,8 @@
 #pragma once
 
 #include "routing_table_generator.hpp"
-#include <tt-metalium/rtoptions.hpp>
 #include <tt-metalium/fabric_host_interface.h>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 
 namespace tt::tt_fabric {

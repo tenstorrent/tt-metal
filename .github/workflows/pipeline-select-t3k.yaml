@@ -65,6 +65,9 @@ jobs:
     uses: ./.github/workflows/t3000-unit-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
+      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
     if: ${{ inputs.t3000-unit }}
   t3000-demo-tests:
     needs: build-artifact
@@ -79,6 +82,9 @@ jobs:
     uses: ./.github/workflows/t3000-frequent-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
+      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
     if: ${{ inputs.t3000-frequent }}
   t3000-nightly-tests:
     needs: build-artifact
