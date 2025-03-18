@@ -13,10 +13,11 @@
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
+#include "ttnn/operations/core/core.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -190,8 +191,20 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
         1        // groups
     );
 
+    // move output tensor to dram
+    output_tensor = ttnn::to_memory_config(output_tensor, dram_mem_config);
+
     // untilize output tensor because the default output tensor layout is TILE layout
     output_tensor = ttnn::untilize(output_tensor);
+
+    // unpad output vector
+    output_tensor = ttnn::slice(
+        output_tensor,
+        std::array<uint32_t, 4>({0, 0, 0, 0}),
+        std::array<uint32_t, 4>({1, 1, batch_size * output_height * output_width, output_channels}),
+        std::array<uint32_t, 4>({1, 1, 1, 1}),
+        dram_mem_config);
+
     // H'  - output_height
     // W'  - output_width
     // (1,1,NH'W',Co) -> (N,H',W',Co)
