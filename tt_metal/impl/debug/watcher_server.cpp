@@ -138,7 +138,7 @@ static void watcher_loop(int sleep_usecs) {
 
     // Print to the user which features are disabled via env vars.
     string disabled_features = "";
-    auto& disabled_features_set = tt::llrt::RunTimeOptions::get_instance().get_watcher_disabled_features();
+    const auto& disabled_features_set = tt::llrt::RunTimeOptions::get_instance().get_watcher_disabled_features();
     if (!disabled_features_set.empty()) {
         for (auto& feature : disabled_features_set) {
             disabled_features += feature + ",";
@@ -277,8 +277,8 @@ void watcher_init(IDevice* device) {
             }
 
             for (CoreType core_type : {CoreType::WORKER, CoreType::ETH}) {
-                std::vector<CoreCoord> delayed_cores =
-                    tt::llrt::RunTimeOptions::get_instance().get_feature_cores(delay_feature)[core_type];
+                const std::vector<CoreCoord>& delayed_cores =
+                    tt::llrt::RunTimeOptions::get_instance().get_feature_cores(delay_feature).at(core_type);
                 for (tt_xy_pair logical_core : delayed_cores) {
                     CoreCoord virtual_core;
                     bool valid_logical_core = true;
