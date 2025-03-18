@@ -70,6 +70,7 @@ template <
     uint32_t BlockSizeHeight,
     uint32_t BlockSizeWidthTiles,
     uint32_t BlockStride,
+    uint32_t BlockStartOffset,
     bool EnableBlocking,
     bool IsBlockSharded,
     bool IsWidthSharded,
@@ -95,8 +96,8 @@ static inline void run_halo_gather(
     }
 
     uint64_t out_l1_addr = 0;
-    uint16_t block_id = 0;  // TODO: Remove this, it probably isn't needed
-    uint16_t block_boundary_offset = BlockSizeHeight;
+    uint16_t block_id = BlockStartOffset;
+    uint16_t block_boundary_offset = BlockSizeHeight + (BlockSizeHeight * BlockStartOffset);
     while (number_of_segments_remaining) {
         // Read header for to get destination for this route
         const uint16_t destination_noc_x = config[current_config_index++];
@@ -160,6 +161,7 @@ void kernel_main() {
     constexpr bool skip_untilize = get_compile_time_arg_val(17) == 1;
     constexpr uint32_t block_size_height = get_compile_time_arg_val(18);
     constexpr uint32_t block_size_width_tiles = get_compile_time_arg_val(19);
+    constexpr uint32_t block_start_offset = get_compile_time_arg_val(20);
 
     static_assert(!remote_read, "Remote read is not supported in this kernel");
 
@@ -201,7 +203,7 @@ void kernel_main() {
         }
     }
 
-    const uint32_t block_stride = 1;
+    const uint32_t block_stride = 2;
 
     const uint32_t config_data_l1_addr = get_read_ptr(local_config_cb_id);
     const tt_l1_ptr uint16_t* config_data = reinterpret_cast<const tt_l1_ptr uint16_t*>(config_data_l1_addr);
@@ -212,6 +214,7 @@ void kernel_main() {
         block_size_height,
         block_size_width_tiles,
         block_stride,
+        block_start_offset,
         enable_blocking,
         is_block_sharded,
         is_width_sharded,

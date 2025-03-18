@@ -74,10 +74,11 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     // Construct CBs
     // //
 
-    uint32_t src_cb_id = tt::CBIndex::c_0;
-    uint32_t pad_cb_id = tt::CBIndex::c_1;
-    uint32_t untilize_out_cb_id = tt::CBIndex::c_16;
-    uint32_t out_cb_id = tt::CBIndex::c_17;
+    const uint32_t src_cb_id = tt::CBIndex::c_0;
+    const uint32_t pad_cb_id = tt::CBIndex::c_1;
+    const uint32_t untilize_out_cb_id0 = tt::CBIndex::c_16;
+    const uint32_t untilize_out_cb_id1 = tt::CBIndex::c_18;
+    const uint32_t out_cb_id = tt::CBIndex::c_17;
 
     // input CB (sharded)
     auto src_cb_config = CircularBufferConfig(input_npages * in_page_size, {{src_cb_id, in_df}})
@@ -90,20 +91,33 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
 
     // We need to clamp to avoid crashing in the case that the block size used was larger than the input
     const uint32_t clamped_block_size_height = std::min(block_size_height, input_npages * TILE_HEIGHT);
-    uint32_t input_to_writer_cb_id = src_cb_id;
+    uint32_t input_to_writer_cb_id0 = src_cb_id;
+    uint32_t input_to_writer_cb_id1 = src_cb_id;
     if (!skip_untilize) {
-        input_to_writer_cb_id = untilize_out_cb_id;
+        input_to_writer_cb_id0 = untilize_out_cb_id0;
+        input_to_writer_cb_id1 = untilize_out_cb_id1;
 
         uint32_t output_ntiles = (clamped_block_size_height / TILE_HEIGHT) * ntiles_per_block;
         // Output of untilize from compute kernel goes into this CB; TODO: Use double buffering
-        auto untilize_out_cb_config =
-            CircularBufferConfig(output_ntiles * out_tile_size, {{untilize_out_cb_id, out_df}})
-                .set_page_size(untilize_out_cb_id, out_tile_size);
-        auto untilize_out_cb = CreateCircularBuffer(program, all_cores, untilize_out_cb_config);
+        auto untilize_out_cb_config0 =
+            CircularBufferConfig(output_ntiles * out_tile_size, {{untilize_out_cb_id0, out_df}})
+                .set_page_size(untilize_out_cb_id0, out_tile_size);
+        auto untilize_out_cb0 = CreateCircularBuffer(program, all_cores, untilize_out_cb_config0);
         tt::log_info(
             tt::LogOp,
-            "UNTILIZE OUT CB {} :: npages = {}, pagesize = {}",
-            untilize_out_cb_id,
+            "UNTILIZE OUT CB0 {} :: npages = {}, pagesize = {}",
+            untilize_out_cb_id0,
+            output_ntiles,
+            out_tile_size);
+
+        auto untilize_out_cb_config1 =
+            CircularBufferConfig(output_ntiles * out_tile_size, {{untilize_out_cb_id1, out_df}})
+                .set_page_size(untilize_out_cb_id1, out_tile_size);
+        auto untilize_out_cb1 = CreateCircularBuffer(program, all_cores, untilize_out_cb_config1);
+        tt::log_info(
+            tt::LogOp,
+            "UNTILIZE OUT CB1 {} :: npages = {}, pagesize = {}",
+            untilize_out_cb_id1,
             output_ntiles,
             out_tile_size);
     }
@@ -141,17 +155,20 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     if (!skip_untilize) {
         // compute kernel
         std::vector<uint32_t> compute_ct_args = {
-            input_nblocks_per_core, ntiles_per_block, src_cb_id, input_to_writer_cb_id};
+            input_nblocks_per_core, ntiles_per_block, src_cb_id, input_to_writer_cb_id0, input_to_writer_cb_id1};
         tt::log_info("ct args for compute={}", compute_ct_args);
         std::string compute_kernel(
-            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
+            "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/compute/pack_untilize.cpp");
+
         if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH) {
+            TT_FATAL(false, "We don't support this yet");
             tt::log_info(
                 "Falling back to slow untilize since ntiles_per_block {} > MAX_PACK_UNTILIZE_WIDTH {}",
                 ntiles_per_block,
                 MAX_PACK_UNTILIZE_WIDTH);
             compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
         }
+
         KernelHandle untilize_kernel_id =
             CreateKernel(program, compute_kernel, all_cores, ComputeConfig{.compile_args = compute_ct_args});
     }
@@ -216,7 +233,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         0,  // blocking_local_config_cb_id
         0,  // blocking_remote_config_cb_id
         src_cb_id,
-        input_to_writer_cb_id,
+        input_to_writer_cb_id0,
         out_cb_id,
         pad_cb_id,
         pad_val,
@@ -229,13 +246,14 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         aligned_input_nstick_nbytes,
         skip_untilize,
         skip_untilize ? input_npages : clamped_block_size_height,
-        ntiles_per_block};
+        ntiles_per_block,
+        0};  // Block start offset
 
     reader_ct_args[0] = padding_config_cb_id;
     reader_ct_args[1] = local_config_cb_id;
-    reader_ct_args[2] = remote_config_cb_id;
-    reader_ct_args[3] = blocking_local_config_cb_id;
-    reader_ct_args[4] = blocking_remote_config_cb_id;
+    reader_ct_args[2] = 0;
+    reader_ct_args[3] = 0;
+    reader_ct_args[4] = 0;
 
     KernelHandle reader_kernel_id0 = CreateKernel(
         program,
@@ -245,10 +263,19 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_ct_args});
 
     reader_ct_args[0] = 0;
-    reader_ct_args[1] = 0;
+    reader_ct_args[1] = remote_config_cb_id;
     reader_ct_args[2] = 0;
     reader_ct_args[3] = 0;
     reader_ct_args[4] = 0;
+    reader_ct_args[6] = untilize_out_cb_id1;
+    reader_ct_args[20] = 1;  // block start offset
+
+    KernelHandle reader_kernel_id1 = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather.cpp",
+        all_cores,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_ct_args});
 
     if (!capture_buffers) {
         padding_config_buffer = nullptr;

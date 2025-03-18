@@ -424,20 +424,58 @@ std::vector<std::vector<uint16_t>> serialize_gather_configs(const std::vector<Ga
     return serialized_configs;
 }
 
-GatherConfig reorder_transfers_globally(const GatherConfig& input) {
-    struct DestinationTransferPair {
-        uint16_t noc_x;
-        uint16_t noc_y;
-        uint16_t src_id;
-        uint16_t dst_id;
-        uint16_t size;
-    };
+struct DestinationTransferPair {
+    uint16_t noc_x;
+    uint16_t noc_y;
+    uint16_t src_id;
+    uint16_t dst_id;
+    uint16_t size;
+};
+
+std::vector<DestinationTransferPair> flatten_gather_config(const GatherConfig& input) {
     std::vector<DestinationTransferPair> all;
     for (const auto& route : input.routes) {
         for (const auto& t : route.transfers) {
             all.push_back({route.header.noc_x, route.header.noc_y, t.src_id, t.dst_id, t.size});
         }
     }
+    return all;
+}
+
+// Rebuild config by grouping consecutive transfers that share (noc_x, noc_y)
+GatherConfig reduce_flattened_transfers(const std::vector<DestinationTransferPair>& transfers) {
+    GatherConfig output;
+    GatherRoute current_route;
+    current_route.header.noc_x = transfers[0].noc_x;
+    current_route.header.noc_y = transfers[0].noc_y;
+    for (size_t i = 0; i < transfers.size(); i++) {
+        const auto& t = transfers[i];
+        bool same_core = (t.noc_x == current_route.header.noc_x) && (t.noc_y == current_route.header.noc_y);
+        if (!same_core) {
+            current_route.header.num_transfers = static_cast<uint16_t>(current_route.transfers.size());
+            TT_FATAL(current_route.header.num_transfers > 0, "Route cannot have zero transfers");
+            output.routes.push_back(current_route);
+
+            current_route = GatherRoute();
+            current_route.header.noc_x = t.noc_x;
+            current_route.header.noc_y = t.noc_y;
+        }
+
+        GatherTransfer transfer;
+        transfer.src_id = t.src_id;
+        transfer.dst_id = t.dst_id;
+        transfer.size = t.size;
+        current_route.transfers.push_back(transfer);
+    }
+    current_route.header.num_transfers = static_cast<uint16_t>(current_route.transfers.size());
+    TT_FATAL(current_route.header.num_transfers > 0, "Route cannot have zero transfers");
+    output.routes.push_back(current_route);
+
+    return output;
+}
+
+GatherConfig reorder_transfers_globally(const GatherConfig& input) {
+    std::vector<DestinationTransferPair> all = flatten_gather_config(input);
     TT_FATAL(!all.empty(), "Expected to have at least one transfer during reorder");
 
     // Sort by ascending src_id and tie-break with noc coords
@@ -451,37 +489,7 @@ GatherConfig reorder_transfers_globally(const GatherConfig& input) {
         return a.noc_y < b.noc_y;
     });
 
-    // Rebuild config by grouping consecutive transfers that share (noc_x, noc_y)
-    GatherConfig output;
-    {
-        GatherRoute current_route;
-        current_route.header.noc_x = all[0].noc_x;
-        current_route.header.noc_y = all[0].noc_y;
-        for (size_t i = 0; i < all.size(); i++) {
-            const auto& t = all[i];
-            bool same_core = (t.noc_x == current_route.header.noc_x) && (t.noc_y == current_route.header.noc_y);
-            if (!same_core) {
-                current_route.header.num_transfers = static_cast<uint16_t>(current_route.transfers.size());
-                TT_FATAL(current_route.header.num_transfers > 0, "Route cannot have zero transfers");
-                output.routes.push_back(current_route);
-
-                current_route = GatherRoute();
-                current_route.header.noc_x = t.noc_x;
-                current_route.header.noc_y = t.noc_y;
-            }
-
-            GatherTransfer transfer;
-            transfer.src_id = t.src_id;
-            transfer.dst_id = t.dst_id;
-            transfer.size = t.size;
-            current_route.transfers.push_back(transfer);
-        }
-        current_route.header.num_transfers = static_cast<uint16_t>(current_route.transfers.size());
-        TT_FATAL(current_route.header.num_transfers > 0, "Route cannot have zero transfers");
-        output.routes.push_back(current_route);
-    }
-
-    return output;
+    return reduce_flattened_transfers(all);
 }
 
 GatherConfig split_into_blocks(const GatherConfig& input, uint32_t block_size) {
@@ -511,6 +519,18 @@ GatherConfig split_into_blocks(const GatherConfig& input, uint32_t block_size) {
         output.routes.push_back(new_route);
     }
     return output;
+}
+
+std::pair<GatherConfig, GatherConfig> divide_blocks_between_cores(const GatherConfig& input, uint32_t block_size) {
+    std::vector<DestinationTransferPair> all = flatten_gather_config(input);
+    TT_FATAL(!all.empty(), "Expected to have at least one transfer during reorder");
+    std::vector<DestinationTransferPair> first;
+    std::vector<DestinationTransferPair> second;
+    for (const auto& transfer : all) {
+        const auto block_id = transfer.src_id / block_size;
+        (block_id % 2 == 0 ? first : second).push_back(transfer);
+    }
+    return std::make_pair(reduce_flattened_transfers(first), reduce_flattened_transfers(second));
 }
 
 std::tuple<
@@ -638,11 +658,18 @@ generate_halo_kernel_config_tensors(
     }
 
     const int block_size = 32;  // TODO: pass this in
-    std::vector<GatherConfig> ordered_gather_configs;
+    std::vector<GatherConfig> ordered_gather_configs0;
+    std::vector<GatherConfig> ordered_gather_configs1;
     for (const auto& config : gather_configs) {
-        ordered_gather_configs.push_back(reorder_transfers_globally(split_into_blocks(config, block_size)));
+        const auto ordered = reorder_transfers_globally(split_into_blocks(config, block_size));
+        const auto [first, second] = divide_blocks_between_cores(ordered, block_size);
+        ordered_gather_configs0.push_back(first);
+        ordered_gather_configs1.push_back(second);
     }
-    const auto serialized_gather_configs = serialize_gather_configs(ordered_gather_configs);
+
+    const auto serialized_gather_configs = serialize_gather_configs(ordered_gather_configs0);
+    const auto serialized_gather_configs1 = serialize_gather_configs(ordered_gather_configs1);
+    tt::log_info("first = {}, secon={}", serialized_gather_configs, serialized_gather_configs1);
 
     // flatten and uniformize the lengths of each config list
     auto flatten_pad_config = [](auto& config) -> std::vector<std::vector<uint16_t>> {
@@ -763,7 +790,7 @@ generate_halo_kernel_config_tensors(
     return std::make_tuple(
         flattened_pad_config,
         serialized_gather_configs,
-        flattened_remote_config,
+        serialized_gather_configs1,
         flattened_remote_config,  // TODO: fix the interface here, we just want to return pad and gather configs
         flattened_remote_config);
 }
