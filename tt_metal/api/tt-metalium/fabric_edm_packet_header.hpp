@@ -174,6 +174,8 @@ struct PacketHeaderBase {
 
         this->command_fields.unicast_write = modified_command_header;
         this->payload_size_bytes = payload_size_bytes;
+#else
+        TT_THROW("Calling to_noc_unicast_write from host is unsupported");
 #endif
         return *static_cast<Derived*>(this);
     }
@@ -192,6 +194,8 @@ struct PacketHeaderBase {
 
         this->command_fields.unicast_inline_write = modified_command_header;
         this->payload_size_bytes = 0;
+#else
+        TT_THROW("Calling to_noc_unicast_inline_write from host is unsupported");
 #endif
         return *static_cast<Derived*>(this);
     }
@@ -219,6 +223,8 @@ struct PacketHeaderBase {
 
         this->command_fields.unicast_seminc = modified_command_header;
         this->payload_size_bytes = 0;
+#else
+        TT_THROW("Calling to_noc_unicast_atomic_inc from host is unsupported");
 #endif
         return *static_cast<Derived*>(this);
     }
@@ -255,6 +261,8 @@ struct PacketHeaderBase {
 
         this->command_fields.unicast_write.noc_address = noc_addr;
         this->payload_size_bytes = payload_size_bytes;
+#else
+        TT_THROW("Calling to_noc_unicast_write from host is unsupported");
 #endif
         return static_cast<volatile Derived*>(this);
     }
@@ -273,6 +281,8 @@ struct PacketHeaderBase {
         this->command_fields.unicast_inline_write.noc_address = noc_addr;
         this->command_fields.unicast_inline_write.value = noc_unicast_command_header.value;
         this->payload_size_bytes = 0;
+#else
+        TT_THROW("Calling to_noc_unicast_inline_write from host is unsupported");
 #endif
         return static_cast<volatile Derived*>(this);
     }
@@ -304,6 +314,8 @@ struct PacketHeaderBase {
         this->command_fields.unicast_seminc.val = noc_unicast_atomic_inc_command_header.val;
         this->command_fields.unicast_seminc.wrap = noc_unicast_atomic_inc_command_header.wrap;
         this->payload_size_bytes = 0;
+#else
+        TT_THROW("Calling to_noc_unicast_atomic_inc from host is unsupported");
 #endif
         return static_cast<volatile Derived*>(this);
     }
