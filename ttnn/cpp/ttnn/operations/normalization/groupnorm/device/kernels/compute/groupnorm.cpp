@@ -409,6 +409,10 @@ void MAIN {
             cb_push_back(cb_ex2pe, 1);
             cb_pop_front(cb_ex2_global, 1);
 
+            bool start_copy_or_add = copy_or_add;
+            uint32_t start_group_reset_index = group_reset_index;
+            uint32_t start_index_block_w = index_block_w;
+
             uint32_t out_block_h_offset = 0;
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks; out_block_index++) {
                 cb_wait_front(cb_in0, out_block_hw);
@@ -489,6 +493,10 @@ void MAIN {
                 cb_pop_front(cb_x, out_block_hw);
                 cb_push_back(cb_xmm, out_block_hw);
                 cb_wait_front(cb_xmm, out_block_hw);
+
+                copy_or_add = start_copy_or_add;
+                group_reset_index = start_group_reset_index;
+                index_block_w = start_index_block_w;
 
                 // add or copy with previous output results
                 uint32_t block_w_curr = index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
