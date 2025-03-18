@@ -16,8 +16,13 @@ static constexpr uint8_t edm_to_local_chip_noc_index = 1;
 static constexpr uint8_t EDM_NOC_ADDR_LOCAL_BITS = 36;
 static constexpr uint8_t EDM_NOC_ADDR_NODE_ID_BITS = 6;
 
+#ifdef ARCH_BLACKHOLE
+constexpr uint8_t noc_size_x = 17;
+constexpr uint8_t noc_size_y = 12;
+#else
 constexpr uint8_t noc_size_x = 10;
 constexpr uint8_t noc_size_y = 12;
+#endif
 
 struct EDMWorkerXY {
     uint16_t x;
