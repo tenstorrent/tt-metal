@@ -48,14 +48,13 @@ HWCommandQueue::HWCommandQueue(
     uint32_t completion_queue_reader_core) :
     manager_(device->sysmem_manager()),
     completion_queue_thread_{},
-    completion_queue_reader_core_(completion_queue_reader_core) {
+    completion_queue_reader_core_(completion_queue_reader_core),
+    num_outstanding_in_completion_q_{0} {
     ZoneScopedN("CommandQueue_constructor");
     this->device_ = device;
     this->worker_launch_message_buffer_state_ = worker_launch_message_buffer_state;
     this->id_ = id;
     this->noc_index_ = noc_index;
-    this->num_entries_in_completion_q_ = 0;
-    this->num_completed_completion_q_reads_ = 0;
 
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_->id());
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_->id());
@@ -144,10 +143,10 @@ HWCommandQueue::~HWCommandQueue() {
             this->issued_completion_q_reads_.empty(),
             "There should be no reads in flight after closing our completion queue thread");
         TT_ASSERT(
-            this->num_entries_in_completion_q_ == this->num_completed_completion_q_reads_,
+            num_outstanding_in_completion_q_ == 0,
             "There shouldn't be any commands in flight after closing our completion queue thread. Num uncompleted "
             "commands: {}",
-            this->num_entries_in_completion_q_ - this->num_completed_completion_q_reads_);
+            num_outstanding_in_completion_q_.load());
         this->set_exit_condition();
         this->completion_queue_thread_.join();
     }
@@ -156,15 +155,15 @@ HWCommandQueue::~HWCommandQueue() {
 void HWCommandQueue::increment_num_entries_in_completion_q() {
     // Increment num_entries_in_completion_q and inform reader thread
     // that there is work in the completion queue to process
-    std::lock_guard lock(this->reader_thread_cv_mutex_);
-    this->num_entries_in_completion_q_++;
-    this->reader_thread_cv_.notify_one();
+    std::lock_guard lock(completion_q_count_mutex_);
+    num_outstanding_in_completion_q_++;
+    completion_q_count_cv_.notify_all();
 }
 
 void HWCommandQueue::set_exit_condition() {
-    std::lock_guard lock(this->reader_thread_cv_mutex_);
+    std::lock_guard lock(this->completion_q_count_mutex_);
     this->exit_condition_ = true;
-    this->reader_thread_cv_.notify_one();
+    this->completion_q_count_cv_.notify_all();
 }
 
 IDevice* HWCommandQueue::device() { return this->device_; }
@@ -454,14 +453,10 @@ void HWCommandQueue::read_completion_queue() {
     while (true) {
         uint32_t num_events_to_read = 0;
         {
-            std::unique_lock<std::mutex> lock(this->reader_thread_cv_mutex_);
-            this->reader_thread_cv_.wait(lock, [this] {
-                return this->num_entries_in_completion_q_ > this->num_completed_completion_q_reads_ or
-                       this->exit_condition_;
-            });
-            if (this->num_entries_in_completion_q_ > this->num_completed_completion_q_reads_) {
-                num_events_to_read = this->num_entries_in_completion_q_ - this->num_completed_completion_q_reads_;
-            }
+            std::unique_lock<std::mutex> lock(this->completion_q_count_mutex_);
+            this->completion_q_count_cv_.wait(
+                lock, [this] { return num_outstanding_in_completion_q_ > 0 or exit_condition_; });
+            num_events_to_read = num_outstanding_in_completion_q_.load();
         }
         if (num_events_to_read > 0) {
             ZoneScopedN("CompletionQueueReader");
@@ -498,9 +493,9 @@ void HWCommandQueue::read_completion_queue() {
                     read_descriptor);
             }
             {
-                std::unique_lock<std::mutex> lock(this->reads_processed_cv_mutex_);
-                this->num_completed_completion_q_reads_ += num_events_to_read;
-                this->reads_processed_cv_.notify_one();
+                std::unique_lock<std::mutex> lock(completion_q_count_mutex_);
+                num_outstanding_in_completion_q_ -= num_events_to_read;
+                completion_q_count_cv_.notify_all();
             }
         } else if (this->exit_condition_) {
             return;
@@ -514,7 +509,7 @@ void HWCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
     std::shared_ptr<Event> event = std::make_shared<Event>();
     this->enqueue_record_event(event, sub_device_ids);
     if (tt::llrt::RunTimeOptions::get_instance().get_test_mode_enabled()) {
-        while (this->num_entries_in_completion_q_ > this->num_completed_completion_q_reads_) {
+        while (num_outstanding_in_completion_q_ > 0) {
             if (DPrintServerHangDetected()) {
                 // DPrint Server hang, early exit. We're in test mode, so main thread will assert.
                 this->set_exit_condition();
@@ -526,9 +521,8 @@ void HWCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
             }
         }
     } else {
-        std::unique_lock<std::mutex> lock(this->reads_processed_cv_mutex_);
-        this->reads_processed_cv_.wait(
-            lock, [this] { return this->num_entries_in_completion_q_ == this->num_completed_completion_q_reads_; });
+        std::unique_lock<std::mutex> lock(completion_q_count_mutex_);
+        this->completion_q_count_cv_.wait(lock, [this] { return num_outstanding_in_completion_q_ == 0; });
     }
 }
 

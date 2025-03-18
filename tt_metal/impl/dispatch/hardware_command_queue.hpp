@@ -97,12 +97,6 @@ private:
     //  call
     DispatchArray<uint32_t> expected_num_workers_completed_;
 
-    std::atomic<bool> exit_condition_;
-    std::atomic<uint32_t> num_entries_in_completion_q_;  // issue queue writer thread increments this when an issued
-                                                         // command is expected back in the completion queue
-    std::atomic<uint32_t> num_completed_completion_q_reads_;  // completion queue reader thread increments this after
-                                                              // reading an entry out of the completion queue
-
     MultiProducerSingleConsumerQueue<CompletionReaderVariant> issued_completion_q_reads_;
     // These values are used to reset the host side launch message wptr after a trace is captured
     // Trace capture is a fully host side operation, but it modifies the state of the wptrs above
@@ -113,11 +107,14 @@ private:
     DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_reset_;
     IDevice* device_;
 
-    std::condition_variable reader_thread_cv_;
-    std::mutex reader_thread_cv_mutex_;
+    std::mutex completion_q_count_mutex_;
+    std::atomic<bool> exit_condition_;
+    std::atomic<uint32_t> num_outstanding_in_completion_q_;  // issue queue writer thread increments this when an issued
+                                                             // command is expected back in the completion queue
+                                                             // and completion queue reader thread decrements this after
+                                                             // reading an entry out of the completion queue
+    std::condition_variable completion_q_count_cv_;
 
-    std::condition_variable reads_processed_cv_;
-    std::mutex reads_processed_cv_mutex_;
     CoreType get_dispatch_core_type();
 
     CoreCoord virtual_enqueue_program_dispatch_core_;
