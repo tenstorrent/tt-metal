@@ -8,6 +8,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
+#include "core/compute_kernel_config.hpp"
 #include "ttnn_fixed/matmuls.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
