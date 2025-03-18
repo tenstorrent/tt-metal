@@ -72,23 +72,30 @@ def run_avg_pool(
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
-    "input_shape",
+    "input_shape",  # NCHW
     (
+        # Case: Normal compute & Normal reader kernel.
         [1, 32, 16, 16],
         [1, 32, 112, 112],
+        # [1, 112, 112, 112], # TODO(jongbinlimTT): C not multiple of 32.
+        # Case: Normal compute & Wide (C > 256) reader kernel.
         [1, 512, 16, 16],
+        [1, 800, 16, 16],
+        # [1, 368, 16, 16], # TODO(jongbinlimTT): C not multiple of 32.
+        # Case: All of the above with batch size > 1.
         [2, 32, 16, 16],
         [2, 32, 112, 112],
         [2, 512, 16, 16],
-        [1, 800, 16, 16],
         [2, 800, 16, 16],
     ),
 )
 @pytest.mark.parametrize(
     "kernel_size",
     (
+        # Case: Normal compute & Normal reader kernel.
         (2, 2),
         (3, 3),
+        # Case: Large compute & Large reader kernel.
         (5, 5),
         (9, 9),
     ),
