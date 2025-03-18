@@ -31,11 +31,19 @@ struct AllReduceCreateQkvHeads {
     const uint32_t num_links;
     const uint32_t ring_size;
     const uint32_t ring_index;
-    const MemoryConfig output_mem_config;
+    const MemoryConfig all_reduce_mem_config;
     const ccl::Topology topology;
     const GlobalSemaphore semaphore;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     bool enable_persistent_fabric_mode;
+
+    // create qkv heads parameters
+    const uint32_t num_heads;
+    const uint32_t num_kv_heads;
+    const bool overlap_qk_coregrid;
+    const bool input_on_subcoregrids;
+    std::optional<const uint32_t> slice_size;
+    const MemoryConfig final_mem_config;
 
     AllReduceCreateQkvHeads(
         std::optional<IDevice*> forward_device,
@@ -43,21 +51,33 @@ struct AllReduceCreateQkvHeads {
         uint32_t num_links,
         uint32_t ring_size,
         uint32_t ring_index,
-        MemoryConfig output_mem_config,
+        MemoryConfig all_reduce_mem_config,
         ccl::Topology topology,
         GlobalSemaphore semaphore,
         std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-        bool enable_persistent_fabric_mode) :
+        bool enable_persistent_fabric_mode,
+        uint32_t num_heads,
+        uint32_t num_kv_heads,
+        bool overlap_qk_coregrid,
+        bool input_on_subcoregrids,
+        std::optional<const uint32_t> slice_size,
+        MemoryConfig final_mem_config) :
         forward_device(forward_device),
         backward_device(backward_device),
         num_links(num_links),
         ring_size(ring_size),
         ring_index(ring_index),
-        output_mem_config(output_mem_config),
+        all_reduce_mem_config(all_reduce_mem_config),
         topology(topology),
         semaphore(semaphore),
         sub_device_id(sub_device_id),
-        enable_persistent_fabric_mode(enable_persistent_fabric_mode) {}
+        enable_persistent_fabric_mode(enable_persistent_fabric_mode),
+        num_heads(num_heads),
+        num_kv_heads(num_kv_heads),
+        overlap_qk_coregrid(overlap_qk_coregrid),
+        input_on_subcoregrids(input_on_subcoregrids),
+        slice_size(slice_size),
+        final_mem_config(final_mem_config) {}
 
     // Add attributes method for reflection
     auto attributes() const {
@@ -67,9 +87,17 @@ struct AllReduceCreateQkvHeads {
         attrs.emplace_back("num_links", num_links);
         attrs.emplace_back("ring_size", ring_size);
         attrs.emplace_back("ring_index", ring_index);
-        attrs.emplace_back("output_mem_config", output_mem_config);
+        attrs.emplace_back("all_reduce_mem_config", all_reduce_mem_config);
         attrs.emplace_back("topology", topology);
         attrs.emplace_back("semaphore", semaphore);
+
+        // Add the new QKV heads parameters
+        attrs.emplace_back("num_heads", num_heads);
+        attrs.emplace_back("num_kv_heads", num_kv_heads);
+        if (slice_size.has_value()) {
+            attrs.emplace_back("slice_size", slice_size.value());
+        }
+        attrs.emplace_back("final_mem_config", final_mem_config);
 
         return attrs;
     }
@@ -91,7 +119,13 @@ AllReduceCreateQkvHeads create_all_reduce_create_qkv_heads_struct(
     const ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphores,
     std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    bool enable_persistent_fabric_mode);
+    bool enable_persistent_fabric_mode,
+    uint32_t num_heads,
+    uint32_t num_kv_heads,
+    bool overlap_qk_coregrid,
+    bool input_on_subcoregrids,
+    std::optional<const uint32_t> slice_size,
+    MemoryConfig final_mem_config);
 
 }  // namespace all_reduce_create_qkv_heads_detail
 }  // namespace ccl
@@ -129,10 +163,16 @@ std::tuple<Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
     const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<MemoryConfig>& all_reduce_memory_config = std::nullopt,
     const std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
-    bool enable_persistent_fabric_mode = false);
+    bool enable_persistent_fabric_mode = false,
+    uint32_t num_heads = 8,
+    uint32_t num_kv_heads = 1,
+    bool overlap_qk_coregrid = false,
+    bool input_on_subcoregrids = false,
+    std::optional<const uint32_t> slice_size = std::nullopt,
+    const std::optional<MemoryConfig>& final_memory_config = std::nullopt);
 
 }  // namespace ccl
 }  // namespace experimental

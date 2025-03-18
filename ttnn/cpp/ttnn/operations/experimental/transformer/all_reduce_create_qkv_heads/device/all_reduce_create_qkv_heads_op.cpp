@@ -17,12 +17,18 @@ namespace all_reduce_create_qkv_heads_detail {
 AllReduceCreateQkvHeads create_all_reduce_create_qkv_heads_struct(
     const Tensor& input_tensor,
     const uint32_t num_links,
-    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<MemoryConfig>& all_reduce_memory_config,
     const std::vector<IDevice*>& devices,
     const ttnn::ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphores,
     std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    bool enable_persistent_fabric_mode) {
+    bool enable_persistent_fabric_mode,
+    uint32_t num_heads,
+    uint32_t num_kv_heads,
+    bool overlap_qk_coregrid,
+    bool input_on_subcoregrids,
+    std::optional<const uint32_t> slice_size,
+    const std::optional<MemoryConfig>& final_memory_config) {
     uint32_t num_devices = devices.size();
 
     std::optional<IDevice*> forward_device = std::nullopt;
@@ -48,11 +54,17 @@ AllReduceCreateQkvHeads create_all_reduce_create_qkv_heads_struct(
         num_links,
         num_devices,
         device_index,
-        memory_config.value_or(input_tensor.memory_config()),
+        all_reduce_memory_config.value_or(input_tensor.memory_config()),
         topology,
         semaphore.value(),
         sub_device_id,
-        enable_persistent_fabric_mode};
+        enable_persistent_fabric_mode,
+        num_heads,
+        num_kv_heads,
+        overlap_qk_coregrid,
+        input_on_subcoregrids,
+        slice_size,
+        final_memory_config.value_or(input_tensor.memory_config())};
 }
 
 }  // namespace all_reduce_create_qkv_heads_detail
@@ -91,16 +103,16 @@ void AllReduceCreateQkvHeads::validate(const std::vector<Tensor>& input_tensors)
         "Unsupported memory layout for buffer tensor {}.",
         buffer_tensor.memory_config().memory_layout);
     TT_FATAL(
-        this->output_mem_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+        this->all_reduce_mem_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
         "Unsupported memory layout for output tensor {}.",
-        this->output_mem_config.memory_layout);
+        this->all_reduce_mem_config.memory_layout);
 
     TT_FATAL(
-        buffer_tensor.memory_config().shard_spec->grid.contains(this->output_mem_config.shard_spec->grid),
+        buffer_tensor.memory_config().shard_spec->grid.contains(this->all_reduce_mem_config.shard_spec->grid),
         "The output tensor must reside on a subset of the cores of the buffer tensor");
 
     const uint32_t output_shard_shape_volume =
-        this->output_mem_config.shard_spec->shape[0] * this->output_mem_config.shard_spec->shape[1];
+        this->all_reduce_mem_config.shard_spec->shape[0] * this->all_reduce_mem_config.shard_spec->shape[1];
     const uint32_t buffer_shard_shape_volume =
         buffer_tensor.memory_config().shard_spec->shape[0] * buffer_tensor.memory_config().shard_spec->shape[1];
     TT_FATAL(
@@ -116,7 +128,7 @@ std::vector<ttnn::TensorSpec> AllReduceCreateQkvHeads::compute_output_specs(
     const auto& input_tensor = input_tensors[0];
     auto shape = input_tensor.get_logical_shape();
     auto output_tensor_layout =
-        input_tensor.get_tensor_spec().tensor_layout().with_memory_config(this->output_mem_config);
+        input_tensor.get_tensor_spec().tensor_layout().with_memory_config(this->all_reduce_mem_config);
     return {TensorSpec(shape, output_tensor_layout)};
 }
 
@@ -170,7 +182,7 @@ const tt::tt_metal::operation::Hash AllReduceCreateQkvHeads::compute_program_has
         this->num_links,
         this->ring_size,
         this->ring_index,
-        this->output_mem_config,
+        this->all_reduce_mem_config,
         this->topology,
         input_shape,
         input_memory_layout,
@@ -189,10 +201,16 @@ std::tuple<Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
     const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
-    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<MemoryConfig>& all_reduce_memory_config,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    bool enable_persistent_fabric_mode) {
+    bool enable_persistent_fabric_mode,
+    uint32_t num_heads,
+    uint32_t num_kv_heads,
+    bool overlap_qk_coregrid,
+    bool input_on_subcoregrids,
+    std::optional<const uint32_t> slice_size,
+    const std::optional<MemoryConfig>& final_memory_config) {
     TT_FATAL(
         topology == ttnn::ccl::Topology::Linear,
         "This all_reduce API with cluster_axis is currently supported only for the Linear topology");
@@ -205,14 +223,20 @@ std::tuple<Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
 
     tt::tt_metal::operation::launch_op(
         [num_preferred_links,
-         memory_config,
+         all_reduce_memory_config,
          mesh_view,
          cluster_axis,
          num_devices,
          topology,
          semaphores,
          subdevice_id,
-         enable_persistent_fabric_mode](
+         enable_persistent_fabric_mode,
+         num_heads,
+         num_kv_heads,
+         overlap_qk_coregrid,
+         input_on_subcoregrids,
+         slice_size,
+         final_memory_config](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -232,12 +256,18 @@ std::tuple<Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
                 ttnn::ccl::all_reduce_create_qkv_heads_detail::create_all_reduce_create_qkv_heads_struct(
                     input_device_tensor,
                     num_preferred_links.has_value() ? num_preferred_links.value() : 1,
-                    memory_config,
+                    all_reduce_memory_config,
                     devices,
                     topology,
                     semaphores,
                     subdevice_id,
-                    enable_persistent_fabric_mode),
+                    enable_persistent_fabric_mode,
+                    num_heads,
+                    num_kv_heads,
+                    overlap_qk_coregrid,
+                    input_on_subcoregrids,
+                    slice_size,
+                    final_memory_config),
                 {input_tensor, buffer_tensor});
         },
         {input_tensor, buffer_tensor},

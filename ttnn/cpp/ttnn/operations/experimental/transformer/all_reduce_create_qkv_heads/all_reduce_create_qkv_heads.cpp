@@ -42,7 +42,13 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteAllReduceCreateQkvHe
         out_memory_config,
         num_preferred_links,
         worker_subdevice_id_opt,
-        true);
+        true,
+        num_heads,
+        num_kv_heads.value_or(1),
+        overlap_qk_coregrid.value_or(false),
+        false,
+        slice_size,
+        final_memory_config);
 }
 
 }  // namespace ttnn::operations::experimental::ccl::transformer
