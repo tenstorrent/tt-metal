@@ -714,11 +714,6 @@ set(TTNN_OP_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_nc_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_w_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_sum/moreh_sum.cpp
-    # RMSNorm Forward
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/rmsnorm_fw/rmsnorm_fw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/rmsnorm_fw/device/rmsnorm_fw_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/rmsnorm_fw/device/rmsnorm_fw_program_factory.cpp
-    # end RMSNorm Forward
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_fold/fold.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_fold/device/fold_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_fold/device/fold_program_factory_rm.cpp
@@ -871,9 +866,6 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/cnn/convert_to_chw/convert_to_chw_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/copy/typecast/typecast_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/dropout/dropout_pybind.cpp
-    # RMSNorm forward
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/rmsnorm_fw/rmsnorm_fw_pybind.cpp
-    # end RMSNorm forward
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/experimental_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_pybind.cpp

@@ -5,6 +5,10 @@
 
 #pragma once
 
+#include <cpp/ttnn/decorators.hpp>
+#include <cpp/ttnn/tensor/tensor.hpp>
+#include <vector>
+
 namespace ttnn::operations::experimental {
 
 struct RMSNormForwardOperation {
@@ -22,7 +26,7 @@ struct RMSNormForwardOperation {
 };
 }  // namespace ttnn::operations::experimental
 namespace ttnn::experimental {
-constexpr auto rmsnorm_fw = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::experimental::rmsnorm_fw",
+constexpr auto rmsnorm_fw_op = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::rmsnorm_fw_op",
     ttnn::operations::experimental::RMSNormForwardOperation>();
 }  // namespace ttnn::experimental

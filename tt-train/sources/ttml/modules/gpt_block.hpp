@@ -9,6 +9,7 @@
 #include "modules/layer_norm_module.hpp"
 #include "modules/linear_module.hpp"
 #include "modules/multi_head_attention.hpp"
+#include "modules/rms_norm_module.hpp"
 #include "modules/single_head_attention.hpp"
 
 namespace ttml::modules {
@@ -26,8 +27,8 @@ public:
 
 class GPTBlock : public autograd::ModuleBase {
     std::shared_ptr<GPTMLP> mlp;
-    std::shared_ptr<LayerNormLayer> ln1;
-    std::shared_ptr<LayerNormLayer> ln2;
+    std::shared_ptr<RMSNormLayer> ln1;
+    std::shared_ptr<RMSNormLayer> ln2;
     std::shared_ptr<MultiHeadAttention> attention;
 
 public:

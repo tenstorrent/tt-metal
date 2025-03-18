@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+
 #include <cstdint>
+
 #include "dataflow_api.h"
 
 void generate_tile_with_value(uint32_t cb, uint32_t packed_value) {

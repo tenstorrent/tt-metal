@@ -2,30 +2,30 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-
 #include "rmsnorm_fw_program_factory.hpp"
 
-#include "rmsnorm_fw_device_operation_types.hpp"
+#include <algorithm>
 #include <bit>
 #include <cstdint>
-#include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/work_split.hpp>
+
+#include "rmsnorm_fw_device_operation_types.hpp"
 
 namespace {
 
 constexpr auto kWriterKernelPath =
-    "ttnn/cpp/ttnn/operations/experimental/rmsnorm_fw/device/kernels/dataflow/"
+    "tt-train/sources/ttml/metal_ops/rmsnorm_fw/device/kernels/dataflow/"
     "writer_rmsnorm_fw_interleaved_start_id.cpp";
 
 constexpr auto kReaderKernelPath =
-    "ttnn/cpp/ttnn/operations/experimental/rmsnorm_fw/device/kernels/dataflow/"
+    "tt-train/sources/ttml/metal_ops/rmsnorm_fw/device/kernels/dataflow/"
     "reader_rmsnorm_fw_interleaved_start_id.cpp";
 
 constexpr auto kComputeKernelPath =
-    "ttnn/cpp/ttnn/operations/experimental/rmsnorm_fw/device/kernels/compute/rmsnorm_fw_kernel.cpp";
+    "tt-train/sources/ttml/metal_ops/rmsnorm_fw/device/kernels/compute/rmsnorm_fw_kernel.cpp";
 
 // reader runtime args
 constexpr uint32_t kInputBufferIdx = 0;
@@ -252,14 +252,14 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
     uint32_t block_size = get_block_size(Wt);
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
 
     // -------------------------------------------------------------------------
     // 2) Create and configure circular buffers
     // -------------------------------------------------------------------------
     uint32_t twice_block_size = 2U * block_size;
     const uint32_t available_L1_in_bytes =
-        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
+        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const uint64_t required_L1_in_bytes =
         Wt * bfloat16_single_tile_size_bytes + kNumMaskTiles * bfloat16_single_tile_size_bytes +
         Wt * bfloat16_single_tile_size_bytes + kNumScalerTiles * bfloat16_single_tile_size_bytes +

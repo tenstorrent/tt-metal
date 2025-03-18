@@ -3,14 +3,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "device/rmsnorm_fw_device_operation.hpp"
 #include "rmsnorm_fw.hpp"
+
+#include "device/rmsnorm_fw_device_operation.hpp"
 
 namespace ttnn::operations::experimental {
 
 std::vector<std::optional<Tensor>> RMSNormForwardOperation::invoke(
     const Tensor& input_tensor, const Tensor& gamma_tensor, bool return_intermediates, float epsilon) {
-    auto result = ttnn::prim::rmsnorm_fw(input_tensor, gamma_tensor, return_intermediates, epsilon);
+    auto result = ttnn::prim::rmsnorm_fw_op(input_tensor, gamma_tensor, return_intermediates, epsilon);
 
     if (result.size() == 1U) {
         return {result[0], std::nullopt};

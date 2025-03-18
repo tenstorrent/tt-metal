@@ -9,12 +9,14 @@
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
+// #include <ttnn/operations/experimental/rmsnorm_fw/rmsnorm_fw.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/graph.hpp"
 #include "autograd/graph_utils.hpp"
 #include "autograd/tensor.hpp"
 #include "core/compute_kernel_config.hpp"
+#include "metal_ops/rmsnorm_fw/rmsnorm_fw.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 namespace ttml::ops {
@@ -34,20 +36,26 @@ autograd::TensorPtr rmsnorm(const autograd::TensorPtr &tensor, const autograd::T
 
     auto device = &autograd::ctx().get_device();
 
-    ttnn::Tensor squares = ttnn::square(tensor->get_value());  // [B,1,S,C] -> [B,1,S,C]
+    // ttnn::Tensor squares = ttnn::square(tensor->get_value());  // [B,1,S,C] -> [B,1,S,C]
 
-    ttnn::Tensor seq_means_of_squares = ttnn::mean(squares, /*dim_arg=*/-1, /*keep_dim=*/true);  // [B,1,S,1]
+    // ttnn::Tensor seq_means_of_squares = ttnn::mean(squares, /*dim_arg=*/-1, /*keep_dim=*/true);  // [B,1,S,1]
 
-    ttnn::Tensor seq_means_of_squares_plus_epsilon =
-        ttnn::experimental::add(seq_means_of_squares, epsilon);  // [B,1,S,1] x. [1] -> [B,1,S,1] (bcast)
+    // ttnn::Tensor seq_means_of_squares_plus_epsilon =
+    //     ttnn::experimental::add(seq_means_of_squares, epsilon);  // [B,1,S,1] x. [1] -> [B,1,S,1] (bcast)
 
-    ttnn::Tensor rms_a = ttnn::sqrt(seq_means_of_squares_plus_epsilon);  // [B,1,S,1] -> [B,1,S,1]
+    // ttnn::Tensor rms_a = ttnn::sqrt(seq_means_of_squares_plus_epsilon);  // [B,1,S,1] -> [B,1,S,1]
 
-    ttnn::Tensor gamma_times_activations =
-        ttnn::experimental::mul(gamma->get_value(), tensor->get_value());  // [1,1,1,C] x [B,1,S,C] -> [B,1,S,C] (bcast)
+    // ttnn::Tensor gamma_times_activations =
+    //     ttnn::experimental::mul(gamma->get_value(), tensor->get_value());  // [1,1,1,C] x [B,1,S,C] -> [B,1,S,C]
+    // // (bcast)
 
-    ttnn::Tensor out_tensor =
-        ttnn::experimental::div(gamma_times_activations, rms_a);  // [B,1,S,C] x [B,1,S,C] -> [B,1,S,C]
+    // ttnn::Tensor out_tensor =
+    //     ttnn::experimental::div(gamma_times_activations, rms_a);  // [B,1,S,C] x [B,1,S,C] -> [B,1,S,C]
+
+    auto res = ttnn::experimental::rmsnorm_fw_op(tensor->get_value(), gamma->get_value(), true, epsilon);
+
+    auto out_tensor = res.front().value();
+    auto rms_a = res.back().value();
 
     auto out = autograd::create_tensor(out_tensor);
 

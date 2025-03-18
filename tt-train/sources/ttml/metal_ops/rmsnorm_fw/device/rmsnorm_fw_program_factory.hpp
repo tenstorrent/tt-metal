@@ -4,8 +4,9 @@
 
 #pragma once
 
+#include <cpp/ttnn/device_operation.hpp>
+
 #include "rmsnorm_fw_device_operation_types.hpp"
-#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::experimental::rmsnorm_fw::program {
 

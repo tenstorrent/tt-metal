@@ -5,17 +5,17 @@
 #include <cstdint>
 
 #include "compute_kernel_api.h"
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/eltwise_unary/sqrt.h"
-#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-#include "compute_kernel_api/eltwise_unary/recip.h"
-#include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/bcast.h"
+#include "compute_kernel_api/common.h"
+#include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api/eltwise_binary_sfpu.h"
+#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "compute_kernel_api/eltwise_unary/recip.h"
+#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
+#include "compute_kernel_api/eltwise_unary/sqrt.h"
 #include "compute_kernel_api/mask.h"
+#include "compute_kernel_api/reduce.h"
+#include "compute_kernel_api/tile_move_copy.h"
 
 namespace NAMESPACE {
 

@@ -8,7 +8,9 @@ file(
     *.cpp
 ) # probably should not do that...
 
-#set(SOURCES)
+# foreach(file ${SOURCES})
+#     message(STATUS "TESTS FOUND source file: ${file}")
+# endforeach()
 
 add_executable(ttml_tests ${SOURCES})
 target_link_libraries(

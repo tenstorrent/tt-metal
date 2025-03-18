@@ -4,15 +4,13 @@
 
 #pragma once
 
+#include <cpp/ttnn/decorators.hpp>
+#include <cpp/ttnn/device_operation.hpp>
+#include <cpp/ttnn/tensor/tensor.hpp>
 #include <optional>
 
-#include "ttnn/tensor/tensor.hpp"
-
-#include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
-
-#include "rmsnorm_fw_program_factory.hpp"
 #include "rmsnorm_fw_device_operation_types.hpp"
+#include "rmsnorm_fw_program_factory.hpp"
 
 namespace ttnn::operations::experimental::rmsnorm_fw {
 
@@ -47,7 +45,7 @@ struct RMSNormForwardDeviceOperation {
 }  // namespace ttnn::operations::experimental::rmsnorm_fw
 
 namespace ttnn::prim {
-constexpr auto rmsnorm_fw = ttnn::register_operation<
-    "ttnn::prim::rmsnorm_fw",
+constexpr auto rmsnorm_fw_op = ttnn::register_operation<
+    "ttnn::prim::rmsnorm_fw_op",
     ttnn::operations::experimental::rmsnorm_fw::RMSNormForwardDeviceOperation>();
 }  // namespace ttnn::prim
