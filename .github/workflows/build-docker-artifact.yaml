@@ -117,7 +117,7 @@ jobs:
   build-docker-image:
     name: "🐳️ Build image"
     needs: check-docker-images
-    if: needs.check-docker-images.outputs.ci-build-exists != 'true' && needs.check-docker-images.outputs.dev-exists != 'true'
+    if: needs.check-docker-images.outputs.ci-build-exists != 'true' || needs.check-docker-images.outputs.dev-exists != 'true'
     timeout-minutes: 30
     runs-on:
       - build-docker
@@ -172,7 +172,7 @@ jobs:
   tag-latest:
     name: "🔄 Update latest tag"
     needs: check-docker-images
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.check-docker-images.outputs.ci-build-exists == 'true' && needs.check-docker-images.outputs.dev-exists != 'true'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && (needs.check-docker-images.outputs.ci-build-exists != 'true' || needs.check-docker-images.outputs.dev-exists != 'true')
     runs-on: ubuntu-latest
     steps:
       - name: Login to GitHub Container Registry
