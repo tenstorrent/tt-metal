@@ -8,6 +8,7 @@
 #include "umd/device/device_api_metal.h"
 #include "umd/device/tt_cluster_descriptor.h"
 #include "umd/device/tt_simulation_device.h"
+#include "rtoptions.hpp"
 
 #include <string>
 

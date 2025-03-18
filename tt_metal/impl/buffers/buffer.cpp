@@ -21,6 +21,8 @@
 #include <tt_stl/reflection.hpp>
 #include "lightmetal/host_api_capture_helpers.hpp"
 
+#include "rtoptions.hpp"
+
 #include "tracy/Tracy.hpp"
 
 namespace tt::tt_metal {
