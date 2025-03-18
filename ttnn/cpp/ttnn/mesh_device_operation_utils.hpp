@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <functional>
 #include <unordered_map>
 
@@ -93,9 +94,16 @@ CachedMeshWorkload<typename ProgramFactoryT::shared_variables_t> create_mesh_wor
     ProgramFactoryT program_factory;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_vars_t> coordinate_range_to_shared_variables;
 
-    const auto tensor_coordinates = extract_tensor_coordinates(tensor_args);
+    auto tensor_coordinates = extract_tensor_coordinates(tensor_args);
     if (per_device_attribute_customizer || tensor_coordinates.has_value()) {
         // Create separate programs for each device with customized attributes
+        if (!tensor_coordinates.has_value()) {
+            std::vector<ttnn::MeshCoordinate> coords;
+            coords.reserve(mesh_device->shape().mesh_size());
+            const ttnn::MeshCoordinateRange r(mesh_device->shape());
+            std::transform(r.begin(), r.end(), std::back_inserter(coords), [](const auto& c) { return c; });
+            tensor_coordinates = std::move(coords);
+        }
         for (const auto& coord : *tensor_coordinates) {
             auto cached_program = program_factory.create(
                 per_device_attribute_customizer ? per_device_attribute_customizer(attrs, coord, mesh_device) : attrs,
