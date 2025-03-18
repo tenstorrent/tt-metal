@@ -371,13 +371,16 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
                   << " page size: " << tiles_per_core_width_output * input_page_size << std::endl;
     }
 
-    auto cb_src = tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, cb_src_config);  // input buffer
-    auto cb_dst = tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, cb_dst_config);  // output buffer
-    auto cb_client_interface =
+    auto cb_input_tensor_handle =
+        tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, cb_src_config);  // input buffer
+    auto cb_output_tensor_handle =
+        tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, cb_dst_config);  // output buffer
+    auto cb_client_interface_handle =
         tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, packet_header_cb_config);  // client interface
-    auto cb_fabric_receiver = tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, fabric_receiver_cb_config);
-    auto cb_fabric_sender = tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, fabric_sender_cb_config);
-    auto cb_accumulator = tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, accumulator_cb_config);
+    auto cb_fabric_receiver_handle =
+        tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, fabric_receiver_cb_config);
+    auto cb_fabric_sender_handle = tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, fabric_sender_cb_config);
+    auto cb_accumulator_handle = tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, accumulator_cb_config);
 
     const uint32_t chip_id = ring_index;
 
@@ -597,7 +600,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         {.unary_reader_kernel_id = unary_reader_kernel_id,
          .unary_writer_kernel_id = unary_writer_kernel_id,
          .compute_kernel_id = compute_kernel_id,
-         .cb_ids = {input_tensor_cb_id, output_tensor_cb_id},
+         .cb_handles = {cb_input_tensor_handle, cb_output_tensor_handle},
          .core_range = all_cores_grid,
          .sender_core_range = sender_core_grid}};
 }
@@ -622,8 +625,8 @@ void LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::override_runtime_
     auto cores = corerange_to_cores(all_cores_grid, std::nullopt);
     auto sender_cores_list = corerange_to_cores(sender_cores, std::nullopt);
 
-    UpdateDynamicCircularBufferAddress(program, cached_program.shared_variables.cb_ids[0], *src_buffer);
-    UpdateDynamicCircularBufferAddress(program, cached_program.shared_variables.cb_ids[1], *dst_buffer);
+    UpdateDynamicCircularBufferAddress(program, cached_program.shared_variables.cb_handles[0], *src_buffer);
+    UpdateDynamicCircularBufferAddress(program, cached_program.shared_variables.cb_handles[1], *dst_buffer);
 
     for (const auto& core : cores) {
         auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, core);
