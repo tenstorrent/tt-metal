@@ -303,7 +303,7 @@ def test_multimodal_demo_text(
                     #     break
                 _num_decode_tokens += (
                     gen_idx * max_batch_size
-               )    # gen_idx is (num_tokens - 1) to avoid counting compile iter
+                )  # gen_idx is (num_tokens - 1) to avoid counting compile iter
 
             # Log full text output for each user in batch
             vision_tokens = [tokenizer.special_tokens["<|image|>"], 128256]
@@ -395,7 +395,7 @@ def test_multimodal_demo_text(
                 run_type=f"{tt_device_name}-demo",
                 ml_model_name=f"{base_model_name}-Vision",
                 ml_model_type="vlm",
-                num_layers=model_args.n_layers,
+                num_layers=model_args[0].n_layers,
                 batch_size=max_batch_size,
                 input_sequence_length=max(prefill_lens).item(),
                 output_sequence_length=max_gen_len,
