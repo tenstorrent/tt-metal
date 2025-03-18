@@ -141,11 +141,11 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
     const chip_id_t device_id = 0;
     IDevice* device = CreateDevice(device_id, 1, 16384, 0, DispatchCoreConfig(DispatchCoreType::ETH));
 
-    const uint32_t input_channels = 32;                  // in_channels
-    const uint32_t output_channels = 32;                 // out_channels
-    const uint32_t batch_size = 2;                       // batch_size
-    const uint32_t input_height = 256;                   // input_height
-    const uint32_t input_width = 256;                    // input_width
+    const uint32_t input_channels = 3;                   // in_channels
+    const uint32_t output_channels = 17;                 // out_channels
+    const uint32_t batch_size = 5;                       // batch_size
+    const uint32_t input_height = 111;                   // input_height
+    const uint32_t input_width = 25;                     // input_width
     const std::array<uint32_t, 2> kernel_size = {3, 3};  // kernel_size
     const std::array<uint32_t, 2> stride = {1, 1};       // stride
     const std::array<uint32_t, 2> padding = {1, 1};      // padding
