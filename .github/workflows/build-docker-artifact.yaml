@@ -51,7 +51,7 @@ on:
         options:
             - "amd64"
 
-env:
+# env:
   # BRRRRR GOTTA CHANGE THE DEV IN HERE !!! Gotta permeate it...
   # IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-dev-${{ inputs.architecture }}
 
@@ -179,6 +179,7 @@ jobs:
 
       - name: Tag and push latest
         run: |
+          echo "fix me rk, IMAGE_NAME" && exit 1
           IMAGE_REPO="ghcr.io/${{ github.repository }}/tt-metalium/${{ env.IMAGE_NAME }}"
           LATEST_TAG="${IMAGE_REPO}:latest"
           BUILD_TAG="${{ needs.check-docker-images.outputs.ci-build-tag }}"
