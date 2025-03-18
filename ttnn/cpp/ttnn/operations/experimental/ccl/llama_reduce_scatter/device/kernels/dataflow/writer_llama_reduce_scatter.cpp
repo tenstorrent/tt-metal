@@ -211,12 +211,22 @@ void kernel_main() {
             // Compute addresses
             uint64_t noc_accumulator_addr =
                 get_noc_addr(output_core_x, output_core_y, accumulator_l1_addr + output_tile_offset);
-            uint64_t local_receiver_semaphore_noc_addr =
-                get_noc_addr(output_core_x, output_core_y, local_semaphore_address);
+            // uint64_t local_receiver_semaphore_noc_addr =
+            //     get_noc_addr(output_core_x, output_core_y, local_semaphore_address);
 
             // print_full_tile(fabric_receiver_cb_id, tile, true);
             noc_async_write(base_receiver_l1_addr + tile * page_size_bytes, noc_accumulator_addr, page_size_bytes);
-            noc_async_write_barrier();
+            // noc_async_write_barrier();
+            // noc_semaphore_inc(local_receiver_semaphore_noc_addr, 1);  // mcast inc is needed, this will tank latency
+        }
+        noc_async_write_barrier();
+        for (uint32_t tile = 0; tile < total_tiles; tile++) {
+            // one tile to each core
+            uint32_t output_core = tile;
+            uint32_t output_core_x = output_core_xy[output_core][x_index];
+            uint32_t output_core_y = output_core_xy[output_core][y_index];
+            uint64_t local_receiver_semaphore_noc_addr =
+                get_noc_addr(output_core_x, output_core_y, local_semaphore_address);
             noc_semaphore_inc(local_receiver_semaphore_noc_addr, 1);  // mcast inc is needed, this will tank latency
         }
 

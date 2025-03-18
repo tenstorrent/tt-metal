@@ -75,7 +75,7 @@ LlamaReduceScatterDeviceOperation::invoke(
     const uint32_t ring_devices,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config) {
-    std::cout << "Primitive operation called" << std::endl;
+    // std::cout << "Primitive operation called" << std::endl;
     return {
         operation_attributes_t{
             .dim = (dim < 0 ? uint32_t(input_tensor.get_logical_shape().rank() + dim) : (uint32_t)dim),
