@@ -2,7 +2,6 @@
 #include "ttnn/device.hpp"
 #include <vector>
 #include <utility>
-#include <boost/chrono.hpp>
 #include <iostream>
 #include <vector>
 #include <fstream>
@@ -141,7 +140,7 @@ class Matmul2DHostPerfTestFixture : public ttnn::TTNNFixtureWithDevice,
                                         /* num_measurement_iterations */ int,
                                         /* use_program_cache */ bool>> {
 public:
-    Matmul2DHostPerfTestFixture() : ttnn::TTNNFixtureWithDevice(24576, 200000) {}
+    Matmul2DHostPerfTestFixture() : ttnn::TTNNFixtureWithDevice(65536, 200000) {}
 };
 
 TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
@@ -299,6 +298,9 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
                     in1_t,
                     /* bias */ std::nullopt,
                     /* parameters */ matmul_params);
+                device->push_work(
+                    [device]() mutable { Synchronize(device, std::nullopt, std::vector<SubDeviceId>()); });
+                device->synchronize();
                 output_tensor.deallocate();
             }
             std::chrono::duration<double> total_time = std::chrono::duration<double>::zero();
@@ -317,8 +319,14 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
                 ttnn::operations::trace::end_trace_capture(device, tid, ttnn::DefaultQueueId);
 
                 auto start_time = std::chrono::high_resolution_clock::now();
+
                 ttnn::operations::trace::execute_trace(device, tid, ttnn::DefaultQueueId, false);
+                device->push_work(
+                    [device]() mutable { Synchronize(device, std::nullopt, std::vector<SubDeviceId>()); });
+                device->synchronize();
+
                 auto end_time = std::chrono::high_resolution_clock::now();
+
                 total_time = end_time - start_time;
                 ttnn::operations::trace::release_trace(device, tid);
             } else {
@@ -329,6 +337,9 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
                         in1_t,
                         /* bias */ std::nullopt,
                         /* parameters */ matmul_params);
+                    device->push_work(
+                        [device]() mutable { Synchronize(device, std::nullopt, std::vector<SubDeviceId>()); });
+                    device->synchronize();
                     output_tensor.deallocate();
                 }
                 auto end_time = std::chrono::high_resolution_clock::now();
@@ -344,19 +355,9 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
             int num_cores_user_grid = std::get<0>(grid_size) * std::get<1>(grid_size);
             auto compute_grid_size = device->compute_with_storage_grid_size();
             int num_cores_full_grid = compute_grid_size.x * compute_grid_size.y;
-            tt::log_info("Full compute grid size: {}x{}", compute_grid_size.x, compute_grid_size.y);
-            tt::log_info(
-                "Cycle per tile: {}, num_cores_user_grid: {}, num_cores_full_grid: {}",
-                cycle_per_tile,
-                num_cores_user_grid,
-                num_cores_full_grid);
             const double dim_per_tile = (double)m * (double)k * (double)n / tile_h / tile_w;
             double ideal_cycle_full_grid = dim_per_tile / 32 * cycle_per_tile / num_cores_full_grid;
             double ideal_cycle_user_grid = dim_per_tile / 32 * cycle_per_tile / num_cores_user_grid;
-            tt::log_info(
-                "Ideal cycle (full grid): {}, Ideal cycle (user grid): {}",
-                ideal_cycle_full_grid,
-                ideal_cycle_user_grid);
             double inference_cycle = inference_time_avg_s * get_device_freq() * 1e6;
             double utilization_full_grid = ideal_cycle_full_grid / inference_cycle;
             double utilization_user_grid = ideal_cycle_user_grid / inference_cycle;
@@ -394,5 +395,5 @@ INSTANTIATE_TEST_SUITE_P(
         /* tile_h */ 32,
         /* tile_w */ 32,
         /* num_warmup_iterations */ 1,
-        /* num_measurement_iterations */ 1,
+        /* num_measurement_iterations */ 5,
         /* use_program_cache */ true)));
