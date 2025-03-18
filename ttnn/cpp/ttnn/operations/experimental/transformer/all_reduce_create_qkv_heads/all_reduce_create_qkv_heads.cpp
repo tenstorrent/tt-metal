@@ -32,6 +32,13 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteAllReduceCreateQkvHe
     const std::optional<MemoryConfig>& final_memory_config,
     std::optional<std::array<Tensor, 3>> optional_output_tensors) {
     MemoryConfig out_memory_config = all_reduce_memory_config.value_or(input_tensor.memory_config());
+    const uint32_t num_kv_heads_val = num_kv_heads.value_or(num_heads);
+    TT_FATAL(
+        input_tensor.get_padded_shape()[3] % (num_heads + 2 * num_kv_heads_val) == 0,
+        "Input shape {} must be divisible by num_heads + 2*num_kv_heads = {}",
+        input_tensor.get_padded_shape()[3],
+        num_heads + 2 * num_kv_heads_val);
+    uint32_t head_dim = input_tensor.get_padded_shape()[3] / (num_heads + 2 * num_kv_heads_val);
     return ttnn::operations::experimental::ccl::all_reduce_create_qkv_heads(
         input_tensor,
         buffer_tensor,
@@ -43,6 +50,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteAllReduceCreateQkvHe
         num_preferred_links,
         worker_subdevice_id_opt,
         true,
+        head_dim,
         num_heads,
         num_kv_heads.value_or(1),
         overlap_qk_coregrid.value_or(false),

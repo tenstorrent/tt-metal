@@ -38,6 +38,7 @@ struct AllReduceCreateQkvHeads {
     bool enable_persistent_fabric_mode;
 
     // create qkv heads parameters
+    const uint32_t head_dim;
     const uint32_t num_heads;
     const uint32_t num_kv_heads;
     const bool overlap_qk_coregrid;
@@ -56,6 +57,7 @@ struct AllReduceCreateQkvHeads {
         GlobalSemaphore semaphore,
         std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
         bool enable_persistent_fabric_mode,
+        uint32_t head_dim,
         uint32_t num_heads,
         uint32_t num_kv_heads,
         bool overlap_qk_coregrid,
@@ -72,6 +74,7 @@ struct AllReduceCreateQkvHeads {
         semaphore(semaphore),
         sub_device_id(sub_device_id),
         enable_persistent_fabric_mode(enable_persistent_fabric_mode),
+        head_dim(head_dim),
         num_heads(num_heads),
         num_kv_heads(num_kv_heads),
         overlap_qk_coregrid(overlap_qk_coregrid),
@@ -167,6 +170,7 @@ std::tuple<Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
     const std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
     bool enable_persistent_fabric_mode = false,
+    uint32_t head_dim = 0,
     uint32_t num_heads = 8,
     uint32_t num_kv_heads = 1,
     bool overlap_qk_coregrid = false,
