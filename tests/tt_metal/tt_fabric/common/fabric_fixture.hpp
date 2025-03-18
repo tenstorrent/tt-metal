@@ -24,13 +24,10 @@ class ControlPlaneFixture : public ::testing::Test {
                    "Control plane test suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
                GTEST_SKIP();
            }
-           tt::tt_metal::detail::InitializeFabricConfig(tt::FabricConfig::FABRIC_2D);
        }
 
        void TearDown() override {}
 };
-
-}  // namespace fabric_router_tests
 
 class BaseFabricFixture : public ::testing::Test {
 protected:
@@ -94,4 +91,5 @@ class Fabric2DFixture : public BaseFabricFixture {
     void SetUp() override { this->SetUpDevices(tt::FabricConfig::FABRIC_2D); }
 };
 
+}  // namespace fabric_router_tests
 }  // namespace tt::tt_fabric

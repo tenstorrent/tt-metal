@@ -77,11 +77,14 @@ class ControlPlane {
        chan_id_t get_downstream_eth_chan_id(
            chan_id_t src_chan_id, const std::vector<chan_id_t>& candidate_target_chans) const;
 
+       chip_id_t get_physical_chip_id_from_eth_coord(const eth_coord_t& eth_coord) const;
+
+       bool validate_mesh_connections(mesh_id_t mesh_id) const;
+
        std::vector<chip_id_t> get_mesh_physical_chip_ids(
            std::uint32_t mesh_ns_size,
            std::uint32_t mesh_ew_size,
-           std::uint32_t num_ports_per_side,
-           std::uint32_t nw_chip_physical_chip_id);
+           chip_id_t nw_chip_physical_chip_id) const;
 
        std::tuple<mesh_id_t, chip_id_t, chan_id_t> get_connected_mesh_chip_chan_ids(
            mesh_id_t mesh_id, chip_id_t chip_id, chan_id_t chan_id) const;
