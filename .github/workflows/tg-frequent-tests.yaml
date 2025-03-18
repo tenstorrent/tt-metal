@@ -10,7 +10,6 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
     with:
-      version: 22.04
       build-wheel: true
   tg-frequent-tests:
     needs: build-artifact
