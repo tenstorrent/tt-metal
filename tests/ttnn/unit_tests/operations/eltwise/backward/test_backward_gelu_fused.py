@@ -5,16 +5,37 @@
 import torch
 import pytest
 import ttnn
-from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import compare_pcc, data_gen_with_range
+from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import compare_pcc
+
+INPUT_SHAPES = (
+    (torch.Size([32])),
+    (torch.Size([25, 34])),  # not aligned by tile size
+    (torch.Size([32, 32])),
+    (torch.Size([1, 32, 32])),
+    (torch.Size([1, 1, 32, 32])),
+    (torch.Size([1, 1, 320, 384])),
+    (torch.Size([1, 3, 320, 384])),
+    (torch.Size([1, 3, 323, 389])),  # not aligned by tile size
+)
+
+
+def gen_data(input_shapes, low, high, device, required_grad=False, is_row_major=False, seed=213919):
+    assert high > low, "Incorrect range provided"
+    torch.manual_seed(seed)
+    pt_tensor = torch.rand(input_shapes, requires_grad=required_grad).bfloat16() * (high - low) + low
+    if is_row_major:
+        tt_tensor = ttnn.Tensor(pt_tensor, ttnn.bfloat16)
+        tt_tensor = ttnn.to_layout(tt_tensor, layout=ttnn.ROW_MAJOR_LAYOUT).to(device)
+    else:
+        tt_tensor = ttnn.Tensor(pt_tensor, ttnn.bfloat16)
+        tt_tensor = ttnn.to_layout(tt_tensor, layout=ttnn.TILE_LAYOUT).to(device)
+
+    return pt_tensor, tt_tensor
 
 
 @pytest.mark.parametrize(
     "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
+    INPUT_SHAPES,
 )
 @pytest.mark.parametrize(
     "approximate",
@@ -24,8 +45,8 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import comp
     ),
 )
 def test_bw_gelu(input_shapes, approximate, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device)
+    in_data, input_tensor = gen_data(input_shapes, -100, 100, device, True)
+    grad_data, grad_tensor = gen_data(input_shapes, -5, 5, device)
 
     tt_output_tensor_on_device = ttnn.experimental.gelu_bw(grad_tensor, input_tensor, approximate=approximate)
 
@@ -38,15 +59,11 @@ def test_bw_gelu(input_shapes, approximate, device):
 
 @pytest.mark.parametrize(
     "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
+    INPUT_SHAPES,
 )
 def test_bw_gelu_default(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device)
+    in_data, input_tensor = gen_data(input_shapes, -100, 100, device, True)
+    grad_data, grad_tensor = gen_data(input_shapes, -5, 5, device)
 
     tt_output_tensor_on_device = ttnn.experimental.gelu_bw(grad_tensor, input_tensor)
 
@@ -59,11 +76,7 @@ def test_bw_gelu_default(input_shapes, device):
 
 @pytest.mark.parametrize(
     "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
+    INPUT_SHAPES,
 )
 @pytest.mark.parametrize(
     "approximate",
@@ -73,8 +86,8 @@ def test_bw_gelu_default(input_shapes, device):
     ),
 )
 def test_bw_gelu_opt_output(input_shapes, approximate, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device)
+    in_data, input_tensor = gen_data(input_shapes, -100, 100, device, True)
+    grad_data, grad_tensor = gen_data(input_shapes, -5, 5, device)
     input_grad = torch.zeros(input_shapes, dtype=torch.bfloat16)
     input_grad = ttnn.from_torch(
         input_grad, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
@@ -96,15 +109,11 @@ def test_bw_gelu_opt_output(input_shapes, approximate, device):
 
 @pytest.mark.parametrize(
     "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
+    INPUT_SHAPES,
 )
 def test_bw_gelu_default_opt_output(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device)
+    in_data, input_tensor = gen_data(input_shapes, -100, 100, device, True)
+    grad_data, grad_tensor = gen_data(input_shapes, -5, 5, device)
     input_grad = torch.zeros(input_shapes, dtype=torch.bfloat16)
     input_grad = ttnn.from_torch(
         input_grad, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
