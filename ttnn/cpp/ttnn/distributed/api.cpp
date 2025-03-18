@@ -54,10 +54,8 @@ std::vector<ttnn::Tensor> get_device_tensors(const ttnn::Tensor& tensor) {
             tensors.push_back(shard);
         }
         return tensors;
-    } else {
-        return {tensor};
     }
-    TT_THROW("Expected tensor to be on MultiDeviceHostStorage type!");
+    return {tensor};
 }
 
 Tensor aggregate_as_tensor(
@@ -219,7 +217,6 @@ Tensor get_device_tensor(const Tensor& multi_device_tensor, const int device_id)
     } else if (std::holds_alternative<tt::tt_metal::DeviceStorage>(multi_device_tensor.get_storage())) {
         return multi_device_tensor;
     }
-
     TT_THROW("User is trying to access a device tensor that is not on device.");
 }
 
@@ -263,10 +260,9 @@ std::vector<Tensor> get_tensors_from_multi_device_storage(const Tensor& multi_de
         for (int i = 0; i < tensor_storage.num_buffers(); ++i) {
             tensors.push_back(Tensor{OwnedStorage{tensor_storage.get_buffer(i)}, tensor_storage.specs[i]});
         }
-    } else {
-        TT_THROW("get_tensors_from_multi_device_storage only support multi device tensors");
+        return tensors;
     }
-    return tensors;
+    TT_THROW("get_tensors_from_multi_device_storage only supports multi-device tensors");
 }
 
 Tensor create_multi_device_tensor(
@@ -321,9 +317,8 @@ Tensor create_multi_device_tensor(
                     MemoryConfig{},
                     tensors.at(0).get_logical_shape(),
                     tensors.at(0).get_padded_shape()))};
-    } else {
-        TT_THROW("Invalid storage type for multi-device tensor");
     }
+    TT_THROW("Invalid storage type for multi-device tensor");
 }
 
 }  // namespace ttnn::distributed
