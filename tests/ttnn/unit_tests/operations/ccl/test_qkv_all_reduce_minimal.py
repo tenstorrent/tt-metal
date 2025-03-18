@@ -178,16 +178,23 @@ def run_all_reduce_impl(
         # tt_qkv Shape([1, 1, 32, 1280])
         # tt_qkv_reduced Shape([1, 1, 32, 1280])
         # MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=0,y=0) - (x=7,y=4)]},shape={32, 32},orientation=ShardOrientation::ROW_MAJOR,mode=ShardMode::PHYSICAL,physical_shard_shape=std::nullopt))
-        tt_qkv_reduced = ttnn.experimental.all_reduce_create_qkv_heads(
+        tt_qkv_reduced, *_ = ttnn.experimental.all_reduce_create_qkv_heads(
             tt_qkv,
             tt_intermediate_tensors[0],
             cluster_axis=cluster_axis,
             mesh_device=mesh_device,
             multi_device_global_semaphore=ccl_semaphore_handles[0],
+            queue_id=0,
+            num_heads=8,
             memory_config=output_mem_config,
             topology=ttnn.Topology.Linear,
             num_links=num_links,
             subdevice_id=worker_sub_device_id,
+            num_kv_heads=1,
+            final_memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+            overlap_qk_coregrid=False,
+            batch_offset=batch_offset_tt_tensor,
+            slice_size=8,
         )  # [1, 1, 32, 1280]
         # breakpoint()
         # Batch Slicing

@@ -272,7 +272,7 @@ std::tuple<Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
         },
         {input_tensor, buffer_tensor},
         output_tensors);
-    return std::make_tuple(output_tensors.at(0), output_tensors.at(1), output_tensors.at(2));
+    return std::make_tuple(output_tensors.at(0), output_tensors.at(0), output_tensors.at(0));
 }
 
 }  // namespace ccl
