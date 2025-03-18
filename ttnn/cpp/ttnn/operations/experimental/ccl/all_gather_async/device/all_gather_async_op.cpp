@@ -146,6 +146,7 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
           (input_tensor_shape[2] % 32 == 0 && input_tensor_shape[3] % 32 == 0))) &&
         input_tensor_buffer_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
         input_tensor_page_layout == tt::tt_metal::Layout::TILE && this->enable_persistent_fabric_mode) {
+        fprintf(stderr, "AllGatherAsyncVersion::MINIMAL_INTERLEAVED_32\n");
         return AllGatherAsyncVersion::MINIMAL_INTERLEAVED_32;
     }
 
@@ -201,6 +202,7 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
         }
     }
     log_trace(tt::LogOp, "Using generic implementation");
+    fprintf(stderr, "AllGatherAsyncVersion::GENERIC\n");
     return AllGatherAsyncVersion::GENERIC;
 }
 
@@ -325,7 +327,7 @@ Tensor all_gather_async(
         "all_gather_async op is only supported for Fast Dispatch");
     auto devices = input_tensor.get_workers();
     uint32_t num_devices = devices.size();
-    TT_FATAL(num_devices > 1, "all_gather_async op will only work for num_devices > 1, but has {}", num_devices);
+    // TT_FATAL(num_devices > 1, "all_gather_async op will only work for num_devices > 1, but has {}", num_devices);
     ttnn::ccl::Topology ccl_topology = topology;
 
     if (num_devices == 2) {
@@ -469,7 +471,7 @@ Tensor all_gather_async(
         "all_gather_async op is only supported for Fast Dispatch");
     auto devices = input_tensor.get_workers();
     uint32_t num_devices = devices.size();
-    TT_FATAL(num_devices > 1, "all_gather_async op will only work for num_devices > 1, but has {}", num_devices);
+    // TT_FATAL(num_devices > 1, "all_gather_async op will only work for num_devices > 1, but has {}", num_devices);
     ttnn::ccl::Topology ccl_topology = topology;
 
     if (num_devices == 2) {

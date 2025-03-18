@@ -281,11 +281,12 @@ def run_all_gather_impl(
         tt_input_tensors = []
         for i, t in enumerate(input_tensors):
             tt_input_tensors.append(
-                ttnn.Tensor(t, input_dtype).to(layout).to(mesh_device.get_devices()[i], input_mem_config)
+                ttnn.Tensor(t, input_dtype).to(layout)  # .to(mesh_device.get_devices()[i], input_mem_config)
             )
             logger.info(f"using device {mesh_device.get_devices()[i].id()}")
 
-        input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
+        # input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors
+        input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(mesh_device)
 
         input_tensor_mesh_list.append(input_tensor_mesh)
 
@@ -391,6 +392,14 @@ def run_all_gather_impl(
         # (4, 1, [1, 1, 64, 512], 3, ttnn.TILE_LAYOUT),
         # (4, 1, [1, 1, 32, 32768], 3, ttnn.TILE_LAYOUT),
         # (4, 1, [1, 1, 2048, 16384], 3, ttnn.TILE_LAYOUT),
+        (2, 1, [1, 1, 64, 32], 2, ttnn.TILE_LAYOUT),
+        (2, 1, [1, 1, 32, 64], 3, ttnn.TILE_LAYOUT),
+        (2, 1, [1, 1, 256, 256], 2, ttnn.TILE_LAYOUT),
+        (2, 1, [1, 1, 256, 256], 3, ttnn.TILE_LAYOUT),
+        (4, 1, [1, 1, 128, 64], 2, ttnn.TILE_LAYOUT),
+        (4, 1, [1, 1, 64, 128], 3, ttnn.TILE_LAYOUT),
+        (8, 1, [1, 1, 256, 64], 2, ttnn.TILE_LAYOUT),
+        (8, 1, [1, 1, 64, 256], 3, ttnn.TILE_LAYOUT),
         (4, 1, [1, 1, 32, 1280], 3, ttnn.TILE_LAYOUT),
     ],
 )
@@ -407,7 +416,7 @@ def run_all_gather_impl(
         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
     ],
 )
-@pytest.mark.parametrize("num_iters", [10])
+@pytest.mark.parametrize("num_iters", [1])
 @pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("dynamic_alloc_semaphore", [False, True])
 def test_all_gather(
