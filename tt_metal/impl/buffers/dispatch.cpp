@@ -1031,7 +1031,7 @@ void copy_completion_queue_data_into_user_space(
     uint16_t channel,
     uint32_t cq_id,
     SystemMemoryManager& sysmem_manager,
-    volatile bool& exit_condition) {
+    std::atomic<bool>& exit_condition) {
     const auto& [buffer_layout, page_size, padded_page_size, buffer_page_mapping, dst, dst_offset, num_pages_read, cur_dev_page_id, starting_host_page_id] =
         read_buffer_descriptor;
     const uint32_t padded_num_bytes = (num_pages_read * padded_page_size) + sizeof(CQDispatchCmd);

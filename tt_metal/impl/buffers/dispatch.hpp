@@ -142,7 +142,7 @@ void copy_completion_queue_data_into_user_space(
     uint16_t channel,
     uint32_t cq_id,
     SystemMemoryManager& sysmem_manager,
-    volatile bool& exit_condition);
+    std::atomic<bool>& exit_condition);
 
 std::vector<CoreCoord> get_cores_for_sharded_buffer(
     bool width_split, const std::shared_ptr<const BufferPageMapping>& buffer_page_mapping, Buffer& buffer);
